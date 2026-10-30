@@ -1111,8 +1111,13 @@
  * words change in place, rising in only when they're new.
  */
 .web-steps-line {
-  @apply -mx-1.5 flex h-9 max-w-[calc(100%+12px)] min-w-0 items-center gap-1.5 self-start rounded-lg px-1.5 text-ui;
+  @apply relative -mx-1.5 flex h-9 max-w-[calc(100%+12px)] min-w-0 items-center gap-1.5 self-start rounded-lg px-1.5 text-ui;
   transition: background-color 160ms ease;
+}
+/* It reads 36 px tall and takes a 44 px touch, reaching into the space around it. */
+.web-steps-line::after {
+  @apply absolute inset-x-0 -inset-y-1;
+  content: "";
 }
 .web-steps-line:active {
   @apply bg-fill-selected;
@@ -1307,8 +1312,13 @@
   .web-viewports {
     @apply mx-3 mb-2 grid shrink-0 grid-cols-3 gap-1 rounded-xl bg-fill-hover p-1;
   }
+  /* A preset reads 32 px tall and takes a 44 px touch: its target reaches into the group's padding and gap. */
   .web-viewport {
-    @apply h-8 rounded-lg text-label font-medium text-muted-foreground;
+    @apply relative h-8 rounded-lg text-label font-medium text-muted-foreground;
+  }
+  .web-viewport::after {
+    @apply absolute inset-x-0 -inset-y-1.5;
+    content: "";
   }
   .web-viewport-on {
     @apply bg-surface text-foreground shadow-sm;
@@ -1322,25 +1332,57 @@
     margin: 0 auto;
   }
 
-  /* A move in a Thread's place: where to, a thin bar that only moves forward, its step and what that means. */
+  /*
+   * A move in a strip above a Thread's transcript, as `ThreadTrouble` is: where to, its step, how far, and a thin bar
+   * that only moves forward; what the step means a tap away.
+   */
   .web-move {
-    @apply flex min-h-0 flex-1 flex-col px-4 pt-[14vh] pb-16;
+    @apply mx-3 mt-2 shrink-0 rounded-2xl bg-raised px-3 pt-1 pb-3 ring-1 ring-hairline;
   }
-  .web-move-card {
-    @apply mx-auto w-full max-w-[460px] rounded-2xl bg-raised p-5 ring-1 ring-hairline;
+  .web-move-head {
+    @apply flex min-h-12 w-full items-center gap-3 text-left;
+  }
+  .web-move-head:disabled {
+    @apply cursor-default opacity-100;
   }
   .web-move-mark {
-    @apply flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface text-foreground ring-1 ring-hairline;
+    @apply flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-foreground ring-1 ring-hairline;
   }
-  .web-move:not([data-move-step="done"]):not([data-move-step="failed"]):not([data-move-step="unsettled"]) .web-move-mark > svg {
+  .web-move:not([data-move-step="done"]):not([data-move-step="failed"]):not([data-move-step="unsettled"]):not([data-move-step="unconfirmed"]) .web-move-mark > svg {
     animation: web-move-blink 1.4s ease-in-out infinite;
   }
+  .web-move-chevron {
+    transition: transform 160ms var(--ease-out);
+  }
+  .web-move-head[aria-expanded="true"] .web-move-chevron {
+    transform: rotate(180deg);
+  }
   .web-move-track {
-    @apply relative mt-5 h-1 overflow-hidden rounded-full bg-fill-selected;
+    @apply relative mt-1.5 h-1 overflow-hidden rounded-full bg-fill-selected;
   }
   .web-move-fill {
     @apply absolute inset-0 origin-left rounded-full bg-foreground;
+    transform: scaleX(0);
     transition: transform 400ms var(--ease-out);
+  }
+  .web-move-reason {
+    @apply mt-0.5 pl-11;
+  }
+  .web-move-detail {
+    @apply mt-2.5;
+  }
+  .web-move-actions {
+    @apply mt-3 flex flex-wrap items-center gap-1.5;
+  }
+  .web-move-actions .web-button {
+    @apply h-11 px-4;
+  }
+  .web-move-actions .web-quiet-button {
+    @apply h-11 gap-2 px-3;
+  }
+  /* A quiet button first in the row lines its icon up with the strip's edge, as the bar's start does. */
+  .web-move-actions > .web-quiet-button:first-child {
+    @apply -ml-3;
   }
   .web-move-ask {
     @apply px-5 pt-1 pb-[calc(env(safe-area-inset-bottom)+16px)];
@@ -1372,12 +1414,15 @@
     }
   }
 
-  /* The capsule's app: a segment that opens it. */
+  /*
+   * The capsule's app: a segment that opens it. Its dot is the text's own colour: hue is for diff, error and warning,
+   * and ember for the turn at work beside it.
+   */
   .web-capsule-app {
     @apply text-foreground;
   }
   .web-capsule-app-dot {
-    @apply size-1.5 shrink-0 rounded-full bg-positive;
+    @apply size-1.5 shrink-0 rounded-full bg-foreground;
   }
   .web-capsule-app[data-app="starting"] .web-capsule-app-dot {
     @apply bg-faint;

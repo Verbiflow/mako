@@ -25,7 +25,7 @@ import { startingWhere } from "./started"
 import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
 import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
-import { listedMove, useMoves } from "./moves"
+import { followedWay, listedMove, useMoves } from "./moves"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
@@ -289,10 +289,9 @@ function DeskRail({ threads, archived, selected, settings, onOpen, onSettings }:
 
 /** A rail row as the desk draws one: its agents' marks, its title, and its state or its age at the trailing edge. */
 function DeskRow({ thread, lit, onOpen }: { thread: WebThread; lit: boolean; onOpen: () => void }) {
-  const quiet = thread.quietSince ? `${thread.where} is off, seen ${copyAge(Date.parse(thread.quietSince))}` : undefined
+  const quiet = thread.quietSince ? `${thread.where} is asleep or offline, seen ${copyAge(Date.parse(thread.quietSince))}` : undefined
   // On its way between a Mac and the cloud: a blinking arrow, up or down, as the phone's row wears.
-  const followed = useMoves((state) => state.moves.get(thread.id))
-  const way = followed && followed.end?.kind !== "failed" ? followed.way : listedMove(thread)?.way
+  const way = useMoves((state) => followedWay(state.moves.get(thread.id))) ?? listedMove(thread)?.way
   const Arrow = way === "device" ? ArrowDownIcon : ArrowUpIcon
   const harnesses = [...new Set(thread.sessions.map((session) => webHarnessLabel(session.row.harness)))].join(", ")
   return (
@@ -325,7 +324,7 @@ function DeskEmpty({ onNew }: { onNew: () => void }) {
   // An account with no Mac heard from yet: the checklist that connects one, in the pane, following along on its own.
   const list = useAccountList((state) => state)
   const places = useReach((state) => state.places)
-  const needsMac = useMemo(() => list.phase === "live" && list.rows.length === 0 && !macConnection(list, new Set([...list.devices.keys()].filter((id) => places.get(macPlace(id))?.ok))).connected, [list, places])
+  const needsMac = useMemo(() => list.phase === "live" && list.rows.length === 0 && !macConnection(list, new Set([...list.devices.keys()].filter((id) => places.get(macPlace(id))?.ok))).heard, [list, places])
   const [connecting, setConnecting] = useState(false)
   if (needsMac && !connecting) setConnecting(true)
   if (connecting)

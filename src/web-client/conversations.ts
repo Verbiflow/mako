@@ -44,6 +44,9 @@ const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
 /** A move's step as its owner's stream carries it (`thread-move-step`, `thread-return-step`): read as far as its kind. */
 const MoveStepEventSchema = z.object({ type: z.enum(["thread-move-step", "thread-return-step"]), move: z.string(), step: z.object({ kind: z.string() }).loose() })
 
+/** One owner's stream as this browser follows it: its conversations, and how many follow each. */
+type Follow = { subscription?: Subscription; conversations: Set<string>; holds: Map<string, number>; stopped: boolean }
+
 /** The head of an owner's stream line: which conversation's event it carries, and what kind. */
 const LineHeadSchema = z.object({ channel: z.string().optional(), type: z.string().optional(), conversation: z.string().optional() })
 
@@ -64,7 +67,7 @@ export class WebConversations {
   /** Where each owner's signed files are served to this browser, by owner, and when that was asked. */
   readonly #files = new Map<string, { at: number; origin: Promise<string> }>()
   /** The owner streams followed, by stream: one follow per stream, however many of its conversations are open. */
-  readonly #follows = new Map<string, { subscription?: Subscription; conversations: Set<string>; stopped: boolean }>()
+  readonly #follows = new Map<string, Follow>()
   /** Follows waiting out a backoff before they follow again: a return cuts the wait short. */
   readonly #waits = new Set<() => void>()
 
@@ -239,17 +242,27 @@ export class WebConversations {
     return this.#follow({ kind: "device", deviceId, runtimeId, stream: sessionStream(runtimeId, conversation) }, conversation)
   }
 
-  /** Follows an owner's stream for one conversation's batches; the stream is shared by every open conversation on it. */
+  /**
+   * Follows an owner's stream for one conversation's batches; the stream is shared by every open conversation on it, and
+   * a conversation by everyone who follows it (an open Session and a move's strip above it): it's let go with the last.
+   */
   #follow(owner: ListedOwner, conversation: string): () => void {
     let follow = this.#follows.get(owner.stream)
     if (!follow) {
-      follow = { conversations: new Set(), stopped: false }
+      follow = { conversations: new Set(), holds: new Map(), stopped: false }
       this.#follows.set(owner.stream, follow)
       void this.#run(owner, follow)
     }
     follow.conversations.add(conversation)
+    follow.holds.set(conversation, (follow.holds.get(conversation) ?? 0) + 1)
     const held = follow
+    let letGo = false
     return () => {
+      if (letGo) return
+      letGo = true
+      const holds = (held.holds.get(conversation) ?? 1) - 1
+      if (holds > 0) return void held.holds.set(conversation, holds)
+      held.holds.delete(conversation)
       held.conversations.delete(conversation)
       if (held.conversations.size) return
       held.stopped = true
@@ -266,7 +279,7 @@ export class WebConversations {
    * followed again at once, then with a backoff (`followAgainInMs`); one silent while its conversation is at work has its
    * connection asked whether it's alive, so a stalled link is replaced in seconds.
    */
-  async #run(owner: ListedOwner, follow: { subscription?: Subscription; conversations: Set<string>; stopped: boolean }): Promise<void> {
+  async #run(owner: ListedOwner, follow: Follow): Promise<void> {
     let failures = 0
     let gapsInRow = 0
     let first = true
@@ -309,6 +322,9 @@ export class WebConversations {
           }
           failures = 0
           gapsInRow = 0
+          // A Mac's update is the Mac answering, live: one streaming a turn isn't said to be unreachable. (A cloud Thread's
+          // stream is its log, which a sleeping machine's past still fills.)
+          if (owner.kind === "device") answered(macPlace(owner.deviceId))
           readings.heard(this.#heard(frame.event.text, follow.conversations))
         }
         // A number skipped: asked for again at once after the last one heard. Gap after gap is a stream that fails.
@@ -421,6 +437,7 @@ export class WebConversations {
       step: event.step as ThreadMoveStep | ThreadReturnStep,
       thread: row?.thread,
       mac: deviceId ? { deviceId, name: name ?? "its Mac" } : undefined,
+      listed: row?.move,
     })
   }
 

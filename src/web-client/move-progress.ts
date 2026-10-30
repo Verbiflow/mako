@@ -55,6 +55,18 @@ export function forward(previous: number, next: number | undefined): number {
   return Math.max(previous, next ?? previous)
 }
 
+/** How far a bar stands, 0..1, for which move. */
+export type MoveBar = { move: string | undefined; fraction: number }
+
+/**
+ * Where a bar starts as the move it draws is named: the list's word on a move (no ID yet) turning out to be the move
+ * whose steps are heard goes on from where it stood; another move (a retry) starts a bar of its own.
+ */
+export function barFrom(bar: MoveBar, move: string | undefined): MoveBar {
+  if (bar.move !== undefined && move !== undefined && bar.move !== move) return { move, fraction: 0 }
+  return { move: bar.move ?? move, fraction: bar.fraction }
+}
+
 /** A percentage as the card says it, with its noun: "42% done". Never 100 before the move ends. */
 export function percentWords(fraction: number, done: boolean): string {
   return `${done ? 100 : Math.min(99, Math.floor(fraction * 100))}% done`

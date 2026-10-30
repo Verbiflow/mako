@@ -2,8 +2,10 @@ import { useEffect } from "react"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
 import { createHook, createStore } from "@/state/store"
 import type { WebClient } from "./client"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { GatewayError } from "./gateway"
-import { ownerCall, previewAddress, type Owner } from "./start"
+import { useForm, type WebForm } from "./route"
+import { ownerCall, previewAddress, type HostCalling, type Owner } from "./start"
 
 /**
  * A Thread's app as a phone shows it: one server per process of it that listens on a port, each Ready, Starting… or
@@ -27,6 +29,8 @@ export interface ThreadApp {
   servers: PreviewServer[]
   /** The app is set up and stopped: Run starts it. */
   runnable: boolean
+  /** Its cloud machine sleeps: nothing of it runs, and running or opening it wakes the machine. */
+  asleep?: true
   /** What stands in the way, in a sentence, when it isn't set up or can't be read. */
   reason?: string
   at: number
@@ -36,11 +40,22 @@ export const appsStore = createStore<{ apps: ReadonlyMap<string, ThreadApp>; con
 export const useApps = createHook(appsStore)
 
 /**
+ * Where a running app is said, by form, once per screen: on a phone the capsule's App running · Open, beside the
+ * composer and a thumb away, where a row of cards would take the transcript's room; with a tablet's or a laptop's room,
+ * a card per server under the Thread's bar, each with its port and how it stands.
+ */
+export function appShownAs(form: WebForm): "capsule" | "cards" {
+  return form === "phone" ? "capsule" : "cards"
+}
+
+/**
  * How a conversation's app stands, for its capsule: `running` once a server of it is ready, `starting` while one is on
- * its way up, nothing otherwise.
+ * its way up, nothing otherwise, and nothing where its cards say it (`appShownAs`).
  */
 export function useAppStanding(conversation: string): "running" | "starting" | undefined {
+  const capsule = appShownAs(useForm()) === "capsule"
   return useApps((state) => {
+    if (!capsule) return undefined
     const key = state.conversations.get(conversation)
     const servers = key ? state.apps.get(key)?.servers : undefined
     if (servers?.some((server) => server.state === "ready")) return "running"
@@ -83,15 +98,29 @@ export function settling(app: ThreadApp | undefined): boolean {
 export const APP_STARTING_MS = 1_500
 export const APP_SETTLED_MS = 10_000
 
-/** Reads a Thread's app now, keeping what it says; a failure keeps what was there, with why. */
-export async function readApp(client: WebClient, owner: Owner, folder: string): Promise<ThreadApp | undefined> {
+/** What reading an app needs of the client: its calls, and the device they're made as. */
+export type AppReader = { readonly gateway: HostCalling; readonly deviceId: string }
+
+/** What an app is said to be while its cloud machine sleeps. */
+const ASLEEP_REASON = "Its cloud machine is asleep. Running the app wakes it."
+
+/**
+ * Reads a Thread's app now, keeping what it says; a failure keeps what was there, with why. `passive`: this browser's
+ * own look, kept up while the Thread shows, which never wakes a cloud machine nor keeps it running: one asleep is said
+ * to be, and nothing of its app runs meanwhile. Without it, the person asked (opening the app), which wakes it.
+ */
+export async function readApp(client: AppReader, owner: Owner, folder: string, how: { passive?: boolean } = {}): Promise<ThreadApp | undefined> {
   const key = appKey(owner, folder)
   let app: ThreadApp
   try {
-    app = { ...serversOf(await ownerCall<ThreadAppView>(client.gateway, client.deviceId, owner, "mako:thread-app", [folder])), at: Date.now() }
+    app = { ...serversOf(await ownerCall<ThreadAppView>(client.gateway, client.deviceId, owner, "mako:thread-app", [folder], { passive: how.passive === true })), at: Date.now() }
   } catch (error) {
     const held = appsStore.get().apps.get(key)
-    app = { servers: held?.servers ?? [], runnable: false, reason: error instanceof Error ? error.message : String(error), at: Date.now() }
+    // The gateway's answer to a passive look at a sleeping machine: not applied, as nothing runs it now (the desk reads
+    // it the same way, `CloudConversations.#appView`).
+    if (how.passive && owner.kind === "cloud" && error instanceof RuntimeDisconnectedError && !error.unconfirmed)
+      app = { servers: (held?.servers ?? []).map((server) => ({ ...server, state: "stopped" })), runnable: true, asleep: true, reason: ASLEEP_REASON, at: Date.now() }
+    else app = { servers: held?.servers ?? [], runnable: false, reason: error instanceof Error ? error.message : String(error), at: Date.now() }
   }
   const apps = new Map(appsStore.get().apps)
   apps.set(key, app)
@@ -101,7 +130,8 @@ export async function readApp(client: WebClient, owner: Owner, folder: string): 
 
 /**
  * Follows a Thread's app while `on` (the Thread on screen) and the page is in front: read at once, again closely while
- * a server starts, and every ten seconds once it's settled; nothing while hidden, read again the moment it's back.
+ * a server starts, and every ten seconds once it's settled; nothing while hidden, read again the moment it's back. Each
+ * read is passive (`readApp`): a window left open on a cloud Thread lets its machine sleep.
  */
 export function useThreadApp(client: WebClient, conversation: string, owner: Owner, folder: string | undefined, on: boolean): void {
   const ownerId = owner.kind === "cloud" ? owner.threadId : owner.deviceId
@@ -117,7 +147,7 @@ export function useThreadApp(client: WebClient, conversation: string, owner: Own
     const look = async () => {
       clearTimeout(timer)
       if (stopped || document.visibilityState !== "visible") return
-      const app = await readApp(client, asked, folder)
+      const app = await readApp(client, asked, folder, { passive: true })
       if (stopped || document.visibilityState !== "visible") return
       timer = setTimeout(() => void look(), settling(app) ? APP_STARTING_MS : APP_SETTLED_MS)
     }

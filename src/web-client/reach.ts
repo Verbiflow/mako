@@ -49,19 +49,25 @@ export const macPlace = (deviceId: string) => `d-${deviceId}`
 export const threadPlace = (threadId: string) => `thread:${threadId}`
 
 /**
- * The log one place's host calls go through (`gatewayHostCalls`): the console's, and each call the gateway refused or
- * lost kept as that place's last word, with its correlation ID, until a call answers.
+ * The gateway's words for a call that didn't reach its place: the place's link is down (`owner-unavailable`), or its
+ * host is closing or restarting. Any other refusal (`not-found`, `conflict`, `fenced`, a harness's own `failed`) came
+ * from a place that answered.
+ */
+const NOT_REACHED: ReadonlySet<string> = new Set(["owner-unavailable", "unavailable", "restarting"])
+
+/**
+ * The log one place's host calls go through (`gatewayHostCalls`): the console's, and each call the gateway refused as
+ * not reaching the place kept as that place's last word, with its correlation ID, until a call answers. A call lost on
+ * the way (this browser's own socket) says nothing of the place: the reconnect is the list's and the socket's to say.
  */
 export function reachLog(place: string): GatewayCallLog {
   return {
     warn(message, fields) {
       console.warn(`[mako] ${message}`, fields)
-      if (message !== "operation failed" && message !== "operation lost") return
+      if (message !== "operation failed") return
       const said = CallFieldsSchema.parse(fields)
-      const outcome = message === "operation lost" ? "lost" : said.outcome
-      // A refusal of the call itself ("failed", a harness's own error) says the place answered.
-      if (outcome === "failed") return answered(place)
-      unanswered(place, { ...(outcome && { outcome }), ...(said.correlationId && { correlationId: said.correlationId }), message: said.error ?? message })
+      if (!said.outcome || !NOT_REACHED.has(said.outcome)) return answered(place)
+      unanswered(place, { outcome: said.outcome, ...(said.correlationId && { correlationId: said.correlationId }), message: said.error ?? message })
     },
     info: (message, fields) => console.info(`[mako] ${message}`, fields),
   }

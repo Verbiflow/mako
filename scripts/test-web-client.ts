@@ -28,9 +28,14 @@ import { freshStep, stepsLine } from "../src/web-client/steps-words"
 import { switchedWords } from "../src/web-client/answered"
 import type { ToolCall } from "../src/extend/slots"
 import { diagnose, diagnosisText, lastSeen, type ReachInput } from "../src/web-client/diagnosis"
-import { forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
-import { listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
-import { loopbackTarget, serversOf, withPath } from "../src/web-client/previews"
+import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
+import { endMove, followedWays, listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
+import { followAnswer } from "../src/web-client/move-actions"
+import { appKey, appShownAs, appsStore, loopbackTarget, readApp, serversOf, withPath } from "../src/web-client/previews"
+import { cloudReach } from "../src/web-client/trouble-state"
+import { OwnerUnavailableError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
+import { Payload, problem, type ClientSession, type Operation, type Reply } from "@mako/protocol"
 import { connectStep, macConnection } from "../src/web-client/mac-connection"
 import { reachLog, reachStore } from "../src/web-client/reach"
 
@@ -710,6 +715,17 @@ test("what a call met is kept by the place it went to: refused as not connected 
     assert.equal(reachStore.get().places.get("d-studio")?.ok, true, "a harness's own refusal came from a Mac that answered")
     log.warn("a conversation's stream ended", { stream: "x" })
     assert.equal(reachStore.get().places.get("d-studio")?.ok, true, "other lines say nothing of reach")
+    for (const outcome of ["unavailable", "restarting"]) {
+      log.warn("operation failed", { op: "live.read", correlationId: "c-3", attempt: 1, outcome, ms: 3 })
+      assert.equal(reachStore.get().places.get("d-studio")?.ok, false, `${outcome}: its host is closing, not reached`)
+      log.warn("operation failed", { op: "live.start", correlationId: "c-4", attempt: 1, outcome: "failed", ms: 3 })
+    }
+    for (const outcome of ["not-found", "conflict", "fenced", "bad-request", "forbidden"]) {
+      log.warn("operation failed", { op: "live.read", correlationId: "c-5", attempt: 1, outcome, ms: 3 })
+      assert.equal(reachStore.get().places.get("d-studio")?.ok, true, `${outcome} came from a Mac that answered`)
+    }
+    log.warn("operation lost", { op: "live.read", correlationId: "c-6", attempt: 1, error: "socket closed" })
+    assert.equal(reachStore.get().places.get("d-studio")?.ok, true, "a call this browser's socket lost says nothing of the Mac")
   } finally {
     console.warn = quiet
   }
@@ -731,6 +747,29 @@ test("a read the network failed is asked once more; a change never is", async ()
     fetched.length = 0
     await assert.rejects(gateway.rest("PUT", "/v1/sessions/x/waiting/y", { text: "hi" }), /Load failed/)
     assert.deepEqual(fetched, ["PUT"], "a message may have landed: it isn't sent twice")
+  } finally {
+    globalThis.fetch = real
+    gateway.close()
+  }
+})
+
+test("a read the network failed and then refused as run out is still renewed once", async () => {
+  const seen: string[] = []
+  const real = globalThis.fetch
+  let tries = 0
+  // SAFETY: a stand-in that answers as fetch does: a promise of a Response, or a network failure.
+  globalThis.fetch = (async (_url: URL, init: RequestInit) => {
+    seen.push(new Headers(init.headers).get("authorization") ?? "")
+    tries++
+    if (tries === 1) throw new TypeError("Load failed")
+    if (tries === 2) return new Response(JSON.stringify({ title: "Expired" }), { status: 401 })
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } })
+  }) as typeof fetch
+  let asked = 0
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: `t${++asked}`, expiresAt: Date.now() + 600_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  try {
+    assert.deepEqual(await gateway.rest("GET", "/v1/devices"), { ok: true })
+    assert.deepEqual(seen, ["Bearer t1", "Bearer t1", "Bearer t2"], "asked again after the network, then renewed")
   } finally {
     globalThis.fetch = real
     gateway.close()
@@ -781,6 +820,145 @@ test("a move is followed from its steps, said by the list from its first step, a
   assert.equal(listedMove(transit)?.way, "device", "a cloud Thread in transit is coming back")
 })
 
+test("a move whose answer the network lost is not confirmed, asked again under the same ID, and ends as the Mac says", async () => {
+  const thread = uuid(100)
+  const mac = { deviceId: STUDIO, name: "Studio" }
+  const ask = { thread, conversation: "c1", way: "cloud" as const, mac, move: "m1" }
+  movesStore.set({ moves: new Map() })
+  putMove({ thread, conversation: "c1", way: "cloud", mac, move: "m1", step: "asking", stepAt: Date.now(), handOff: false, ours: true })
+  const asked: number[] = []
+  const said: Array<string | undefined> = []
+  await followAnswer(
+    ask,
+    async (attempt) => {
+      asked.push(attempt)
+      if (attempt === 0) throw new RuntimeDisconnectedError(true, undefined, "The connection dropped mid-call.")
+      return { kind: "done" }
+    },
+    async () => {
+      said.push(movesStore.get().moves.get(thread)?.end?.kind)
+      // Meanwhile the Mac goes on, and its steps say so.
+      stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "packing" }, thread, mac })
+      said.push(movesStore.get().moves.get(thread)?.end?.kind ?? movesStore.get().moves.get(thread)?.step)
+    }
+  )
+  assert.deepEqual(said, ["unconfirmed", "packing"], "not confirmed, never failed; a later step carries it on")
+  assert.deepEqual(asked, [0, 1], "asked again, by the same move: its ask carries one ID")
+  assert.equal(movesStore.get().moves.get(thread)?.end?.kind, "done", "and it ends as the Mac answers")
+  assert.equal(movesStore.get().moves.get(thread)?.move, "m1", "no second move")
+
+  // Dropped, then its last step heard before the next ask: the step's end overrides what the phone assumed.
+  movesStore.set({ moves: new Map() })
+  putMove({ thread, conversation: "c1", way: "cloud", mac, move: "m2", step: "packing", stepAt: Date.now(), handOff: false, ours: true })
+  const calls: number[] = []
+  await followAnswer({ ...ask, move: "m2" }, async (attempt) => {
+    calls.push(attempt)
+    throw new RuntimeDisconnectedError(true)
+  }, async () => stepHeard({ conversation: "c1", move: "m2", way: "cloud", step: { kind: "moved", conversations: ["c1"] }, thread, mac }))
+  assert.equal(movesStore.get().moves.get(thread)?.end?.kind, "done")
+  assert.deepEqual(calls, [0], "nothing is asked once its end is heard")
+
+  // Asked of a Mac that's off: nothing started, said as it is.
+  movesStore.set({ moves: new Map() })
+  putMove({ thread, conversation: "c1", way: "cloud", mac, move: "m3", step: "asking", stepAt: Date.now(), handOff: false, ours: true })
+  await followAnswer({ ...ask, move: "m3" }, async () => {
+    throw new OwnerUnavailableError(false, undefined, "Studio's Mako isn't connected.")
+  })
+  assert.deepEqual(movesStore.get().moves.get(thread)?.end, { kind: "failed", reason: "Studio's Mako isn't connected." })
+
+  // The owner's refusal is its last word; an end only assumed here isn't.
+  movesStore.set({ moves: new Map() })
+  putMove({ thread, conversation: "c1", way: "cloud", mac, move: "m4", step: "packing", stepAt: 0, handOff: false, ours: true })
+  endMove(thread, "m4", { kind: "unconfirmed", reason: "x" })
+  stepHeard({ conversation: "c1", move: "m4", way: "cloud", step: { kind: "kept-here", reason: "The cloud is full." }, thread, mac })
+  assert.deepEqual(movesStore.get().moves.get(thread)?.end, { kind: "failed", reason: "The cloud is full." })
+  endMove(thread, "m4", { kind: "unconfirmed", reason: "x" })
+  assert.equal(movesStore.get().moves.get(thread)?.end?.kind, "failed", "a lost answer after it changes nothing")
+  movesStore.set({ moves: new Map() })
+})
+
+test("a main-checkout Thread's move follows the conversation it forked to onto its own branch, to its end", () => {
+  const thread = uuid(100)
+  const mac = { deviceId: STUDIO, name: "Studio" }
+  movesStore.set({ moves: new Map() })
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "own-branch" }, thread, mac })
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "own-branch", to: "c-fork" }, thread, mac })
+  assert.equal(movesStore.get().moves.get(thread)?.conversation, "c-fork", "the rest of its steps are the fork's, and that's what's followed")
+  // The fork's own steps, heard on its own stream, where the list doesn't name it yet.
+  stepHeard({ conversation: "c-fork", move: "m1", way: "cloud", step: { kind: "packing" }, thread: undefined, mac: undefined })
+  assert.equal(movesStore.get().moves.get(thread)?.step, "packing")
+  stepHeard({ conversation: "c-fork", move: "m1", way: "cloud", step: { kind: "moved", conversations: ["c-fork"] }, thread: undefined, mac: undefined })
+  assert.equal(movesStore.get().moves.get(thread)?.end?.kind, "done", "it ends rather than freezing at its own branch")
+  movesStore.set({ moves: new Map() })
+})
+
+test("a move's bar never goes back as the list's word gives way to its steps: the step began when the list said", () => {
+  const thread = uuid(100)
+  const mac = { deviceId: STUDIO, name: "Studio" }
+  movesStore.set({ moves: new Map() })
+  const since = new Date(Date.now() - 20_000).toISOString()
+  const going = foldThreads({ rows: [row(1, { runsOn: { kind: "device", deviceId: STUDIO }, move: { to: "cloud", step: "packing", since } })], devices, quiet: new Map(), waiting: new Map(), archived: [] }).threads[0]!
+  const listed = listedMove(going)!
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "packing", sent: { bytes: 0, of: 10 } }, thread, mac, listed: { to: "cloud", step: "packing", since } })
+  const followed = movesStore.get().moves.get(thread)!
+  assert.equal(followed.stepAt, listed.stepAt, "seeded from the list's since, not restarted now")
+  const now = Date.now()
+  assert.equal(stepFraction("cloud", followed.step, now - followed.stepAt, followed.sent), stepFraction("cloud", listed.step, now - listed.stepAt))
+  // The bar the list drew is carried to the move it turns out to be; a retry, another move, starts its own.
+  assert.deepEqual(barFrom({ move: undefined, fraction: 0.34 }, "m1"), { move: "m1", fraction: 0.34 })
+  assert.deepEqual(barFrom({ move: "m1", fraction: 0.34 }, "m1"), { move: "m1", fraction: 0.34 })
+  assert.deepEqual(barFrom({ move: "m1", fraction: 0.6 }, "m2"), { move: "m2", fraction: 0 })
+  // A row's arrow reads only which way it goes: its bytes are no change to the list.
+  const before = followedWays(movesStore.get().moves)
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "packing", sent: { bytes: 5, of: 10 } }, thread, mac: undefined })
+  assert.deepEqual(followedWays(movesStore.get().moves), before)
+  movesStore.set({ moves: new Map() })
+})
+
+test("an open cloud Thread's app is read passively: an asleep machine is said asleep, never woken; opening the app wakes it", async () => {
+  const sent: Operation[] = []
+  let asleep = true
+  const session: ClientSession = {
+    subscribe: () => {
+      throw new Error("nothing is followed here")
+    },
+    watch: () => {
+      throw new Error("nothing is watched here")
+    },
+    call: async (operation: Operation): Promise<Reply> => {
+      sent.push(operation)
+      if (asleep && operation.passive) return { v: 1, id: operation.id, ok: false, problem: problem("owner-unavailable", "Its machine is asleep", operation.correlationId, "not-applied") }
+      return { v: 1, id: operation.id, ok: true, value: Payload.encoded(encodeRuntimeValue({ kind: "ready", project: "api", phase: "running", processes: [{ name: "web", state: "running", port: 5173 }], checks: [] })!) }
+    },
+  }
+  const client = { gateway: { session }, deviceId: uuid(1) }
+  const owner = { kind: "cloud", threadId: "t-0123456789abcdef" } as const
+  const looked = await readApp(client, owner, "/srv/api", { passive: true })
+  assert.equal(sent[0]?.passive, true, "the look a Thread on screen keeps taking is passive")
+  assert.deepEqual([looked?.asleep, looked?.runnable, looked?.servers.length], [true, true, 0], "asleep, said so: Run wakes it")
+  assert.equal(sent.length, 1, "a passive look isn't repeated until the machine wakes")
+  asleep = false
+  const opened = await readApp(client, owner, "/srv/api")
+  assert.equal(sent[1]?.passive, undefined, "the person opening the app asks as themselves")
+  assert.equal(opened?.servers[0]?.state, "ready")
+  appsStore.set({ apps: new Map(), conversations: new Map() })
+  assert.ok(appKey(owner, "/srv/api"))
+})
+
+test("a running app is said once per screen: the capsule on a phone, its cards where there's room", () => {
+  assert.equal(appShownAs("phone"), "capsule")
+  assert.equal(appShownAs("tablet"), "cards")
+  assert.equal(appShownAs("desk"), "cards")
+})
+
+test("Mako Cloud is one fact for the list and a Thread: the live stream says it answers, whatever one request met", () => {
+  const failed = { at: 1, ok: false, outcome: "502", message: "The gateway answered 502" }
+  assert.equal(cloudReach({ phase: "live" }, failed).state, "ok", "the list's live stream answers now")
+  assert.deepEqual(cloudReach({ phase: "reconnecting" }, failed), { state: "failed", failure: { message: "The gateway answered 502", at: 1, outcome: "502" } })
+  assert.equal(cloudReach({ phase: "reconnecting" }, { at: 2, ok: true }).state, "ok")
+  assert.equal(cloudReach({ phase: "starting" }, undefined).state, "unknown")
+})
+
 test("a Thread's app as servers: each process with a port, Ready once it runs, Starting… on its way, the address the host names first", () => {
   const ready = serversOf({ kind: "ready", project: "api", phase: "running", address: { host: "127.0.0.1", port: 5173 }, processes: [{ name: "api", state: "running", port: 8787 }, { name: "web", state: "running", port: 5173 }, { name: "worker", state: "running" }], checks: [] })
   assert.deepEqual(ready.servers, [{ name: "web", port: 5173, state: "ready" }, { name: "api", port: 8787, state: "ready" }])
@@ -807,5 +985,7 @@ test("a Mac to connect: none yet, one that joined and isn't heard from, one that
   assert.deepEqual([joined.mac?.name, connectStep(joined)], ["Studio", "connect"])
   assert.equal(connectStep(macConnection({ devices, rows: [row(1, { runsOn: { kind: "device", deviceId: STUDIO } })], quiet: new Map() }, new Set())), "done", "it listed what it runs")
   assert.equal(connectStep(macConnection({ devices, rows: [], quiet: new Map() }, new Set([STUDIO]))), "done", "or answered")
-  assert.equal(connectStep(macConnection({ devices, rows: [row(1, { runsOn: { kind: "device", deviceId: STUDIO } })], quiet: new Map([[STUDIO, at(1)]]) }, new Set())), "connect", "a quiet one isn't there")
+  const asleep = macConnection({ devices, rows: [], quiet: new Map([[STUDIO, at(1)]]) }, new Set())
+  assert.equal(asleep.connected, false, "a quiet one isn't there")
+  assert.equal(connectStep(asleep), "done", "but it connected before, with nothing to list: a Mac to wake, not to connect")
 })

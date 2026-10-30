@@ -7,7 +7,7 @@ import { webHarnessLabel } from "./labels"
 import { CLOUD, macPlace, threadPlace, unanswered, useReach, within, type Reached } from "./reach"
 import { macCall } from "./start"
 import type { WebSession } from "./threads"
-import { baseFacts, checkList, cloudState, hereOf, useNow, useOnline } from "./trouble-state"
+import { baseFacts, checkList, cloudReach, hereOf, useNow, useOnline } from "./trouble-state"
 import { useForm } from "./route"
 
 /** A Mac asked whether it's there gets this long to answer before it's said not to. */
@@ -39,13 +39,13 @@ export function useSessionDiagnosis(session: WebSession): Diagnosis | undefined 
   return useMemo(() => {
     const device = session.owner.kind === "device" ? list.devices.get(session.owner.deviceId) : undefined
     const place = session.owner.kind === "device" ? places.get(macPlace(session.owner.deviceId)) : places.get(threadPlace(session.owner.threadId))
-    const cloud = places.get(CLOUD)
-    const failure = !place?.ok && place ? place : cloud && !cloud.ok ? cloud : undefined
+    const cloud = cloudReach(list, places.get(CLOUD))
+    const failure = place && !place.ok ? place : cloud.failure
     const input: ReachInput = {
       now,
       here,
       online,
-      cloud: cloudState(list, cloud),
+      cloud: cloud.state,
       harness: { name: webHarnessLabel(session.row.harness), state: failedStart ? "failed" : "unknown", ...(failedStart && { reason: failedStart }) },
       facts: baseFacts(client, list, now),
     }
