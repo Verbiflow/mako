@@ -32,9 +32,10 @@ function sections(threads: readonly WebThread[]) {
 }
 
 /**
- * The account's Threads. On a phone, the first screen: its bar says where you are and holds New and your account, and
- * rows run edge to edge, parted by hairlines. Wide, it's the desk's rail: on the shell, rows inset and rounded, the one
- * open lit, New at its head and your account at its foot.
+ * The account's Threads under a finger. On a phone, the first screen: its bar says where you are and holds your
+ * account, rows run edge to edge, parted by hairlines, and New waits at the bottom right of a toolbar, in thumb's reach,
+ * as Mail's and Notes' compose does. On a tablet, the rail beside what's open: rows inset and rounded, the one open
+ * lit, New at its head and your account at its foot.
  */
 export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting = false, settings = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; wide: boolean; starting?: boolean; settings?: boolean }) {
   const client = useWebClient()
@@ -58,20 +59,22 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
   const pull = usePullToRefresh(scroller, content, () => client.list.refresh())
   useRowFlip(scroller, showArchived ? "archived" : "threads")
   const named = macCount(list) > 1
-  const quietMacs = [...list.quiet].map(([deviceId, since]) => ({ name: list.devices.get(deviceId)?.name ?? "A Mac", since }))
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
       <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
         <h1 className="min-w-0 flex-1 truncate text-title font-semibold">Threads</h1>
-        <ListPhase list={list} />
-        {wide ? null : (
+        {wide ? (
+          <>
+            <ListPhase list={list} />
+            <button type="button" aria-label="New thread" aria-pressed={starting} onClick={onNew} className={cn("web-icon-button", starting && "bg-fill-selected text-foreground")}>
+              <SquarePenIcon className="size-[19px]" />
+            </button>
+          </>
+        ) : (
           <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
             <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} className="rounded-full" />
           </button>
         )}
-        <button type="button" aria-label="New thread" aria-pressed={wide ? starting : undefined} onClick={onNew} className={cn("web-icon-button", starting && "bg-fill-selected text-foreground")}>
-          <SquarePenIcon className="size-[19px]" />
-        </button>
       </header>
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
@@ -80,16 +83,6 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
             <EmptyList phase={list.phase} onNew={onNew} />
           ) : (
             <>
-              {quietMacs.length ? (
-                <p className="flex flex-col gap-0.5 px-4 pt-2 text-label text-faint">
-                  {quietMacs.map((mac) => (
-                    <span key={mac.name} className="flex items-center gap-1.5">
-                      <MoonIcon aria-hidden className="size-3" />
-                      {mac.name} is off · seen {copyAge(Date.parse(mac.since))}
-                    </span>
-                  ))}
-                </p>
-              ) : null}
               {sections(threads).map((section) => (
                 <section key={section.id} aria-labelledby={`section-${section.id}`} className="web-section">
                   <h2 id={`section-${section.id}`} className="web-section-label">
@@ -130,6 +123,17 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
       <div ref={dock} className="web-list-foot">
         <InstallCard />
       </div>
+      {wide ? null : (
+        <footer className="web-toolbar">
+          <span aria-hidden className="size-11" />
+          <span className="flex min-w-0 justify-center">
+            <ListPhase list={list} />
+          </span>
+          <button type="button" aria-label="New thread" onClick={onNew} className="web-icon-button text-foreground">
+            <SquarePenIcon className="size-[21px]" />
+          </button>
+        </footer>
+      )}
       {wide ? (
         <footer className="shrink-0 border-t border-hairline p-2">
           <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
@@ -202,12 +206,13 @@ export function HarnessMarks({ thread, size }: { thread: WebThread; size?: numbe
 
 function threadLabel(thread: WebThread, detail: string): string {
   const harnesses = [...new Set(thread.sessions.map((session) => webHarnessLabel(session.row.harness)))].join(", ")
-  return `${thread.title}. ${detail}. ${harnesses}.`
+  return `${thread.title}. ${detail}. ${harnesses}.${thread.quietSince ? ` ${thread.where} is off, seen ${copyAge(Date.parse(thread.quietSince))}.` : ""}`
 }
 
 export function ThreadRow({ thread, selected, named, onOpen }: { thread: WebThread; selected: boolean; named: boolean; onOpen: () => void }) {
   const detail = rowDetail(thread, named)
-  const Place = detail.place === "cloud" ? CloudIcon : LaptopIcon
+  // A Mac that's off says so on its own rows, dimmed with a moon where its laptop stood, rather than in a line of its own.
+  const Place = detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : LaptopIcon
   return (
     <button
       type="button"

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react"
 import { AcpPanel } from "@/components/viewer/acp-panel"
+import { Composer as DeskComposer } from "@/components/composer/composer"
 import { PromptQueue } from "@/components/composer/prompt-queue"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { useWebClient } from "./client"
@@ -11,9 +12,11 @@ import type { WebSession } from "./threads"
 
 /**
  * A Session live: opened on its owner through the gateway, drawn by the renderer's own conversation (`AcpPanel`: the
- * transcript, approvals and questions, exactly as on a Mac), with the queue and the phone's composer under it.
+ * transcript, approvals and questions, exactly as on a Mac), with the queue and a composer under it: on a laptop's
+ * browser (`desk`) the desktop's own composer, its routing row and sigils, sending through the same bridge; under a
+ * finger, the phone's.
  */
-export default function LiveSession({ session }: { session: WebSession }) {
+export default function LiveSession({ session, desk = false }: { session: WebSession; desk?: boolean }) {
   const client = useWebClient()
   const conversation = session.row.conversation
   const panel = useRef<HTMLDivElement>(null)
@@ -30,7 +33,7 @@ export default function LiveSession({ session }: { session: WebSession }) {
       close?.()
     }
   }, [client, conversation])
-  useAnsweredLeaves(panel)
+  useAnsweredLeaves(panel, !desk)
   const active = useAcp((state) => state.activeKey === conversation)
   const running = useAcp((state) => {
     const live = activeLiveAcp(state)
@@ -38,6 +41,13 @@ export default function LiveSession({ session }: { session: WebSession }) {
   })
   const canceling = useAcp((state) => activeLiveAcp(state)?.canceling === true)
   const harness = webHarnessLabel(session.row.harness)
+  if (desk)
+    return (
+      <div ref={panel} className="desk-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
+        {active ? <AcpPanel /> : <div className="flex-1" />}
+        {active ? <DeskComposer /> : null}
+      </div>
+    )
   return (
     <div ref={panel} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
       {active ? <AcpPanel /> : <div className="flex-1" />}
@@ -62,10 +72,10 @@ export default function LiveSession({ session }: { session: WebSession }) {
  * its receipt hidden), so the phone draws its last frame in its place, the chosen answer marked, and lets that sink and
  * fade over 180 ms while the transcript takes the room. It's a picture of the card only: nothing in it can be pressed.
  */
-function useAnsweredLeaves(panel: React.RefObject<HTMLDivElement | null>) {
+function useAnsweredLeaves(panel: React.RefObject<HTMLDivElement | null>, on: boolean) {
   useEffect(() => {
     const root = panel.current
-    if (!root) return
+    if (!root || !on) return
     const answered = (event: Event) => {
       const option = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-permission-option]") : null
       const card = option?.closest<HTMLElement>("[data-permission]")
@@ -89,5 +99,5 @@ function useAnsweredLeaves(panel: React.RefObject<HTMLDivElement | null>) {
     // Before the desk's own handler: the card is still drawn as the person saw it.
     root.addEventListener("click", answered, { capture: true })
     return () => root.removeEventListener("click", answered, { capture: true })
-  }, [panel])
+  }, [panel, on])
 }

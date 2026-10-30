@@ -6,7 +6,7 @@ import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { useKeyboardInset } from "./keyboard"
 import { ThreadList } from "./list"
-import { routeHref, useRoute, useWide, type ScreenRoute } from "./route"
+import { routeHref, useForm, useRoute, type ScreenRoute } from "./route"
 import { ScreenStack } from "./screens"
 import { startedFromHere } from "./started"
 import type { Started } from "./start"
@@ -53,6 +53,8 @@ const threadChunk = chunk(() => import("./thread"))
 const transcriptChunk = chunk(() => import("./live-session"))
 const conversationsChunk = chunk(() => import("./conversations"))
 const startChunk = chunk(() => import("./new-thread"))
+/** The desk, a laptop's browser's form: the desktop app's rail, transcript, composer and palette, its own chunk. */
+const deskChunk = chunk(() => import("./desk"))
 const Toaster = lazy(() => import("@/components/ui/sonner").then((module) => ({ default: module.Toaster })))
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
 
@@ -75,15 +77,17 @@ function afterFirstPaint(then: () => void): () => void {
 }
 
 /**
- * The web app: the account's Threads, one open, a new one, and Settings. On a phone the list stays under and what's
- * open slides over it (Back is the edge swipe, or the system's); a new Thread is a sheet over whatever is open. Wide,
- * it's the desk's two panes: the list as a rail on the shell, and what's open beside it, a new Thread included, which
- * opens in the pane as the desk's new tab does.
+ * The web app: the account's Threads, one open, a new one, and Settings, in the form the browser's input asks for
+ * (`useForm`). In a laptop's browser it is the desktop app (`desk.tsx`). On a phone the list stays under and what's open
+ * slides over it (Back is the edge swipe, or the system's); a new Thread is a sheet over whatever is open. On a tablet
+ * it's two panes under a finger: the list beside what's open, a new Thread opening in the pane.
  */
 export function WebApp() {
   const client = useWebClient()
   const [route, navigate, back] = useRoute(client.options.base)
-  const wide = useWide()
+  const form = useForm()
+  const wide = form !== "phone"
+  const desk = form === "desk"
   useKeyboardInset()
   const signedOut = useAccountList((state) => state.phase === "signed-out")
   // The list paints first: what it doesn't need is read after (the page's own work too, such as its service worker).
@@ -111,6 +115,10 @@ export function WebApp() {
   // A screen asked for before its code arrived (opened from an address, or tapped at once) reads it now.
   const threadCode = threadChunk.use()
   const startCode = startChunk.use()
+  const deskCode = deskChunk.use()
+  useEffect(() => {
+    if (desk && !deskCode) void deskChunk.read().catch(() => undefined)
+  }, [desk, deskCode])
   const wantsThread = route.kind === "thread" || (route.kind === "new" && route.over?.kind === "thread")
   useEffect(() => {
     if (!wantsThread || threadCode) return
@@ -179,8 +187,20 @@ export function WebApp() {
       </Suspense>
     ) : null
   const sheet = startOpened && startCode && !wide ? <startCode.StartSheet open={route.kind === "new"} onDismiss={back} onStarted={onStarted} /> : null
+  const toaster = settled ? (
+    <Suspense fallback={null}>
+      {desk ? <Toaster position="top-right" offset={{ top: 46, right: 12 }} duration={3000} /> : <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />}
+    </Suspense>
+  ) : null
+  if (desk)
+    return (
+      <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form="desk">
+        {deskCode ? <deskCode.default route={route} navigate={navigate} back={back} onStarted={onStarted} /> : <div className="flex-1 bg-shell" />}
+        {toaster}
+      </div>
+    )
   return (
-    <div className="web-app flex w-full overflow-hidden bg-shell text-foreground">
+    <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form={form}>
       {wide ? (
         <>
           <div className="web-rail flex shrink-0 flex-col border-r border-hairline">{list}</div>
@@ -192,11 +212,7 @@ export function WebApp() {
         </main>
       )}
       {sheet}
-      {settled ? (
-        <Suspense fallback={null}>
-          <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />
-        </Suspense>
-      ) : null}
+      {toaster}
     </div>
   )
 }
