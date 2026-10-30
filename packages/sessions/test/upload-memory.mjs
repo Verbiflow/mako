@@ -67,6 +67,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve))
   assert.equal(frameLength(unsized), unsized.length, "a frame's length read from its blocks")
   assert.equal(frameLength(frame), frame.length)
   for (const made of [frame, unsized]) for (let cut = 1; cut < made.length; cut += 7) assert.notEqual(frameLength(made.subarray(0, cut)), cut, "no cut frame reads as whole")
+  const emptyFrame = zstdCompressSync(Buffer.alloc(0))
   const bad = {
     "not a frame": Buffer.from("not a zstd frame at all"),
     "too short for a header": frame.subarray(0, 4),
@@ -74,6 +75,8 @@ const tick = () => new Promise((resolve) => setImmediate(resolve))
     "cut to its header": frame.subarray(0, 9),
     "two frames": Buffer.concat([frame, frame]),
     "with bytes after it": Buffer.concat([frame, Buffer.from([1, 2, 3])]),
+    "with an empty frame cut short after it": Buffer.concat([frame, emptyFrame.subarray(0, 5)]),
+    "with an empty frame, then bytes, after it": Buffer.concat([frame, emptyFrame, Buffer.from([1, 2, 3])]),
     "corrupt": flipped,
     "cut short, naming no size": unsized.subarray(0, unsized.length - 3),
   }
@@ -82,6 +85,9 @@ const tick = () => new Promise((resolve) => setImmediate(resolve))
     assert.deepEqual(await frames.decompress(frame), input, `and the call after a frame ${what} reads whole`)
   }
   assert.deepEqual(await frames.decompress(unsized), input, "a whole frame naming no size reads")
+  // zlib's encoder writes an empty frame after one that ends exactly at its output buffer's end; stores hold them.
+  assert.deepEqual(await frames.decompress(Buffer.concat([frame, emptyFrame])), input, "a frame followed by an empty frame reads as the frame")
+  assert.deepEqual(await frames.decompress(Buffer.concat([unsized, emptyFrame, emptyFrame])), input, "and by several")
   // Frames asked for together: the bad one rejects alone, those around it read.
   const together = await Promise.allSettled([frames.decompress(frame), frames.decompress(bad["cut short"]), frames.decompress(frame)])
   assert.deepEqual(together.map((each) => each.status), ["fulfilled", "rejected", "fulfilled"])
