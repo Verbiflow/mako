@@ -72,6 +72,7 @@
     "attribution": "tsx scripts/attribution.ts",
     "test:attribution": "npm run -s build --workspace @mako/protocol && tsx scripts/test-attribution-lines.ts && tsx scripts/test-attribution-conformance.ts && tsx scripts/test-attribution-scenarios.ts && tsx scripts/test-attribution-watcher.ts && tsx scripts/test-attribution-footprint.ts && tsx scripts/test-attribution-regressions.ts && tsx scripts/test-attribution-recovery.ts && tsx scripts/test-shared-journal.ts && tsx scripts/test-file-references.ts && tsx scripts/test-thread-history.ts && tsx scripts/test-worktree-attribution-moves.ts && tsx scripts/test-turn-review.ts",
     "bench:attribution": "npm run -s build --workspace @mako/protocol && tsx scripts/bench-attribution.ts",
+    "bench:attribution-rescan": "npm run -s build --workspace @mako/protocol && tsx scripts/bench-attribution-rescan.ts",
     "bench:footprint": "tsx scripts/bench-footprint.ts",
     "bench:watcher": "tsx scripts/bench-watcher.ts",
     "bench:session-report": "tsx scripts/bench-session-report.ts",
