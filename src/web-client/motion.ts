@@ -24,6 +24,17 @@ export const SETTLE: Spring = { response: 0.38, damping: 1 }
 /** Thrown by a flick: a hair of overshoot, as the gesture carried momentum. */
 export const THROWN: Spring = { response: 0.34, damping: 0.86 }
 
+/**
+ * A spring given as a physics engine gives one (stiffness, damping, mass), as the response and damping ratio these
+ * springs are stated in: the same motion, so a feel tuned elsewhere carries over exactly.
+ */
+export function physicalSpring({ stiffness, damping, mass }: { stiffness: number; damping: number; mass: number }): Spring {
+  return { response: (2 * Math.PI) / Math.sqrt(stiffness / mass), damping: damping / (2 * Math.sqrt(stiffness * mass)) }
+}
+
+/** A row let go mid-swipe: a touch of give as it settles open or shut (stiffness 330, damping 26, mass 0.7). */
+export const ROW: Spring = physicalSpring({ stiffness: 330, damping: 26, mass: 0.7 })
+
 const STEP_S = 1 / 120
 
 /**

@@ -14,6 +14,8 @@ import { ScreenStack } from "./screens"
 import { startedFromHere } from "./started"
 import type { Started } from "./start"
 import { tapOnLift } from "./taps"
+import { useSeenWhileOpen } from "./read-state"
+import { useThread } from "./use-thread"
 import { arrivedUpdated, takeUpdates } from "./update"
 
 /**
@@ -121,6 +123,9 @@ export function WebApp() {
   useEffect(() => {
     if (desk && !deskCode) void deskChunk.read().catch(() => undefined)
   }, [desk, deskCode])
+  // The Thread on screen is read, here: a run that finishes while it's open never lists as "Done".
+  const shownThread = useThread(route.kind === "thread" ? route.thread : route.kind === "new" && route.over?.kind === "thread" ? route.over.thread : "")
+  useSeenWhileOpen(shownThread)
   const wantsThread = route.kind === "thread" || (route.kind === "new" && route.over?.kind === "thread")
   useEffect(() => {
     if (!wantsThread || threadCode) return

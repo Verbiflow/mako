@@ -1,5 +1,6 @@
 import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
+import type { WaitingFor } from "@mako/protocol/attention"
 import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import type { AccountListState, WebDevice } from "./account-list"
@@ -30,6 +31,10 @@ export interface WebThread {
   standing: ThreadStanding
   /** What a waiting Session waits on, in its owner's words ("Approve: npm test"). */
   waitingOn?: string
+  /** What it waits on the person for, as its owner says: an approval, a question, or anything else. */
+  waitingFor?: WaitingFor
+  /** When the earliest of its Sessions at work last changed, as its owner said (`changedAt`): its run's start. */
+  workingSince?: number
   /** Where it runs: one place, or several when its Sessions run on more than one. */
   where: string
   /** The project folder's name, when its Sessions agree on one. */
@@ -42,7 +47,19 @@ export interface WebThread {
   archived?: { move: string; archivedAt: string }
 }
 
-const STANDING_ORDER = { waiting: 0, failed: 1, working: 2, moving: 3, idle: 4 } satisfies Record<ThreadStanding, number>
+/**
+ * Which Session speaks for a Thread, and in what order the list puts them: one waiting on the person, then one at work
+ * (which doesn't need them yet, but will), then one that failed, then the rest. A Thread with a Session at work and
+ * another that failed reads as working: the failure is said once that work ends.
+ */
+const STANDING_ORDER = { waiting: 0, working: 1, moving: 2, failed: 3, idle: 4 } satisfies Record<ThreadStanding, number>
+/** Among waiting Sessions: an approval first, then a question, then anything else the person is waited on for. */
+const WAITING_ORDER = { approval: 0, question: 1, "needs-you": 2 } satisfies Record<WaitingFor, number>
+
+/** How a waiting Thread ranks among waiting ones: what it asks of the person. */
+export function waitingRank(thread: Pick<WebThread, "waitingFor">): number {
+  return WAITING_ORDER[thread.waitingFor ?? "needs-you"]
+}
 export const CLOUD_WHERE = "the cloud"
 
 /** The words for where a Session runs: its device's name, or the cloud. */
@@ -82,6 +99,8 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   const lead = sessions[0]!
   let standing: ThreadStanding = "idle"
   let waitingOn: string | undefined
+  let waitingFor: WaitingFor | undefined
+  let workingSince: number | undefined
   let activityAt = 0
   let waitingMessages = 0
   const places = new Set<string>()
@@ -89,7 +108,11 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   for (const session of sessions) {
     const own = archived ? "idle" : standingOf(session.row.state, session.quietSince !== undefined)
     if (STANDING_ORDER[own] < STANDING_ORDER[standing]) standing = own
-    if (own === "waiting" && !waitingOn && session.row.waitingOn) waitingOn = session.row.waitingOn
+    if (own === "waiting" && (waitingFor === undefined || WAITING_ORDER[session.row.waitingFor ?? "needs-you"] < WAITING_ORDER[waitingFor])) {
+      waitingFor = session.row.waitingFor ?? "needs-you"
+      if (session.row.waitingOn) waitingOn = session.row.waitingOn
+    }
+    if (own === "working" && session.row.changedAt) workingSince = Math.min(workingSince ?? Infinity, Date.parse(session.row.changedAt))
     activityAt = Math.max(activityAt, Date.parse(session.row.activityAt))
     waitingMessages += session.waiting.length
     places.add(session.where)
@@ -107,6 +130,8 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
     waitingMessages,
   }
   if (waitingOn) thread.waitingOn = waitingOn
+  if (standing === "waiting" && waitingFor) thread.waitingFor = waitingFor
+  if (standing === "working" && workingSince !== undefined) thread.workingSince = workingSince
   if (projects.size === 1) thread.project = [...projects][0]!
   const quietSince = sessions.find((session) => session.quietSince)?.quietSince
   if (quietSince && sessions.every((session) => session.quietSince)) thread.quietSince = quietSince
@@ -133,7 +158,7 @@ export function foldThreads(list: Pick<AccountListState, "rows" | "devices" | "q
     else byThread.set(row.thread, [session])
   }
   const threads = [...byThread].map(([id, sessions]) => fold(id, sessions))
-  threads.sort((left, right) => STANDING_ORDER[left.standing] - STANDING_ORDER[right.standing] || right.activityAt - left.activityAt)
+  threads.sort((left, right) => STANDING_ORDER[left.standing] - STANDING_ORDER[right.standing] || (left.standing === "waiting" ? waitingRank(left) - waitingRank(right) : 0) || right.activityAt - left.activityAt)
   const archived = list.archived.flatMap((entry) => {
     const sessions = entry.sessions.map((row) => sessionOf(row, list))
     return sessions.length ? [fold(entry.sessions[0]!.thread, sessions, entry)] : []

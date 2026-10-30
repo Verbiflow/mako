@@ -8,7 +8,9 @@ import { typedRepository } from "../src/web-client/account"
 import { Gateway } from "../src/web-client/gateway"
 import { rowDetail } from "../src/web-client/rows"
 import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places } from "../src/web-client/places"
-import { rubberband, SETTLE, springPath } from "../src/web-client/motion"
+import { ROW, rubberband, SETTLE, springPath } from "../src/web-client/motion"
+import { ACTION_PX, commitDistance, swipeRelease } from "../src/web-client/row-gestures"
+import { isUnread, markSeen, markUnread, noteListed, readStore } from "../src/web-client/read-state"
 import { shouldOffer } from "../src/web-client/install"
 import { HeldPreviews, type Picked } from "../src/web-client/attachments"
 import { accessInEffect, chooseAccess, orderedModes, readAccessChoices, type Ladder } from "../src/web-client/access"
@@ -336,4 +338,71 @@ test("a newer build is taken only at a quiet moment: nothing touched for 8 s, no
   assert.equal(newerBuild("dev", "def456"), false, "a development server never reloads itself")
   assert.equal(newerBuild(undefined, "def456"), false)
   assert.equal(newerBuild("abc123", undefined), false, "a host that names no build")
+})
+
+test("a row speaks for its Thread by what needs the person most: an approval, a question, waiting, then work, a failure", () => {
+  const rows = [
+    row(40, { thread: uuid(140), state: "waiting", waitingFor: "needs-you", waitingOn: "Waiting for you", activityAt: at(9) }),
+    row(41, { thread: uuid(141), state: "waiting", waitingFor: "question", waitingOn: "A question: which branch?", activityAt: at(8) }),
+    row(42, { thread: uuid(142), state: "waiting", waitingFor: "approval", waitingOn: "Approve: npm test", activityAt: at(1) }),
+    // One Session asks a question, another an approval: the approval speaks.
+    row(43, { thread: uuid(143), state: "waiting", waitingFor: "question", waitingOn: "A question: which file?", activityAt: at(7) }),
+    row(44, { thread: uuid(143), state: "waiting", waitingFor: "approval", waitingOn: "Approve: rm -rf dist", activityAt: at(2) }),
+    // At work in one Session, failed in another: it works.
+    row(45, { thread: uuid(145), state: "failed", activityAt: at(6) }),
+    row(46, { thread: uuid(145), state: "working", changedAt: at(3), activityAt: at(5) }),
+    row(47, { thread: uuid(147), state: "failed", activityAt: at(9) }),
+  ]
+  const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
+  assert.deepEqual(threads.map((thread) => [thread.id, thread.standing, thread.waitingFor]), [
+    [uuid(143), "waiting", "approval"],
+    [uuid(142), "waiting", "approval"],
+    [uuid(141), "waiting", "question"],
+    [uuid(140), "waiting", "needs-you"],
+    [uuid(145), "working", undefined],
+    [uuid(147), "failed", undefined],
+  ])
+  assert.equal(threads[0]?.waitingOn, "Approve: rm -rf dist")
+  assert.equal(threads.find((thread) => thread.id === uuid(145))?.workingSince, Date.parse(at(3)), "its run started when its owner said it changed")
+})
+
+test("a working row counts its run, and a finished one says Done until it's opened again", () => {
+  const rows = [row(50, { thread: uuid(150), state: "working" }), row(51, { thread: uuid(151), state: "idle", activityAt: at(20) })]
+  const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
+  const [working, idle] = [threads.find((thread) => thread.id === uuid(150))!, threads.find((thread) => thread.id === uuid(151))!]
+  assert.deepEqual(rowDetail(working, false, { now: 1_000 + 42_000, workingSince: 1_000 }), { text: "Working", tone: "working", elapsed: "42s" })
+  assert.deepEqual(rowDetail(working, false, { now: 3 * 60_000 + 5_000, workingSince: 0 }).elapsed, "3m")
+  assert.deepEqual(rowDetail(working, false, { now: 75 * 60_000, workingSince: 0 }).elapsed, "1h 15m")
+  assert.deepEqual(rowDetail(working, false), { text: "Working", tone: "working" }, "a run whose start isn't known says only that it works")
+  assert.deepEqual(rowDetail(idle, false, { done: true }), { text: "api", tone: "faint", place: "cloud", lead: "Done" })
+
+  // Read state: first listed reads as seen; a run that finishes after is news until the Thread is opened.
+  const listed = { id: uuid(151), activityAt: Date.parse(at(20)) }
+  noteListed([listed])
+  assert.equal(isUnread(readStore.get(), listed), false, "what was there before is not news")
+  const finished = { ...listed, activityAt: Date.parse(at(25)) }
+  assert.equal(isUnread(readStore.get(), finished), true, "finished since it was last on screen")
+  markSeen(finished.id, finished.activityAt)
+  assert.equal(isUnread(readStore.get(), finished), false, "opened: read")
+  markUnread(finished.id)
+  assert.equal(isUnread(readStore.get(), finished), true, "marked unread by hand")
+  markSeen(finished.id, finished.activityAt)
+  assert.equal(isUnread(readStore.get(), finished), false, "opened again: the mark goes")
+})
+
+test("a row swiped left opens on Archive past 42% of it, and archives past the full swipe or when thrown", () => {
+  const width = 393
+  assert.equal(commitDistance(width), Math.max(ACTION_PX + 44, width * 0.58))
+  assert.equal(commitDistance(320), ACTION_PX + 44 > 320 * 0.58 ? ACTION_PX + 44 : 320 * 0.58)
+  const release = (offset: number, velocity = 0) => swipeRelease({ offset, velocity, width })
+  assert.equal(release(-ACTION_PX * 0.41), "close", "short of 42% of the action: shut")
+  assert.equal(release(-ACTION_PX * 0.43), "open", "past it: open on Archive")
+  assert.equal(release(-commitDistance(width) + 1), "open")
+  assert.equal(release(-commitDistance(width)), "commit", "a full swipe archives")
+  assert.equal(release(-ACTION_PX - 10, -0.8), "commit", "thrown left once Archive is out: archived")
+  assert.equal(release(-20, -0.8), "open", "a flick left on a nudge: opened")
+  assert.equal(release(-ACTION_PX, 0.8), "close", "a flick right: shut")
+  // The row's spring is T3's (stiffness 330, damping 26, mass 0.7): barely under critical, at rest within 0.4 s.
+  assert.ok(Math.abs(ROW.response - 0.2894) < 0.001 && Math.abs(ROW.damping - 0.855) < 0.001)
+  assert.ok(springPath(-ACTION_PX, 0, 0, ROW).length / 120 < 0.4)
 })

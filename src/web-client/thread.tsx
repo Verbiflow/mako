@@ -17,6 +17,7 @@ import { moveToCloud } from "./start"
 import { CLOUD_WHERE, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
 import { startingWhere } from "./started"
 import { useThread } from "./use-thread"
+import { archiveThread } from "./archive-thread"
 import { useSyncing } from "./syncing"
 import { useDelayedStatus } from "./delayed-status"
 
@@ -141,23 +142,15 @@ function ThreadBar({ onBack, title, subtitle, place, headingRef, actions }: { on
 export function ThreadActions({ thread, session, onArchived, onPreview, onAdd }: { thread: WebThread; session: WebSession; onArchived: () => void; onPreview: () => void; onAdd: (() => void) | undefined }) {
   const client = useWebClient()
   const [busy, setBusy] = useState<string | undefined>(undefined)
-  const cloud = thread.sessions.find((each) => each.row.runsOn.kind === "cloud")?.row.runsOn
   const onMac = session.owner.kind === "device" && !session.quietSince ? session.owner : undefined
   const archive = async (anyway = false) => {
     setBusy("Archiving…")
     try {
-      if (cloud?.kind === "cloud") {
-        const { archiveCloudThread } = await import("./archive")
-        const words = { packing: "Saving its work…", ending: "Ending its machine…" } as const
-        const outcome = await archiveCloudThread(client.gateway, client.deviceId, cloud.threadId, client.list.rows(), { anyway, step: (kind) => kind !== "bringing" && setBusy(words[kind]) })
-        if (outcome.kind === "refused") {
-          if (outcome.anyway) toast.error("Not archived", { description: outcome.reason, action: { label: "Archive anyway", onClick: () => void archive(true) }, duration: ACTION_TOAST_MS })
-          else toast.error("Not archived", { description: outcome.reason })
-          return
-        }
-      } else {
-        const conversations = await client.conversations()
-        for (const each of thread.sessions) await conversations.archiveOnOwner(each.row.conversation)
+      const outcome = await archiveThread(client, thread, { anyway, step: setBusy })
+      if (outcome.kind === "refused") {
+        if (outcome.anyway) toast.error("Not archived", { description: outcome.reason, action: { label: "Archive anyway", onClick: () => void archive(true) }, duration: ACTION_TOAST_MS })
+        else toast.error("Not archived", { description: outcome.reason })
+        return
       }
       toast.success("Archived", { description: thread.title })
       onArchived()

@@ -15,7 +15,12 @@ import { useDelayedStatus } from "./delayed-status"
 import { InstallCard } from "./install-card"
 import { usePullToRefresh } from "./pull"
 import { PullIndicator } from "./pull-indicator"
-import { rowDetail } from "./rows"
+import { archiveWithUndo, useArchiving } from "./archive-thread"
+import { isUnread, noteListed, useReadState, type ReadState } from "./read-state"
+import { useRowGestures } from "./row-gestures"
+import { RowMenu } from "./row-menu"
+import { shownTitle } from "./renames"
+import { rowDetail, type RowContext } from "./rows"
 import { foldThreads, type WebThread } from "./threads"
 import { webHarnessLabel } from "./labels"
 import { macCount } from "./places"
@@ -41,7 +46,34 @@ function sections(threads: readonly WebThread[]) {
 export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting = false, settings = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; wide: boolean; starting?: boolean; settings?: boolean }) {
   const client = useWebClient()
   const list = useAccountList((state) => state)
-  const { threads, archived } = useMemo(() => foldThreads(list), [list])
+  const folded = useMemo(() => foldThreads(list), [list])
+  // A Thread swiped away leaves the list at once; it's back only if the archive is taken back or refused.
+  const hidden = useArchiving((state) => state.hidden)
+  const threads = useMemo(() => (hidden.size ? folded.threads.filter((thread) => !hidden.has(thread.id)) : folded.threads), [folded, hidden])
+  const { archived } = folded
+  const read = useReadState((state) => state)
+  // Threads listed here for the first time read as seen: only what happens from now on is news.
+  useEffect(() => {
+    if (list.phase === "live") noteListed(folded.threads)
+  }, [list.phase, folded])
+  const now = useTick(threads.some((thread) => thread.standing === "working"))
+  // The held row's menu; `serial` starts each one afresh, a rename half-typed in the last one left behind.
+  const [menu, setMenu] = useState<{ thread: WebThread; anchor: HTMLElement | null; open: boolean; serial: number } | undefined>(undefined)
+  const rowProps = (thread: WebThread) => {
+    const context = rowContext(thread, read, now)
+    return {
+      thread,
+      selected: thread.id === selected,
+      named,
+      context,
+      // A dot for news: a run that finished since it was last opened here, or the person's own mark.
+      unread: Boolean(read.unread[thread.id]) || context.done === true,
+      swipe: !thread.archived && !thread.quietSince,
+      onOpen: () => onOpen(thread),
+      onHold: (anchor: HTMLElement | null) => setMenu((last) => ({ thread, anchor, open: true, serial: (last?.serial ?? 0) + 1 })),
+      onArchive: () => archiveWithUndo(client, thread),
+    }
+  }
   const [showArchived, setShowArchived] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
@@ -96,7 +128,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
                   <ul role="list" className="web-rows">
                     {section.threads.map((thread) => (
                       <li key={thread.id} data-flip-key={thread.id}>
-                        <ThreadRow thread={thread} selected={thread.id === selected} named={named} onOpen={() => onOpen(thread)} />
+                        <ThreadRow {...rowProps(thread)} />
                       </li>
                     ))}
                   </ul>
@@ -115,7 +147,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
                 <ul role="list" className="web-rows">
                   {archived.map((thread) => (
                     <li key={thread.id} data-flip-key={`archived:${thread.id}`}>
-                      <ThreadRow thread={thread} selected={thread.id === selected} named={named} onOpen={() => onOpen(thread)} />
+                      <ThreadRow {...rowProps(thread)} />
                     </li>
                   ))}
                 </ul>
@@ -134,6 +166,15 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
         )}
         <InstallCard />
       </div>
+      <RowMenu
+        key={menu?.serial}
+        thread={menu?.thread}
+        open={menu?.open ?? false}
+        anchor={menu?.anchor ?? null}
+        unread={menu ? isUnread(read, menu.thread) : false}
+        onDismiss={() => setMenu((shown) => (shown ? { ...shown, open: false } : shown))}
+        onArchive={(thread) => archiveWithUndo(client, thread)}
+      />
       {wide ? (
         <footer className="shrink-0 border-t border-hairline p-2">
           <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
@@ -209,43 +250,115 @@ export function HarnessMarks({ thread, size }: { thread: WebThread; size?: numbe
   )
 }
 
-function threadLabel(thread: WebThread, detail: string): string {
+function threadLabel(thread: WebThread, detail: string, unread: boolean): string {
   const harnesses = [...new Set(thread.sessions.map((session) => webHarnessLabel(session.row.harness)))].join(", ")
-  return `${thread.title}. ${detail}. ${harnesses}.${thread.quietSince ? ` ${thread.where} is off, seen ${copyAge(Date.parse(thread.quietSince))}.` : ""}`
+  return `${shownTitle(thread)}. ${unread ? "Unread. " : ""}${detail}. ${harnesses}.${thread.quietSince ? ` ${thread.where} is off, seen ${copyAge(Date.parse(thread.quietSince))}.` : ""}`
 }
 
-export function ThreadRow({ thread, selected, named, onOpen }: { thread: WebThread; selected: boolean; named: boolean; onOpen: () => void }) {
-  const detail = rowDetail(thread, named)
+/** When this browser first saw each Thread at work, for one whose owner doesn't say when its run started. */
+const seenWorking = new Map<string, number>()
+
+/** What a row reads besides its Thread: the clock, when its run started, and whether it finished unread. */
+function rowContext(thread: WebThread, read: ReadState, now: number): RowContext {
+  if (thread.standing !== "working") {
+    seenWorking.delete(thread.id)
+    const seen = read.seen[thread.id]
+    return { done: thread.standing === "idle" && !thread.archived && seen !== undefined && thread.activityAt > seen }
+  }
+  let since = thread.workingSince
+  if (since === undefined) {
+    since = seenWorking.get(thread.id) ?? now
+    seenWorking.set(thread.id, since)
+  }
+  return { now, workingSince: since }
+}
+
+/** The clock, ticking each second while `on` (a row counts its run), else still. */
+function useTick(on: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!on) return
+    const tick = () => setNow(Date.now())
+    const first = setTimeout(tick, 0)
+    const timer = setInterval(tick, 1000)
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, [on])
+  return now
+}
+
+/**
+ * One Thread in the list. Under a finger it opens as the finger lifts, offers its menu when held, and swipes left to
+ * Archive (`row-gestures.ts`). Its title is set in medium, except while it's at work: that doesn't need the person yet.
+ * A run that finished since it was last opened here leads its line with "Done" and marks it unread.
+ */
+export function ThreadRow({ thread, selected, named, onOpen, context = {}, unread = false, swipe = false, onHold, onArchive }: { thread: WebThread; selected: boolean; named: boolean; onOpen: () => void; context?: RowContext; unread?: boolean; swipe?: boolean; onHold?: (anchor: HTMLElement | null) => void; onArchive?: () => void }) {
+  const detail = rowDetail(thread, named, context)
+  const box = useRef<HTMLDivElement>(null)
+  const front = useRef<HTMLButtonElement>(null)
+  useRowGestures(box, front, swipe, { onTap: onOpen, onHold: () => onHold?.(box.current), onArchive: () => onArchive?.() })
   // A Mac that's off says so on its own rows, dimmed with a moon where its laptop stood, rather than in a line of its own.
   const Place = detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : LaptopIcon
+  const receding = thread.standing === "working" || thread.standing === "moving"
+  const spoken = detail.elapsed ? `${detail.text} for ${detail.elapsed}` : detail.lead ? `${detail.lead}, ${detail.text}` : detail.text
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-current={selected ? "page" : undefined}
-      aria-label={threadLabel(thread, detail.text)}
-      data-thread={thread.id}
-      data-standing={thread.standing}
-      className={cn("web-row group relative flex w-full items-center text-left", thread.quietSince && "opacity-60")}
-    >
-      <span className="web-row-mark">
-        <HarnessMarks thread={thread} />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">{thread.title}</span>
-          <span className="tabular shrink-0 text-label text-faint">{formatRelative(thread.activityAt)}</span>
+    <div ref={box} className="web-swipe">
+      {swipe ? (
+        <div className="web-swipe-actions" aria-hidden>
+          <button type="button" tabIndex={-1} data-swipe-action className="web-swipe-archive">
+            <ArchiveIcon className="size-5" />
+            <span>Archive</span>
+          </button>
+        </div>
+      ) : null}
+      <button
+        ref={front}
+        type="button"
+        onClick={onOpen}
+        aria-current={selected ? "page" : undefined}
+        aria-label={threadLabel(thread, spoken, unread)}
+        data-thread={thread.id}
+        data-standing={thread.standing}
+        data-unread={unread || undefined}
+        className={cn("web-row group relative flex w-full items-center text-left", thread.quietSince && "opacity-60")}
+      >
+        <span className="web-row-mark">
+          <HarnessMarks thread={thread} />
         </span>
-        <span className="flex min-w-0 items-center gap-1.5 text-label">
-          {detail.place ? <Place aria-hidden className="size-3 shrink-0 text-faint" /> : null}
-          {detail.tone === "working" ? (
-            <Shimmer text={detail.text} className="min-w-0 truncate" />
-          ) : (
-            <span className={cn("min-w-0 flex-1 truncate", detail.tone === "caution" ? "text-caution" : detail.tone === "negative" ? "text-negative" : "text-faint")}>{detail.text}</span>
-          )}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
+            <span className="flex shrink-0 items-center gap-1.5 self-center">
+              {unread ? <span aria-hidden data-unread-mark className="size-2 rounded-full bg-foreground" /> : null}
+              <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
+            </span>
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-label">
+            {detail.place ? <Place aria-hidden className="size-3 shrink-0 text-faint" /> : null}
+            {detail.tone === "working" ? (
+              <Shimmer className="min-w-0 truncate">
+                {detail.text}
+                {detail.elapsed ? <span className="tabular"> {detail.elapsed}</span> : null}
+              </Shimmer>
+            ) : (
+              <span className={cn("min-w-0 flex-1 truncate", detail.tone === "caution" ? "text-caution" : detail.tone === "negative" ? "text-negative" : "text-faint")}>
+                {detail.lead ? (
+                  <>
+                    <span data-done className="font-medium text-foreground">
+                      {detail.lead}
+                    </span>
+                    {" · "}
+                  </>
+                ) : null}
+                {detail.text}
+              </span>
+            )}
+          </span>
         </span>
-      </span>
-    </button>
+      </button>
+    </div>
   )
 }
 

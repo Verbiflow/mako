@@ -150,7 +150,7 @@
       @apply bg-fill-hover;
     }
   }
-  [data-list="screen"] li + li > .web-row::before {
+  [data-list="screen"] li + li .web-row::before {
     content: "";
     position: absolute;
     top: 0;
@@ -158,6 +158,59 @@
     left: 56px;
     border-top: 1px solid var(--hairline);
   }
+  /*
+   * A row over its swipe action: the row slides left over Archive, ink on the page's ground, drawn only while it shows.
+   * Held, the row sinks a little before its menu rises; a full swipe arms Archive, which grows as the finger crosses.
+   */
+  .web-swipe {
+    position: relative;
+    overflow: hidden;
+    touch-action: pan-y;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: scale 160ms var(--ease-out);
+  }
+  .web-swipe[data-held] {
+    scale: 0.98;
+    transition: scale 380ms var(--ease-out) 120ms;
+  }
+  .web-swipe[data-swiping] > .web-row {
+    @apply bg-surface;
+  }
+  [data-list="rail"] .web-swipe {
+    @apply rounded-lg;
+  }
+  [data-list="rail"] .web-swipe[data-swiping] > .web-row {
+    @apply bg-shell;
+  }
+  .web-swipe-actions {
+    @apply absolute inset-0 flex justify-end bg-foreground text-background;
+    visibility: hidden;
+  }
+  .web-swipe[data-swiping] .web-swipe-actions {
+    visibility: visible;
+  }
+  .web-swipe-archive {
+    @apply flex h-full w-[88px] flex-col items-center justify-center gap-1 text-label font-medium;
+  }
+  .web-swipe-archive > svg {
+    transition: scale 180ms var(--ease-out);
+  }
+  .web-swipe[data-armed] .web-swipe-archive > svg {
+    scale: 1.18;
+  }
+  /* "Done" and a hand's "unread": a dot in the row's ink beside its time, never the accent. */
+  .web-row[data-unread] [data-unread-mark] {
+    animation: web-unread-in 220ms var(--ease-out);
+  }
+  @keyframes web-unread-in {
+    from {
+      opacity: 0;
+      scale: 0.4;
+    }
+  }
+
   [data-list="rail"] .web-rows {
     @apply flex flex-col gap-px px-2;
   }
@@ -751,6 +804,10 @@
   .web-fab[data-away],
   .web-live [data-permission-option]:active {
     transform: none !important;
+  }
+  .web-swipe[data-held],
+  .web-swipe[data-armed] .web-swipe-archive > svg {
+    scale: none !important;
   }
   /* Pressed, New dims instead of shrinking. */
   .web-fab:active {
