@@ -98,8 +98,17 @@ class MemoryRemote {
     const through = page.at(-1)?.n ?? after
     return { bundle: { harness, nativeId, layout: this.layout, marks: this.marks, units: [...units.values()] }, through, more: mine.some((entry) => entry.n > through) }
   }
+  /** Each session it holds, with its versions: what a device's uploads set against what they believe it holds. */
   async sessions() {
-    return []
+    const sessions = new Map()
+    for (const [key, unit] of this.units) {
+      const [harness, nativeId] = key.split("\n")
+      const session = sessions.get(`${harness}\n${nativeId}`) ?? { harness, nativeId, units: 0, versions: 0, through: 0 }
+      session.units += 1
+      session.versions += unit.versions.length
+      sessions.set(`${harness}\n${nativeId}`, session)
+    }
+    return [...sessions.values()]
   }
 }
 
@@ -341,19 +350,30 @@ try {
       await appendFile(own(name), line(n, 1))
       await store.capture({ harness: "synthetic", nativeId: name, home, records: { roots: [{ name: "synthetic", path: home }], files: [own(name)], databases: [] } })
     }
-    for (const name of ["s6", "s7"]) await capture(name, 0)
+    // Lines of their own: a chunk the account refuses is refused in whichever Session names it.
+    for (const [name, n] of [["s6", 0], ["s7", 1_000]]) await capture(name, n)
     const remote = new MemoryRemote("gateway/d-refusing")
     const tries = { s6: 0, s7: 0 }
     let refusedBytes = 0
     let unanswered = 0
+    // s6's first chunk is one the account refuses wherever it's carried, as the gateway refused a chunk of exactly
+    // 40,960 bytes: with its bundle, in a pack, and alone. Each try sends it alone first, which counts the try.
+    const poisoned = new Set()
     remote.pushWith = async (bundle, pack) => {
-      tries[bundle.nativeId] += 1
       if (bundle.nativeId === "s7") {
+        tries.s7 += 1
         if (unanswered-- > 0) throw new GatewayHttpError(503, "Something went wrong", { method: "POST", path: "/sessions/with-chunks", tries: 4, correlationId: `c-${tries.s7}` })
         return MemoryRemote.prototype.pushWith.call(remote, bundle, pack)
       }
+      if (!poisoned.size) for (const chunk of pack) poisoned.add(chunk.hash)
       refusedBytes += pack.reduce((total, chunk) => total + chunk.body.length, 0)
       throw new GatewayHttpError(400, "The pack was refused", { method: "POST", path: "/sessions/with-chunks", tries: 1, correlationId: `c-${tries.s6}` })
+    }
+    remote.putChunks = async (pack) => {
+      if (!pack.some((chunk) => poisoned.has(chunk.hash))) return MemoryRemote.prototype.putChunks.call(remote, pack)
+      if (pack.length === 1) tries.s6 += 1
+      refusedBytes += pack.reduce((total, chunk) => total + chunk.body.length, 0)
+      throw new GatewayHttpError(400, "The pack was refused", { method: "PUT", path: "/chunks", tries: 1, correlationId: `c-${tries.s6}` })
     }
     let now = 1_800_000_000_000
     const lines = []

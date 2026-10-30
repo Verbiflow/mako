@@ -137,6 +137,7 @@ import { SessionCatalog } from "./catalog.js"
 import type { BackfillLog } from "./record-backfill.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
 import { DecodeAside } from "./decode-aside.js"
+import type { WorkUnderWay } from "./loop-watch.js"
 import { keptOutputsIn } from "./kept-outputs.js"
 import { NativeStores } from "./read-only-sqlite.js"
 import type { SessionProvider } from "./providers/types.js"
@@ -215,6 +216,8 @@ export function defaultCatalog(
      * harness (Cursor's SDK agents). The person's `~/.mako` unless given.
      */
     userRoot?: string
+    /** Names what the catalog's process does, for a watch on its loop (`watchLoop`): the sync daemon's. */
+    work?: WorkUnderWay
   } = {}
 ): SessionCatalog {
   const { readers = SAVED_HISTORY_READERS, decodeExecutable, userRoot, ...rest } = options

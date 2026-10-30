@@ -8,6 +8,7 @@ import { zstdCompressSync, zstdDecompressSync } from "node:zlib"
 import { z } from "zod"
 import { EntrySchema, type Entry, type EntryOf } from "./entries.js"
 import type { UnreadIndex } from "./unread-index.js"
+import type { ZstdFrames } from "./zstd-frames.js"
 import { entryChars, trimToolOutput, VIEWER_PAGE, type Thread, type ThreadPageOptions, type ThreadTail } from "./format.js"
 import type { ResumePoint } from "./jsonl.js"
 import { ResumePointSchema, ThreadRefSchema, UnreadRecordSchema } from "./thread-schema.js"
@@ -126,6 +127,12 @@ export interface SessionView {
   at(index: number): Entry | null
   /** Every entry from `from` on, whole. */
   entries(from?: number): Entry[]
+  /**
+   * The entries from `start` up to `end`, each as the bytes of its JSON, the way the view keeps it: what a reading copy
+   * writes, without reading each entry back into objects and strings and out again, which took two thirds of a 146 MB
+   * copy's time and held as much again in memory. A compressed entry is read through `frames`, its caller's context.
+   */
+  json(start: number, end: number, frames: ZstdFrames): Promise<Uint8Array[]>
   thread(): Thread
 }
 
@@ -167,6 +174,10 @@ export class ThreadView implements SessionView {
 
   entries(from = 0): Entry[] {
     return this.whole.entries.slice(from)
+  }
+
+  json(start: number, end: number): Promise<Uint8Array[]> {
+    return Promise.resolve(this.whole.entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry))))
   }
 
   thread(): Thread {
@@ -255,6 +266,14 @@ export class View implements SessionView {
     return row ? decodeEntry(row["body"]) : null
   }
 
+  async json(start: number, end: number, frames: ZstdFrames): Promise<Uint8Array[]> {
+    if (end <= start) return []
+    const stored = this.prepare("SELECT body FROM entries WHERE seq >= ? AND seq < ? ORDER BY seq").all(start, end).map((row) => storedBody(row["body"]))
+    const bytes: Uint8Array[] = []
+    for (const body of stored) bytes.push(body[0] === 0x7b ? body : await frames.decompress(body))
+    return bytes
+  }
+
   /** Whether an entry before `index` has the id of one of `entries`. */
   holdsBefore(entries: readonly Entry[], index: number): boolean {
     const statement = this.prepare("SELECT seq FROM entries WHERE id = ?")
@@ -313,9 +332,20 @@ function encodeBody(entry: Entry): Buffer {
 
 /** A body as `encodeBody` kept it: JSON as written (it opens with `{`), else a zstd frame. */
 function decodeEntry(value: SQLOutputValue | undefined): Entry {
-  if (!(value instanceof Uint8Array)) throw new Error("A view's entry is not a blob")
-  const bytes = value[0] === 0x7b ? value : zstdDecompressSync(value)
+  const bytes = bodyBytes(value)
   return EntrySchema.parse(JSON.parse(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8")))
+}
+
+/** A body's JSON bytes, as `encodeBody` wrote it. */
+function bodyBytes(value: SQLOutputValue | undefined): Uint8Array {
+  const body = storedBody(value)
+  return body[0] === 0x7b ? body : zstdDecompressSync(body)
+}
+
+/** A body as the view keeps it: JSON, else a zstd frame. */
+function storedBody(value: SQLOutputValue | undefined): Uint8Array {
+  if (!(value instanceof Uint8Array)) throw new Error("A view's entry is not a blob")
+  return value
 }
 
 /** Writes `entries` into `db`, one row each, from `seq`: the whole form, and the brief one when a page would trim it. Returns the characters they hold. */

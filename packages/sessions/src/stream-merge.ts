@@ -144,11 +144,35 @@ type Step = { kind: "same"; record: number; stream: number } | { kind: "record";
  * a call that never returned a result.
  */
 export function mergeStream(record: readonly Entry[], stream: readonly Entry[], differences: readonly StreamDifference[] = [], cutOff?: ReadonlySet<string>): StreamMerge {
+  return finished(mergeStreamSteps(record, stream, differences, cutOff))
+}
+
+/**
+ * Work that stops (`yield`) every few hundred items it goes through, so a
+ * caller can run it at once (`finished`) or a slice at a time between other
+ * work: a history of 150MB merged in one stretch held a host's loop for a
+ * third of a second.
+ */
+export type Steps<Result> = Generator<void, Result, void>
+
+/** `steps` run to their end at once. */
+export function finished<Result>(steps: Steps<Result>): Result {
+  for (;;) {
+    const next = steps.next()
+    if (next.done) return next.value
+  }
+}
+
+/** How many items a merge goes through between two stops. */
+const ITEMS_PER_STEP = 256
+
+/** `mergeStream` as `Steps`: the same merge, stopping every `ITEMS_PER_STEP` items. */
+export function* mergeStreamSteps(record: readonly Entry[], stream: readonly Entry[], differences: readonly StreamDifference[] = [], cutOff?: ReadonlySet<string>): Steps<StreamMerge> {
   const cut = cutOffEntries(stream, cutOff)
-  const left = units(record)
-  const right = units(stream)
+  const left = yield* units(record)
+  const right = yield* units(stream)
   const same = (a: number, b: number) => sameUnit(record, left[a]!, stream, right[b]!)
-  const steps = align(left.length, right.length, same)
+  const steps = yield* align(left.length, right.length, same)
   if (!steps) {
     return {
       entries: [...record],
@@ -165,7 +189,9 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
   const taken = new Set<number>()
   const turns = new Map<number, { records: number[]; streams: number[] }>()
   let turn = 0
+  let items = 0
   for (const step of steps) {
+    if (++items % ITEMS_PER_STEP === 0) yield
     if (step.kind === "same") {
       if (opensTurn(record[left[step.record]!.from]!)) turn++
       continue
@@ -177,13 +203,16 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
   }
   for (const { records, streams } of turns.values())
     for (const at of records)
-      for (const candidate of streams)
+      for (const candidate of streams) {
+        if (++items % ITEMS_PER_STEP === 0) yield
         if (!taken.has(candidate) && same(at, candidate)) {
           partner.set(at, { stream: candidate, kind: "order" })
           taken.add(candidate)
           break
         }
+      }
   for (let start = 0; start < steps.length; ) {
+    if (++items % ITEMS_PER_STEP === 0) yield
     if (steps[start]!.kind === "same") {
       start++
       continue
@@ -222,6 +251,7 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
   const steerOrder = differences.some((difference) => difference.holds === "order" && difference.entry.type === "user" && difference.entry.steered)
   if (steerOrder)
     for (const step of steps) {
+      if (++items % ITEMS_PER_STEP === 0) yield
       if (step.kind !== "same") continue
       const entry = record[left[step.record]!.from]!
       if (entry.type === "user" && entry.steeringFor) steers.push([step.record, step.stream])
@@ -251,6 +281,7 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
     } else note("stream-only", undefined, b)
   }
   for (let start = 0; start < steps.length; ) {
+    if (++items % ITEMS_PER_STEP === 0) yield
     const step = steps[start]!
     if (step.kind === "same") {
       const b = right[step.stream]!
@@ -294,11 +325,16 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
  * attempted for.
  */
 export function recordSpan(record: readonly Entry[], inherited: readonly Entry[], live: readonly Entry[]): number | undefined {
+  return finished(recordSpanSteps(record, inherited, live))
+}
+
+/** `recordSpan` as `Steps`. */
+export function* recordSpanSteps(record: readonly Entry[], inherited: readonly Entry[], live: readonly Entry[]): Steps<number | undefined> {
   const stream = [...inherited, ...live]
-  const left = units(record)
+  const left = yield* units(record)
   // Units of their own, so a reply that ends the copy never joins one that starts the blocks.
-  const right = [...units(inherited), ...units(live).map((unit) => ({ ...unit, from: unit.from + inherited.length, to: unit.to + inherited.length }))]
-  const steps = align(left.length, right.length, (a, b) => sameUnit(record, left[a]!, stream, right[b]!))
+  const right = [...yield* units(inherited), ...(yield* units(live)).map((unit) => ({ ...unit, from: unit.from + inherited.length, to: unit.to + inherited.length }))]
+  const steps = yield* align(left.length, right.length, (a, b) => sameUnit(record, left[a]!, stream, right[b]!))
   if (!steps) return undefined
   let span = 0
   for (const step of steps) if (step.kind === "same" && right[step.stream]!.from < inherited.length) span = left[step.record]!.to
@@ -312,9 +348,10 @@ export function recordSpan(record: readonly Entry[], inherited: readonly Entry[]
  * keeps none), so it rides with the item before it: the record's is kept,
  * the stream's dropped, neither reported.
  */
-function units(entries: readonly Entry[]): Unit[] {
+function* units(entries: readonly Entry[]): Steps<Unit[]> {
   const found: Unit[] = []
   for (let index = 0; index < entries.length; index++) {
+    if (index % ITEMS_PER_STEP === ITEMS_PER_STEP - 1) yield
     const entry = entries[index]!
     const last = found.at(-1)
     if (last && drawsNothing(entry)) {
@@ -515,21 +552,21 @@ function sameRef(left: RecordRef | undefined, right: RecordRef | undefined): boo
  * `same` says two agree; null past `MAX_STREAM_DIFFERENCES`. What both
  * start and end with is taken first, so two sides that agree cost one pass.
  */
-function align(n: number, m: number, same: (a: number, b: number) => boolean): Step[] | null {
+function* align(n: number, m: number, same: (a: number, b: number) => boolean): Steps<Step[] | null> {
   let head = 0
-  while (head < n && head < m && same(head, head)) head++
+  while (head < n && head < m && same(head, head)) if (++head % ITEMS_PER_STEP === 0) yield
   let tail = 0
-  while (tail < n - head && tail < m - head && same(n - 1 - tail, m - 1 - tail)) tail++
+  while (tail < n - head && tail < m - head && same(n - 1 - tail, m - 1 - tail)) if (++tail % ITEMS_PER_STEP === 0) yield
   const steps: Step[] = []
   for (let index = 0; index < head; index++) steps.push({ kind: "same", record: index, stream: index })
-  const middle = diff(head, n - tail, head, m - tail, same)
+  const middle = yield* diff(head, n - tail, head, m - tail, same)
   if (!middle) return null
   steps.push(...middle)
   for (let index = tail; index > 0; index--) steps.push({ kind: "same", record: n - index, stream: m - index })
   return steps
 }
 
-function diff(aFrom: number, aTo: number, bFrom: number, bTo: number, same: (a: number, b: number) => boolean): Step[] | null {
+function* diff(aFrom: number, aTo: number, bFrom: number, bTo: number, same: (a: number, b: number) => boolean): Steps<Step[] | null> {
   const n = aTo - aFrom
   const m = bTo - bFrom
   const max = Math.min(n + m, MAX_STREAM_DIFFERENCES)
@@ -537,12 +574,25 @@ function diff(aFrom: number, aTo: number, bFrom: number, bTo: number, same: (a: 
   const frontier = new Int32Array(2 * max + 3)
   const trace: Int32Array[] = []
   let found = -1
+  let compared = 0
   for (let d = 0; d <= max && found < 0; d++) {
+    // Stops between rounds, never inside one: a round is at most `MAX_STREAM_DIFFERENCES` diagonals and their runs of
+    // cheap comparisons, a few milliseconds at most.
+    if (compared >= ITEMS_PER_STEP) {
+      compared = 0
+      yield
+    }
     trace.push(frontier.slice(offset - d - 1, offset + d + 2))
     for (let k = -d; k <= d; k += 2) {
+      compared++
       let x = k === -d || (k !== d && frontier[offset + k - 1]! < frontier[offset + k + 1]!) ? frontier[offset + k + 1]! : frontier[offset + k - 1]! + 1
       let y = x - k
-      while (x < n && y < m && same(aFrom + x, bFrom + y)) { x++; y++ }
+      const from = x
+      while (x < n && y < m && same(aFrom + x, bFrom + y)) {
+        x++
+        y++
+      }
+      compared += x - from
       frontier[offset + k] = x
       if (x >= n && y >= m) {
         found = d

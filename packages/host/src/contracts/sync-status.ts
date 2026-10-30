@@ -32,6 +32,8 @@ export const SyncFailureViewSchema = z.object({
   nativeId: z.string(),
   message: z.string(),
   correlationId: z.string().optional(),
+  /** When the Session began failing this way; `at` is its newest try. */
+  since: z.number().optional(),
 })
 export type SyncFailureView = z.infer<typeof SyncFailureViewSchema>
 

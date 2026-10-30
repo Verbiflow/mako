@@ -45,6 +45,7 @@ import { defaultCatalog, defaultCatalogIdentity, loadedCatalogCode } from "./ind
 import { onDemandCatalogPaths } from "./catalog-identity.js"
 import { makoRecords } from "./record-streams.js"
 import { makoViews } from "./view-cache.js"
+import { WorkUnderWay } from "./loop-watch.js"
 import {
   claimDaemon,
   DaemonAlreadyServing,
@@ -113,10 +114,10 @@ function installLog(dir: string, role: string): void {
 function watchMemory(): void {
   let logged = 0
   const sample = () => {
-    const { rss, heapUsed } = process.memoryUsage()
+    const { rss, heapUsed, external } = process.memoryUsage()
     if (logged && Math.abs(rss - logged) < MEMORY_STEP_BYTES) return
     logged = rss
-    say("info", "memory", { rssMb: Math.round(rss / MB), heapUsedMb: Math.round(heapUsed / MB) })
+    say("info", "memory", { rssMb: Math.round(rss / MB), heapUsedMb: Math.round(heapUsed / MB), externalMb: Math.round(external / MB) })
   }
   sample()
   setInterval(sample, 60_000).unref()
@@ -159,7 +160,7 @@ async function backfillOnce(dir: string): Promise<void> {
  * Starts a backfill pass's process now and every ten minutes after the last ended, never two at once; the returned
  * function stops starting them and ends the one running.
  */
-function scheduleBackfill(): () => void {
+function scheduleBackfill(work: WorkUnderWay): () => void {
   let child: ReturnType<typeof spawn> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let stopped = false
@@ -167,7 +168,7 @@ function scheduleBackfill(): () => void {
     if (stopped) return
     const script = process.argv[1]
     if (!script) return
-    const pass = spawn(process.execPath, [`--max-old-space-size=${BACKFILL_HEAP_MB}`, script, "--backfill"], { stdio: "ignore", env: process.env })
+    const pass = work.run("start a backfill pass", () => spawn(process.execPath, [`--max-old-space-size=${BACKFILL_HEAP_MB}`, script, "--backfill"], { stdio: "ignore", env: process.env }))
     child = pass
     const started = Date.now()
     say("info", "backfill pass started", { pid: pass.pid, heapMb: BACKFILL_HEAP_MB })
@@ -246,7 +247,10 @@ async function main(): Promise<void> {
     return
   }
 
+  // What this process does, by name, for the watch on its loop: a request answered late says why.
+  const work = new WorkUnderWay()
   const catalog = defaultCatalog({
+    work,
     cachePath: paths?.cache ?? join(dir, "syncd-catalog.json"),
     // Mako's copies of sessions nothing else holds any more, read as they were kept.
     archivePath,
@@ -266,7 +270,7 @@ async function main(): Promise<void> {
     const discovery = catalog.scan().then((refs) => {
       catalog.startWatching()
       console.log(`mako-syncd: discovered ${refs.length} sessions in ${Math.round(performance.now() - started)}ms`)
-      stopBackfill = scheduleBackfill()
+      stopBackfill = scheduleBackfill(work)
       return refs
     })
     // Observe failures while socket ownership and identity are being resolved.
@@ -275,6 +279,7 @@ async function main(): Promise<void> {
       catalogIdentity: identity,
       discovery,
       idleMs: onDemand ? 10_000 : undefined,
+      work,
       log: (level, message, fields) => {
         if (message === "retiring") exitReason = `retired: ${fields?.reason ?? "unknown"}`
         say(level, message, fields)

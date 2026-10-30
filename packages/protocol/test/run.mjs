@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
-import { CORRELATION_HEADER, GatewayHttpError, gatewayCalls } from "../dist/gateway-http.js"
+import { CORRELATION_HEADER, GatewayHttpError, RETRY_AFTER_MOST_MS, gatewayCalls, retryAfterMs } from "../dist/gateway-http.js"
 import { recordsOverHttp } from "../dist/records-http.js"
 import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema, ReturnStateSchema, ReturnBeginRequestSchema } from "../dist/moves.js"
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
@@ -1566,6 +1566,29 @@ describe("a call to a gateway over HTTP", () => {
     assert.equal(trace.failures.length, 2)
     assert.match(trace.failures[0], /^ECONNRESET after \d+ ms$/)
     assert.match(trace.failures[1], /^503 after \d+ ms$/)
+  })
+
+  test("a busy gateway's Retry-After is waited out before the call goes again, never past the most", async () => {
+    const answers = [
+      () => new Response(JSON.stringify({ title: "Busy: try again in a few seconds" }), { status: 429, headers: { "retry-after": "0.3" } }),
+      () => new Response("{}", { status: 503, headers: { "retry-after": "nonsense" } }),
+      () => new Response(JSON.stringify({ missing: [] }), { status: 200 }),
+    ]
+    const at = []
+    const fetch = async () => {
+      at.push(performance.now())
+      return answers.shift()()
+    }
+    const trace = { tries: 0, failures: [] }
+    const remote = recordsOverHttp({ id: "t", base: "https://gw/v1/devices/d/originals", authorization: () => "Bearer t", fetch, backoff: [1, 1] })
+    assert.deepEqual(await remote.missing(["a".repeat(64)], trace), [])
+    assert.equal(trace.tries, 3)
+    assert.ok(at[1] - at[0] >= 290, `waited ${Math.round(at[1] - at[0])} ms of the 300 the gateway asked`)
+    assert.ok(at[2] - at[1] < 250, "one it can't read is the client's own backoff")
+    assert.equal(retryAfterMs("2"), 2_000)
+    assert.equal(retryAfterMs(new Date(Date.now() + 5_000).toUTCString()) > 3_000, true)
+    assert.equal(retryAfterMs("3600"), RETRY_AFTER_MOST_MS)
+    assert.equal(retryAfterMs(null), 0)
   })
 
   test("a refusal names the call's own correlation ID when the gateway's answer names none", async () => {

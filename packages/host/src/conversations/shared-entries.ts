@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util"
 import type { ThreadPage } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
+import { isPaged, pagedEqual } from "./paged-entries.js"
+import type { Steps } from "../base/slices.js"
 
 /** How long `sharedEntries` compares before it lets other work run. */
 const COMPARE_SLICE_MS = 8
@@ -22,7 +24,7 @@ export async function sharedEntries(previous: readonly Entry[], next: Entry[]): 
   const length = Math.min(previous.length, next.length)
   for (let index = 0; index < length; index++) {
     const before = previous[index]!
-    if (before !== next[index] && isDeepStrictEqual(before, next[index])) (shared ??= [...next])[index] = before
+    if (before !== next[index] && sameEntry(before, next[index]!)) (shared ??= [...next])[index] = before
     if (performance.now() >= until) {
       await new Promise((resolve) => setImmediate(resolve))
       until = performance.now() + COMPARE_SLICE_MS
@@ -31,15 +33,21 @@ export async function sharedEntries(previous: readonly Entry[], next: Entry[]): 
   return shared ?? next
 }
 
-/** `sharedEntries` at once, for a read that is synchronous anyway (`LiveJournal.read`). */
-export function sharedBase(previous: ThreadPage, next: ThreadPage): ThreadPage {
+/** `sharedEntries` of two pages, as `Steps`, for the journal's read (`LiveJournal.reading`). */
+export function* sharedBase(previous: ThreadPage, next: ThreadPage): Steps<ThreadPage> {
   let shared: Entry[] | undefined
   const length = Math.min(previous.entries.length, next.entries.length)
   for (let index = 0; index < length; index++) {
     const before = previous.entries[index]!
-    if (before !== next.entries[index] && isDeepStrictEqual(before, next.entries[index])) (shared ??= [...next.entries])[index] = before
+    if (before !== next.entries[index] && sameEntry(before, next.entries[index]!)) (shared ??= [...next.entries])[index] = before
+    if (index % 256 === 255) yield
   }
   return shared ? { ...next, entries: shared } : next
+}
+
+/** Whether `before` says what `entry` says; a paged one is compared with its row's text first (`pagedEqual`), not read back field by field. */
+function sameEntry(before: Entry, entry: Entry): boolean {
+  return isPaged(before) ? pagedEqual(before, entry) : isDeepStrictEqual(before, entry)
 }
 
 /** Whether two histories hold the same entries, once `sharedEntries` gave equal ones one object. */

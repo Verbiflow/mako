@@ -6,12 +6,14 @@ import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { HISTORY_VIEW_EXPIRED, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
-import { cutOffRequests, mergedBase } from "./stream-merging.js"
+import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
+import { inSlices } from "../base/slices.js"
 import { ContentWeights } from "../contracts/residency.js"
 import type { Entry } from "@mako/sessions/entries"
 import { mediaFacts } from "@mako/sessions/turn-media"
 import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
 import { hostLog } from "../base/host-log.js"
+import { pagedOf, pagedWeight } from "./paged-entries.js"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
@@ -64,7 +66,7 @@ export class LiveHistoryReader {
   private readonly views = new Map<string, View>()
   private readonly records = new Map<string, RecordValue>()
   private readonly versions = new WeakMap<Entry, string>()
-  private readonly weights = new ContentWeights()
+  private readonly weights = new ContentWeights(pagedWeight)
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
   private readonly nativeEntry?: (path: string, id: string) => Promise<Entry | null>
   private readonly originals?: Originals
@@ -72,6 +74,8 @@ export class LiveHistoryReader {
   private readonly held?: (id: string) => LiveSnapshot | undefined
   private readonly gone = new Map<string, { id: string; why: string; at: number }>()
   private pruned = 0
+  /** A weighing of the views a capture asked for, still to run (`pruneSoon`). */
+  private pruneDue?: ReturnType<typeof setImmediate>
 
   constructor(
     nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>,
@@ -79,6 +83,31 @@ export class LiveHistoryReader {
     originals?: Originals,
     held?: (id: string) => LiveSnapshot | undefined,
   ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals; this.held = held }
+
+  /**
+   * Conversation `id`'s entries were paged (`paged-entries.ts`): its views of
+   * earlier revisions hold the paged entries too, so what they keep alive is
+   * what memory keeps of the conversation, not its whole history again.
+   */
+  paged(id: string): void {
+    const held = this.held?.(id)
+    for (const view of this.views.values()) {
+      if (view.id !== id) continue
+      if (view.snapshot.blocks !== held?.blocks) swapPaged(view.snapshot.blocks)
+      const entries = view.snapshot.base?.entries
+      if (entries && entries !== held?.base?.entries) swapPaged(entries)
+    }
+  }
+
+  /** Conversation `id` was let go: its views go with it, and a window reading one reads the conversation again. */
+  released(id: string): void {
+    for (const [token, view] of Array.from(this.views)) if (view.id === id) this.letGo(token, view, "its conversation was let go")
+  }
+
+  /** The captures this reader holds of conversation `id`, newest last: what its views keep alive, for a diagnostic. */
+  viewsOf(id: string): LiveSnapshot[] {
+    return Array.from(this.views.values()).flatMap((view) => (view.id === id ? [view.snapshot] : []))
+  }
 
   /** Shared response boundary for operations that return a snapshot. */
   present<Result>(value: Result): Result {
@@ -110,7 +139,7 @@ export class LiveHistoryReader {
     const token = held?.[0] ?? randomUUID()
     if (held) { this.touchView(held[0], held[1]); snapshot = held[1].snapshot }
     else this.views.set(token, { id: snapshot.session.id, snapshot, used: Date.now() })
-    this.pruneViews()
+    this.pruneSoon()
     const tail = this.page(token, snapshot, { blocks: snapshot.blocks.length,
       base: snapshot.base ? snapshot.base.start + snapshot.base.entries.length : 0 })
     // A background refresh keeps the range the reader explicitly loaded. It
@@ -132,7 +161,8 @@ export class LiveHistoryReader {
   }
 
   async read(id: string, input: LiveHistoryRead, snapshot: () => Promise<LiveSnapshot | null>): Promise<LiveHistoryChunk> {
-    if (Date.now() - this.pruned > PRUNE_MS) this.pruneViews()
+    if (this.pruneDue) this.prunePending()
+    else if (Date.now() - this.pruned > PRUNE_MS) this.pruneViews()
     this.pruneRecords()
     if (input.kind === "part") {
       const record = this.records.get(input.record)
@@ -166,8 +196,10 @@ export class LiveHistoryReader {
               nativeHistoryRevision(earlier) !== nativeHistoryRevision(base))
             throw new Error("The native history changed since this capture. Open the current conversation before loading earlier messages.")
           const { blocks, baseCoveredBlocks, baseLiveStart, requests } = view.snapshot
-          view.snapshot = { ...view.snapshot, base: mergedBase({ ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier },
-            blocks, baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base }
+          const merged = await inSlices(mergedBaseSteps({ ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier },
+            blocks, baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }))
+          // Another read of this page may have prepended it meanwhile.
+          if (view.snapshot.base === base) view.snapshot = { ...view.snapshot, base: merged.base }
         }
         value = input.kind === "range" ? this.range(input.token, view.snapshot, input.from, input.to)
           : this.page(input.token, view.snapshot, input.before)
@@ -258,6 +290,23 @@ export class LiveHistoryReader {
       if (index > 0 && (index >= MAX_RECORDS || bytes + weight > 32 * 1024 * 1024)) this.records.delete(key)
       else bytes += weight
     }
+  }
+
+  /**
+   * The views weighed once what a capture serves has gone out, on a turn of
+   * the loop of its own: weighing a conversation of 150MB and its views takes
+   * 20ms, and in the same stretch as the capture's first chunks it held the
+   * loop past 50. A read before then weighs them first, as it would have.
+   */
+  private pruneSoon(): void {
+    this.pruneDue ??= setImmediate(() => this.prunePending())
+  }
+
+  private prunePending(): void {
+    if (!this.pruneDue) return
+    clearImmediate(this.pruneDue)
+    this.pruneDue = undefined
+    this.pruneViews()
   }
 
   /**
@@ -460,4 +509,12 @@ function isPartial(entry: Entry): boolean {
 function largeTool(block: { input?: string; output?: string; details?: unknown; attachments?: unknown }): boolean {
   return (block.input?.length ?? 0) > TOOL_PREVIEW || (block.output?.length ?? 0) > TOOL_PREVIEW ||
     JSON.stringify([block.details, block.attachments]).length > TOOL_PREVIEW
+}
+
+/** Puts each entry's paged copy where `entries` holds the entry warm, so the warm one can go. */
+function swapPaged(entries: Entry[]): void {
+  for (let index = 0; index < entries.length; index++) {
+    const paged = pagedOf(entries[index]!)
+    if (paged) entries[index] = paged
+  }
 }
