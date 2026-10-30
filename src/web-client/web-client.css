@@ -210,16 +210,51 @@
   [data-list="rail"] .web-list-foot {
     bottom: 57px;
   }
-  /* The phone's toolbar: New at its right, in thumb's reach, over the Home indicator; the install offer floats above it. */
-  .web-toolbar {
-    @apply grid shrink-0 items-center border-t border-hairline bg-surface/85 px-1.5 backdrop-blur-xl;
-    grid-template-columns: 44px minmax(0, 1fr) 44px;
-    min-height: calc(50px + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
-  }
+  /* On a phone, New and the offer keep 16px off the corner, above the Home indicator. */
   [data-list="screen"] .web-list-foot {
-    bottom: calc(50px + env(safe-area-inset-bottom));
-    padding-bottom: 12px;
+    padding: 0 calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 16px) calc(env(safe-area-inset-left) + 16px);
+  }
+  /*
+   * New on a phone: a 50px disc at the bottom right, in thumb's reach. It floats, so it alone of the list wears a
+   * shadow, the desk's floating one (a hairline ring and a short, soft drop), on the popover's surface with the
+   * glass's rim of light along its top, the way iOS draws a floating control. It steps aside down and out while the
+   * list is scrolled down, and back on the way up, on the desk's two curves, from wherever it is; it isn't there while
+   * a sheet is.
+   */
+  .web-fab {
+    @apply relative flex size-[50px] shrink-0 items-center justify-center rounded-full bg-popover text-foreground;
+    box-shadow:
+      var(--elevation-floating),
+      inset 0 1px 0 0 var(--glass-rim);
+    transition:
+      transform 220ms var(--ease-out),
+      opacity 180ms var(--ease-out),
+      scale 120ms var(--ease-out);
+  }
+  /* Dark, the popover's surface is a hair off the list's: the raised one reads as a control without turning to ink. */
+  :root:not(.light) .web-fab {
+    @apply bg-raised;
+  }
+  .web-fab:active {
+    scale: 0.92;
+    transition-duration: 220ms, 180ms, 40ms;
+  }
+  .web-fab[data-away] {
+    transform: translate3d(0, calc(100% + env(safe-area-inset-bottom) + 24px), 0);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      transform 180ms var(--ease-swift),
+      opacity 140ms var(--ease-swift),
+      scale 120ms var(--ease-out);
+  }
+  .web-app:has(.web-sheet-layer[data-open]) .web-fab {
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* With the offer under it, New sits a gap above the card rather than off the corner. */
+  .web-list-foot:has(.web-install) .web-fab[data-away] {
+    transform: translate3d(0, 12px, 0);
   }
   .web-list-foot > * {
     pointer-events: auto;
@@ -707,7 +742,14 @@
   .web-chip:active,
   .web-tab:active,
   .web-account:active,
+  .web-fab:active,
+  .web-fab[data-away],
   .web-live [data-permission-option]:active {
     transform: none !important;
+  }
+  /* Pressed, New dims instead of shrinking. */
+  .web-fab:active {
+    scale: none !important;
+    opacity: 0.7;
   }
 }
