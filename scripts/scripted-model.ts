@@ -28,6 +28,8 @@ export interface ScriptedReply {
   fail?: { status: number; message: string }
   /** A Responses `compaction` item's content, which only the provider reads. */
   compaction?: string
+  /** Milliseconds before each streamed delta of this reply, over the model's own `pace`: one answer streamed slowly. */
+  pace?: number
 }
 
 type Wire = "chat" | "messages" | "responses"
@@ -196,13 +198,13 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       void paced(STREAMED[wire](reply).map((event) => served(event, as)), (event) => {
         const named = wire === "chat" ? "" : `event: ${z.object({ type: z.string() }).parse(event).type}\n`
         response.write(`${named}data: ${JSON.stringify(event)}\n\n`)
-      }).then(() => response.end(wire === "chat" ? "data: [DONE]\n\n" : ""))
+      }, reply.pace ?? options.pace).then(() => response.end(wire === "chat" ? "data: [DONE]\n\n" : ""))
     })
   })
-  /** Writes a reply's events in order, each delta `options.pace` ms after the event before it, telling `options.sent` of each. */
-  const paced = async (events: JsonObject[], write: (event: JsonObject) => void) => {
+  /** Writes a reply's events in order, each delta `pace` ms after the event before it, telling `options.sent` of each. */
+  const paced = async (events: JsonObject[], write: (event: JsonObject) => void, pace = options.pace) => {
     for (const event of events) {
-      if (options.pace && DeltaEvent.safeParse(event).success) await new Promise((resolve) => setTimeout(resolve, options.pace))
+      if (pace && DeltaEvent.safeParse(event).success) await new Promise((resolve) => setTimeout(resolve, pace))
       write(event)
       options.sent?.(event)
     }
@@ -237,7 +239,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       if (body.generate === false) return void warmUpAnswer(id).forEach(send)
       const reply = compacting(body.input, answer(`WS ${path}`, { tools: chain.tools, tool_choice: body.tool_choice }, chain.heard))
       if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
-      void paced(responsesStreamed(reply, id).map((event) => served(event, { model: body.model, usage: options.usage })), (event) => send(JSON.stringify(event)))
+      void paced(responsesStreamed(reply, id).map((event) => served(event, { model: body.model, usage: options.usage })), (event) => send(JSON.stringify(event)), reply.pace ?? options.pace)
     })
   })
   const host = options.host ?? "127.0.0.1"

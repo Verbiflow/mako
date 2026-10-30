@@ -31,15 +31,18 @@ function updateLive(
 const deliveries = new Map<string, Promise<boolean>>()
 const retries = new Map<string, ReturnType<typeof setTimeout>>()
 const retryDelays = new Map<string, number>()
+/** An unconfirmed message is asked again after 1 s, then 2, 4, 8 and every 16 s: under its one id, so never twice. */
+const FIRST_RETRY_MS = 1_000
+const LAST_RETRY_MS = 16_000
 
 function scheduleRecovery(id: string): void {
   if (retries.has(id)) return
-  const delay = retryDelays.get(id) ?? 1_000
+  const delay = retryDelays.get(id) ?? FIRST_RETRY_MS
   retries.set(id, setTimeout(() => {
     retries.delete(id)
     void replayUnconfirmedPrompts([id])
   }, delay))
-  retryDelays.set(id, Math.min(delay * 2, 30_000))
+  retryDelays.set(id, Math.min(delay * 2, LAST_RETRY_MS))
 }
 
 export function sendTo(

@@ -37,7 +37,7 @@ import { loadReleasedLiveTurn } from "@/state/live-history"
 import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
-import { TRANSCRIPT_END_EVENT } from "./transcript-end"
+import { TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 
 const NEAR_BOTTOM = 96
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
@@ -482,6 +482,10 @@ export function ConversationTimeline({
   /** The latest proximity check, for callers that outlive one render. */
   const wake = useRef<() => void>(() => {})
   const [showJump, setShowJump] = useState(false)
+  const transcriptEnd = useContext(TranscriptEndContext)
+  /** With `transcriptEnd` provided: room after the column that keeps a followed end from moving back (`pin`). */
+  const steadyEnd = useRef<HTMLDivElement>(null)
+  const highWater = useRef(0)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
    * Each turn's React key, for the turns that came back under another id. A
@@ -710,6 +714,12 @@ export function ConversationTimeline({
     node.addEventListener(TRANSCRIPT_END_EVENT, toEnd)
     return () => node.removeEventListener(TRANSCRIPT_END_EVENT, toEnd)
   }, [scrollToEnd])
+  useEffect(() => transcriptEnd?.away(showJump), [transcriptEnd, showJump])
+  useEffect(() => {
+    if (!transcriptEnd) return
+    transcriptEnd.bind(() => scrollToEnd("smooth"))
+    return () => transcriptEnd.bind(null)
+  }, [transcriptEnd, scrollToEnd])
 
   const onScroll = useCallback(() => {
     const node = viewport.current
@@ -982,6 +992,21 @@ export function ConversationTimeline({
     let lastHeight = node.scrollHeight
     let shrinkFrame = 0
     const pin = () => {
+      const column = node.firstElementChild
+      const spacer = steadyEnd.current
+      if (spacer && column instanceof HTMLElement) {
+        if (pinned.current) {
+          // A transcript followed at its end never moves back under the reader: a column that got shorter (a sending
+          // row giving way to its turn's own) keeps its height as room at the end, which what it writes next fills.
+          const natural = column.offsetHeight
+          highWater.current = Math.max(highWater.current, natural)
+          spacer.style.height = `${highWater.current - natural}px`
+        } else {
+          // Away from the end, the room kept there goes: nothing the reader sees moves.
+          highWater.current = column.offsetHeight
+          spacer.style.height = "0px"
+        }
+      }
       settleShrink()
       if (!pinned.current) {
         holdReader(node)
@@ -1487,6 +1512,7 @@ export function ConversationTimeline({
               {footer}
             </div>
           )}
+          {transcriptEnd && !isEmpty ? <div ref={steadyEnd} aria-hidden data-steady-end /> : null}
         </div>
         {showNavigator ? (
           <TurnNavigator
@@ -1496,7 +1522,7 @@ export function ConversationTimeline({
             paneRef={pane}
           />
         ) : null}
-        <button
+        {transcriptEnd ? null : <button
           type="button"
           onClick={() => scrollToEnd("smooth")}
           aria-hidden={!showJump}
@@ -1515,7 +1541,7 @@ export function ConversationTimeline({
         >
           <ArrowDownIcon className="size-3" />
           Jump to latest
-        </button>
+        </button>}
       </div>
     </TranscriptSourceContext>
   )

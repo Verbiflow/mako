@@ -1197,6 +1197,24 @@ attachment that is still `pending`, so sending mid-staging drops a file with no
 notice, and `clear()` revokes preview URLs — which is why detaching for a
 possible restore is separate from discarding for good.
 
+The web app's phone composer keeps the same promise across a page the system
+may kill at any moment (`src/web-client/drafts.ts`): each Session's draft and
+New's are kept in `localStorage` by account and place, written a quarter second
+after the last key and at once when the page hides or the composer closes. A
+send mints the message's request ID in the composer; the words leave the field
+at once but stay in the draft under that ID until the host confirms them, and
+the renderer's outbox (`message-outbox.ts`) holds the message under the same ID
+across a reload, so a page that dies mid-send finds it again rather than
+losing it or sending it twice: re-asked under its ID, which the host settles by
+(`LiveConversations.submit`), it lands once. A refused message comes back
+into the field only if the field is empty, else it's kept under the composer
+with Retry (`outbox.ts`). Under each sent message the phone says where it is,
+in a word (`delivery.ts`): Waking…, Sending…, Not confirmed · Retry, Queued,
+Delivered; and the status capsule says Working only once the host started the
+turn. `npm run test:cloud-conversations` (`test-web-client.ts`) covers the
+rules, and the web proof's Mac (`prove-web-client.ts`, `begin`) gives the
+phone's behaviour cases a Thread of their own on each scripted cue.
+
 ## MCP
 
 Mako owns a redacted, provider-neutral MCP registry. Use the current

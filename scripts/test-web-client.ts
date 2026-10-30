@@ -18,6 +18,10 @@ import { AccessChoosingSchema, type AccessChoices } from "@mako/protocol/access-
 import { delayedStatusDeadline, stepDelayedStatus, type DelayedStatus } from "../src/web-client/delayed-status"
 import { returnKind } from "../src/web-client/resume"
 import { newerBuild, QUIET_AFTER_MS, quietMoment } from "../src/web-client/update"
+import { newDraftKey, noteSending, openingText, readDraft, settleSending, threadDraftKey, writeDraft } from "../src/web-client/drafts"
+import { answeredWords, dockStatus, statusWords, workingWords, type DockStatusInput } from "../src/web-client/dock-status"
+import { DELIVERY_WORDS, deliveryOf, type Sending } from "../src/web-client/delivery"
+import { SAY_WAKING_MS, wakeThread, wakingNow, wakingStore } from "../src/web-client/wake"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -405,4 +409,106 @@ test("a row swiped left opens on Archive past 42% of it, and archives past the f
   // The row's spring is T3's (stiffness 330, damping 26, mass 0.7): barely under critical, at rest within 0.4 s.
   assert.ok(Math.abs(ROW.response - 0.2894) < 0.001 && Math.abs(ROW.damping - 0.855) < 0.001)
   assert.ok(springPath(-ACTION_PX, 0, 0, ROW).length / 120 < 0.4)
+})
+
+/** A page's `localStorage`, for the drafts a composer keeps. */
+function withStorage<T>(run: (storage: Map<string, string>) => T): T {
+  const storage = new Map<string, string>()
+  const held = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
+  })
+  try {
+    return run(storage)
+  } finally {
+    if (held) Object.defineProperty(globalThis, "localStorage", held)
+    else Reflect.deleteProperty(globalThis, "localStorage")
+  }
+}
+
+test("a draft is kept by place and by account, and outlives the composer until its message is confirmed sent", () => {
+  withStorage((storage) => {
+    const here = threadDraftKey("ana", "c1")
+    const elsewhere = threadDraftKey("ana", "c2")
+    writeDraft(here, "Half a thought about")
+    assert.equal(openingText(here, () => false), "Half a thought about")
+    assert.equal(openingText(elsewhere, () => false), "", "another Thread's field starts empty")
+    assert.equal(openingText(threadDraftKey("ben", "c1"), () => false), "", "another account's drafts aren't read")
+    assert.notEqual(newDraftKey("ana", "thread"), here)
+    // Sent: the field empties, the words are kept under the message's ID until it's confirmed.
+    noteSending(here, "m1", "Half a thought about retries")
+    writeDraft(here, "")
+    assert.deepEqual(readDraft(here)?.sending, { m1: "Half a thought about retries" })
+    // The page goes before the answer, and the outbox still holds the message: it's sent from there, not put back.
+    assert.equal(openingText(here, (id) => id === "m1"), "")
+    // Nothing holds it (it never reached the outbox): its words come back, after what was written since.
+    writeDraft(here, "And another")
+    assert.equal(openingText(here, () => false), "And another\n\nHalf a thought about retries")
+    assert.equal(readDraft(here)?.sending, undefined)
+    // Confirmed: nothing is kept for it, and an empty field keeps nothing at all.
+    noteSending(here, "m2", "Second")
+    settleSending(here, "m2")
+    writeDraft(here, "")
+    assert.equal(storage.has(here), false)
+    // A month untouched, it goes.
+    writeDraft(elsewhere, "Old words", Date.now() - 31 * 24 * 60 * 60_000)
+    assert.equal(readDraft(elsewhere), undefined)
+  })
+})
+
+test("the capsule says one thing, by priority, and Working only once the host started the turn", () => {
+  const quiet: DockStatusInput = { online: true, unconfirmed: false, canceling: false, waking: false, wakingMessage: false, running: false, since: undefined, asking: false }
+  assert.equal(dockStatus(quiet), undefined)
+  assert.deepEqual(dockStatus({ ...quiet, running: true, since: 1 }), { kind: "working", since: 1 })
+  assert.equal(dockStatus({ ...quiet, running: true, since: 1, asking: true }), undefined, "the card says it while the agent waits on the person")
+  assert.deepEqual(dockStatus({ ...quiet, running: true, since: 1, canceling: true }), { kind: "stopping" })
+  assert.deepEqual(dockStatus({ ...quiet, wakingMessage: true }), { kind: "waking", message: true })
+  assert.deepEqual(dockStatus({ ...quiet, canceling: true, unconfirmed: true }), { kind: "reconnecting" })
+  assert.deepEqual(dockStatus({ ...quiet, online: false, unconfirmed: true, running: true, since: 1 }), { kind: "offline" })
+  assert.equal(statusWords({ kind: "waking", message: true }), "Waking the agent… your message sends when it's ready.")
+  assert.deepEqual([0, 9_400, 59_999, 60_000, 83_000, 3_600_000 + 120_000].map(workingWords), ["Working 0s", "Working 9s", "Working 59s", "Working 1m 00s", "Working 1m 23s", "Working 1h 02m"])
+  assert.deepEqual(["Allow once", "Deny and stop", "Allow matching commands", "Blue"].map(answeredWords), ["Allowed once", "Denied and stopped", "Allowed matching commands", "Blue"])
+})
+
+test("a sent message says how its delivery stands, and never Delivered on a guess", () => {
+  const sending = new Map<string, Sending>([["waking", "waking"]])
+  const conversation = {
+    requests: [
+      { id: "running", status: "dispatching" as const },
+      { id: "behind", status: "queued" as const },
+      { id: "answered", status: "completed" as const },
+    ],
+    pendingPrompts: [{ id: "on-its-way" }, { id: "lost", unconfirmed: true }, { id: "waking" }],
+  }
+  const said = (id: string) => {
+    const delivery = deliveryOf(id, conversation, sending)
+    return delivery && DELIVERY_WORDS[delivery]
+  }
+  assert.deepEqual(["running", "behind", "answered", "on-its-way", "lost", "waking", "unknown"].map(said), ["Delivered", "Queued", undefined, "Sending…", "Not confirmed", "Waking…", undefined])
+})
+
+test("a cloud Thread's machine wakes once for every key and message, and is said to wake only when it takes a while", async () => {
+  const asked: string[] = []
+  let answer: () => void = () => undefined
+  // SAFETY: the wake asks only `livePrewarm` of the bridge.
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { mako: { livePrewarm: (conversation: string) => (asked.push(conversation), new Promise<"waking">((done) => (answer = () => done("waking")))) } } })
+  try {
+    const first = wakeThread("t1", "c1")
+    const second = wakeThread("t1", "c1")
+    assert.equal(first, second, "one wake per Thread, however many ask")
+    assert.equal(asked.length, 1)
+    assert.equal(wakingNow("t1"), true)
+    assert.equal(wakingStore.get().waking.has("t1"), false, "not said at once: an awake machine answers in a moment")
+    await new Promise((done) => setTimeout(done, SAY_WAKING_MS + 50))
+    assert.equal(wakingStore.get().waking.has("t1"), true)
+    answer()
+    await first
+    assert.equal(wakingStore.get().waking.has("t1"), false)
+    assert.equal(wakingNow("t1"), false)
+    await wakeThread("t1", "c1")
+    assert.equal(asked.length, 1, "woken a moment ago: the next key asks nothing")
+  } finally {
+    Reflect.deleteProperty(globalThis, "window")
+  }
 })

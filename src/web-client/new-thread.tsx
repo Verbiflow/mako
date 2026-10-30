@@ -15,6 +15,7 @@ import { accountProjects, cloudHarnesses, typedRepository } from "./account"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { Composer } from "./composer"
+import { newDraftKey } from "./drafts"
 import { WebHarnessIcon } from "./harness-icon"
 import { webHarnessLabel } from "./labels"
 import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places, readStartMemory, rememberStart, startable, type Place, type StartProject } from "./places"
@@ -251,7 +252,7 @@ export function StartForm({ onStarted, adding, desk = false }: { onStarted: (sta
       ) : failure ? (
         <StartFailed message={failure} />
       ) : null}
-      <Composer autoFocus placeholder="What should it work on?" header={where} tools={how} sendable={ready} onSend={start} sendLabel="Start" desk={desk} />
+      <Composer autoFocus placeholder="What should it work on?" header={where} tools={how} sendable={ready} onSend={start} sendLabel="Start" desk={desk} draftKey={newDraftKey(client.account.id, adding ? `add:${adding.thread}` : "thread")} />
       <PlaceSheet anchor={chip} open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {
         if (next !== chosenPlace) {
           setProjects(undefined)

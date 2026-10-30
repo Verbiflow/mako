@@ -1,103 +1,120 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { Composer as DeskComposer } from "@/components/composer/composer"
-import { PromptQueue } from "@/components/composer/prompt-queue"
-import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcript/transcript-end"
+import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/transcript-notes"
+import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useWebClient } from "./client"
-import { Composer } from "./composer"
-import { noteAnswered } from "./install"
+import { useAnswered } from "./answered"
+import { AnsweredLine, WebDock } from "./dock"
+import { threadDraftKey } from "./drafts"
 import { webHarnessLabel } from "./labels"
-import { reducedMotion } from "./motion"
+import { DELIVERY_WORDS, deliveryOf } from "./delivery"
+import { resumeOutbox, retryUnconfirmed, useOutbox } from "./outbox"
 import type { WebSession } from "./threads"
+
+const NO_RECORDS: never[] = []
 
 /**
  * A Session live: opened on its owner through the gateway, drawn by the renderer's own conversation (`AcpPanel`: the
- * transcript, approvals and questions, exactly as on a Mac), with the queue and a composer under it: on a laptop's
- * browser (`desk`) the desktop's own composer, its routing row and sigils, sending through the same bridge; under a
- * finger, the phone's.
+ * transcript, exactly as on a Mac), and under it on a laptop's browser (`desk`) the desktop's own composer, its routing
+ * row and sigils, sending through the same bridge; under a finger, the phone's dock (`dock.tsx`): what the agent asks,
+ * pinned above the composer, a capsule saying what it's doing, the queue and the phone's composer. Either way each
+ * message the person sent says under it how its delivery stands (`outbox.ts`).
  */
 export default function LiveSession({ session, desk = false }: { session: WebSession; desk?: boolean }) {
   const client = useWebClient()
   const conversation = session.row.conversation
-  const panel = useRef<HTMLDivElement>(null)
   // Opened once per conversation: the row it was opened from changes as the list does, and its batches say more.
-  const opening = useRef(session)
+  const [opening] = useState(session)
   useEffect(() => {
     let close: (() => void) | undefined
     let left = false
     void client.conversations().then((conversations) => {
-      if (!left) close = conversations.open(opening.current)
+      if (!left) close = conversations.open(opening)
     })
     return () => {
       left = true
       close?.()
     }
-  }, [client, conversation])
-  useAnsweredLeaves(panel, !desk)
+  }, [client, conversation, opening])
   const active = useAcp((state) => state.activeKey === conversation)
-  const running = useAcp((state) => {
-    const live = activeLiveAcp(state)
-    return live?.session.status === "running" || live?.session.status === "starting"
-  })
-  const canceling = useAcp((state) => activeLiveAcp(state)?.canceling === true)
+  // Once its requests are read: what this browser left on its way to it is asked again under its own IDs.
+  const hydrated = useAcp((state) => activeLiveAcp(state)?.key === conversation && activeLiveAcp(state)?.hydrated !== false && activeLiveAcp(state)?.requests !== undefined)
+  useEffect(() => {
+    if (hydrated) resumeOutbox(conversation)
+  }, [hydrated, conversation])
+  const [away, setAway] = useState(false)
+  const [jump, setJump] = useState<{ to: (() => void) | null }>({ to: null })
+  const end = useMemo<TranscriptEnd>(() => ({ away: setAway, bind: (to) => setJump({ to }) }), [])
+  const note = useDeliveryNote(conversation)
+  const records = useAnswered((state) => state.records.get(conversation) ?? NO_RECORDS)
+  const exchangeNote = useMemo(
+    () => (records.length ? (exchange: string) => records.filter((entry) => entry.exchange === exchange).map((entry) => <AnsweredLine key={entry.id} entry={entry} />) : null),
+    [records]
+  )
   const harness = webHarnessLabel(session.row.harness)
+  const cloudThread = session.owner.kind === "cloud" ? session.owner.threadId : undefined
+  const target = useMemo(() => ({ conversation, ...(cloudThread && { cloudThread }) }), [conversation, cloudThread])
   if (desk)
     return (
-      <div ref={panel} className="desk-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-        {active ? <AcpPanel /> : <div className="flex-1" />}
-        {active ? <DeskComposer /> : null}
-      </div>
+      <PromptNoteContext value={note}>
+        <div className="desk-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
+          {active ? <AcpPanel /> : <div className="flex-1" />}
+          {active ? <DeskComposer /> : null}
+        </div>
+      </PromptNoteContext>
     )
   return (
-    <div ref={panel} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-      {active ? <AcpPanel /> : <div className="flex-1" />}
-      <div className="web-dock shrink-0">
-        <div className="mx-auto w-full max-w-content px-3">
-          <PromptQueue />
-        </div>
-        <Composer
-          placeholder={running ? `Queue a message for ${harness}` : `Message ${harness}`}
-          running={running}
-          stopping={canceling}
-          onStop={() => void acp.cancel()}
-          onSend={(text, attachments) => acp.send(text, attachments)}
-        />
-      </div>
-    </div>
+    <PromptNoteContext value={note}>
+      <ExchangeNoteContext value={exchangeNote}>
+        <TranscriptEndContext value={end}>
+          <div className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
+            {active ? <AcpPanel asks={false} /> : <div className="flex-1" />}
+            <WebDock
+              conversation={conversation}
+              harness={harness}
+              target={target}
+              draftKey={threadDraftKey(client.account.id, conversation)}
+              away={away}
+              jump={() => jump.to?.()}
+              reconnect={() => client.gateway.wake()}
+            />
+          </div>
+        </TranscriptEndContext>
+      </ExchangeNoteContext>
+    </PromptNoteContext>
   )
 }
 
-/**
- * An approval answered leaves the way it came. The desk's card is put away the moment its answer is sent (it waits on
- * its receipt hidden), so the phone draws its last frame in its place, the chosen answer marked, and lets that sink and
- * fade over 180 ms while the transcript takes the room. It's a picture of the card only: nothing in it can be pressed.
- */
-function useAnsweredLeaves(panel: React.RefObject<HTMLDivElement | null>, on: boolean) {
-  useEffect(() => {
-    const root = panel.current
-    if (!root || !on) return
-    const answered = (event: Event) => {
-      const option = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-permission-option]") : null
-      const card = option?.closest<HTMLElement>("[data-permission]")
-      if (!option || !card) return
-      noteAnswered()
-      if (reducedMotion()) return
-      const bounds = card.getBoundingClientRect()
-      // SAFETY: a deep clone of an element is an element of the same kind.
-      const ghost = card.cloneNode(true) as HTMLElement
-      ghost.removeAttribute("data-permission")
-      ghost.setAttribute("aria-hidden", "true")
-      ghost.inert = true
-      ghost.classList.add("web-approval-ghost")
-      ghost.querySelector(`[data-permission-option="${option.dataset["permissionOption"]}"]`)?.setAttribute("data-chosen", "")
-      Object.assign(ghost.style, { position: "fixed", left: `${bounds.left}px`, top: `${bounds.top}px`, width: `${bounds.width}px`, margin: "0" })
-      document.querySelector(".web-app")?.append(ghost)
-      void ghost
-        .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translate3d(0, 16px, 0) scale(0.98)" }], { duration: 180, delay: 90, easing: "cubic-bezier(0.2, 0, 0, 1)", fill: "forwards" })
-        .finished.finally(() => ghost.remove())
+/** Under each message the person sent, how its delivery stands, in a word; "Not confirmed" with Retry. */
+function useDeliveryNote(conversation: string) {
+  const delivery = useAcp((state) => {
+    const live = state.conversations[conversation]
+    return live?.kind === "live" ? { requests: live.requests, pendingPrompts: live.pendingPrompts } : undefined
+  }, (left, right) => left?.requests === right?.requests && left?.pendingPrompts === right?.pendingPrompts)
+  const sending = useOutbox((state) => state.sending)
+  return useMemo(() => {
+    if (!delivery) return null
+    return (requestId: string | undefined) => {
+      if (!requestId) return null
+      const state = deliveryOf(requestId, delivery, sending)
+      if (!state) return null
+      if (state === "unconfirmed")
+        return (
+          <span data-delivery={state} className="flex items-center gap-1 text-caution">
+            {DELIVERY_WORDS[state]}
+            <span aria-hidden>·</span>
+            <button type="button" className="pressable -mx-1 rounded px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
+              Retry
+            </button>
+          </span>
+        )
+      return (
+        <span data-delivery={state} className={state === "delivered" ? "text-faint" : undefined}>
+          {DELIVERY_WORDS[state]}
+        </span>
+      )
     }
-    // Before the desk's own handler: the card is still drawn as the person saw it.
-    root.addEventListener("click", answered, { capture: true })
-    return () => root.removeEventListener("click", answered, { capture: true })
-  }, [panel, on])
+  }, [delivery, sending, conversation])
 }
