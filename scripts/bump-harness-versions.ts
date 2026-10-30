@@ -287,6 +287,8 @@ function driftTools(provider: string, steps: Step[]): void {
   // docs/adding-a-harness.md names each harness's tested version, generated from the declarations.
   run("harness:checklist", "npm", ["run", "harness:checklist"], steps)
   run("harness:self-report", "npm", ["run", "harness:self-report", "--", provider], steps)
+  // docs/harness-concepts.md names each harness's self-report and recorded tools, generated from them.
+  run("harness:concepts", "npm", ["run", "harness:concepts"], steps)
   run("session flows against the scripted model", "npm", ["run", "harness:decode-pairs", "--", provider, "--write", "--sealed"], steps)
 }
 
