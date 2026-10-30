@@ -780,6 +780,15 @@ taken when a turn ends, failed or closed included (`settled`), and the merge
 keeps what a cut-off turn streamed where its harness declares its record
 never keeps it (`cutOffTurn`; a turn holding a call that never returned, or
 one Mako's log has stopped, failed or uncertain, `cutOffRequests`).
+A copy the journal keeps is a row per entry (`base_entries`), written by
+identity: a history read again keeps the objects of the entries that say the
+same (`sharedEntries`), so a turn writes, weighs and holds only what it
+added. While the journal keeps no copy its rows stay, written ahead between
+other work (`stageBase`, `writeAhead`), so the next turn names them without
+writing them; the compaction drops them once the journal closes.
+`npm run bench:live-read` fails if reading a huge conversation holds the
+event loop. This is the host's memory, not the window's: a conversation
+whose harness is attached is pinned and kept whole there, whatever it weighs.
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn

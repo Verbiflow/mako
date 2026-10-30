@@ -88,21 +88,26 @@ export class ContentWeights {
 
   /**
    * A capture cache supplies `shared` to count immutable payload once across
-   * views. `retain` commits that view's objects after deciding to keep it.
+   * views; `share` adds a view's objects to it once it decides to keep it.
    */
-  of(content: LiveContent, shared?: WeakSet<object>, retain = false): number {
+  of(content: LiveContent, shared?: WeakSet<object>): number {
     let bytes = 1024 + 8 * (content.blocks.length + (content.base?.entries.length ?? 0) + (content.requests?.length ?? 0))
-    const weight = (value: Measured) => {
-      if (shared?.has(value)) return 0
-      if (retain) shared?.add(value)
-      return this.#measure(value)
-    }
+    const weight = (value: Measured) => (shared?.has(value) ? 0 : this.#measure(value))
     for (const block of content.blocks) bytes += weight(block)
     for (const entry of content.base?.entries ?? []) bytes += weight(entry)
     for (const request of content.requests ?? []) bytes += weight(request)
     if (content.control) bytes += weight(content.control)
     if (content.configOptions) bytes += weight(content.configOptions)
     return bytes
+  }
+
+  /** Counts `content` in `shared` without measuring it: what a view shares with it then weighs nothing. */
+  share(content: LiveContent, shared: WeakSet<object>): void {
+    for (const block of content.blocks) shared.add(block)
+    for (const entry of content.base?.entries ?? []) shared.add(entry)
+    for (const request of content.requests ?? []) shared.add(request)
+    if (content.control) shared.add(content.control)
+    if (content.configOptions) shared.add(content.configOptions)
   }
 
   #measure(value: Measured): number {

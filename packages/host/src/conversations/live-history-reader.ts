@@ -276,7 +276,7 @@ export class LiveHistoryReader {
     for (const [key, view] of [...this.views].reverse().sort((a, b) => b[1].used - a[1].used)) {
       const count = newer.get(view.id) ?? 0
       const held = count === 0 ? this.held?.(view.id) : undefined
-      if (held) this.weights.of(held, shared, true)
+      if (held) this.weights.share(held, shared)
       const weight = this.weights.of(view.snapshot, shared)
       const why = count >= VIEWS_PER_CONVERSATION ? "newer views of its conversation"
         : first || held ? undefined
@@ -287,7 +287,7 @@ export class LiveHistoryReader {
       else {
         newer.set(view.id, count + 1)
         bytes += weight
-        this.weights.of(view.snapshot, shared, true)
+        this.weights.share(view.snapshot, shared)
       }
     }
   }

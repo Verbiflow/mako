@@ -89,6 +89,7 @@
     "bench:opening": "tsx scripts/bench-opening.ts",
     "bench:mako-log": "tsx --tsconfig tsconfig.app.json scripts/bench-mako-log.ts",
     "bench:history-tool": "node --expose-gc --import tsx scripts/bench-history-tool.ts",
+    "bench:live-read": "node --expose-gc --import tsx scripts/bench-live-read.ts",
     "test:thread-history": "tsx scripts/test-thread-history.ts",
     "mako-log": "tsx --tsconfig tsconfig.app.json scripts/mako-log.ts",
     "attribution:footprint": "npm run -s build --workspace @mako/protocol && tsx scripts/footprint-replay.ts",

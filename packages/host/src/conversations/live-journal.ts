@@ -38,7 +38,8 @@ import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, stored
 import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
 import { cutOffRequests, mergedBase } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
-import { EntrySchema } from "@mako/sessions/entries"
+import { EntrySchema, type Entry } from "@mako/sessions/entries"
+import { sharedBase } from "./shared-entries.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -282,16 +283,52 @@ const BaseSchema = BaseFields.extend({ entries: z.array(EntrySchema) })
 /** A base stored before 2026-10-15, its entries grouped into messages and its indices counting them. */
 const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchema) })
 
+/** How long `stageBase` writes rows before it lets other work run. */
+const STAGE_SLICE_MS = 4
+
+/** Where a run of `writeBaseRows` stopped, and the entry each row it wrote holds. */
+interface RowsWritten {
+  at: number
+  rows: Map<number, Entry>
+}
+
+/** What a commit wrote of the base: no copy, or the rows it wrote and how many the copy has. */
+type BaseWrite = { kept: false } | { kept: true; rows: Map<number, Entry>; length: number }
+
+/** The base row of a base kept an entry a row (`base_entries`): its page without entries, and how many rows hold them. */
+const BaseHeaderRowSchema = BaseFields.extend({ entryRows: z.number().int().nonnegative() })
+const BaseEntryRowSchema = z.object({ id: z.number().int().nonnegative(), value: z.string() })
+
+/** A stored base as `readBase` gives it back. `whole` is one an earlier build wrote as one row: written as rows once it changes. */
+export interface StoredBase {
+  base: ThreadPage
+  entryIndex?: (message: number) => number
+  whole?: true
+}
+
 /**
- * The stored base, and for one that counted messages, the index each
- * message index of it is in entries: a message is as many entries as it
- * has items, and its page keeps its start.
+ * The base journal `db` keeps: none, or its page with its entries read from
+ * their rows. One an earlier build kept whole in the base row reads too.
  */
-export function readBase(text: string): { base: ThreadPage; entryIndex?: (message: number) => number } | null {
-  const value = JSON.parse(text)
+export function readBase(db: DatabaseSync): StoredBase | null {
+  const row = db.prepare("SELECT value FROM base WHERE id=1").get()
+  if (!row) return null
+  const value = JSON.parse(RowSchema.parse(row).value)
   if (value === null) return null
+  const header = BaseHeaderRowSchema.safeParse(value)
+  if (header.success) {
+    const { entryRows, ...page } = header.data
+    const entries: Entry[] = []
+    for (const stored of db.prepare("SELECT id, value FROM base_entries WHERE id < ? ORDER BY id").all(entryRows)) {
+      const entry = BaseEntryRowSchema.parse(stored)
+      if (entry.id !== entries.length) throw new Error(`The journal's history is missing entry ${entries.length}`)
+      entries.push(EntrySchema.parse(JSON.parse(entry.value)))
+    }
+    if (entries.length !== entryRows) throw new Error(`The journal's history holds ${entries.length} of its ${entryRows} entries`)
+    return { base: { ...page, entries } }
+  }
   const flat = BaseSchema.safeParse(value)
-  if (flat.success) return { base: flat.data }
+  if (flat.success) return { base: flat.data, whole: true }
   const grouped = MessageBaseSchema.parse(value)
   const starts = [0]
   for (const message of grouped.entries) starts.push(starts.at(-1)! + itemsIn(message))
@@ -299,7 +336,7 @@ export function readBase(text: string): { base: ThreadPage; entryIndex?: (messag
   const { start } = grouped
   const entryIndex = (message: number) => start + starts[Math.max(0, Math.min(message - start, grouped.entries.length))]!
   const total = entryIndex(Math.min(grouped.total, start + grouped.entries.length)) + Math.max(0, grouped.total - start - grouped.entries.length)
-  return { base: { ...grouped, entries, total }, entryIndex }
+  return { base: { ...grouped, entries, total }, entryIndex, whole: true }
 }
 
 function itemsIn(message: DecodedEntry): number {
@@ -447,6 +484,26 @@ export class LiveJournal {
   private optionsStored = false
   /** The stored base counts messages (`readBase`): the next commit writes it and the metadata again. */
   private messageBase = false
+  /**
+   * What each `base_entries` row holds, by identity; a hole is a row this
+   * journal hasn't written or read. The host keeps an entry's object from
+   * one reading of its history to the next while it says the same
+   * (`sharedEntries`), so a commit writes only the rows whose entry changed:
+   * a history of 150MB gains a turn for the cost of that turn. The rows
+   * stay while the base row names none of them (`storedBase` keeps no copy,
+   * or an earlier build kept it whole), so a turn that makes the journal
+   * keep its copy again writes none of them.
+   */
+  private baseRows: (Entry | undefined)[] = []
+  /** Whether rows past `baseRows` may be on disk: none are once a commit has cut them. */
+  private baseRowsCut = false
+  /** The base `stageBase` is writing into rows a slice at a time, while the base row names none. */
+  private staging?: { base: ThreadPage; at: number; waiting: (() => void)[] }
+  /** The base whose entries the rows last held whole, so a flush of the same base looks no further. */
+  private stagedBase?: ThreadPage
+  /** Whether the base row names the rows; unknown until the journal is read or writes it. */
+  private rowsNamed?: boolean
+  private closed = false
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
@@ -459,6 +516,7 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS base (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS base_entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -473,6 +531,8 @@ export class LiveJournal {
         this.appends.set(row.block_id, row.count)
       }
       this.optionsStored = Boolean(this.db.prepare("SELECT 1 FROM options WHERE id=1").get())
+      // Every commit writes the metadata and the base row together: a journal without the one has neither.
+      if (!this.db.prepare("SELECT 1 FROM metadata WHERE id=1").get()) this.rowsNamed = false
     } catch (error) {
       this.db.close()
       throw error
@@ -516,7 +576,6 @@ export class LiveJournal {
     if (!metadataValue) return null
     const stored = MetadataSchema.parse(JSON.parse(metadataValue))
     const metadata = { ...stored, revision: Math.max(stored.revision, this.revision()) }
-    const base = this.db.prepare("SELECT value FROM base WHERE id=1").get()
     const blocks = this.db
       .prepare("SELECT value FROM blocks ORDER BY id")
       .all()
@@ -544,9 +603,12 @@ export class LiveJournal {
       }
       if (block) blocks[index] = block
     }
-    const read = base ? readBase(RowSchema.parse(base).value) : null
+    const read = readBase(this.db)
     // Until the next commit writes both, the base row and `baseLiveStart` stay in messages.
     this.messageBase = Boolean(read?.entryIndex)
+    this.rowsNamed = Boolean(read && !read.whole)
+    // The rows hold what was read; merged again below, an entry that reads the same keeps the object its row holds.
+    if (read && !read.whole) this.baseRows = [...read.base.entries]
     const baseLiveStart = read?.entryIndex && metadata.baseLiveStart !== undefined ? read.entryIndex(metadata.baseLiveStart) : metadata.baseLiveStart
     const requests = this.db
       .prepare("SELECT value FROM requests ORDER BY rowid")
@@ -563,7 +625,7 @@ export class LiveJournal {
       ...harnessTurns.length && { harnessTurns },
       ...baseLiveStart !== undefined && { baseLiveStart },
       // A base an earlier build kept unmerged reads as every other reading of it does.
-      base: read ? mergedBase(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base : null,
+      base: read ? sharedBase(read.base, mergedBase(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base) : null,
       blocks,
       requests,
     }
@@ -612,6 +674,7 @@ export class LiveJournal {
     } catch (error) {
       throw new JournalWriteError(error)
     }
+    let written: BaseWrite | undefined
     try {
       const { blocks, requests, harnessTurns, ...metadata } = next
       const { configOptions, ...session } = metadata.session
@@ -628,10 +691,7 @@ export class LiveJournal {
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
       const stored = storedBase(next)
-      if (!previous || this.messageBase || stored !== storedBase(previous))
-        this.db
-          .prepare("INSERT OR REPLACE INTO base VALUES (1, ?)")
-          .run(JSON.stringify(stored))
+      if (!previous || this.messageBase || stored !== storedBase(previous)) written = this.writeBase(stored)
       const upsertBlock = this.db.prepare(
         "INSERT OR REPLACE INTO blocks VALUES (?, ?)"
       )
@@ -719,11 +779,142 @@ export class LiveJournal {
         if (count) this.appends.set(index, count)
         else this.appends.delete(index)
       }
+      if (written) this.wroteBase(written)
     } catch (error) {
       // SQLite rolls a full disk, an I/O error or a busy lock back itself, and a ROLLBACK then would throw over why.
       if (this.db.isTransaction) this.db.exec("ROLLBACK")
       this.log = undefined
+      // What the rows hold is no longer known: the next write of the base writes each.
+      if (written) this.forgetBaseRows()
       throw new JournalWriteError(error)
+    }
+    if (!this.rowsNamed && next.base) this.stageBase(next.base)
+  }
+
+  /**
+   * Writes the base row, inside the commit's transaction: none, or the
+   * page and the rows of its entries that don't hold them yet.
+   */
+  private writeBase(stored: ThreadPage | null): BaseWrite {
+    if (!stored) {
+      this.db.prepare("INSERT OR REPLACE INTO base VALUES (1, 'null')").run()
+      return { kept: false }
+    }
+    const { entries, ...page } = stored
+    // Rows written ahead under a base row that named none: a compaction since (`JournalReclaims`) may have dropped them.
+    if (!this.rowsNamed && this.baseRows.length) {
+      const written = this.baseRows.reduce((count, entry) => (entry ? count + 1 : count), 0)
+      const { count } = CountSchema.parse(this.db.prepare("SELECT count(*) AS count FROM base_entries WHERE id < ?").get(this.baseRows.length))
+      if (count < written) {
+        this.baseRows = []
+        this.baseRowsCut = false
+      }
+    }
+    const { rows } = this.writeBaseRows(entries, 0, entries.length)
+    if (this.baseRowsCut === false || this.baseRows.length > entries.length)
+      this.db.prepare("DELETE FROM base_entries WHERE id >= ?").run(entries.length)
+    this.db.prepare("INSERT OR REPLACE INTO base VALUES (1, ?)").run(JSON.stringify({ ...page, entryRows: entries.length }))
+    return { kept: true, rows, length: entries.length }
+  }
+
+  /** Writes `entries[from, to)` whose rows don't hold them, until `until` when given; what each row then holds. */
+  private writeBaseRows(entries: readonly Entry[], from: number, to: number, until?: number): RowsWritten {
+    const upsert = this.db.prepare("INSERT OR REPLACE INTO base_entries VALUES (?, ?)")
+    const rows = new Map<number, Entry>()
+    let at = from
+    for (; at < to && (until === undefined || performance.now() < until); at++) {
+      const entry = entries[at]!
+      if (this.baseRows[at] === entry) continue
+      upsert.run(at, JSON.stringify(entry))
+      rows.set(at, entry)
+    }
+    return { at, rows }
+  }
+
+  /** What a committed `writeBase` left in the rows. */
+  private wroteBase(write: BaseWrite): void {
+    this.rowsNamed = write.kept
+    if (!write.kept) return
+    this.stopStaging()
+    this.stagedBase = undefined
+    for (const [index, entry] of write.rows) this.baseRows[index] = entry
+    this.baseRows.length = write.length
+    this.baseRowsCut = true
+  }
+
+  private forgetBaseRows(): void {
+    this.stagedBase = undefined
+    this.baseRows = []
+    this.baseRowsCut = false
+    this.rowsNamed = undefined
+    this.stopStaging()
+  }
+
+  /**
+   * While the base row names no rows, writes the rows of
+   * `base`'s entries a slice at a time between other work, so a turn that
+   * makes it keep one again (`baseKeptBecause`) commits only the page. The
+   * rows mean nothing until the base row names them.
+   */
+  private stageBase(base: ThreadPage): void {
+    if (this.closed || this.staging?.base === base || this.stagedBase === base) return
+    const { entries } = base
+    if (entries.length === this.baseRows.length && this.baseRowsCut && entries.every((entry, index) => this.baseRows[index] === entry)) {
+      this.stagedBase = base
+      return
+    }
+    const scheduled = this.staging
+    this.staging = { base, at: 0, waiting: scheduled?.waiting ?? [] }
+    if (!scheduled) setImmediate(() => this.stageSlice())
+  }
+
+  /**
+   * Writes the rows of `base`'s entries ahead of the commit that first names
+   * them, a slice at a time, so that commit writes only the page: a session
+   * of 150MB taken in otherwise held the loop for as long as writing it took.
+   */
+  writeAhead(base: ThreadPage): Promise<void> {
+    if (this.rowsNamed !== false) return Promise.resolve()
+    this.stageBase(base)
+    const staging = this.staging
+    return staging ? new Promise((resolve) => staging.waiting.push(resolve)) : Promise.resolve()
+  }
+
+  /** Writing ahead ended, done or not; whoever waits on it goes on. */
+  private stopStaging(): void {
+    const waiting = this.staging?.waiting ?? []
+    this.staging = undefined
+    for (const resolve of waiting) resolve()
+  }
+
+  private stageSlice(): void {
+    const staging = this.staging
+    if (!staging || this.closed || this.rowsNamed !== false) {
+      this.stopStaging()
+      return
+    }
+    const { entries } = staging.base
+    try {
+      this.db.exec("BEGIN IMMEDIATE")
+      const written = this.writeBaseRows(entries, staging.at, entries.length, performance.now() + STAGE_SLICE_MS)
+      const done = written.at >= entries.length
+      if (done && (this.baseRowsCut === false || this.baseRows.length > entries.length))
+        this.db.prepare("DELETE FROM base_entries WHERE id >= ?").run(entries.length)
+      this.db.exec("COMMIT")
+      for (const [index, entry] of written.rows) this.baseRows[index] = entry
+      if (!done) {
+        staging.at = written.at
+        setImmediate(() => this.stageSlice())
+        return
+      }
+      this.baseRows.length = entries.length
+      this.baseRowsCut = true
+      this.stagedBase = staging.base
+      this.stopStaging()
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK")
+      this.forgetBaseRows()
+      hostWarn("journal", "a journal's history rows couldn't be written ahead; a turn writes them", { path: this.path, error: errorMessage({ error }) })
     }
   }
 
@@ -737,9 +928,29 @@ export class LiveJournal {
 
   /** `compact` is handed the closed file when a dropped copy left much of it free (`JournalReclaims`). */
   close(compact?: (path: string) => void): void {
-    const free = compact !== undefined && this.mostlyFree()
+    this.closed = true
+    this.stopStaging()
+    // Rows written ahead that the base row doesn't name go with the journal: dropped by the compaction, off this
+    // thread, as 150MB of them take a few hundred milliseconds to free.
+    const ahead = this.rowsNamed === false && this.rowsAhead()
+    if (ahead && !compact) {
+      try {
+        this.db.exec("DELETE FROM base_entries")
+      } catch (error) {
+        hostWarn("journal", "a journal's history rows couldn't be dropped", { path: this.path, error: errorMessage({ error }) })
+      }
+    }
+    const free = compact !== undefined && (ahead || this.mostlyFree())
     this.db.close()
     if (free) compact(this.path)
+  }
+
+  private rowsAhead(): boolean {
+    try {
+      return Boolean(this.db.prepare("SELECT 1 FROM base_entries LIMIT 1").get())
+    } catch {
+      return false
+    }
   }
 
   private mostlyFree(): boolean {
@@ -776,8 +987,7 @@ export function storedRequest(root: string, id: string, requestId: string): Live
 export function copiedBaseBytes(root: string, id: string): number {
   const db = new DatabaseSync(join(root, `${id}.sqlite`), { readOnly: true })
   try {
-    const row = z.object({ bytes: z.number().nullable() }).optional().parse(db.prepare("SELECT length(value) AS bytes FROM base WHERE id = 1").get())
-    return row?.bytes && row.bytes > "null".length ? row.bytes : 0
+    return baseHeader(db)?.copiedBytes ?? 0
   } finally {
     db.close()
   }
@@ -791,8 +1001,28 @@ const BaseHeaderSchema = z.object({
   harness: z.string().nullable(),
   nativeId: z.string().nullable(),
   path: z.string().nullable(),
+  /** A copy an entry a row: how many rows; null for one kept whole, or none. */
+  entryRows: z.number().nullable(),
+  /** A copy kept whole: how many entries it holds. */
   entries: z.number().nullable(),
 })
+const RowBytesSchema = z.object({ bytes: z.number().nullable() })
+const CountSchema = z.object({ count: z.number() })
+
+/** The base row's page, read without decoding its entries, and the bytes of the copy it names: 0 when it names none. */
+function baseHeader(db: DatabaseSync) {
+  const header = BaseHeaderSchema.optional().parse(db.prepare(`SELECT length(value) AS bytes,
+    json_extract(value, '$.start') AS start, json_extract(value, '$.hasEarlier') AS hasEarlier, json_extract(value, '$.preview') AS preview,
+    json_extract(value, '$.ref.harness') AS harness, json_extract(value, '$.ref.nativeId') AS nativeId, json_extract(value, '$.ref.path') AS path,
+    json_extract(value, '$.entryRows') AS entryRows, json_array_length(value, '$.entries') AS entries FROM base WHERE id=1`).get())
+  if (!header) return undefined
+  const kept = header.bytes !== null && header.bytes > "null".length
+  // Rows past the copy's count, or under a base row that names none, are rows written ahead (`stageBase`), not a copy.
+  const rows = kept && header.entryRows !== null
+    ? RowBytesSchema.parse(db.prepare("SELECT sum(length(value)) AS bytes FROM base_entries WHERE id < ?").get(header.entryRows)).bytes ?? 0
+    : 0
+  return { ...header, entries: header.entryRows ?? header.entries, copiedBytes: kept ? (header.bytes ?? 0) + rows : 0 }
+}
 const PragmaSchema = z.object({ size: z.number(), pages: z.number(), free: z.number() })
 
 export type JournalInspection = ReturnType<typeof inspectJournal>
@@ -808,10 +1038,7 @@ export function inspectJournal(root: string, id: string) {
     const row = metadataRow(db)
     if (!row) throw new Error("The journal has no metadata row")
     const metadata = MetadataSchema.parse(JSON.parse(row))
-    const header = BaseHeaderSchema.optional().parse(db.prepare(`SELECT length(value) AS bytes,
-      json_extract(value, '$.start') AS start, json_extract(value, '$.hasEarlier') AS hasEarlier, json_extract(value, '$.preview') AS preview,
-      json_extract(value, '$.ref.harness') AS harness, json_extract(value, '$.ref.nativeId') AS nativeId, json_extract(value, '$.ref.path') AS path,
-      json_array_length(value, '$.entries') AS entries FROM base WHERE id=1`).get())
+    const header = baseHeader(db)
     const base = header?.harness && header.nativeId && header.path && header.start !== null
       ? { start: header.start, hasEarlier: Boolean(header.hasEarlier), preview: Boolean(header.preview), ref: { harness: header.harness, nativeId: header.nativeId, path: header.path } }
       : null
@@ -830,7 +1057,7 @@ export function inspectJournal(root: string, id: string) {
       blocks,
       bytes: pages.size * pages.pages,
       freeBytes: pages.size * pages.free,
-      copiedBaseBytes: header?.bytes && header.bytes > "null".length ? header.bytes : 0,
+      copiedBaseBytes: header?.copiedBytes ?? 0,
       baseEntries: header?.entries ?? 0,
       baseSource: metadata.baseSource,
       /** Null when the base is read from `baseSource` on open, or there is none. */
