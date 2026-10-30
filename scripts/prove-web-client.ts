@@ -23,8 +23,9 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * - `start`: a Codex Session in `api` at "Ask first", whose first turn asks to run the payments tests: the first makes its
  *   Thread, each after is a Session added to it. `STARTED <conversation>`
  * - `begin <access> <first message>`: a Thread of its own in `api` at that access ("full", "ask"), its first turn the
- *   script its words name: "Say hello", "Stream a long answer", "Hold the turn", "Ask me a question", "Fail this turn".
- *   `STARTED <conversation>`
+ *   script its words name: "Say hello", "Stream a long answer", "Hold the turn", "Ask me a question", "Fail this turn",
+ *   "Check the retry fix" (three steps), "Break the last step" (three, the last failing), "Work through the steps" (three,
+ *   the last running 30 seconds). `STARTED <conversation>`
  * - `access <harness> <mode>`: the person chooses that access for the harness here, as the desk's composer does; it goes
  *   to their account. `ACCESS <the host's choices>`
  * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
@@ -173,6 +174,34 @@ const ANSWERS: Array<{ heard: RegExp; steps: ScriptedReply[] }> = [
     steps: [
       { text: "One question first.", call: { id: "call_ask", name: "request_user_input", arguments: { questions: [{ id: "colour", header: "Colour", question: "Which colour should the new button be?", options: [{ label: "Blue", description: "The brand's calm colour" }, { label: "Green", description: "Reads as go" }] }] } } },
       { text: "Going with that colour." },
+    ],
+  },
+  // Several steps in a row, for the phone's one-line fold of them: settled, failed at the end, and still running.
+  {
+    heard: /Check the retry fix/i,
+    steps: [
+      { reasoning: "Look at what the suite has first.", text: "Looking at the suite first.", call: { id: "call_list", name: "exec_command", arguments: { cmd: "ls test" } } },
+      { text: "Running it three times.", call: { id: "call_three", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 3" } } },
+      { text: "And once more on its own.", call: { id: "call_once", name: "exec_command", arguments: { cmd: "node test/payments.mjs" } } },
+      { text: "The retry fix holds: 412 tests pass three runs in a row, and once more on their own." },
+    ],
+  },
+  {
+    heard: /Break the last step/i,
+    steps: [
+      { text: "Listing the tests.", call: { id: "call_ls", name: "exec_command", arguments: { cmd: "ls test" } } },
+      { text: "Running the suite.", call: { id: "call_run", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 2" } } },
+      { text: "Checking the lint.", call: { id: "call_lint", name: "exec_command", arguments: { cmd: "node -e \"console.error('lint: 2 problems'); process.exit(1)\"" } } },
+      { text: "The lint failed with two problems; the tests pass." },
+    ],
+  },
+  {
+    heard: /Work through the steps/i,
+    steps: [
+      { text: "Listing the tests.", call: { id: "call_walk_ls", name: "exec_command", arguments: { cmd: "ls test" } } },
+      { text: "Running the suite.", call: { id: "call_walk_run", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 2" } } },
+      { text: "Running the suite for a while.", call: { id: "call_walk_long", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 300", yield_time_ms: 60_000 } } },
+      { text: "Worked through every step." },
     ],
   },
   { heard: /Fail this turn/i, steps: [{ fail: { status: 400, message: "The scripted model refused this turn." } }] },

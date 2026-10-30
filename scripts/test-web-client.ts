@@ -22,6 +22,11 @@ import { newDraftKey, noteSending, openingText, readDraft, settleSending, thread
 import { answeredWords, dockStatus, statusWords, workingWords, type DockStatusInput } from "../src/web-client/dock-status"
 import { DELIVERY_WORDS, deliveryOf, type Sending } from "../src/web-client/delivery"
 import { SAY_WAKING_MS, wakeThread, wakingNow, wakingStore } from "../src/web-client/wake"
+import { sendChoiceDetail, sendPresentation, type SendSituation } from "../src/web-client/send-action"
+import { appendHeard, DictationSession, elapsedWords, frameDecibels, meterLevel, splitUnsure, type Recognition } from "../src/web-client/dictation"
+import { freshStep, stepsLine } from "../src/web-client/steps-words"
+import { switchedWords } from "../src/web-client/answered"
+import type { ToolCall } from "../src/extend/slots"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -511,4 +516,153 @@ test("a cloud Thread's machine wakes once for every key and message, and is said
   } finally {
     Reflect.deleteProperty(globalThis, "window")
   }
+})
+
+test("one send button: Send idle, Stop when empty at work, Steer or Queue by the desk's choice, ✓ while editing", () => {
+  const at = (situation: Partial<SendSituation>) => sendPresentation({ running: false, hasContent: true, editingQueued: false, canSteer: false, steerByDefault: true, ...situation })
+  assert.deepEqual(at({}), { kind: "send", label: "Send" })
+  assert.deepEqual(at({ sendLabel: "Start" }), { kind: "send", label: "Start" })
+  assert.equal(at({ hasContent: false }).kind, "send")
+  assert.equal(at({ running: true, hasContent: false, canSteer: true }).kind, "stop")
+  // The desk's preference decides the tap; a long press offers the other, only where the harness can steer.
+  assert.deepEqual(at({ running: true, canSteer: true }), { kind: "steer", label: "Steer", alternate: "queue" })
+  assert.deepEqual(at({ running: true, canSteer: true, steerByDefault: false }), { kind: "queue", label: "Queue", alternate: "steer" })
+  assert.deepEqual(at({ running: true, canSteer: false }), { kind: "queue", label: "Queue" })
+  assert.equal(at({ running: true, editingQueued: true }).kind, "update")
+  assert.equal(at({ running: true, hasContent: false, editingQueued: true }).kind, "update")
+  // Words under an open question answer it: Send, whatever the turn is doing.
+  assert.deepEqual(at({ running: true, canSteer: true, answering: true }), { kind: "send", label: "Send answer" })
+  assert.equal(at({ running: true, hasContent: false, answering: true }).kind, "stop")
+  assert.equal(sendChoiceDetail("queue", "step"), "Runs after this turn")
+  assert.notEqual(sendChoiceDetail("steer", "interrupt"), sendChoiceDetail("steer", "step"))
+})
+
+test("dictation's meter: −60 dB is silence, 0 dB full, the square root between; words append, the last three unsure", () => {
+  assert.equal(meterLevel(undefined), 0)
+  assert.equal(meterLevel(-Infinity), 0)
+  assert.equal(meterLevel(-60), 0)
+  assert.equal(meterLevel(-75), 0)
+  assert.equal(meterLevel(0), 1)
+  assert.equal(meterLevel(6), 1)
+  const quiet = meterLevel(-40)
+  const loud = meterLevel(-10)
+  assert.ok(quiet > 0.05 && quiet < loud && loud < 1)
+  // Square-root scaling: −40 dB (amplitude 0.01) reads near 0.1, not 0.01.
+  assert.ok(Math.abs(quiet - Math.sqrt((0.01 - 0.001) / (1 - 0.001))) < 1e-9)
+  assert.equal(frameDecibels(new Uint8Array(64).fill(128)), -Infinity)
+  assert.ok(Math.abs(frameDecibels(Uint8Array.from({ length: 64 }, (_, index) => (index % 2 ? 192 : 64))) - 20 * Math.log10(0.5)) < 1e-9)
+  assert.deepEqual(splitUnsure("check the retry backoff on a slow runner"), { sure: "check the retry backoff on", unsure: "a slow runner" })
+  assert.deepEqual(splitUnsure("two words"), { sure: "", unsure: "two words" })
+  assert.equal(elapsedWords(7_400), "0:07")
+  assert.equal(elapsedWords(102_000), "1:42")
+  assert.equal(elapsedWords(725_000), "12:05")
+  assert.equal(appendHeard("", " Let's check "), "Let's check")
+  assert.equal(appendHeard("Fix the retry.", "Then the lint"), "Fix the retry. Then the lint")
+  assert.equal(appendHeard("Fix it\n", "then"), "Fix it\nthen")
+  assert.equal(appendHeard("Kept", "  "), "Kept")
+})
+
+test("a run of steps is one line: its count and its newest step, present while it runs, failed when it failed", () => {
+  const call = (id: string, kind: "shell" | "read", target: string, extra: Partial<ToolCall> = {}): ToolCall => ({ id, name: kind, tool: { kind, name: kind, label: kind === "shell" ? "Shell" : "Read", target }, pending: false, ...extra })
+  const three = [call("a", "read", "test/payments.mjs"), call("b", "shell", "npm test"), call("c", "shell", "npm run lint")]
+  assert.deepEqual(stepsLine(three, false), { count: "3 steps", newest: "ran npm run lint", running: false, failed: false })
+  assert.deepEqual(stepsLine([...three.slice(0, 2), call("c", "shell", "npm run lint", { pending: true })], true), { count: "3 steps", newest: "running npm run lint", running: true, failed: false })
+  // A finished record's call that never returned isn't running: only a live run's is.
+  assert.equal(stepsLine([call("c", "shell", "sleep 9", { pending: true })], false).running, false)
+  assert.equal(stepsLine([...three.slice(0, 2), call("c", "shell", "npm run lint", { isError: true })], false).failed, true)
+  assert.equal(stepsLine([call("c", "shell", "npm test", { isCanceled: true })], false).newest, "Ran npm test · stopped")
+  // One step is its own words: a count of one says nothing.
+  assert.deepEqual(stepsLine([call("a", "read", "README.md")], false), { count: "", newest: "Read README.md", running: false, failed: false })
+  assert.equal(freshStep({ startedAt: 10_000 }, 12_000), true)
+  assert.equal(freshStep({ startedAt: 10_000 }, 13_500), false)
+  assert.equal(freshStep({}, 13_500), false)
+})
+
+test("a switch from the composer leaves its line: switched, or not, in so many words", () => {
+  assert.equal(switchedWords({ what: "GPT-5.5", refused: false }), "Switched to GPT-5.5")
+  assert.equal(switchedWords({ what: "Full access", refused: true }), "Not switched to Full access")
+})
+
+test("dictation listens until it's stopped: silence starts it again, and what it was still hearing is kept", () => {
+  const made: FakeRecognizer[] = []
+  class FakeRecognizer extends EventTarget implements Recognition {
+    lang = ""
+    continuous = false
+    interimResults = false
+    onresult: Recognition["onresult"] = null
+    onend: Recognition["onend"] = null
+    onerror: Recognition["onerror"] = null
+    stopped = false
+    constructor() {
+      super()
+      made.push(this)
+    }
+    start() {}
+    stop() {
+      this.stopped = true
+      this.onend?.()
+    }
+    abort() {}
+    say(results: Array<[string, boolean]>) {
+      this.onresult?.({ resultIndex: 0, results: results.map(([transcript, isFinal]) => ({ isFinal, 0: { transcript } })) })
+    }
+  }
+  const settled: string[] = []
+  const hearing: string[] = []
+  let ended: string | undefined | null = null
+  const session = new DictationSession(FakeRecognizer, { settled: (words) => settled.push(words), hearing: (words) => hearing.push(words), levels: () => undefined, ended: (why) => (ended = why) })
+  session.begin()
+  made[0]!.say([["Check the retry", true], ["backoff on a", false]])
+  made[0]!.say([["Check the retry", true], ["backoff on a slow", false]])
+  assert.deepEqual(settled, ["Check the retry"])
+  assert.equal(hearing.at(-1), "backoff on a slow")
+  // The platform ends it on silence: what it was hearing is kept, and it listens again.
+  made[0]!.onend?.()
+  assert.deepEqual(settled, ["Check the retry", "backoff on a slow"])
+  assert.equal(made.length, 2)
+  assert.equal(ended, null)
+  made[1]!.say([["runner", true]])
+  session.end(false)
+  assert.equal(made[1]!.stopped, true)
+  assert.deepEqual(settled, ["Check the retry", "backoff on a slow", "runner"])
+  assert.equal(ended, undefined)
+})
+
+test("dictation that fails keeps what it heard and says why; one that won't listen stops rather than looping", () => {
+  const made: Array<Recognition & { fail(error: string): void }> = []
+  class Failing extends EventTarget implements Recognition {
+    lang = ""
+    continuous = false
+    interimResults = false
+    onresult: Recognition["onresult"] = null
+    onend: Recognition["onend"] = null
+    onerror: Recognition["onerror"] = null
+    constructor() {
+      super()
+      made.push(this)
+    }
+    start() {}
+    stop() {}
+    abort() {}
+    fail(error: string) {
+      this.onerror?.({ error })
+      this.onend?.()
+    }
+  }
+  const settled: string[] = []
+  let ended: string | undefined | null = null
+  const session = new DictationSession(Failing, { settled: (words) => settled.push(words), hearing: () => undefined, levels: () => undefined, ended: (why) => (ended = why) })
+  session.begin()
+  made[0]!.onresult?.({ resultIndex: 0, results: [{ isFinal: false, 0: { transcript: "half a sentence" } }] })
+  made[0]!.fail("network")
+  assert.deepEqual(settled, ["half a sentence"])
+  assert.equal(ended, "Dictation stopped. What it heard is kept.")
+  // Ending again and again with nothing heard: it gives up after a few tries instead of spinning.
+  let quit: string | undefined | null = null
+  const looping = new DictationSession(Failing, { settled: () => undefined, hearing: () => undefined, levels: () => undefined, ended: (why) => (quit = why) })
+  const before = made.length
+  looping.begin()
+  for (let index = 0; index < 8 && quit === null; index++) made.at(-1)!.onend?.()
+  assert.ok(made.length - before <= 5)
+  assert.equal(quit, "Dictation stopped. What it heard is kept.")
 })
