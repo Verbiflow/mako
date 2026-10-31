@@ -9,7 +9,7 @@ import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
 import { ExchangeNoteContext, MoveDividersContext, PromptNoteContext } from "./transcript-notes"
-import { CompactPresentationContext } from "./compact-presentation"
+import { CompactPresentationContext, type CompactPresentation } from "./compact-presentation"
 import { acp, useAcp, type ForkAnswer } from "@/state/acp"
 import { descriptorFor } from "@/state/descriptors"
 import { threadsStore } from "@/state/thread-store"
@@ -22,6 +22,8 @@ import { memo, useContext, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AgentMark, LeadSlot, ToolRow } from "@/components/transcript/tool-row"
+import { readPersonTokenProblem } from "@mako/host/contracts/github-person"
+import { PersonTokenNotice } from "./person-token-notice"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { ExchangeFailure, TurnError } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
@@ -273,7 +275,7 @@ export const Exchange = memo(function Exchange({
             {liveTail ? <LiveRow step={NOTHING_RUNNING} answering={lastSection?.kind === "prose"} /> : null}
           </div>
         ) : null}
-        {exchangeNote?.(exchange.id)}
+        {exchangeNote?.(exchange.id, standing)}
 
         {plan ? (
           <div className="mt-3">
@@ -838,6 +840,8 @@ function thoughtLine(text: string): string {
 function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; foldKey: string; stop?: boolean | TurnStop; kept: ReactNode[]; children: ReactNode }) {
   const open = useTurnFolds((state) => state.open.has(foldKey))
   const work = useMemo(() => summarizeWork(fold.messages), [fold.messages])
+  // A pull request refused because the person's own GitHub token couldn't be used asks them to choose: never folded away.
+  const tokenProblems = useMemo(() => (work.failed ? personTokenNotices(fold.messages) : []), [work.failed, fold.messages])
   const { text } = describeWork(work)
   const duration = fold.worked !== undefined ? formatDuration(fold.worked) : undefined
   const yours = stop === true || (stop !== undefined && stop !== false && endedAsChosen(stop.reason))
@@ -862,6 +866,7 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
           body: <div className="flex flex-col gap-4 pt-1">{children}</div>,
         })}
         {kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+        {tokenProblems}
       </div>
     )
   return (
@@ -892,8 +897,17 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
         </div>
       </Collapse>
       {!open && kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+      {!open ? tokenProblems : null}
     </div>
   )
+}
+
+/** The notice of each call in `messages` that refused for the person's own GitHub token, as its row draws it when shown. */
+function personTokenNotices(messages: TurnFold["messages"]): ReactNode[] {
+  return messages.flatMap((message) => pairTools(message.blocks)).flatMap((call) => {
+    const problem = call.isError ? readPersonTokenProblem(call.result) : undefined
+    return problem ? [<PersonTokenNotice key={call.id} problem={problem} />] : []
+  })
 }
 
 /** How the calls under a summary ended other than well: "2 failed", "3 stopped", "1 cut off". */
@@ -1169,16 +1183,8 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
   const { copied, copy } = useCopy(text, undefined, () => completeLiveAnswer(liveId, exchange))
   const last = exchange.response.at(-1)
   const compact = useContext(CompactPresentationContext)?.reply
-  const fork = useLiveFork(exchange)
   if (!text && !last?.timestamp && !interrupted) return null
-  if (compact)
-    return (
-      <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
-        {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
-        {/* The phone's reply offers what it can be used for; its time and model are the desk's details. */}
-        {streaming ? null : compact({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
-      </div>
-    )
+  if (compact) return <CompactFooter exchange={exchange} text={text} streaming={streaming} interrupted={interrupted} reply={compact} />
 
   return (
     <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
@@ -1212,6 +1218,18 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
       {!streaming && !interrupted ? <ForkButton exchange={exchange} /> : null}
       {!streaming ? <ShowOriginal origins={exchange.response.map((message) => message.origin)} /> : null}
       {last ? <Slot name="transcript.turn.trailing" message={last} /> : null}
+    </div>
+  )
+}
+
+/** The phone's footer: a reply offers what it can be used for; its time and model are the desk's details. */
+function CompactFooter({ exchange, text, streaming, interrupted, reply }: { exchange: ExchangeData; text: string; streaming?: boolean; interrupted?: boolean | TurnStop; reply: NonNullable<CompactPresentation["reply"]> }) {
+  // Asked only here: whether a fork can follow this answer is the phone's Branch, never the desk's footer.
+  const fork = useLiveFork(exchange)
+  return (
+    <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
+      {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
+      {streaming ? null : reply({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
     </div>
   )
 }

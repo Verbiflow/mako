@@ -94,6 +94,12 @@ export function WebApp() {
   const wide = form !== "phone"
   const desk = form === "desk"
   useKeyboardInset()
+  // What the desk's own pieces ask for by `mako:settings` (a transcript notice's "Update token"): the web's one Settings.
+  useEffect(() => {
+    const open = () => navigate({ kind: "settings" })
+    window.addEventListener("mako:settings", open)
+    return () => window.removeEventListener("mako:settings", open)
+  }, [navigate])
   const signedOut = useAccountList((state) => state.phase === "signed-out")
   // The list paints first: what it doesn't need is read after (the page's own work too, such as its service worker).
   const painted = useAccountList((state) => state.phase !== "starting" && state.phase !== "signed-out")

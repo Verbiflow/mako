@@ -457,6 +457,27 @@ test("the carried files the agent placed reach the host by name, and a move's ar
   assert.deepEqual(await failing, { files: [], problem: "the gateway answered 503" })
 })
 
+test("before a pull request the host asks the agent whether it goes as the person, and an unanswered ask is unknown, never off", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-person-")) })
+  const asked = agent.runtime.githubPerson()
+  await agent.until("the agent asked", () => agent.messages.some((message) => message.type === "github-person-refresh"))
+  const request = agent.messages.findLast((message) => message.type === "github-person-refresh")
+  assert.ok(request?.type === "github-person-refresh")
+  agent.tell({ type: "github-person", answers: "someone-else", person: { state: "off" } })
+  agent.tell({ type: "github-person", answers: request.id, person: { state: "on", login: "ada", expiresAt: null } })
+  assert.deepEqual(await asked, { state: "on", login: "ada", expiresAt: null })
+  // A token in the answer isn't the protocol's: the message is refused whole, so the ask isn't answered by it.
+  const again = agent.runtime.githubPerson()
+  await agent.until("asked again", () => agent.messages.filter((message) => message.type === "github-person-refresh").length === 2)
+  const second = agent.messages.findLast((message) => message.type === "github-person-refresh")
+  assert.ok(second?.type === "github-person-refresh")
+  agent.tellRaw(JSON.stringify({ type: "github-person", answers: second.id, person: { state: "on", login: "ada", expiresAt: null, token: "github_pat_madeUpForTests0123456789" } }))
+  agent.tell({ type: "github-person", answers: second.id, person: { state: "unusable", problem: "Mako Cloud couldn't open your GitHub token." } })
+  assert.deepEqual(await again, { state: "unusable", problem: "Mako Cloud couldn't open your GitHub token." })
+  agent.runtime.stop()
+  assert.equal((await agent.runtime.githubPerson()).state, "unknown", "a runtime that can't ask says unknown")
+})
+
 test("a base's folder is prepared when the agent asks, and the host says so either way", async () => {
   const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-prepare-")) })
   agent.tell({ type: "prepare", path: "/home/node/work/repo" })

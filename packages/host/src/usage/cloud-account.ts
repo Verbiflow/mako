@@ -63,6 +63,7 @@ import {
 import { clipReason, CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-threads.js"
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
+import { GitHubTokenAnswerSchema, GitHubTokenListingSchema, type GitHubTokenListing } from "../contracts/github-person.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
@@ -549,6 +550,27 @@ export class CloudAccounts {
 
   async removeSignIn(harness: CloudSignInHarness): Promise<void> {
     await this.#call("sign-ins.remove", "DELETE", `${this.#signInsPath()}/${harness}`)
+  }
+
+  /** "Open pull requests as me": who the account's own GitHub token belongs to, or null while it's off. Never the token. */
+  async githubToken(): Promise<GitHubTokenListing | null> {
+    const response = await this.#call("github-token.read", "GET", `${this.#accountPath()}/github-token`)
+    return GitHubTokenAnswerSchema.parse(await response.json()).token
+  }
+
+  /**
+   * Turns it on, or replaces the token: the cloud checks it with GitHub (who it belongs to, and that it reaches
+   * `repository`, `owner/name`, when one is in view) and keeps it encrypted for the account's cloud machines. This Mac
+   * keeps nothing of it. A refusal is GitHub's reason in words.
+   */
+  async saveGitHubToken(token: string, repository?: string): Promise<GitHubTokenListing> {
+    const response = await this.#call("github-token.save", "PUT", `${this.#accountPath()}/github-token`, { token, ...repository && { repository } })
+    return GitHubTokenListingSchema.parse(await response.json())
+  }
+
+  /** Turns it off: the account removes the token, and each cloud machine its copy before its next pull request. */
+  async removeGitHubToken(): Promise<void> {
+    await this.#call("github-token.remove", "DELETE", `${this.#accountPath()}/github-token`)
   }
 
   /** A project's carried files the account's store keeps (`?repository=`), listed without their values. */

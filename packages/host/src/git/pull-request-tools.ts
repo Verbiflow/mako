@@ -2,7 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { basename, relative, resolve, sep } from "node:path"
 import { z } from "zod"
 import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "../contracts/git-actions.js"
-import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
+import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, type PersonOf, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
+import { authorWords, MAKO_GITHUB_APP } from "../contracts/github-person.js"
 import { toolText } from "../base/tool-text.js"
 import type { Git } from "@mako/git"
 
@@ -34,12 +35,14 @@ interface Deps {
   place(conversationId: string): Promise<RepositoryPlace>
   /** A pull request changed: cached pull requests are forgotten and windows read GitHub again. */
   changed(): void
+  /** On a cloud machine: whether its pull requests go as its person, asked before each write; undefined elsewhere. */
+  person?: PersonOf
 }
 
 export interface PullRequestTools {
   status(conversationId: string, options?: { logs?: boolean; repository?: string }): Promise<string>
   open(conversationId: string, draft: PullRequestDraft & { repository?: string }): Promise<string>
-  merge(conversationId: string, options?: { method?: MergeMethod; repository?: string }): Promise<string>
+  merge(conversationId: string, options?: { method?: MergeMethod; repository?: string; as?: "app" }): Promise<string>
 }
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`
@@ -116,19 +119,19 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
     async open(conversationId, { repository, ...draft }) {
       const place = await deps.place(conversationId)
       const one = meant(place, repository) ?? await onlyOne(place, "work")
-      const result = await openPullRequest(deps.git, one.root, draft, one.startedFrom)
+      const result = await openPullRequest(deps.git, one.root, draft, one.startedFrom, deps.person)
       deps.changed()
       const left = result.uncommitted
         ? ` ${plural(result.uncommitted, "file")} with uncommitted changes stayed behind; commit what belongs in it and call again to push.`
         : ""
       return `${place.repositories.length > 1 ? `${one.name}: ` : ""}${openedSentence(result)}.${left}`
     },
-    async merge(conversationId, { method, repository } = {}) {
+    async merge(conversationId, { method, repository, as } = {}) {
       const place = await deps.place(conversationId)
       const one = meant(place, repository) ?? await onlyOne(place, "pull")
-      const { pull, method: used } = await mergePullRequest(one.root, method)
+      const { pull, method: used, author } = await mergePullRequest(one.root, method, deps.person, as === "app")
       deps.changed()
-      return `${place.repositories.length > 1 ? `${one.name}: ` : ""}${pull.state === "merged" ? "Merged" : "Asked GitHub to merge"} #${pull.number} into ${pull.base} (${used}). The branch is kept.`
+      return `${place.repositories.length > 1 ? `${one.name}: ` : ""}${pull.state === "merged" ? "Merged" : "Asked GitHub to merge"} #${pull.number} into ${pull.base} (${used}${author ? `, ${authorWords(author)}` : ""}). The branch is kept.`
     },
   }
 }
@@ -147,6 +150,11 @@ const REPOSITORY = z
   .max(512)
   .optional()
   .describe("In a project folder holding several repositories, the one to act on: its folder there, as worktree_status lists it (such as `api`). Leave it out in a single repository.")
+
+const AS_APP = z
+  .literal("app")
+  .optional()
+  .describe(`Only after a refusal of the person's own GitHub token, and only when the person has chosen it: go as ${MAKO_GITHUB_APP} this once. Never on your own.`)
 
 /** How every pull request tool picks its repository, said once in each description. */
 const ONE_PER_REPOSITORY =
@@ -175,13 +183,14 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     "pull_request_open",
     {
       description:
-        `Call when the user asks to open a pull request, or to push to or update the open one. Pushes the branch this Session edits on, never forcing, and opens its pull request; when one is open already it pushes the new commits instead, and edits its title or body only when you pass them. Commit what belongs in it first: uncommitted files stay behind, and the reply says how many. The base defaults to the branch this Thread's worktree started from when origin has it, else the repository's default. Refused on the default branch, with no commits to carry, or when origin has commits the branch lacks. ${ONE_PER_REPOSITORY} in the project folder itself it acts on the only repository with work, and when several have work it lists where each stands and pushes nothing, so call it once per repository, each with a title and body for that repository's own change. When one repository's change needs another's, say so in both bodies, with a link to the other pull request. Use this instead of \`gh pr create\`, so the base and the push follow the same rules as the Git sidebar and the user sees it there at once.\n\nWrite the title and body from what the branch does and why, by these rules:\n\n${PULL_REQUEST_WRITING}`,
+        `Call when the user asks to open a pull request, or to push to or update the open one. Pushes the branch this Session edits on, never forcing, and opens its pull request; when one is open already it pushes the new commits instead, and edits its title or body only when you pass them. Commit what belongs in it first: uncommitted files stay behind, and the reply says how many. The base defaults to the branch this Thread's worktree started from when origin has it, else the repository's default. Refused on the default branch, with no commits to carry, or when origin has commits the branch lacks. ${ONE_PER_REPOSITORY} in the project folder itself it acts on the only repository with work, and when several have work it lists where each stands and pushes nothing, so call it once per repository, each with a title and body for that repository's own change. When one repository's change needs another's, say so in both bodies, with a link to the other pull request. In a cloud Thread whose person opens pull requests as themselves, it pushes and opens with their own GitHub token; when theirs can't be used it refuses with what happened and pushes nothing, so tell the person and let them choose. Use this instead of \`gh pr create\`, so the base and the push follow the same rules as the Git sidebar and the user sees it there at once.\n\nWrite the title and body from what the branch does and why, by these rules:\n\n${PULL_REQUEST_WRITING}`,
       inputSchema: z.object({
         title: z.string().max(256).optional().describe("Required for a new pull request; for an open one, only to change it."),
         body: z.string().max(60_000).optional().describe("Markdown; for an open one, only to change it."),
         base: z.string().max(256).optional().describe("The branch to merge into, when not the default."),
         draft: z.boolean().optional().describe("Open it as a draft. Applies only when opening."),
         repository: REPOSITORY,
+        as: AS_APP,
       }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -192,9 +201,9 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     {
       description:
         `Call only when the user asks to merge this branch's pull request on GitHub. Merges it with the method given, or the first the repository allows of squash, merge and rebase. Refused while it conflicts, a check fails or is still running, or changes are requested; the reply says which. The branch is kept, since this Thread's worktree may still be on it. ${ONE_PER_REPOSITORY} in the project folder itself it merges the only open one, and when several are open it lists them and merges none. Merge a project's pull requests one at a time, the one the others depend on first, and use method merge for a repository whose commits another one pins by hash: a squash or rebase puts different commits on its default branch, and the pinned one is left off it.`,
-      inputSchema: z.object({ method: z.enum(MERGE_METHODS).optional(), repository: REPOSITORY }).strict(),
+      inputSchema: z.object({ method: z.enum(MERGE_METHODS).optional(), repository: REPOSITORY, as: AS_APP }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    ({ method, repository }) => reply(() => tools.merge(conversationId(), { method, repository }))
+    ({ method, repository, as }) => reply(() => tools.merge(conversationId(), { method, repository, as }))
   )
 }

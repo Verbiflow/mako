@@ -97,14 +97,42 @@ export function appendHeard(draft: string, words: string): string {
   return /\s$/.test(draft) ? `${draft}${said}` : `${draft} ${said}`
 }
 
+const QUIET: readonly number[] = Array.from({ length: METER_BARS }, () => 0)
+
+/**
+ * The meter's samples, oldest first, each 0 to 1: read by the bars as they're drawn, never through React. A sample comes
+ * every 80 ms, and a render of the composer for each would redraw its field, its chips and its button with it.
+ */
+export class MeterLevels {
+  #levels: readonly number[] = QUIET
+  readonly #listeners = new Set<(levels: readonly number[]) => void>()
+
+  get(): readonly number[] {
+    return this.#levels
+  }
+
+  set(levels: readonly number[]): void {
+    this.#levels = levels
+    for (const listener of this.#listeners) listener(levels)
+  }
+
+  /** Calls `listener` with each sample from now on; returns the way to stop. */
+  subscribe(listener: (levels: readonly number[]) => void): () => void {
+    this.#listeners.add(listener)
+    return () => {
+      this.#listeners.delete(listener)
+    }
+  }
+}
+
 export interface Dictation {
   offered: boolean
   listening: boolean
   failure?: string
   /** When it began listening, for its timer. */
   since?: number
-  /** The meter's samples, oldest first, each 0 to 1. */
-  levels: readonly number[]
+  /** The meter, sampled every 80 ms: drawn by subscribing, so a sample renders nothing. */
+  levels: MeterLevels
   /** Heard but not settled: drawn after the draft, never written into it. */
   hearing: string
   start: () => void
@@ -113,8 +141,6 @@ export interface Dictation {
   /** Stops listening now, dropping what's still being heard (a send took it already). */
   cancel: () => void
 }
-
-const QUIET = Array.from({ length: METER_BARS }, () => 0)
 
 /**
  * Dictation into the composer by the platform's own recognizer, the one its keyboard's dictation uses: no sound goes
@@ -131,7 +157,7 @@ export function useDictation(onSettled: (words: string) => void): Dictation {
   const [listening, setListening] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
   const [since, setSince] = useState<number | undefined>(undefined)
-  const [levels, setLevels] = useState<readonly number[]>(QUIET)
+  const [levels] = useState(() => new MeterLevels())
   const [hearing, setHearing] = useState("")
   const settled = useRef(onSettled)
   useEffect(() => {
@@ -145,18 +171,18 @@ export function useDictation(onSettled: (words: string) => void): Dictation {
     if (!Class || session.current) return
     setFailure(undefined)
     setHearing("")
-    setLevels(QUIET)
+    levels.set(QUIET)
     const started = Date.now()
     const current = new DictationSession(Class, {
       settled: (words) => settled.current(words),
       hearing: setHearing,
-      levels: setLevels,
+      levels: (sampled) => levels.set(sampled),
       ended: (why) => {
         session.current = null
         setListening(false)
         setSince(undefined)
         setHearing("")
-        setLevels(QUIET)
+        levels.set(QUIET)
         if (why) setFailure(why)
       },
     })
@@ -164,7 +190,7 @@ export function useDictation(onSettled: (words: string) => void): Dictation {
     setListening(true)
     setSince(started)
     current.begin()
-  }, [])
+  }, [levels])
   const stop = useCallback(() => session.current?.end(false), [])
   const cancel = useCallback(() => session.current?.end(true), [])
   const offered = dictationOffered()

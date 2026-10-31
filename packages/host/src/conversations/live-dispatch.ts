@@ -158,6 +158,7 @@ export class LiveDispatch {
       nativeDelivery,
       usageFrom: usageFrom && (usageFrom.tokens || usageFrom.cost || usageFrom.unrecorded) ? usageFrom : undefined,
       status: "dispatching" as const,
+      mode: resident.snapshot.session.currentMode ?? undefined,
       context: [
         ...(request.context ?? []),
         ...pendingMerges.map((merge) => merge.manifest),

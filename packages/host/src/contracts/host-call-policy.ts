@@ -139,6 +139,8 @@ const reads = [
   "mako:cloud-sign-ins",
   /** A project's carried files and where each stands in the cloud, read, never sent. */
   "mako:cloud-carried-files",
+  /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
+  "mako:github-token",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
@@ -247,6 +249,9 @@ const replays = [
   "mako:cloud-carried-files-decide",
   /** Keeping a file on this Mac, or copying it again, a second time is the same end state. */
   "mako:cloud-carried-files-keep",
+  /** The same token saved twice is kept once; removing it twice leaves it off. */
+  "mako:github-token-save",
+  "mako:github-token-remove",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */

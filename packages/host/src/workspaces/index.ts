@@ -1,3 +1,4 @@
+import type { GitHubPerson } from "../contracts/github-person.js"
 import type { Git } from "@mako/git"
 import { realpathSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
@@ -242,6 +243,8 @@ export interface WorkspaceMoversDeps {
   jobs: HostJobs
   emit(event: HostEvent): void
   warn(message: string, facts: Record<string, string | number | boolean | undefined>): void
+  /** On a cloud machine: whether its pull requests go as its person, asked now; undefined elsewhere. */
+  person?(): Promise<GitHubPerson | undefined>
 }
 
 export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers {
@@ -318,7 +321,7 @@ function worktreesChanged(worktrees: Workspaces["worktrees"], emit: (event: Host
   emit({ type: "github-changed" })
 }
 
-function agentTools({ git, workspaces, live, emit }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
+function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
   const { worktrees } = workspaces
   const cwd = (id: string) => live.session(id)?.cwd
   const changed = () => worktreesChanged(worktrees, emit)
@@ -331,6 +334,7 @@ function agentTools({ git, workspaces, live, emit }: WorkspaceMoversDeps, moves:
       return repositoryPlace(git, worktrees, id, folder)
     },
     changed,
+    person,
   })
   return [
     (server, conversationId) => registerWorkspaceTools(server, workspace, conversationId),

@@ -119,6 +119,7 @@ export const LiveRequestSchema = z.object({
   changes: RequestChangesSchema,
   undone: TurnUndoneSchema,
   tuning: SessionSettingsSchema.optional(),
+  mode: z.string().optional(),
   inputDigest: z.string().optional(),
   nativeRun: z
     .object({

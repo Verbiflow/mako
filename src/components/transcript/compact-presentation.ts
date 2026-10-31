@@ -11,6 +11,8 @@ export interface CompactPresentation {
   steps?: (run: CompactSteps) => ReactNode
   /** What a finished reply offers under it, and under a long press: its words to copy, and a branch from it. */
   reply?: (reply: CompactReply) => ReactNode
+  /** False on a phone's width: no rail of turns beside the transcript, and no gutter kept for one. */
+  navigator?: false
 }
 
 export interface CompactSteps {

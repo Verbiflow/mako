@@ -7,10 +7,11 @@ import { createContext, type ReactNode } from "react"
 export const PromptNoteContext = createContext<((requestId: string | undefined) => ReactNode) | null>(null)
 
 /**
- * What a surface adds at the end of a turn, by the exchange's ID: the phone's one-line record of an approval or a
- * question it answered from its dock while the turn ran ("Allowed once · npm test"). The desk adds nothing.
+ * What a surface adds at the end of a turn, by the exchange's ID and the request its turn stands on: the phone's
+ * one-line record of an approval or a question it answered from its dock while the turn ran ("Allowed once · npm
+ * test"), and where the model or access changed after it ("Switched to GPT-5.5"). The desk adds nothing.
  */
-export const ExchangeNoteContext = createContext<((exchangeId: string) => ReactNode) | null>(null)
+export const ExchangeNoteContext = createContext<((exchangeId: string, requestId: string | undefined) => ReactNode) | null>(null)
 
 /**
  * Where a move between a Mac and the cloud cut a turn, drawn as a line across the transcript ("Moved to the cloud ·

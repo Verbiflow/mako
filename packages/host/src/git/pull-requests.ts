@@ -16,7 +16,9 @@ import {
   rerunFailedJobs,
   type ReviewThread,
 } from "./github.js"
-import type { Git } from "@mako/git"
+import { GitError, type Git } from "@mako/git"
+import { authorWords, personTokenRefusal, type GitHubPerson, type PersonTokenProblem, type PullRequestAuthor } from "../contracts/github-person.js"
+import { MACHINE_GITHUB_AS } from "../contracts/machine-agent.js"
 
 /*
  * A branch's pull request as the Git sidebar's buttons and the agent's
@@ -36,10 +38,63 @@ export interface PullRequestDraft {
   body?: string
   base?: string
   draft?: boolean
+  /** On a cloud machine whose person opens pull requests as themselves: open this one as Mako's App, as they chose. */
+  as?: "app"
+}
+
+/**
+ * On a cloud machine: whether its pull requests go as its person (`github-person.ts`), asked of the account before
+ * each; undefined on a Mac, where `gh`'s own sign-in is the person already.
+ */
+export type PersonOf = () => Promise<GitHubPerson | undefined>
+
+/** A pull request that couldn't go as its person: refused before anything else was pushed, never sent as the App instead. */
+export class PersonTokenError extends Error {
+  readonly problem: PersonTokenProblem
+
+  constructor(problem: PersonTokenProblem, options?: ErrorOptions) {
+    super(personTokenRefusal(problem), options)
+    this.name = "PersonTokenError"
+    this.problem = problem
+  }
+}
+
+/** Who an action goes as, and the environment that makes Git and `gh` go so: the person, or the App when they're off or chose it. */
+type Acting = { author: PullRequestAuthor; env?: Record<string, string>; expiresAt: string | null } | undefined
+
+async function actingAs(personOf: PersonOf | undefined, asApp: boolean, repository: string | undefined, now = Date.now()): Promise<Acting> {
+  const person = await personOf?.()
+  if (!person) return undefined
+  if (person.state === "off") return { author: { as: "app", chosen: false }, expiresAt: null }
+  if (asApp) return { author: { as: "app", chosen: true }, env: { [MACHINE_GITHUB_AS]: "app" }, expiresAt: null }
+  if (person.state === "unusable" || person.state === "unknown") throw new PersonTokenError({ reason: person.state, said: person.problem, ...repository && { repository } })
+  if (person.expiresAt && Date.parse(person.expiresAt) <= now) throw new PersonTokenError({ reason: "expired", login: person.login, expiredAt: person.expiresAt, ...repository && { repository } })
+  return { author: { as: "person", login: person.login }, expiresAt: person.expiresAt }
+}
+
+/** GitHub refusing the person's token, as Git or `gh` said it: revoked or lapsed, or short of what this repository needs. */
+const TOKEN_REFUSED = /HTTP 401|Bad credentials|Authentication failed|Invalid username or (password|token)/i
+const TOKEN_SHORT = /HTTP 40[34]|Resource not accessible|Permission to .* denied|returned error: 403|Could not resolve to a Repository|Repository not found|must have (push|write) access/i
+
+/** A failure of a write that went as the person, as the problem it is when GitHub refused their token; undefined for any other. */
+function personProblemOf(error: Error, acting: Acting, repository: string | undefined): PersonTokenError | undefined {
+  if (acting?.author.as !== "person") return undefined
+  const said = error instanceof GitError ? error.stderr || error.message : error.message
+  const where = repository ? { repository } : {}
+  // Git's helper or `gh` on the machine found the token gone between the ask and the write: still never the App.
+  if (/Mako didn't (push|change the pull request)/.test(said)) return new PersonTokenError({ reason: "unusable", login: acting.author.login, said: "Your GitHub token was removed from this machine just now.", ...where }, { cause: error })
+  if (TOKEN_REFUSED.test(said)) {
+    const lapsed = acting.expiresAt !== null && Date.parse(acting.expiresAt) <= Date.now()
+    return new PersonTokenError(lapsed ? { reason: "expired", login: acting.author.login, expiredAt: acting.expiresAt!, ...where } : { reason: "refused", login: acting.author.login, ...where }, { cause: error })
+  }
+  if (TOKEN_SHORT.test(said) || (error instanceof GitError && error.kind === "auth")) return new PersonTokenError({ reason: "no-access", login: acting.author.login, ...where }, { cause: error })
+  return undefined
 }
 
 export interface PullRequestOpened {
   pull: PullRequest
+  /** On a cloud machine, who it went as; undefined on a Mac. */
+  author?: PullRequestAuthor
   /** False when it was open already and was brought up to date. */
   opened: boolean
   /** Commits the push sent. */
@@ -121,14 +176,16 @@ async function openingBlocker(git: Git, cwd: string, branch: string, base: strin
 }
 
 /** Push the branch to its own name on origin, never forcing; a rejection says what to do instead. */
-async function push(git: Git, cwd: string, branch: string): Promise<void> {
+async function push(git: Git, cwd: string, branch: string, acting: Acting, repository: string | undefined): Promise<void> {
   try {
-    await git.output(cwd, ["push", "--set-upstream", "origin", `HEAD:refs/heads/${branch}`])
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    await git.run({ cwd, args: ["push", "--set-upstream", "origin", `HEAD:refs/heads/${branch}`], ...acting?.env && { env: acting.env } })
+  } catch (raw) {
+    const problem = raw instanceof Error ? personProblemOf(raw, acting, repository) : undefined
+    if (problem) throw problem
+    const message = raw instanceof Error ? raw.message : String(raw)
     if (/rejected|non-fast-forward|fetch first/i.test(message))
-      throw new Error(`origin/${branch} has commits this branch doesn't. Pull them in first (git pull --no-rebase origin ${branch}), then try again. Mako never force-pushes.`, { cause: error })
-    throw new Error(`Git couldn't push ${branch}: ${message}`, { cause: error })
+      throw new Error(`origin/${branch} has commits this branch doesn't. Pull them in first (git pull --no-rebase origin ${branch}), then try again. Mako never force-pushes.`, { cause: raw })
+    throw new Error(`Git couldn't push ${branch}: ${message}`, { cause: raw })
   }
 }
 
@@ -137,18 +194,22 @@ async function push(git: Git, cwd: string, branch: string): Promise<void> {
  * date: push its new commits and, given a title or body, edit them. The base
  * is `draft.base`, else the shared rule.
  */
-export async function openPullRequest(git: Git, cwd: string, draft: PullRequestDraft, startedFrom?: string | null): Promise<PullRequestOpened> {
+export async function openPullRequest(git: Git, cwd: string, draft: PullRequestDraft, startedFrom?: string | null, personOf?: PersonOf): Promise<PullRequestOpened> {
   const status = await ready(cwd)
   const branch = await branchOf(git, cwd)
   if (!branch) throw new Error("This checkout isn't on a branch. Check one out or create one first.")
+  // Who it goes as is settled before anything is pushed: a person whose token can't be used is told so, never pushed as the App.
+  const acting = await actingAs(personOf, draft.as === "app", status.repo)
+  const author = acting && { author: acting.author }
+  const writing = <T>(work: Promise<T>) => work.catch((error: Error) => { throw personProblemOf(error, acting, status.repo) ?? error })
   const [existing, remote, left] = await Promise.all([openPull(cwd), pushedRef(git, cwd, branch), uncommitted(git, cwd)])
   if (existing) {
     const pushed = remote ? (await count(git, cwd, `${remote}..HEAD`)) ?? 0 : 0
-    await push(git, cwd, branch)
+    await push(git, cwd, branch, acting, status.repo)
     const edit = { title: draft.title?.trim() || undefined, body: draft.body === undefined ? undefined : draft.body.trim() }
     const edited = edit.title !== undefined || edit.body !== undefined
-    if (edited) await editPull(cwd, existing.number, edit)
-    return { pull: (await pullForBranch(cwd)) ?? existing, opened: false, pushed, edited, uncommitted: left }
+    if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env))
+    return { pull: (await pullForBranch(cwd)) ?? existing, opened: false, pushed, edited, uncommitted: left, ...author }
   }
   const title = draft.title?.trim()
   if (!title) throw new Error("A new pull request needs a title.")
@@ -156,16 +217,20 @@ export async function openPullRequest(git: Git, cwd: string, draft: PullRequestD
   const blocked = await openingBlocker(git, cwd, branch, base, status.defaultBranch)
   if (blocked) throw new Error(blocked)
   const pushed = (await count(git, cwd, `${remote || `refs/remotes/origin/${base}`}..HEAD`)) ?? 0
-  await push(git, cwd, branch)
-  await createPull(cwd, { title, body: draft.body?.trim() ?? "", base, draft: draft.draft })
+  await push(git, cwd, branch, acting, status.repo)
+  await writing(createPull(cwd, { title, body: draft.body?.trim() ?? "", base, draft: draft.draft }, acting?.env))
   const pull = await pullForBranch(cwd)
   if (!pull) throw new Error("GitHub opened the pull request but didn't return it. Read it with gh pr view.")
-  return { pull, opened: true, pushed, edited: false, uncommitted: left }
+  return { pull, opened: true, pushed, edited: false, uncommitted: left, ...author }
 }
 
-/** Merge the branch's open pull request on GitHub, only when the shared guard allows, with a method the repository allows. */
-export async function mergePullRequest(cwd: string, method?: MergeMethod): Promise<{ pull: PullRequest; method: MergeMethod }> {
-  await ready(cwd)
+/**
+ * Merge the branch's open pull request on GitHub, only when the shared guard allows, with a method the repository
+ * allows. On a cloud machine it goes as the person while they open pull requests as themselves, as opening does.
+ */
+export async function mergePullRequest(cwd: string, method?: MergeMethod, personOf?: PersonOf, asApp = false): Promise<{ pull: PullRequest; method: MergeMethod; author?: PullRequestAuthor }> {
+  const status = await ready(cwd)
+  const acting = await actingAs(personOf, asApp, status.repo)
   const pull = await openPull(cwd)
   if (!pull) throw new Error("This branch has no open pull request.")
   const reason = pullMergeReason(pull)
@@ -174,8 +239,8 @@ export async function mergePullRequest(cwd: string, method?: MergeMethod): Promi
   const chosen = method ?? allowed[0]
   if (!chosen) throw new Error("This repository allows no merge method.")
   if (!allowed.includes(chosen)) throw new Error(`This repository doesn't allow ${chosen} merges. It allows: ${allowed.join(", ")}.`)
-  await mergePull(cwd, pull.number, chosen)
-  return { pull: (await pullForBranch(cwd)) ?? pull, method: chosen }
+  await mergePull(cwd, pull.number, chosen, acting?.env).catch((error: Error) => { throw personProblemOf(error, acting, status.repo) ?? error })
+  return { pull: (await pullForBranch(cwd)) ?? pull, method: chosen, ...acting && { author: acting.author } }
 }
 
 /** The commit GitHub has for the branch: its copy on origin's, else `HEAD`. */
@@ -283,8 +348,9 @@ async function failedLogs(git: Git, cwd: string, branch: string): Promise<NonNul
 }
 
 /** One line for what opening or updating did, as the agent and a toast both say it. */
-export function openedSentence({ pull, opened, pushed, edited }: PullRequestOpened): string {
-  if (opened) return `Opened #${pull.number}${pull.draft ? " as a draft" : ""} into ${pull.base}: ${pull.url}`
+export function openedSentence({ pull, opened, pushed, edited, author }: PullRequestOpened): string {
+  const as = author ? ` ${authorWords(author)}` : ""
+  if (opened) return `Opened #${pull.number}${pull.draft ? " as a draft" : ""} into ${pull.base}${as}: ${pull.url}`
   const parts = [pushed ? `pushed ${plural(pushed, "commit")}` : "nothing new to push", edited ? "updated its title and body" : null].filter(Boolean)
-  return `#${pull.number} was already open; ${parts.join(" and ")}: ${pull.url}`
+  return `#${pull.number} was already open; ${parts.join(" and ")}${as}: ${pull.url}`
 }

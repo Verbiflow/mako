@@ -70,6 +70,7 @@ import type { SyncReadings } from "./sync-readings.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
+import type { GitHubTokenListing } from "./github-person.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
@@ -478,6 +479,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     /* Whether this Mac's harness sign-ins are shared with the account's cloud machines; `cloud-sign-ins` events follow it. */
     cloudSignIns: () => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins"),
     cloudSignInsShare: (sharing: boolean) => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins-share", sharing),
+    /* "Open pull requests as me": who the account's own GitHub token belongs to, saving one (checked by the cloud first) and removing it. */
+    githubToken: () => invokeTrustedHost<GitHubTokenListing | null>("mako:github-token"),
+    githubTokenSave: (token: string, repository?: string) => invokeTrustedHost<GitHubTokenListing>("mako:github-token-save", token, repository),
+    githubTokenRemove: () => invokeTrustedHost<void>("mako:github-token-remove"),
     /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
@@ -837,9 +842,11 @@ export function createMakoBridge(transport: BridgeTransport) {
       body: string
       base?: string
       draft?: boolean
+      /** As Mako's App this once, where the person opens pull requests as themselves and chose that after a refusal. */
+      as?: "app"
     }) => invokeTrustedHost<PullRequest | null>("mako:create-pull", options),
-    mergePull: (strategy: MergeMethod) =>
-      invokeTrustedHost<PullRequest | null>("mako:merge-pull", strategy),
+    mergePull: (strategy: MergeMethod, as?: "app") =>
+      invokeTrustedHost<PullRequest | null>("mako:merge-pull", strategy, as),
     /** How many failed GitHub Actions runs were re-run. */
     rerunChecks: () => invokeTrustedHost<number>("mako:rerun-checks"),
     repoAvatar: (repo: string) =>

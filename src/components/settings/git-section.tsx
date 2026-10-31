@@ -10,13 +10,19 @@ import { git } from "@/state/git"
 import { refreshCommitModel } from "@/state/commit-model"
 import { CommitKeys } from "./model-connections"
 import { WorktreesSection } from "./worktrees-section"
+import { PullRequestsAsMe } from "./pull-requests-as-me"
+import { desktopGitHubTokens } from "@/state/github-token"
+import { useGitHub } from "@/state/github"
 
-/** Settings › Git: how Changes looks, what writes commit messages, and worktrees. */
+/** Settings › Git: how Changes looks, what writes commit messages, who cloud pull requests are from, and worktrees. */
 export function GitSection() {
+  // The repository in view, which a new GitHub token is checked against.
+  const repository = useGitHub((state) => state.status?.repo)
   return (
     <div className="flex flex-col gap-8">
       <ChangesView />
       <CommitMessages />
+      <PullRequestsAsMe tokens={desktopGitHubTokens} repository={repository} />
       <section className="flex flex-col gap-3">
         <h3 className="text-ui font-medium">Worktrees</h3>
         <WorktreesSection />

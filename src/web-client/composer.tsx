@@ -7,7 +7,7 @@ import { ComposerActionButton } from "@/components/composer/composer-action-butt
 import { Ticking } from "@/components/ui/ticking"
 import { usePrefs } from "@/state/prefs"
 import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
-import { appendHeard, elapsedWords, splitUnsure, useDictation, type Dictation } from "./dictation"
+import { appendHeard, elapsedWords, METER_BARS, splitUnsure, useDictation, type Dictation, type MeterLevels } from "./dictation"
 import { noteSending, openingText, readDraft, settleSending, writeDraft } from "./drafts"
 import { outboxHolds } from "./outbox"
 import { sendPresentation } from "./send-action"
@@ -122,7 +122,6 @@ export function Composer({
   const [problem, setProblem] = useState<string | undefined>(undefined)
   const input = useRef<HTMLTextAreaElement>(null)
   const files = useRef<HTMLInputElement>(null)
-  const pressedAt = useRef(0)
   const [previews] = useState(() => new HeldPreviews())
   const steerByDefault = usePrefs((prefs) => prefs.steerOnEnter)
 
@@ -239,15 +238,26 @@ export function Composer({
 
   /**
    * The mic: pressed, it starts listening at once. Let go within `HOLD_MS`, it listens on until stopped (a tap); held
-   * longer, it stops on release (push-to-talk).
+   * longer, it stops on release (push-to-talk). The release is heard on the window: listening puts the recording in the
+   * mic's place, so the button pressed is gone before the finger lifts and never hears it.
    */
-  const micDown = () => {
-    pressedAt.current = performance.now()
+  const release = useRef<AbortController | null>(null)
+  useEffect(() => () => release.current?.abort(), [])
+  const micDown = (event: React.PointerEvent) => {
     if (dictation.listening) return
+    const pressed = performance.now()
+    const pointer = event.pointerId
+    release.current?.abort()
+    const watch = new AbortController()
+    release.current = watch
+    const lifted = (up: PointerEvent) => {
+      if (up.pointerId !== pointer) return
+      watch.abort()
+      if (performance.now() - pressed >= HOLD_MS) dictation.stop()
+    }
+    addEventListener("pointerup", lifted, { signal: watch.signal })
+    addEventListener("pointercancel", lifted, { signal: watch.signal })
     dictation.start()
-  }
-  const micUp = () => {
-    if (dictation.listening && performance.now() - pressedAt.current >= HOLD_MS) dictation.stop()
   }
 
   const budget = encodedBytes(picked)
@@ -297,8 +307,6 @@ export function Composer({
         className="web-icon-button web-composer-mic"
         disabled={disabled}
         onPointerDown={micDown}
-        onPointerUp={micUp}
-        onPointerCancel={micUp}
         onClick={(event) => {
           // A keyboard's Enter or Space: no pointer pressed it, so it starts.
           if (event.detail === 0) dictation.start()
@@ -341,7 +349,7 @@ export function Composer({
             <div className="web-composer-editing" role="status">
               <PencilIcon aria-hidden className="size-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">Editing a queued message</span>
-              <button type="button" className="web-quiet-button h-8 px-2.5 text-label" onClick={editing.cancel}>
+              <button type="button" className="web-quiet-button web-composer-editing-cancel text-label" onClick={editing.cancel}>
                 Cancel
               </button>
             </div>
@@ -420,16 +428,36 @@ function RecordingPill({ dictation }: { dictation: Dictation }) {
         <SquareIcon aria-hidden className="size-3 fill-current" />
       </button>
       <Ticking words={(now) => elapsedWords(now - since)} className="web-recording-time" />
-      <span aria-hidden className="web-recording-bars">
-        {dictation.levels.map((level, index) => (
-          <span key={index} style={{ height: `${5 + Math.round(level * 9)}px` }} />
-        ))}
-      </span>
+      <MeterBars levels={dictation.levels} />
       <span className="web-recording-words" aria-live="polite">
         {sure ? <span>{sure} </span> : null}
         {unsure ? <span className="text-faint">{unsure}</span> : dictation.hearing ? null : <span className="text-faint">Listening</span>}
       </span>
     </div>
+  )
+}
+
+/** The meter's five bars, 5 to 14 px tall: each sample is written to them as it comes, rendering nothing. */
+function MeterBars({ levels }: { levels: MeterLevels }) {
+  const bars = useRef<HTMLSpanElement>(null)
+  useLayoutEffect(() => {
+    const draw = (sampled: readonly number[]) => {
+      const nodes = bars.current?.children
+      if (!nodes) return
+      sampled.forEach((level, index) => {
+        const node = nodes[index]
+        if (node instanceof HTMLElement) node.style.height = `${5 + Math.round(level * 9)}px`
+      })
+    }
+    draw(levels.get())
+    return levels.subscribe(draw)
+  }, [levels])
+  return (
+    <span ref={bars} aria-hidden className="web-recording-bars">
+      {Array.from({ length: METER_BARS }, (_, index) => (
+        <span key={index} />
+      ))}
+    </span>
   )
 }
 

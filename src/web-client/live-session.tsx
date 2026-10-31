@@ -6,7 +6,7 @@ import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/
 import { CompactPresentationContext, type CompactPresentation } from "@/components/transcript/compact-presentation"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useWebClient } from "./client"
-import { useAnswered } from "./answered"
+import { sameSwitches, switchesOf, useAnswered } from "./answered"
 import { AnsweredLine, WebDock } from "./dock"
 import { threadDraftKey } from "./drafts"
 import { webHarnessLabel } from "./labels"
@@ -17,6 +17,7 @@ import { PhoneReply, ReplySheet } from "./reply"
 import { useReplyHold } from "./replies"
 import { useWide } from "./route"
 import { PhoneSteps } from "./steps"
+import { SwitchLines } from "./thread-chips"
 
 const NO_RECORDS: never[] = []
 
@@ -54,16 +55,34 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
   const end = useMemo<TranscriptEnd>(() => ({ away: setAway, bind: (to) => setJump({ to }) }), [])
   const note = useDeliveryNote(conversation)
   const records = useAnswered((state) => state.records.get(conversation) ?? NO_RECORDS)
+  // Where the model or access changed, from the Session's own record: the same lines live, reloaded and elsewhere.
+  // Read again only when the record's requests change, and kept while they say the same: a turn's lines stay drawn.
+  const switches = useAcp((state) => {
+    const live = state.conversations[conversation]
+    return switchesOf(live?.kind === "live" ? live.requests : undefined)
+  }, sameSwitches)
+  const harnessId = session.row.harness
   const exchangeNote = useMemo(
-    () => (records.length ? (exchange: string) => records.filter((entry) => entry.exchange === exchange).map((entry) => <AnsweredLine key={entry.id} entry={entry} />) : null),
-    [records]
+    () =>
+      records.length || switches.size
+        ? (exchange: string, request: string | undefined) => {
+            const switched = request ? switches.get(request) : undefined
+            return (
+              <>
+                {records.filter((entry) => entry.exchange === exchange).map((entry) => <AnsweredLine key={entry.id} entry={entry} />)}
+                {switched ? <SwitchLines harness={harnessId} switches={switched} /> : null}
+              </>
+            )
+          }
+        : null,
+    [records, switches, harnessId]
   )
   const harness = webHarnessLabel(session.row.harness)
   const cloudThread = session.owner.kind === "cloud" ? session.owner.threadId : undefined
   const target = useMemo(() => ({ conversation, ...(cloudThread && { cloudThread }) }), [conversation, cloudThread])
   // Under a finger: replies offer Copy and Branch; on a phone's width a run of steps is one line that opens them.
   const wide = useWide()
-  const compact = useMemo<CompactPresentation>(() => ({ reply: (reply) => <PhoneReply reply={reply} />, ...(!wide && { steps: (run) => <PhoneSteps key={run.id} run={run} /> }) }), [wide])
+  const compact = useMemo<CompactPresentation>(() => ({ reply: (reply) => <PhoneReply reply={reply} />, ...(!wide && { steps: (run) => <PhoneSteps key={run.id} run={run} />, navigator: false }) }), [wide])
   const live = useRef<HTMLDivElement>(null)
   const hold = useReplyHold(live)
   if (desk)

@@ -23,9 +23,10 @@ import { answeredWords, dockStatus, statusWords, workingWords, type DockStatusIn
 import { DELIVERY_WORDS, deliveryOf, type Sending } from "../src/web-client/delivery"
 import { SAY_WAKING_MS, wakeThread, wakingNow, wakingStore } from "../src/web-client/wake"
 import { sendChoiceDetail, sendPresentation, type SendSituation } from "../src/web-client/send-action"
-import { appendHeard, DictationSession, elapsedWords, frameDecibels, meterLevel, splitUnsure, type Recognition } from "../src/web-client/dictation"
+import { appendHeard, DictationSession, elapsedWords, frameDecibels, MeterLevels, METER_MS, meterLevel, splitUnsure, type Recognition } from "../src/web-client/dictation"
 import { freshStep, stepsLine } from "../src/web-client/steps-words"
-import { switchedWords } from "../src/web-client/answered"
+import { recordedSwitches, sameSwitches, switchedWords, switchesOf } from "../src/web-client/answered"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { ToolCall } from "../src/extend/slots"
 import { diagnose, diagnosisText, lastSeen, type ReachInput } from "../src/web-client/diagnosis"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
@@ -589,9 +590,40 @@ test("a run of steps is one line: its count and its newest step, present while i
   assert.equal(freshStep({}, 13_500), false)
 })
 
-test("a switch from the composer leaves its line: switched, or not, in so many words", () => {
+test("a switch is said in so many words: switched, or, refused, not", () => {
   assert.equal(switchedWords({ what: "GPT-5.5", refused: false }), "Switched to GPT-5.5")
   assert.equal(switchedWords({ what: "Full access", refused: true }), "Not switched to Full access")
+})
+
+test("switch lines are the Session's record: drawn where a sent turn ran with other settings or access than the one before", () => {
+  const sent = (id: string, model: string | undefined, effort: string | undefined, mode: string | undefined, status: LiveRequest["status"] = "completed") =>
+    ({ id, status, ...((model || effort) && { tuning: { ...(model && { model }), ...(effort && { options: { reasoning_effort: effort } }) } }), ...(mode && { mode }) })
+  const record = [
+    sent("a", "gpt-5.5", "medium", "auto"),
+    sent("b", "gpt-5.5", "medium", "auto"),
+    sent("c", "gpt-5.5-codex", "high", "full-access"),
+    // Still waiting: what it will run with isn't settled, so it says nothing yet.
+    sent("d", "gpt-5.5", "medium", "auto", "queued"),
+  ]
+  const switches = recordedSwitches(record)
+  // The line goes at the end of the turn the switch was made after: b's.
+  assert.deepEqual([...switches.keys()], ["b"])
+  assert.deepEqual(switches.get("b"), [
+    { kind: "model", model: "gpt-5.5-codex" },
+    { kind: "option", option: "reasoning_effort", value: "high" },
+    { kind: "mode", mode: "full-access" },
+  ])
+  // A reload reads the same record and draws the same lines: nothing of them is kept anywhere else.
+  // SAFETY: the same record, through JSON as a reload reads it.
+  assert.deepEqual(recordedSwitches(JSON.parse(JSON.stringify(record)) as typeof record), switches)
+  // Read once per list of requests, and a new list that says the same keeps the lines as they were drawn.
+  assert.equal(switchesOf(record), switchesOf(record))
+  assert.equal(sameSwitches(switchesOf([...record]), switchesOf(record)), true)
+  assert.equal(sameSwitches(switchesOf(record.slice(0, 2)), switchesOf(record)), false)
+  // An older journal keeps no access: compared with nothing, it draws nothing, and the model still says itself.
+  assert.deepEqual(recordedSwitches([sent("a", "gpt-5.5", undefined, undefined), sent("b", "gpt-5.5", undefined, "full-access"), sent("c", "gpt-5.5-codex", undefined, undefined)]), new Map([["b", [{ kind: "model", model: "gpt-5.5-codex" }]]]))
+  // A turn that never went (canceled) is skipped: the switch is said against the turn that ran before it.
+  assert.deepEqual([...recordedSwitches([sent("a", "x", undefined, "auto"), sent("b", "y", undefined, "auto", "canceled"), sent("c", "y", undefined, "auto")]).entries()], [["a", [{ kind: "model", model: "y" }]]])
 })
 
 test("dictation listens until it's stopped: silence starts it again, and what it was still hearing is kept", () => {
@@ -637,6 +669,36 @@ test("dictation listens until it's stopped: silence starts it again, and what it
   assert.equal(made[1]!.stopped, true)
   assert.deepEqual(settled, ["Check the retry", "backoff on a slow", "runner"])
   assert.equal(ended, undefined)
+})
+
+test("dictation's meter goes to its subscribers, every 80 ms, without a render: nothing else hears a sample", async () => {
+  class Quiet extends EventTarget implements Recognition {
+    lang = ""
+    continuous = false
+    interimResults = false
+    onresult: Recognition["onresult"] = null
+    onend: Recognition["onend"] = null
+    onerror: Recognition["onerror"] = null
+    start() {}
+    stop() {
+      this.onend?.()
+    }
+    abort() {}
+  }
+  const levels = new MeterLevels()
+  const drawn: number[][] = []
+  const stop = levels.subscribe((sampled) => drawn.push([...sampled]))
+  const session = new DictationSession(Quiet, { settled: () => undefined, hearing: () => undefined, levels: (sampled) => levels.set(sampled), ended: () => undefined })
+  session.begin()
+  await new Promise((done) => setTimeout(done, METER_MS * 3.5))
+  assert.ok(drawn.length >= 3, `samples drawn: ${drawn.length}`)
+  assert.equal(drawn.at(-1)?.length, 5)
+  assert.deepEqual(levels.get(), drawn.at(-1))
+  stop()
+  const before = drawn.length
+  await new Promise((done) => setTimeout(done, METER_MS * 2.5))
+  assert.equal(drawn.length, before, "a subscriber that let go hears nothing more")
+  session.end(true)
 })
 
 test("dictation that fails keeps what it heard and says why; one that won't listen stops rather than looping", () => {

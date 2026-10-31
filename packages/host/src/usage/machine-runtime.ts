@@ -24,6 +24,7 @@ import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host
 import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } from "./process-cpu.js"
 import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
+import type { GitHubPerson } from "../contracts/github-person.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import type { RuntimeEvent, RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
@@ -110,6 +111,8 @@ const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harn
 
 /** How long a move's arrival waits for the agent to place the store's carried files again before it goes on without. */
 const CARRIED_REFRESH_MS = 20_000
+/** How long a pull request waits to hear whether it goes as its person: one ask of the account, which takes well under a second. */
+const PERSON_REFRESH_MS = 15_000
 /** A clock that moved this much more than the timer that read it was asleep: the machine was paused, or copied. */
 const RESUMED_GAP_MS = 3_000
 /** Between tries of a restore that failed: the Thread's object replaces a machine that stays silent much longer. */
@@ -156,6 +159,7 @@ export class MachineRuntime {
   #unfollow: (() => void) | undefined
   /** A move's arrival waiting for the agent to place the carried files again, by its request's id. */
   readonly #carriedAsked = new Map<string, (answer: { files: CarriedFile[]; problem?: string } | undefined) => void>()
+  readonly #personAsked = new Map<string, (person: GitHubPerson) => void>()
   /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
   #installing: Promise<void> | undefined
   /** The harness the machine was asked to run a start ahead for, and the installs its signed-in stage last ran after. */
@@ -289,6 +293,11 @@ export class MachineRuntime {
         return void this.#prefetch(message.harness)
       case "carried-files":
         return this.#carried(message)
+      case "github-person": {
+        const answer = this.#personAsked.get(message.answers)
+        this.#personAsked.delete(message.answers)
+        return answer?.(message.person)
+      }
     }
   }
 
@@ -708,6 +717,31 @@ export class MachineRuntime {
         resolve(answer)
       })
       this.#send({ type: "carried-files-refresh", id })
+    })
+  }
+
+  /**
+   * Whether the machine's pull requests go as its person, asked of the account now (`github-person-refresh`), so one
+   * the person turned on or off just before is what the next pull request uses. An agent that can't answer, or doesn't
+   * in time, is `unknown`: a pull request never goes as the App because nobody said otherwise.
+   */
+  githubPerson(): Promise<GitHubPerson> {
+    const unknown = (problem: string): GitHubPerson => ({ state: "unknown", problem })
+    if (this.#stopped || !this.#options.agent.writable) return Promise.resolve(unknown("This machine's agent can't be asked whether to open pull requests as you."))
+    const id = randomUUID()
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.#personAsked.delete(id)
+        hostWarn("machine", "the agent didn't say in time whether pull requests open as the person", { waitedMs: PERSON_REFRESH_MS })
+        resolve(unknown("This machine's agent didn't say in time whether to open pull requests as you."))
+      }, PERSON_REFRESH_MS)
+      timer.unref()
+      this.#personAsked.set(id, (person) => {
+        clearTimeout(timer)
+        hostLog("machine", "pull requests open as", person.state === "on" ? { state: person.state, login: person.login } : { state: person.state })
+        resolve(person)
+      })
+      this.#send({ type: "github-person-refresh", id })
     })
   }
 

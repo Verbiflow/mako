@@ -42,6 +42,9 @@ export function SendButton({
   const longPressed = useRef(false)
   const { kind, alternate } = presentation
   const offersChoice = alternate !== undefined && ready && waiting === undefined
+  // The choice is for the words in the field now: once it's no longer offered (the turn ended, the field emptied, a
+  // switch began), it's closed, and the next working turn's first key doesn't open it again.
+  if (choosing && !offersChoice) setChoosing(false)
   useEffect(() => () => clearTimeout(held.current?.timer), [])
 
   const release = () => {
