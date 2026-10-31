@@ -12,7 +12,8 @@ import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSession
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
+import { SessionUploads, syncStatusOf, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
+import { describeSending } from "@mako/host/contracts/sync-status"
 import { followHostLog } from "@mako/host/base/host-log"
 import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
 import { threadArchiveKey } from "@mako/host/contracts/thread-lifecycle"
@@ -786,6 +787,24 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
 /** A tier whose `sessions` are all in the account, as one Thread. */
 const tierCount = (sessions: number) => ({ sessions, threads: 1, readable: sessions, held: sessions, whole: sessions, inCloud: sessions, threadsInCloud: 1 })
 const activity = (failures: SyncFailure[] = []) => ({ sending: [], paused: false, pushes: 1, bytes: 10, failed: failures.length, lastSuccessAt: NOW, failures })
+
+test("the Sessions not synced are one line each, its copy's or its records', the longest failing first, with how many in all and how many only retrying", () => {
+  const failing = (nativeId: string, since: number, kind: SyncFailure["kind"]): SyncFailure => ({ at: NOW, since, harness: "codex", nativeId, kind, message: `${nativeId} failed`, correlationId: `c-${nativeId}` })
+  const scope: SyncScope = { sessions: [], paused: false }
+  const tiers = { now: tierCount(2), day: tierCount(2), week: tierCount(1) }
+  const copies = { ...activity([failing("a", NOW - 1_000, "unreachable"), failing("b", NOW - 9_000, "refused")]), retrying: 1 }
+  const originals = { ...activity([failing("b", NOW - 5_000, "refused"), ...["c", "d", "e", "f", "g"].map((id, n) => failing(id, NOW - 100 * n, "unreachable"))]), retrying: 2 }
+  const status = syncStatusOf(scope, { paused: false, tiers, stale: 0, copies, originals }, undefined)
+  assert.ok("failures" in status)
+  assert.equal(status.state, "failing")
+  assert.deepEqual(status.failures.map((failure) => [failure.nativeId, failure.since, failure.kind]), [["b", NOW - 9_000, "refused"], ["a", NOW - 1_000, "unreachable"], ["g", NOW - 400, "unreachable"], ["f", NOW - 300, "unreachable"], ["e", NOW - 200, "unreachable"]], "b once, since its copy began failing; the longest failing first")
+  assert.deepEqual([status.notSynced, status.retrying], [7, 3])
+  assert.match(describeSending(status), /^7 Sessions not synced; the first: the account turned down part of it \(correlation c-b\)\. 3 Sessions retrying after a failed push/)
+  // Retrying only: not failing, and said only in Diagnostics.
+  const retrying = syncStatusOf(scope, { paused: false, tiers, stale: 0, copies: { ...activity(), retrying: 1 }, originals: activity() }, undefined)
+  assert.ok("failures" in retrying)
+  assert.deepEqual([retrying.state, retrying.failures, retrying.retrying], ["synced", [], 1])
+})
 
 const listed = (n: number, state: ListedSession["state"] = "idle"): ListedSession => ({ ...row(n, state), runsOn: { kind: "device", deviceId: uuid(900) }, listedAt: new Date(NOW).toISOString() })
 

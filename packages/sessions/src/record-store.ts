@@ -1115,7 +1115,7 @@ export class RecordStore {
         this.db.exec("COMMIT")
         return true
       } catch (error) {
-        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        this.rollback()
         throw error
       }
     })
@@ -1207,7 +1207,7 @@ export class RecordStore {
         this.db.exec("COMMIT")
         return { units, versions }
       } catch (error) {
-        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        this.rollback()
         throw error
       }
     })
@@ -1243,7 +1243,7 @@ export class RecordStore {
         this.db.exec("COMMIT")
         return added
       } catch (error) {
-        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        this.rollback()
         throw error
       }
     })
@@ -1369,7 +1369,7 @@ export class RecordStore {
         this.setMark(session, WRITERS, JSON.stringify(mergeWriters(known ? SessionWritersSchema.parse(JSON.parse(known)) : null, { record: found })))
         this.db.exec("COMMIT")
       } catch (error) {
-        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        this.rollback()
         throw error
       }
       return found
@@ -1540,7 +1540,7 @@ export class RecordStore {
       guardStoreWrites(this.db, RECORD_TABLES, SCHEMA_VERSION)
       this.db.exec("COMMIT")
     } catch (error) {
-      if (this.db.isTransaction) this.db.exec("ROLLBACK")
+      this.rollback()
       throw error
     }
   }
@@ -1613,6 +1613,12 @@ export class RecordStore {
     this.db.exec("BEGIN IMMEDIATE")
     this.sliceAt = Date.now()
     await this.packs.begin()
+  }
+
+  /** Ends the write transaction under way, if any, without its changes: the index's, and the pack entries waiting for it. */
+  private rollback(): void {
+    if (this.db.isTransaction) this.db.exec("ROLLBACK")
+    this.packs.abandon()
   }
 
   private async commit(): Promise<void> {
@@ -1764,7 +1770,7 @@ export class RecordStore {
         } else for (const unit of held.units) this.noteRemoteHead(remote, session, harness, unit.key, unit.versions.at(-1)?.seq ?? -1)
         this.db.exec("COMMIT")
       } catch (error) {
-        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        this.rollback()
         throw error
       }
     })
@@ -1964,7 +1970,7 @@ export class RecordStore {
       imported.ms = Date.now() - started
       return imported
     } catch (error) {
-      if (!this.closed && this.db.isTransaction) this.db.exec("ROLLBACK")
+      if (!this.closed) this.rollback()
       this.endIntent(intent.id)
       throw error
     }
@@ -2030,7 +2036,7 @@ export class RecordStore {
       return report
     } catch (error) {
       // Slices already committed stay: each is true of the records as they were read.
-      if (!this.closed && this.db.isTransaction) this.db.exec("ROLLBACK")
+      if (!this.closed) this.rollback()
       this.endIntent(intent.id)
       throw error
     }
@@ -2048,7 +2054,7 @@ export class RecordStore {
       this.prepared("UPDATE intents SET ended = ? WHERE id = ? AND owner = ? AND ended IS NULL").run(Date.now(), id, this.owner.id)
       this.db.exec("COMMIT")
     } catch (error) {
-      if (this.db.isTransaction) this.db.exec("ROLLBACK")
+      this.rollback()
       // Left open, it ends with this store's lock, when the store closes or the process does.
       console.warn("A failed capture's intent could not be marked ended", this.folder, error instanceof Error ? error.message : error)
     }

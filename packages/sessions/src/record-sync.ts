@@ -33,7 +33,7 @@ export class RecordChunksRefusedError extends GatewayHttpError {
   ) {
     const [first] = chunks
     const named = first ? `${first.hash.slice(0, 12)}, ${first.size.toLocaleString("en-US")} bytes${chunks.length > 1 ? `, and ${chunks.length - 1} more` : ""}` : ""
-    super(refusal.status, `The account refused ${chunks.length === 1 ? "one chunk" : `${chunks.length} chunks`} of this Session (${named}) and took the rest: ${refusal.message}`, refusal.call)
+    super(refusal.status, `The account refused ${chunks.length === 1 ? "one chunk" : `${chunks.length} chunks`} of this Session (${named}) and took the rest: ${refusal.message}`, refusal.call, refusal.detail)
   }
 }
 

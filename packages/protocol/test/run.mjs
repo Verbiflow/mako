@@ -1602,6 +1602,13 @@ describe("a call to a gateway over HTTP", () => {
     const call = gatewayCalls({ id: "t", base: "https://gw", authorization: () => "t", fetch })
     await assert.rejects(call("/sessions"), (error) => error instanceof GatewayHttpError && error.call?.correlationId === sent && error.described.includes(`correlation ${sent}`))
   })
+
+  test("a refusal keeps its problem's detail, so its log line says why", async () => {
+    const fetch = async () => new Response(JSON.stringify({ title: "The pack was refused", detail: "The chunk 9032b81c isn't the chunk its hash names", correlationId: "c-1" }), { status: 400 })
+    const call = gatewayCalls({ id: "t", base: "https://gw", authorization: () => "t", fetch })
+    await assert.rejects(call("/chunks", { method: "PUT" }), (error) => error instanceof GatewayHttpError && error.message === "The pack was refused" && error.detail === "The chunk 9032b81c isn't the chunk its hash names" &&
+      error.described === "The pack was refused: The chunk 9032b81c isn't the chunk its hash names (PUT /chunks answered 400, correlation c-1)")
+  })
 })
 
 describe("a project's recipe authority over HTTP", () => {

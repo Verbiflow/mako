@@ -1,4 +1,5 @@
 import { describeFollow, describeList, describeOwner, type SyncReadings } from "@mako/host/contracts/sync-readings"
+import { describeSending, type SyncStatus } from "@mako/host/contracts/sync-status"
 import { Action } from "@/components/ui/kit"
 import { formatRelative } from "@/lib/format"
 
@@ -10,7 +11,7 @@ const SHOWN = 8
  * conversation it follows elsewhere, how long an update takes to arrive and what it took to keep it whole; the account's
  * list; and what it sends of its own conversations another device watches. Numbers only, said in words.
  */
-export function SyncReadout({ readings }: { readings: SyncReadings }) {
+export function SyncReadout({ readings, sending }: { readings: SyncReadings; sending?: SyncStatus | undefined }) {
   const follows = [...readings.follows].sort((left, right) => (right.lastHeardAt ?? 0) - (left.lastHeardAt ?? 0)).slice(0, SHOWN)
   const owner = describeOwner(readings.owner)
   return (
@@ -27,6 +28,7 @@ export function SyncReadout({ readings }: { readings: SyncReadings }) {
         </Action>
       </div>
       <div className="divide-y divide-hairline border-t border-hairline">
+        {sending ? <Line title="This Mac's Sessions" detail={describeSending(sending)} /> : null}
         <Line title="Account list" detail={describeList(readings.list)} />
         {owner ? <Line title="Watched from elsewhere" detail={owner} /> : null}
         {follows.length === 0 ? (

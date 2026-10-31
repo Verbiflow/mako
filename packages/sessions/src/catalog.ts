@@ -66,7 +66,7 @@ import type { ReaderPlace } from "./readers.js"
 import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
 import { ReadingCopies, ReceivedCopies, type CopyPage } from "./reading-copies.js"
-import { ScopedUploads, countTiers, type CatalogSyncStatus, type SyncScope } from "./scoped-uploads.js"
+import { FAILURES_SAID, LASTING_MS, ScopedUploads, countTiers, longestFailing, type CatalogSyncStatus, type SyncFailure, type SyncScope } from "./scoped-uploads.js"
 import type { WorkUnderWay } from "./loop-watch.js"
 import { UploadBudget } from "./upload-budget.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
@@ -79,9 +79,8 @@ import { FolderWatches, type RootWatch } from "./root-watch.js"
 
 /** How often the originals look for what was captured since, in any process: a Session at work goes this soon after. */
 const ORIGINALS_LOOK_MS = 5_000
-/** Capture failures kept, and said with a sync status's failures at the most. */
+/** Capture failures kept. */
 const CAPTURE_FAILURES_KEPT = 200
-const CAPTURE_FAILURES_SAID = 5
 /** Catching up on originals goes at no more than this, beside the copies' own: a week of records never fills the connection. */
 const ORIGINALS_BYTES_PER_SECOND = 1024 * 1024
 
@@ -1758,11 +1757,14 @@ export class SessionCatalog {
     const originals = this.originals?.uploads
     // A Session whose records this Mac can't read is not in the cloud however its last push went: the account holds
     // what was read before, and the Session went on since.
-    const unread = scope.sessions.flatMap((session) => {
+    const unread = scope.sessions.flatMap((session): SyncFailure[] => {
       const failed = this.captureFailures.get(`${session.harness}\n${session.nativeId}`)
-      return failed ? [{ at: failed.at, since: failed.since, harness: session.harness, nativeId: session.nativeId, message: `Mako couldn't read this Session into its records: ${failed.message}` }] : []
+      return failed ? [{ at: failed.at, since: failed.since, harness: session.harness, nativeId: session.nativeId, kind: "unread", message: `Mako couldn't read this Session into its records: ${failed.message}` }] : []
     })
     const unreadKeys = new Set(unread.map((failure) => `${failure.harness}\n${failure.nativeId}`))
+    // Said as the uploads say theirs: once it has lasted, after the capture's own retries.
+    const now = Date.now()
+    const lasting = unread.filter((failure) => now - (failure.since ?? failure.at) >= LASTING_MS)
     const originalsStatus = originals?.status() ?? null
     return {
       paused: scope.paused,
@@ -1773,7 +1775,12 @@ export class SessionCatalog {
       }),
       stale: copies ? scope.sessions.filter((session) => !copies.current(session)).length : 0,
       copies: copies?.status() ?? null,
-      originals: originalsStatus && { ...originalsStatus, failures: [...unread, ...originalsStatus.failures].sort((left, right) => right.at - left.at).slice(0, CAPTURE_FAILURES_SAID) },
+      originals: originalsStatus && {
+        ...originalsStatus,
+        // One line a Session: what it couldn't read stands for its pushes, which can only send what was read before.
+        failures: [...lasting, ...originalsStatus.failures.filter((failure) => !lasting.some((each) => each.harness === failure.harness && each.nativeId === failure.nativeId))].sort(longestFailing).slice(0, FAILURES_SAID),
+        ...(unread.length - lasting.length + (originalsStatus.retrying ?? 0) > 0 && { retrying: unread.length - lasting.length + (originalsStatus.retrying ?? 0) }),
+      },
     }
   }
 

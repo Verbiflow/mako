@@ -23,25 +23,34 @@ export type GatewayHttpOptions = {
 export type GatewayCallTried = { method: string; path: string; tries: number; correlationId?: string }
 
 /**
- * A call the gateway answered with a refusal: its status and its problem's title, which is the message, and the call
- * it answered, which `described` adds so a log line leads straight to the gateway's own.
+ * A call the gateway answered with a refusal: its status and its problem's title, which is the message, the problem's
+ * detail when it gave one (why: "The chunk 9032… isn't the chunk its hash names"), and the call it answered, which
+ * `described` adds so a log line leads straight to the gateway's own.
  */
 export class GatewayHttpError extends Error {
   constructor(
     readonly status: number,
     title: string,
-    readonly call?: GatewayCallTried
+    readonly call?: GatewayCallTried,
+    readonly detail?: string
   ) {
     super(title)
   }
 
-  /** The title with the call: "Something went wrong (GET /sessions/pull answered 500, 4 tries, correlation …)". */
+  /**
+   * The title, its detail and the call: "The pack was refused: The chunk 9032… isn't the chunk its hash names (PUT
+   * /chunks answered 400, correlation …)".
+   */
   get described(): string {
-    if (!this.call) return this.message
+    const said = this.detail ? `${this.message}: ${this.detail}` : this.message
+    if (!this.call) return said
     const { method, path, tries, correlationId } = this.call
-    return `${this.message} (${method} ${path} answered ${this.status}${tries > 1 ? `, ${tries} tries` : ""}${correlationId ? `, correlation ${correlationId}` : ""})`
+    return `${said} (${method} ${path} answered ${this.status}${tries > 1 ? `, ${tries} tries` : ""}${correlationId ? `, correlation ${correlationId}` : ""})`
   }
 }
+
+/** The most of a problem's detail a refusal keeps: a schema's complaint can run long, and it goes into log lines. */
+const DETAIL_KEPT = 500
 
 /** An error's words for a log or an operator: a gateway refusal with the call it answered, anything else its message. */
 export function describeGatewayFailure(error: Error): string {
@@ -60,7 +69,7 @@ export type GatewayCall = (path: string, init?: { method?: string; json?: unknow
 export const CORRELATION_HEADER = "x-mako-correlation-id"
 const REPEATED = new Set([429, 500, 502, 503, 504])
 export const ProblemTitle = z.object({ title: z.string() }).partial()
-const ProblemCorrelation = z.object({ title: z.string(), correlationId: z.string() }).partial()
+const ProblemCorrelation = z.object({ title: z.string(), detail: z.string(), correlationId: z.string() }).partial()
 
 /** What ended a try that got no answer: the network's code ("ECONNRESET"), else the error's name ("TimeoutError"). */
 const TryFailure = z.object({ name: z.string(), cause: z.object({ code: z.string() }).partial().optional() }).partial()
@@ -92,7 +101,7 @@ export function gatewayCalls(options: GatewayHttpOptions): GatewayCall {
         if (!response) throw failure
         const problem = ProblemCorrelation.safeParse(await response.json().catch(() => undefined)).data
         const call: GatewayCallTried = { method: init.method ?? "GET", path: path.split("?")[0] ?? path, tries: attempt + 1, correlationId: problem?.correlationId ?? response.headers.get(CORRELATION_HEADER) ?? correlationId }
-        throw new GatewayHttpError(response.status, problem?.title ?? `The gateway answered ${response.status}`, call)
+        throw new GatewayHttpError(response.status, problem?.title ?? `The gateway answered ${response.status}`, call, problem?.detail?.slice(0, DETAIL_KEPT))
       }
       const failed = TryFailure.safeParse(failure).data
       trace.failures.push(`${response ? response.status : (failed?.cause?.code ?? failed?.name ?? "no answer")} after ${Math.round(performance.now() - began)} ms`)

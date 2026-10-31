@@ -155,31 +155,41 @@ async function checkWindow() {
   assert.match(said, /2 Sessions changed since their last copy, going up in turn\./)
   await both("sync-waiting-for-power", [section])
 
-  // 4. A push failed: the rail says how many Sessions haven't gone up for a minute and why the first didn't, opening
-  // Settings › Account, where each is said in the cloud's words, with its correlation ID one copy away.
+  // 4. Sessions not synced, as the sync daemon says (failures that lasted): the rail says how many and what kept the
+  // first out in a person's words, opening Settings › Account, where each is said so, with the account's own words and
+  // its correlation ID one disclosure away.
   await window.loadURL(`${base}?mock&cloud=signed-in&invited&sync=failing`)
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
   await until(`Boolean(document.querySelector('.composer-input'))`, "the desk")
   await until(`document.querySelector('[data-sync-rail]') !== null`, "the rail's line")
   const rail = await evaluate(`document.querySelector('[data-sync-rail]').innerText`)
   assert.match(rail, /2 Sessions not synced/)
+  assert.match(rail, /The account turned down part of it · since /)
+  assert.doesNotMatch(rail, /correlation|PUT \/chunks/, "the rail speaks the person's words, not the gateway's")
   assert.match(rail, /Why/)
   await both("sync-rail", ["[data-sync-rail]"])
   await evaluate(`document.querySelector('[data-sync-rail]').click(), true`)
   await until(`document.querySelector('[data-sync-failures]') !== null`, "the failures")
   await show()
-  const failure = await evaluate(`document.querySelector('[data-sync-failures]').innerText`)
-  assert.match(failure, /2 Sessions haven't gone up, the first since 40m ago\. Mako tries again on its own\./)
-  assert.match(failure, /refused one chunk of this Session \(8fd50237a1c4, 40,960 bytes\)/, "each named with why")
-  assert.match(failure, /correlation 6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8/)
+  let failure = await evaluate(`document.querySelector('[data-sync-failures]').innerText`)
+  assert.match(failure, /2 Sessions aren't synced/)
+  assert.match(failure, /The account turned down part of it · since /)
+  assert.match(failure, /Mako can't reach the account · since /)
+  assert.match(failure, /less often each time/, "and what Mako does next")
+  assert.doesNotMatch(failure, /correlation 0a9b8c7d/, "the account's words wait behind Details")
   assert.match(failure, /Copy details/)
   await both("sync-failing", [section, "[data-sync-failures]"])
+  await evaluate(`document.querySelector('[data-sync-failures] details').open = true, true`)
+  failure = await evaluate(`document.querySelector('[data-sync-failures]').innerText`)
+  assert.match(failure, /refused one chunk of this Session \(8fd50237a1c4, 40,960 bytes\)/, "Details: the account's own words")
+  assert.match(failure, /0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d/, "and its correlation ID")
+  await both("sync-failing-details", ["[data-sync-failures]"])
 
   // 5. No cloud on the account: no Sync at all.
   await openAccount("&cloud=signed-in")
   await until(`document.body.innerText.includes("Invite-only for now")`, "the account")
   assert.equal(await evaluate(`document.querySelector('${section}')`), null)
-  console.log("Sync status UI: catching up by tier with the backfill said, all in sync, waiting for power, Sessions not synced said in the rail and named in Settings in the cloud's words with their correlation IDs, and nothing without the cloud")
+  console.log("Sync status UI: catching up by tier with the backfill said, all in sync, waiting for power, Sessions not synced said in the rail and in Settings in a person's words with the account's and their correlation IDs behind Details, and nothing without the cloud")
   clearTimeout(watchdog)
   app.exit(0)
 }

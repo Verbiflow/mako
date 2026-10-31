@@ -229,12 +229,7 @@ export class Packs {
   /** A chunk's bytes as stored, compressed or not, for another store's `writeStored`. */
   async readStored(place: ChunkPlace): Promise<StoredChunk> {
     const body = Buffer.allocUnsafe(place.stored)
-    const { writing, staged } = this
-    if (writing?.pack === place.pack && staged && place.offset >= writing.written)
-      staged.copy(body, 0, place.offset - writing.written, place.offset - writing.written + place.stored)
-    else {
-      await this.readAt(place, body)
-    }
+    if (!this.copyWaiting(place, body)) await this.readAt(place, body)
     return { codec: place.codec, size: place.size, body }
   }
 
@@ -257,14 +252,23 @@ export class Packs {
 
   async read(place: ChunkPlace): Promise<Buffer> {
     const body = Buffer.allocUnsafe(place.stored)
-    const { writing, staged } = this
-    if (writing?.pack === place.pack && staged && place.offset >= writing.written) {
-      // Still waiting to be written, by the transaction reading it.
-      staged.copy(body, 0, place.offset - writing.written, place.offset - writing.written + place.stored)
-      return this.decoded(place, body)
-    }
-    await this.readAt(place, body)
+    if (!this.copyWaiting(place, body)) await this.readAt(place, body)
     return this.decoded(place, body)
+  }
+
+  /**
+   * Copies a chunk still waiting to be written, by the transaction reading it, into `body`; false when it isn't one of
+   * this store's waiting entries, so it's in its pack. Only `written` to `size` is waiting: past `size` (or anywhere,
+   * between transactions, when the two are equal) is what another process appended to the same pack since, which the
+   * buffer never held. Reading those from the buffer gave a chunk's place its stale bytes: the sync daemon sent chunks
+   * the backfill had just captured, each read from its own old entries, and the account refused every one as not the
+   * chunk its hash names (18 of a live Session's, 2026-10-31).
+   */
+  private copyWaiting(place: ChunkPlace, body: Buffer): boolean {
+    const { writing, staged } = this
+    if (writing?.pack !== place.pack || !staged || place.offset < writing.written || place.offset + place.stored > writing.size) return false
+    staged.copy(body, 0, place.offset - writing.written, place.offset - writing.written + place.stored)
+    return true
   }
 
   private async decoded(place: ChunkPlace, body: Buffer): Promise<Buffer> {
@@ -300,6 +304,14 @@ export class Packs {
     const reader = this.readers.get(pack)
     this.readers.delete(pack)
     if (reader) await retire(reader)
+  }
+
+  /**
+   * Drops the entries still waiting, for a transaction that rolled back: no index names them, and their places may be
+   * another process's next, which this store's buffer must not answer for.
+   */
+  abandon(): void {
+    if (this.writing) this.writing.size = this.writing.written
   }
 
   /** Makes what's written durable before the index that names it commits. */
