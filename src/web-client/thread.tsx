@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
@@ -7,7 +7,6 @@ import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { MoveDividersContext } from "@/components/transcript/transcript-notes"
 import { WebHarnessIcon } from "./harness-icon"
 import { copyAge } from "@/lib/format"
-import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
@@ -25,7 +24,7 @@ import { useForm } from "./route"
 import { CLOUD_WHERE, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
 import { startingWhere } from "./started"
 import { useThread } from "./use-thread"
-import { archiveThread } from "./archive-thread"
+import { archiveAndSay } from "./archive-thread"
 import { useSyncing } from "./syncing"
 import { useDelayedStatus } from "./delayed-status"
 import { useBranchOpening } from "./replies"
@@ -226,7 +225,10 @@ function ThreadBar({ onBack, title, subtitle, place, headingRef, actions }: { on
  * cloud Thread's archive is the cloud's own; another device's Sessions are archived, and moved, by asking that device.
  * Each can be refused, in the owner's words.
  */
-export function ThreadActions({ thread, session, onArchived, onAdd }: { thread: WebThread; session: WebSession; onArchived: () => void; onAdd: (() => void) | undefined }) {
+export function ThreadActions({ thread, session, onArchived, onAdd, desk = false }: { thread: WebThread; session: WebSession; onArchived: () => void; onAdd: (() => void) | undefined; desk?: boolean }) {
+  // In a laptop's browser, the desktop's own menu: its rows and glyphs at the desk's size, under the strip's `…`.
+  const item = desk ? undefined : "min-h-11 gap-2.5 px-3 text-ui"
+  const glyph = desk ? "size-3.5" : "size-4 text-muted-foreground"
   const client = useWebClient()
   const devices = useAccountList((state) => state.devices)
   const moving = useMoves((state) => state.moves.has(thread.id)) || listedMove(thread) !== undefined
@@ -235,23 +237,7 @@ export function ThreadActions({ thread, session, onArchived, onAdd }: { thread: 
   const onMac = session.owner.kind === "device" && !session.quietSince ? session.owner : undefined
   const inCloud = session.owner.kind === "cloud"
   const hasMac = [...devices.values()].some((device) => device.kind === "desktop")
-  const archive = async (anyway = false) => {
-    setBusy("Archiving…")
-    try {
-      const outcome = await archiveThread(client, thread, { anyway, step: setBusy })
-      if (outcome.kind === "refused") {
-        if (outcome.anyway) toast.error("Not archived", { description: outcome.reason, action: { label: "Archive anyway", onClick: () => void archive(true) }, duration: ACTION_TOAST_MS })
-        else toast.error("Not archived", { description: outcome.reason })
-        return
-      }
-      toast.success("Archived", { description: thread.title })
-      onArchived()
-    } catch (error) {
-      toast.error("Not archived", { description: error instanceof Error ? error.message : String(error) })
-    } finally {
-      setBusy(undefined)
-    }
-  }
+  const archive = () => void archiveAndSay(client, thread, setBusy, onArchived)
   const move = (mac: MoveMac) => {
     const way = asking
     setAsking(undefined)
@@ -268,43 +254,49 @@ export function ThreadActions({ thread, session, onArchived, onAdd }: { thread: 
     <>
       <Menu>
         <MenuTrigger asChild>
-          <button type="button" aria-label="More for this Thread" className="web-icon-button">
-            <EllipsisIcon className="size-5" />
-          </button>
+          {desk ? (
+            <button type="button" aria-label="More for this Thread" className="pressable mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground">
+              <MoreHorizontalIcon className="size-3.5" />
+            </button>
+          ) : (
+            <button type="button" aria-label="More for this Thread" className="web-icon-button">
+              <EllipsisIcon className="size-5" />
+            </button>
+          )}
         </MenuTrigger>
-        <MenuContent align="end" className="min-w-56">
+        <MenuContent align="end" className={desk ? "min-w-52" : "min-w-56"}>
           {onAdd ? (
-            <MenuItem onSelect={onAdd} className="min-h-11 gap-2.5 px-3 text-ui">
-              <PlusIcon className="size-4 text-muted-foreground" />
+            <MenuItem onSelect={onAdd} className={item}>
+              <PlusIcon className={glyph} />
               Add a Session
             </MenuItem>
           ) : null}
           {!session.quietSince ? (
-            <MenuItem onSelect={() => openReview({ conversation: session.row.conversation, scope: { kind: "thread" } })} className="min-h-11 gap-2.5 px-3 text-ui">
-              <FileDiffIcon className="size-4 text-muted-foreground" />
+            <MenuItem onSelect={() => openReview({ conversation: session.row.conversation, scope: { kind: "thread" } })} className={item}>
+              <FileDiffIcon className={glyph} />
               Changes
             </MenuItem>
           ) : null}
           {session.row.folder && !session.quietSince && !moving ? (
-            <MenuItem onSelect={() => askPreview(session.row.conversation)} className="min-h-11 gap-2.5 px-3 text-ui">
-              <GlobeIcon className="size-4 text-muted-foreground" />
+            <MenuItem onSelect={() => askPreview(session.row.conversation)} className={item}>
+              <GlobeIcon className={glyph} />
               Open app
             </MenuItem>
           ) : null}
           {onMac && cloudOn(client.account.entitlements) && !moving ? (
-            <MenuItem onSelect={() => setAsking("cloud")} className="min-h-11 gap-2.5 px-3 text-ui">
-              <ArrowUpIcon className="size-4 text-muted-foreground" />
+            <MenuItem onSelect={() => setAsking("cloud")} className={item}>
+              <ArrowUpIcon className={glyph} />
               Move to the cloud
             </MenuItem>
           ) : null}
           {inCloud && hasMac && !moving ? (
-            <MenuItem onSelect={() => setAsking("device")} className="min-h-11 gap-2.5 px-3 text-ui">
-              <ArrowDownIcon className="size-4 text-muted-foreground" />
+            <MenuItem onSelect={() => setAsking("device")} className={item}>
+              <ArrowDownIcon className={glyph} />
               Bring back to a Mac
             </MenuItem>
           ) : null}
-          <MenuItem onSelect={() => void archive()} className="min-h-11 gap-2.5 px-3 text-ui">
-            <ArchiveIcon className="size-4 text-muted-foreground" />
+          <MenuItem onSelect={archive} className={item}>
+            <ArchiveIcon className={glyph} />
             Archive
           </MenuItem>
         </MenuContent>

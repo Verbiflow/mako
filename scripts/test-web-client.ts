@@ -27,6 +27,10 @@ import { appendHeard, DictationSession, elapsedWords, frameDecibels, MeterLevels
 import { freshStep, stepsLine } from "../src/web-client/steps-words"
 import { recordedSwitches, sameSwitches, switchedWords, switchesOf } from "../src/web-client/answered"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import { listedSummaries, listingChanges } from "../src/web-client/desk-listing"
+import { selectAcpPresence } from "../src/state/acp-presence"
+import { acpStore } from "../src/state/acp-state"
+import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
 import type { ToolCall } from "../src/extend/slots"
 import { diagnose, diagnosisText, lastSeen, type ReachInput } from "../src/web-client/diagnosis"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
@@ -1081,4 +1085,37 @@ test("a Mac to connect: none yet, one that joined and isn't heard from, one that
   const asleep = macConnection({ devices, rows: [], quiet: new Map([[STUDIO, at(1)]]) }, new Set())
   assert.equal(asleep.connected, false, "a quiet one isn't there")
   assert.equal(connectStep(asleep), "done", "but it connected before, with nothing to list: a Mac to wake, not to connect")
+})
+
+test("the desk's rail lists the account's Sessions as a Mac's window lists another device's: each change once, the open one from its own stream", () => {
+  const list = { rows: [row(1, { thread: uuid(300), runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Ship the webhooks" }), row(2, { thread: uuid(300), runsOn: { kind: "device", deviceId: STUDIO } })], devices, quiet: new Map<string, string>(), waiting: new Map() }
+  const summaries = listedSummaries(list)
+  assert.deepEqual(summaries.map((summary) => [summary.session.id, summary.threadId, summary.elsewhere, summary.movedAt]), [
+    ["c1", uuid(300), "Studio", Date.parse(at(1))],
+    ["c2", uuid(300), "Studio", Date.parse(at(2))],
+  ], "one conversation per row, in its Thread, where it runs and when it last moved")
+  const first = listingChanges(summaries, new Map(), null)
+  assert.deepEqual(first.listed.map((summary) => summary.session.id), ["c1", "c2"], "all listed at first")
+  assert.deepEqual(listingChanges(summaries, first.now, null).listed, [], "nothing again while nothing changed")
+
+  // c1 is open: its stream says what changes; the list's word on it waits until the person leaves it.
+  const moved = listedSummaries({ ...list, rows: [row(1, { thread: uuid(300), runsOn: { kind: "device", deviceId: STUDIO }, state: "working", activityAt: at(9) }), list.rows[1]!] })
+  const whileOpen = listingChanges(moved, first.now, "c1")
+  assert.deepEqual(whileOpen.listed, [], "the open conversation isn't overwritten by the list")
+  assert.deepEqual(listingChanges(moved, whileOpen.now, null).listed.map((summary) => summary.session.id), ["c1"], "left, it's listed as it stands")
+  // Its device went quiet: the stream can't say so, so the list does, open or not.
+  const quiet = listedSummaries({ ...list, quiet: new Map([[STUDIO, at(10)]]) })
+  assert.deepEqual(listingChanges(quiet, first.now, "c1").listed.map((summary) => summary.session.id), ["c1", "c2"], "a quiet device is said of the open one too")
+  assert.deepEqual(listingChanges(summaries.slice(1), first.now, null).gone, ["c1"], "a Session no longer listed leaves the rail")
+})
+
+test("a listed Session keeps its Thread's name and its time once its owner's snapshot is read", () => {
+  const [summary] = listedSummaries({ rows: [row(31, { thread: uuid(310), runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Rotate the keys", activityAt: at(40) })], devices, quiet: new Map(), waiting: new Map() })
+  listLive([summary!])
+  const listed = () => selectAcpPresence(acpStore.get()).find((presence) => presence.key === "c31")
+  assert.equal(listed()?.movedAt, Date.parse(at(40)), "the row says when it last moved")
+  assert.equal(listed()?.threadTitle, "Rotate the keys")
+  applyLiveSnapshot({ ...summary!, session: { ...summary!.session, connection: "connected", status: "ready" }, threadTitle: undefined, movedAt: undefined, revision: 2, base: null, permissions: [], requests: [], blocks: [] })
+  assert.equal(listed()?.threadTitle, "Rotate the keys", "the owner's snapshot doesn't say the Thread's name; the list's stays")
+  assert.equal(listed()?.movedAt, Date.parse(at(40)))
 })

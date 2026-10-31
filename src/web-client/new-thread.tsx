@@ -18,7 +18,7 @@ import { Composer } from "./composer"
 import { newDraftKey } from "./drafts"
 import { WebHarnessIcon } from "./harness-icon"
 import { webHarnessLabel } from "./labels"
-import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places, readStartMemory, rememberStart, startable, type Place, type StartProject } from "./places"
+import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places, readStartMemory, rememberStart, startable, type Place, type PlaceKey, type StartProject } from "./places"
 import { Sheet, SheetScroll } from "./sheet"
 import { WEB_HARNESSES } from "./labels"
 import { addSession, cloudCatalog, macCatalog, macWorktrees, startInCloud, startOnMac, type Catalog, type CloudStep, type OfferedHarness, type Owner, type Started } from "./start"
@@ -33,6 +33,12 @@ export interface AddingTo {
   owner: Owner
   /** Where it runs, in words, for the sheet's line. */
   where: string
+}
+
+/** A new Thread asked for in one project (a rail folder's +): where it runs and its folder, chosen to begin with. */
+export interface StartIn {
+  place: PlaceKey
+  project: string
 }
 
 /** The sheet's chips' own sheets: one open at a time, over the composer. */
@@ -71,7 +77,7 @@ export function StartPane({ onDismiss, onStarted }: { onDismiss: () => void; onS
   )
 }
 
-export function StartForm({ onStarted, adding, desk = false }: { onStarted: (started: Started, where: string) => void; adding?: AddingTo; desk?: boolean }) {
+export function StartForm({ onStarted, adding, startIn, desk = false }: { onStarted: (started: Started, where: string) => void; adding?: AddingTo; startIn?: StartIn; desk?: boolean }) {
   const client = useWebClient()
   const list = useAccountList((state) => state)
   const cloud = client.account.entitlements.includes(CLOUD_ENTITLEMENT)
@@ -79,6 +85,7 @@ export function StartForm({ onStarted, adding, desk = false }: { onStarted: (sta
   const all = useMemo(() => places(list, cloud), [list, cloud])
   const [chosenPlace, setChosenPlace] = useState<string | undefined>(() => {
     if (adding) return adding.owner.kind === "cloud" ? CLOUD_PLACE : adding.owner.deviceId
+    if (startIn) return startIn.place
     const first = defaultPlace(all, memory.place)
     return first ? placeKey(first) : undefined
   })
@@ -88,7 +95,7 @@ export function StartForm({ onStarted, adding, desk = false }: { onStarted: (sta
 
   const [projects, setProjects] = useState<StartProject[] | undefined>(undefined)
   const [catalog, setCatalog] = useState<Catalog | undefined>(undefined)
-  const [pickedProject, setPickedProject] = useState<string | undefined>(undefined)
+  const [pickedProject, setPickedProject] = useState<string | undefined>(startIn?.project)
   const [picked, setPicked] = useState<{ harness: string; model: string | undefined } | undefined>(undefined)
   const [picking, setPicking] = useState<Picking>(undefined)
   // The chip a choice was opened from: wide, its choices grow from it.

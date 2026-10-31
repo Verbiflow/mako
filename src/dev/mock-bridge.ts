@@ -79,6 +79,7 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
+import { busySnapshot, busySummaries, BUSY_SESSIONS } from "./mock-busy-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -396,6 +397,11 @@ export function installMockBridge() {
    * (`ThreadRef.copyOnly`), as the archive's migration leaves them.
    */
   const keptScene = scene === "kept"
+  /** `?app=busy`: a long Thread of four Sessions, its first waiting on three agents and twenty-two commands. */
+  if (scene === "busy") {
+    BUSY_SESSIONS.forEach((entry, index) => liveSnapshots.set(entry.conversation, busySnapshot(index)))
+    boot.live.push(...busySummaries())
+  }
   /** `?app=slow-start`: a start the host takes 26 s to accept, as a cloud Thread's might, with its steps, to see the wait. */
   const slowStart = scene === "slow-start"
   /**

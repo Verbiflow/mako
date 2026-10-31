@@ -404,6 +404,11 @@ export interface LiveSummary {
    * there, which titles the Thread's row as this Mac's own Threads' names title theirs.
    */
   threadTitle?: string
+  /**
+   * When a conversation listed from another device last moved (a turn, a message, an answer), in epoch milliseconds, as
+   * the account's list says: its row says how long ago, as this Mac's own rows do.
+   */
+  movedAt?: number
 }
 
 /** A native session, as the catalog reads it. */

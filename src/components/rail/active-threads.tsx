@@ -23,9 +23,10 @@ import {
   type FoldedThread,
 } from "@/lib/thread-fold"
 import { ReadyBesideMark, ThreadStatusMark } from "@/components/rail/thread-status"
-import { threadStatus, useThreads } from "@/state/threads"
+import { threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
-import { acp, acpForThread, useAcp } from "@/state/acp"
+import { acpForThread, useAcp } from "@/state/acp"
+import { openConversation, useWindowRoutes } from "@/state/window-routes"
 import { CLOUD_WHERE } from "@/state/cloud-moves"
 import type { AcpPresence } from "@/state/acp-presence"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
@@ -34,6 +35,8 @@ import { useThreadTitles } from "@/state/thread-titles"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
+
+const IDLE: ThreadStatus = { kind: "idle" }
 
 export function LiveAgentRow({
   presence,
@@ -67,6 +70,8 @@ export function LiveAgentRow({
     )
   )
   const lit = draftOpen || (viewedMember ?? liveOnScreen)
+  // In a browser every computer is elsewhere: only the cloud is marked, as the place apart from the person's own Macs.
+  const routed = useWindowRoutes((state) => state.routes !== null)
   // Its device can't be heard: nothing there is shown at work, and the row says when it was last seen instead.
   const lastSeen = presence.quietSince === undefined ? undefined : `last seen ${copyAge(presence.quietSince)}`
   const where = presence.elsewhere ? `on ${presence.elsewhere}${lastSeen ? `, ${lastSeen}` : ""}` : undefined
@@ -105,7 +110,7 @@ export function LiveAgentRow({
     named ?? presence.threadTitle ?? presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
   const open = () => {
     if (folded) openFoldedThread(folded.thread, folded.members)
-    else acp.activate(presence.key)
+    else openConversation(presence)
   }
   const archiveTargets = folded?.members.map((member): ThreadTarget =>
     member.kind === "native" ? nativeThreadTarget(member.ref) : { kind: "live", id: member.key }
@@ -162,7 +167,7 @@ export function LiveAgentRow({
           {title}
         </span>
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
-        {presence.elsewhere ? <ElsewhereMark where={presence.elsewhere} /> : null}
+        {presence.elsewhere && (!routed || presence.elsewhere === CLOUD_WHERE) ? <ElsewhereMark where={presence.elsewhere} /> : null}
         {folded ? <SessionCount count={folded.members.length} /> : null}
         {!indent ? (
           <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">
@@ -187,6 +192,9 @@ export function LiveAgentRow({
             {/* "seen", so it doesn't read as an idle row's time of its last change. */}
             seen {formatRelative(presence.quietSince)}
           </span>
+        ) : presence.status === "ready" && presence.movedAt !== undefined ? (
+          // Listed from another device and ready: how long ago it last moved, as this Mac's own rows say.
+          <ThreadStatusMark status={IDLE} updatedAt={new Date(presence.movedAt).toISOString()} />
         ) : (
           <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
             <ActivityMark state={state} size={20} />

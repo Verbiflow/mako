@@ -29,6 +29,8 @@ export interface AcpPresence {
   threadTitle?: string
   /** When the device it runs on was last heard from, while the account can't hear it. */
   quietSince?: number
+  /** When it last moved, for a conversation listed from another device (`LiveSummary.movedAt`). */
+  movedAt?: number
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -85,6 +87,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
       if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
       if (conversation.quietSince !== undefined) presence.quietSince = conversation.quietSince
+      if (conversation.movedAt !== undefined) presence.movedAt = conversation.movedAt
       return [presence]
     })
     .sort((left, right) => right.createdAt - left.createdAt)
@@ -116,6 +119,7 @@ export function sameAcpPresence(
         candidate.waitingOn === presence.waitingOn &&
         candidate.threadTitle === presence.threadTitle &&
         candidate.quietSince === presence.quietSince &&
+        candidate.movedAt === presence.movedAt &&
         candidate.background === presence.background
       )
     })

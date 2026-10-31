@@ -82,7 +82,8 @@ function projectOf(folder: string | undefined): string | undefined {
   return parts.at(-1)
 }
 
-function sessionOf(row: ListedSession, list: Pick<AccountListState, "devices" | "quiet" | "waiting">): WebSession {
+/** One listed row as the browser holds it: who answers it, where it runs, and how a window lists it. */
+export function sessionOf(row: ListedSession, list: Pick<AccountListState, "devices" | "quiet" | "waiting">): WebSession {
   const where = whereOf(row, list.devices)
   const quietSince = row.runsOn.kind === "device" ? list.quiet.get(row.runsOn.deviceId) : undefined
   const session: WebSession = {

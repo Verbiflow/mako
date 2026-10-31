@@ -31,6 +31,7 @@ import { threads, useThreads } from "@/state/threads"
 import { threadTitle } from "@/state/thread-titles"
 import { followCheckouts } from "@/state/checkout-heads"
 import { useWorktrees, workingFolder, worktreesStore, type WorktreePlaces } from "@/state/worktrees"
+import { openConversation, windowRoutesStore } from "@/state/window-routes"
 
 interface LiveSlot {
   key: string
@@ -233,7 +234,7 @@ export function openSessionTab(tab: SessionTab): void {
   const { ref, presence } = tab
   const owns = presence && ref && (presence.threadPath === ref.path || presence.nativePaths?.includes(ref.path))
   if (ref && (!presence || owns)) void threads.view(ref)
-  else if (presence) acp.activate(presence.key)
+  else if (presence) openConversation(presence)
 }
 
 /**
@@ -242,6 +243,8 @@ export function openSessionTab(tab: SessionTab): void {
  * until the first message is sent.
  */
 export function newSessionInThread(): boolean {
+  const { routes } = windowRoutesStore.get()
+  if (routes) return routes.newSession()
   const here = currentOnScreen()
   if (!here.thread) return false
   if (here.draft) {
@@ -319,7 +322,7 @@ export function openFoldedThread(thread: string, members: readonly FoldRow[]): v
     members[0]
   if (!target) return
   if (target.kind === "native") void threads.view(target.ref)
-  else acp.activate(target.presence.key)
+  else openConversation(target.presence)
 }
 
 /**
