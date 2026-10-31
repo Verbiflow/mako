@@ -14,7 +14,8 @@ import { COMPACT_LIVE_FORM, LIVE_FORM } from "@mako/protocol/live-form"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import type { RecordRef } from "@mako/sessions/entries"
 import { toast } from "sonner"
-import { compactLiveBatch, requestsAfter, type ConversationControl, type HeardLiveBatch, type LiveBatch, type LiveRequest, type LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { ConversationControl } from "@mako/host/contracts/conversation-control"
+import { compactLiveBatch, requestsAfter, type CompactLiveBatch, type LiveBatch, type LiveRequest, type LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { encodeRuntimeEvent, readEventLine } from "@mako/host/contracts/runtime-value"
 import type { RuntimePacket } from "@mako/host/contracts/runtime"
 import { startWebHost } from "@mako/host/transport/server"
@@ -41,6 +42,7 @@ const control = (coveredBlocks: number): ConversationControl => ({
   activeBindingId: "binding-1",
   bindings: [{ id: "binding-1", provider: "codex", coveredBlocks, includesBase: true }],
   transfers: [],
+  merges: [],
 })
 
 /**
@@ -61,7 +63,7 @@ function owner(snapshot: LiveSnapshot) {
     compact,
     get saved() { return 1 - compactBytes / wholeBytes },
     /** The next batch, from `fields`; `deliver` false writes it without giving it to the compact window. */
-    send(fields: Omit<LiveBatch, "id" | "revision">, deliver = true): HeardLiveBatch {
+    send(fields: Omit<LiveBatch, "id" | "revision">, deliver = true): CompactLiveBatch {
       revision += 1
       const batch: LiveBatch = { id: whole, revision, ...fields }
       const written = compactLiveBatch(batch, { blocks: held.blocks, requests: held.requests, ...(held.control && { control: held.control }) })
@@ -71,7 +73,7 @@ function owner(snapshot: LiveSnapshot) {
       wholeBytes += line.length
       compactBytes += compactLine.length
       applyLiveBatch(JSON.parse(line).batch)
-      const heard: HeardLiveBatch = JSON.parse(compactLine).batch
+      const heard: CompactLiveBatch = JSON.parse(compactLine).batch
       if (deliver) applyLiveBatch(heard)
       return heard
     },
@@ -87,7 +89,7 @@ assert.ok(request)
 
 // A turn: its answer streamed a few words at a time, a call between, its request settled, its binding grown.
 const answer = (id: string, text: string, stream?: RecordRef): LiveUpdate => ({ kind: "text", id, text, ...(stream && { stream }) })
-conversation.send({ updates: [answer("text-new", "The ")], sessionChanges: { status: "running" }, requestChanges: [{ ...request, status: "running" } satisfies LiveRequest] })
+conversation.send({ updates: [answer("text-new", "The ")], sessionChanges: { status: "running" }, requestChanges: [{ ...request, status: "dispatching" } satisfies LiveRequest] })
 same("a new answer and a request changed")
 for (const [index, words] of ["answer ", "goes ", "on ", "word ", "by ", "word."].entries()) {
   const heard = conversation.send({ updates: [answer("text-new", words, { file: "/records/rollout.jsonl", ranges: [[index * 10, index * 10 + 9]] })] })
@@ -99,7 +101,7 @@ const output = conversation.send({ updates: [{ kind: "tool-update", id: "tool-ne
 const update = output.updates[0]
 assert.ok(update?.kind === "tool-update" && update.stream && !("file" in update.stream), "a call's frames name no file its call already names")
 same("a call and its output")
-const settled = conversation.send({ updates: [answer("text-after", "Done.")], sessionChanges: { status: "idle" }, requestChanges: [{ ...request, status: "completed" }], control: control(12) })
+const settled = conversation.send({ updates: [answer("text-after", "Done.")], sessionChanges: { status: "ready" }, requestChanges: [{ ...request, status: "completed" }], control: control(12) })
 assert.ok(settled.requestPatches?.length && !settled.requestChanges && settled.bindingPatches?.length && !settled.control, "a held request and binding change as their fields")
 same("a request settled and the binding grown")
 assert.ok(conversation.saved > 0.1, `the compact form says the turn in fewer bytes than the whole form (${Math.round(conversation.saved * 100)}% fewer)`)

@@ -83,6 +83,8 @@ export class CloudLink {
   #timers = new Set<NodeJS.Timeout>()
   /** The connection a silence probe is waiting on an answer from, if any. */
   #probing: Open | undefined
+  /** The connection a silence probe waits to ask, once it has been silent long enough, if any. */
+  #asking: Open | undefined
   #offlineTimer: NodeJS.Timeout | undefined
   #reconnectTimer: NodeJS.Timeout | undefined
 
@@ -147,11 +149,24 @@ export class CloudLink {
   /**
    * Something someone waits for is going out on the link (a watched conversation's updates): a connection nothing has
    * come from for `silentMs` is pinged, and replaced unless it answers within `answerMs`, so a stalled link is found in
-   * seconds rather than at the next missed heartbeat. One probe at a time; a connection heard from recently isn't asked.
+   * seconds rather than at the next missed heartbeat. One probe at a time. A connection heard from more recently is
+   * asked once it has been silent that long, unless it's heard from first: what went out last, as a turn ends, may
+   * have gone into a link that stalled after its last heartbeat, with nothing going out after it to ask.
    */
   probeIfSilent(silentMs: number, answerMs: number): void {
     const open = this.#open
-    if (!this.#running || !open?.opened || this.#probing === open || open.socket.readyState !== WebSocket.OPEN || Date.now() - open.lastHeard < silentMs) return
+    if (!this.#running || !open?.opened || this.#probing === open || open.socket.readyState !== WebSocket.OPEN) return
+    const silent = Date.now() - open.lastHeard
+    if (silent < silentMs) {
+      if (this.#asking === open) return
+      this.#asking = open
+      const heard = open.lastHeard
+      this.#after(silentMs - silent, () => {
+        if (this.#asking === open) this.#asking = undefined
+        if (open === this.#open && open.lastHeard === heard) this.probeIfSilent(silentMs, answerMs)
+      })
+      return
+    }
     this.#probing = open
     const asked = Date.now()
     open.socket.send(PING)
