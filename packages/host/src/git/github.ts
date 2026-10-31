@@ -35,11 +35,13 @@ async function githubExecutable(): Promise<string> {
   return executable
 }
 
-async function gh(cwd: string, args: string[]): Promise<string> {
+/** `env`: added to `gh`'s environment, as on a cloud machine to open a pull request as Mako's App (`MACHINE_GITHUB_AS`). */
+async function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
   const { stdout } = await run(await githubExecutable(), args, {
     cwd,
     timeout: TIMEOUT,
     maxBuffer: MAX_BUFFER,
+    ...env && { env: { ...process.env, ...env } },
   })
   return stdout
 }
@@ -581,6 +583,8 @@ export interface CreatePullOptions {
   body: string
   base?: string
   draft?: boolean
+  /** On a cloud machine whose person opens pull requests as themselves: open this one as Mako's App, as they chose. */
+  as?: "app"
 }
 
 /** A `gh` failure in its own words: what it printed on stderr, not Node's "Command failed" line. */
@@ -590,22 +594,22 @@ function ghFailure(cause: unknown): Error {
 }
 
 /** Open a pull request for the pushed branch; the push and the rules are `pull-requests.ts`'s. */
-export async function createPull(cwd: string, options: CreatePullOptions): Promise<void> {
+export async function createPull(cwd: string, options: CreatePullOptions, env?: Readonly<Record<string, string>>): Promise<void> {
   const args = ["pr", "create", "--title", options.title, "--body", options.body]
   if (options.base) args.push("--base", options.base)
   if (options.draft) args.push("--draft")
-  await gh(cwd, args).catch((cause) => { throw ghFailure(cause) })
+  await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
 }
 
-export async function editPull(cwd: string, number: number, edit: { title?: string; body?: string }): Promise<void> {
+export async function editPull(cwd: string, number: number, edit: { title?: string; body?: string }, env?: Readonly<Record<string, string>>): Promise<void> {
   const args = ["pr", "edit", String(number)]
   if (edit.title !== undefined) args.push("--title", edit.title)
   if (edit.body !== undefined) args.push("--body", edit.body)
-  await gh(cwd, args).catch((cause) => { throw ghFailure(cause) })
+  await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
 }
 
-export async function mergePull(cwd: string, number: number, method: MergeMethod): Promise<void> {
-  await gh(cwd, ["pr", "merge", String(number), `--${method}`]).catch((cause) => { throw ghFailure(cause) })
+export async function mergePull(cwd: string, number: number, method: MergeMethod, env?: Readonly<Record<string, string>>): Promise<void> {
+  await gh(cwd, ["pr", "merge", String(number), `--${method}`], env).catch((cause) => { throw ghFailure(cause) })
 }
 
 /** The ways the repository lets a pull request merge, in the order Mako offers them. */

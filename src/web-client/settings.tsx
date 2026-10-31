@@ -1,7 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { describeFollow, describeList } from "@mako/host/contracts/sync-readings"
 import { webSync } from "./sync-readings"
-import { BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
+import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
+import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
+import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
+import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
+import { webGitHubTokens } from "./github-tokens"
+import { useForm } from "./route"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
 import { copyAge } from "@/lib/format"
@@ -42,6 +47,7 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
           </Group>
           <Notifications />
           <Conversation />
+          <PullRequests />
           <Appearance />
           <ThisBrowser />
           <Diagnostics />
@@ -64,6 +70,134 @@ function Conversation() {
         detail={steer ? "Your message goes into the turn it's running" : "Your message waits for the turn to end"}
         end={<Switch on={steer} label="Send steers a working agent" onChange={(on) => setPref("steerOnEnter", on)} />}
       />
+    </Group>
+  )
+}
+
+/**
+ * "Open pull requests as me". In a laptop's browser it's the desktop's own Settings row (`PullRequestsAsMe`); on a
+ * phone or tablet, the same setting in the touch layout here. Both read and change the account's, never keep the token.
+ */
+function PullRequests() {
+  const client = useWebClient()
+  const tokens = useMemo(() => webGitHubTokens(client.gateway, client.account.id), [client])
+  if (useForm() === "desk") return <PullRequestsAsMe tokens={tokens} />
+  return <TouchPullRequests tokens={tokens} />
+}
+
+export function TouchPullRequests({ tokens }: { tokens: GitHubTokens }) {
+  const { phase, busy, error, save, remove, read, clearError } = useGitHubToken(tokens)
+  const [asking, setAsking] = useState(false)
+  const [confirmingOff, setConfirmingOff] = useState(false)
+  const [token, setToken] = useState("")
+  const listing = phase.kind === "ready" ? phase.listing : null
+  const expiry = listing ? expiryWords(listing.expiresAt) : undefined
+  const cancel = () => {
+    setAsking(false)
+    setToken("")
+    clearError()
+  }
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!PERSON_TOKEN.test(token.trim()) || busy) return
+    void save(token).then((saved) => {
+      if (!saved) return
+      setAsking(false)
+      setToken("")
+    })
+  }
+  const footer = phase.kind === "failed"
+    ? phase.message
+    : listing
+      ? "Your cloud Threads push, open and merge with your GitHub token. Turning this off deletes it from Mako Cloud."
+      : `Off: cloud Threads open pull requests as ${MAKO_GITHUB_APP}. Pull requests from your Mac always use your own GitHub sign-in.`
+  return (
+    <Group title="Pull requests" footer={asking ? undefined : footer}>
+      <Row
+        label="Open pull requests as me"
+        detail={listing ? "GitHub shows you as the author" : "From cloud Threads"}
+        icon={<GitPullRequestIcon className="size-4" />}
+        end={
+          <Switch
+            on={Boolean(listing) || asking}
+            label="Open pull requests as me"
+            disabled={phase.kind !== "ready" || busy !== undefined}
+            onChange={(next) => {
+              if (listing) setConfirmingOff(!next)
+              else if (next) setAsking(true)
+              else cancel()
+            }}
+          />
+        }
+      />
+      {phase.kind === "failed" ? (
+        <button type="button" onClick={read} className="web-row flex h-12 w-full items-center px-4 text-left text-ui">Try again</button>
+      ) : null}
+      {listing && expiry && !asking ? (
+        <div className="flex min-h-12 items-center gap-3 px-4 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-ui">Signed in as <span className="font-medium">@{listing.login}</span></p>
+            <p className={cn("text-label", expiry.lapsed ? "text-negative" : "text-faint")}>{expiry.lapsed ? `${expiry.text}. Replace it to open pull requests.` : expiry.text}</p>
+          </div>
+          <button type="button" className="web-quiet-button h-9 px-3" disabled={busy !== undefined} onClick={() => setAsking(true)}>Replace</button>
+        </div>
+      ) : null}
+      {confirmingOff && listing ? (
+        <div className="flex flex-col gap-2 px-4 py-3">
+          <p className="text-ui">Delete your token from Mako Cloud?</p>
+          <p className="text-label text-faint">Cloud Threads go back to {MAKO_GITHUB_APP}. Turning this on again needs a token.</p>
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" className="web-quiet-button h-9 px-3" onClick={() => setConfirmingOff(false)}>Cancel</button>
+            <button type="button" className="web-button web-button-negative h-9 px-3" disabled={busy !== undefined} onClick={() => void remove().then((removed) => removed && setConfirmingOff(false))}>
+              {busy === "removing" ? "Turning off…" : "Turn off"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {asking ? (
+        <form onSubmit={submit} className="flex flex-col gap-3 px-4 py-3.5">
+          <p className="text-ui font-medium">Make a fine-grained token on GitHub</p>
+          <p className="text-label text-faint">Pick the repositories cloud Threads should push to, with these repository permissions:</p>
+          <dl className="grid grid-cols-[max-content_1fr] gap-x-5 gap-y-1 text-label">
+            {PERSON_TOKEN_PERMISSIONS.map((permission) => (
+              <div key={permission.name} className="contents">
+                <dt>{permission.name}</dt>
+                <dd className="text-faint">{permission.access}</dd>
+              </div>
+            ))}
+          </dl>
+          <button type="button" className="web-quiet-button flex h-10 items-center justify-center gap-1.5" onClick={() => tokens.openUrl(NEW_PERSON_TOKEN_URL)}>
+            New token on GitHub
+            <ArrowUpRightIcon className="size-4" />
+          </button>
+          <input
+            type="password"
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            maxLength={300}
+            value={token}
+            disabled={busy === "saving"}
+            placeholder="Paste it: github_pat_…"
+            aria-label="GitHub token"
+            aria-invalid={error ? true : undefined}
+            onChange={(event) => {
+              setToken(event.target.value)
+              clearError()
+            }}
+            className="web-field h-11 w-full font-mono placeholder:font-sans"
+          />
+          {error ? <p role="alert" className="text-label text-negative">{error}</p> : null}
+          <p className="text-label text-faint">Mako Cloud checks it with GitHub, keeps it encrypted, and gives it only to your cloud Threads' machines, where agents can use it. It isn't kept on this phone.</p>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="web-quiet-button h-10 px-4" disabled={busy === "saving"} onClick={cancel}>Cancel</button>
+            <button type="submit" className="web-button h-10 px-4" disabled={!PERSON_TOKEN.test(token.trim()) || busy === "saving"}>
+              {busy === "saving" ? "Checking with GitHub…" : listing ? "Replace" : "Save"}
+            </button>
+          </div>
+        </form>
+      ) : null}
+      {!asking && error ? <p className="px-4 py-3 text-label text-negative">{error}</p> : null}
     </Group>
   )
 }

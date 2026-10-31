@@ -51,9 +51,23 @@ export async function handGitAction(action: GitAction, where: GitHandoff): Promi
     window.dispatchEvent(new CustomEvent("mako:focus-composer"))
     return
   }
-  const live = activeLiveAcp(acpStore.get())
-  if (live && live.session.status !== "running" && !live.permission && (await acp.send(prompt))) return
+  if (await sendIfIdle(prompt)) return
   stageGitAction(action)
+}
+
+/** Sends the session on screen `prompt` when it's idle and asking nothing; false when it can't take it now. */
+async function sendIfIdle(prompt: string): Promise<boolean> {
+  const live = activeLiveAcp(acpStore.get())
+  return Boolean(live && live.session.status !== "running" && !live.permission && (await acp.send(prompt)))
+}
+
+/**
+ * The person's own words for the Thread's agent, from a button: sent at once to an idle session, or else put in the
+ * composer for them to send, as a Git action is.
+ */
+export async function askAgent(prompt: string): Promise<void> {
+  if (await sendIfIdle(prompt)) return
+  window.dispatchEvent(new CustomEvent("mako:attach", { detail: { files: [], text: () => prompt } }))
 }
 
 /** Mako's Git commands for the checkout the composer works in, each with what it does here or why it can't; none outside Git. */

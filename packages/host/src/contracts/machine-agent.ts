@@ -1,6 +1,7 @@
 import { RuntimeIdSchema, type ThreadOutboxStats } from "@mako/protocol"
 import { z } from "zod"
 import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall } from "./cloud-sign-ins.js"
+import { GitHubPersonSchema } from "./github-person.js"
 
 /**
  * On a cloud machine, the host is started by the machine's agent, which runs as root and holds what the host
@@ -12,9 +13,10 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
  * 2: the host takes `sign-ins`. 3: and `workspace`. 4: and says `warm` once it has loaded what every start loads, which
  * the agent waits for before it calls the host ready. 5: and takes `prepare`, answering `prepared`. 6: and takes
  * `prefetch`, and sends its start's lines as `log`. 7: and takes `carried-files`, asking for them again as a move
- * arrives (`carried-files-refresh`). An agent sends only what the host's `hello` says it takes.
+ * arrives (`carried-files-refresh`). 8: and asks `github-person-refresh` before a pull request, answered with
+ * `github-person`. An agent sends only what the host's `hello` says it takes.
  */
-export const MACHINE_AGENT_PROTOCOL = 7
+export const MACHINE_AGENT_PROTOCOL = 8
 
 /**
  * Set by the agent as it starts the host: the folder in memory that holds the machine's GitHub access, an hour-long
@@ -23,6 +25,15 @@ export const MACHINE_AGENT_PROTOCOL = 7
  * writes and renews it; the host only reads who the person is.
  */
 export const MACHINE_GITHUB_ENV = "MAKO_GITHUB_ACCESS"
+
+/**
+ * Set by the agent as it starts the host: the folder in memory where it keeps the person's own GitHub token while they
+ * open pull requests as themselves (`github-person.ts`). Git's credential helper and `gh` read it; the host never does,
+ * and learns the state from `github-person`. A Git or `gh` call the host makes with `MACHINE_GITHUB_AS` set to `app`
+ * goes as Mako's App: only when the person chose that for one pull request.
+ */
+export const MACHINE_GITHUB_PERSON_ENV = "MAKO_GITHUB_PERSON"
+export const MACHINE_GITHUB_AS = "MAKO_GITHUB_AS"
 
 /**
  * One of the project's carried files the agent placed in the Thread's checkout (its `.env`, a local settings file):
@@ -96,6 +107,8 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
     problem: z.string().min(1).max(2_000).optional(),
     answers: z.string().max(100).optional(),
   }).strict(),
+  /** Whether the machine's pull requests open as its person, asked again just now: `answers` the host's `github-person-refresh`. Never the token. */
+  z.object({ type: z.literal("github-person"), answers: z.string().max(100), person: GitHubPersonSchema }).strict(),
 ])
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
@@ -155,6 +168,11 @@ export type HostMessage =
    * machine started is what the Thread's app reads.
    */
   | { type: "carried-files-refresh"; id: string }
+  /**
+   * A pull request is about to be opened, edited or merged: the agent asks the account again whether it goes as the
+   * person, keeps the answer where Git and `gh` read it, and answers `github-person` for this `id`.
+   */
+  | { type: "github-person-refresh"; id: string }
   /**
    * One of the host's lines a machine's timeline shows beside the agent's (`npm run timeline`): each launch's phases,
    * what the machine runtime does, a held event loop, and every warning and error. The agent keeps them with its own.

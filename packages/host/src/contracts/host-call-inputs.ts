@@ -185,6 +185,7 @@ const inputs = {
         body: z.string(),
         base: z.string().optional(),
         draft: z.boolean().optional(),
+        as: z.literal("app").optional(),
       }),
     ]),
   "mako:create-workspace-text": () =>
@@ -266,6 +267,9 @@ const inputs = {
   "mako:git-unstage": () => z.tuple([z.array(z.string())]),
   "mako:git-unstage-all": () => z.tuple([]),
   "mako:github-status": () => z.tuple([]),
+  "mako:github-token": () => z.tuple([]),
+  "mako:github-token-remove": () => z.tuple([]),
+  "mako:github-token-save": () => z.tuple([z.string(), z.string().optional()]),
   "mako:handoff": () => z.tuple([z.string(), z.literal("quit")]),
   "mako:handoff-candidates": () => z.tuple([]),
   "mako:handoff-settings": () => z.tuple([]),
@@ -815,6 +819,7 @@ const inputs = {
   "mako:merge-pull": () =>
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
+      z.literal("app").optional(),
     ]),
   "mako:move-arrive": () =>
     z.tuple([
@@ -1834,6 +1839,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:git-unstage", "git"],
   ["mako:git-unstage-all", "git"],
   ["mako:github-status", "git"],
+  ["mako:github-token", "usage"],
+  ["mako:github-token-remove", "usage"],
+  ["mako:github-token-save", "usage"],
   ["mako:handoff", "conversations"],
   ["mako:handoff-candidates", "conversations"],
   ["mako:handoff-settings", "conversations"],

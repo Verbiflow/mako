@@ -1,6 +1,7 @@
 import { useCopy } from "@/components/ui/use-copy"
 import type { ToolIdentity } from "@mako/sessions/tool-identity"
-import { memo, useContext, useEffect, useState, type ComponentType, type ReactNode } from "react"
+import { memo, useContext, useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react"
+import { readPersonTokenProblem } from "@mako/host/contracts/github-person"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
   formatToolArguments,
@@ -32,6 +33,7 @@ import {
   FileTextIcon,
 } from "lucide-react"
 import { ToolGlyph } from "@/components/transcript/tool-views"
+import { PersonTokenNotice } from "./person-token-notice"
 import { Shimmer } from "@/components/ui/shimmer"
 
 /**
@@ -59,6 +61,8 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const rest = open ? call.rest : undefined
   const threadPath = source.threadPath
   const liveId = source.liveId
+  // A pull request tool's refusal of the person's own GitHub token is drawn as its notice, open, with both ways on.
+  const tokenProblem = useMemo(() => (call.isError ? readPersonTokenProblem(call.result) : undefined), [call.isError, call.result])
   useEffect(() => {
     if (!rest) return
     let active = true
@@ -109,6 +113,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
         ) : null}
       </div>
 
+      {tokenProblem ? <PersonTokenNotice problem={tokenProblem} /> : null}
       {open ? (
         <div data-tool-body className="ml-1.75 space-y-2 border-l border-hairline py-1.5 pl-3.75">
           {!rest && call.details?.length ? <ToolDetails details={call.details} /> : null}

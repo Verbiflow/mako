@@ -17,7 +17,7 @@ import { desktop } from "@/state/desktop"
 import { git } from "@/state/git"
 import { stageGitAction } from "@/state/git-actions"
 import { useGitPush } from "@/state/git-push"
-import { github, pullComposer, useBranchPull } from "@/state/github"
+import { github, pullComposer, toastPersonToken, useBranchPull } from "@/state/github"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
 import { mergeWorktree, refreshWorktreeSummaries, removeWorktree, useWorktreeReview, useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
@@ -133,12 +133,13 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
     }
     reread()
   }
-  const mergePull = async (strategy: (typeof MERGE_STRATEGIES)[number][0]) => {
+  const mergePull = async (strategy: (typeof MERGE_STRATEGIES)[number][0], as?: "app") => {
     try {
-      const next = await github.merge(strategy)
+      const next = await github.merge(strategy, as)
       toast.success(next?.state === "merged" ? `Merged #${next.number}` : "Pull request merged")
       if (worktree) void refreshWorktreeSummaries().catch(() => {})
     } catch (error) {
+      if (error instanceof Error && toastPersonToken(error, () => void mergePull(strategy, "app"))) return
       toast.error("Pull request was not merged", { duration: ACTION_TOAST_MS, description: error instanceof Error ? error.message : String(error) })
     }
   }

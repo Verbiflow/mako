@@ -22,6 +22,8 @@ import { memo, useContext, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AgentMark, LeadSlot, ToolRow } from "@/components/transcript/tool-row"
+import { readPersonTokenProblem } from "@mako/host/contracts/github-person"
+import { PersonTokenNotice } from "./person-token-notice"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { ExchangeFailure, TurnError } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
@@ -838,6 +840,8 @@ function thoughtLine(text: string): string {
 function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; foldKey: string; stop?: boolean | TurnStop; kept: ReactNode[]; children: ReactNode }) {
   const open = useTurnFolds((state) => state.open.has(foldKey))
   const work = useMemo(() => summarizeWork(fold.messages), [fold.messages])
+  // A pull request refused because the person's own GitHub token couldn't be used asks them to choose: never folded away.
+  const tokenProblems = useMemo(() => (work.failed ? personTokenNotices(fold.messages) : []), [work.failed, fold.messages])
   const { text } = describeWork(work)
   const duration = fold.worked !== undefined ? formatDuration(fold.worked) : undefined
   const yours = stop === true || (stop !== undefined && stop !== false && endedAsChosen(stop.reason))
@@ -862,6 +866,7 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
           body: <div className="flex flex-col gap-4 pt-1">{children}</div>,
         })}
         {kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+        {tokenProblems}
       </div>
     )
   return (
@@ -892,8 +897,17 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
         </div>
       </Collapse>
       {!open && kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+      {!open ? tokenProblems : null}
     </div>
   )
+}
+
+/** The notice of each call in `messages` that refused for the person's own GitHub token, as its row draws it when shown. */
+function personTokenNotices(messages: TurnFold["messages"]): ReactNode[] {
+  return messages.flatMap((message) => pairTools(message.blocks)).flatMap((call) => {
+    const problem = call.isError ? readPersonTokenProblem(call.result) : undefined
+    return problem ? [<PersonTokenNotice key={call.id} problem={problem} />] : []
+  })
 }
 
 /** How the calls under a summary ended other than well: "2 failed", "3 stopped", "1 cut off". */

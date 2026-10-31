@@ -6,7 +6,7 @@ import { handGitAction, type GitHandoff } from "@/state/git-actions"
 import { pullBaseFor } from "@mako/host/contracts/git-actions"
 import { SearchSelect } from "@/components/ui/search-select"
 import { desktop } from "@/state/desktop"
-import { github, pullComposer, pullRequestAttachment, useBranchPull, usePullComposer } from "@/state/github"
+import { github, pullComposer, pullRequestAttachment, toastPersonToken, useBranchPull, usePullComposer } from "@/state/github"
 import { useSession } from "@/state/session"
 import { useOnScreen } from "@/state/thread-sessions"
 import { useThreads } from "@/state/threads"
@@ -227,7 +227,7 @@ export function ComposePull({
       .catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
   }
 
-  const create = useCallback(async function createPullRequest() {
+  const create = useCallback(async function createPullRequest(as?: "app") {
     if (!title.trim() || busy) return
     setBusy(true)
     try {
@@ -236,11 +236,13 @@ export function ComposePull({
         body: body.trim(),
         base: selectedBase,
         draft,
+        ...as && { as },
       })
       toast.success(pull ? `Opened #${pull.number}` : "Pull request opened")
       onOpened?.()
       onDone()
     } catch (error) {
+      if (error instanceof Error && toastPersonToken(error, () => void createPullRequest("app"))) return
       toast.error("Pull request was not created", {
         duration: ACTION_TOAST_MS,
         description: error instanceof Error ? error.message : String(error),
