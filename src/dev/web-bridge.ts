@@ -5,7 +5,7 @@ import { RuntimeInfoSchema, type RuntimeInfo, CORRELATION_HEADER, RuntimeReplySc
 import { type HostEvent } from "@mako/host/contracts/host-events-boot"
 import { type TerminalEvent } from "@mako/host/contracts/terminal"
 import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
-import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
+import { answerClientCall, isClientCall, openableLink, UNOPENABLE_LINK, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { HostCallTimeoutError, RuntimeDisconnectedError, HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
@@ -189,7 +189,7 @@ export async function installWebBridge(): Promise<void> {
   const clientAnswers: ClientAnswers<undefined> = {
     "mako:open-url": (_page, url) => {
       const link = openableLink(url)
-      if (!link) throw new Error("Mako opens only http and https links")
+      if (!link) throw new Error(UNOPENABLE_LINK)
       window.open(link, "_blank", "noopener,noreferrer")
     },
     "mako:copy": (_page, text) => navigator.clipboard.writeText(text),

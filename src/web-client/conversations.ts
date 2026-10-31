@@ -1,5 +1,5 @@
 import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, sessionStream, type Actor, type Json, type Subscription } from "@mako/protocol"
-import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
+import { answerClientCall, isClientCall, openableLink, UNOPENABLE_LINK, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { conversationCallId } from "@mako/host/contracts/conversation-calls"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
@@ -77,7 +77,7 @@ export class WebConversations {
     const answers: ClientAnswers<undefined> = {
       "mako:open-url": (_page, url) => {
         const link = openableLink(url)
-        if (!link) throw new Error("Mako opens only http and https links")
+        if (!link) throw new Error(UNOPENABLE_LINK)
         window.open(link, "_blank", "noopener,noreferrer")
       },
       "mako:copy": (_page, text) => navigator.clipboard.writeText(text),

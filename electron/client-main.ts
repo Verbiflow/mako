@@ -7,7 +7,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import { HostCallInputs, hostChannels } from "@mako/host/contracts/host-call-inputs"
-import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
+import { answerClientCall, isClientCall, openableLink, UNOPENABLE_LINK, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "@mako/host/contracts/machine-offer"
 import { AGENT_VIEWS_ENV, type DesktopRole } from "@mako/host/contracts/desktop-channel"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
@@ -195,7 +195,7 @@ function finishClientShutdown(): void {
 const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
   "mako:open-url": async (_event, url) => {
     const link = openableLink(url)
-    if (!link) throw new Error("Mako opens only http and https links")
+    if (!link) throw new Error(UNOPENABLE_LINK)
     await shell.openExternal(link)
   },
   "mako:copy": (_event, text) => { clipboard.writeText(text) },
