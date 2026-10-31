@@ -49,12 +49,12 @@ import { accounts, usageKey, useAccounts } from "@/state/accounts"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { accountIdentity } from "@/lib/account-identity"
 import type { AccountConfirmation } from "@mako/host/contracts/execution-context"
-import { modelKey, usePrefs } from "@/state/prefs"
+import { usePrefs } from "@/state/prefs"
 import { providerProfileKey, providers, useProviders } from "@/state/providers"
 import { shallowEqual } from "@/state/store"
 import { setComposerHarness } from "@/state/threads"
 import { formatTokens } from "@/lib/format"
-import { fuzzy } from "@/lib/fuzzy"
+import { rankModels } from "./model-rank"
 import { cn } from "@/lib/utils"
 import type { HarnessModel, HarnessProfile } from "@/lib/types"
 import { settingSourceLabel, settingValueLabel } from "./settings-source"
@@ -515,36 +515,6 @@ function ModelRow({
       <CheckIcon className={cn("size-3.5 shrink-0", selected ? "opacity-100" : "opacity-0")} />
     </MenuItem>
   )
-}
-
-function rankModels(
-  models: HarnessModel[],
-  query: string,
-  favorites: string[],
-  harness: string
-): HarnessModel[] {
-  const term = query.trim()
-  if (!term) {
-    const order = new Map(favorites.map((key, index) => [key, index]))
-    return [...models].sort((left, right) => {
-      const leftOrder = order.get(modelKey(harness, left.id))
-      const rightOrder = order.get(modelKey(harness, right.id))
-      if (leftOrder === undefined && rightOrder === undefined) return 0
-      if (leftOrder === undefined) return 1
-      if (rightOrder === undefined) return -1
-      return leftOrder - rightOrder
-    })
-  }
-  return models
-    .flatMap((model) => {
-      const match = fuzzy(
-        term,
-        `${model.label} ${model.id} ${model.launchId ?? ""} ${(model.aliases ?? []).join(" ")} ${model.description ?? ""}`
-      )
-      return match ? [{ model, score: match.score }] : []
-    })
-    .sort((left, right) => right.score - left.score)
-    .map((entry) => entry.model)
 }
 
 /* ------------------------------------------------------------- options */
