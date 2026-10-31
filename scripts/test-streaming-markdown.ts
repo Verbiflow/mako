@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { toHtml } from "hast-util-to-html"
 import { fenceSegments, streamingMarkdown } from "../src/lib/streaming-markdown"
 import { parseProse } from "../src/lib/parsed-markdown"
+import { LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
 import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type StreamClock } from "../src/lib/stream-frames"
 
 // What a streaming answer draws: whole structure, never half of one.
@@ -152,6 +153,17 @@ import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type
   assert.equal(streamFrameMs(9_000), STREAM_FRAME_MS)
   assert.ok(streamFrameMs(16_000) > 80 && streamFrameMs(16_000) <= STREAM_FRAME_MAX_MS)
   assert.equal(streamFrameMs(1_000_000), STREAM_FRAME_MAX_MS)
+  // The host sends a stream's batches on this frame (`LIVE_FRAME_MS`): each one paints as it lands, none waits on a paint.
+  assert.equal(STREAM_FRAME_MS, LIVE_FRAME_MS)
+  const paintedAt: number[] = []
+  const batches = new StreamFrames(() => paintedAt.push(now), clock)
+  const start = now
+  for (let at = start + 1; at <= start + 501; at += LIVE_FRAME_MS) {
+    advance(at)
+    batches.next(`batch ${at}`)
+    advance(at)
+    assert.equal(paintedAt.at(-1), at, "a batch on the host's frame paints the moment it lands")
+  }
 }
 
 console.log("PASS: streaming markdown draws whole structure and cuts its parse only at closed fences, and repaints the first token of a burst at once, then once a frame")

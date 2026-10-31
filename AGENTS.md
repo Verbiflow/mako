@@ -1010,10 +1010,16 @@ conversation's ledger with where each number came from.
 Token streaming must never re-send the session. The host emits `stream` with
 only the in-flight message; `messages`, `tree`, and `git` go out only when they
 actually change. A conversation's first change after a quiet frame flushes at
-once, and the rest of a burst one flush per 33 ms (`BATCH_MS` in
-`live-conversations.ts`): windows, watching devices and the journal get the
-same batches. A batch says `activityAt` only when it moved into another
-second. On the
+once, and the rest of a burst one flush per frame (`LIVE_FRAME_MS`, 50 ms, in
+`contracts/live-conversations.ts`): windows, watching devices and the journal
+get the same batches. The frame is the window's paint frame (`StreamFrames`
+takes it): on 33 ms the batches beat against the paints, a third of them were
+painted over unseen and a word waited longer for its paint. Status changes,
+questions and approvals don't wait for it. A batch says `activityAt` only when
+it moved into another second, and carries a whole value (a control, a request,
+a roster) only when its content changed (`sharedFields`); a message whose
+record lands on what streamed travels as its frames alone
+(`deliverLiveUpdates`). On the
 renderer side components subscribe through selectors, so a token wakes the one
 turn rendering it — not the rail, the stage strip, or the titlebar's readings.
 
@@ -2830,7 +2836,9 @@ and stdout plays the person there (`helperCloud` says the asks). It prints one
 JSON report: live content per hop, status on the phone's list and the second
 Mac, six link disturbances (words missed, time to current, rereads, a stall
 noticed, and with the owner's last batch lost, when the turn's end showed),
-quiet devices, and messages and bytes per token per hop. Past the
+quiet devices, messages and bytes per token per hop, and from each word to
+its paint on each device (`paint`: the device's arrivals through the window's
+own `StreamFrames`, which per-hop latency leaves out). Past the
 plan's budgets it exits 1 unless `--report-only`; a run that doesn't finish
 exits 2. It takes about two minutes and isn't in CI: it needs a real Codex
 CLI, and today's numbers fail several budgets by design. The first baseline

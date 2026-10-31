@@ -13,8 +13,10 @@ import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
 import type { SideQuestionCommand } from "../contracts/live-side-questions.js"
 import { makoReviewPrompt, reviewDisplayText, ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews.js"
 import {
+  LIVE_FRAME_MS,
   requestsDelta,
   sessionDelta,
+  sharedFields,
   sharedSession,
   traceOf,
   type InterruptionReason,
@@ -1336,7 +1338,7 @@ export class LiveConversations {
     const delivery = deliverLiveUpdates(resident.snapshot.blocks, resident.updates)
     const updates = delivery.updates
     const snapshot = {
-      ...resident.snapshot,
+      ...sharedFields(previous, resident.snapshot),
       session: sharedSession(previous.session, resident.snapshot.session),
       blocks: delivery.blocks,
       revision: resident.snapshot.revision + 1,
@@ -1473,11 +1475,11 @@ export class LiveConversations {
 }
 
 /**
- * A streaming conversation's batches go at most this often, the first of a burst at once. No screen paints more than
- * about twenty a second (`StreamFrames`), so each batch on 2026-10-28's 16 ms was mostly sent to be thrown away, on every
- * hop to every device, and written to the journal.
+ * A streaming conversation's batches go at most once a window's paint frame (`LIVE_FRAME_MS`), the first of a burst at
+ * once: each batch on 2026-10-28's 16 ms, and on 33 ms after it, was mostly sent to be painted over, on every hop to
+ * every device, and written to the journal.
  */
-const BATCH_MS = 33
+const BATCH_MS = LIVE_FRAME_MS
 
 /**
  * Whether a batch says when the conversation last showed work: when it moved into another second. It moves with every

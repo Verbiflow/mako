@@ -1,0 +1,331 @@
+{
+  "version": 1,
+  "at": "2026-10-31T02:14:27.799Z",
+  "gateway": "fake",
+  "local": true,
+  "pace": 20,
+  "words": 150,
+  "turns": 5,
+  "live": {
+    "owner": {
+      "n": 750,
+      "p50": 18,
+      "p95": 34.4,
+      "max": 37.1
+    },
+    "phone": {
+      "n": 750,
+      "p50": 0.8,
+      "p95": 2.6,
+      "max": 5
+    },
+    "secondMac": {
+      "n": 750,
+      "p50": 1,
+      "p95": 2.9,
+      "max": 5.3
+    },
+    "cloud": {
+      "n": 2250,
+      "p50": 0.7,
+      "p95": 2.3,
+      "max": 4.9
+    }
+  },
+  "paint": {
+    "owner": {
+      "n": 750,
+      "p50": 42.5,
+      "p95": 70.6,
+      "max": 85.3
+    },
+    "phone": {
+      "n": 750,
+      "p50": 43.4,
+      "p95": 71.5,
+      "max": 85.8
+    },
+    "secondMac": {
+      "n": 750,
+      "p50": 43.7,
+      "p95": 71.7,
+      "max": 86
+    },
+    "cloud": {
+      "n": 2250,
+      "p50": 43.3,
+      "p95": 71.4,
+      "max": 85.8
+    }
+  },
+  "status": {
+    "start": {
+      "phone": {
+        "n": 7,
+        "p50": 5.3,
+        "p95": 10.2,
+        "max": 10.2,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 7,
+        "p50": 33.1,
+        "p95": 41.3,
+        "max": 41.3,
+        "missed": 0
+      }
+    },
+    "end": {
+      "phone": {
+        "n": 7,
+        "p50": 17.8,
+        "p95": 19.6,
+        "max": 19.6,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 7,
+        "p50": 0.8,
+        "p95": 1.1,
+        "max": 1.1,
+        "missed": 0
+      }
+    },
+    "waiting": {
+      "phone": {
+        "n": 1,
+        "p50": 2.3,
+        "p95": 2.3,
+        "max": 2.3,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 1,
+        "p50": 1.7,
+        "p95": 1.7,
+        "max": 1.7,
+        "missed": 0
+      }
+    },
+    "new": {
+      "phone": {
+        "n": 1,
+        "p50": 10.5,
+        "p95": 10.5,
+        "max": 10.5
+      },
+      "secondMac": {
+        "n": 1,
+        "p50": 11.6,
+        "p95": 11.6,
+        "max": 11.6
+      }
+    },
+    "title": {
+      "phone": {
+        "n": 3,
+        "p50": 2.7,
+        "p95": 3.6,
+        "max": 3.6,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 3,
+        "p50": 3.3,
+        "p95": 5.1,
+        "max": 5.1,
+        "missed": 0
+      }
+    },
+    "archive": {
+      "phone": {
+        "n": 1,
+        "p50": 1.3,
+        "p95": 1.3,
+        "max": 1.3
+      },
+      "secondMac": {
+        "n": 1,
+        "p50": 1.8,
+        "p95": 1.8,
+        "max": 1.8
+      }
+    }
+  },
+  "reconnect": {
+    "phone link cut": {
+      "link": "phone",
+      "devices": {
+        "phone": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 0,
+          "rereads": 0
+        }
+      }
+    },
+    "B's link stalled 8 s": {
+      "link": "B",
+      "stallNoticedMs": 4594,
+      "devices": {
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 11,
+          "rereads": 0
+        }
+      }
+    },
+    "B's link cut": {
+      "link": "B",
+      "devices": {
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 54,
+          "rereads": 0
+        }
+      }
+    },
+    "A's link stalled 5 s": {
+      "link": "A",
+      "stallNoticedMs": 3855,
+      "devices": {
+        "phone": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 5,
+          "rereads": 0
+        },
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 13,
+          "rereads": 0
+        }
+      }
+    },
+    "A's link cut": {
+      "link": "A",
+      "devices": {
+        "phone": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 279,
+          "rereads": 0
+        },
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 280,
+          "rereads": 0
+        }
+      }
+    },
+    "A's last batch lost": {
+      "link": "A",
+      "devices": {
+        "phone": {
+          "turnEndShownMs": 258,
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 258,
+          "rereads": 0
+        },
+        "secondMac": {
+          "turnEndShownMs": 258,
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 258,
+          "rereads": 0
+        }
+      }
+    }
+  },
+  "cost": {
+    "owner": {
+      "messages": 523,
+      "bytes": 317864,
+      "messagesPerToken": 0.6970000000000001,
+      "bytesPerToken": 423.8
+    },
+    "phone": {
+      "messages": 523,
+      "bytes": 372256,
+      "messagesPerToken": 0.6970000000000001,
+      "bytesPerToken": 496.3
+    },
+    "secondMac": {
+      "messages": 523,
+      "bytes": 317864,
+      "messagesPerToken": 0.6970000000000001,
+      "bytesPerToken": 423.8
+    },
+    "cloud": {
+      "messages": 1569,
+      "bytes": 1116768,
+      "messagesPerToken": 0.6970000000000001,
+      "bytesPerToken": 496.3
+    }
+  },
+  "skipped": {
+    "quiet": "not asked for (--quiet)"
+  },
+  "seconds": 131,
+  "budgets": {
+    "local": true,
+    "checked": 54,
+    "failed": 8,
+    "over": [
+      {
+        "name": "cost.owner.messagesPerToken",
+        "value": 0.6970000000000001,
+        "limit": 0.5,
+        "ok": false
+      },
+      {
+        "name": "cost.owner.bytesPerToken",
+        "value": 423.8,
+        "limit": 150,
+        "ok": false
+      },
+      {
+        "name": "cost.phone.messagesPerToken",
+        "value": 0.6970000000000001,
+        "limit": 0.5,
+        "ok": false
+      },
+      {
+        "name": "cost.phone.bytesPerToken",
+        "value": 496.3,
+        "limit": 150,
+        "ok": false
+      },
+      {
+        "name": "cost.secondMac.messagesPerToken",
+        "value": 0.6970000000000001,
+        "limit": 0.5,
+        "ok": false
+      },
+      {
+        "name": "cost.secondMac.bytesPerToken",
+        "value": 423.8,
+        "limit": 150,
+        "ok": false
+      },
+      {
+        "name": "cost.cloud.messagesPerToken",
+        "value": 0.6970000000000001,
+        "limit": 0.5,
+        "ok": false
+      },
+      {
+        "name": "cost.cloud.bytesPerToken",
+        "value": 496.3,
+        "limit": 150,
+        "ok": false
+      }
+    ]
+  },
+  "ok": false
+}

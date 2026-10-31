@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { deliverLiveUpdates, liveUpdateWeight, mergeLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "@mako/host/contracts/live-conversations"
+import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedFields, sharedSession, type LiveRequest } from "@mako/host/contracts/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import type { ModelOption } from "@mako/sessions/settings"
 import { auditSnapshot } from "./performance-audit-fixtures"
@@ -117,6 +117,24 @@ for (const [report, batches] of Object.entries(reports)) {
   }
 }
 
+// A message's record landing on what streamed (Codex's whole message, once it ends) travels as nothing but its frames.
+{
+  const file = "mako-streams:codex/a.jsonl"
+  const words = Array.from({ length: 150 }, (_, index) => `w${index} `)
+  const streamed = words.map((word, index): LiveUpdate[] => [{ kind: "text", id: "msg", text: word, stream: { file, ranges: [[index * 10, index * 10 + 10]] } }])
+  const landed: LiveUpdate = { kind: "text", id: "msg", text: words.join(""), replace: true, stream: { file, ranges: [[1_600, 1_700]] } }
+  const { blocks, sent } = stream([...streamed, [landed]], [])
+  const host = deliverLiveUpdates(reduceLiveUpdates([], streamed.flat()), [landed])
+  assert.deepEqual(host.updates, [{ kind: "text", id: "msg", text: "", stream: landed.stream }], "The whole text it already holds doesn't go again")
+  assert.deepEqual(blocks, [{ type: "text", id: "msg", text: words.join(""), stream: { file, ranges: [[0, 1_500], [1_600, 1_700]] } }])
+  assert.ok(sent < streamed.flat().reduce((sum, update) => sum + JSON.stringify(update).length, 0) + 120, "Landing costs its frames alone")
+  const amended = deliverLiveUpdates(blocks, [{ ...landed, text: `${words.join("")}and more` }]).updates
+  assert.deepEqual(amended, [{ kind: "text", id: "msg", text: "and more", stream: landed.stream }], "Text that continues it goes as its new end")
+  const rewritten = deliverLiveUpdates(blocks, [{ ...landed, text: "Something else" }]).updates
+  assert.equal(rewritten[0]?.kind === "text" && rewritten[0].replace, true, "Text that doesn't continue it goes whole")
+  stream([[{ kind: "thinking", text: "Look" }], [{ kind: "thinking", text: "Look closer", replace: true }], [{ kind: "thinking", text: "Elsewhere", replace: true }]], [])
+}
+
 // The weight follows what an update carries without serializing it.
 {
   const text: LiveUpdate = { kind: "text", text: "a".repeat(10_000) }
@@ -147,6 +165,24 @@ for (const [report, batches] of Object.entries(reports)) {
   const same = [first]
   assert.deepEqual(requestsDelta(same, same), {})
   assert.equal(requestsAfter(same, {}), undefined)
+}
+
+// A value a batch carries whole goes only when its content changed: a control or request built anew, equal, stays home.
+{
+  const held = { ...auditSnapshot(3), control: { activeBindingId: "binding", bindings: [], transfers: [], merges: [], actions: [] } }
+  // SAFETY: a JSON round trip keeps a snapshot's shape and drops only undefined fields, as code that rebuilds one does.
+  const rebuilt = JSON.parse(JSON.stringify(held)) as typeof held
+  const shared = sharedFields(held, rebuilt)
+  assert.equal(shared.control, held.control, "An equal control keeps its identity")
+  assert.equal(shared.requests, held.requests, "Equal requests keep the list's identity")
+  assert.deepEqual(requestsDelta(held.requests, shared.requests), {}, "and none travels")
+  const running = { ...rebuilt.requests[1]!, status: "dispatching" as const }
+  const moved = sharedFields(held, { ...rebuilt, requests: [rebuilt.requests[0]!, running, rebuilt.requests[2]!] })
+  assert.equal(moved.requests[0], held.requests[0])
+  assert.deepEqual(requestsDelta(held.requests, moved.requests), { requestChanges: [running] }, "Only the request that changed travels")
+  assert.equal(sharedFields(held, held), held)
+  const control = { ...held.control!, activeBindingId: "another" }
+  assert.equal(sharedFields(held, { ...held, control }).control, control, "A changed control travels")
 }
 
 // A session travels as the fields that changed: a harness's commands and models go once.

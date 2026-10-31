@@ -521,6 +521,19 @@ function toolDelivery(block: Extract<Entry, { type: "tool" }>, update: Extract<L
   return { update: sent, grows }
 }
 
+/**
+ * A text's whole value sent again as it travels against `block`: the end it adds, or nothing but its frames. A harness
+ * whose record lands on what it streamed (Codex's message, whole once it ends) otherwise sent every answer twice.
+ */
+function textDelivery(block: Entry | undefined, update: Extract<LiveUpdate, { kind: "text" | "thinking" }>): LiveUpdate {
+  if (block?.type !== update.kind) return update
+  const form = streamForm(block.text, update.text)
+  if (!form) return update
+  const sent = { ...update, text: form.append ?? "" }
+  delete sent.replace
+  return sent
+}
+
 /** Whether a call's restated effects are the ones its block holds; the window has no `node:util`. */
 function sameEffects(next: readonly ToolEffect[], current: readonly ToolEffect[] | undefined): boolean {
   return next === current || (current !== undefined && next.length === current.length && JSON.stringify(next) === JSON.stringify(current))
@@ -605,6 +618,9 @@ function reduce(
           delivering.delivery.grown.set(index, growth)
         }
       }
+    } else if ((update.kind === "text" || update.kind === "thinking") && update.replace && delivering) {
+      const index = update.id ? findCurrent(`${update.kind}:${update.id}`) : last?.type === update.kind ? next.length - 1 : -1
+      update = textDelivery(next[index], update)
     } else if (update.kind === "tool" && delivering) rewrite(tools.get(update.id) ?? next.length)
     else if (update.kind === "retract" && delivering) {
       delivering.shifted = true

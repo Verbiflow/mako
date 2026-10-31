@@ -15,7 +15,7 @@ import { SessionMemory } from "@mako/host/threads/session-memory"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
-import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import { LIVE_FRAME_MS, type LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -1913,7 +1913,7 @@ async function nativeActivityLastsItsTurn() {
   }
 }
 
-/** A stream's first change goes out at once, and the rest one batch a frame (33 ms) at most, whatever the pace of its tokens. */
+/** A stream's first change goes out at once, and the rest one batch a frame (`LIVE_FRAME_MS`) at most, whatever the pace of its tokens. */
 async function batchesLeadThenPace() {
   const f = fixture()
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -1937,7 +1937,7 @@ async function batchesLeadThenPace() {
     await sleep(50)
     const elapsed = performance.now() - started
     const count = batches()
-    assert.ok(count >= 3 && count <= Math.ceil(elapsed / 33) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
+    assert.ok(count >= 3 && count <= Math.ceil(elapsed / LIVE_FRAME_MS) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
     const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
     assert.ok(text.startsWith("The w0 w1") && text.endsWith(" w79"), "every word, in order")
   } finally {
