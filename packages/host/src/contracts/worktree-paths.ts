@@ -1,4 +1,4 @@
-import { worktreeCheckout } from "@mako/host/contracts/thread-worktrees"
+import { worktreeCheckout } from "./thread-worktrees.js"
 
 /** macOS reaches /tmp, /var and /etc through /private, and harnesses record either spelling of one folder. */
 export const plainPath = (path: string) => (path.startsWith("/private/") ? path.slice("/private".length) : path)

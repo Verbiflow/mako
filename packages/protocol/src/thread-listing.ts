@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
-import { MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -42,6 +42,35 @@ export const ListedMoveSchema = z
   })
   .strict()
 export type ListedMove = z.infer<typeof ListedMoveSchema>
+
+const BranchSchema = z.string().min(1).max(256)
+
+/**
+ * What a checkout has checked out, as a rail shows it beside its project: a branch, the branch a rebase is replaying
+ * onto, or a commit while detached (link version 12 on).
+ */
+export const ListedHeadSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("branch"), name: BranchSchema }).strict(),
+  z.object({ kind: z.literal("rebasing"), name: BranchSchema }).strict(),
+  z.object({ kind: z.literal("detached"), commit: z.string().regex(/^[0-9a-f]{7,64}$/) }).strict(),
+])
+export type ListedHead = z.infer<typeof ListedHeadSchema>
+
+/**
+ * The project a Session is filed under on its owner's rail (link version 12 on): the project folder itself, which is
+ * the Session's own folder or, for one working in a Thread's worktree, the folder that worktree was made from; and what
+ * the project's own checkout has checked out, once its owner has read it.
+ */
+export const ListedProjectSchema = z
+  .object({
+    folder: z.string().min(1).max(1024),
+    head: ListedHeadSchema.optional(),
+  })
+  .strict()
+export type ListedProject = z.infer<typeof ListedProjectSchema>
+
+/** The harnesses a Session ran in before its current one, oldest first, as its rail row wears them: at most this many. */
+export const LISTED_LINEAGE = 8
 const GenerationSchema = z.number().int().positive()
 
 /** One Session as its owner says it: everything but where it runs, which the cloud knows from who said it. */
@@ -87,6 +116,17 @@ export const ReportedSessionSchema = z
     changedAt: z.iso.datetime().optional(),
     /** Its Thread on its way between a device and the cloud (`ListedMoveSchema`, link version 11 on). */
     move: ListedMoveSchema.optional(),
+    /** The project its owner's rail files it under, and what that project has checked out (link version 12 on). */
+    project: ListedProjectSchema.optional(),
+    /** It works in a Thread's worktree, on this branch (link version 12 on). */
+    worktree: z.object({ branch: BranchSchema }).strict().optional(),
+    /** The harnesses it ran in before its current one, oldest first (link version 12 on). */
+    lineage: z.array(HarnessSchema).min(1).max(LISTED_LINEAGE).optional(),
+    /**
+     * Its turn ended and it waits on work it left running, which wakes it when it settles: how many (link version 12
+     * on). Said with `state: "working"`, which a list before it reads as at work.
+     */
+    background: z.number().int().positive().max(1_000).optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -179,19 +219,24 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 11, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 12, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= MOVES_VERSION) return [...rows]
+  if (version >= RAIL_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
-    // Before version 11 a gateway knows no `move` (the row says `moving` once the Thread is in transit); before 10, no
-    // `waitingFor` (it reads `waitingOn`'s words); before 9, no `changedAt`; before 6, no native IDs either.
-    delete older.move
+    // Before version 12 a gateway knows none of what a rail shows (the row's `state` still says it's at work); before
+    // 11, no `move` (the row says `moving` once the Thread is in transit); before 10, no `waitingFor` (it reads
+    // `waitingOn`'s words); before 9, no `changedAt`; before 6, no native IDs either.
+    delete older.project
+    delete older.worktree
+    delete older.lineage
+    delete older.background
+    if (version < MOVES_VERSION) delete older.move
     if (version < WAITING_FOR_VERSION) delete older.waitingFor
     if (version < NUMBERED_LIVE_VERSION) delete older.changedAt
     if (version < NATIVE_SESSIONS_VERSION) delete older.nativeId
@@ -209,6 +254,13 @@ export function mayReplace(row: Pick<ListedSession, "generation" | "runsOn"> | u
   if (!row) return true
   if (report.generation !== row.generation) return report.generation > row.generation
   return sameRunsOn(row.runsOn, report.runsOn)
+}
+
+/** Whether two checkouts have the same checked out. */
+export function sameHead(left: ListedHead | undefined, right: ListedHead | undefined): boolean {
+  if (!left || !right) return left === right
+  if (left.kind === "detached") return right.kind === "detached" && left.commit === right.commit
+  return right.kind !== "detached" && right.kind === left.kind && right.name === left.name
 }
 
 export function sameRunsOn(left: RunsOn, right: RunsOn): boolean {
@@ -240,6 +292,11 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.capture?.path === right.capture?.path &&
     left.move?.to === right.move?.to &&
     left.move?.step === right.move?.step &&
+    left.project?.folder === right.project?.folder &&
+    sameHead(left.project?.head, right.project?.head) &&
+    left.worktree?.branch === right.worktree?.branch &&
+    (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
+    left.background === right.background &&
     sameRunsOn(left.runsOn, right.runsOn)
   )
 }

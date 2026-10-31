@@ -2,7 +2,7 @@ import { agentOrder, harnessesByRecency } from "@mako/host/contracts/agent-order
 import type { ThreadWorktrees } from "@mako/host/contracts/thread-worktrees"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { z } from "zod"
-import { projectFolder, pathInside } from "@/lib/worktree-paths"
+import { projectFolder, pathInside } from "@mako/host/contracts/worktree-paths"
 import type { AccountListState } from "./account-list"
 import type { Catalog, OfferedHarness } from "./start"
 

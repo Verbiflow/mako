@@ -59,11 +59,15 @@ import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
+import { backgroundWork } from "./contracts/background-work.js"
+import { projectFolder, worktreeAt } from "./contracts/worktree-paths.js"
 
 type WebHost = Awaited<ReturnType<typeof startWebHost>>
 
 /** How often held messages are checked for their time; a wake lands at most this late. */
 const HELD_WAKE_TICK_MS = 15_000
+/** A project whose checkout this host couldn't read, or let go of, is asked about again at most this often. */
+const HEAD_ASK_AGAIN_MS = 60_000
 
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
 export interface CoreShell {
@@ -416,6 +420,19 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   let windowPaths: Map<string, string> | undefined
   // The Threads moving to the cloud from here, said on their rows from the move's first step.
   const movesUnderWay = new MovesUnderWay()
+  // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
+  // listed, then followed (a branch switched anywhere arrives as a `checkout-heads` event, which reports again).
+  const headsAsked = new Map<string, number>()
+  const listedHead = (project: string) => {
+    const known = workspaces.checkoutHeads.known(project)
+    if (known !== undefined) return known
+    const asked = headsAsked.get(project)
+    if (asked === undefined || Date.now() - asked > HEAD_ASK_AGAIN_MS) {
+      headsAsked.set(project, Date.now())
+      void workspaces.checkoutHeads.read([project]).then(() => late.sessions?.changed(), () => undefined)
+    }
+    return undefined
+  }
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
@@ -423,6 +440,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
       if (!live || !store || !catalog.ready()) return undefined
       const activity = catalog.activity()
+      const made = store.worktrees()
       return ownedSessions({
         summaries: () => live.summaries(),
         native: () => (windowRows ??= catalog.recent(windowStart(Date.now()))),
@@ -435,6 +453,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         executions: (ids) => store.executionsOf(ids),
         titles: (ids) => store.titlesOf(ids),
         moving: (thread) => movesUnderWay.of(thread),
+        worktree: (folder) => {
+          const found = worktreeAt(made, folder)
+          const project = found && projectFolder(made, folder)
+          return found && project ? { project, branch: found.worktree.branch } : undefined
+        },
+        head: listedHead,
+        background: (id) => {
+          const held = live.held(id)
+          return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
+        },
         now: Date.now,
       })
     },
@@ -444,7 +472,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const live = late.conversations?.live
       const session = live?.session(id)
       if (!live || !session) return undefined
-      return conversationShown({ session, working: live.workOf(id)?.status, waitingOn: (conversation) => live.waitingOn(conversation) })
+      const held = live.held(id)
+      return conversationShown({ session, working: live.workOf(id)?.status, waitingOn: (conversation) => live.waitingOn(conversation), background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined })
     },
     // A change goes to the account within a fraction of a second, on the link this host serves then, named as the tick's
     // job is: a Mac's account link, or a cloud machine's runtime link.

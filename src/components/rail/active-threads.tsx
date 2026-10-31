@@ -9,7 +9,8 @@ import { MarkStack } from "@/components/ui/mark-stack"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
-import { ROW_ACTIONS, ROW_ACTIONS_BESIDE_MARK, ROW_SURFACE, SessionCount } from "@/components/rail/thread-row"
+import { EarlierAgentMark, ROW_ACTIONS, ROW_ACTIONS_BESIDE_MARK, ROW_SURFACE, SessionCount } from "@/components/rail/thread-row"
+import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { copyAge, formatRelative, workspaceName } from "@/lib/format"
 import {
@@ -151,6 +152,7 @@ export function LiveAgentRow({
         className={cn("pressable", ROW_SURFACE, indent ? "pl-2" : "pl-1.5")}
       >
         <MarkStack>
+          {folded || !presence.lineage ? null : <EarlierAgentMark lineage={presence.lineage} />}
           {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member, index) => {
             const session = foldState?.sessions[index]
             return (
@@ -169,9 +171,11 @@ export function LiveAgentRow({
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
         {presence.elsewhere && (!routed || presence.elsewhere === CLOUD_WHERE) ? <ElsewhereMark where={presence.elsewhere} /> : null}
         {folded ? <SessionCount count={folded.members.length} /> : null}
+        {/* The branch its owner's worktree is on, as a row this Mac made one for wears it. */}
+        {presence.worktreeBranch ? <WorktreeMark worktree={{ branch: presence.worktreeBranch }} summary={undefined} /> : null}
         {!indent ? (
           <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">
-            {threadFolderKey(presence) ? workspaceName(presence.cwd) : "tmp"}
+            {threadFolderKey(presence) ? workspaceName(presence.workspace ?? presence.cwd) : "tmp"}
           </span>
         ) : null}
         <span

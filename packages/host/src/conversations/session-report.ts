@@ -1,6 +1,8 @@
-import { LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { LISTED_LINEAGE, LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, sameHead, type ListedHead, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import type { ThreadRef } from "@mako/sessions"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
+import type { CheckoutHead } from "../contracts/checkout-heads.js"
+import { projectFolder } from "../contracts/worktree-paths.js"
 import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
 import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
@@ -18,7 +20,7 @@ import { syncTier } from "./sync-window.js"
 import { needsYouWaiting, type Waiting } from "@mako/protocol/attention"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
-export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived">
+export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived">
 
 /** What the report reads of this host: its conversations, their work, the sessions its harnesses keep, and its Thread store. */
 export type ReportSources = {
@@ -53,6 +55,18 @@ export type ReportSources = {
   titles(threads: readonly ThreadId[]): ReadonlyMap<ThreadId, { title?: string; titleSource?: string }>
   /** A move of this Thread to the cloud under way here (`MovesUnderWay`), said on each of its rows while it goes. */
   moving?(thread: ThreadId): ListedMove | undefined
+  /**
+   * The Thread worktree a folder is in, if it is in one this Mac made: the project folder it stands for on the rail
+   * (`projectFolder` over the Thread store's worktrees) and its branch. Read from what the store holds.
+   */
+  worktree?(folder: string): { project: string; branch: string } | undefined
+  /**
+   * What a project folder has checked out, as far as this host has read it (`CheckoutHeadService.known`); undefined
+   * until then, and the source starts reading it, so a later report says it.
+   */
+  head?(project: string): CheckoutHead | null | undefined
+  /** How many things a conversation whose turn ended still waits on (`backgroundWork`); undefined while none. */
+  background?(conversationId: string): number | undefined
   now(): number
 }
 
@@ -73,20 +87,22 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
   return right.activityAt > left.activityAt ? right : left
 }
 
-/** What a list shows of a conversation that its own turns move: where it stands, its title, and what it waits on. */
-export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor">
+/** What a list shows of a conversation that its own turns move: where it stands, its title, what it waits on, and its background work. */
+export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background">
 
 /**
  * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
  * row is made with this (`ownedSessions`), and each of its batches is checked against it (`SessionPublisher.own`), so
  * whether a batch moved anything a list shows is decided by the row's own rule, never a second one. `working` is the
- * lifecycle's word on it; `execution`, when known, whether it's leaving this host.
+ * lifecycle's word on it; `execution`, when known, whether it's leaving this host; `background`, what its ended turn
+ * left running, said only while that's why it's at work.
  */
 export function conversationShown(conversation: {
   session: Pick<LiveSummary["session"], "id" | "status" | "title">
   working: LifecycleWork["status"] | undefined
   execution?: SessionExecution | undefined
   waitingOn: (conversationId: string) => Waiting | undefined
+  background?: number | undefined
 }): ConversationShown {
   const { session, working, execution } = conversation
   const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
@@ -97,6 +113,7 @@ export function conversationShown(conversation: {
     : "idle"
   const shown: ConversationShown = { state }
   if (session.title) shown.title = line(session.title)
+  if (state === "working" && session.status !== "running" && session.status !== "starting" && conversation.background) shown.background = conversation.background
   if (state === "waiting") {
     // A native agent of its waiting on the person says nothing more than that it does.
     const on = conversation.waitingOn(session.id) ?? needsYouWaiting(undefined)
@@ -104,6 +121,22 @@ export function conversationShown(conversation: {
     shown.waitingFor = on.for
   }
   return shown
+}
+
+/** A checkout's head as a list says it: what it has checked out, without where its worktree's main checkout is. */
+export function listedHead(head: CheckoutHead): ListedHead {
+  return head.kind === "detached" ? { kind: "detached", commit: head.commit } : { kind: head.kind, name: head.name }
+}
+
+/**
+ * The harnesses a Session ran in before `harness`, oldest first, each once in a row, as its rail row wears them: from
+ * every harness it ran in, in order, the current one last.
+ */
+export function earlierHarnesses(ran: readonly string[], harness: string): string[] {
+  const order: string[] = []
+  for (const each of ran) if (order.at(-1) !== each) order.push(each)
+  if (order.at(-1) === harness) order.pop()
+  return order.slice(-LISTED_LINEAGE)
 }
 
 /** Each Thread's last activity, as the newest of its rows': a Thread is in the window whole, its older Sessions too. */
@@ -155,6 +188,21 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
   }
   const executions = sources.executions([...conversations.map(({ placed }) => placed.session), ...natives.map(({ session }) => session)])
   const titles = sources.titles([...new Set([...conversations.map(({ placed }) => placed.thread), ...natives.map(({ thread }) => thread)])])
+  // What the rail shows of a row besides its state: the project it's filed under and what that has checked out, the
+  // worktree it works in, and the agents it ran in before.
+  const rail = (folder: string | undefined, worktrees: NativeRow["worktrees"], lineage: readonly string[], harness: string): Pick<ReportedSession, "project" | "worktree" | "lineage"> => {
+    const fields: Pick<ReportedSession, "project" | "worktree" | "lineage"> = {}
+    if (folder) {
+      const made = sources.worktree?.(folder)
+      const project = made?.project ?? projectFolder(worktrees, folder) ?? folder
+      const head = sources.head?.(project)
+      fields.project = head ? { folder: project, head: listedHead(head) } : { folder: project }
+      if (made) fields.worktree = { branch: made.branch }
+    }
+    const earlier = earlierHarnesses(lineage, harness)
+    if (earlier.length) fields.lineage = earlier
+    return fields
+  }
   // A title the person or Mako gave the Thread; an older build's automatic one isn't shown anywhere.
   const threadTitle = (thread: ThreadId) => {
     const found = titles.get(thread)
@@ -170,7 +218,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const { session } = summary
     const execution = executions.get(placed.session)
     if (execution?.state === "elsewhere") continue
-    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn })
+    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn, background: sources.background?.(session.id) })
     const movedAt = Math.max(summary.createdAt, sources.lastMoved(session.id, summary.revision) ?? 0)
     const row: ReportedSession = {
       session: placed.session,
@@ -188,6 +236,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (move) row.move = move
     if (session.cwd) row.folder = session.cwd
     if (session.nativeId) row.nativeId = session.nativeId
+    Object.assign(row, rail(session.cwd || undefined, undefined, (summary.nativeIds ?? []).map((id) => id.provider), session.harness))
     // A harness or ID the protocol can't carry is left out, never the rest.
     const parsed = ReportedSessionSchema.safeParse(row)
     if (parsed.success) add(parsed.data)
@@ -229,6 +278,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
       row.waitingFor = on.for
     }
     if (ref.cwd) row.folder = ref.cwd
+    Object.assign(row, rail(ref.workspace ?? ref.cwd, ref.worktrees, (ref.lineage ?? []).map((origin) => origin.harness), ref.harness))
     const parsed = ReportedSessionSchema.safeParse(row)
     if (parsed.success) add(parsed.data)
   }
@@ -250,7 +300,9 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
   return left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
     left.harness === right.harness && left.title === right.title && left.state === right.state && left.waitingOn === right.waitingOn && left.waitingFor === right.waitingFor &&
     left.folder === right.folder && left.createdAt === right.createdAt && left.generation === right.generation &&
-    left.nativeId === right.nativeId && left.capture?.path === right.capture?.path
+    left.nativeId === right.nativeId && left.capture?.path === right.capture?.path && left.background === right.background &&
+    left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
+    left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0")
 }
 
 /**
@@ -598,6 +650,8 @@ export class SessionPublisher {
     // A Session archived here leaves every device's list, and a Thread renamed here is renamed there: the owner's word
     // is the one that counts, and no batch says either.
     if (event.type === "thread-archives" || event.type === "thread-titles") return this.showsChanged()
+    // A project's checkout moved to another branch, or a rebase began or ended: its rows say so beside the project.
+    if (event.type === "checkout-heads") return this.changed()
     // A move's steps go to whoever watches the conversation it was asked from, as its window hears them: a device that
     // has it open follows the move as it goes, each upload's bytes included. The way back's too, to a device that
     // follows this host for the conversation coming back.
@@ -615,7 +669,7 @@ export class SessionPublisher {
   #sawBatch(conversation: string): void {
     const shown = this.#shown?.(conversation)
     if (!shown) return
-    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}`
+    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}`
     if (this.#shownOf.get(conversation) === key) return
     this.#shownOf.set(conversation, key)
     this.#changedAt.set(conversation, this.#now())

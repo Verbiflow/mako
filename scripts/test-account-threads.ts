@@ -11,6 +11,7 @@ import type { MoveSent } from "@mako/host/contracts/cloud-threads"
 import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
+import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
 import { followHostLog } from "@mako/host/base/host-log"
 import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
@@ -314,6 +315,33 @@ test("a publisher reports when something changed, sweeps every half minute regar
   const before = sent.length
   older.report({ link: await newLink(), served: served(4) })
   assert.equal(sent.length, before)
+})
+
+test("a row says what its owner's rail shows of it: the project it's filed under and that project's checkout, its worktree, its earlier agents, its background work", () => {
+  const heads = new Map<string, CheckoutHead>([["/Users/ana/api", { kind: "rebasing", name: "pricing-table" }], ["/Users/ana/site", { kind: "branch", name: "main", linked: { path: "/Users/ana/site", repoRoot: "/Users/ana/site" } }]])
+  const live = summary("c-1", NOW - 1_000, { cwd: "/Users/ana/.mako/worktrees/api-3f2a/retry-webhooks/src" })
+  live.nativeIds = [{ provider: "devin", nativeId: "d-1" }, { provider: "claude", nativeId: "cl-1" }, { provider: "claude", nativeId: "cl-2" }, { provider: "codex", nativeId: "cx-1" }]
+  const waiting = summary("c-2", NOW - 2_000, { cwd: "/Users/ana/site" })
+  const sources: ReportSources = {
+    ...host([live, waiting], { work: [work("c-2", "running")], native: [nativeRow(41, NOW - 3_000, { cwd: "/Users/ana/api-wt/payments", worktrees: [{ path: "/Users/ana/api-wt", repoRoot: "/Users/ana/api" }], lineage: [{ harness: "devin" }] })] }),
+    worktree: (folder) => (folder.startsWith("/Users/ana/.mako/worktrees/api-3f2a/retry-webhooks") ? { project: `/Users/ana/api${folder.slice("/Users/ana/.mako/worktrees/api-3f2a/retry-webhooks".length)}`, branch: "mako/retry-webhooks" } : undefined),
+    head: (project) => heads.get(project),
+    background: (id) => (id === "c-2" ? 25 : undefined),
+  }
+  const rows = ownedSessions(sources)
+  const row = (conversation: string) => rows.find((each) => each.conversation === conversation)
+  assert.deepEqual(row("c-1")?.project, { folder: "/Users/ana/api/src" }, "a Thread worktree's Session is filed under the project it was made from, at the same place inside")
+  assert.deepEqual(row("c-1")?.worktree, { branch: "mako/retry-webhooks" })
+  assert.deepEqual(row("c-1")?.lineage, ["devin", "claude"], "the agents it ran in before its current one, each once in a row")
+  assert.equal(row("c-1")?.background, undefined, "nothing left running: no count")
+  assert.deepEqual(row("c-2")?.project, { folder: "/Users/ana/site", head: { kind: "branch", name: "main" } }, "the project's checkout, without where its main checkout is")
+  assert.deepEqual([row("c-2")?.state, row("c-2")?.background], ["working", 25], "at work on what its ended turn left running, and how many")
+  const terminal = rows.find((each) => each.capture)
+  assert.deepEqual(terminal?.project, { folder: "/Users/ana/api/payments" }, "a terminal's session in a linked worktree is filed under its main checkout")
+  assert.deepEqual(terminal?.lineage, ["devin"])
+  heads.set("/Users/ana/api/src", { kind: "branch", name: "main" })
+  assert.deepEqual(ownedSessions(sources).find((each) => each.conversation === "c-1")?.project?.head, { kind: "branch", name: "main" }, "once the project's checkout is read, its rows say it")
+  assert.equal(conversationShown({ session: { id: "c-3", status: "running" }, working: "running", waitingOn: () => undefined, background: 3 }).background, undefined, "a turn at work is at work, whatever else runs")
 })
 
 test("a Thread moving to the cloud says so on every row of it from the move's first step, each step once, and not after it ends", () => {
