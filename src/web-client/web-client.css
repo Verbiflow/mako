@@ -721,6 +721,17 @@
 .web-dock {
   position: relative;
 }
+/*
+ * The queue's row actions under a finger (the desk's `PromptQueue`): its glyphs as the desk draws them, each in a
+ * 44 px target that reaches into the row's padding rather than making the row taller.
+ */
+@media (pointer: coarse) {
+  .web-dock [data-queued-action] {
+    min-width: 44px;
+    height: 44px;
+    margin-block: -10px;
+  }
+}
 .web-dock-fade {
   position: absolute;
   left: 0;
@@ -810,9 +821,6 @@
 .web-capsule-dot {
   @apply size-1.5 shrink-0 rounded-full bg-ember;
   animation: web-breathe 1.6s ease-in-out infinite;
-}
-.web-capsule-queued {
-  @apply shrink-0;
 }
 .web-jump {
   @apply flex size-[34px] shrink-0 items-center justify-center rounded-full text-foreground;
@@ -1043,6 +1051,10 @@
   box-shadow: inset 0 -1px 0 var(--hairline);
   margin-bottom: 2px;
 }
+/* Cancel is a thumb's height, reaching past the line's own 34 px rather than making it taller. */
+.web-composer-editing-cancel {
+  @apply -my-[5px] h-11 px-2.5;
+}
 /* A Thread's chips give way to the send pill: each keeps its glyph and a few letters, the model more. */
 .web-chip-model {
   min-width: 5.5rem;
@@ -1160,14 +1172,6 @@
 }
 .web-reply-action:disabled {
   opacity: 0.6;
-}
-/* A long press on a reply is the app's, not the platform's: no callout, no selection starting under the finger. */
-@media (pointer: coarse) {
-  .web-live [data-answer] {
-    -webkit-touch-callout: none;
-    -webkit-user-select: none;
-    user-select: none;
-  }
 }
 
 @keyframes web-choices-in {
