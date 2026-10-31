@@ -706,7 +706,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "steering": {
         "state": "implemented",
-        "via": "A message sent while a run works cuts its current step short and the model continues with it.",
+        "via": "A message sent while a run works cuts a running command short and the model continues with it; a running subagent finishes first. One the run ends before taking goes as the next message.",
         "lands": "interrupt"
       },
       "compaction": {
