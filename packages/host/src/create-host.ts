@@ -141,6 +141,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
           await machine?.refreshCarried()
         },
         reportMachineSessions: () => machine?.reportSessions(),
+        machineGitHubPerson: async () => machine?.githubPerson(),
         web: () => web,
         closing: () => closing,
         closeSocket,

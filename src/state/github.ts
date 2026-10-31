@@ -8,6 +8,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import type { MergeMethod } from "@mako/host/contracts/git-actions"
 import type { AttachmentInput } from "@/lib/attachments"
 import { pullRequestContext } from "@/lib/pull-request-context"
+import { GITHUB_PERSON_SETTINGS, MAKO_GITHUB_APP, personTokenWords, readPersonTokenProblem } from "@mako/host/contracts/github-person"
 
 /**
  * The pull request for the branch you are on.
@@ -54,6 +55,24 @@ async function readPull(root: string, branch?: string) {
   const pull = await getMako().pullRequest().catch(() => null)
   if (mine !== pullGeneration || githubStore.get().root !== root) return
   githubStore.set({ pull, loading: false, branch, root })
+}
+
+/**
+ * A pull request the sidebar couldn't open or merge as the person (their own GitHub token, on a cloud Thread): said as
+ * the problem it is, with Update token and the person's choice to go as Mako's App this once, which `again` does.
+ * False for any other failure, which its caller says as before.
+ */
+export function toastPersonToken(error: Error, again: () => void): boolean {
+  const problem = readPersonTokenProblem(error.message)
+  if (!problem) return false
+  const { title, detail } = personTokenWords(problem)
+  toast.error(title, {
+    duration: ACTION_TOAST_MS,
+    description: detail,
+    action: { label: "Update token", onClick: () => window.dispatchEvent(new CustomEvent("mako:settings", { detail: GITHUB_PERSON_SETTINGS })) },
+    cancel: { label: `Open as ${MAKO_GITHUB_APP}`, onClick: again },
+  })
+  return true
 }
 
 export const github = {
@@ -126,16 +145,16 @@ export const github = {
     return getMako().pullBranches()
   },
 
-  async create(options: { title: string; body: string; base?: string; draft?: boolean }) {
+  async create(options: { title: string; body: string; base?: string; draft?: boolean; as?: "app" }) {
     const root = githubStore.get().root
     const pull = await getMako().createPull(options)
     if (githubStore.get().root === root) githubStore.set({ pull })
     return pull
   },
 
-  async merge(strategy: MergeMethod) {
+  async merge(strategy: MergeMethod, as?: "app") {
     const root = githubStore.get().root
-    const pull = await getMako().mergePull(strategy)
+    const pull = await getMako().mergePull(strategy, as)
     if (githubStore.get().root === root) githubStore.set({ pull })
     return pull
   },

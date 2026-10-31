@@ -315,6 +315,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:cloud-browser-session-end", (id: string) => cloud.endBrowserSession(id))
   methods.handle("mako:cloud-browser-sessions-end", () => cloud.endBrowserSessions())
   methods.handle("mako:cloud-sign-out", () => cloud.signOut())
+  // "Open pull requests as me": the account's own GitHub token, checked and kept by the cloud; this Mac sends it once and keeps none.
+  methods.handle("mako:github-token", () => cloud.githubToken())
+  methods.handle("mako:github-token-save", (token: string, repository?: string) => cloud.saveGitHubToken(token, repository))
+  methods.handle("mako:github-token-remove", () => cloud.removeGitHubToken())
 
   sync?.start()
   const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))

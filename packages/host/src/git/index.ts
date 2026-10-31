@@ -6,7 +6,7 @@ import { installGitIpc, openUtilityModels, type GitTab } from "./methods.js"
 import { UtilityWork } from "./utility-work.js"
 import type { RecordHelperRun } from "./helper-tally.js"
 import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "./github.js"
-import { mergePullRequest, openPullRequest, rerunFailedChecks } from "./pull-requests.js"
+import { mergePullRequest, openPullRequest, rerunFailedChecks, type PersonOf } from "./pull-requests.js"
 import type { MergeMethod } from "../contracts/git-actions.js"
 import type { PullRequestSearchRequest } from "../contracts/pull-request-search.js"
 import { PullRequestSearch } from "./pull-request-search.js"
@@ -28,10 +28,12 @@ export interface GitMethodsDeps {
   secrets: DomainSecrets
   /** The usage ledger's record of model calls Mako makes itself: commit drafts and connection checks. */
   recordHelperRun?: RecordHelperRun
+  /** On a cloud machine: whether its pull requests go as its person, asked before each write (`pull-requests.ts`). */
+  person?: PersonOf
 }
 
 /** Status, staging, commits and their drafts, and the pull requests of the tab in front. */
-export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets, recordHelperRun }: GitMethodsDeps): void {
+export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets, recordHelperRun, person }: GitMethodsDeps): void {
   const models = openUtilityModels(environment, secrets, recordHelperRun)
   const avatars = join(environment.dataRoot, "avatars")
   const pullSearch = new PullRequestSearch()
@@ -44,14 +46,14 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost, g
   methods.handle("mako:pull-branches", () => withHost((h) => listRemoteBranches(git, h.gitWorkspace)))
   methods.handle("mako:create-pull", (options: CreatePullOptions) =>
     withHost(async (h) => {
-      const opened = await openPullRequest(git, h.gitWorkspace, options)
+      const opened = await openPullRequest(git, h.gitWorkspace, options, undefined, person)
       worktrees?.forgetPulls()
       return opened.pull
     })
   )
-  methods.handle("mako:merge-pull", (strategy: MergeMethod) =>
+  methods.handle("mako:merge-pull", (strategy: MergeMethod, as?: "app") =>
     withHost(async (h) => {
-      const { pull } = await mergePullRequest(h.gitWorkspace, strategy)
+      const { pull } = await mergePullRequest(h.gitWorkspace, strategy, person, as === "app")
       worktrees?.forgetPulls()
       return pull
     })

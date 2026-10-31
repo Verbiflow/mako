@@ -48,6 +48,7 @@ import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environmen
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockCarriedFiles } from "./mock-carried-files"
+import { mockGitHubToken } from "./mock-github-token"
 import { matchPullRequests, pullSearchLimit, type PullRequestListing } from "@mako/host/contracts/pull-request-search"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
@@ -1530,6 +1531,7 @@ export function installMockBridge() {
     threadContexts: mockThreadContexts,
     ...mockCloudAccount(emit),
     ...mockCarriedFiles(),
+    ...mockGitHubToken(),
     providerConnections: async () => [],
     providerConnectionAction: async () => {
       throw new Error("Fixture providers keep no sign-in")

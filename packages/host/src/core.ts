@@ -40,6 +40,7 @@ import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount,
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
+import type { GitHubPerson } from "./contracts/github-person.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
@@ -73,6 +74,8 @@ export interface CoreShell {
   refreshMachineCarried?(): Promise<void>
   /** On a cloud machine: reports its Sessions on its runtime's link now, as its tick does (`MachineRuntime.reportSessions`). */
   reportMachineSessions?(): void
+  /** On a cloud machine: whether its pull requests go as its person, asked now (`MachineRuntime.githubPerson`); undefined elsewhere. */
+  machineGitHubPerson?(): Promise<GitHubPerson | undefined>
   owner: HostOwner
   methods: HostMethods
   jobs: HostJobs
@@ -999,6 +1002,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     movedPaths: async (thread, from, to) => late.attribution?.movedPaths(thread, from, to),
     checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
     jobs: shell.jobs,
+    person: shell.machineGitHubPerson,
     emit,
     warn: (message, facts) => hostWarn("workspace", message, facts),
   })
@@ -1043,7 +1047,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareAttributionMethods(methods, () => late.attribution)
   declareMediaMethods(methods, turnMedia)
   const helperRuns = new HelperRuns(helperRunsRoot(environment.dataRoot))
-  declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record })
+  declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record, person: shell.machineGitHubPerson })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
   declareControlMethods(methods, control, environment.appRoot, config.executable)
   declareCloudControlPreviewMethods(methods, () => cloudConversations?.controlPreviews)
