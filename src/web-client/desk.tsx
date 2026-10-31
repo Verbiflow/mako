@@ -29,6 +29,8 @@ import { followedWay, listedMove, useMoves } from "./moves"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
+import { ReviewLayer } from "./review-layer"
+import { closeReview, deskReviewCode, openReview, reviewOpenStore } from "./review-open"
 import { WebHarnessIcon } from "./harness-icon"
 
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
@@ -61,7 +63,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
 
   return (
     <TooltipProvider delayDuration={350}>
-    <div className="web-desk flex min-h-0 flex-1 flex-col bg-shell">
+    <div className="web-desk flex min-h-0 min-w-0 flex-1 flex-col bg-shell">
       <header className="flex h-[38px] shrink-0 items-center border-b border-hairline bg-shell pr-2">
         <div style={{ width: RAIL_PX }} className="flex h-full shrink-0 items-center gap-1 border-r border-hairline px-2">
           <span className="flex min-w-0 flex-1 items-center gap-2 pl-1 text-ui font-medium text-foreground">
@@ -92,6 +94,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskEmpty onNew={newThread} />
           )}
         </main>
+        <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -125,6 +128,21 @@ function useDeskKeys({ ordered, selected, open, newThread, settings }: { ordered
       { id: "session.stop", title: "Stop the current turn", section: "Session", keys: "mod+escape", when: () => activeLiveAcp(acpStore.get())?.session.status === "running", run: () => void acp.cancel() },
       { id: "thread.next", title: "Next thread", section: "Session", keys: "alt+arrowdown", run: step(1) },
       { id: "thread.previous", title: "Previous thread", section: "Session", keys: "alt+arrowup", run: step(-1) },
+      // The desk's own command for Changes: the open Session's turns, beside its transcript, and away again.
+      {
+        id: "view.changes",
+        title: "Show changed files",
+        section: "View",
+        keywords: "review diff turn",
+        when: () => Boolean(reviewOpenStore.get().open ?? activeLiveAcp(acpStore.get())),
+        run: () => {
+          if (reviewOpenStore.get().open) return closeReview()
+          const live = activeLiveAcp(acpStore.get())
+          if (!live) return
+          void deskReviewCode.read()
+          openReview({ conversation: live.key, scope: { kind: "thread" } })
+        },
+      },
     ])
   }, [])
   // Each Thread by its title: the palette's way to any of them from the keyboard.

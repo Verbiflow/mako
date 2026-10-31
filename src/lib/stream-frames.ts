@@ -1,10 +1,13 @@
+import { LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
+
 /**
  * How often a streaming answer repaints. The piece being written is parsed again on each paint; on 2026-10-28 that
  * cost about 1.2 ms per 1,000 characters (1.2 ms at 500, 9 ms at 8,000, 19 ms at 16,000, where the parse moves to a
  * worker). So a paint comes at most every `STREAM_FRAME_MS`, and a long piece waits longer, up to
- * `STREAM_FRAME_MAX_MS`, so its parse never takes more than about a fifth of the renderer's time.
+ * `STREAM_FRAME_MAX_MS`, so its parse never takes more than about a fifth of the renderer's time. It is the frame the
+ * host sends a stream's batches on, so each batch paints as it lands.
  */
-export const STREAM_FRAME_MS = 50
+export const STREAM_FRAME_MS = LIVE_FRAME_MS
 export const STREAM_FRAME_MAX_MS = 90
 /** Characters per millisecond of frame past `STREAM_FRAME_MS`: 9,000 characters paint every 50 ms, 16,000 every 89. */
 const CHARS_PER_FRAME_MS = 180

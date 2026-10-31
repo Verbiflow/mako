@@ -1,0 +1,431 @@
+/*
+ * Changes on the web: a turn's files as cards, their diffs with both line numbers pinned on the left while the code
+ * scrolls sideways, on solid colours so nothing shows through the numbers. The desk's tokens and its diff colours
+ * (`--added`, `--removed` mixed into the surface, as its own diffs are); hue only for added and removed lines.
+ */
+@layer components {
+  .rv-layer {
+    @apply absolute inset-0 z-40 flex flex-col bg-surface;
+  }
+  /* A laptop's desk: the desktop's own review, a pane beside the transcript, edge to edge, as its Changes panel sits. */
+  .rv-layer[data-form="desk"] {
+    @apply relative inset-auto z-auto min-w-0 border-l border-hairline;
+    flex: 0 1 clamp(440px, 50%, 820px);
+  }
+  .rv-screen {
+    @apply relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface;
+  }
+
+  .rv-bar {
+    @apply flex shrink-0 items-center gap-1 border-b border-hairline px-1.5;
+    min-height: calc(52px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+  }
+
+  /* This turn or this Thread: two halves of one control, the chosen one raised. */
+  .rv-scopes {
+    @apply mx-3 mt-2.5 mb-1 flex shrink-0 gap-0.5 rounded-xl bg-fill-hover p-0.5;
+  }
+  .rv-scopes-inline {
+    @apply mx-0 mt-0;
+  }
+  .rv-scope {
+    @apply flex h-11 flex-1 items-center justify-center rounded-[10px] text-label font-medium text-muted-foreground;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+  .rv-scope:is([aria-selected="true"], [aria-checked="true"]) {
+    @apply bg-raised text-foreground ring-1 ring-hairline;
+  }
+  .rv-scope:disabled {
+    @apply opacity-40;
+  }
+
+  .rv-scroll {
+    @apply min-h-0 flex-1 overflow-y-auto;
+    padding-bottom: calc(env(safe-area-inset-bottom) + 24px);
+  }
+  .rv-screen:has(.rv-finish) .rv-scroll {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 96px);
+  }
+
+  .rv-summary {
+    @apply flex flex-col items-start gap-2 px-4 pt-3 pb-3 text-ui;
+  }
+  .rv-quiet {
+    @apply -ml-2.5 inline-flex h-11 items-center gap-1.5 rounded-lg px-2.5 text-ui text-muted-foreground;
+    transition: background-color 160ms ease;
+  }
+  .rv-quiet:active {
+    @apply bg-fill-selected;
+  }
+  @media (hover: hover) {
+    .rv-quiet:hover {
+      @apply bg-fill-hover text-foreground;
+    }
+  }
+  .rv-empty {
+    @apply mx-auto max-w-[340px] px-6 pt-16 text-center text-ui text-muted-foreground;
+  }
+  .rv-inline-action {
+    @apply ml-2 font-medium text-foreground;
+  }
+
+  /*
+   * A file: a card whose header stays at the top while its lines scroll under it. A card off screen isn't laid out
+   * or painted, so a turn of forty files costs what the few on screen do; its last size holds its place.
+   */
+  .rv-file {
+    @apply mx-3 mb-3 rounded-xl border border-hairline bg-surface;
+    overflow: clip;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 240px;
+  }
+  .rv-file-head {
+    @apply sticky top-0 z-10 flex min-h-11 items-center bg-surface;
+    border-radius: 11px 11px 0 0;
+  }
+  .rv-file[data-open] .rv-file-head {
+    @apply border-b border-hairline;
+  }
+  .rv-file-toggle {
+    @apply flex min-h-11 min-w-0 flex-1 items-center gap-2 pl-3 text-left;
+  }
+  .rv-chevron {
+    @apply text-faint;
+    transform: rotate(-90deg);
+    transition: transform 160ms var(--ease-out);
+  }
+  .rv-file[data-open] .rv-chevron {
+    transform: none;
+  }
+  /* The path cut from its start: the folders give way, the name always shows. */
+  .rv-path {
+    @apply flex min-w-0 flex-1 items-baseline font-mono text-label;
+  }
+  .rv-folder {
+    @apply min-w-0 shrink overflow-hidden text-ellipsis whitespace-nowrap text-faint;
+    direction: rtl;
+    text-align: left;
+  }
+  .rv-folder > bdi {
+    direction: ltr;
+  }
+  .rv-name {
+    @apply max-w-full shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium text-foreground;
+  }
+  .rv-file[data-viewed] .rv-name {
+    @apply text-muted-foreground;
+  }
+  .rv-kind {
+    @apply shrink-0 text-label text-faint;
+  }
+  .rv-viewed {
+    @apply flex h-11 shrink-0 items-center gap-1.5 pr-3 pl-2.5 text-label text-muted-foreground;
+  }
+  .rv-check {
+    @apply flex size-4 items-center justify-center rounded-[5px] ring-1 ring-border;
+    transition: background-color 160ms ease;
+  }
+  .rv-viewed[aria-checked="true"] .rv-check {
+    @apply bg-foreground text-surface ring-foreground;
+  }
+  .rv-note {
+    @apply px-3 py-2.5 text-label text-faint;
+  }
+  .rv-gate {
+    @apply flex flex-col items-center gap-2 px-4 py-5 text-center;
+  }
+  .rv-load {
+    @apply h-11 rounded-lg bg-fill-hover px-4 text-ui font-medium text-foreground;
+  }
+  .rv-load:active {
+    @apply bg-fill-selected;
+  }
+  .rv-reading {
+    @apply flex flex-col gap-2 px-3 py-3;
+  }
+  .rv-reading > span {
+    @apply block h-3 rounded;
+    background: var(--skeleton);
+    animation: web-breathe 1.6s ease-in-out infinite;
+  }
+  .rv-reading > span:nth-child(2) {
+    width: 72%;
+  }
+  .rv-reading > span:nth-child(3) {
+    width: 48%;
+  }
+
+  /*
+   * The diff. One scroller per file, so its lines move sideways together; the numbers (old, new) and the sign are
+   * pinned at its left edge over solid colours, so code sliding under them never shows through.
+   */
+  .rv-code {
+    --rv-number: calc(var(--rv-digits, 3ch) + 12px);
+    --rv-gutter: calc(var(--rv-number) * 2 + 16px);
+    --rv-row-same: var(--surface);
+    --rv-row-add: color-mix(in oklab, var(--added) 10%, var(--surface));
+    --rv-row-remove: color-mix(in oklab, var(--removed) 10%, var(--surface));
+    --rv-gutter-add: color-mix(in oklab, var(--added) 16%, var(--surface));
+    --rv-gutter-remove: color-mix(in oklab, var(--removed) 16%, var(--surface));
+    --rv-word-add: color-mix(in oklab, var(--added) 30%, var(--surface));
+    --rv-word-remove: color-mix(in oklab, var(--removed) 30%, var(--surface));
+    @apply relative overflow-x-auto font-mono;
+    font-size: 12px;
+    line-height: 19px;
+    overscroll-behavior-x: contain;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .rv-rows {
+    @apply min-w-full py-1;
+    width: max-content;
+  }
+  .rv-row {
+    @apply flex cursor-pointer;
+    background: var(--rv-row-same);
+  }
+  /* A finger picks a line: rows a little taller under one, so a tap lands on the line meant. */
+  @media (pointer: coarse) {
+    .rv-row {
+      @apply py-[3px];
+    }
+  }
+  .rv-row[data-kind="add"] {
+    background: var(--rv-row-add);
+  }
+  .rv-row[data-kind="remove"] {
+    background: var(--rv-row-remove);
+  }
+  .rv-gutter {
+    @apply sticky left-0 z-[1] flex shrink-0 select-none;
+    background: var(--rv-row-same);
+    box-shadow: 1px 0 0 var(--hairline);
+  }
+  .rv-row[data-kind="add"] .rv-gutter {
+    background: var(--rv-gutter-add);
+  }
+  .rv-row[data-kind="remove"] .rv-gutter {
+    background: var(--rv-gutter-remove);
+  }
+  .rv-number {
+    @apply shrink-0 pr-1 pl-2 text-right text-faint tabular-nums;
+    width: var(--rv-number);
+  }
+  .rv-row[data-kind="add"] .rv-number {
+    color: color-mix(in oklab, var(--added) 60%, var(--faint));
+  }
+  .rv-row[data-kind="remove"] .rv-number {
+    color: color-mix(in oklab, var(--removed) 60%, var(--faint));
+  }
+  .rv-sign {
+    @apply relative w-4 shrink-0 text-center text-faint;
+  }
+  .rv-row[data-kind="add"] .rv-sign {
+    color: var(--added);
+  }
+  .rv-row[data-kind="remove"] .rv-sign {
+    color: var(--removed);
+  }
+  .rv-text {
+    @apply flex-1 pr-4 pl-1.5 whitespace-pre text-foreground;
+    tab-size: 4;
+  }
+  .rv-row[data-kind="add"] mark {
+    @apply rounded-[3px] text-inherit;
+    background: var(--rv-word-add);
+  }
+  .rv-row[data-kind="remove"] mark {
+    @apply rounded-[3px] text-inherit;
+    background: var(--rv-word-remove);
+  }
+  /* A line picked as a range's first end, and lines a comment waits on. */
+  .rv-row[data-anchor],
+  .rv-row[data-anchor] .rv-gutter {
+    background: color-mix(in oklab, var(--foreground) 14%, var(--surface));
+  }
+  .rv-row[data-commented] .rv-sign::after {
+    @apply absolute top-1/2 right-0 size-[5px] -translate-y-1/2 rounded-full bg-foreground;
+    content: "";
+  }
+  @media (hover: hover) {
+    .rv-row:hover .rv-text {
+      box-shadow: inset 0 0 0 999px var(--fill-hover);
+    }
+  }
+
+  /*
+   * Who wrote a line, only where another writer shares its block: a hairline stripe at the gutter's edge, the turn's
+   * own quiet, the person's and another Thread's in the text colour; and a line under the stretch naming them.
+   */
+  .rv-row[data-writer] .rv-gutter {
+    box-shadow:
+      inset 2px 0 0 var(--rv-writer, var(--faint)),
+      1px 0 0 var(--hairline);
+  }
+  .rv-row[data-writer="turn"],
+  .rv-row[data-writer="thread"] {
+    --rv-writer: color-mix(in oklab, var(--faint) 55%, transparent);
+  }
+  .rv-row[data-writer="person"] {
+    --rv-writer: var(--foreground);
+  }
+  .rv-row[data-writer="other"] {
+    --rv-writer: var(--muted-foreground);
+  }
+  .rv-writer {
+    @apply flex h-[22px] items-center font-sans text-label text-faint;
+    background: var(--surface);
+  }
+  .rv-writer-text {
+    @apply sticky left-0 whitespace-nowrap;
+    padding-left: calc(var(--rv-gutter) + 6px);
+  }
+  .rv-writer[data-writer="person"] .rv-writer-text,
+  .rv-writer[data-writer="other"] .rv-writer-text {
+    @apply text-muted-foreground;
+  }
+
+  /* Unchanged lines between stretches, counted. */
+  .rv-gap {
+    @apply flex h-7 items-center font-sans text-label text-faint;
+    background: color-mix(in oklab, var(--foreground) 4%, var(--surface));
+  }
+  .rv-gap-text {
+    @apply sticky left-0 pl-3 whitespace-nowrap;
+  }
+  p.rv-gap {
+    @apply h-auto px-3 py-2 whitespace-normal;
+  }
+
+  /* While a range waits for its last line: a capsule over the bottom of the screen. */
+  .rv-range-hint {
+    @apply fixed inset-x-3 z-20 mx-auto flex h-12 max-w-[420px] items-center gap-2 rounded-full bg-popover pr-2 pl-4 font-sans text-ui text-foreground;
+    bottom: calc(env(safe-area-inset-bottom) + 16px);
+    box-shadow: var(--elevation-floating);
+    animation: web-rise 200ms var(--ease-out) both;
+  }
+
+  /* Finish review: one bar over the bottom while comments wait. */
+  .rv-finish {
+    @apply pointer-events-none absolute inset-x-0 bottom-0 z-10 px-3 pt-6;
+    padding-bottom: calc(env(safe-area-inset-bottom) + 10px);
+    background: linear-gradient(to bottom, transparent, var(--surface) 45%);
+  }
+  .rv-finish-button {
+    @apply pointer-events-auto mx-auto flex h-12 w-full max-w-[560px] items-center gap-2.5 rounded-2xl bg-popover px-4 text-ui text-muted-foreground;
+    box-shadow: var(--elevation-floating);
+    animation: web-rise 200ms var(--ease-out) both;
+    transition: transform 160ms var(--ease-out);
+  }
+  .rv-finish-button:active {
+    transform: scale(0.98);
+    transition-duration: 40ms;
+  }
+  .rv-finish-foot {
+    @apply flex shrink-0 flex-col gap-2.5 border-t border-hairline px-4 pt-3;
+    padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
+  }
+
+  /* Every turn of the Thread, newest first. */
+  .rv-turns {
+    @apply mx-3 overflow-hidden rounded-xl border border-hairline;
+  }
+  .rv-turns > li + li {
+    @apply border-t border-hairline;
+  }
+  .rv-turn {
+    @apply flex w-full items-center gap-3 px-3.5 py-3 text-left;
+    transition: background-color 160ms ease;
+  }
+  .rv-turn:active {
+    @apply bg-fill-selected;
+    transition-duration: 0ms;
+  }
+  @media (hover: hover) {
+    .rv-turn:hover {
+      @apply bg-fill-hover;
+    }
+  }
+  .rv-turn-number {
+    @apply w-14 shrink-0 self-start pt-px text-label text-faint tabular-nums;
+  }
+  .rv-thread-foot {
+    @apply px-4 pt-3;
+  }
+
+  /* The sheets: the lines a comment is on, the comments waiting, an undo's files. */
+  .rv-quote {
+    @apply max-h-48 overflow-auto rounded-xl border border-hairline py-1 font-mono;
+    font-size: 12px;
+    line-height: 19px;
+  }
+  .rv-quote-row {
+    @apply flex w-max min-w-full;
+  }
+  .rv-quote-row[data-kind="add"] {
+    background: color-mix(in oklab, var(--added) 10%, var(--popover));
+  }
+  .rv-quote-row[data-kind="remove"] {
+    background: color-mix(in oklab, var(--removed) 10%, var(--popover));
+  }
+  .rv-quote-number {
+    @apply w-10 shrink-0 pr-2 text-right text-faint tabular-nums;
+  }
+  .rv-quote-text {
+    @apply pr-3 whitespace-pre text-foreground;
+  }
+  .rv-comment-field {
+    @apply resize-none py-2.5 leading-snug;
+  }
+  .rv-notes {
+    @apply flex flex-col;
+  }
+  .rv-note-row {
+    @apply flex items-center gap-2 border-b border-hairline py-2;
+  }
+  .rv-note-row:last-child {
+    @apply border-b-0;
+  }
+  .rv-undo-list {
+    @apply overflow-hidden rounded-xl border border-hairline;
+  }
+  .rv-undo-row {
+    @apply flex min-h-11 items-center gap-2.5 px-3;
+  }
+  .rv-undo-row + .rv-undo-row {
+    @apply border-t border-hairline;
+  }
+
+  /* The comments going with the next message, over the composer. */
+  .rv-tray {
+    @apply mx-auto flex w-full max-w-content items-center gap-1.5 px-3 pb-1.5;
+  }
+  .rv-tray-chip {
+    @apply inline-flex h-8 max-w-[260px] shrink-0 items-center gap-1.5 rounded-lg bg-fill-hover pr-0.5 pl-2 text-label text-muted-foreground;
+  }
+  /* A 28 px mark with a 44 px reach: the strip leaves room for it above and below. */
+  .rv-tray-remove {
+    @apply relative flex size-7 shrink-0 items-center justify-center rounded-md text-faint;
+  }
+  .rv-tray-remove::after {
+    @apply absolute -inset-2;
+    content: "";
+  }
+  .rv-tray-remove:active {
+    @apply bg-fill-selected text-foreground;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rv-range-hint,
+    .rv-finish-button {
+      animation: none;
+    }
+    .rv-reading > span {
+      animation: none;
+    }
+  }
+}

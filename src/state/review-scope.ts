@@ -29,8 +29,21 @@ export function requestedTurn(requested: TurnReviewRequest | null, workspace: st
   return requested && requested.workspace === workspace ? requested.turn : null
 }
 
+/** Where Review on a turn's line opens when the window has no Changes panel of its own (the web app's). */
+const openerStore = createStore<{ open: ((workspace: string, turn: TurnScope) => void) | null }>({ open: null })
+
+/** Review opens with `open` instead of the Changes panel, until the returned function is called. */
+export function openTurnReviewWith(open: (workspace: string, turn: TurnScope) => void): () => void {
+  openerStore.set({ open })
+  return () => {
+    if (openerStore.get().open === open) openerStore.set({ open: null })
+  }
+}
+
 /** Opens Changes on what one turn changed. */
 export function reviewTurn(workspace: string, turn: Omit<TurnScope, "kind">): void {
+  const opener = openerStore.get().open
+  if (opener) return opener(workspace, { kind: "turn", ...turn })
   reviewScopeStore.set({ requested: { workspace, turn: { kind: "turn", ...turn } } })
   stage.open("changes")
 }

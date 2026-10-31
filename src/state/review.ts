@@ -251,12 +251,16 @@ export const review = {
  * `cwd`, the workspace the agent runs in, when the repository lies inside it.
  */
 export function reviewContext(comments: readonly ReviewComment[], cwd: string | undefined): ContextInput[] {
+  return inMessageOrder(comments).map((comment) => commentInput(noteDetail(comment, cwd)))
+}
+
+/** By file, in the order the notes first name them, then by line, the old side first. */
+function inMessageOrder(comments: readonly ReviewComment[]): ReviewComment[] {
   const files = [...new Set(comments.map((comment) => comment.path))]
   return files.flatMap((path) =>
     comments
       .filter((comment) => comment.path === path)
       .sort((a, b) => a.line - b.line || (a.side === b.side ? 0 : a.side === "deletions" ? -1 : 1))
-      .map((comment) => commentInput(noteDetail(comment, cwd)))
   )
 }
 
@@ -277,10 +281,12 @@ function noteDetail(comment: ReviewComment, cwd: string | undefined): CommentDet
 
 /**
  * Put notes into the composer as chips and take them off the diff: once a
- * note is in the message, the message is where it lives.
+ * note is in the message, the message is where it lives. With
+ * `conversation`, only that conversation's composer takes them; a note no
+ * composer took stays on the diff.
  */
-export function addReviewToMessage(comments: readonly ReviewComment[], cwd: string | undefined): void {
-  for (const input of reviewContext(comments, cwd)) addContext(input)
-  const added = new Set(comments.map((comment) => comment.id))
+export function addReviewToMessage(comments: readonly ReviewComment[], cwd: string | undefined, conversation?: string): void {
+  const added = new Set<string>()
+  for (const comment of inMessageOrder(comments)) if (addContext(commentInput(noteDetail(comment, cwd)), conversation)) added.add(comment.id)
   reviewStore.set((state) => ({ comments: state.comments.filter((comment) => !added.has(comment.id)) }))
 }

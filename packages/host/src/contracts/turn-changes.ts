@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { GitFile } from "./git-workspace-search.js"
 
 /*
  * What one turn changed, as the attribution journal counts it: the one
@@ -108,6 +109,41 @@ export type RequestChanges = TurnChanges | { version: typeof TURN_CHANGES_VERSIO
 /** The record, counted, or undefined while it's pending or from a version this build doesn't read. */
 export function countedChanges(changes: RequestChanges | undefined): TurnChanges | undefined {
   return changes?.version === TURN_CHANGES_VERSION && changes.state !== "pending" ? changes : undefined
+}
+
+/** The repository a record's file is in: its path less its path inside the journal's root. */
+export function turnFileRoot(file: Pick<TurnChangedFile, "path" | "relative">): string {
+  return file.path.slice(0, file.path.length - file.relative.length - 1)
+}
+
+/**
+ * A record's file as a review lists it, counted as the turn's line counts it:
+ * the Thread's own lines. Lines not sure whose aren't in them (a file with
+ * only those counts none); a review names them from the record beside it.
+ */
+export function turnGitFile(file: TurnChangedFile): GitFile {
+  const own = file.own
+  return {
+    path: file.relative,
+    status: file.kind === "create" ? "added" : file.kind === "delete" ? "deleted" : "modified",
+    staged: false,
+    insertions: own === null ? null : own?.added ?? 0,
+    deletions: own === null ? null : own?.removed ?? 0,
+    binary: own === null || file.maybe === null,
+  }
+}
+
+/** A turn's files in one of its repositories, relative to it. */
+export interface TurnFilesIn {
+  root: string
+  files: GitFile[]
+}
+
+/** A record's files in one repository: `workspace`, or the first it names. */
+export function turnFilesIn(record: TurnChanges, workspace?: string): TurnFilesIn {
+  const roots = [...new Set(record.files.map(turnFileRoot))]
+  const root = workspace && roots.includes(workspace) ? workspace : roots[0] ?? workspace ?? ""
+  return { root, files: record.files.filter((file) => turnFileRoot(file) === root).map(turnGitFile) }
 }
 
 const Lines = z.object({ added: z.number().int().nonnegative(), removed: z.number().int().nonnegative() })

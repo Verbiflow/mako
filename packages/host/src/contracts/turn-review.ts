@@ -147,3 +147,48 @@ export const TurnUndoneSchema: z.ZodType<TurnUndone | undefined> = z.object({
   left: z.number().int().nonnegative(),
   backup: z.string(),
 }).optional().catch(undefined)
+
+/**
+ * One stretch of a turn's diff of a file, as a phone reads it: the lines
+ * that changed and a few unchanged ones around them, never the files whole.
+ * `kinds` has one letter per row: " " unchanged, "-" removed, "+" added.
+ * `oldStart` and `newStart` are the stretch's first line on each side,
+ * 1-based; a side with no rows in it names the line it follows (0 before
+ * the first).
+ */
+export interface TurnHunk {
+  oldStart: number
+  newStart: number
+  kinds: string
+  /** Each row's text, without its line ending. */
+  lines: string[]
+}
+
+/**
+ * A turn's diff of one file in stretches (`mako:live-turn-hunks`): what a
+ * device that isn't the turn's own reads instead of the two versions whole,
+ * bounded by `TURN_HUNK_LIMITS` so a reply stays small over a phone's link.
+ * Its writers ride along when another writer shares a change block, so one
+ * read draws the file.
+ */
+export type TurnFileHunks =
+  | {
+      kind: "text"
+      path: string
+      /** A renamed file's path before the turn, relative as `path` is. */
+      from?: string
+      hunks: TurnHunk[]
+      /** Lines on each side, whole: what the diff's line numbers run to. */
+      oldLines: number
+      newLines: number
+      /** Rows past the bound were left out; the stretches given are whole. */
+      limited: boolean
+      /** Who wrote each changed line, present only when someone besides the turn wrote one. */
+      writers?: WriterRun[]
+      body: TurnFileWriters["body"]
+    }
+  | { kind: "binary"; path: string; before: number | null; after: number | null }
+  | { kind: "unavailable"; path: string; reason: string }
+
+/** How much of a file `mako:live-turn-hunks` answers with, and the unchanged lines around each change. */
+export const TURN_HUNK_LIMITS = { rows: 4_000, chars: 256 * 1024, context: 3, maxContext: 20 } as const
