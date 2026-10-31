@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.314"
+    "version": "2.1.316"
   },
   "about": "Watch for two ticks, then wait four seconds and tell me what the watch saw. A watch the agent left running reports while a shell command runs in the same turn, then ends; the harness takes the reports in before its next step, or wakes on the end once the turn is over.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/5eaec2ff-0e05-4c79-86d8-4fc439d89237.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/cdca6bb9-beb0-4511-9974-73680ba3e94c.jsonl",
       "known": []
     }
   ]

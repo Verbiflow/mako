@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.314"
+    "version": "2.1.316"
   },
   "about": "Read only lines 10 to 20 of log.md with your file read tool, once, and tell me the last line you were shown. Don't run commands. A read of lines 10 to 20 of a long file, so a harness's own cut can be told from one the model asked for.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/67369e87-3faa-4f6b-aed5-42cf736f8abc.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/4b78cbba-2935-4aff-9939-a6866e1e1768.jsonl",
       "known": []
     }
   ]
