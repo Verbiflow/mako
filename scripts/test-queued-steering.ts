@@ -148,4 +148,63 @@ try {
     }
   }
   console.log("PASS: six harness profiles plus future adapter; atomic intent/queue ownership, completion race, refusals, held queue, stale edits, lost reply, owner restart, duplicate ID and disk failure")
+
+  // 2026-10-31: a Cursor run held a steered queued message while its subagents worked, the person stopped the turn,
+  // and only then did the SDK answer that the run never took it. A harness that answers every steer it holds when its
+  // turn ends (`answersOnEnd`) keeps the words: they go as the next message. One that may never answer leaves them
+  // unknown, the queue held, as before.
+  for (const answersOnEnd of [true, false]) {
+    const id = randomUUID(), first = randomUUID(), queuedId = randomUUID()
+    const directory = join(root, "stopped-while-held", String(answersOnEnd))
+    const sent: string[] = []
+    let state: LiveSessionState
+    let owner: LiveConversations
+    const response = Promise.withResolvers<ProviderSteerResult>()
+    const driver: ProviderLiveDriver = {
+      ...noCapabilities,
+      resume: fixtureResume(),
+      steering: { kind: "supported", lands: "interrupt", ...answersOnEnd && { answersOnEnd: true as const }, via: "Injected driver fixture", steer: () => response.promise },
+      approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION,
+      nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+      turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
+      provider: "cursor", available: () => true,
+      async start(cwd, options) {
+        state = { id: options.conversationId, harness: "cursor", cwd, nativeId: "fixture", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
+        return state
+      },
+      async prompt(_id, text, _attachments, _settings, dispatch) {
+        dispatch.report({ kind: "submitted", source: "transport-call" })
+        sent.push(text)
+        state = { ...state, status: "running", nativeRunId: randomUUID() }
+        owner.observe({ type: "live-session", session: state })
+      },
+      async permission() {}, async cancel() {}, async setMode() {}, close() {},
+    }
+    owner = new LiveConversations({ root: directory, appPath: root, driver: () => driver, history: async () => null, emit: () => {} })
+    try {
+      await owner.start("cursor", root, { conversationId: id })
+      for (let i = 0; owner.snapshot(id)?.session.connection !== "connected" && i < 100; i++) await delay(5)
+      owner.submit(id, first, "first")
+      owner.submit(id, queuedId, "the code is the truth")
+      const pending = owner.act(id, { kind: "steer-queued", id: randomUUID(), requestId: first, queuedRequestId: queuedId, text: "the code is the truth", attachments: [] })
+      await delay(5)
+      state = { ...state!, status: "ready", lastStop: "cancelled" }
+      owner.observe({ type: "live-session", session: state })
+      const held = owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind
+      assert.equal(held, answersOnEnd ? "dispatching" : "uncertain", "a stopped turn leaves a steer its harness will still answer waiting for that answer")
+      response.resolve({ kind: "not-accepted", reason: "Cursor didn't take it into this turn, so it goes as the next message." })
+      const receipt = await pending
+      assert.equal(receipt.state.kind, answersOnEnd ? "not-accepted" : "uncertain")
+      for (let i = 0; answersOnEnd && sent.length < 2 && i < 100; i++) await delay(5)
+      assert.deepEqual(sent, answersOnEnd ? ["first", "the code is the truth"] : ["first"],
+        answersOnEnd ? "the words go as the next message" : "a harness that may never answer keeps them unknown")
+      assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === queuedId)?.status, answersOnEnd ? "dispatching" : "canceled")
+    } finally { response.resolve({ kind: "accepted" }); owner.stop() }
+  }
+  console.log("PASS: a steer held when its turn is stopped goes as the next message once its harness answers it")
 } finally { rmSync(root, { recursive: true, force: true }) }

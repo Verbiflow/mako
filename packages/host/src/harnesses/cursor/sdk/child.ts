@@ -12,6 +12,7 @@
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "./errors.js"
 import { guardShellFolder } from "./shell-folder.js"
+import { CURSOR_SDK_LOG_EVENT, CursorSdkLogEntry, cursorRunLogLine } from "./run-log.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
 import { existsSync, readFileSync } from "node:fs"
@@ -1213,6 +1214,11 @@ function main(): void {
   console.info = (...args) => console.error(...args)
   console.debug = (...args) => console.error(...args)
   if (process.argv[2] === CURSOR_SDK_HEADLESS) return headlessMain(process.argv[3])
+  process.on(CURSOR_SDK_LOG_EVENT, (...args: unknown[]) => {
+    const entry = CursorSdkLogEntry.safeParse(args[0])
+    const line = entry.success ? cursorRunLogLine(entry.data) : undefined
+    if (line) log(line.level, `sdk ${line.message}`)
+  })
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
   lines.on("line", (line) => {
     if (!line.trim()) return

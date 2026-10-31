@@ -81,6 +81,33 @@ const claude = new ClaudeAgents()
   assert.equal(resumed?.usage, undefined, "a resumed subagent counts its own calls")
   assert.equal(cursor.progress(call("build", "completed", "task-2"))?.usage?.toolUses, 1)
 }
+{
+  // A run's end ends the subagents it left working, whatever bookend never came: SDK 1.2.0 gave up resuming a run
+  // whose five `task` calls it had re-started, and they died with it.
+  const cursor = new CursorAgents()
+  const task = (id: string) => ({
+    type: "tool_call", agent_id: "parent", run_id: "parent-run", name: "task",
+    call_id: `task-${id}`, status: "running",
+    args: { agentId: `child-${id}`, description: `Work ${id}` },
+  }) satisfies CursorSdkMessage
+  cursor.project(task("a"))
+  cursor.project(task("a"))
+  cursor.project(task("b"))
+  cursor.project(task("c"))
+  cursor.project({ ...task("c"), status: "completed", result: { status: "success", value: { isBackground: false } } })
+  const gaveUp = "Agent turn stopped after repeated resume attempts made no progress"
+  assert.deepEqual(cursor.end("error", gaveUp).map((agent) => [agent.nativeId, agent.state]), [
+    ["child-a", { kind: "failed", error: `Its run ended with an error: ${gaveUp}` }],
+    ["child-b", { kind: "failed", error: `Its run ended with an error: ${gaveUp}` }],
+  ], "each child still working fails with its run; the one that returned stays completed")
+  assert.equal(cursor.project(task("a")), undefined, "a late running bookend cannot revive a child its run ended")
+  assert.equal(cursor.progress({ type: "subagent-call", task: "task-b", callId: "late", name: "shell", status: "running" }), undefined)
+  assert.deepEqual(cursor.end("finished"), [], "nothing is left to end")
+  cursor.project(task("d"))
+  assert.deepEqual(cursor.end("cancelled").map((agent) => agent.state), [{ kind: "canceled" }], "Stop cancels them")
+  cursor.project(task("e"))
+  assert.equal(cursor.end("finished")[0]?.state.kind, "unknown", "a finished run that never said how one ended leaves it unknown, not working")
+}
 const common = { uuid: randomUUID(), session_id: "parent", task_id: "agent-1" }
 const started = {
   ...common,

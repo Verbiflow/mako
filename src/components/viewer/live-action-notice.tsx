@@ -1,15 +1,15 @@
 import { useAcp, activeLiveAcp } from "@/state/acp"
-import { describeActionRecovery } from "@mako/host/contracts/operation-recovery"
+import { actionNoticeCurrent, describeActionRecovery } from "@mako/host/contracts/operation-recovery"
 import { acknowledgeLiveAction } from "@/state/live-actions"
 import type { ComposerNotice } from "@/extend/notices"
 
-/** The newest compaction or steering command above the composer while it runs or went wrong. */
+/** The newest compaction or steering command above the composer while it runs, or while what went wrong still stands. */
 export function useLiveActionNotice(): ComposerNotice | null {
   const id = useAcp((state) => state.activeKey)
   const action = useAcp((state) => activeLiveAcp(state)?.control?.actions?.at(-1))
-  if (!id || !action) return null
+  const requests = useAcp((state) => activeLiveAcp(state)?.requests)
+  if (!id || !action || !actionNoticeCurrent(action, requests ?? [])) return null
   const state = action.state
-  if (state.kind === "acknowledged" || state.kind === "completed" || (state.kind === "accepted" && action.input.kind !== "compact")) return null
   const recovery = describeActionRecovery(action)
   const troubled = state.kind === "uncertain" || state.kind === "not-accepted" || state.kind === "failed"
   return {

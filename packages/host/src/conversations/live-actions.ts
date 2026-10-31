@@ -114,7 +114,9 @@ export class LiveActions {
     const interrupted = session.connection === "disconnected" ||
       session.status === "failed" || session.status === "closed" ||
       /cancel|interrupt/i.test(session.lastStop ?? "")
-    if (interrupted) {
+    const steering = resident.driver?.steering
+    const answering = session.connection !== "disconnected" && steering?.kind === "supported" && steering.answersOnEnd === true
+    if (interrupted && !answering) {
       for (const action of this.host.control(resident).actions ?? []) {
         if (action.bindingId !== bindingId || action.input.kind === "compact" || action.state.kind !== "dispatching") continue
         // A provider may never answer a steer after its turn is cancelled.

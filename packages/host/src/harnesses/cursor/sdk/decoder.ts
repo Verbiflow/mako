@@ -10,6 +10,7 @@ import {
   compactionSummary,
   cursorSdkMessageRecord,
   CursorSdkProjection,
+  cursorUnfinishedToolNote,
   type CursorSdkDelta,
   type CursorSdkMessage,
   type CursorSdkModelSelection,
@@ -166,13 +167,18 @@ export class CursorDecoder {
     return this.projection.settle(settledResults(calls)).map((update) => ({ kind: "update", update }))
   }
 
-  /** Ends the turn's projection, closing any tool row the run left open with what its checkpoint kept (`settled`), else `note`. */
-  finish(outcome: CursorTurnOutcome, note: string, settled?: SdkSettledCalls): Decoded<CursorEffect>[] {
+  /**
+   * Ends the turn's projection, closing any tool row the run left open with
+   * what its checkpoint kept (`settled`), else why it is open, and the
+   * subagents the run left working with it.
+   */
+  finish(outcome: CursorTurnOutcome, error?: string, settled?: SdkSettledCalls): Decoded<CursorEffect>[] {
     const decoded = this.releaseCompaction()
     const projection = this.projection
     this.projection = null
     const results = settledResults(settled ?? [])
-    if (projection) decoded.push(...projection.finish(outcome, note, () => results).map((update) => ({ kind: "update" as const, update })))
+    if (projection) decoded.push(...projection.finish(outcome, cursorUnfinishedToolNote(outcome, error), () => results).map((update) => ({ kind: "update" as const, update })))
+    for (const agent of this.agents.end(outcome, error)) decoded.push({ kind: "effect", effect: { type: "agent", agent } })
     return decoded
   }
 

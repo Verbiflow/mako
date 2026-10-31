@@ -145,9 +145,14 @@ export type NativeFork =
   | { kind: "transcript"; via: string }
   | DriverAbsent
 
-/** Adding a message to the running turn. `lands` says what the harness does with it. */
+/**
+ * Adding a message to the running turn. `lands` says what the harness does
+ * with it. `answersOnEnd`: the harness answers every steer it still holds
+ * when its turn ends, so a turn that ends, even stopped or failed, leaves no
+ * steer whose fate is unknown: its answer is on its way.
+ */
 export type SteerCapability =
-  | { kind: "supported"; lands: LiveSteering; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
+  | { kind: "supported"; lands: LiveSteering; answersOnEnd?: true; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
   | DriverAbsent
 
 /**

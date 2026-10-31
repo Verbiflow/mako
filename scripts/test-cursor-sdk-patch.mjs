@@ -15,19 +15,22 @@ try {
   writeFileSync(join(sdk, "package.json"), readFileSync(join(installed, "package.json")))
   // Model the Settings checkout's cached, unpatched dependency tree without
   // changing the real dependency. Use this version's actual SDK bytes.
+  const unpatched = new Map()
   for (const { target, replacements } of CURSOR_SDK_PATCHES) {
     let source = readFileSync(join(installed, target), "utf8")
     for (const [original, patched] of replacements) {
       assert.equal(source.split(patched).length - 1, 1)
       source = source.replace(patched, () => original)
     }
+    unpatched.set(target, source)
     mkdirSync(dirname(join(sdk, target)), { recursive: true })
     writeFileSync(join(sdk, target), source)
   }
+  const shipped = { read: (target) => unpatched.get(target) }
   assert.throws(() => assertCursorSdkPatched(read), /lacks Mako's complete/)
-  patchCursorSdk(sdk)
+  patchCursorSdk(sdk, shipped)
   const first = CURSOR_SDK_PATCHES.map(({ target }) => read(target))
-  patchCursorSdk(sdk)
+  patchCursorSdk(sdk, shipped)
   assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first, "repeated builds leave patched bytes unchanged")
   const archive = join(root, "app.asar")
   await createPackage(join(root, "app"), archive)
@@ -36,11 +39,19 @@ try {
   const [original, patched] = replacements[1]
   writeFileSync(join(sdk, target), read(target).replace(patched, () => original))
   assert.throws(() => assertCursorSdkPatched(read), /lacks Mako's complete/, "the marker alone cannot hide a partial patch")
-  assert.throws(() => patchCursorSdk(sdk), /incomplete or older/)
   const incompleteArchive = join(root, "incomplete.asar")
   await createPackage(join(root, "app"), incompleteArchive)
   assert.throws(() => assertCursorSdkPatched((file) => extractFile(incompleteArchive, `node_modules/@cursor/sdk/${file}`).toString("utf8")), /lacks Mako's complete/, "the package gate checks the archive, not development dependencies")
-  console.log("Cursor SDK patch: cached unpatched tree repaired, repeat build idempotent, incomplete patch refused, actual ASAR checked")
+  // An incomplete patch, or one an older Mako left (what the updater's copy of a person's modules holds): patched
+  // again from the shipped bytes, never over the old patch.
+  patchCursorSdk(sdk, shipped)
+  assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first, "an incomplete patch is redone")
+  const older = /\/\*mako:patched:\d+\*\//
+  assert.match(read(target), older)
+  writeFileSync(join(sdk, target), read(target).replace(older, () => "/*mako:patched:1*/"))
+  patchCursorSdk(sdk, shipped)
+  assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first, "an older patch is replaced by this one")
+  console.log("Cursor SDK patch: cached unpatched tree repaired, repeat build idempotent, incomplete or older patch redone from the shipped bytes, actual ASAR checked")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

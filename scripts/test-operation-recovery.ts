@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { actionRetainsInput, describeActionRecovery, describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
+import { actionNoticeCurrent, actionRetainsInput, describeActionRecovery, describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 import type { ContextTransfer } from "@mako/host/contracts/conversation-control"
 import { LiveActionSchema, type LiveAction } from "@mako/host/contracts/live-actions"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
@@ -36,5 +36,24 @@ for (const kind of ["compact", "steer", "steer-queued"] as const) {
     if (state.kind === "uncertain") assert.match(description.guidance, /does not .*confirm completion/)
     if (state.kind === "acknowledged") assert.match(description.guidance, /not a completion receipt/)
   }
+}
+{
+  // The notice above the composer says only what still stands (2026-10-31: "Steering message not accepted" stayed
+  // for good after its words had gone as the next message).
+  const turn = "22222222-2222-4222-8222-222222222222", queued = "33333333-3333-4333-8333-333333333333"
+  const refused = { kind: "not-accepted", reason: "Cursor didn't take it into this turn, so it goes as the next message." } as const
+  const steerQueued: LiveAction = { input: { kind: "steer-queued", id, requestId: turn, queuedRequestId: queued, text: "Change direction", attachments: [] }, digest: "digest", bindingId: id, createdAt: 1, queueStatus: "queued", state: refused }
+  assert.equal(actionNoticeCurrent(steerQueued, []), false, "a refused steer whose queued message was put back has nothing left to say")
+  assert.equal(actionNoticeCurrent({ ...steerQueued, queueStatus: undefined }, []), true, "one whose message was never put back still holds the words")
+  const steer: LiveAction = { input: { kind: "steer", id, requestId: turn, text: "Change direction", attachments: [] }, digest: "digest", bindingId: id, createdAt: 1, state: refused }
+  assert.equal(actionNoticeCurrent(steer, []), true, "until the client sends its words as a message")
+  assert.equal(actionNoticeCurrent(steer, [{ id }]), false, "then they are that message's")
+  assert.equal(actionNoticeCurrent({ ...steer, state: { kind: "dispatching" } }, [{ id }]), true, "a steer on its way shows")
+  assert.equal(actionNoticeCurrent({ ...steer, state: { kind: "uncertain", reason: "Reply lost" } }, [{ id }]), true, "an unknown outcome waits for the person")
+  assert.equal(actionNoticeCurrent({ ...steer, state: { kind: "accepted" } }, []), false)
+  const compact: LiveAction = { input: { kind: "compact", id }, digest: "digest", bindingId: id, createdAt: 1, state: { kind: "accepted" } }
+  assert.equal(actionNoticeCurrent(compact, []), true, "a compaction in progress shows until it completes")
+  assert.equal(actionNoticeCurrent({ ...compact, state: { kind: "completed" } }, []), false)
+  assert.match(describeActionRecovery({ ...steer, state: { kind: "dispatching" } }).title, /waiting for the agent/)
 }
 console.log("PASS: all-six plus future-provider transfer receipts, exact request correlation and every action outcome")

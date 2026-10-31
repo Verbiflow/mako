@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { isActiveNativeAgent, type NativeAgentObservation } from "../../../contracts/native-agents.js"
-import { toolTitle, type CursorSdkDelta, type CursorSdkMessage } from "@mako/sessions/cursor-sdk-content"
+import { toolTitle, type CursorSdkDelta, type CursorSdkMessage, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 
 type SubagentCall = Extract<CursorSdkDelta, { type: "subagent-call" }>
 
@@ -46,6 +46,26 @@ export class CursorAgents {
     const agent: NativeAgentObservation = { ...previous, state, ...usage && { usage } }
     this.agents.set(nativeId, agent)
     return agent
+  }
+
+  /**
+   * The children still working when their run ended, ended with it: a run
+   * stays running while a subagent it started works, and its end disposes
+   * them, so none outlives the turn whatever bookend it missed.
+   */
+  end(outcome: CursorTurnOutcome, error?: string): NativeAgentObservation[] {
+    const state: NativeAgentObservation["state"] = outcome === "cancelled" ? { kind: "canceled" }
+      : outcome === "error" ? { kind: "failed", error: `Its run ended with an error${error ? `: ${error.slice(0, 8000)}` : "."}` }
+      : { kind: "unknown", reason: "Its run ended without saying how it finished." }
+    const ended: NativeAgentObservation[] = []
+    for (const [nativeId, agent] of this.agents) {
+      if (!isActiveNativeAgent(agent)) continue
+      const settled: NativeAgentObservation = { ...agent, state }
+      this.agents.set(nativeId, settled)
+      if (agent.toolId) this.ended.delete(agent.toolId)
+      ended.push(settled)
+    }
+    return ended
   }
 
   project(message: CursorSdkMessage): NativeAgentObservation | undefined {
