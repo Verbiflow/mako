@@ -18,6 +18,7 @@ import { splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
 import { invokeRuntime, runtimeInfo, subscribeRuntime } from "@mako/host/transport/connection"
 import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { MachineRuntime } from "@mako/host/usage/machine-runtime"
+import { STREAM_FRAME_MAX_MS, StreamFrames, type StreamClock } from "../src/lib/stream-frames.ts"
 import { Gateway } from "../src/web-client/gateway.ts"
 import { assertOwnHarnessStores } from "./lib/proof-host.ts"
 import { removeScratch } from "./lib/scratch-processes.mjs"
@@ -38,6 +39,10 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * Without `--cloud` the cloud is the protocol's fake gateway, in this process (`lib/sync-bench-cloud.ts`): the hosts'
  * own hops, needing nothing private. With `--cloud <url>` it is that gateway, and a helper on this process's stdin
  * and stdout plays the person there (`helperCloud`); the gateway's own repository has one for a local gateway.
+ *
+ * Each device's window is also played: its live arrivals go through the window's own `StreamFrames`, so the report
+ * says when each word was painted there (`paint`), the batching and the paint's frame included, which per-hop `live`
+ * leaves out.
  *
  * It prints one JSON report to stdout (progress goes to stderr) and checks it against the budgets below: past any of
  * them it exits 1, unless `--report-only`. A run that fails to finish exits 2 either way.
@@ -107,19 +112,72 @@ const TOKEN = /\b(t\d+w\d+)\b/g
 const sentAt = new Map<string, number>()
 /** By device: when each word first reached it live. */
 const seen = new Map<string, Map<string, number>>()
+/** By device: each live arrival that brought new words, in order, for when its window would paint them (`paintedOn`). */
+const arrivals = new Map<string, Array<{ t: number; words: string[] }>>()
 /** By device: when each word it missed live was read again by a snapshot. */
 const reread = new Map<string, Map<string, number>>()
 const rereads: Array<{ device: string; t: number; why: string }> = []
 function scan(into: Map<string, Map<string, number>>, device: string, text: string, at = now()): number {
   let map = into.get(device)
   if (!map) into.set(device, (map = new Map()))
-  let fresh = 0
+  const fresh: string[] = []
   for (const match of text.matchAll(TOKEN))
     if (!map.has(match[1]!)) {
       map.set(match[1]!, at)
-      fresh++
+      fresh.push(match[1]!)
     }
-  return fresh
+  if (into !== seen || !fresh.length) return fresh.length
+  let list = arrivals.get(device)
+  if (!list) arrivals.set(device, (list = []))
+  list.push({ t: at, words: fresh })
+  return fresh.length
+}
+
+/**
+ * When a device's window paints each word it heard live: its arrivals, in order, through the window's own
+ * `StreamFrames` (one per answer, as the transcript has one per message), on a clock that is the arrivals' own. What
+ * the person reading that device sees, short of the paint's own cost: a word waits for its batch, then for its paint.
+ */
+function paintedOn(device: string): Map<string, number> {
+  const painted = new Map<string, number>()
+  const turnOf = (word: string) => word.slice(0, word.indexOf("w"))
+  const turns = Map.groupBy(arrivals.get(device) ?? [], (arrival) => turnOf(arrival.words[0]!))
+  for (const answer of turns.values()) {
+    let clockAt = answer[0]!.t
+    const timers: Array<{ at: number; run: () => void; live: boolean }> = []
+    const clock: StreamClock = {
+      now: () => clockAt,
+      schedule: (run, ms) => {
+        const timer = { at: clockAt + ms, run, live: true }
+        timers.push(timer)
+        return () => void (timer.live = false)
+      },
+    }
+    const runUntil = (to: number) => {
+      for (;;) {
+        const due = timers.filter((timer) => timer.live && timer.at <= to).sort((a, b) => a.at - b.at)[0]
+        if (!due) break
+        clockAt = due.at
+        due.live = false
+        due.run()
+      }
+      clockAt = to
+    }
+    let waiting: string[] = []
+    let text = ""
+    const frames = new StreamFrames(() => {
+      for (const word of waiting) painted.set(word, clockAt)
+      waiting = []
+    }, clock)
+    for (const arrival of answer) {
+      runUntil(arrival.t)
+      waiting.push(...arrival.words)
+      text += `${arrival.words.join(" ")} `
+      frames.next(text)
+    }
+    runUntil(answer.at(-1)!.t + STREAM_FRAME_MAX_MS)
+  }
+  return painted
 }
 const turnWords = (turn: number | string, count = WORDS) => Array.from({ length: count }, (_, index) => `t${turn}w${index + 1}`)
 const saw = (device: string, word: string) => seen.get(device)?.has(word) ?? false
@@ -183,9 +241,10 @@ function link(name: string, upstream: URL) {
   const upgrades: Array<{ t: number; path: string }> = []
   /** When each connection the device opened was accepted: while stalled, a new one is the device replacing a silent socket. */
   const accepts: number[] = []
-  const server: Server = createServer((a) => {
+  // Without Nagle's delay, as a WebSocket's own socket is (`ws` turns it off): the proxy isn't to hold a frame back.
+  const server: Server = createServer({ noDelay: true }, (a) => {
     accepts.push(now())
-    const b = connect(Number(upstream.port || 80), upstream.hostname)
+    const b = connect({ port: Number(upstream.port || 80), host: upstream.hostname, noDelay: true })
     const pair: Pair = { a, b }
     pairs.add(pair)
     a.once("data", (chunk: Buffer) => {
@@ -729,6 +788,17 @@ try {
     secondMac: stats(over("B")),
     cloud: place ? stats(["cloud-1", "cloud-2", "cloud-3"].flatMap(over)) : undefined,
   }
+  // From the model's word to its paint on each device: the batching and the paint's frame, which live leaves out.
+  const paintOf = (device: string) => {
+    const painted = paintedOn(device)
+    return steady.flatMap((word) => (painted.has(word) && sentAt.has(word) ? [painted.get(word)! - sentAt.get(word)!] : []))
+  }
+  const paint = {
+    owner: stats(paintOf("A")),
+    phone: stats(paintOf("phone")),
+    secondMac: stats(paintOf("B")),
+    cloud: place ? stats(["cloud-1", "cloud-2", "cloud-3"].flatMap(paintOf)) : undefined,
+  }
 
   // Status: each change on A, and when each device first showed it.
   // Turn 1 is before B and the phone open the conversation: its changes count only as `new`.
@@ -817,7 +887,7 @@ try {
     return [[hop, { messages: held.messages, bytes: held.bytes, messagesPerToken: round((held.messages / watchers / tokens) * 100) / 100, bytesPerToken: round(held.bytes / watchers / tokens) }]]
   }))
 
-  const measured = { ...head, live, status, reconnect, quiet: values.quiet && cloud.presence ? quiet : undefined, cost, skipped, seconds: Math.round((now() - started) / 1000) }
+  const measured = { ...head, live, paint, status, reconnect, quiet: values.quiet && cloud.presence ? quiet : undefined, cost, skipped, seconds: Math.round((now() - started) / 1000) }
 
   const checks: Array<{ name: string; value: number | null; limit: number; ok: boolean }> = []
   const check = (name: string, value: number | null | undefined, limit: number) => checks.push({ name, value: value ?? null, limit, ok: value !== null && value !== undefined && value <= limit })

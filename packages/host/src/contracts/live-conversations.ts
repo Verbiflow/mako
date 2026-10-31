@@ -673,6 +673,39 @@ export function sharedSession(previous: LiveSessionState, next: LiveSessionState
   return shared ?? next
 }
 
+/** The fields a batch carries whole whenever they are a new value; see `sharedFields`. */
+const WHOLE_FIELDS = ["control", "nativeAgents", "goal", "side", "harnessTurns", "spentThrough", "permissions", "nativeActivity"] as const
+type Shared = Pick<LiveSnapshot, (typeof WHOLE_FIELDS)[number] | "requests">
+
+function keepField<Key extends keyof Shared>(target: Shared, source: Shared, key: Key): void {
+  target[key] = source[key]
+}
+
+/**
+ * `next` keeping `previous`'s value for each field a batch carries whole, and
+ * each request, where equal in content: a batch sends whatever isn't
+ * `previous`'s, to every window and watching device. The code that changes a
+ * conversation builds these anew (a control spread to note one approval, a
+ * request restated for one field); on 2026-10-30 a streamed turn sent its
+ * 2 KB control five times, four of them unchanged.
+ */
+export function sharedFields<Snapshot extends Shared>(previous: Shared, next: Snapshot): Snapshot {
+  let shared: Snapshot | undefined
+  for (const key of WHOLE_FIELDS)
+    if (next[key] !== previous[key] && next[key] !== undefined && canonicalJson(next[key]) === canonicalJson(previous[key]))
+      keepField(shared ??= { ...next }, previous, key)
+  if (next.requests !== previous.requests) {
+    const requests = next.requests.map((request, index) => {
+      const held = previous.requests[index]
+      return request !== held && held?.id === request.id && canonicalJson(request) === canonicalJson(held) ? held : request
+    })
+    const unchanged = requests.length === previous.requests.length && requests.every((request, index) => request === previous.requests[index])
+    if (unchanged || requests.some((request, index) => request !== next.requests[index]))
+      (shared ??= { ...next }).requests = unchanged ? previous.requests : requests
+  }
+  return shared ?? next
+}
+
 /** JSON text whatever order its producer wrote each object's keys in: a list restored from storage equals the one a harness reports again. */
 function canonicalJson<Value>(value: Value): string | undefined {
   return JSON.stringify(value, (_key, field) =>
@@ -712,6 +745,14 @@ export type LiveDriverEvent =
   /** The goal the harness is working toward; `null` when it has none. */
   | { type: "live-goal"; id: string; goal: import("./live-goals.js").GoalObservation | null }
   | { type: "live-permission"; request: LivePermissionRequest }
+
+/**
+ * How often a streaming conversation's batches go, and its window paints: once a frame (`StreamFrames`), the first of
+ * a burst at once. The two share it. On 2026-10-30 batches every 33 ms against paints every 50 beat: a third of the
+ * batches were painted over unseen, on every hop to every device and in the journal, and a word was painted 43 ms after
+ * its model wrote it at the median, 72 at p95; on the paint's own frame each batch paints as it lands, 30 and 52.
+ */
+export const LIVE_FRAME_MS = 50
 
 /** One batch in this many of a conversation is traced, besides each that changes its status, approvals or requests. */
 export const TRACE_EVERY = 25
