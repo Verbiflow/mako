@@ -2,7 +2,7 @@
 // build at the checkout's root, so its aliases, its Tailwind sources and its plugins are the desk's.
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -34,3 +34,6 @@ const written = readFileSync(css, "utf8").replace(/url\(data:font\/woff2;base64,
 })
 writeFileSync(css, written)
 console.log(`web-client: ${fonts} fonts as files of their own`)
+
+// The desk's artwork, for the app to serve at `/artwork` as the desk's window does (`vite.config.ts`, `artwork`).
+cpSync(resolve(root, "public/artwork"), resolve(here, "dist/artwork"), { recursive: true })
