@@ -1,25 +1,18 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
-import { isTurnStart } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
-import { HISTORY_VIEW_EXPIRED, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
-import { historyJsonChunks } from "./live-history-json.js"
+import { HISTORY_VIEW_EXPIRED, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor } from "../contracts/live-history.js"
+import { HistoryRecords, HistoryVersions, historyCapture, historyPage, historyRange, isPartial, type HistoryValue } from "../contracts/history-pages.js"
 import { nativeHistoryRevision } from "./native-history.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { inSlices } from "../base/slices.js"
 import { ContentWeights } from "../contracts/residency.js"
 import type { Entry } from "@mako/sessions/entries"
-import { mediaFacts } from "@mako/sessions/turn-media"
 import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
 import { hostLog } from "../base/host-log.js"
 import { pagedOf, pagedWeight } from "./paged-entries.js"
 
-const PAGE_CHARS = 192 * 1024
-const PAGE_ITEMS = 80
-const TOOL_PREVIEW = 2048
-/** How much of each string a preview's input keeps (`previewInput`). */
-const INPUT_STRING_PREVIEW = 256
 /** A conversation's newest views: the one its windows hold, and ones a read still in flight names. */
 const VIEWS_PER_CONVERSATION = 4
 /** What views keep alive beyond what memory holds of their conversations anyway. */
@@ -28,8 +21,6 @@ const VIEW_BYTES = 128 * 1024 * 1024
 const PRUNE_MS = 30_000
 /** Views let go, remembered by token so a read naming one says why. */
 const GONE_KEPT = 256
-const MAX_RECORDS = 8
-const MAX_ACTIVE_READS = 32
 const IDLE_MS = 10 * 60_000
 interface View { id: string; snapshot: LiveSnapshot; used: number }
 /** Where an entry's bytes are read: its record by the catalog, and Mako's streams folder. */
@@ -37,17 +28,6 @@ interface Originals {
   record(path: string, id: string): Promise<EntryOriginal | null>
   streams: string
 }
-type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | Entry | EntryOriginal
-interface RecordValue {
-  id: string
-  value: HistoryValue
-  reader: Generator<string>
-  next: IteratorResult<string>
-  offset: number
-  recent: Map<number, LiveHistoryChunk>
-  used: number
-}
-
 const snapshotIdentity = z.object({
   session: z.object({ id: z.string() }), revision: z.number(), createdAt: z.number(),
   // These are already typed internal arrays. Check the response category
@@ -64,8 +44,8 @@ const resultArray = z.array(z.unknown())
  * details cross the bridge; every read is pinned to an immutable capture. */
 export class LiveHistoryReader {
   private readonly views = new Map<string, View>()
-  private readonly records = new Map<string, RecordValue>()
-  private readonly versions = new WeakMap<Entry, string>()
+  private readonly records = new HistoryRecords()
+  private readonly versions = new HistoryVersions()
   private readonly weights = new ContentWeights(pagedWeight)
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
   private readonly nativeEntry?: (path: string, id: string) => Promise<Entry | null>
@@ -140,36 +120,15 @@ export class LiveHistoryReader {
     if (held) { this.touchView(held[0], held[1]); snapshot = held[1].snapshot }
     else this.views.set(token, { id: snapshot.session.id, snapshot, used: Date.now() })
     this.pruneSoon()
-    const tail = this.page(token, snapshot, { blocks: snapshot.blocks.length,
-      base: snapshot.base ? snapshot.base.start + snapshot.base.entries.length : 0 })
-    // A background refresh keeps the range the reader explicitly loaded. It
-    // must not throw away earlier pages while a large live event arrives.
-    if (!from) return { ...snapshot, ...tail }
-    const target = { blocks: Math.max(snapshot.baseCoveredBlocks ?? 0, from.blocks), base: from.base }
-    const pages = [tail]
-    let page = tail
-    while (page.history.before && (page.history.blockStart > target.blocks || (page.base?.start ?? 0) > target.base)) {
-      if (page.history.before.blocks === (snapshot.baseCoveredBlocks ?? 0) && page.history.before.base === snapshot.base?.start) break
-      page = this.page(token, snapshot, page.history.before)
-      pages.push(page)
-    }
-    pages.reverse()
-    return { ...snapshot, blocks: pages.flatMap(part => part.blocks),
-      base: tail.base ? { ...tail.base, entries: pages.flatMap(part => part.base?.entries ?? []),
-        start: page.base!.start, hasEarlier: page.base!.hasEarlier } : null,
-      history: { ...tail.history, blockStart: page.history.blockStart, turnStart: page.history.turnStart, before: page.history.before } }
+    return historyCapture(token, snapshot, this.versions, from)
   }
 
   async read(id: string, input: LiveHistoryRead, snapshot: () => Promise<LiveSnapshot | null>): Promise<LiveHistoryChunk> {
     if (this.pruneDue) this.prunePending()
     else if (Date.now() - this.pruned > PRUNE_MS) this.pruneViews()
-    this.pruneRecords()
-    if (input.kind === "part") {
-      const record = this.records.get(input.record)
-      if (!record || record.id !== id) throw new Error("This history read expired. Open the conversation again to refresh it.")
-      return this.part(input.record, record, input.offset)
-    }
-    if ([...this.records.values()].filter(record => !record.next.done).length >= MAX_ACTIVE_READS)
+    this.records.prune()
+    if (input.kind === "part") return this.records.part(id, input.record, input.offset)
+    if (this.records.busy())
       throw new Error("Other history reads are still finishing. Try this read again shortly.")
     let value: HistoryValue | undefined
     if (input.kind === "snapshot") {
@@ -201,18 +160,18 @@ export class LiveHistoryReader {
           // Another read of this page may have prepended it meanwhile.
           if (view.snapshot.base === base) view.snapshot = { ...view.snapshot, base: merged.base }
         }
-        value = input.kind === "range" ? this.range(input.token, view.snapshot, input.from, input.to)
-          : this.page(input.token, view.snapshot, input.before)
+        value = input.kind === "range" ? historyRange(input.token, view.snapshot, input.from, input.to, this.versions)
+          : historyPage(input.token, view.snapshot, input.before, this.versions)
       }
       else if (input.kind === "original") value = await this.original(view.snapshot, input.at)
       else if (input.at.kind === "live") {
         value = view.snapshot.blocks[input.at.index]
-        if (value?.type === "tool") value = { ...value, historyVersion: this.version(value) }
+        if (value?.type === "tool") value = { ...value, historyVersion: this.versions.of(value) }
       } else {
         const base = view.snapshot.base
         const id = input.at.id
         value = base?.entries.find(entry => entry.id === id)
-        const version = value?.type === "tool" ? this.version(value) : undefined
+        const version = value?.type === "tool" ? this.versions.of(value) : undefined
         if (base && value && isPartial(value)) {
           const before = await this.nativePage?.(base.ref.path)
           if (!before || nativeHistoryRevision(before) !== nativeHistoryRevision(base))
@@ -227,12 +186,7 @@ export class LiveHistoryReader {
       }
       if (value === undefined) throw new Error("That retained history item is unavailable.")
     }
-    const record = randomUUID()
-    const reader = historyJsonChunks(value, LIVE_HISTORY_CHUNK_CHARS)
-    const held: RecordValue = { id, value, reader, next: reader.next(), offset: 0, recent: new Map(), used: Date.now() }
-    this.records.set(record, held)
-    this.pruneRecords()
-    return this.part(record, held, 0)
+    return this.records.open(id, value)
   }
 
   /**
@@ -250,46 +204,6 @@ export class LiveHistoryReader {
       : undefined
     const stream = entry.stream && this.originals ? await readStreamOriginal(this.originals.streams, entry.stream) : undefined
     return { kept: record?.kept ?? false, parts: record?.parts ?? [], ...stream && { stream } }
-  }
-
-  private part(key: string, record: RecordValue, offset: number): LiveHistoryChunk {
-    if (offset % LIVE_HISTORY_CHUNK_CHARS !== 0)
-      throw new Error("Invalid history read position")
-    record.used = Date.now()
-    const cached = record.recent.get(offset)
-    if (cached) return cached
-    if (offset !== record.offset) {
-      // Re-reading an older part is harmless. Rebuild its stream from the
-      // pinned value with bounded memory, never from a newer journal snapshot.
-      record.reader = historyJsonChunks(record.value, LIVE_HISTORY_CHUNK_CHARS)
-      record.next = record.reader.next()
-      record.offset = 0
-      while (record.offset < offset && !record.next.done) {
-        record.offset += record.next.value.length
-        record.next = record.reader.next()
-      }
-    }
-    if (record.next.done || record.offset !== offset) throw new Error("Invalid history read position")
-    const data = record.next.value
-    record.offset += data.length
-    record.next = record.reader.next()
-    const chunk = { record: key, offset, data, total: record.next.done ? record.offset : undefined,
-      next: record.next.done ? null : record.offset }
-    record.recent.set(offset, chunk)
-    if (record.recent.size > 2) record.recent.delete(record.recent.keys().next().value!)
-    return chunk
-  }
-
-  private pruneRecords(): void {
-    const now = Date.now()
-    for (const [key, value] of this.records) if (now - value.used > IDLE_MS) this.records.delete(key)
-    const completed = [...this.records].filter(([, value]) => value.next.done).sort((a, b) => a[1].used - b[1].used)
-    let bytes = 0
-    for (const [index, [key, record]] of completed.reverse().entries()) {
-      const weight = record.offset * 2
-      if (index > 0 && (index >= MAX_RECORDS || bytes + weight > 32 * 1024 * 1024)) this.records.delete(key)
-      else bytes += weight
-    }
   }
 
   /**
@@ -363,152 +277,6 @@ export class LiveHistoryReader {
     this.views.delete(token)
     this.views.set(token, view)
   }
-
-  private range(token: string, source: LiveSnapshot, from: LiveHistoryCursor, to: LiveHistoryCursor): LiveHistoryPage {
-    if (from.blocks > to.blocks || from.base > to.base) throw new Error("Invalid retained history range")
-    const parts: LiveHistoryPage[] = []
-    let cursor = to
-    while (cursor.blocks > from.blocks || cursor.base > from.base) {
-      const page = this.page(token, source, cursor)
-      parts.push(page)
-      const next = { blocks: page.history.blockStart, base: page.base?.start ?? 0 }
-      if (next.blocks === cursor.blocks && next.base === cursor.base) throw new Error("That retained history range is unavailable.")
-      cursor = next
-    }
-    if (!parts.length) throw new Error("Invalid empty history range")
-    parts.reverse()
-    const first = parts[0]!, last = parts.at(-1)!
-    const allBlocks = parts.flatMap(part => part.blocks)
-    const allEntries = parts.flatMap(part => part.base?.entries ?? [])
-    const base = last.base ? { ...last.base, entries: allEntries.slice(from.base - (first.base?.start ?? 0)), start: from.base,
-      hasEarlier: from.base > 0 || Boolean(source.base?.hasEarlier) } : null
-    // Recompute the prefix's turn numbering from a page ending at `from`.
-    const prefix = this.page(token, source, from)
-    const turnStart = prefix.history.turnStart + prefix.blocks.filter(isTurnStart).length
-    return { blocks: allBlocks.slice(from.blocks - first.history.blockStart), base,
-      history: { ...last.history, blockStart: from.blocks, blockEnd: to.blocks, turnStart,
-        before: from.blocks > (source.baseCoveredBlocks ?? 0) || base?.hasEarlier ? from : null } }
-  }
-
-  private page(token: string, source: LiveSnapshot, before: LiveHistoryCursor): LiveHistoryPage {
-    const covered = source.baseCoveredBlocks ?? 0
-    const baseOrigin = source.base?.start ?? 0
-    if (before.blocks > source.blocks.length || before.blocks < covered || before.base < baseOrigin ||
-      before.base > baseOrigin + (source.base?.entries.length ?? 0))
-      throw new Error("Invalid retained history cursor")
-    const blocks: Entry[] = []
-    const entries: Entry[] = []
-    let chars = 0
-    let blockStart = before.blocks
-    let baseStart = before.base
-    while (blockStart > covered && blocks.length < PAGE_ITEMS) {
-      const original = source.blocks[blockStart - 1]!
-      const preview = previewLive(original, blockStart - 1)
-      const block = preview.type === "tool" && preview.historyRest ? { ...preview, historyVersion: this.version(original) } : preview
-      const size = JSON.stringify(block).length
-      if (blocks.length && chars + size > PAGE_CHARS) break
-      blocks.push(block)
-      chars += size
-      blockStart--
-    }
-    if (blockStart === covered) {
-      while (baseStart > baseOrigin && entries.length + blocks.length < PAGE_ITEMS) {
-        const original = source.base!.entries[baseStart - baseOrigin - 1]!
-        const preview = previewSaved(original)
-        const entry = preview.type === "tool" && isPartial(preview) ? { ...preview, historyVersion: this.version(original) } : preview
-        const size = JSON.stringify(entry).length
-        if (entries.length + blocks.length > 0 && chars + size > PAGE_CHARS) break
-        entries.push(entry)
-        chars += size
-        baseStart--
-      }
-    }
-    let turnStart = 0
-    const earlierRequests: string[] = []
-    for (let index = 0; index < blockStart; index++) {
-      const block = source.blocks[index]
-      if (block?.type === "user" && block.requestId) earlierRequests.push(block.requestId)
-      if (index >= covered && isTurnStart(block)) turnStart++
-    }
-    const base: ThreadPage | null = source.base ? {
-      ...source.base, entries: entries.reverse(), start: baseStart,
-      hasEarlier: baseStart > baseOrigin || source.base.hasEarlier,
-    } : null
-    return {
-      blocks: blocks.reverse(), base,
-      history: { token, ranges: true, blockStart, blockEnd: before.blocks, turnStart, earlierRequests,
-        before: blockStart > covered || baseStart > baseOrigin || source.base?.hasEarlier ? { blocks: blockStart, base: baseStart } : null },
-    }
-  }
-
-  private version(block: Entry): string {
-    const held = this.versions.get(block)
-    if (held) return held
-    const version = randomUUID()
-    this.versions.set(block, version)
-    return version
-  }
-}
-
-function previewLive(block: Entry, index: number): Entry {
-  if (block.type !== "tool" || !largeTool(block)) return block
-  // What the turn made stays: its shelf reads the preview's media facts.
-  return { ...block, input: previewInput(block.input), output: block.output?.slice(0, TOOL_PREVIEW),
-    details: undefined, attachments: undefined, effects: undefined, ...mediaFacts(block, TOOL_PREVIEW),
-    historyRest: { index, length: block.output?.length ?? 0 } }
-}
-
-/** A saved entry as a page carries it: a large call's head, or an unread record without its raw body; `detail` reads the whole. */
-function previewSaved(entry: Entry): Entry {
-  if (entry.type === "unread") {
-    if (entry.raw === undefined || JSON.stringify(entry.raw).length <= TOOL_PREVIEW) return entry
-    const preview = { ...entry, rawOmitted: true as const }
-    delete preview.raw
-    return preview
-  }
-  if (entry.type !== "tool" || !largeTool(entry)) return entry
-  return { ...entry, input: previewInput(entry.input), output: entry.output?.slice(0, TOOL_PREVIEW) ?? "",
-    outputLength: entry.outputLength ?? entry.output?.length ?? 0, contentOmitted: true,
-    details: undefined, attachments: undefined, effects: undefined, ...mediaFacts(entry, TOOL_PREVIEW) }
-}
-
-/**
- * A large call's input as a preview carries it: still the call's own JSON,
- * each long string cut to its head, so what names the call (an agent's
- * description, a command, a path) reads on its row before the rest is
- * fetched. A plain cut at the preview's length left JSON that no longer
- * parsed, and an agent started with a long prompt read only "Agent" while it
- * ran. Input that isn't JSON, or is still too long once cut, keeps its head.
- * The row's detail reads the whole (`detail`).
- */
-function previewInput(input: string | undefined): string | undefined {
-  if (input === undefined || input.length <= TOOL_PREVIEW) return input
-  try {
-    const parsed = PreviewJson.safeParse(JSON.parse(input))
-    const cut = parsed.success ? JSON.stringify(parsed.data) : undefined
-    if (cut !== undefined && cut.length <= TOOL_PREVIEW) return cut
-  } catch {
-    // Not JSON: a raw command line, a patch. Its head is what there is to show.
-  }
-  return input.slice(0, TOOL_PREVIEW)
-}
-
-type JsonValue = z.infer<ReturnType<typeof z.json>>
-/** A JSON value with each string past `INPUT_STRING_PREVIEW` cut to its head and marked so. */
-const PreviewJson: z.ZodType<JsonValue> = z.lazy(() => z.union([
-  z.string().transform((text) => (text.length > INPUT_STRING_PREVIEW ? `${text.slice(0, INPUT_STRING_PREVIEW)}…` : text)),
-  z.number(), z.boolean(), z.null(), z.array(PreviewJson), z.record(z.string(), PreviewJson),
-]))
-
-function isPartial(entry: Entry): boolean {
-  if (entry.type === "unread") return Boolean(entry.rawOmitted)
-  return entry.type === "tool" && (Boolean(entry.contentOmitted || entry.attachmentsOmitted) ||
-    (entry.outputLength ?? 0) > (entry.output?.length ?? 0))
-}
-
-function largeTool(block: { input?: string; output?: string; details?: unknown; attachments?: unknown }): boolean {
-  return (block.input?.length ?? 0) > TOOL_PREVIEW || (block.output?.length ?? 0) > TOOL_PREVIEW ||
-    JSON.stringify([block.details, block.attachments]).length > TOOL_PREVIEW
 }
 
 /** Puts each entry's paged copy where `entries` holds the entry warm, so the warm one can go. */

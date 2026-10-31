@@ -134,7 +134,9 @@ export class AccountList {
   byConversation(conversation: string): ListedSession | undefined {
     for (const row of this.#list.sessions().values()) if (row.conversation === conversation) return row
     for (const archived of this.#list.archived().values()) for (const row of archived.sessions) if (row.conversation === conversation) return row
-    return undefined
+    // Until the gateway answers, the rows painted from this browser's last list: a conversation on screen is asked about
+    // as it's shown, its Mac's copy read at once if that Mac was off.
+    return accountListStore.get().phase === "cached" ? accountListStore.get().rows.find((row) => row.conversation === conversation) : undefined
   }
 
   /**

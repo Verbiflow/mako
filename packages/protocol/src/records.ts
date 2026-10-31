@@ -256,6 +256,37 @@ export type RecordPulled = z.infer<typeof RecordPulledSchema>
 export const RecordHoldingsPageSchema = z.object({ holdings: RecordHoldingsSchema, next: z.string().nullable() })
 
 /**
+ * What a session's units hold now, in one read: each unit's versions from its newest whole one (`replace`) to its
+ * head, and the remote's number for the newest (`through`), which changes with every version it takes. A reader that
+ * wants only a session's current bytes (a reading copy, rewritten whole every few seconds while its Session works)
+ * reads this rather than pulling every version since the first: a day's copies of a busy Session are thousands.
+ */
+export const RecordHeadSchema = z.object({ through: z.number().int().nonnegative(), units: z.array(RecordUnitSchema) })
+export type RecordHead = z.infer<typeof RecordHeadSchema>
+/** `GET …/sessions/head`'s answer: null for a session the remote holds no records of. */
+export const RecordHeadAnswerSchema = z.object({ head: RecordHeadSchema.nullable() })
+
+/**
+ * The versions a unit's bytes are now, in order: from its newest whole one (`replace`), each `append` after it. The
+ * rule a record store restores a file by; empty for a unit whose newest version deleted it.
+ */
+export function currentVersions(versions: readonly RecordVersion[]): RecordVersion[] {
+  if (!versions.length || versions.at(-1)?.kind === "delete") return []
+  let from = 0
+  versions.forEach((version, index) => {
+    if (version.kind === "replace") from = index
+  })
+  return versions.slice(from).filter((version) => version.kind !== "delete")
+}
+
+/** A version's chunk hashes, in order. */
+export function versionChunks(version: Pick<RecordVersion, "chunks">): string[] {
+  const hashes: string[] = []
+  for (let at = 0; at < version.chunks.length; at += 64) hashes.push(version.chunks.slice(at, at + 64))
+  return hashes
+}
+
+/**
  * A remote record store, as a gateway serves one Thread's: the chunks it lacks, packs of them up and down, and the
  * sessions pushed and pulled by `planRecordImport`'s rule. Every call is safe to repeat: chunks are kept once, a
  * version held is passed over, and reads change nothing. A remote over the network fills in each call's `trace`
@@ -277,5 +308,10 @@ export interface RecordRemote {
   pushWith(bundle: RecordBundle, chunks: PackedChunk[], trace?: GatewayCallTrace): Promise<RecordPushAnswer | { missing: string[] }>
   holdings(harness: string, nativeId: string, after: string, trace?: GatewayCallTrace): Promise<{ holdings: RecordHoldings; next: string | null }>
   pull(harness: string, nativeId: string, after: number, trace?: GatewayCallTrace): Promise<RecordPulled | null>
+  /**
+   * What the session's units hold now (`RecordHead`); null when the remote holds none of it, undefined when it doesn't
+   * answer this (a gateway from before it, or a session too large to answer at once), whose reader pulls instead.
+   */
+  head?(harness: string, nativeId: string, trace?: GatewayCallTrace): Promise<RecordHead | null | undefined>
   sessions(): Promise<RecordSession[]>
 }

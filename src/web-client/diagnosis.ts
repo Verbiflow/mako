@@ -55,6 +55,8 @@ export interface ReachInput {
   harness?: { name: string; state: HopState; reason?: string }
   /** The last failure heard, for its correlation ID and time. */
   failure?: { message: string; at: number; correlationId?: string; outcome?: string }
+  /** Read from the copy its Mac keeps in the account, that Mac being off: when the Mac wrote it, and how it was read here. */
+  copy?: { at: number; read?: string }
   /** Anything else worth quoting: the build, this browser's device, the list's number. */
   facts?: Array<[string, string]>
 }
@@ -88,8 +90,13 @@ export function diagnose(input: ReachInput): Diagnosis | undefined {
   }
   if (input.mac?.quietSince) facts.push([`${host} last heard`, input.mac.quietSince])
   if (input.mac?.version) facts.push([`Mako on ${host}`, input.mac.version])
+  if (input.copy) facts.push(["Copy written", new Date(input.copy.at).toISOString()])
+  if (input.copy?.read) facts.push(["Copy read", input.copy.read])
   facts.push(...(input.facts ?? []))
-  return { ...found, hops, facts }
+  // Its Mac off, what's on screen is that Mac's copy: said beside when it was last seen, with how old the copy is.
+  const written = input.copy && found.at === "mac" ? copyAge(input.copy.at, input.now) : undefined
+  const detail = !written ? found.detail : found.detail ? `${found.detail} · reading its copy from ${written}` : `Reading its copy from ${written}`
+  return { ...found, ...(detail && { detail }), hops, facts }
 }
 
 type Found = Pick<Diagnosis, "headline" | "detail" | "causes" | "at">

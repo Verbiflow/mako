@@ -4,89 +4,17 @@ import { mkdtemp, readFile, rm, truncate } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { planRecordImport, RecordConflictError } from "@mako/protocol/records"
-import { copyFile, CopyHeaderSchema, ReadingCopies, ReceivedCopies } from "../dist/reading-copies.js"
+import { versionChunks } from "@mako/protocol/records"
+import { copyFile, CopyHeaderSchema, parseCopy, ReadingCopies, ReceivedCopies } from "../dist/reading-copies.js"
+import { CopyReader, MemoryCopyStore } from "../dist/copy-reader.js"
+import { ZstdFrames } from "../dist/zstd-frames.js"
+import { MemoryRemote } from "./memory-remote.mjs"
 
 /**
  * A device's reading copies: each Session in scope written as Mako draws it (a header line, then an entry a line) when
  * it changed and its turn came, the ones at work first and more often, captured and pushed so only what changed goes
  * up; waiting on a low battery but for Sessions at work; and after a restart, nothing copied again that hasn't changed.
  */
-
-/** The gateway's records routes in memory: chunks kept once by hash, versions taken by the protocol's rule. */
-class MemoryRemote {
-  constructor(id) {
-    Object.assign(this, { id, chunks: new Map(), units: new Map(), versions: [], bytes: 0, pushed: [] })
-  }
-  async missing(hashes) {
-    return hashes.filter((hash) => !this.chunks.has(hash))
-  }
-  async putChunks(pack) {
-    for (const chunk of pack) this.#keep(chunk)
-    return { taken: pack.length }
-  }
-  async readChunks(hashes) {
-    return hashes.flatMap((hash) => this.chunks.get(hash) ?? [])
-  }
-  async push(bundle) {
-    return this.#take(bundle)
-  }
-  async pushWith(bundle, pack) {
-    for (const chunk of pack) this.#keep(chunk)
-    return this.#take(bundle)
-  }
-  async holdings() {
-    return { holdings: {}, next: null }
-  }
-  async pull(harness, nativeId, after) {
-    const mine = this.versions.filter((entry) => entry.harness === harness && entry.nativeId === nativeId)
-    if (!mine.length) return null
-    const page = mine.filter((entry) => entry.n > after)
-    const units = new Map()
-    for (const entry of page) {
-      if (!units.has(entry.unit.key)) units.set(entry.unit.key, { ...entry.unit, versions: [] })
-      units.get(entry.unit.key).versions.push(entry.version)
-    }
-    return { bundle: { harness, nativeId, layout: this.layout, marks: {}, units: [...units.values()] }, through: page.at(-1)?.n ?? after, more: false }
-  }
-  async sessions() {
-    const sessions = new Map()
-    for (const [key, versions] of this.units) {
-      const [harness, nativeId] = key.split("\n")
-      const session = sessions.get(`${harness}\n${nativeId}`) ?? { harness, nativeId, units: 0, versions: 0, through: 0 }
-      session.units += 1
-      session.versions += versions.length
-      sessions.set(`${harness}\n${nativeId}`, session)
-    }
-    return [...sessions.values()]
-  }
-  #keep(chunk) {
-    if (this.chunks.has(chunk.hash)) return
-    this.chunks.set(chunk.hash, chunk)
-    this.bytes += chunk.body.length
-  }
-  #take(bundle) {
-    const key = (unit) => `${bundle.harness}\n${bundle.nativeId}\n${unit}`
-    try {
-      const plan = planRecordImport(bundle, (unit) => {
-        const held = this.units.get(key(unit))
-        return held && { head: held.length - 1, version: (seq) => held[seq] }
-      })
-      this.layout ??= bundle.layout
-      for (const { unit, version } of plan.taking) {
-        const held = this.units.get(key(unit.key)) ?? []
-        held.push({ kind: version.kind, chunks: version.chunks })
-        this.units.set(key(unit.key), held)
-        this.versions.push({ n: this.versions.length + 1, harness: bundle.harness, nativeId: bundle.nativeId, unit: { ...unit, versions: [] }, version })
-      }
-      if (plan.taking.length) this.pushed.push(bundle.nativeId)
-      return { ok: true, versions: plan.taking.length, held: plan.held, through: 0 }
-    } catch (error) {
-      if (!(error instanceof RecordConflictError)) throw error
-      return { ok: false, conflict: error.conflict, key: error.key, seq: error.seq, head: error.head, message: error.message }
-    }
-  }
-}
 
 /** A Session's view as the catalog serves it: entries by index, the decoder build that drew them. */
 function sessionView(nativeId, entries) {
@@ -348,7 +276,6 @@ test("another device reads a copy as it stands: the newest version, a page at a 
     const earlier = await reader.page(link, "claude", "s-1", newest.start, 100)
     assert.deepEqual([earlier.start, earlier.entries[0].id], [50, "e-50"], "then the page before it")
     assert.equal(pulls, 1, "paging back reads it once")
-    assert.equal((await reader.entry(link, "claude", "s-1", "e-7"))?.id, "e-7")
 
     // The owner's next turn: read once the last read has had 10 s.
     entries.push(turn(250))
@@ -365,6 +292,205 @@ test("another device reads a copy as it stands: the newest version, a page at a 
     owner.stop()
     reader.close()
   } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
+/** A remote counting what it's asked, and failing every call once it's `down` (the account out of reach). */
+function watched(remote) {
+  const asked = { head: 0, pull: 0, readChunks: 0, hashes: 0, down: false, corrupt: false }
+  const proxy = new Proxy(remote, {
+    get: (target, name) => {
+      if (typeof target[name] !== "function") return target[name]
+      return async (...args) => {
+        if (asked.down) throw new Error("offline")
+        if (name in asked) asked[name]++
+        if (name === "readChunks") asked.hashes += args[0].length
+        const answer = await target[name](...args)
+        if (name === "readChunks" && asked.corrupt) return answer.map((chunk) => ({ ...chunk, codec: 0, body: Buffer.from("not this chunk") }))
+        return answer
+      }
+    },
+  })
+  return { proxy, asked }
+}
+
+test("every device reads a copy the same way: its current versions at once, the newest page from a few chunks at the end, earlier pages and entries by ID as asked, and what it read kept for when the account's out of reach", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "mako-copy-reader-"))
+  const frames = new ZstdFrames()
+  try {
+    // About 4 MB of copy: far more chunks than its newest page needs.
+    const entries = Array.from({ length: 1000 }, (_, n) => turn(n))
+    let stamp = "n:1"
+    let now = 3_000_000
+    const remote = new MemoryRemote("gateway/d-studio")
+    remote.answersHead = true
+    const owner = new ReadingCopies(join(folder, "studio"), { view: async () => sessionView("s-1", entries), stamp: () => stamp, translator: () => "t-1" }, () => {}, { now: () => now, remote: () => remote })
+    const scope = { sessions: [{ harness: "claude", nativeId: "s-1", path: "/rail/s-1.jsonl", thread: "t-1", busy: true, tier: "now" }], paused: false }
+    owner.scope(scope)
+    owner.link({ id: "d-studio", base: "https://cloud.test/v1/devices/d-studio/records", authorization: "Bearer b" })
+    await owner.settled()
+    const whole = parseCopy(await readFile(copyFile(join(folder, "studio"), "claude", "s-1"), "utf8"))
+
+    const store = new MemoryCopyStore()
+    const logged = []
+    const { proxy, asked } = watched(remote)
+    const reader = () => new CopyReader({ remote: () => proxy, store, decode: (frame) => frames.decompress(frame), now: () => now, log: (level, message, fields) => logged.push({ level, message, ...fields }) })
+    const phone = reader()
+    const copy = await phone.open("d-studio", "claude", "s-1")
+    assert.ok(copy.chunkCount > 4 * copy.tailChunks - 1, `a copy of many chunks (${copy.chunkCount})`)
+    const newest = await copy.page(undefined, 80)
+    assert.deepEqual([newest.start, newest.total, newest.header.title], [920, 1000, "Session s-1"])
+    assert.deepEqual(newest.entries, whole.entries.slice(920), "the newest page, as the whole copy has it")
+    assert.deepEqual([asked.head, asked.pull], [1, 0], "its current versions in one answer, no versions pulled")
+    assert.ok(asked.hashes <= copy.tailChunks + 1, `the newest page from its last chunks and its header's (${asked.hashes} of ${copy.chunkCount})`)
+    assert.equal(copy.whole, false)
+
+    // Once drawn, the rest filled in from the end back: paging back then reads nothing more.
+    await copy.fill()
+    assert.equal(copy.whole, true)
+    const filled = asked.hashes
+    let before = newest.start
+    const paged = [...newest.entries]
+    while (before > 0) {
+      const page = await copy.page(before, 80)
+      paged.unshift(...page.entries)
+      before = page.start
+    }
+    assert.deepEqual(paged, whole.entries, "paging back reaches the first entry, every entry once and in order")
+    assert.ok(filled <= copy.chunkCount, `every chunk asked once (${filled} of ${copy.chunkCount})`)
+    assert.equal(asked.hashes, filled)
+    assert.deepEqual(await copy.entry("e-3"), whole.entries[3])
+    assert.equal(await copy.entry("e-nobody"), null)
+    assert.deepEqual(phone.reads().at(-1), { ...phone.reads().at(-1), via: "head", size: copy.manifest.size }, "the read, said")
+
+    // Within 10 s: the same copy, nothing asked; then its current versions again, the same chunks: nothing fetched.
+    const hashes = asked.hashes
+    assert.equal(await phone.open("d-studio", "claude", "s-1"), copy)
+    now += 10_000
+    assert.equal(await phone.open("d-studio", "claude", "s-1"), copy, "unchanged, the copy already held")
+    assert.deepEqual([asked.head, asked.hashes], [2, hashes])
+
+    // Its next turn: a new version, read from the chunks it doesn't have yet.
+    entries.push(turn(1000))
+    stamp = "n:2"
+    now += 10_000
+    owner.scope(scope)
+    await owner.settled()
+    const next = await phone.open("d-studio", "claude", "s-1")
+    assert.notEqual(next, copy)
+    assert.equal((await next.page(undefined, 1)).entries[0].id, "e-1000")
+    assert.equal(copy.total, 1000, "the version paged through stays as it was")
+
+    // The account out of reach: a reader that's never read it opens what this one kept, as it was last read.
+    asked.down = true
+    const offline = await reader().open("d-studio", "claude", "s-1")
+    assert.equal((await offline.page(undefined, 1)).entries[0].id, "e-1000")
+    assert.equal(offline.manifest.through, next.manifest.through)
+    asked.down = false
+
+    // A chunk that isn't what its hash says is refused, never kept or drawn.
+    const untouched = new MemoryCopyStore()
+    const fresh = new CopyReader({ remote: () => proxy, store: untouched, decode: (frame) => frames.decompress(frame), now: () => now })
+    asked.corrupt = true
+    await assert.rejects(fresh.open("d-studio", "claude", "s-1"), /isn't the one its hash names/)
+    assert.deepEqual([(await untouched.manifests()).length, (await untouched.chunks(versionChunks(next.manifest))).size], [0, 0], "nothing of it kept")
+    asked.corrupt = false
+    assert.equal((await (await fresh.open("d-studio", "claude", "s-1")).page(undefined, 1)).entries[0].id, "e-1000", "and read again once the account answers right")
+    assert.equal(await phone.open("d-studio", "claude", "nobody"), null, "a Session with no copy: none")
+    owner.stop()
+  } finally {
+    frames.close()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
+test("where a reader can say a copy changed, one it kept opens at once from its own storage, nothing asked first, and the account's newer one is said after", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "mako-copy-reader-kept-"))
+  const frames = new ZstdFrames()
+  try {
+    const entries = Array.from({ length: 200 }, (_, n) => turn(n))
+    let stamp = "n:1"
+    let now = 5_000_000
+    const remote = new MemoryRemote("gateway/d-studio")
+    remote.answersHead = true
+    const owner = new ReadingCopies(join(folder, "studio"), { view: async () => sessionView("s-1", entries), stamp: () => stamp, translator: () => "t-1" }, () => {}, { now: () => now, remote: () => remote })
+    const scope = { sessions: [{ harness: "claude", nativeId: "s-1", path: "/rail/s-1.jsonl", thread: "t-1", busy: true, tier: "now" }], paused: false }
+    owner.scope(scope)
+    owner.link({ id: "d-studio", base: "https://cloud.test/v1/devices/d-studio/records", authorization: "Bearer b" })
+    await owner.settled()
+
+    const store = new MemoryCopyStore()
+    const { proxy, asked } = watched(remote)
+    const changed = []
+    const reader = () => new CopyReader({ remote: () => proxy, store, decode: (frame) => frames.decompress(frame), now: () => now, changed: (...named) => changed.push(named) })
+    // Read once, and filled: what a page that opened it before keeps.
+    await (await reader().open("d-studio", "claude", "s-1")).fill()
+    entries.push(turn(200))
+    stamp = "n:2"
+    now += 10_000
+    owner.scope(scope)
+    await owner.settled()
+
+    // The page again, the account's copy newer meanwhile: what it kept opens before the account is asked.
+    let release
+    asked.held = new Promise((resolve) => (release = resolve))
+    const heads = asked.head
+    const gate = new Proxy(proxy, { get: (target, name) => (name === "head" ? async (...args) => (await asked.held, target.head(...args)) : target[name]) })
+    const gated = new CopyReader({ remote: () => gate, store, decode: (frame) => frames.decompress(frame), now: () => now, changed: (...named) => changed.push(named) })
+    const opened = await gated.open("d-studio", "claude", "s-1")
+    assert.equal((await opened.page(undefined, 1)).entries[0].id, "e-199", "the copy it kept, its newest page from storage")
+    assert.equal(asked.head, heads, "nothing asked of the account before it opened")
+    assert.equal(gated.reads().at(-1).via, "kept")
+    release()
+    for (let tries = 0; !changed.length && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.deepEqual(changed, [["d-studio", "claude", "s-1"]], "the account's newer copy is said once it's read")
+    assert.equal((await (await gated.open("d-studio", "claude", "s-1")).page(undefined, 1)).entries[0].id, "e-200", "and read again, it's the newer one")
+    // Unchanged in the account, nothing is said.
+    const quiet = []
+    const again = new CopyReader({ remote: () => proxy, store, decode: (frame) => frames.decompress(frame), now: () => now, changed: (...named) => quiet.push(named) })
+    assert.equal((await (await again.open("d-studio", "claude", "s-1")).page(undefined, 1)).entries[0].id, "e-200")
+    await again.open("d-studio", "claude", "s-1", { fresh: true })
+    assert.deepEqual(quiet, [])
+    // Without `changed` (a Mac's reader), the account is asked before it opens, as before.
+    const before = asked.head
+    await new CopyReader({ remote: () => proxy, store, decode: (frame) => frames.decompress(frame), now: () => now }).open("d-studio", "claude", "s-1")
+    assert.equal(asked.head, before + 1)
+    owner.stop()
+  } finally {
+    frames.close()
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
+test("from a gateway without the current versions at once, a copy is pulled, and read again from where it was pulled to", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "mako-copy-reader-pull-"))
+  const frames = new ZstdFrames()
+  try {
+    const entries = Array.from({ length: 30 }, (_, n) => turn(n))
+    let stamp = "n:1"
+    let now = 4_000_000
+    const remote = new MemoryRemote("gateway/d-studio")
+    const owner = new ReadingCopies(join(folder, "studio"), { view: async () => sessionView("s-1", entries), stamp: () => stamp, translator: () => "t-1" }, () => {}, { now: () => now, remote: () => remote })
+    const scope = { sessions: [{ harness: "claude", nativeId: "s-1", path: "/rail/s-1.jsonl", thread: "t-1", busy: true, tier: "now" }], paused: false }
+    owner.scope(scope)
+    owner.link({ id: "d-studio", base: "https://cloud.test/v1/devices/d-studio/records", authorization: "Bearer b" })
+    await owner.settled()
+    const pulled = []
+    const pulling = new Proxy(remote, { get: (target, name) => (name === "pull" ? (...args) => (pulled.push(args[2]), target.pull(...args)) : typeof target[name] === "function" ? target[name].bind(target) : target[name]) })
+    const reader = new CopyReader({ remote: () => pulling, store: new MemoryCopyStore(), decode: (frame) => frames.decompress(frame), now: () => now })
+    assert.equal((await (await reader.open("d-studio", "claude", "s-1")).page(undefined, 5)).total, 30)
+    entries.push(turn(30))
+    stamp = "n:2"
+    now += 10_000
+    owner.scope(scope)
+    await owner.settled()
+    assert.equal((await (await reader.open("d-studio", "claude", "s-1")).page(undefined, 5)).total, 31)
+    assert.deepEqual(pulled, [0, 1], "the second read pulls only the versions after the first")
+    assert.equal(reader.reads().at(-1).via, "pull")
+    owner.stop()
+  } finally {
+    frames.close()
     await rm(folder, { recursive: true, force: true })
   }
 })

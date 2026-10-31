@@ -1,7 +1,10 @@
 import { useMemo } from "react"
+import type { CopyRead } from "@mako/sessions/copy-reader"
+import { formatBytes } from "@/lib/format"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useAccountList } from "./account-list"
 import { useWebClient, type WebClient } from "./client"
+import { useCopyReads } from "./copies"
 import { diagnose, type Diagnosis, type HopState, type ReachInput } from "./diagnosis"
 import { webHarnessLabel } from "./labels"
 import { CLOUD, macPlace, threadPlace, unanswered, useReach, within, type Reached } from "./reach"
@@ -34,6 +37,12 @@ export function useSessionDiagnosis(session: WebSession): Diagnosis | undefined 
     if (live?.key !== conversation || live.session.status !== "failed" || live.session.connection === "connected") return undefined
     return live.session.error ?? "It stopped as it started."
   })
+  const copyAt = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return live?.key === conversation ? live.copy?.at : undefined
+  })
+  const owner = session.owner.kind === "device" ? session.owner.deviceId : undefined
+  const read = useCopyReads((state) => state.reads.findLast((each) => each.device === owner && each.harness === session.row.harness && each.nativeId === session.row.nativeId))
   const now = useNow()
   const here = hereOf(useForm())
   return useMemo(() => {
@@ -58,8 +67,15 @@ export function useSessionDiagnosis(session: WebSession): Diagnosis | undefined 
       input.machine = { state: place && !place.ok && place.outcome !== "owner-unavailable" ? "failed" : place?.ok ? "ok" : "unknown", ...(place?.message && !place.ok && { reason: place.message }) }
     }
     if (failure) input.failure = { message: failure.message ?? "No answer", at: failure.at, ...(failure.correlationId && { correlationId: failure.correlationId }), ...(failure.outcome && { outcome: failure.outcome }) }
+    if (copyAt !== undefined) input.copy = { at: copyAt, ...(read && { read: copyReadText(read) }) }
     return diagnose(input)
-  }, [client, online, list, places, session, failedStart, now, here])
+  }, [client, online, list, places, session, failedStart, copyAt, read, now, here])
+}
+
+/** A copy's read, for Diagnostics: "head through 1234, 4.8 MB in 310 chunks, 33 fetched (412 KB), 180 ms". */
+function copyReadText(read: CopyRead): string {
+  const said = `${read.via} through ${read.through}, ${formatBytes(read.size)} in ${read.chunks} chunks, ${read.fetched} fetched (${formatBytes(read.fetchedBytes)}), ${Math.round(read.ms)} ms${read.correlationId ? `, correlation ${read.correlationId}` : ""}`
+  return read.error ? `${said}; the account didn't answer: ${read.error}` : said
 }
 
 /**

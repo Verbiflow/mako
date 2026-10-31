@@ -13,6 +13,7 @@ import {
   interruptSendingDraft,
 } from "@/state/send-recovery"
 import { PromptQueue } from "./prompt-queue"
+import { WAITING_PLACEHOLDER } from "./copy-notice"
 import { promptDelivery } from "@/state/prompt-delivery"
 import { savedMessageDraft, type RestoreSavedMessageEvent, type RestoreUnsentEvent } from "@/lib/saved-message-draft"
 import type { ProposedPlan } from "@mako/sessions/content"
@@ -1112,7 +1113,7 @@ export function Composer() {
         : `Draft a reply — moves this conversation to ${harnessTitle(newHarness)} once it loads`
     : liveOwnsComposer && liveHarness
       ? copyOn
-        ? `Message — waits for ${copyOn} to come back`
+        ? WAITING_PLACEHOLDER
         : liveStarting
         ? `Queue a message for ${harnessTitle(liveHarness)}`
         : liveRunning

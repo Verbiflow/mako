@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { GatewayHttpError, ProblemTitle, gatewayCalls, type GatewayHttpOptions } from "./gateway-http.js"
 import {
+  RecordHeadAnswerSchema,
   RecordHoldingsPageSchema,
   RecordPulledSchema,
   RecordPushAnswerSchema,
@@ -64,6 +65,15 @@ export function recordsOverHttp(options: RecordsHttpOptions): RecordRemote {
         return null
       }
       return RecordPulledSchema.parse(await response.json())
+    },
+    async head(harness, nativeId, trace) {
+      const response = await call(`/sessions/head?${query({ harness, nativeId })}`, { accept: [404, 413], ...trace && { trace } })
+      // The route itself not found (a gateway from before it), or a session too large to answer at once: read by pulling.
+      if (response.status === 404 || response.status === 413) {
+        await response.body?.cancel()
+        return undefined
+      }
+      return RecordHeadAnswerSchema.parse(await response.json()).head
     },
     async sessions() {
       return z.object({ sessions: z.array(RecordSessionSchema) }).parse(await (await call("/sessions")).json()).sessions

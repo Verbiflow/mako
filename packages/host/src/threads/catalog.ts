@@ -325,8 +325,6 @@ export interface ThreadCatalog {
   recent(since: string): ThreadRef[]
   /** A page of the copy another device keeps of a Session, at its records in the account (`SessionCatalog.copyPage`). */
   copyPage(link: RecordsLink, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null>
-  /** One entry of such a copy (`SessionCatalog.copyEntry`). */
-  copyEntry(link: RecordsLink, harness: string, nativeId: string, id: string): Promise<Entry | null>
   /** Sends the sessions at `paths` to a remote store now and through to their newest, as a move hands them on (`SessionCatalog.sendRecords`). */
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** Takes sessions from a remote store into their harnesses' own stores here, as a move's destination does (`SessionCatalog.receiveRecords`). */
@@ -546,7 +544,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let syncScope: SyncScope | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "syncCopies" | "syncOriginals" | "scopeSync" | "syncStatus" | "copyPage" | "copyEntry" | "sendRecords" | "receiveRecords" | "stageRecords">
+    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "syncCopies" | "syncOriginals" | "scopeSync" | "syncStatus" | "copyPage" | "sendRecords" | "receiveRecords" | "stageRecords">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -1390,12 +1388,6 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return source.copyPage(link, harness, nativeId, before, limit)
   }
 
-  async function copyEntry(link: RecordsLink, harness: string, nativeId: string, id: string): Promise<Entry | null> {
-    const { source, signal } = await awaitCatalogReady()
-    signal.throwIfAborted()
-    return source.copyEntry(link, harness, nativeId, id)
-  }
-
   async function syncOriginals(link: RecordsLink | null): Promise<void> {
     originalsLink = link
     const { source, signal } = await awaitCatalogReady()
@@ -1743,7 +1735,6 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     syncStatus,
     recent: recentThreads,
     copyPage,
-    copyEntry,
     sendRecords,
     receiveRecords,
     stageRecords,

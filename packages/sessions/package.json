@@ -11,6 +11,7 @@
     "./record-files": "./dist/record-files.js",
     "./record-original": "./dist/record-original.js",
     "./record-sync": "./dist/record-sync.js",
+    "./copy-reader": "./dist/copy-reader.js",
     "./reading-copies": "./dist/reading-copies.js",
     "./scoped-uploads": "./dist/scoped-uploads.js",
     "./stream-merge": "./dist/stream-merge.js",

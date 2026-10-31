@@ -119,13 +119,13 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
     >
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label text-faint">
         {waitsFor ? <ClockIcon className="size-3.5" /> : <CornerDownRightIcon className="size-3.5" />}
-        <span className="font-medium text-muted-foreground">{waitsFor ? `Waiting for ${waitsFor}` : "Up next"}</span>
-        <span>
+        <span className="min-w-0 truncate font-medium text-muted-foreground">{waitsFor ? `Waiting for ${waitsFor}` : "Up next"}</span>
+        <span className="shrink-0 whitespace-nowrap">
           {delivery.length} {delivery.length === 1 ? "message" : "messages"}
         </span>
         <span className="ml-auto truncate" data-queue-when>
           {waitsFor
-            ? `Runs there once ${waitsFor} is back`
+            ? "Runs there once it's back"
             : delivery[0] && "signIn" in delivery[0] && delivery[0].signIn
               ? "Sends after Resume"
               : delivery[0] && "wake" in delivery[0] && delivery[0].wake
