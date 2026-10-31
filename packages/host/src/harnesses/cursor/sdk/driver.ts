@@ -33,7 +33,7 @@ import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from 
 import { CursorSdkClient, CursorSdkError, cursorSdkPackages } from "./client.js"
 import { createCursorModelCache, cursorSettings, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
-import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
+import type { CursorSdkModelSelection, CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../../native-stream.js"
@@ -241,7 +241,7 @@ function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, erro
       live.settledTurns.delete(live.settledTurns.values().next().value!)
   }
   live.turn = null
-  const decoded = live.decoder.finish(outcome, cursorUnfinishedToolNote(outcome, error), settled)
+  const decoded = live.decoder.finish(outcome, error, settled)
   if (observed)
     for (const item of decoded) if (item.kind === "update") live.stream?.drawn(JSON.parse(JSON.stringify(item.update)))
   deliver(engine, live, decoded)
@@ -927,15 +927,19 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         throw error
       }
     },
-    // Verified 2026-09-13 (SDK 1.0.31): a steer delivered while `sleep 6 &&
-    // echo two` ran completed that shell step after 1.7 s and the model
-    // resumed with the steered text, so the SDK cuts the current step short
-    // rather than waiting for it, the same as `cursor-agent acp` did.
-    steering: { kind: "supported", lands: "interrupt", via: "A message sent while a run works cuts its current step short and the model continues with it.", async steer(id, input): Promise<ProviderSteerResult> {
+    // Verified 2026-10-31 (SDK 1.2.0): a steer sent 20 s into a foreground
+    // `sleep 150` cut it short within 0.5 s and the model answered it; one
+    // sent while a `task` subagent worked was held until the subagent
+    // returned 136 s later, then delivered. The SDK answers a steer it holds
+    // when its run ends (`revert_to_followup`), and its words go as the next
+    // message: the queued one it came from is put back, else the client sends it.
+    steering: { kind: "supported", lands: "interrupt", answersOnEnd: true, via: "A message sent while a run works cuts a running command short and the model continues with it; a running subagent finishes first. One the run ends before taking goes as the next message.", async steer(id, input): Promise<ProviderSteerResult> {
       const live = requireLive(id)
       if (live.state.status !== "running" || live.state.nativeRunId !== input.expectedRunId)
-        return { kind: "not-accepted", reason: "The Cursor turn has already changed" }
+        return { kind: "not-accepted", reason: "The Cursor turn had already changed, so it goes as the next message." }
+      const started = Date.now()
       const result = await live.client.request("steer", { text: promptText(input.text, input.attachments) })
+      hostLog("cursor-sdk", "steer answered", { conversation: live.state.id, outcome: result.outcome, ms: Date.now() - started })
       if (result.outcome === "complete_delivered") {
         live.stream?.steered(input.text, input.shown)
         engine.emitUpdate(live, {
@@ -945,7 +949,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         })
         return { kind: "accepted" }
       }
-      return { kind: "not-accepted", reason: "Cursor could not fold the message into the running turn" }
+      return { kind: "not-accepted", reason: "Cursor didn't take it into this turn, so it goes as the next message." }
     } },
     async permission(id, requestId, response, dispatch) {
       dispatch.assertCurrent()

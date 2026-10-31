@@ -3043,9 +3043,18 @@ passes `settingSources: ["project", "user"]`; without it the SDK loads no
 on-disk config at all — no `.cursor/hooks.json` (the one policy hook the
 SDK honours), none of Cursor's own `mcp.json` servers (which the reach
 predicate never projects because a provider is expected to load its own),
-no project rules. `Run.steer` cuts the current step short (a `sleep 6` shell
-step completed after 1.7 s when the steer landed) and the model continues
-with the message, so the driver advertises `interrupt`. `@cursor/sdk-*` is
+no project rules. `Run.steer` cuts a running command short (SDK 1.2.0: a
+foreground `sleep 150` ended 0.5 s after the steer) and the model continues
+with the message, so the driver advertises `interrupt`. A running `task`
+subagent is not cut short: the SDK holds the steer until it returns (136 s in
+the same check) and answers `revert_to_followup` for one its run ends before
+taking, so its words go as the next message; the driver declares that answer
+(`answersOnEnd`), and `LiveActions.settle` waits for it rather than calling a
+stopped turn's steer unknown. The SDK runs every turn with a logger that
+drops every entry, among them its retry, resume and stall account
+(`[nal_agent_retries]`, `[AGENT_ERROR_DIAGNOSTICS]`); `scripts/patch-cursor-sdk.mjs`
+hands each entry to the process and the child writes those to the host log
+(`run-log.ts`). `@cursor/sdk-*` is
 `asarUnpack`ed for its `cursorsandbox`, `rg` and tree-sitter binaries.
 `scripts/test-cursor-sdk.ts` covers the projection, modes and wire; a live
 check is `node` against `packages/host/dist/harnesses/cursor/sdk/client.js` in a
@@ -3303,6 +3312,11 @@ repeatedly` after its transport retries, each of which resent the action and
 re-ran its tools, and `Agent turn stopped after repeated resume attempts made
 no progress`. Both settle `failed` with `RETRIES_EXHAUSTED_STOP`, which the
 host never continues, except when the agent's turn had already ended. A
+resume re-runs the tool calls still in flight under the same call ids, so a
+cut while `task` subagents work starts each over: on 2026-10-31 (SDK 1.2.0)
+five 18-minute subagents restarted twice, 49 s and 34 s apart, before the
+no-progress error; the same subagent work ran 21 minutes uncut in a
+scratch check, so a long call alone doesn't cut the stream. A
 stream error after `turn-ended` makes the SDK resume inside the same run from
 an older checkpoint; each resume re-streams the closing and ends the turn
 again, and two that save nothing end the run with the no-progress error. The

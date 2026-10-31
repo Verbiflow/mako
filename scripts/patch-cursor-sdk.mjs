@@ -16,6 +16,10 @@
 //    a new child starts at zero, so both rewrite the file in full, which the
 //    SDK's own streamed writer (`streamFullJsonlWrites`) does a megabyte at a
 //    time instead of as one string.
+// Separately, the SDK runs every turn with a logger that drops every entry,
+// among them its only account of why a run's stream was cut and how it retried
+// or resumed. The patched logger hands each entry to the process as a
+// `mako:cursor-sdk-log` event, where the Cursor child keeps that account.
 // A cached streaming tool's source failure reaches every active and later
 // replay reader in the SDK itself since 1.0.40 (`scripts/test-cursor-tool-stream.mjs`).
 import { readFileSync, writeFileSync } from "node:fs"
@@ -24,7 +28,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const VERSION = "1.2.0"
-const MARKER = "/*mako:patched:4*/"
+const MARKER = "/*mako:patched:5*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -116,17 +120,20 @@ function transcripts({ writer, store, write, fs, child }) {
   ]
 }
 
+/** `logger` is the backend every local run's context logs to. */
+const runLog = logger => [`${logger}={log(){}}`, `${logger}={log(e,t){process.emit("mako:cursor-sdk-log",t)}}`]
+
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
   { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
-  { target: "dist/esm/336.js", replacements: transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), change: "incremental transcripts" },
-  { target: "dist/cjs/336.js", replacements: transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), change: "incremental transcripts" },
+  { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), runLog("BF")], change: "incremental transcripts and the run log" },
+  { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), runLog("qF")], change: "incremental transcripts and the run log" },
 ]
 
 function assertVersion(read) {
   const { version } = JSON.parse(read("package.json"))
   if (version !== VERSION)
-    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs and transcript writes, then port or delete this patch.`)
+    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes and the run log, then port or delete this patch.`)
 }
 
 /** Checks every replacement, including the SDK bytes inside the built archive. */

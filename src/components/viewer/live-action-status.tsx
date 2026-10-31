@@ -1,5 +1,5 @@
 import { useAcp, activeLiveAcp } from "@/state/acp"
-import { describeActionRecovery } from "@mako/host/contracts/operation-recovery"
+import { actionNoticeCurrent, describeActionRecovery } from "@mako/host/contracts/operation-recovery"
 import { acknowledgeLiveAction } from "@/state/live-actions"
 import { Notice, NoticeAction, type NoticeTone } from "@/components/ui/notice"
 
@@ -9,13 +9,9 @@ export function LiveActionStatus({ history = false }: { history?: boolean }) {
   const action = useAcp((state) =>
     activeLiveAcp(state)?.control?.actions?.at(-1)
   )
+  const requests = useAcp((state) => activeLiveAcp(state)?.requests)
   if (!id || !action) return null
-  if (
-    !history &&
-    (action.state.kind === "acknowledged" || action.state.kind === "completed" ||
-      (action.state.kind === "accepted" && action.input.kind !== "compact"))
-  )
-    return null
+  if (!history && !actionNoticeCurrent(action, requests ?? [])) return null
   const state = action.state
   const recovery = describeActionRecovery(action)
   const troubled =

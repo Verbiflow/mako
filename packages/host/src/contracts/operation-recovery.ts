@@ -9,13 +9,32 @@ export function actionRetainsInput(action: LiveAction): boolean {
   return action.state.kind !== "not-accepted"
 }
 
+/**
+ * Whether the action's notice above the composer still says something true.
+ * A steer the agent didn't take is over once its words are a message of
+ * their own: the queued message it came from, which the refusal put back
+ * (`queueStatus`), or the follow-up the client sends under the action's ID.
+ */
+export function actionNoticeCurrent(action: LiveAction, requests: readonly Pick<LiveRequest, "id">[]): boolean {
+  const state = action.state
+  if (state.kind === "acknowledged" || state.kind === "completed") return false
+  if (action.input.kind === "compact") return true
+  if (state.kind === "accepted") return false
+  if (state.kind !== "not-accepted") return true
+  if (action.input.kind === "steer-queued") return !action.queueStatus
+  const id = action.input.id
+  return !requests.some((request) => request.id === id)
+}
+
 export function describeActionRecovery(action: LiveAction) {
   const compact = action.input.kind === "compact"
   const label = compact ? "Compaction" : "Steering message"
   const state = action.state
   switch (state.kind) {
     case "dispatching":
-      return { title: `${label} awaiting confirmation`, guidance: "Mako saved the action. The agent has not confirmed acceptance yet." }
+      return compact
+        ? { title: `${label} awaiting confirmation`, guidance: "Mako saved the action. The agent has not confirmed acceptance yet." }
+        : { title: `${label} waiting for the agent`, guidance: "Mako sent it. The agent takes it at its next step, once the call it's in returns, so a subagent it waits on finishes first." }
     case "accepted":
       return { title: `${label} ${compact ? "in progress" : "accepted"}`, guidance: "The agent accepted the action. Completion has not been confirmed." }
     case "completed":

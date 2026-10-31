@@ -1,4 +1,3 @@
-import { cursorUnfinishedToolNote } from "@mako/sessions/cursor-sdk-content"
 import type { JsonObject, JsonValue } from "../../../contracts/json.js"
 import type { Decoded } from "../../../contracts/native-decoding.js"
 import type { LiveSessionState } from "../../../contracts/providers-acp.js"
@@ -83,7 +82,7 @@ export const cursorDecoderSource: ProviderDecoderSource = {
           decoder.startTurn(turn)
         }
         if (event.event === "result")
-          return decoder.finish(event.result.status, cursorUnfinishedToolNote(event.result.status, event.result.error?.message), event.result.settled)
+          return decoder.finish(event.result.status, event.result.error?.message, event.result.settled)
         if (event.event === "settled") return decoder.settle(event.calls)
         const decoded = decoder.decode(event)
         for (const item of decoded) if (item.kind === "state" && item.patch.settings) state = { settings: item.patch.settings }

@@ -2,7 +2,7 @@ import { readLiveSnapshot } from "@/state/live-history"
 import { toast } from "sonner"
 import { z } from "zod"
 import { getMako } from "@/lib/bridge"
-import type { LiveActionInput } from "@/lib/types"
+import type { LiveAction, LiveActionInput } from "@/lib/types"
 import { actionRetainsInput } from "@mako/host/contracts/operation-recovery"
 import { applyLiveSnapshot } from "./live-recovery"
 
@@ -33,6 +33,12 @@ function actionError(input: LiveActionInput, message: string): string {
     : message
 }
 
+/** A refusal whose queued message was put back only says where its words went: they go next. */
+function refused(action: Pick<LiveAction, "queueStatus">, reason: string): void {
+  if (action.queueStatus) toast(reason)
+  else toast.error(reason)
+}
+
 /** A saved receipt owns the draft even when the HTTP response is lost. */
 export async function performLiveAction(
   id: string,
@@ -41,7 +47,7 @@ export async function performLiveAction(
   try {
     const result = await getMako().liveAction(id, input)
     if (result.state.kind === "not-accepted") {
-      toast.error(result.state.reason)
+      refused(result, result.state.reason)
       return false
     }
     if (result.state.kind === "uncertain" || result.state.kind === "failed") toast.error(result.state.reason)
@@ -55,7 +61,7 @@ export async function performLiveAction(
         (action) => action.input.id === input.id
       )
       if (receipt) {
-        if (receipt.state.kind === "not-accepted") toast.error(receipt.state.reason)
+        if (receipt.state.kind === "not-accepted") refused(receipt, receipt.state.reason)
         return actionRetainsInput(receipt)
       }
     }

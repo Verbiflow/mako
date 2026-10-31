@@ -22,6 +22,7 @@ import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { adoptedEnvironment } from "@mako/host/harnesses/cursor/sdk/adopt"
+import { CursorSdkLogEntry, cursorRunLogLine } from "@mako/host/harnesses/cursor/sdk/run-log"
 
 const nativeStores = new NativeStores(false)
 
@@ -672,10 +673,11 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const { memorySecrets } = await import("@mako/host/base/secrets")
   const { createCursorSdkDriver } = await import("@mako/host/harnesses/cursor/sdk/driver")
   type Client = import("@mako/host/harnesses/cursor/sdk/driver").CursorSdkLiveClient
-  type Answers = { [M in SdkMethod]?: () => SdkResult<M> }
+  type Answers = { [M in SdkMethod]?: () => SdkResult<M> | Promise<SdkResult<M>> }
 
   const root = mkdtempSync(join(tmpdir(), "mako-cursor-events-"))
   let childEvent: (event: SdkEvent) => void = () => {}
+  let steered = Promise.withResolvers<SdkResult<"steer">>()
   const client: Client = {
     alive: true,
     exited: new Promise(() => {}),
@@ -686,6 +688,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
         open: () => ({ agentId: "fixture-agent", model: { id: "fixture-model" } }),
         active: () => ({}),
         send: () => ({ runId: "fixture-run" }),
+        steer: () => steered.promise,
       }
       const respond = answers[method]
       if (!respond) throw new Error(`Unexpected fixture method: ${method}`)
@@ -717,6 +720,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const id = randomUUID()
   const markers: string[] = []
   const activity: string[] = []
+  const agents = new Map<string, string>()
   let lastStop: string | undefined
   try {
     await driver.start(root, admitted("cursor", {
@@ -728,6 +732,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
         }
         if (event.type === "live-activity") activity.push(event.activity?.kind ?? "idle")
         if (event.type === "live-session") lastStop = event.session.lastStop
+        if (event.type === "live-agent") agents.set(event.agent.nativeId, event.agent.state.kind)
       },
     }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
     const summary = (text: string) => (turn: string): SdkEvent => ({ event: "message", turn, message: { ...run, type: "task", text } })
@@ -779,6 +784,31 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     assert.equal(lastStop, RETRIES_EXHAUSTED_STOP)
     assert.deepEqual(await turn([], { status: "error", error: { message: "Connection failed repeatedly" }, turnEnded: true }), ["Turn failed | Connection failed repeatedly | error"],
       "a transport give-up stays failed after the turn ended: those retries resend the action and re-run its tools")
+
+    // 2026-10-31, as the SDK streamed it: a turn starts five subagents (two here), each `task` bookend twice; its
+    // resumes re-emit them as running; then it gives up. The subagents died with the run: none is left working.
+    const task = (call: string, agentId: string) => (turn: string): SdkEvent => ({ event: "message", turn, message: { ...run, type: "tool_call", call_id: call, name: "task", status: "running", args: { agentId, description: `Brief ${agentId}` } } })
+    const subagentCall = (call: string) => (turn: string): SdkEvent => ({ event: "delta", turn, delta: { type: "subagent-call", task: call, callId: `${call}-read`, name: "shell", status: "running", args: { command: "cat brief.md" } } })
+    const launched = [task("call-a", "agent-a"), task("call-a", "agent-a"), task("call-b", "agent-b"), task("call-b", "agent-b"), subagentCall("call-a"), subagentCall("call-b")]
+    await turn([...launched, ...launched], { status: "error", error: { message: gaveUp } })
+    assert.deepEqual([...agents], [["agent-a", "failed"], ["agent-b", "failed"]], "a run that gave up leaves no subagent working (\"Waiting on 10 agents\")")
+    agents.clear()
+    await turn([task("call-c", "agent-c"), subagentCall("call-c")], { status: "cancelled" })
+    assert.deepEqual([...agents], [["agent-c", "canceled"]], "Stop cancels the subagents its run started")
+
+    // A steer the SDK held while a subagent worked is answered when its run ends: it never reached the model, and its
+    // words go as the next message.
+    agents.clear()
+    const attemptId = randomUUID()
+    await driver.prompt(id, "go", [], undefined, { operationId: randomUUID(), attemptId, report() {} })
+    childEvent(task("call-d", "agent-d")(attemptId))
+    const steering = driver.steering
+    assert.ok(steering.kind === "supported" && steering.answersOnEnd, "the SDK answers every steer it holds when its run ends")
+    const answer = steering.steer(id, { id: randomUUID(), expectedRunId: "fixture-run", text: "the code is the truth", attachments: [] })
+    childEvent({ event: "result", turn: attemptId, result: { runId: "fixture-run", status: "cancelled" } })
+    steered.resolve({ outcome: "revert_to_followup" })
+    assert.deepEqual(await answer, { kind: "not-accepted", reason: "Cursor didn't take it into this turn, so it goes as the next message." })
+    steered = Promise.withResolvers()
   } finally {
     await driver.close(id)
     rmSync(root, { recursive: true, force: true })
@@ -793,4 +823,25 @@ console.log("cursor sdk: compaction markers carry their summary in either order;
   assert.deepEqual(adopted, { PATH: "/session/bin", MAKO_THREAD_DATA_DIR: "/thread", CURSOR_RIPGREP_PATH: "/kept/rg" })
   assert.equal(adoptedEnvironment({ CURSOR_RIPGREP_PATH: "/kept/rg" }, { CURSOR_RIPGREP_PATH: "/session/rg" }).CURSOR_RIPGREP_PATH, "/session/rg")
   console.log("cursor sdk: an adopted child takes the session's environment, never the key")
+}
+
+// The SDK's run log reaches the host only for the turn runner's retries and resumes and the stream's stall warnings, each on one line with its details.
+{
+  const runner = "@anysphere/agent-client:turn-runner"
+  const entry = (logger: string, level: CursorSdkLogEntry["level"], message: string, metadata?: Record<string, number | string | boolean>, error?: Error) =>
+    CursorSdkLogEntry.parse({ level, message, logger, metadata, error, context: {}, timestamp: new Date(0) })
+  assert.equal(cursorRunLogLine(entry(runner, "info", "[nal_agent_retries] Initial request", { attempt: 0 })), undefined)
+  assert.equal(cursorRunLogLine(entry(runner, "info", "[nal_agent_retries] Request successful")), undefined)
+  assert.equal(cursorRunLogLine(entry("@anysphere/agent-exec:mcp", "info", "[mcp] tool listed", { tool: "fixture" })), undefined)
+  assert.equal(CursorSdkLogEntry.safeParse("not an entry").success, false)
+  const stalls = "@anysphere/agent-client:stall-detector"
+  assert.equal(cursorRunLogLine(entry(stalls, "info", "[NAL client stall detector] Stream stall detector disposed", { reqId: "r0" })), undefined)
+  assert.deepEqual(cursorRunLogLine(entry(stalls, "warn", "[NAL client stall detector] Advisory stall detected - no activity for advisory threshold period", { reqId: "r0" })), { level: "warn", message: "[NAL client stall detector] Advisory stall detected - no activity for advisory threshold period { reqId: 'r0' }" })
+  const resumed = cursorRunLogLine(entry(runner, "info", "[nal_agent_retries] Resuming from checkpoint", { nextAttempt: 2, reason: "resume_action" }))
+  assert.deepEqual(resumed, { level: "info", message: "[nal_agent_retries] Resuming from checkpoint { nextAttempt: 2, reason: 'resume_action' }" })
+  const gaveUp = cursorRunLogLine(entry(runner, "warn", "[AGENT_ERROR_DIAGNOSTICS] requestId=r1 originalRequestId=r0 decision=THROW", { decision: "THROW", stallAborted: true }, new Error("stream stalled\nsecond line")))
+  assert.equal(gaveUp?.level, "warn")
+  assert.ok(gaveUp?.message.startsWith("[AGENT_ERROR_DIAGNOSTICS] requestId=r1 originalRequestId=r0 decision=THROW { decision: 'THROW', stallAborted: true } Error: stream stalled | second line"), gaveUp?.message)
+  assert.ok(!gaveUp.message.includes("\n"))
+  console.log("cursor sdk: the run log keeps retries, resumes and stalls on one line each, and nothing routine")
 }

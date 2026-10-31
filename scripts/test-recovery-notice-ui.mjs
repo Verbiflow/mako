@@ -293,7 +293,7 @@ async function checkWindow() {
           assert.equal(input.requestId,runningId)
           assert.equal(input.text,'Check the retry boundary exactly once.')
           assert.deepEqual(await evaluate('window.__queueEdits'),[])
-          await until("document.querySelector('[data-action-recovery]')?.textContent.includes('awaiting confirmation')")
+          await until("document.querySelector('[data-action-recovery]')?.textContent.includes('waiting for the agent')")
           assert.equal(await evaluate("Boolean(document.querySelector('[aria-label=\"Send now, into the running turn\"]'))"),false)
           if(harness==='claude') await capture(outcome+'-intent-owned.png')
           await evaluate('window.__releaseQueuedSteer();true')
