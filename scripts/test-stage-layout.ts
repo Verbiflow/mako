@@ -44,11 +44,11 @@ import { viewedThread } from "../src/state/thread-viewing.ts"
 import {
   groupThreadFolders,
   orderThreadFolders,
-  stableFolderRanks,
   stableThreadRanks,
   threadBelongsToWorkspace,
   threadFolderKey,
   visibleThreadFolders,
+  workedFolderRanks,
   type RailRanks,
 } from "../src/lib/thread-folders.ts"
 import {
@@ -106,6 +106,7 @@ import {
   canonicalThreadRefs,
   sameAcpPresence,
   selectAcpPresence,
+  type SessionOwner,
 } from "../src/state/acp-presence.ts"
 import type {
   ChatMessage,
@@ -1042,38 +1043,36 @@ const idleFollows = stableThreadRanks(
 )
 assert.equal(idleFollows["/a"]?.at, "2026-09-11T10:20:00Z", "an idle thread still follows outside activity")
 
-// Folders hold their place from first sight. An agent's reply does not lift
-// one; your own prompt there does; a pinned folder stays above both.
-const heldRefs = [busyRef("/a", "/one", "2026-09-11T10:00:00Z"), busyRef("/b", "/two", "2026-09-11T09:00:00Z")]
-const heldFolders = groupThreadFolders({ refs: heldRefs, pinnedThreads: [], pinnedFolders: [], sortBy: "recent" })
-const firstFolderRanks = stableFolderRanks(heldFolders, {}, {})
-assert.deepEqual(firstFolderRanks, { "/one": "2026-09-11T10:00:00Z", "/two": "2026-09-11T09:00:00Z" })
-const grownFolders = groupThreadFolders({
-  refs: [busyRef("/a", "/one", "2026-09-11T10:00:00Z"), busyRef("/b", "/two", "2026-09-11T11:00:00Z")],
-  pinnedThreads: [],
-  pinnedFolders: [],
-  sortBy: "recent",
-})
-assert.deepEqual(grownFolders.map((folder) => folder.cwd), ["/two", "/one"], "unheld, the newer reply would lead")
-const heldFolderRanks = stableFolderRanks(grownFolders, {}, firstFolderRanks)
-assert.equal(heldFolderRanks["/two"], "2026-09-11T09:00:00Z", "an agent's reply does not lift its folder")
-assert.deepEqual(orderThreadFolders(grownFolders, heldFolderRanks, "recent").map((folder) => folder.cwd), ["/one", "/two"], "the folder order is the held order")
-const usedFolderRanks = stableFolderRanks(grownFolders, { "/two": "2026-09-11T12:00:00Z" }, heldFolderRanks)
-assert.equal(usedFolderRanks["/two"], "2026-09-11T12:00:00Z", "your own prompt lifts the folder")
-assert.deepEqual(orderThreadFolders(grownFolders, usedFolderRanks, "recent").map((folder) => folder.cwd), ["/two", "/one"])
-assert.deepEqual(orderThreadFolders(grownFolders, usedFolderRanks, "name").map((folder) => folder.cwd), ["/one", "/two"], "by-name order ignores held ranks")
-const pinnedHeld = groupThreadFolders({ refs: heldRefs, pinnedThreads: [], pinnedFolders: ["/two"], sortBy: "recent" })
+// A folder's place is when you last worked there, the same on every device:
+// your last message to any of its Sessions (as their owners say it), or a
+// Session's start while you've sent none. An agent's reply doesn't lift one;
+// a prompt from any device does; a pinned folder stays above both; and the
+// order is a function of the rows alone, whatever loaded first.
+const startedRef = (path: string, cwd: string, startedAt: string, updatedAt: string): ThreadRef => ({ ...busyRef(path, cwd, updatedAt), startedAt })
+const owner = (path: string, worked: string): SessionOwner => ({ harness: "codex", nativeId: path, title: path, threadPath: path, worked: Date.parse(worked) })
+const workedRefs = [startedRef("/a", "/one", "2026-09-11T09:00:00Z", "2026-09-11T10:00:00Z"), startedRef("/b", "/two", "2026-09-11T08:00:00Z", "2026-09-11T11:00:00Z")]
+const workedFolders = groupThreadFolders({ refs: workedRefs, pinnedThreads: [], pinnedFolders: [], sortBy: "recent" })
+assert.deepEqual(workedFolders.map((folder) => folder.cwd), ["/two", "/one"], "by activity alone, the newer reply would lead")
+const startedRanks = workedFolderRanks({ refs: workedRefs, live: [], owners: [] })
+assert.deepEqual(startedRanks, { "/one": "2026-09-11T09:00:00.000Z", "/two": "2026-09-11T08:00:00.000Z" }, "a terminal session ranks by its start, as its row says on every device")
+assert.deepEqual(orderThreadFolders(workedFolders, startedRanks, "recent").map((folder) => folder.cwd), ["/one", "/two"], "an agent's reply does not lift its folder")
+const promptedRanks = workedFolderRanks({ refs: workedRefs, live: [], owners: [owner("/b", "2026-09-11T12:00:00Z")] })
+assert.equal(promptedRanks["/two"], "2026-09-11T12:00:00.000Z", "your own prompt to the conversation that reads it lifts the folder")
+assert.deepEqual(orderThreadFolders(workedFolders, promptedRanks, "recent").map((folder) => folder.cwd), ["/two", "/one"])
+assert.deepEqual(orderThreadFolders(workedFolders, promptedRanks, "name").map((folder) => folder.cwd), ["/one", "/two"], "by-name order ignores worked times")
+const elsewhere = { cwd: "/one", workspace: "/one", createdAt: Date.parse("2026-09-10T00:00:00Z"), promptedAt: Date.parse("2026-09-11T13:00:00Z") }
+assert.equal(workedFolderRanks({ refs: workedRefs, live: [elsewhere], owners: [owner("/b", "2026-09-11T12:00:00Z")] })["/one"], "2026-09-11T13:00:00.000Z", "a message from another device to a Session there lifts it too")
 assert.deepEqual(
-  orderThreadFolders(pinnedHeld, stableFolderRanks(pinnedHeld, { "/one": "2026-09-12T00:00:00Z" }, {}), "recent").map((folder) => folder.cwd),
+  workedFolderRanks({ refs: [...workedRefs].reverse(), live: [elsewhere], owners: [owner("/b", "2026-09-11T12:00:00Z")] }),
+  workedFolderRanks({ refs: workedRefs, live: [elsewhere], owners: [owner("/b", "2026-09-11T12:00:00Z")] }),
+  "nothing depends on what arrived first"
+)
+const pinnedWorked = groupThreadFolders({ refs: workedRefs, pinnedThreads: [], pinnedFolders: ["/two"], sortBy: "recent" })
+assert.deepEqual(
+  orderThreadFolders(pinnedWorked, workedFolderRanks({ refs: workedRefs, live: [], owners: [owner("/a", "2026-09-12T00:00:00Z")] }), "recent").map((folder) => folder.cwd),
   ["/two", "/one"],
   "a pinned folder stays above a folder you just used"
 )
-const newFolderRanks = stableFolderRanks(
-  groupThreadFolders({ refs: [...heldRefs, busyRef("/c", "/three", "2026-09-11T10:30:00Z")], pinnedThreads: [], pinnedFolders: [], sortBy: "recent" }),
-  {},
-  usedFolderRanks
-)
-assert.equal(newFolderRanks["/three"], "2026-09-11T10:30:00Z", "a folder first seen enters at its own time")
 
 // The status board: fixed sections, newest change first, empty ones absent.
 const board = groupThreadBoard([

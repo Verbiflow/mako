@@ -1,5 +1,6 @@
 import type { LiveRequest, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
+import { personPromptedAt } from "@mako/host/contracts/worked-at"
 
 /*
  * A long, busy Thread for the desk's fixtures (`?mock&app=busy`, and the web
@@ -131,9 +132,11 @@ const ANSWERS = [
   "The composer agent is queued behind the review agent's full phone test run on every device, which has held the heavy-run lock for about 43 minutes. Memory is fine: about 1 GB of swap still free.",
 ]
 
-function busyRequests(prefix: string, count: number): LiveRequest[] {
+/** A Session's prompts, the person's, sent 25 minutes apart from its start. */
+function busyRequests(prefix: string, count: number, startedAt: number): LiveRequest[] {
   return PROMPTS.slice(0, count).map((text, index) => ({
     id: `${prefix}-${String(index).padStart(4, "0")}-4000-8000-000000000000`.slice(0, 36),
+    createdAt: startedAt + index * 25 * 60_000,
     text,
     attachments: [],
     status: "completed",
@@ -146,7 +149,8 @@ function busyRequests(prefix: string, count: number): LiveRequest[] {
 export function busySnapshot(index: number): LiveSnapshot {
   const entry = BUSY_SESSIONS[index]!
   const long = index === 0
-  const requests = busyRequests(`b${index}b0b0b0`, long ? PROMPTS.length : 2)
+  const createdAt = STARTED + index * 60_000
+  const requests = busyRequests(`b${index}b0b0b0`, long ? PROMPTS.length : 2, createdAt)
   const blocks: LiveSnapshot["blocks"] = requests.flatMap((request, turn) => [
     { type: "user" as const, text: request.text, requestId: request.id },
     { type: "tool" as const, id: `${entry.conversation}-read-${turn}`, toolKind: "read" as const, title: "Read docs/meta-harness/tracks.md", input: "{\"path\":\"docs/meta-harness/tracks.md\"}", output: "# Tracks", status: "completed" as const },
@@ -172,7 +176,7 @@ export function busySnapshot(index: number): LiveSnapshot {
       ...(long && { backgroundTasks: AGENTS.length + COMMANDS.length }),
     },
     revision: 1,
-    createdAt: STARTED + index * 60_000,
+    createdAt,
     threadPath: `/mock/busy-${index}.jsonl`,
     threadId: BUSY_THREAD,
     sessionId: entry.session,
@@ -188,7 +192,7 @@ export function busySnapshot(index: number): LiveSnapshot {
 /** The Thread's Sessions as the desktop's host lists them at boot. */
 export function busySummaries(): LiveSummary[] {
   return BUSY_SESSIONS.map((_, index) => {
-    const { session, revision, createdAt, threadPath, threadId, sessionId } = busySnapshot(index)
-    return { session, revision, createdAt, threadPath, threadId, sessionId, threadTitle: BUSY_TITLE }
+    const { session, revision, createdAt, threadPath, threadId, sessionId, requests, control } = busySnapshot(index)
+    return { session, revision, createdAt, threadPath, threadId, sessionId, threadTitle: BUSY_TITLE, promptedAt: personPromptedAt(requests, control?.actions) }
   })
 }

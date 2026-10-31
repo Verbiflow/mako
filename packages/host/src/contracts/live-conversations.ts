@@ -274,6 +274,8 @@ export interface LiveRequest {
   inputDigest?: string
   nativeRun?: { bindingId: string; runId: string; forkId?: string }
   id: string
+  /** When the host admitted it (epoch ms); absent in journals written before it was kept. */
+  createdAt?: number
   text: string
   attachments: PromptAttachment[]
   /**
@@ -413,14 +415,21 @@ export interface LiveSummary {
   movedAt?: number
   /** For a conversation listed from another device, what its owner's rail shows of it besides its state (`ListedRail`). */
   rail?: ListedRail
+  /**
+   * When the person last sent it a message, from any device (`personPromptedAt`), in epoch milliseconds: read from its
+   * requests and steers on its own host, and from the account's list (`ReportedSession.promptedAt`) for one listed from
+   * another device. The rail orders projects by it.
+   */
+  promptedAt?: number
 }
 
 /**
  * What a Session's owner's rail shows of it besides its state, as the account's list says it (link version 12 on): the
  * project it's filed under and what that project has checked out, the Thread worktree it works on, the agents it ran in
- * before, and how many things its ended turn left running, which it waits on.
+ * before, how many things its ended turn left running, which it waits on, and that another app has it open (link
+ * version 14 on).
  */
-export type ListedRail = Pick<ReportedSession, "project" | "worktree" | "lineage" | "background">
+export type ListedRail = Pick<ReportedSession, "project" | "worktree" | "lineage" | "background" | "openElsewhere">
 
 /** A native session, as the catalog reads it. */
 export interface BaseSource {

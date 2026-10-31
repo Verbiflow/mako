@@ -75,6 +75,7 @@ import {
   WAITING_FOR_VERSION,
   MOVES_VERSION,
   RAIL_VERSION,
+  PROMPTED_VERSION,
   StreamCursor,
   followAgainInMs,
   readStreamNotice,
@@ -106,7 +107,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 13)
+    assert.equal(SUPPORTED_VERSIONS.max, 14)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1833,6 +1834,23 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.equal(sameListed(listedRailed, { ...listedRailed, project: { folder: "/Users/ana/api", head: { kind: "branch", name: "pricing-table" } } }), false, "a rebase that finished is news")
     assert.equal(sameListed(listedRailed, { ...listedRailed, background: 24 }), false, "so is a background task that settled")
     assert.equal(sameListed(listedRailed, { ...listedRailed, lineage: ["codex"] }), false)
+    const prompted = { ...railed, promptedAt: "2026-10-30T18:04:00.000Z" }
+    assert.deepEqual(ReportedSessionSchema.parse(prompted), prompted, "a row says when the person last sent its Session a message")
+    assert.throws(() => ReportedSessionSchema.parse({ ...prompted, promptedAt: 1793 }), "as a time, like the row's others")
+    assert.deepEqual(rowsForLink([prompted], PROMPTED_VERSION), [prompted])
+    const beforePrompted = rowsForLink([prompted], PROMPTED_VERSION - 1)[0]
+    assert.equal(beforePrompted.promptedAt, undefined, "a gateway before 14 refuses it, so it goes without")
+    assert.deepEqual(beforePrompted.project, prompted.project, "and keeps what 12 knows")
+    assert.equal(rowsForLink([prompted], RAIL_VERSION - 1)[0].project, undefined)
+    const ringed = { ...terminal, state: "idle", openElsewhere: true }
+    delete ringed.waitingOn
+    assert.deepEqual(ReportedSessionSchema.parse(ringed), ringed, "a terminal's session its own app has open says so")
+    assert.throws(() => ReportedSessionSchema.parse({ ...ringed, openElsewhere: false }), "said only when it is")
+    assert.equal(rowsForLink([ringed], PROMPTED_VERSION)[0].openElsewhere, true)
+    assert.equal(rowsForLink([ringed], PROMPTED_VERSION - 1)[0].openElsewhere, undefined, "a gateway before 14 hears an idle row")
+    assert.equal(sameListed({ ...ringed, runsOn: mac, listedAt: listed.listedAt }, { ...ringed, openElsewhere: undefined, runsOn: mac, listedAt: listed.listedAt }), false, "its app closing it is news")
+    const listedPrompted = { ...prompted, runsOn: mac, listedAt: listed.listedAt }
+    assert.equal(sameListed(listedPrompted, { ...listedPrompted, promptedAt: "2026-10-30T18:09:00.000Z" }), false, "a message the person sent is news: every rail moves its project")
     assert.equal(sameListed(listedGoing, { ...listedGoing, move: undefined }), false, "nor is its end")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, state: "thinking" }), "a state is one of five")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")

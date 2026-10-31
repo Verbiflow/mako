@@ -56,11 +56,6 @@ export interface Prefs {
   railScope: RailScope
   railSortBy: RailSortBy
   railGrouping: "project" | "recent" | "status" | "archived"
-  /**
-   * When you last worked in each folder (a prompt sent, a thread started),
-   * by folder key. The only thing that lifts a folder in the rail.
-   */
-  folderUse: PreferenceStringMap
   providerModes: PreferenceStringMap
   /**
    * Enter during a running turn steers it when the provider can; Cmd/Ctrl+Enter
@@ -166,7 +161,6 @@ const defaults: Prefs = {
   railScope: "all",
   railSortBy: "recent",
   railGrouping: "project",
-  folderUse: {},
   landWith: {},
   removeLandedOnArchive: false,
   providerModes: {},
@@ -427,7 +421,6 @@ function parsePrefs(value: JsonValue): Prefs | null {
     ),
     composerHarness: readComposerHarness(value.composerHarness),
     railGrouping: readChoice(value.railGrouping, ["project", "recent", "status", "archived"], defaults.railGrouping),
-    folderUse: readStringRecord(value.folderUse),
     landWith: readStringRecord(value.landWith),
     removeLandedOnArchive: readBoolean(value.removeLandedOnArchive, defaults.removeLandedOnArchive),
     providerModes: readStringRecord(value.providerModes),
@@ -570,28 +563,15 @@ export function setProjectHidden(path: string, hidden: boolean) {
   setPref("hiddenProjects", hidden ? [path, ...current] : current.filter((entry) => entry !== path))
 }
 
-/** How many folders' last use is remembered; older ones fall back to their threads' times. */
-const FOLDER_USE_LIMIT = 64
-
 /**
- * You worked in `cwd`: a prompt went out or a thread started there. This is
- * the one event that moves a folder in the rail's Projects view, so agent
- * output never reshuffles the list under you. It also brings a hidden
- * project back.
+ * You worked in `cwd`: a prompt went out or a thread started there, which
+ * brings a hidden project back. Where the project sits isn't this device's
+ * to say: its Sessions' hosts keep when you last sent each a message
+ * (`workedFolderRanks`).
  */
-export function noteFolderUse(
-  cwd: string | undefined,
-  at = new Date().toISOString()
-) {
+export function revealWorkedProject(cwd: string | undefined) {
   const key = threadFolderKey({ cwd })
-  if (!key) return
-  setProjectHidden(key, false)
-  const current = prefsStore.get().folderUse
-  if ((current[key] ?? "") >= at) return
-  const kept = Object.entries({ ...current, [key]: at })
-    .sort((left, right) => right[1].localeCompare(left[1]))
-    .slice(0, FOLDER_USE_LIMIT)
-  setPref("folderUse", Object.fromEntries(kept))
+  if (key) setProjectHidden(key, false)
 }
 
 export function togglePref(key: BooleanPref) {

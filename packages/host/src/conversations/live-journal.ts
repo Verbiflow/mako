@@ -30,6 +30,7 @@ import { TurnUndoneSchema } from "../contracts/turn-review.js"
 import { ACCOUNT_SWITCH_WAITS, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
+import { laterPrompt, personPromptedAt, type PromptedRequest } from "../contracts/worked-at.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
 import type { LiveSessionMode } from "../contracts/providers-acp.js"
 import { hostWarn } from "../base/host-log.js"
@@ -382,6 +383,11 @@ const AppendValueSchema = z.union([
 ])
 type AppendValue = z.infer<typeof AppendValueSchema>
 const ProgressSchema = z.object({ revision: z.number().int().nonnegative() })
+/** The `prompted` row: when the person last sent a request here, or null for never, and how many requests it read. */
+const PromptedRowSchema = z.object({ at: z.number().nonnegative().nullable(), requests: z.number().int().nonnegative() })
+const CountSchema = z.object({ count: z.number().int().nonnegative() })
+/** A request's admission and who sent it, as `requestTimes` projects them; an older journal's request has neither. */
+const RequestTimeSchema = z.object({ at: z.number().nonnegative().nullable(), kind: z.enum(["person", "agent", "service"]).nullable() })
 
 /**
  * Mako's log (`mako-log.ts`), in the conversation's own file so each event
@@ -403,10 +409,11 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
 
 /**
  * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves; `wakeAt` is
- * read from `requests`. `elsewhere`, `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `movedAt`,
- * `rail` and `copy` are a cloud router's word on a conversation it relays or reads from the account's copy, never a journal's.
+ * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`,
+ * `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `movedAt`, `rail` and `copy` are a cloud
+ * router's word on a conversation it relays or reads from the account's copy, never a journal's.
  */
-type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "movedAt" | "rail" | "copy" | "wakeAt"
+type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -475,6 +482,7 @@ export function journalSummary(metadata: string) {
     nativeIds: control?.bindings.flatMap((binding) =>
       binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []
     ),
+    steeredAt: personPromptedAt(undefined, control?.actions),
   }
 }
 
@@ -555,6 +563,7 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS base_entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS prompted (id INTEGER PRIMARY KEY, at INTEGER, requests INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
       ${MAKO_LOG_TABLE}`)
@@ -622,9 +631,38 @@ export class LiveJournal {
   summary() {
     const metadata = this.metadata()
     if (!metadata) return null
-    const summary = journalSummary(metadata)
+    const { steeredAt, ...summary } = journalSummary(metadata)
     const wakeAt = this.wakeAt()
-    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt } }
+    const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt } }
+  }
+
+  /**
+   * When the person last sent a request here (`personPromptedAt`), as each commit that writes the requests keeps it, so
+   * a startup that lists every journal reads one row of each. The row names how many requests it was read from: a
+   * journal from before it was kept, or one an older build added requests to since, reads its requests once again, and
+   * keeps the answer.
+   */
+  private requestedAt(): number | undefined {
+    const kept = PromptedRowSchema.safeParse(this.db.prepare("SELECT at, requests FROM prompted WHERE id=1").get())
+    const { count } = CountSchema.parse(this.db.prepare("SELECT count(*) AS count FROM requests").get())
+    if (kept.success && kept.data.requests === count) return kept.data.at ?? undefined
+    const at = personPromptedAt(this.requestTimes())
+    this.db.prepare("INSERT OR REPLACE INTO prompted VALUES (1, ?, ?)").run(at ?? null, count)
+    return at
+  }
+
+  /** Who sent each request and when it was admitted, read without parsing a request's text. */
+  private requestTimes(): PromptedRequest[] {
+    return this.db
+      .prepare("SELECT json_extract(value, '$.createdAt') AS at, json_extract(value, '$.actor.kind') AS kind FROM requests")
+      .all()
+      .flatMap((row) => {
+        const parsed = RequestTimeSchema.safeParse(row)
+        if (!parsed.success || parsed.data.at === null) return []
+        const { at, kind } = parsed.data
+        return [kind === null ? { createdAt: at } : { createdAt: at, actor: { kind } }]
+      })
   }
 
   /** The soonest a held request here sends itself (`LiveRequest.wake`); only rows that name a wake are parsed. */
@@ -878,6 +916,7 @@ export class LiveJournal {
         const kept = new Set(requests.map((request) => request.id))
         if (!previous || previous.requests.some((request) => !kept.has(request.id)))
           this.db.prepare("DELETE FROM requests WHERE id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...kept]))
+        this.db.prepare("INSERT OR REPLACE INTO prompted VALUES (1, ?, ?)").run(personPromptedAt(requests) ?? null, requests.length)
       }
       // Each is kept as it ends and never changes.
       if (harnessTurns !== previous?.harnessTurns && harnessTurns?.length) {

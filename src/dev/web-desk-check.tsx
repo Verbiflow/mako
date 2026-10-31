@@ -3,6 +3,7 @@ import { useState } from "react"
 import { createRoot } from "react-dom/client"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { nativeStartedAt, personPromptedAt } from "@mako/host/contracts/worked-at"
 import { Toaster } from "@/components/ui/sonner"
 import { acp, acpStore } from "@/state/acp"
 import { applyLiveSnapshot } from "@/state/live-recovery"
@@ -59,8 +60,9 @@ function uuid(seed: string, kind: number): string {
 }
 
 /**
- * A row as the Mac running it lists it (link version 12): with what its rail shows, the project it's filed under and
- * what that project has checked out (the desktop fixture's own checkouts).
+ * A row as the Mac running it lists it (link version 14): with what its rail shows, the project it's filed under and
+ * what that project has checked out (the desktop fixture's own checkouts), when the person last wrote to it, and
+ * whether another app has it open.
  */
 function row(fields: Pick<ListedSession, "session" | "thread" | "conversation" | "harness" | "createdAt" | "activityAt"> & Partial<ListedSession>): ListedSession {
   const listed: ListedSession = { state: "idle", generation: 1, runsOn: { kind: "device", deviceId: STUDIO }, listedAt: now, ...fields }
@@ -80,10 +82,12 @@ const native = mockThreads().threads.map((ref) => {
     harness: ref.harness,
     title: ref.title,
     folder: ref.cwd,
-    createdAt: ref.startedAt ?? ref.updatedAt,
+    createdAt: new Date(nativeStartedAt(ref)!).toISOString(),
     activityAt: ref.updatedAt,
   })
   if ("lineage" in ref && ref.lineage) listed.lineage = ref.lineage.map((origin) => origin.harness)
+  // A session its own app holds, as the Mac's rail rings it.
+  if ("locked" in ref && ref.locked) listed.openElsewhere = true
   return listed
 })
 const busy = BUSY_SESSIONS.map((entry, index) => {
@@ -98,6 +102,7 @@ const busy = BUSY_SESSIONS.map((entry, index) => {
     folder: BUSY_CWD,
     createdAt: new Date(snapshot.createdAt).toISOString(),
     activityAt: new Date(busyActivity(index)).toISOString(),
+    promptedAt: new Date(personPromptedAt(snapshot.requests, snapshot.control?.actions)!).toISOString(),
     // The long Session's turn ended with its background work still running: at work on it, as its owner lists it.
     ...(index === 0 && { state: "working" as const, background: 25 }),
   })

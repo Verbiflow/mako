@@ -94,6 +94,7 @@ export function presenceThreadStatus(presence: AcpPresence): ThreadStatus {
   if (presence.status === "running" || presence.status === "starting")
     return { kind: "working", since: presence.createdAt }
   if (presence.status === "background") return { kind: "background", count: presence.background ?? 1 }
+  if (presence.openElsewhere) return { kind: "external-open", app: presence.harness }
   return { kind: "idle" }
 }
 

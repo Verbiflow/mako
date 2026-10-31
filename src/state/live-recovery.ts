@@ -9,6 +9,7 @@ import { noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
+import { laterPrompt, personPromptedAt, promptedAfter } from "@mako/host/contracts/worked-at"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
@@ -123,6 +124,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     threadTitle: snapshot.threadTitle ?? existing?.threadTitle,
     movedAt: snapshot.movedAt ?? existing?.movedAt,
     rail: snapshot.rail ?? existing?.rail,
+    promptedAt: laterPrompt(personPromptedAt(snapshot.requests, snapshot.control?.actions), snapshot.promptedAt ?? existing?.promptedAt),
     threadId: snapshot.threadId ?? existing?.threadId,
     sessionId: snapshot.sessionId ?? existing?.sessionId,
     createdAt: snapshot.createdAt,
@@ -375,6 +377,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
       harnessTurns: batch.harnessTurns ?? current.harnessTurns,
       spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
       requests: requests ?? current.requests,
+      promptedAt: promptedAfter(current.promptedAt, batch),
       permission: batch.permissions
         ? (batch.permissions[0] ?? null)
         : current.permission,
@@ -449,6 +452,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
       : current.nativePaths,
     harness: session.harness,
     requests,
+    promptedAt: promptedAfter(current.promptedAt, batch),
     pendingPrompts,
     blocks,
     history,
@@ -601,6 +605,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         quietSince: summary.quietSince,
         movedAt: summary.movedAt ?? previous.movedAt,
         rail: summary.rail,
+        promptedAt: laterPrompt(summary.promptedAt, previous.promptedAt),
         threadId: summary.threadId ?? previous.threadId,
         sessionId: summary.sessionId ?? previous.sessionId,
         permission: null,
@@ -640,6 +645,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       quietSince: summary.quietSince,
       movedAt: summary.movedAt,
       rail: summary.rail,
+      promptedAt: summary.promptedAt,
       threadId: summary.threadId,
       sessionId: summary.sessionId,
       revision: summary.revision,

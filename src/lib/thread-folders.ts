@@ -1,8 +1,9 @@
 import { workspaceName } from "@/lib/format"
 import type { ThreadRef } from "@/lib/types"
 import { projectFolder } from "@mako/host/contracts/worktree-paths"
+import { nativeStartedAt, workedAt } from "@mako/host/contracts/worked-at"
 import type { RailSortBy } from "@/state/prefs"
-import type { AcpPresence } from "@/state/acp-presence"
+import type { AcpPresence, SessionOwner } from "@/state/acp-presence"
 
 export interface ThreadFolderActivity {
   running?: boolean
@@ -169,33 +170,52 @@ export function stableThreadRanks(
   return next
 }
 
-/** Held folder ranks by folder key, from `stableFolderRanks`. */
+/** Folder ranks by folder key, from `workedFolderRanks`. */
 export interface FolderRanks {
   [key: string]: string
 }
 
 /**
- * A folder's place in Projects, held between renders.
+ * A folder's place in Projects: when the person last worked there, on any
+ * device. Each Session counts its `workedAt` (their last message to it, or
+ * its start while they've sent none), and a folder ranks by its newest.
  *
- * A folder takes its rank the first time it is seen — its newest thread's
- * time — and keeps it. Only working there lifts it: `use` carries the moment
- * you last sent a prompt or started a thread in each folder, and a newer one
- * wins. Agent output, a turn finishing, a file another app is writing: none
- * of these move a folder, so the list you are looking at is the list you
- * looked at a minute ago. Status changes the folder's chip, not its place.
+ * Only working there moves a folder: agent output, a turn finishing, a file
+ * another app is writing change none of these times, so the list you are
+ * looking at is the list you looked at a minute ago, and status changes the
+ * folder's chip, not its place. And it's the same list on every device: the
+ * times are the owners' (`ReportedSession.promptedAt`), and nothing here
+ * depends on what a window heard first. `refs` are this Mac's catalog rows,
+ * each ranked by the conversation that reads it (`owners`, closed ones
+ * included) or else by its start, as its row says on every other device;
+ * `live` are the conversations with no catalog row here, another device's
+ * among them. A Thread's Sessions all count, before folding hides any.
  */
-export function stableFolderRanks(
-  folders: readonly ThreadFolder[],
-  use: Readonly<Record<string, string>>,
-  previous: FolderRanks
-): FolderRanks {
-  const next: FolderRanks = {}
-  for (const folder of folders) {
-    const held = previous[folder.key] ?? folder.order
-    const used = use[folder.key] ?? ""
-    next[folder.key] = used > held ? used : held
+export function workedFolderRanks({
+  refs,
+  live,
+  owners,
+  folderMap = currentFolderMap,
+}: {
+  refs: readonly ThreadRef[]
+  live: readonly Pick<AcpPresence, "cwd" | "workspace" | "promptedAt" | "createdAt">[]
+  owners: readonly SessionOwner[]
+  folderMap?: FolderMap
+}): FolderRanks {
+  const byPath = new Map<string, number>()
+  const byIdentity = new Map<string, number>()
+  for (const owner of owners) {
+    for (const path of [...(owner.nativePaths ?? []), ...(owner.threadPath ? [owner.threadPath] : [])]) byPath.set(path, Math.max(byPath.get(path) ?? 0, owner.worked))
+    if (owner.nativeId) byIdentity.set(`${owner.harness}:${owner.nativeId}`, Math.max(byIdentity.get(`${owner.harness}:${owner.nativeId}`) ?? 0, owner.worked))
   }
-  return next
+  const latest = new Map<string, number>()
+  const add = (key: string, at: number | undefined) => {
+    if (at !== undefined && at > (latest.get(key) ?? Number.NEGATIVE_INFINITY)) latest.set(key, at)
+  }
+  for (const ref of refs)
+    add(threadFolderKey(ref, folderMap) || "~", byPath.get(ref.path) ?? byIdentity.get(`${ref.harness}:${ref.identity ?? ref.nativeId}`) ?? nativeStartedAt(ref))
+  for (const presence of live) add(threadFolderKey(presence, folderMap) || "~", workedAt(presence))
+  return Object.fromEntries([...latest].map(([key, at]) => [key, new Date(at).toISOString()]))
 }
 
 function compareFolders(a: ThreadFolder, b: ThreadFolder, sortBy: RailSortBy): number {
@@ -206,7 +226,7 @@ function compareFolders(a: ThreadFolder, b: ThreadFolder, sortBy: RailSortBy): n
   return b.order.localeCompare(a.order)
 }
 
-/** The folders in held order: each takes its rank from `ranks` where one is held. */
+/** The folders in Projects' order: in "recent", each takes its place from `ranks` (`workedFolderRanks`) where it has one. */
 export function orderThreadFolders(
   folders: readonly ThreadFolder[],
   ranks: FolderRanks,
@@ -226,8 +246,8 @@ export function orderThreadFolders(
  * Threads by folder, each folder's rows in order.
  *
  * Position never carries status. A row sits by its held recency, a folder by
- * its newest thread — `orderThreadFolders` then applies the held folder
- * ranks — and a thread that starts working, finishes, or fails changes its
+ * its newest thread — `orderThreadFolders` then places it by when you last
+ * worked there — and a thread that starts working, finishes, or fails changes its
  * mark and its folder's chip, nothing else. `priorities` feeds only the
  * folder's aggregate `priority` for that chip.
  */

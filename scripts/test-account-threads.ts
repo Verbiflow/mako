@@ -2,6 +2,10 @@ import type { Waiting } from "@mako/protocol/attention"
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { z } from "zod"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { MAX_EVENT_BYTES, NUMBERED_LIVE_VERSION, serveRuntime, type Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { AccountSessions } from "@mako/protocol/account-sessions"
@@ -22,6 +26,9 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CatalogSyncStatus, SyncFailure, SyncScope } from "@mako/sessions/scoped-uploads"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
+import { nativeStartedAt, personPromptedAt } from "@mako/host/contracts/worked-at"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { auditSnapshot } from "./performance-audit-fixtures.js"
 import { DeviceIdSchema, MoveIdSchema, RuntimeIdSchema, type SessionExecution } from "@mako/host/contracts/thread-execution"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { encodeRuntimeEvent, splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
@@ -178,6 +185,11 @@ test("the sessions a terminal or another app runs are listed beside Mako's own, 
   assert.equal(waiting?.folder, "/Users/ana/api")
   assert.deepEqual(waiting?.capture, { path: nativeRow(21, 0).path }, "its device opens it by the path its catalog reads it at")
   assert.equal(rows[3]?.nativeId, "native-24", "the newer of a Session's two sessions")
+  assert.deepEqual(rows.map((each) => each.openElsewhere), [undefined, undefined, undefined, undefined, true], "the one its app has open, at rest, wears the ring this Mac's rail draws")
+  const held = ownedSessions(host([], {
+    native: [nativeRow(41, NOW - 1_000, { locked: true }), nativeRow(42, NOW - 2_000, { locked: true, heldBy: "Mako's host (pid 81)" })],
+  }))
+  assert.deepEqual(held.map((each) => each.openElsewhere), [true, undefined], "a session file its app locks is open there; one another Mako host holds is still Mako's")
   assert.equal(nativeConversation(uuid(21)), nativeConversation(uuid(21)), "named from its Session, the same on every device")
 })
 
@@ -437,6 +449,71 @@ test("a row whose last activity alone moved is said once it's moved a minute; wi
   assert.deepEqual(ended[0]?.listed.map((each) => [each.state, each.activityAt]), [["working", new Date(NOW + ACTIVITY_REPORT_MS + 5_000).toISOString()]], "with a state that moved, at once and with its activity")
 })
 
+test("a row says when the person last sent its Session a message, from whichever device; Mako's and an agent's turns aren't theirs; a new one is said at once", async () => {
+  const person = { kind: "person" } as const
+  const requests = [
+    { actor: person, createdAt: NOW - 50_000 },
+    { createdAt: NOW - 40_000 },
+    { actor: { kind: "service" } as const, createdAt: NOW - 30_000 },
+    { actor: { kind: "agent" } as const, createdAt: NOW - 20_000 },
+    { actor: person },
+  ]
+  assert.equal(personPromptedAt(requests), NOW - 40_000, "a goal's next turn and an agent's handoff aren't the person's; a host without a Thread store names nobody, and that's them")
+  assert.equal(personPromptedAt([]), undefined)
+  // SAFETY: the two fields `personPromptedAt` reads of an action.
+  const steer = (createdAt: number, kind: "steer" | "compact") => ({ input: { kind }, createdAt }) as never
+  assert.equal(personPromptedAt(requests, [steer(NOW - 10_000, "steer"), steer(NOW - 5_000, "compact")]), NOW - 10_000, "a steer into a running turn is a message; compacting isn't")
+
+  const rows = ownedSessions(host([{ ...summary("c-1", NOW - 60_000), promptedAt: NOW - 10_000 }, summary("c-2", NOW - 30_000)]))
+  assert.deepEqual(rows.map((row) => [row.conversation, row.promptedAt]), [["c-2", undefined], ["c-1", new Date(NOW - 10_000).toISOString()]], "the summary's time, said on the row; none while the person's sent nothing")
+  assert.equal(conversationShown({ session: { id: "c-1", status: "running" }, working: "running", waitingOn: () => undefined, promptedAt: NOW - 1_000 }).promptedAt, new Date(NOW - 1_000).toISOString(), "a batch is checked against it by the row's own rule")
+
+  const reporter = new SessionReporter()
+  const link = await newLink()
+  reporter.sent(reporter.reports(link, [row(1, "working")]).flatMap((report) => report.listed))
+  const prompted = { ...row(1, "working"), activityAt: new Date(NOW + 1_000).toISOString(), promptedAt: new Date(NOW + 1_000).toISOString() }
+  assert.equal(reporter.reports(link, [prompted])[0]?.listed[0]?.promptedAt, prompted.promptedAt, "a message into a turn already running is said at once, though its state didn't move: every rail moves its project")
+
+  const started = nativeRow(1, NOW - 5_000)
+  const nativeRows = ownedSessions(host([], { native: [started] }))
+  assert.equal(nativeRows[0]?.createdAt, new Date(nativeStartedAt(started)!).toISOString(), "a terminal session starts when the rail says it did, the one rule every rail ranks it by")
+  assert.equal(nativeRows[0]?.promptedAt, undefined, "and no host saw its prompts arrive")
+})
+
+test("a journal says when the person last sent it a message without being read whole, as its resident snapshot does", () => {
+  const root = mkdtempSync(join(tmpdir(), "mako-prompted-"))
+  try {
+    const snapshot = auditSnapshot(3)
+    snapshot.requests = snapshot.requests.map((request, index) => ({ ...request, createdAt: NOW + index * 1_000, actor: index === 2 ? { kind: "service", name: "goal" } : request.actor }))
+    const journal = new LiveJournal(root, snapshot.session.id)
+    journal.commit(snapshot)
+    journal.close()
+    const reopened = new LiveJournal(root, snapshot.session.id)
+    assert.equal(reopened.summary()?.promptedAt, NOW + 1_000, "the goal's turn after the person's isn't theirs")
+    assert.equal(personPromptedAt(snapshot.requests, snapshot.control?.actions), NOW + 1_000, "the same time a loaded one's summary reads")
+    reopened.close()
+    const file = join(root, `${snapshot.session.id}.sqlite`)
+    const raw = new DatabaseSync(file)
+    raw.exec("DELETE FROM prompted")
+    raw.close()
+    const older = new LiveJournal(root, snapshot.session.id)
+    assert.equal(older.summary()?.promptedAt, NOW + 1_000, "a journal from before it was kept reads its requests")
+    older.close()
+    const read = new DatabaseSync(file, { readOnly: true })
+    assert.deepEqual({ ...read.prepare("SELECT at, requests FROM prompted").get() }, { at: NOW + 1_000, requests: 3 }, "once: it keeps the answer, and how many requests it read")
+    read.close()
+    // An older build that knows nothing of `prompted` takes a message in, and leaves the row as it was.
+    const elder = new DatabaseSync(file)
+    elder.prepare("INSERT INTO requests VALUES (?, ?)").run(uuid(9), JSON.stringify({ ...snapshot.requests[0], id: uuid(9), createdAt: NOW + 9_000 }))
+    elder.close()
+    const upgraded = new LiveJournal(root, snapshot.session.id)
+    assert.equal(upgraded.summary()?.promptedAt, NOW + 9_000, "a request the row didn't count is read again, never a stale time")
+    upgraded.close()
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("a batch that moves what a list shows of its conversation is reported on the next turn, whatever the second's pacing; a batch that moves nothing a list shows waits; a state that flaps is said ten times a second at most", async () => {
   let now = NOW
   let rows = [row(1)]
@@ -674,6 +751,8 @@ test("one batch in twenty-five is traced, and each that starts or ends a turn, a
   assert.deepEqual(read.follows[0]?.lagMs, { samples: 4, p50: 80, p95: 400 })
   assert.equal(describeFollow(read.follows[0]!), "updates arrive in 80 ms typically, 400 ms at worst · 1 skipped update asked for again · read again whole once · followed again twice (skipped an update, went silent)")
   assert.equal(describeList(read.list), "at event 512 · changes arrive in 38 ms typically, 38 ms at worst · read whole again after 1 gap")
+  readings.listFrom(() => [{ promptedAt: new Date(NOW).toISOString() }, {}, { promptedAt: new Date(NOW).toISOString() }])
+  assert.equal(describeList(readings.readings().list), "at event 512 · changes arrive in 38 ms typically, 38 ms at worst · read whole again after 1 gap · 2 of 3 Sessions say when you last wrote to them; the rest rank by their start", "how many rows a rail can rank by your messages, and that the rest go by their start")
   assert.equal(describeOwner(read.owner), "2 conversations watched from another device · 1 sent whole, as a device watching reads only the older form · 14 updates sent again after a reconnect")
   assert.equal(describeOwner({ watched: 0, compact: 0, negotiated: false, resent: 0, notices: 0 }), undefined, "nothing to say")
   for (let index = 0; index < 60; index++) readings.follow(`session:d-1:c-${index + 2}`)

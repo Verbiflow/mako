@@ -18,11 +18,11 @@ import {
   groupThreadFolders,
   orderThreadFolders,
   showsInRecent,
-  stableFolderRanks,
   stableThreadRanks,
   threadBelongsToWorkspace,
   threadFolderKey,
   visibleThreadFolders,
+  workedFolderRanks,
   type FolderRanks,
   type RailRanks,
   type ThreadFolder,
@@ -57,6 +57,7 @@ import { CheckoutLabel } from "@/components/rail/checkout-label"
 import { useAcp } from "@/state/acp"
 import {
   canonicalThreadRefs,
+  readsThreadRefs,
   sameAcpPresence,
   sameSessionOwners,
   selectAcpPresence,
@@ -115,9 +116,10 @@ import {
  * The threads rail: every agent's conversations, arranged the way work is —
  * by folder, the ones you work in first.
  *
- * Position never carries status. A folder takes its place when first seen
- * and moves only when you work there — a prompt sent, a thread started —
- * never when an agent answers; a busy thread keeps its rank until it
+ * Position never carries status. A folder sits by when you last worked
+ * there, from any device — a prompt sent, a thread started — so it moves
+ * only when you do, never when an agent answers, and every device lists the
+ * folders in the same order; a busy thread keeps its rank until it
  * finishes; while the pointer is inside the rail nothing changes place at
  * all. What a thread needs from you is its mark and its folder's chip, and
  * the Status view is the one place threads regroup by state, on purpose.
@@ -197,7 +199,6 @@ export function AgentThreads() {
   const scope = usePrefs((prefs) => prefs.railScope)
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const grouping = usePrefs((prefs) => prefs.railGrouping)
-  const folderUse = usePrefs((prefs) => prefs.folderUse)
   const scroller = useRef<HTMLDivElement>(null)
   useKeepWorktreeSummaries()
   // The order caught when the pointer entered the rail; held until it leaves,
@@ -254,20 +255,14 @@ export function AgentThreads() {
 
   const archiveKeys = useThreadArchives((state) => state.keys)
   const unboundLiveAgents = useMemo(() => {
-    const nativePaths = new Set(all.map((ref) => ref.path))
-    const nativeIdentities = new Set(
-      all.map((ref) => `${ref.harness}:${ref.identity ?? ref.nativeId}`)
-    )
+    const bound = readsThreadRefs(all)
     return liveAgents.filter(
       (presence) =>
         (grouping === "archived" ? archivedLive(presence, archiveKeys) : !archivedLive(presence, archiveKeys) || presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission") &&
         (!filter.length || filter.includes(presence.harness)) &&
         (scope !== "workspace" || threadBelongsToWorkspace(presence, cwd)) &&
         (!deferred.trim() || `${presence.title ?? ""} ${presence.cwd} ${presence.harness}`.toLowerCase().includes(deferred.trim().toLowerCase())) &&
-        (!presence.threadPath || !nativePaths.has(presence.threadPath)) &&
-        !presence.nativePaths?.some((path) => nativePaths.has(path)) &&
-        (!presence.nativeId ||
-          !nativeIdentities.has(`${presence.harness}:${presence.nativeId}`))
+        !bound(presence)
     )
   }, [all, liveAgents, filter, scope, cwd, deferred, archiveKeys, grouping])
 
@@ -390,17 +385,15 @@ export function AgentThreads() {
       }),
     [cwd, shownRefs, countedLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
   )
-  // A folder takes its place when first seen and keeps it until you work
-  // there. Agent output never moves one.
+  // A folder sits by when you last worked there, on any device: every Session counts, a Thread's folded ones too, so
+  // agent output never moves one and every device puts them in the same order.
   const folderRanks = useMemo(
-    () => stableFolderRanks(grouped, folderUse, railRanksStore.get().folderRanks),
-    [grouped, folderUse]
+    () => workedFolderRanks({ refs: matched, live: unboundLiveAgents, owners, folderMap }),
+    [matched, unboundLiveAgents, owners, folderMap]
   )
-  // Held only once the catalog is in: a folder's first place is its newest thread's, which the conversations a window
-  // hears at its start can't say alone. Taken from them, it was a place this launch's timing chose.
   useEffect(() => {
-    if (loaded) railRanksStore.set({ ranks, folderRanks })
-  }, [loaded, ranks, folderRanks])
+    if (loaded) railRanksStore.set({ ranks })
+  }, [loaded, ranks])
   const folders = useMemo(
     () => orderThreadFolders(grouped, hold?.folderRanks ?? folderRanks, sortBy),
     [grouped, hold, folderRanks, sortBy]

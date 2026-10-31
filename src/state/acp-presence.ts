@@ -3,6 +3,7 @@ import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { backgroundWork } from "@mako/host/contracts/background-work"
+import { workedAt } from "@mako/host/contracts/worked-at"
 
 export interface AcpPresence {
   key: string
@@ -37,6 +38,10 @@ export interface AcpPresence {
   worktreeBranch?: string
   /** The agents it ran in before its current one, oldest first. */
   lineage?: readonly string[]
+  /** When the person last sent it a message, from any device (`LiveSummary.promptedAt`). */
+  promptedAt?: number
+  /** Listed from another device, idle, and open in its harness's own app or terminal there (`ListedRail.openElsewhere`). */
+  openElsewhere?: true
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -100,6 +105,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (rail?.project) presence.workspace = rail.project.folder
       if (rail?.worktree) presence.worktreeBranch = rail.worktree.branch
       if (rail?.lineage) presence.lineage = rail.lineage
+      if (rail?.openElsewhere && presence.status === "ready" && conversation.session.connection === "hibernated") presence.openElsewhere = true
+      if (conversation.promptedAt !== undefined) presence.promptedAt = conversation.promptedAt
       return [presence]
     })
     .sort((left, right) => right.createdAt - left.createdAt)
@@ -135,14 +142,22 @@ export function sameAcpPresence(
         candidate.workspace === presence.workspace &&
         candidate.worktreeBranch === presence.worktreeBranch &&
         candidate.lineage === presence.lineage &&
+        candidate.promptedAt === presence.promptedAt &&
+        candidate.openElsewhere === presence.openElsewhere &&
         candidate.background === presence.background
       )
     })
   )
 }
 
-/** The native sessions a conversation stands for. */
-export type SessionOwner = Pick<AcpPresence, "harness" | "nativeId" | "title" | "threadPath" | "nativePaths">
+/**
+ * The native sessions a conversation stands for, and when the person last worked in it (`workedAt`): what its catalog
+ * row ranks its project by, as the conversation's own row does on every other device.
+ */
+export type SessionOwner = SessionPaths & { worked: number }
+
+/** The native sessions a conversation stands for, by harness, native ID and path. */
+export type SessionPaths = Pick<AcpPresence, "harness" | "nativeId" | "title" | "threadPath" | "nativePaths">
 
 /**
  * Every conversation's native sessions, closed ones included: a conversation
@@ -156,6 +171,7 @@ export function selectSessionOwners(state: AcpState): SessionOwner[] {
     title: conversation.title,
     threadPath: conversation.threadPath,
     nativePaths: conversation.nativePaths,
+    worked: workedAt(conversation),
   }))
 }
 
@@ -169,16 +185,32 @@ export function sameSessionOwners(left: SessionOwner[], right: SessionOwner[]): 
         candidate.nativeId === owner.nativeId &&
         candidate.title === owner.title &&
         candidate.threadPath === owner.threadPath &&
+        candidate.worked === owner.worked &&
         (candidate.nativePaths ?? []).join("\0") === (owner.nativePaths ?? []).join("\0")
       )
     })
   )
 }
 
+/**
+ * Whether a conversation reads one of `refs`, this Mac's catalog rows: one of them then stands for it in the rail, and
+ * it has no row of its own.
+ */
+export function readsThreadRefs(
+  refs: readonly { path: string; harness?: string; nativeId?: string; identity?: string }[]
+): (conversation: Pick<AcpPresence, "harness" | "threadPath" | "nativePaths" | "nativeId">) => boolean {
+  const paths = new Set(refs.map((ref) => ref.path))
+  const identities = new Set(refs.map((ref) => `${ref.harness}:${ref.identity ?? ref.nativeId}`))
+  return (conversation) =>
+    (conversation.threadPath !== undefined && paths.has(conversation.threadPath)) ||
+    (conversation.nativePaths?.some((path) => paths.has(path)) ?? false) ||
+    (conversation.nativeId !== undefined && identities.has(`${conversation.harness}:${conversation.nativeId}`))
+}
+
 /** Preserve native references while choosing one row for an app-owned conversation. */
 export function canonicalThreadRefs<T extends { path: string; harness?: string; nativeId?: string; identity?: string; title?: string }>(
   refs: T[],
-  conversations: SessionOwner[],
+  conversations: SessionPaths[],
   pinned: string[]
 ): T[] {
   const paths = new Set(refs.map((ref) => ref.path))
