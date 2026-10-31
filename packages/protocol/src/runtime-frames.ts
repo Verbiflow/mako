@@ -14,6 +14,7 @@ import {
   ThreadIdSchema,
 } from "./ids.js"
 import { MediaStreamIdSchema } from "./media.js"
+import type { LiveForm } from "./live-form.js"
 import { PortRequestSchema } from "./ports.js"
 import { SessionsReportSchema } from "./thread-listing.js"
 import type { Payload } from "./payload.js"
@@ -28,6 +29,9 @@ import { VersionRangeSchema } from "./version.js"
  * These are the frames' envelopes; an event, a reply's value and an operation's input cross
  * after them, unread (`wire.ts`).
  */
+/** A live form (`live-form.ts`) as a frame says it. */
+export const LiveFormSchema = z.union([z.literal(1), z.literal(2)]) satisfies z.ZodType<LiveForm>
+
 export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z
     .object({
@@ -59,6 +63,8 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       generation: GenerationSchema,
       localSeq: SeqSchema,
       correlationId: CorrelationIdSchema.optional(),
+      /** The live form the event is written in, when above 1 (version 13 on, `live-form.ts`); the gateway gives a reader of an older one the notice to read again. */
+      form: LiveFormSchema.optional(),
     })
     .strict(),
   z.object({ type: z.literal("reply"), reply: ReplyEnvelopeSchema }).strict(),
@@ -98,7 +104,8 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * One live update of a conversation someone watches (version 5 on, `sessionStream`), its event after the envelope as
    * the runtime encoded it. Not acknowledged. From version 9 it carries the runtime's own number for it (`n`, rising
    * across all its conversations), so a runtime that sends it again on a new link (`watch`'s `after` says what's
-   * missing) has it relayed once; and a trace for the hops to log (`correlationId`), on the few that carry one.
+   * missing) has it relayed once; and a trace for the hops to log (`correlationId`), on the few that carry one. From
+   * version 13, the live form it's written in when above 1 (`form`, `live-form.ts`).
    */
   z
     .object({
@@ -106,6 +113,7 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       conversation: z.string().min(1).max(128),
       n: SeqSchema.optional(),
       correlationId: CorrelationIdSchema.optional(),
+      form: LiveFormSchema.optional(),
     })
     .strict(),
   /** The runtime ended a stream it served (version 3 on, `media.ts`); its viewer hears why. */
@@ -240,8 +248,19 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
        * sent while it was down. A conversation not named here sends nothing old.
        */
       after: z.record(z.string().min(1).max(128), SeqSchema).optional(),
+      /**
+       * By conversation, the live form every one of its watchers reads, where that's above 1 (version 13 on,
+       * `live-form.ts`): its updates may be written so. A conversation not named here is written in form 1.
+       */
+      forms: z.record(z.string().min(1).max(128), LiveFormSchema).optional(),
     })
     .strict(),
+  /**
+   * The live form every reader of a Thread this runtime runs reads now (version 13 on, `live-form.ts`): its events may
+   * be written so from the next one. Said when it changes, and on enrolment for each Thread read above form 1; a Thread
+   * not said is written in form 1.
+   */
+  z.object({ type: z.literal("live-form"), threadId: ThreadIdSchema, form: LiveFormSchema }).strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>

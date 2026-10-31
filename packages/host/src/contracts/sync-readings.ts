@@ -18,6 +18,8 @@ export type FollowReading = {
   /** What the person knows it by: the conversation's title, or where it runs. */
   label?: string
   frames: number
+  /** Of `frames`, those its owner wrote in the compact live form, which this follower said it reads (`live-form.ts`). */
+  compact: number
   lastHeardAt?: number
   /** From its owner's emitting a traced update to its arrival here. */
   lagMs: Spread
@@ -41,8 +43,12 @@ export type SyncReadings = {
   owner?: OwnerReading
 }
 
-/** What a device sends of its own conversations others watch: how many, and what went again after a reconnect. */
-export type OwnerReading = { watched: number; resent: number; notices: number }
+/**
+ * What a device sends of its own conversations others watch: how many, and how many of them in the compact live form,
+ * which goes where the gateway says every watcher reads it (`negotiated`: its link says so, version 13 on); the rest go
+ * whole, as a watcher reads only form 1. And what went again after a reconnect.
+ */
+export type OwnerReading = { watched: number; compact: number; negotiated: boolean; resent: number; notices: number }
 
 const KEPT_SAMPLES = 200
 const KEPT_RECONNECTS = 8
@@ -65,6 +71,7 @@ const keep = <T>(list: T[], item: T, most: number) => {
 export class FollowRecorder {
   label: string | undefined
   #frames = 0
+  #compact = 0
   #lastHeardAt: number | undefined
   readonly #lag: number[] = []
   #gaps = 0
@@ -80,10 +87,11 @@ export class FollowRecorder {
     this.#now = now
   }
 
-  /** An update arrived; with `emittedAt` when its owner traced it. */
-  heard(emittedAt?: number): void {
+  /** An update arrived; with `emittedAt` when its owner traced it, and `compact` when it came in the compact live form. */
+  heard(emittedAt?: number, compact = false): void {
     const at = this.#now()
     this.#frames += 1
+    if (compact) this.#compact += 1
     this.#lastHeardAt = at
     if (emittedAt !== undefined) keep(this.#lag, Math.max(0, at - emittedAt), KEPT_SAMPLES)
   }
@@ -109,6 +117,7 @@ export class FollowRecorder {
       stream: this.stream,
       ...(this.label && { label: this.label }),
       frames: this.#frames,
+      compact: this.#compact,
       ...(this.#lastHeardAt !== undefined && { lastHeardAt: this.#lastHeardAt }),
       lagMs: spread(this.#lag),
       gaps: this.#gaps,
@@ -187,6 +196,7 @@ export function describeFollow(follow: FollowReading): string {
   const reasons = [...new Set(follow.reconnects.map((reconnect) => REASON_TEXT[reconnect.why]))]
   return [
     spreadText("updates arrive", follow.lagMs) ?? `${plural(follow.frames, "update")} heard`,
+    follow.compact ? `${follow.compact === follow.frames ? "all" : plural(follow.compact, "update")} in the compact form` : undefined,
     follow.gaps ? `${plural(follow.gaps, "skipped update")} asked for again` : undefined,
     follow.rereads ? `read again whole ${times(follow.rereads)}` : undefined,
     follow.reconnects.length ? `followed again ${times(follow.reconnects.length)} (${reasons.join(", ")})` : undefined,
@@ -207,6 +217,10 @@ export function describeOwner(owner: SyncReadings["owner"]): string | undefined 
   if (!owner || (!owner.watched && !owner.resent && !owner.notices)) return undefined
   return [
     `${plural(owner.watched, "conversation")} watched from another device`,
+    owner.watched && owner.compact === owner.watched ? "sent compact" : undefined,
+    owner.watched > owner.compact
+      ? `${owner.compact ? `${owner.watched - owner.compact} ` : ""}sent whole, as ${owner.negotiated ? "a device watching reads only the older form" : "the cloud doesn't say what its watchers read"}`
+      : undefined,
     owner.resent ? `${plural(owner.resent, "update")} sent again after a reconnect` : undefined,
     owner.notices ? `${plural(owner.notices, "watcher")} told to read again` : undefined,
   ].filter(Boolean).join(" · ")

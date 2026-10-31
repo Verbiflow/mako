@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
@@ -15,6 +15,7 @@ import { makoReviewPrompt, reviewDisplayText, ReviewTargetSchema, type ReviewTar
 import {
   LIVE_FRAME_MS,
   requestsDelta,
+  compactLiveBatch,
   sessionDelta,
   sharedFields,
   sharedSession,
@@ -138,8 +139,9 @@ export class LiveConversations {
    * One generation per host life. Every batch and snapshot carries it so a
    * renderer can tell a revision numbered by this host from one numbered by
    * the host before it, and re-snapshot instead of merging across the seam.
+   * Readers only compare it, and every batch carries it: 72 random bits, in 12 characters rather than a UUID's 36.
    */
-  readonly epoch = randomUUID()
+  readonly epoch = randomBytes(9).toString("base64url")
   private readonly reclaims = new JournalReclaims()
 
   constructor(dependencies: Dependencies) {
@@ -1340,7 +1342,8 @@ export class LiveConversations {
       resident.journalSnapshot === resident.snapshot
     )
       return
-    const delivery = deliverLiveUpdates(resident.snapshot.blocks, resident.updates)
+    const delivered = resident.snapshot.blocks
+    const delivery = deliverLiveUpdates(delivered, resident.updates)
     const updates = delivery.updates
     const snapshot = {
       ...sharedFields(previous, resident.snapshot),
@@ -1406,7 +1409,9 @@ export class LiveConversations {
       batch.emittedAt = Date.now()
       batch.trace = trace
     }
-    this.dependencies.emit({ type: "live-batch", batch })
+    // Readers hold `previous`; its updates were reduced against the blocks it held only when nothing replaced them since.
+    const compact = compactLiveBatch(batch, { blocks: previous.blocks === delivered ? delivered : [], requests: previous.requests, ...(previous.control && { control: previous.control }) })
+    this.dependencies.emit({ type: "live-batch", batch, compact })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
     if (previous.session.status === "running" && settled(snapshot.session.status))

@@ -141,6 +141,8 @@ export type RuntimeValue = Extract<RuntimeReply, { ok: true }>["value"]
 
 /** One call's identity through every hop: the client, the gateway, the runtime and the host's log lines. */
 export { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
+/** The live form (`@mako/protocol/live-form`) an `/events` subscriber reads; one that sends none reads form 1. */
+export const LIVE_FORM_HEADER = "x-mako-live"
 export const CorrelationIdSchema = z.string().regex(/^[\w=-]{1,128}$/)
 
 /**

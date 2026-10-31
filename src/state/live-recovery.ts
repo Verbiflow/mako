@@ -8,7 +8,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { changesSession, requestsAfter, sessionAfter } from "@mako/host/contracts/live-conversations"
+import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
@@ -18,7 +18,7 @@ import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 
 const fetching = new Map<string, Promise<boolean>>()
-const pending = new Map<string, LiveBatch[]>()
+const pending = new Map<string, HeardLiveBatch[]>()
 // Invalid/oversized snapshots cannot be repaired by refetching on every token.
 // Activation and reconnect retry them. Transient outages may recover on a later
 // batch even if the independent event stream stayed connected throughout.
@@ -32,7 +32,7 @@ const mergedSince = new Map<string, number>()
  * The batch a reread left waiting, and how many rereads in a row left that same batch waiting: the host answered
  * without it, so each next ask waits longer and nothing a host never answers can spin. New batches read at once.
  */
-const stuck = new Map<string, { batch: LiveBatch; tries: number }>()
+const stuck = new Map<string, { batch: HeardLiveBatch; tries: number }>()
 
 function restoredLive(id: string): void {
   if (failed.delete(id)) toast.dismiss(`live-restore:${id}`)
@@ -321,7 +321,26 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
   return batch.historyFailure === undefined ? current.historyFailure : (batch.historyFailure ?? undefined)
 }
 
-export function applyLiveBatch(batch: LiveBatch): void {
+/**
+ * A batch as its host sent it, whole or in the compact live form (`expandLiveBatch`, the one reading of that form the
+ * desk's windows and the web client share). A compact batch is read against what this window holds only where it holds
+ * the revision before it; held anywhere else (buffered, out of order, another epoch) it waits as it came and is read
+ * when it's next in line, so a snapshot taken meanwhile is what it's read against.
+ */
+export function applyLiveBatch(heard: HeardLiveBatch): void {
+  if (!isCompactBatch(heard)) return applyBatch(heard, heard, false)
+  const current = acpStore.get().conversations[heard.id]
+  const held = current?.kind === "live" && sameEpoch(current, heard) && heard.revision === (current.revision ?? 0) + 1 ? current : undefined
+  const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }) } : { blocks: [] })
+  for (const patch of read.unheld) settleMessage(patch.id, true)
+  applyBatch(read.batch, heard, read.unread)
+}
+
+/**
+ * `batch` merged, or `heard` (what it was read from) buffered for a snapshot. `unread`: `heard` said more than this
+ * window could read of it, which a conversation it only lists does without, and one it shows reads again.
+ */
+function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): void {
   for (const request of batch.requests ?? batch.requestChanges ?? []) settleMessage(request.id, true)
   for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   for (const action of batch.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
@@ -382,6 +401,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     // screen are not what this batch was reduced against, so it is buffered
     // and a fresh snapshot is taken rather than merged onto the wrong state.
     !sameEpoch(current, batch) ||
+    unread ||
     batch.historyChanged ||
     (current.releasedTurns?.length && batch.updates.length &&
       (batch.changedFrom === undefined || current.releasedTurns.some(turn => batch.changedFrom! < turn.blocks.end))) ||
@@ -393,7 +413,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
   ) {
     // A bounded buffer is only an optimization. The host snapshot remains authoritative.
     const buffered = pending.get(batch.id) ?? []
-    pending.set(batch.id, [...buffered.slice(-127), batch])
+    pending.set(batch.id, [...buffered.slice(-127), heard])
     const failure = failed.get(batch.id)
     if (!failure || failure.reconnecting) void hydrateLive(batch.id)
     return

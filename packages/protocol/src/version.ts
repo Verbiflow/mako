@@ -21,10 +21,12 @@ export const PROTOCOL_VERSION = 1
  * (`waitingFor`: an approval, a question, or anything else). 11 lets a `sessions` row say that its Thread is on its way
  * between a device and the cloud, and how far (`move`). 12 lets a `sessions` row say what its owner's rail shows of it:
  * the project it's filed under and what that project has checked out (`project`), the worktree branch it works on
- * (`worktree`), the agents it ran in before (`lineage`), and the background work it waits on (`background`). Every
- * envelope stays at `PROTOCOL_VERSION` on every link version.
+ * (`worktree`), the agents it ran in before (`lineage`), and the background work it waits on (`background`). 13 lets
+ * a runtime write live updates in the compact form where every reader reads it (`live-form.ts`): `watch` says the form
+ * each watched conversation's readers read (`forms`), `live-form` says it of a Thread's, and `live` and `event` say the
+ * form an update is in (`form`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 12
+export const LINK_VERSION = 13
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -65,6 +67,13 @@ export const MOVES_VERSION = 11
  * `lineage`, `background`); a gateway that agreed less refuses them.
  */
 export const RAIL_VERSION = 12
+
+/**
+ * The first link version whose `watch` says the live form each watched conversation's readers read (`forms`), whose
+ * gateway says a Thread's (`live-form`), and whose `live` and `event` say the form an update is in (`form`). A runtime
+ * on a link that agreed less is told neither, so it writes form 1 alone, which every reader reads.
+ */
+export const COMPACT_LIVE_VERSION = 13
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

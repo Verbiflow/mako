@@ -16,7 +16,8 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
 import {
-  type ClientEndpoint,
+  LIVE_FORM,
+  clientEndpointPath,
   type ClientSessionOverSockets,
   type ConnectionCredential,
   type EventFrame,
@@ -25,6 +26,7 @@ import {
   type RuntimeLink,
   RuntimeRefusedError,
   type GoingQuietReason,
+  type RuntimeOptions,
   type ServedRuntime,
   WireError,
   decodeGatewayClientFrame,
@@ -219,7 +221,7 @@ export type RuntimeClaim = { threadId: string; generation: number }
 
 /** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
 export type CloudRuntime = {
-  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>) => void }): Promise<ServedRuntime>
+  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: RuntimeOptions["watch"] }): Promise<ServedRuntime>
 }
 
 /** How a cloud Thread is made: ahead of its first message (`prepare`), and the harness that message is for. */
@@ -1068,7 +1070,8 @@ export class CloudAccounts {
   session(): ClientSessionOverSockets {
     const cloud = this.#require()
     const session = clientSessionOverSockets(
-      async (endpoint) => new WebSocket(new URL(endpointPath(endpoint), cloud), subprotocols(await this.#connectionToken())),
+      // Saying the live form its followers read (`CloudConversations`, which relays it to windows that read it too).
+      async (endpoint) => new WebSocket(new URL(clientEndpointPath(endpoint, LIVE_FORM), cloud), subprotocols(await this.#connectionToken())),
       {
         credential: this.#credential(),
         heartbeatMs: PING_MS,
@@ -1305,7 +1308,7 @@ export class CloudAccounts {
     let served: ServedRuntime | undefined
     let closed = false
     if (runtime)
-      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after) => this.#options.sessions?.watch(link, conversations, after) }).then(
+      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after, forms) => this.#options.sessions?.watch(link, conversations, after, forms) }).then(
         (started) => {
           served = started
           if (closed) return started.close()
@@ -1378,13 +1381,6 @@ export class CloudAccounts {
 }
 
 /** How the cloud ended a link: a removed device signs out; an expired token is fetched fresh; anything else reconnects. */
-/** Where the cloud takes a session's connection to each endpoint. */
-function endpointPath(endpoint: ClientEndpoint): string {
-  if (endpoint.kind === "thread") return `/v1/threads/${encodeURIComponent(endpoint.threadId)}/connect`
-  if (endpoint.kind === "runtime") return `/v1/runtimes/${encodeURIComponent(endpoint.runtimeId)}/clients`
-  return `/v1/accounts/${encodeURIComponent(endpoint.accountId)}/connect`
-}
-
 function endingOf(problem: Problem | undefined): CloudLinkEnding {
   if (!problem) return "lost"
   const type = problemType(problem)

@@ -597,7 +597,7 @@ test("a watched conversation's updates go out on a link as soon as it's served; 
   assert.equal(live.length, 2, "not before the link is served")
   publisher.linked(second)
   assert.deepEqual(live.slice(2).map((each) => [each.revision, each.n]), [[2, two], [3, two! + 1], [4, two! + 2]])
-  assert.deepEqual(publisher.readings(), { watched: 1, resent: 3, notices: 0 }, "Diagnostics counts what went again")
+  assert.deepEqual(publisher.readings(), { watched: 1, compact: 0, negotiated: false, resent: 3, notices: 0 }, "Diagnostics counts what went again")
   // Said again with the same word, nothing goes twice.
   publisher.watch(second.link, ["c-1"], { "c-1": two! + 2 })
   assert.equal(live.length, 5)

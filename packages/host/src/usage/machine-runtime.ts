@@ -12,6 +12,7 @@ import {
   problemType,
   runtimeLinkOverSocket,
   type GatewayFrame,
+  type LiveForm,
   type LocalSeqStore,
   type MediaHandler,
   type Problem,
@@ -27,7 +28,7 @@ import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-in
 import type { GitHubPerson } from "../contracts/github-person.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import type { RuntimeEvent, RuntimeEventChannel } from "../contracts/runtime-value.js"
-import { gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
+import { gatewayCompactLine, gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
 import { appPorts } from "./app-ports.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
@@ -96,7 +97,7 @@ export type SessionPublishing = {
   report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> } | undefined): void
   /** The link is up and served: watched conversations go out on it at once, not from the next report. */
   linked(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }): void
-  watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>): void
+  watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>, forms?: Readonly<Record<string, LiveForm>>): void
 }
 
 /** A stream's frames come as often as its acks; they change nothing the agent hears about. */
@@ -247,8 +248,10 @@ export class MachineRuntime {
     }
     if (line.fit === "reread") this.#state.events.invalidated += 1
     const payload = Payload.encoded(line.text)
+    const compactLine = gatewayCompactLine(event)
+    const compact = compactLine === undefined ? undefined : Payload.encoded(compactLine)
     // A sampled update's trace rides as the event's correlation ID, which the Thread logs and gives each reader.
-    for (const { threadId } of claims) threads.emit(threadId, payload, event.trace)
+    for (const { threadId } of claims) threads.emit(threadId, payload, event.trace, compact)
     if (event.trace) hostLog("sync", "traced update sent", { trace: event.trace, conversation: event.conversation })
     this.#state.events.emitted += 1
     this.#changed()
@@ -559,7 +562,7 @@ export class MachineRuntime {
     }
     // A phone reaches this machine's Threads' apps and signed files through the same link, as it does a Mac's.
     const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), signedFiles: this.#options.signedFiles })
-    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations, after) => this.#options.sessions?.watch(runtimeLink, conversations, after) }).then(
+    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations, after, forms) => this.#options.sessions?.watch(runtimeLink, conversations, after, forms) }).then(
       (served) => {
         if (closed) return served.close()
         this.#served = served

@@ -21,7 +21,7 @@ import type { NativeRequest } from "./native-requests.js"
 import type { AccountRemovalEvent, AccountUsage } from "./accounts.js"
 import type { ProcessPlatform } from "./platform.js"
 import type { AppshotShortcutWatch } from "./appshot-shortcut.js"
-import type { LiveBatch, LiveSummary } from "./live-conversations.js"
+import type { CompactLiveBatch, LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
   ThreadRef as CatalogThreadRef,
 } from "@mako/sessions"
@@ -119,7 +119,12 @@ export type HostEventBody =
       /** For a Session that followed another into the worktree: where that one goes on, and this one's title. */
       lead?: string; title?: string
     }
-  | { type: "live-batch"; batch: LiveBatch }
+  /**
+   * A conversation's batch, and as its host emits it, the same in the compact live form (`compact`), which a reader that
+   * said it reads that form hears in its place: each is encoded apart (`encodeRuntimeEvent`), never together. A window
+   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`).
+   */
+  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch }
   /**
    * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
    * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.

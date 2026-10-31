@@ -7,11 +7,11 @@ import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
 import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type ThreadPlacement } from "../contracts/thread-identity.js"
-import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
+import { COMPACT_LIVE_FORM, COMPACT_LIVE_VERSION, Payload, SESSIONS_VERSION, WHOLE_LIVE_FORM, type LiveForm, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import type { HostWork } from "../base/event-loop.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { encodeRuntimeEvent, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
-import { gatewayEventLine, historyChangedNotice } from "../transport/index.js"
+import { gatewayCompactLine, gatewayEventLine, historyChangedNotice } from "../transport/index.js"
 import type { OwnerReading } from "../contracts/sync-readings.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
@@ -374,6 +374,13 @@ export class SessionReporter {
   }
 }
 
+/**
+ * One update of a watched conversation, numbered and kept to be sent again on a new link: its line whole (or the notice
+ * in its place), and in the compact live form where it has one that fits (`gatewayCompactLine`), the same string as the
+ * event's own.
+ */
+type KeptUpdate = { n: number; event: RuntimeEvent; text: string; compact?: string; correlationId?: string }
+
 /** The runtime link a host serves its Sessions on, while it's up: the link itself (one per connection), and what serves on it. */
 export type SessionLink = { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }
 
@@ -413,7 +420,8 @@ export class SessionPublisher {
   #current: SessionLink | undefined
   /** The link the last report went out on: a link not reported on yet is told every row. */
   #reportedLink: RuntimeLink | undefined
-  #watching: { link: RuntimeLink; conversations: ReadonlySet<string> } | undefined
+  /** What the gateway said is watched on `link`, and the live form each one's watchers read where that's above 1. */
+  #watching: { link: RuntimeLink; conversations: ReadonlySet<string>; forms: Readonly<Record<string, LiveForm>> } | undefined
   #dirty = true
   #reportedAt = Number.NEGATIVE_INFINITY
   #listed: readonly ReportedSession[] | undefined
@@ -441,7 +449,7 @@ export class SessionPublisher {
    * By conversation watched on the last link the gateway named it on: its updates since, kept to send again on a new
    * link from where the gateway says it got to, and the highest number given up past the bound, if any.
    */
-  readonly #kept = new Map<string, { updates: Array<{ n: number; event: RuntimeEvent; text: string; correlationId?: string }>; bytes: number; given?: number }>()
+  readonly #kept = new Map<string, { updates: Array<KeptUpdate>; bytes: number; given?: number }>()
   /** The gateway's word on a link not yet served: what it last relayed, to send the rest once the link is. */
   #after: { link: RuntimeLink; after: Readonly<Record<string, number>> } | undefined
   /** Updates sent again on a new link, and notices to read a conversation again sent in their place, for Diagnostics. */
@@ -559,11 +567,18 @@ export class SessionPublisher {
   }
 
   /**
-   * The gateway says which of this host's conversations another device watches, on `link`: the whole set, and from link
-   * version 9 the number of the last update it relayed of each (`after`), so a new link sends what came after.
+   * The gateway says which of this host's conversations another device watches, on `link`: the whole set, from link
+   * version 9 the number of the last update it relayed of each (`after`), so a new link sends what came after, and from
+   * 13 the live form every watcher of each reads (`forms`), the one its updates go in from now (`live-form.ts`).
    */
-  watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>): void {
-    this.#watching = { link, conversations: new Set(conversations) }
+  watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>, forms: Readonly<Record<string, LiveForm>> = {}): void {
+    const before = this.#watching?.link === link ? this.#watching.forms : {}
+    for (const conversation of conversations) {
+      const form = forms[conversation] ?? WHOLE_LIVE_FORM
+      const was = before[conversation] ?? WHOLE_LIVE_FORM
+      if (form !== was) hostLog("sync", "a watched conversation's watchers read another live form; its updates go in it from now", { conversation, form, was })
+    }
+    this.#watching = { link, conversations: new Set(conversations), forms }
     for (const conversation of this.#kept.keys()) if (!this.#watching.conversations.has(conversation)) this.#kept.delete(conversation)
     if (after) this.#after = { link, after }
     this.#resend()
@@ -594,7 +609,7 @@ export class SessionPublisher {
         delete kept.given
         continue
       }
-      for (const update of missed) current.served.live(conversation, Payload.encoded(update.text), { n: update.n, ...(update.correlationId && { correlationId: update.correlationId }) })
+      for (const update of missed) this.#send(current, conversation, update)
       this.#resent += missed.length
       hostLog("sync", "a watched conversation's updates the gateway didn't relay went again on a new link", { conversation, updates: missed.length })
     }
@@ -602,7 +617,25 @@ export class SessionPublisher {
 
   /** What this host sends of its own watched conversations, for Diagnostics' Sync. */
   readings(): OwnerReading {
-    return { watched: this.#watching?.conversations.size ?? 0, resent: this.#resent, notices: this.#notices }
+    const watching = this.#watching
+    const compact = watching ? [...watching.conversations].filter((conversation) => this.#formOf(conversation) === COMPACT_LIVE_FORM).length : 0
+    const negotiated = (this.#current?.served.version ?? 0) >= COMPACT_LIVE_VERSION
+    return { watched: watching?.conversations.size ?? 0, compact, negotiated, resent: this.#resent, notices: this.#notices }
+  }
+
+  /** The live form a watched conversation's updates go in on the link it's watched on. */
+  #formOf(conversation: string): LiveForm {
+    return this.#watching?.forms[conversation] ?? WHOLE_LIVE_FORM
+  }
+
+  /**
+   * One update on `current`, in the form the gateway last said every watcher of its conversation reads: the compact one
+   * where it has it and fits, else whole. The same update sent again on a new link goes in what that link says.
+   */
+  #send(current: SessionLink, conversation: string, update: KeptUpdate): void {
+    const compact = this.#formOf(conversation) === COMPACT_LIVE_FORM ? update.compact : undefined
+    const text = compact ?? update.text
+    current.served.live(conversation, Payload.encoded(text), { n: update.n, ...(update.correlationId && { correlationId: update.correlationId }), ...(compact !== undefined && { form: COMPACT_LIVE_FORM }) })
   }
 
   /**
@@ -621,23 +654,26 @@ export class SessionPublisher {
     if (line.fit === "too-large") return hostWarn("sessions", "a watched conversation's event too large for the gateway wasn't sent", { conversation, type: line.type, bytes: line.bytes })
     const n = ++this.#n
     const correlationId = event.trace
-    this.#keep(conversation, { n, event, text: line.text, ...(correlationId && { correlationId }) })
+    const compact = gatewayCompactLine(event)
+    const update: KeptUpdate = { n, event, text: line.text, ...(compact !== undefined && { compact }), ...(correlationId && { correlationId }) }
+    this.#keep(conversation, update)
     const current = this.#watched(conversation)
     if (!current) return
-    current.served.live(conversation, Payload.encoded(line.text), { n, ...(correlationId && { correlationId }) })
+    this.#send(current, conversation, update)
     // A sampled update: logged here, at the gateway and on each device that hears it, under its trace.
     if (correlationId) hostLog("sync", "traced update sent", { trace: correlationId, conversation, n })
     this.#sent?.()
   }
 
-  #keep(conversation: string, update: { n: number; event: RuntimeEvent; text: string; correlationId?: string }): void {
+  #keep(conversation: string, update: KeptUpdate): void {
     let kept = this.#kept.get(conversation)
     if (!kept) this.#kept.set(conversation, (kept = { updates: [], bytes: 0 }))
+    const bytes = (each: KeptUpdate) => each.text.length + (each.compact?.length ?? 0)
     kept.updates.push(update)
-    kept.bytes += update.text.length
+    kept.bytes += bytes(update)
     while (kept.updates.length > KEPT_UPDATES || (kept.bytes > KEPT_BYTES && kept.updates.length > 1)) {
       const given = kept.updates.shift()!
-      kept.bytes -= given.text.length
+      kept.bytes -= bytes(given)
       kept.given = given.n
     }
   }

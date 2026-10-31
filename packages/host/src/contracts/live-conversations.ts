@@ -1,6 +1,7 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
+import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
 import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
 import type {
   NativeAgentObservation,
@@ -19,7 +20,7 @@ import type {
   PromptAttachment,
   LiveSessionState,
 } from "./providers-acp.js"
-import type { LiveUpdate } from "@mako/sessions/live-content"
+import { compactLiveUpdates, expandLiveUpdates, type CompactLiveUpdate, type LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { RequestChanges } from "./turn-changes.js"
@@ -741,6 +742,147 @@ export function requestsAfter(current: readonly LiveRequest[] | undefined, batch
     else next[at] = request
   }
   return next
+}
+
+/** What changed of one object of a list kept by `id`, against the one a reader holds: the fields set anew, and those gone. */
+export type FieldPatch<Value extends { id: string }> = { id: string; set?: Partial<Value>; unset?: (keyof Value & string)[] }
+
+/** `next` as what changed of `held`, when that says it in fewer characters than `next` whole. */
+function fieldPatch<Value extends { id: string }>(held: Value, next: Value): FieldPatch<Value> | undefined {
+  const set: Partial<Value> = {}
+  const unset: (keyof Value & string)[] = []
+  // SAFETY: both are values of `Value`, so each own key of either is one of its fields.
+  const keys = (value: Value) => Object.keys(value) as (keyof Value & string)[]
+  for (const key of keys(next))
+    if (next[key] === undefined) {
+      if (held[key] !== undefined) unset.push(key)
+    } else if (next[key] !== held[key] && canonicalJson(next[key]) !== canonicalJson(held[key])) set[key] = next[key]
+  for (const key of keys(held)) if (!(key in next) && held[key] !== undefined) unset.push(key)
+  const patch: FieldPatch<Value> = { id: next.id, ...(Object.keys(set).length && { set }), ...(unset.length && { unset }) }
+  return JSON.stringify(patch).length < JSON.stringify(next).length ? patch : undefined
+}
+
+/** `held` with `patch` applied. */
+function patched<Value extends { id: string }>(held: Value, patch: FieldPatch<Value>): Value {
+  const next = { ...held, ...patch.set }
+  for (const key of patch.unset ?? []) Reflect.deleteProperty(next, key)
+  return next
+}
+
+type ConversationBinding = ConversationControl["bindings"][number]
+
+/** `next`'s bindings as what changed of `held`'s, when nothing else of the control changed and its bindings are the same ones. */
+function bindingPatches(held: ConversationControl, next: ConversationControl): FieldPatch<ConversationBinding>[] | undefined {
+  const { bindings: heldBindings, ...heldRest } = held
+  const { bindings, ...rest } = next
+  if (bindings.length !== heldBindings.length || bindings.some((binding, index) => binding.id !== heldBindings[index]!.id)) return undefined
+  if (canonicalJson(rest) !== canonicalJson(heldRest)) return undefined
+  const patches: FieldPatch<ConversationBinding>[] = []
+  for (const [index, binding] of bindings.entries()) {
+    const was = heldBindings[index]!
+    if (binding === was || canonicalJson(binding) === canonicalJson(was)) continue
+    const patch = fieldPatch(was, binding)
+    if (!patch) return undefined
+    patches.push(patch)
+  }
+  return patches.length ? patches : undefined
+}
+
+/**
+ * A batch in the compact live form (`COMPACT_LIVE_FORM`), written for readers that read it against the conversation as
+ * each holds it at the revision before (`compactLiveBatch`), and read back by `expandLiveBatch`, the one way any reader
+ * reads it. Besides `LiveBatch`'s fields as they are:
+ * - `updates` as `compactLiveUpdates` writes them;
+ * - `requestPatches`: each changed request a reader holds, as the fields that changed; new ones stay in `requestChanges`;
+ * - `bindingPatches`: the control's bindings that changed, likewise, when nothing else of the control did;
+ * - no `changedFrom` when only the last block changed (it's `blockCount - 1`), and neither it nor `blockCount` when no
+ *   block did.
+ */
+export type CompactLiveBatch = Omit<LiveBatch, "updates"> & {
+  form: typeof COMPACT_LIVE_FORM
+  updates: CompactLiveUpdate[]
+  requestPatches?: FieldPatch<LiveRequest>[]
+  bindingPatches?: FieldPatch<ConversationBinding>[]
+}
+
+/** A batch as a reader hears it: whole, or in the compact form where it said it reads that. */
+export type HeardLiveBatch = LiveBatch | CompactLiveBatch
+
+export function isCompactBatch(batch: HeardLiveBatch): batch is CompactLiveBatch {
+  return "form" in batch && batch.form === COMPACT_LIVE_FORM
+}
+
+/** What every reader of a conversation holds at the revision before a batch: the blocks it reduced `updates` against. */
+export type LiveBatchBase = { blocks: Entry[]; requests: readonly LiveRequest[]; control?: ConversationControl }
+
+/** `batch`, as a flush writes it, in the compact live form against `before`. */
+export function compactLiveBatch(batch: LiveBatch, before: LiveBatchBase): CompactLiveBatch {
+  const { id, updates, changedFrom, blockCount, requestChanges, control, ...rest } = batch
+  // `id` leads, so a line is read as this form's by its first characters (`readEventLine`).
+  const compact: CompactLiveBatch = { id, ...rest, form: COMPACT_LIVE_FORM, updates: compactLiveUpdates(before.blocks, updates) }
+  if (updates.length || changedFrom !== blockCount) {
+    if (changedFrom !== undefined && (blockCount === undefined || changedFrom !== blockCount - 1)) compact.changedFrom = changedFrom
+    if (blockCount !== undefined) compact.blockCount = blockCount
+  }
+  if (requestChanges) {
+    const held = new Map(before.requests.map((request) => [request.id, request]))
+    const whole: LiveRequest[] = []
+    const patches: FieldPatch<LiveRequest>[] = []
+    for (const request of requestChanges) {
+      const was = held.get(request.id)
+      const patch = was && fieldPatch(was, request)
+      if (patch) patches.push(patch)
+      else whole.push(request)
+    }
+    if (whole.length) compact.requestChanges = whole
+    if (patches.length) compact.requestPatches = patches
+  }
+  if (control) {
+    const patches = before.control && bindingPatches(before.control, control)
+    if (patches) compact.bindingPatches = patches
+    else compact.control = control
+  }
+  return compact
+}
+
+/** A compact batch as its reader read it (`expandLiveBatch`). */
+export type ExpandedLiveBatch = { batch: LiveBatch; unread: boolean; unheld: FieldPatch<LiveRequest>[] }
+
+/**
+ * A compact batch read against what its reader holds (`held`), as the whole batch its owner wrote it from. What `held`
+ * doesn't hold to read it against is left out and `unread`: a reader that holds the conversation reads it again; one that
+ * only lists it takes the rest. `unheld` are the patches of requests `held` doesn't hold.
+ */
+export function expandLiveBatch(batch: CompactLiveBatch, held: { blocks: Entry[]; requests?: readonly LiveRequest[]; control?: ConversationControl }): ExpandedLiveBatch {
+  const { updates, changedFrom, requestChanges, requestPatches, control, bindingPatches: bindings, ...rest } = batch
+  const expanded = expandLiveUpdates(held.blocks, updates)
+  let unread = expanded === undefined
+  const whole: LiveBatch = { ...rest, updates: expanded ?? [] }
+  Reflect.deleteProperty(whole, "form")
+  const from = changedFrom ?? (rest.blockCount === undefined ? undefined : rest.blockCount - 1)
+  if (from !== undefined) whole.changedFrom = from
+  const unheld: FieldPatch<LiveRequest>[] = []
+  if (requestChanges || requestPatches) {
+    const requests = new Map((held.requests ?? []).map((request) => [request.id, request]))
+    const changes = [...(requestChanges ?? [])]
+    for (const patch of requestPatches ?? []) {
+      const was = requests.get(patch.id)
+      if (was) changes.push(patched(was, patch))
+      else unheld.push(patch)
+    }
+    if (changes.length) whole.requestChanges = changes
+    if (unheld.length) unread = true
+  }
+  if (control) whole.control = control
+  else if (bindings) {
+    if (held.control && bindings.every((patch) => held.control!.bindings.some((binding) => binding.id === patch.id)))
+      whole.control = { ...held.control, bindings: held.control.bindings.map((binding) => {
+        const patch = bindings.find((each) => each.id === binding.id)
+        return patch ? patched(binding, patch) : binding
+      }) }
+    else unread = true
+  }
+  return { batch: whole, unread, unheld }
 }
 
 export type LiveDriverEvent =

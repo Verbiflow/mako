@@ -20,6 +20,7 @@
     "./attention": "./dist/attention.js",
     "./account-sessions": "./dist/account-sessions.js",
     "./live-tail": "./dist/live-tail.js",
+    "./live-form": "./dist/live-form.js",
     "./waiting": "./dist/waiting.js",
     "./recipes": "./dist/recipes.js",
     "./recipes-http": "./dist/recipes-http.js",

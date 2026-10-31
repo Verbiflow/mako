@@ -83,6 +83,8 @@ jobs:
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
+      # A conversation's batches read alike in the whole and the compact live form, each window served the one it reads.
+      - run: npm run test:live-form
       # Messages from the Mac, a phone and another Mac at once, with lost replies, cut links and restarts: each lands once.
       - run: npm run test:send-race
       - run: npm run test:tuning
@@ -143,6 +145,30 @@ jobs:
       # The rows read `@mako/*` from the packages' builds.
       - run: npm run build:control-runtime
       - run: npm run perf:decoders -- --reference HEAD^1
+
+  # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
+  # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
+  # the owner's Codex at the tested build sealed against the bench's stand-in model.
+  sync-bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/codex-sandbox
+      - name: The sync bench at the tested Codex
+        run: |
+          version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
+          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
+          PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run bench:sync-latency
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.

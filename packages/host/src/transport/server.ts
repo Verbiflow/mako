@@ -8,10 +8,11 @@ import { once } from "node:events"
 import { chmod } from "node:fs/promises"
 import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
+import { saidLiveForm, type LiveForm } from "@mako/protocol/live-form"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
-import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
-import { encodeRuntimeEvent, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
+import { encodeRuntimeEvent, payloadFor, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { historyChangedNotice } from "./gateway.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -82,7 +83,8 @@ export async function startWebHost(
   video?: (args: unknown[], client: string) => Promise<Uint8Array>
 ) {
   const info = () => (runtime instanceof Function ? runtime() : runtime)
-  const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
+  /** Each subscriber, and the live form it reads (`x-mako-live`, `live-form.ts`): one that says none reads form 1. */
+  const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number; live: LiveForm }>()
   // A cloud machine's Thread hears every event through the outlet, so the work done for subscribers runs for it too.
   const subscribersChanged = () => subscribed.set(streams.size > 0 || outlet !== undefined)
   subscribersChanged()
@@ -209,7 +211,8 @@ export async function startWebHost(
       const eventLimit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 64 * 1024 && requestedLimit <= 32 * 1024 * 1024
         ? requestedLimit : 512 * 1024
       streams.set(response, { client: clientId, observer: request.headers["x-mako-observer"] === "1",
-        history: request.headers["x-mako-history"] === "1", eventLimit })
+        history: request.headers["x-mako-history"] === "1", eventLimit,
+        live: saidLiveForm(request.headers[LIVE_FORM_HEADER]?.toString()) })
       subscribersChanged()
       response.once("close", () => {
         streams.delete(response)
@@ -308,23 +311,37 @@ export async function startWebHost(
   }
   const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string) => {
     if (!client) outlet?.(channel, event)
-    const line = runtimeEventLine(channel, event)
+    // Each subscriber gets the event in the newest live form it reads, each line encoded once.
+    const lines = new Map<string, { line: string; bytes: number }>()
+    const lineOf = (payload: string) => {
+      let held = lines.get(payload)
+      if (!held) {
+        const line = runtimeEventLine(channel, { ...event, payload })
+        lines.set(payload, (held = { line, bytes: Buffer.byteLength(line) }))
+      }
+      return held
+    }
     let invalidation: string | null | undefined
-    const bytes = Buffer.byteLength(line)
+    const notice = () => (invalidation === undefined ? (invalidation = invalidated(event)) : invalidation)
     for (const [stream, owner] of streams) {
       if (client && client !== owner.client) continue
-      if (stream.writableLength > 8 * 1024 * 1024)
+      if (stream.writableLength > 8 * 1024 * 1024) {
         stream.destroy(new Error("Web client stopped consuming host events"))
-      else {
-        if (owner.history && channel === "event" && bytes > owner.eventLimit) {
-          if (invalidation === undefined) invalidation = invalidated(event)
-          if (invalidation) {
-            stream.write(invalidation)
-            continue
-          }
-        }
-        stream.write(line)
+        continue
       }
+      const payload = payloadFor(event, owner.live)
+      // Heard in a form this subscriber doesn't read: it reads the conversation again instead.
+      if (payload === undefined) {
+        const line = notice()
+        if (line) stream.write(line)
+        continue
+      }
+      const { line, bytes } = lineOf(payload)
+      if (owner.history && channel === "event" && bytes > owner.eventLimit && notice()) {
+        stream.write(notice()!)
+        continue
+      }
+      stream.write(line)
     }
   }
   return {

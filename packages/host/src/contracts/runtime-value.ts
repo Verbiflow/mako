@@ -1,4 +1,5 @@
 import type { Json } from "@mako/protocol"
+import { COMPACT_LIVE_FORM, WHOLE_LIVE_FORM, readsLiveForm, type LiveForm } from "@mako/protocol/live-form"
 import type { HostEvent } from "./host-events-boot.js"
 import type { TerminalEvent } from "./terminal.js"
 
@@ -46,6 +47,22 @@ export interface RuntimeEventRouting {
 /** An event as its producer encoded it, with what a hop routes it by. */
 export interface RuntimeEvent extends RuntimeEventRouting {
   payload: string
+  /** The same event in the compact live form, where it has one (a batch its host emitted): for a reader of that form. */
+  compact?: string
+  /**
+   * The live form `payload` is in, when above 1: a batch heard so from another device, which this host has in no other.
+   * A reader of an older form is told to read the conversation again in its place.
+   */
+  form?: LiveForm
+}
+
+/**
+ * What a reader of live form `reads` is sent of `event`: its payload in the newest form the reader reads, or undefined
+ * when it has none the reader reads, where the notice that its conversation changed goes instead (`historyChangedNotice`).
+ */
+export function payloadFor(event: RuntimeEvent, reads: LiveForm): string | undefined {
+  if (event.compact !== undefined && reads >= COMPACT_LIVE_FORM) return event.compact
+  return readsLiveForm(reads, event.form) ? event.payload : undefined
 }
 
 export type RuntimeEventChannel = "event" | "terminal"
@@ -53,7 +70,14 @@ export type RuntimeEventChannel = "event" | "terminal"
 /** An event encoded once, for every subscriber of every host and window it reaches. */
 export function encodeRuntimeEvent(event: HostEvent | TerminalEvent): RuntimeEvent {
   if (event.type !== "live-batch") return { type: event.type, conversation: undefined, payload: JSON.stringify(event) }
-  return { type: event.type, conversation: event.batch.id, ...(event.batch.trace && { trace: event.batch.trace }), payload: JSON.stringify(event) }
+  const { compact, ...whole } = event
+  return {
+    type: event.type,
+    conversation: event.batch.id,
+    ...(event.batch.trace && { trace: event.batch.trace }),
+    payload: JSON.stringify(whole),
+    ...(compact && { compact: JSON.stringify({ type: event.type, batch: compact }) }),
+  }
 }
 
 /** An event for its window, decoded once; only the host and the desktop's main process write what reaches it. */
@@ -118,3 +142,43 @@ export function splitRuntimeEventLine(line: string): { head: string; payload: st
   if (at < 0) return null
   return { head: `${line.slice(0, at)}}`, payload: line.slice(at + PAYLOAD_FIELD.length, -1) }
 }
+
+/** The live form a `live-batch` event's payload is written in (`CompactLiveBatch` says it); form 1 for any other. */
+export function batchPayloadForm(payload: string): LiveForm {
+  // SAFETY: a `live-batch` event's payload as its host wrote it, whose batch says `form` only in the compact form.
+  const event = JSON.parse(payload) as { batch?: { form?: LiveForm } } | null
+  return event?.batch?.form === COMPACT_LIVE_FORM ? COMPACT_LIVE_FORM : WHOLE_LIVE_FORM
+}
+
+/** How a batch's payload begins in the compact live form: its conversation leads (`compactLiveBatch`). */
+const COMPACT_BATCH_START = '{"type":"live-batch","batch":{"id":"'
+
+/** What a line of an owner's stream says, as every reader reads it (`readEventLine`). */
+export type EventLine = { channel: string; type: string | undefined; conversation: string | undefined; payload: string; form: LiveForm }
+
+/**
+ * A line of an owner's stream through the gateway, as a device reads it: a header then the payload (`runtimeEventLine`),
+ * or, in the compact live form, a batch's payload alone, read as one by its first characters. `null` for a line that is
+ * neither, or one whose header isn't JSON.
+ */
+export function readEventLine(line: string): EventLine | null {
+  if (line.startsWith(COMPACT_BATCH_START)) {
+    const end = line.indexOf('"', COMPACT_BATCH_START.length)
+    if (end < 0) return null
+    return { channel: "event", type: "live-batch", conversation: line.slice(COMPACT_BATCH_START.length, end), payload: line, form: COMPACT_LIVE_FORM }
+  }
+  const parts = splitRuntimeEventLine(line)
+  if (!parts) return null
+  let head: EventHead | null
+  try {
+    // SAFETY: a header as every build's `runtimeEventLine` writes it: its channel, its event's type and conversation.
+    head = JSON.parse(parts.head) as EventHead | null
+  } catch {
+    return null
+  }
+  if (!head?.channel) return null
+  return { channel: head.channel, type: head.type, conversation: head.conversation, payload: parts.payload, form: WHOLE_LIVE_FORM }
+}
+
+/** What an event line's header says (`runtimeEventLine`). */
+type EventHead = { channel?: string; type?: string; conversation?: string }

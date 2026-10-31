@@ -468,6 +468,111 @@ export function deliverLiveUpdates(blocks: Entry[], updates: LiveUpdate[]): Live
   return delivery
 }
 
+/**
+ * An update of the compact live form that goes on with the block a batch began with last, a text or a thinking: more of
+ * its text, and its frames as more ranges of the block's own file. Only a batch's first updates are.
+ */
+export type MoreUpdate = { kind: "more"; text: string; ranges?: [number, number][] }
+
+/**
+ * Updates as the compact live form writes them against the blocks their batch began with (`compactLiveUpdates`): the
+ * first updates that go on with the last block are `more`, and a call's update names no file where the call it lands on
+ * has one, whose file its frames take.
+ */
+export type CompactLiveUpdate = LiveUpdate | MoreUpdate
+
+/** Whether `update` lands on the last of `blocks` and goes on with it, so a `more` can say it. */
+function continuesLast(blocks: Entry[], update: LiveUpdate): update is Extract<LiveUpdate, { kind: "text" | "thinking" }> {
+  if ((update.kind !== "text" && update.kind !== "thinking") || update.replace) return false
+  const last = blocks.at(-1)
+  if (last?.type !== update.kind || last.id !== update.id) return false
+  if (update.stream && (update.stream.rows || update.stream.file !== last.stream?.file)) return false
+  // Found by name, an update lands on the first block of that name in its turn.
+  if (update.id === undefined) return true
+  for (let index = blocks.length - 2; index >= 0 && !isTurnStart(blocks[index]); index--) {
+    const block = blocks[index]!
+    if (block.type === update.kind && block.id === update.id) return false
+  }
+  return true
+}
+
+/**
+ * The call a batch's update at `index` lands on, among the blocks the batch began with, when that call names the file
+ * its frames are in: found as the reduction finds it (the last of that id in the current turn), and only while no
+ * update before it in the batch began a turn or withdrew blocks.
+ */
+function filedCall(blocks: Entry[], updates: readonly CompactLiveUpdate[], index: number, id: string): Extract<Entry, { type: "tool" }> | undefined {
+  for (let before = 0; before < index; before++) {
+    const kind = updates[before]!.kind
+    if (kind === "user" || kind === "provider-turn" || kind === "retract") return undefined
+  }
+  for (let at = blocks.length - 1; at >= 0 && !isTurnStart(blocks[at]); at--) {
+    const block = blocks[at]!
+    if (block.type === "tool" && block.id === id) return block.stream?.file === undefined ? undefined : block
+  }
+  return undefined
+}
+
+/**
+ * `updates` as the compact live form writes them against `blocks`, the blocks their batch began with: reduced with
+ * `expandLiveUpdates` against the same blocks, they place what `updates` would. A frame whose file differs from its
+ * call's is one the reduction drops (`joined`), so it isn't sent.
+ */
+export function compactLiveUpdates(blocks: Entry[], updates: LiveUpdate[]): CompactLiveUpdate[] {
+  const compact: CompactLiveUpdate[] = []
+  let leading = true
+  for (const [index, update] of updates.entries()) {
+    if (leading && continuesLast(blocks, update)) {
+      const more: MoreUpdate = { kind: "more", text: update.text }
+      if (update.stream?.ranges) more.ranges = update.stream.ranges
+      compact.push(more)
+      continue
+    }
+    leading = false
+    const call = update.kind === "tool-update" && update.stream ? filedCall(blocks, updates, index, update.id) : undefined
+    if (!call || update.kind !== "tool-update" || !update.stream) {
+      compact.push(update)
+      continue
+    }
+    const { stream, ...rest } = update
+    if (stream.file !== call.stream!.file) compact.push(rest)
+    else {
+      const { file: _file, ...frames } = stream
+      compact.push({ ...rest, stream: frames })
+    }
+  }
+  return compact
+}
+
+/**
+ * The updates a compact batch's `updates` say against `blocks`, the blocks its reader holds at the revision before:
+ * what `compactLiveUpdates` wrote them from, for the reduction. Undefined when they don't go on from `blocks` (a `more`
+ * with no text or thinking last), which a reader whose blocks are the batch's own never sees: it reads the conversation
+ * again.
+ */
+export function expandLiveUpdates(blocks: Entry[], updates: readonly CompactLiveUpdate[]): LiveUpdate[] | undefined {
+  const last = blocks.at(-1)
+  const expanded: LiveUpdate[] = []
+  let leading = true
+  for (const [index, update] of updates.entries()) {
+    if (update.kind === "more") {
+      if (!leading || (last?.type !== "text" && last?.type !== "thinking")) return undefined
+      const file = last.stream?.file
+      expanded.push({
+        kind: last.type,
+        text: update.text,
+        ...(last.id !== undefined && { id: last.id }),
+        ...(update.ranges && { stream: { ...(file !== undefined && { file }), ranges: update.ranges } }),
+      })
+      continue
+    }
+    leading = false
+    const call = update.kind === "tool-update" && update.stream && update.stream.file === undefined ? filedCall(blocks, updates, index, update.id) : undefined
+    expanded.push(call && update.kind === "tool-update" ? { ...update, stream: { ...update.stream, file: call.stream!.file } } : update)
+  }
+  return expanded
+}
+
 interface Delivering {
   delivery: LiveDelivery
   /** Blocks stored whole this batch, which no later append can describe. */

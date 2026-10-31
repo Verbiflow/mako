@@ -1,7 +1,7 @@
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
 import { answered, CLOUD, unanswered } from "./reach"
-import { clientSessionOverSockets, problemType, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
+import { LIVE_FORM, clientEndpointPath, clientSessionOverSockets, problemType, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
 
 /** Who this browser is signed in as, as the gateway says it with each connection token. */
 export interface WebAccount {
@@ -182,13 +182,7 @@ export class Gateway {
 
   async #open(endpoint: ClientEndpoint): Promise<MessageSocket> {
     const { token } = await this.connection()
-    const path =
-      endpoint.kind === "thread"
-        ? `/v1/threads/${encodeURIComponent(endpoint.threadId)}/connect`
-        : endpoint.kind === "runtime"
-          ? `/v1/runtimes/${encodeURIComponent(endpoint.runtimeId)}/clients`
-          : `/v1/accounts/${encodeURIComponent(endpoint.accountId)}/connect`
-    const socket = new WebSocket(new URL(path, this.origin.replace(/^http/, "ws")), subprotocols(token))
+    const socket = new WebSocket(new URL(clientEndpointPath(endpoint, LIVE_FORM), this.origin.replace(/^http/, "ws")), subprotocols(token))
     socket.binaryType = "arraybuffer"
     return socket
   }

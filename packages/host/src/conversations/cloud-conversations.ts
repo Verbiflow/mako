@@ -16,11 +16,12 @@ import { bootFolder, CloudRepositorySchema, githubRepositoryUrl, type CloudPrepa
 import { deferredWhenAsleep } from "../contracts/host-call-policy.js"
 import { OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { ForkInputSchema } from "../contracts/conversation-control.js"
-import { sessionAfter, type LiveBatch, type LiveRequest, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
+import { sessionAfter, type CompactLiveBatch, type HeardLiveBatch, type LiveRequest, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { WaitingMessage } from "@mako/protocol/waiting"
-import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, readEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import type { CloudMachineState, ThreadAppView } from "../contracts/thread-app.js"
 import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadPlacement } from "../contracts/thread-identity.js"
@@ -86,8 +87,8 @@ type Offered = z.infer<typeof OfferedSchema>
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
 const LiveSummarySchema = z.custom<LiveSummary>((value) => SummaryIdentitySchema.safeParse(value).success)
-/** A cloud host's own `LiveBatch`, checked for the revision a summary follows. */
-const LiveBatchSchema = z.custom<LiveBatch>((value) => z.object({ revision: z.number() }).loose().safeParse(value).success)
+/** A cloud host's own `LiveBatch`, whole or compact, checked for the revision a summary follows. */
+const LiveBatchSchema = z.custom<HeardLiveBatch>((value) => z.object({ revision: z.number() }).loose().safeParse(value).success)
 
 const AppProcessSchema = z.object({
   name: z.string(),
@@ -200,7 +201,6 @@ type StartedAhead = { conversationId: string; key: string; cwd: string | undefin
 const StoredSchema = z.object({ conversations: z.array(EntrySchema) })
 
 
-const LiveBatchHeadSchema = z.object({ channel: z.string(), type: z.string().optional(), conversation: z.string().optional() })
 const ControlActivityEventSchema = z.object({ type: z.literal("control-activity"), activity: ControlActivitySchema })
 
 export type CloudConversationsOptions = {
@@ -1571,26 +1571,27 @@ export class CloudConversations {
     // The Thread's object's own word on its machine, written into the stream as JSON: every conversation of the Thread
     // here shows it. Read only when the line says so, so a runtime's batches are never parsed for it.
     if (line.startsWith(MACHINE_NOTICE_PREFIX)) return this.#machineNotice(entry, line)
-    const parts = splitRuntimeEventLine(line)
-    if (!parts) return
-    const head = LiveBatchHeadSchema.safeParse(JSON.parse(parts.head))
-    if (!head.success || head.data.channel !== "event") return
+    const head = readEventLine(line)
+    if (!head || head.channel !== "event") return
     // Only its host's events are a runtime's lines: the machine is up (woken by another device, or by its own work).
     this.#heardAwake(entry.threadId)
-    if (head.data.type === "control-activity") {
+    if (head.type === "control-activity") {
       // The machine's host emits every conversation's; only this one's is this Thread's to show.
-      const event = ControlActivityEventSchema.safeParse(JSON.parse(parts.payload))
+      const event = ControlActivityEventSchema.safeParse(JSON.parse(head.payload))
       if (!event.success || this.#entries.get(event.data.activity.conversationId)?.threadId !== entry.threadId) return
       const { activity } = event.data
       this.controlPreviews.activity(entry.threadId, activity)
-      this.#options.emit({ type: "control-activity", payload: parts.payload })
+      this.#options.emit({ type: "control-activity", payload: head.payload })
       return
     }
     // One subscription follows a Thread; a Thread moved from this Mac can carry several of its conversations.
-    const target = head.data.type === "live-batch" && head.data.conversation ? this.#entries.get(head.data.conversation) : undefined
+    const target = head.type === "live-batch" && head.conversation ? this.#entries.get(head.conversation) : undefined
     if (!target || target.threadId !== entry.threadId) return
-    const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
-    this.#options.readings?.follow(entry.runtime ? entry.threadId : threadStream(entry.threadId)).heard(batch.emittedAt)
+    // In the compact live form, read only by the windows, which hold what it was written against; this reads the fields
+    // it carries as they are.
+    const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(head.payload))
+    const compact = head.form === COMPACT_LIVE_FORM
+    this.#options.readings?.follow(entry.runtime ? entry.threadId : threadStream(entry.threadId)).heard(batch.emittedAt, compact)
     if (batch.trace) hostLog("sync", "traced update heard", { trace: batch.trace, conversation: target.conversationId, ...(batch.emittedAt !== undefined && { lagMs: Date.now() - batch.emittedAt }) })
     const before = target.summary?.session.status
     if (target.summary) {
@@ -1608,7 +1609,7 @@ export class CloudConversations {
       this.#endHeard.add(target.conversationId)
       this.#options.turnEnded?.(target.conversationId, entry.threadId)
     } else if (before === "running" && after !== "running" && !this.#endHeard.delete(target.conversationId)) this.#options.turnEnded?.(target.conversationId, entry.threadId)
-    this.#options.emit({ type: "live-batch", conversation: target.conversationId, payload: parts.payload })
+    this.#options.emit({ type: "live-batch", conversation: target.conversationId, payload: head.payload, ...(compact && { form: COMPACT_LIVE_FORM }) })
     this.#noteChange(target.conversationId)
   }
 
@@ -1616,7 +1617,7 @@ export class CloudConversations {
    * Whether a relayed batch carries a request of the conversation reaching its end for the first time: a turn ended. A
    * whole list (one went away, or they reordered) restates requests that ended long ago, which are noted, never said.
    */
-  #endsRequest(conversationId: string, batch: Pick<LiveBatch, "requests" | "requestChanges">): boolean {
+  #endsRequest(conversationId: string, batch: Pick<HeardLiveBatch, "requests" | "requestChanges"> & Pick<CompactLiveBatch, "requestPatches">): boolean {
     const ended = this.#ended.get(conversationId) ?? new Set<string>()
     this.#ended.set(conversationId, ended)
     const note = (id: string) => {
@@ -1627,7 +1628,8 @@ export class CloudConversations {
       }
     }
     for (const request of batch.requests ?? []) if (ENDED_REQUEST.has(request.status)) note(request.id)
-    const fresh = (batch.requestChanges ?? []).filter((request) => ENDED_REQUEST.has(request.status) && !ended.has(request.id))
+    const changed = [...(batch.requestChanges ?? []), ...(batch.requestPatches ?? []).flatMap((patch) => (patch.set?.status ? [{ id: patch.id, status: patch.set.status }] : []))]
+    const fresh = changed.filter((request) => ENDED_REQUEST.has(request.status) && !ended.has(request.id))
     for (const request of fresh) note(request.id)
     return fresh.length > 0
   }

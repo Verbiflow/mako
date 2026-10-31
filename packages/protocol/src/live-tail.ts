@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { type EventFrame, nextStep } from "./events.js"
+import { type LiveForm, WHOLE_LIVE_FORM, readsLiveForm } from "./live-form.js"
 
 /**
  * A watched conversation's live stream (`session:<runtime>:<conversation>`), numbered and briefly kept by the gateway, so
@@ -12,7 +13,8 @@ import { type EventFrame, nextStep } from "./events.js"
  * it answers by reading the conversation as a snapshot. A watcher on a gateway that sends no notice reads the stream as
  * before: updates relayed, numbered by the clock, a missed one found from its batches' revisions.
  *
- * A notice is a line no runtime writes, so a reader that doesn't know it passes it over.
+ * A notice is a line no runtime writes, so a reader that doesn't know it passes it over. An update written in a newer live
+ * form than a watcher reads (`live-form.ts`) reaches it as `reread`, numbered as the update was.
  */
 export const StreamNoticeSchema = z
   .object({ streamNotice: z.enum(["head", "reread"]), head: z.number().int().nonnegative() })
@@ -50,8 +52,20 @@ export const TAIL_BYTES = 256 * 1024
  */
 export const LINGER_MS = 30_000
 
-/** One update as the gateway kept it: its number, when it relayed it, its line, and its trace, if it carried one. */
-export type TailFrame = { seq: number; at: string; text: string; correlationId?: string }
+/**
+ * One update as the gateway kept it: its number, when it relayed it, its line, its trace if it carried one, and the live
+ * form it's written in when above 1.
+ */
+export type TailFrame = { seq: number; at: string; text: string; correlationId?: string; form?: LiveForm }
+
+/**
+ * What a reader of live form `reads` is sent for `frame`: the frame, or in its place, under its number, the notice to read
+ * the conversation again when it's written in a form the reader doesn't read.
+ */
+export function frameFor(frame: TailFrame, reads: LiveForm): TailFrame {
+  if (readsLiveForm(reads, frame.form)) return frame
+  return { seq: frame.seq, at: frame.at, text: streamNoticeText({ streamNotice: "reread", head: frame.seq }) }
+}
 
 /** What the tail did, for the gateway's `inspect` and for logs. */
 export type TailView = {
@@ -64,6 +78,8 @@ export type TailView = {
   rereads: number
   /** The runtime's number (`n`) of the last update relayed, which a new link's `watch` says. */
   runtime: number | undefined
+  /** Updates relayed in the compact live form. */
+  compact: number
 }
 
 /**
@@ -79,7 +95,7 @@ export class LiveTail {
   #runtime: number | undefined
   readonly #maxFrames: number
   readonly #maxBytes: number
-  readonly #stats = { relayed: 0, duplicates: 0, replayed: 0, rereads: 0 }
+  readonly #stats = { relayed: 0, duplicates: 0, replayed: 0, rereads: 0, compact: 0 }
 
   /** `base` is above every number given to this stream before: its first update is `base + 1`. */
   constructor(base: number, limits: { frames?: number; bytes?: number } = {}) {
@@ -103,7 +119,7 @@ export class LiveTail {
    * A runtime's update: numbered, kept, and returned to be sent to the stream's watchers; undefined when its number says
    * it was relayed already (a runtime sending again what its old link may have carried).
    */
-  take(text: string, at: Date, from: { n?: number; correlationId?: string } = {}): TailFrame | undefined {
+  take(text: string, at: Date, from: { n?: number; correlationId?: string; form?: LiveForm } = {}): TailFrame | undefined {
     if (from.n !== undefined) {
       if (this.#runtime !== undefined && from.n <= this.#runtime) {
         this.#stats.duplicates += 1
@@ -112,7 +128,8 @@ export class LiveTail {
       this.#runtime = from.n
     }
     this.#head += 1
-    const frame: TailFrame = { seq: this.#head, at: at.toISOString(), text, ...(from.correlationId && { correlationId: from.correlationId }) }
+    const frame: TailFrame = { seq: this.#head, at: at.toISOString(), text, ...(from.correlationId && { correlationId: from.correlationId }), ...(from.form !== undefined && from.form !== WHOLE_LIVE_FORM && { form: from.form }) }
+    if (frame.form !== undefined) this.#stats.compact += 1
     this.#frames.push(frame)
     this.#bytes += text.length
     while (this.#frames.length > this.#maxFrames || (this.#bytes > this.#maxBytes && this.#frames.length > 1)) this.#bytes -= this.#frames.shift()!.text.length
@@ -136,14 +153,18 @@ export class LiveTail {
   }
 
   /**
-   * The frames a subscription opens with: the `head` notice and the updates after `after` (0 for a new watcher: live
-   * ones only), or the `reread` notice alone when the tail can't serve it.
+   * The frames a subscription of a watcher that reads live form `reads` opens with: the `head` notice and the updates
+   * after `after` (0 for a new watcher: live ones only), or the `reread` notice alone when the tail can't serve it, or
+   * one of them is in a form the watcher doesn't read.
    */
-  opening(after: number): Array<{ seq: number; text: string; at?: string; correlationId?: string }> {
+  opening(after: number, reads: LiveForm = WHOLE_LIVE_FORM): Array<{ seq: number; text: string; at?: string; correlationId?: string }> {
     const head = Math.max(1, this.#head)
     if (after === 0) return [{ seq: head, text: streamNoticeText({ streamNotice: "head", head: this.#head }) }]
     const frames = this.since(after)
-    if (!frames) return [{ seq: head, text: streamNoticeText({ streamNotice: "reread", head: this.#head }) }]
+    if (!frames || !frames.every((frame) => readsLiveForm(reads, frame.form))) {
+      if (frames) this.#stats.rereads += 1
+      return [{ seq: head, text: streamNoticeText({ streamNotice: "reread", head: this.#head }) }]
+    }
     return [{ seq: head, text: streamNoticeText({ streamNotice: "head", head: this.#head }) }, ...frames]
   }
 
@@ -156,6 +177,20 @@ export class LiveTail {
       runtime: this.#runtime,
     }
   }
+}
+
+/**
+ * A log's events after a reader's place (a cloud Thread's), as a reader of live form `reads` is sent them: each event it
+ * reads, and in place of each run of events written in a form it doesn't, one notice to read again (no `event`),
+ * numbered as the run's last.
+ */
+export function logFor<T extends { seq: number; form?: LiveForm }>(events: readonly T[], reads: LiveForm): Array<{ seq: number; event?: T }> {
+  const sent: Array<{ seq: number; event?: T }> = []
+  for (const [index, event] of events.entries()) {
+    if (readsLiveForm(reads, event.form)) sent.push({ seq: event.seq, event })
+    else if (index === events.length - 1 || readsLiveForm(reads, events[index + 1]!.form)) sent.push({ seq: event.seq })
+  }
+  return sent
 }
 
 /**

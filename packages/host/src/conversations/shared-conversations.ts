@@ -7,7 +7,8 @@ import { z } from "zod"
 import type { OwnerResolution } from "../contracts/thread-continuation.js"
 import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "../threads/index.js"
 import { ensureRuntime, invokeRuntime, invokeRuntimeEncoded, probeRuntime, runtimeLocation, subscribeRuntime } from "../transport/index.js"
-import { decodeRuntimeValue, encodeRuntimeEvent, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import { batchPayloadForm, decodeRuntimeValue, encodeRuntimeEvent, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import { LIVE_FORM, WHOLE_LIVE_FORM } from "@mako/protocol/live-form"
 import { runtimeEventRouting } from "../contracts/runtime.js"
 import { hostReplacementPending } from "../application/index.js"
 import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
@@ -296,12 +297,14 @@ export class SharedConversations {
           const shutdown = shutdownRequest.safeParse(JSON.parse(packet.payload))
           if (shutdown.success) void invokeRuntime(socket, this.client, "mako:shutdown-ack", [shutdown.data.requestId]).catch(() => {})
         }
-        // Relayed as the owner encoded it, with the header it routes by.
+        // Relayed as the owner encoded it, with the header it routes by, and in the live form it was written in.
         if (type === "live-batch" && conversation && peer.ids.has(conversation) &&
-          this.memory.routeForConversation(conversation)?.socket === socket)
-          this.emit({ type, conversation, payload: packet.payload })
+          this.memory.routeForConversation(conversation)?.socket === socket) {
+          const form = batchPayloadForm(packet.payload)
+          this.emit({ type, conversation, payload: packet.payload, ...(form !== WHOLE_LIVE_FORM && { form }) })
+        }
       }
-    }, disconnected, { observer: true, history: true, eventLimit: 32 * 1024 * 1024 })
+    }, disconnected, { observer: true, history: true, eventLimit: 32 * 1024 * 1024, live: LIVE_FORM })
   }
 
   dispose(): void {

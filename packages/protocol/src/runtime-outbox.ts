@@ -1,6 +1,8 @@
 import { type Problem, problemType } from "./envelope.js"
+import { COMPACT_LIVE_FORM, type LiveForm, WHOLE_LIVE_FORM } from "./live-form.js"
 import type { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import { COMPACT_LIVE_VERSION } from "./version.js"
 
 export type ThreadClaim = { threadId: string; generation: number }
 
@@ -52,9 +54,14 @@ export type ThreadOutboxStats = {
   lost: number
   /** The Thread's last sequence number, from the newest acknowledgement. */
   seq: number | undefined
+  /** The live form every reader of the Thread reads, as the gateway last said on this link (`live-form`). */
+  form: LiveForm
+  /** Frames sent in the compact live form. */
+  compact: number
 }
 
-type Waiting = { localSeq: number; event: Payload; correlationId: string | undefined; bytes: number; at: number; sent: boolean }
+/** An event, and the same in the compact live form where it has one (`live-form.ts`): which goes is chosen as it's sent. */
+type Waiting = { localSeq: number; event: Payload; compact: Payload | undefined; correlationId: string | undefined; bytes: number; at: number; sent: boolean }
 
 type Run = {
   generation: number
@@ -69,6 +76,7 @@ type Run = {
   resent: number
   lost: number
   seq: number | undefined
+  compact: number
 }
 
 const RESERVE_BLOCK = 1_000
@@ -89,6 +97,8 @@ export const MAX_EVENT_BYTES = 768 * 1024
  *   generation would be recorded.
  * - Memory is bounded: past `maxBytes` the oldest events are given up and counted as lost, rather than the runtime
  *   running out of memory while its link is down.
+ * - An event emitted with its compact form goes in it only while the gateway says every reader of its Thread reads it
+ *   (`live-form`, link version 13), chosen as it's sent: an event sent again on a new link goes in what that link says.
  */
 export class RuntimeThreads {
   readonly #runs = new Map<string, Run>()
@@ -98,6 +108,9 @@ export class RuntimeThreads {
   readonly #options: RuntimeThreadsOptions
   readonly #now: () => number
   #send: ((frame: RuntimeFrame) => void) | undefined
+  /** The version of the link attached, and the live form the gateway said each Thread's readers read on it. */
+  #version = 0
+  readonly #forms = new Map<string, LiveForm>()
   #bytes = 0
 
   constructor(options: RuntimeThreadsOptions = {}) {
@@ -123,7 +136,7 @@ export class RuntimeThreads {
     if (held?.generation === generation) return
     if (held) this.#forget(threadId, held)
     const reserved = this.#numbers ? this.#numbers.reserved(threadId, generation) : Number.MAX_SAFE_INTEGER
-    this.#runs.set(threadId, { generation, next: (this.#numbers ? reserved : 0) + 1, reserved, reserving: false, waiting: [], resentFrom: undefined, sent: 0, acked: 0, resent: 0, lost: 0, seq: undefined })
+    this.#runs.set(threadId, { generation, next: (this.#numbers ? reserved : 0) + 1, reserved, reserving: false, waiting: [], resentFrom: undefined, sent: 0, acked: 0, resent: 0, lost: 0, seq: undefined, compact: 0 })
   }
 
   /** Stops running the Thread under any generation below `generation`. */
@@ -134,18 +147,20 @@ export class RuntimeThreads {
 
   /**
    * Numbers an event of the Thread and sends it, or keeps it for the next link. Undefined when the runtime doesn't
-   * run the Thread: an event for it would be refused. Throws for an event larger than the gateway takes.
+   * run the Thread: an event for it would be refused. Throws for an event larger than the gateway takes. `compact` is
+   * the same event in the compact live form, sent in its place where the Thread's readers read it.
    */
-  emit(threadId: string, event: Payload, correlationId?: string): number | undefined {
+  emit(threadId: string, event: Payload, correlationId?: string, compact?: Payload): number | undefined {
     const run = this.#runs.get(threadId)
     if (!run) return undefined
-    const bytes = event.text.length
-    // A character is at most three bytes in UTF-8, so only a long event is measured.
-    if (bytes * 3 > this.#maxEventBytes) {
-      const size = new TextEncoder().encode(event.text).byteLength
+    for (const each of compact ? [event, compact] : [event]) {
+      // A character is at most three bytes in UTF-8, so only a long event is measured.
+      if (each.text.length * 3 <= this.#maxEventBytes) continue
+      const size = new TextEncoder().encode(each.text).byteLength
       if (size > this.#maxEventBytes) throw new RangeError(`An event of ${size} bytes is over the ${this.#maxEventBytes} a runtime may send`)
     }
-    const waiting: Waiting = { localSeq: run.next++, event, correlationId, bytes, at: this.#now(), sent: false }
+    const bytes = event.text.length + (compact?.text.length ?? 0)
+    const waiting: Waiting = { localSeq: run.next++, event, compact, correlationId, bytes, at: this.#now(), sent: false }
     run.waiting.push(waiting)
     this.#bytes += bytes
     this.#bound()
@@ -170,12 +185,21 @@ export class RuntimeThreads {
       resent: run.resent,
       lost: run.lost,
       seq: run.seq,
+      form: this.form(threadId),
+      compact: run.compact,
     }))
   }
 
-  /** A link enrolled: everything waiting goes on it, in order. */
-  attach(send: (frame: RuntimeFrame) => void): void {
+  /** The live form the gateway said on the link attached that every reader of the Thread reads; 1 until it says. */
+  form(threadId: string): LiveForm {
+    return this.#version >= COMPACT_LIVE_VERSION ? (this.#forms.get(threadId) ?? WHOLE_LIVE_FORM) : WHOLE_LIVE_FORM
+  }
+
+  /** A link enrolled at `version`: everything waiting goes on it, in order, in the form it says (form 1 until it does). */
+  attach(send: (frame: RuntimeFrame) => void, version = 0): void {
     this.#send = send
+    this.#version = version
+    this.#forms.clear()
     for (const [threadId, run] of this.#runs) {
       run.resentFrom = undefined
       for (const waiting of run.waiting) {
@@ -196,6 +220,14 @@ export class RuntimeThreads {
     if (frame.type === "fence") return this.fence(frame.threadId, frame.generation)
     if (frame.type === "ack") return this.#acked(frame)
     if (frame.type === "rejected") return this.#rejected(frame)
+    if (frame.type === "live-form") return this.#formed(frame.threadId, frame.form)
+  }
+
+  #formed(threadId: string, form: LiveForm): void {
+    const before = this.form(threadId)
+    if (form === WHOLE_LIVE_FORM) this.#forms.delete(threadId)
+    else this.#forms.set(threadId, form)
+    if (this.form(threadId) !== before) this.#options.log?.("a Thread's readers read another live form; its events go in it from now", { threadId, form: this.form(threadId), was: before })
   }
 
   #acked(frame: Extract<GatewayFrame, { type: "ack" }>): void {
@@ -243,8 +275,13 @@ export class RuntimeThreads {
     if (!send) return
     waiting.sent = true
     run.sent += 1
-    const frame: Extract<RuntimeFrame, { type: "event" }> = { type: "event", threadId, generation: run.generation, localSeq: waiting.localSeq, event: waiting.event }
+    const compact = waiting.compact && this.form(threadId) >= COMPACT_LIVE_FORM ? waiting.compact : undefined
+    const frame: Extract<RuntimeFrame, { type: "event" }> = { type: "event", threadId, generation: run.generation, localSeq: waiting.localSeq, event: compact ?? waiting.event }
     if (waiting.correlationId) frame.correlationId = waiting.correlationId
+    if (compact) {
+      frame.form = COMPACT_LIVE_FORM
+      run.compact += 1
+    }
     send(frame)
   }
 
@@ -297,6 +334,8 @@ export class RuntimeThreads {
   #forget(threadId: string, run: Run): void {
     for (const waiting of run.waiting) this.#bytes -= waiting.bytes
     this.#runs.delete(threadId)
+    // A Thread taken again starts in form 1: the gateway says its readers' form with each assignment.
+    this.#forms.delete(threadId)
   }
 }
 
