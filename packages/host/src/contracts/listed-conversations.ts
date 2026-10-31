@@ -39,6 +39,7 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
     elsewhere: where,
     threadId: row.thread,
     sessionId: row.session,
+    movedAt: Date.parse(row.activityAt),
   }
   if (row.title) summary.session.title = row.title
   if (row.threadTitle) summary.threadTitle = row.threadTitle

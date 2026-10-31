@@ -295,7 +295,7 @@ export function groupThreadFolders({
     entries.sort(byOrder)
     const allEntries = allByCwd.get(key) ?? entries
     const present = live.filter((presence) => threadFolderKey(presence, folderMap) === key)
-    const liveLatest = present.reduce((latest, presence) => Math.max(latest, presence.createdAt), 0)
+    const liveLatest = present.reduce((latest, presence) => Math.max(latest, presence.movedAt ?? presence.createdAt), 0)
     const latest = allEntries.reduce(
       (top, ref) => ((ref.updatedAt ?? "") > top ? ref.updatedAt! : top),
       liveLatest ? new Date(liveLatest).toISOString() : ""

@@ -23,8 +23,7 @@ import { answered, macPlace, reachLog, threadPlace } from "./reach"
 import { stepHeard } from "./moves"
 import { accountListStore } from "./account-list"
 import type { WebSession } from "./threads"
-import { harnessDescriptors } from "@/dev/harness-descriptors"
-import type { HarnessDescriptor } from "@/lib/types"
+import { webHarnessDescriptors } from "./descriptors"
 
 /** What `mako:resolve-file-references` names first: the conversation whose transcript's words are being resolved. */
 const FileReferencesSourceSchema = z.object({ liveId: z.string().optional() })
@@ -446,12 +445,4 @@ export class WebConversations {
     this.#gateway.wake()
     for (const done of this.#waits) done()
   }
-}
-
-/**
- * Every harness as the host describes it on any Mac, each runnable: what the renderer reads for a harness's name, mark
- * and what it can do (steering, modes). Generated from the harness definitions (`npm run harness:descriptors`).
- */
-function webHarnessDescriptors(): HarnessDescriptor[] {
-  return harnessDescriptors.map((descriptor) => ({ ...descriptor, live: true }))
 }

@@ -1,5 +1,5 @@
 import { OceanScene } from "@/components/ui/ocean-scene"
-import { useMemo } from "react"
+import { useMemo, type ReactNode } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { Launcher } from "@/components/transcript/launcher"
 import { MakoMark } from "@/components/ui/mako-mark"
@@ -67,39 +67,56 @@ function EmptyTranscript() {
   const chat = useChatFolders((state) => chatFolderOf(cwd, state.root) !== undefined)
 
   return (
+    <Welcome
+      detail={
+        chat ? (
+          <>
+            <MessageCircleIcon className="size-3 shrink-0" />
+            <span data-empty-chat className="truncate" title="The first message makes this chat a folder of its own in ~/Mako/Chats. Run git init there to make it a project.">
+              New chat, with its own folder in ~/Mako/Chats
+            </span>
+          </>
+        ) : (
+          <>
+            <FolderIcon className="size-3 shrink-0" />
+            <span className="truncate" title={cwd}>
+              {cwd ?? "no workspace"}
+            </span>
+          </>
+        )
+      }
+      model={model}
+    >
+      <Slot name="transcript.empty" meta={undefined} />
+      <Launcher chat={chat} />
+    </Welcome>
+  )
+}
+
+/**
+ * The opening screen's headline, and what a start has under it: the
+ * desktop's new session, and the web app's New in a laptop's browser.
+ * `detail` and `model` are the facts worth knowing before typing, where the
+ * screen knows them.
+ */
+export function Welcome({ detail, model, children }: { detail?: ReactNode; model?: string; children?: ReactNode }) {
+  return (
     <div className="relative flex min-h-full justify-center px-6">
       <div className="relative mt-8 mb-auto w-full max-w-[460px] py-12">
         <div className="flex items-center gap-3.5">
           <MakoMark className="size-8" />
           <div className="min-w-0">
             <p className="text-welcome font-medium">What are we working on?</p>
-            <p className="mt-1 flex min-w-0 items-center gap-1.5 text-ui text-faint">
-              {chat ? (
-                <>
-                  <MessageCircleIcon className="size-3 shrink-0" />
-                  <span data-empty-chat className="truncate" title="The first message makes this chat a folder of its own in ~/Mako/Chats. Run git init there to make it a project.">
-                    New chat, with its own folder in ~/Mako/Chats
-                  </span>
-                </>
-              ) : (
-                <>
-                  <FolderIcon className="size-3 shrink-0" />
-                  <span className="truncate" title={cwd}>
-                    {cwd ?? "no workspace"}
-                  </span>
-                </>
-              )}
-              {model ? (
-                <>
-                  <span className="text-faint/50">·</span>
-                  <span className="shrink-0 truncate">{model}</span>
-                </>
-              ) : null}
-            </p>
+            {detail || model ? (
+              <p className="mt-1 flex min-w-0 items-center gap-1.5 text-ui text-faint">
+                {detail}
+                {detail && model ? <span className="text-faint/50">·</span> : null}
+                {model ? <span className="shrink-0 truncate">{model}</span> : null}
+              </p>
+            ) : null}
           </div>
         </div>
-        <Slot name="transcript.empty" meta={undefined} />
-        <Launcher chat={chat} />
+        {children}
       </div>
     </div>
   )

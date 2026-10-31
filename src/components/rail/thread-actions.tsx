@@ -11,6 +11,7 @@ import { wholeThreadTargets } from "@/state/session-archive"
 import { viewer } from "@/state/viewer"
 import { lostVersions } from "@/state/lost-versions"
 import { RestoreVersions } from "@/components/rail/restore-versions"
+import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
 
 export interface ThreadMenuProps {
   target: ThreadTarget
@@ -59,6 +60,8 @@ function useThreadMenu(props: ThreadMenuProps) {
     onOpenChange: (open: boolean) => {
       if (!open) { setControls(null); return }
       setError(null)
+      // A window that routes draws its own menu, from what it already holds.
+      if (windowRoutesStore.get().routes) return
       void threadLifecycle.controls(props.target).then(setControls).catch((failure) => setError(failure instanceof Error ? failure.message : "Controls are unavailable"))
       if (props.thread) void lostVersions(props.thread).then((found) => setLost(found.length))
     },
@@ -73,7 +76,14 @@ function useThreadMenu(props: ThreadMenuProps) {
   }
 }
 
+/** The menu's items: the host's, or those of a window that routes (`WindowRoutes.threadMenu`), which has no host of its own. */
 function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
+  const routes = useWindowRoutes((state) => state.routes)
+  if (routes) return routes.threadMenu(props.thread, props.target.kind === "live" ? props.target.id : undefined)
+  return <HostThreadMenuItems props={props} menu={menu} />
+}
+
+function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
   const { target, title, archived, running, path, thread, cwd, archiveTargets, pinned, onPin, onRename } = props
   const { controls, error } = menu
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)

@@ -31,6 +31,28 @@ export async function archiveThread(client: WebClient, thread: WebThread, option
   return { kind: "archived" }
 }
 
+/**
+ * Archives a Thread from this browser and says how it went: archived, or why not, with "Archive anyway" where its owner
+ * allows it. `step` hears each step's words while it goes, then `undefined`.
+ */
+export async function archiveAndSay(client: WebClient, thread: WebThread, step: (words: string | undefined) => void, onArchived: () => void, anyway = false): Promise<void> {
+  step("Archiving…")
+  try {
+    const outcome = await archiveThread(client, thread, { anyway, step })
+    if (outcome.kind === "refused") {
+      if (outcome.anyway) toast.error("Not archived", { description: outcome.reason, action: { label: "Archive anyway", onClick: () => void archiveAndSay(client, thread, step, onArchived, true) }, duration: ACTION_TOAST_MS })
+      else toast.error("Not archived", { description: outcome.reason })
+      return
+    }
+    toast.success("Archived", { description: thread.title })
+    onArchived()
+  } catch (error) {
+    toast.error("Not archived", { description: error instanceof Error ? error.message : String(error) })
+  } finally {
+    step(undefined)
+  }
+}
+
 /** How long an archive from the list can be taken back before it's asked of its owner. */
 export const UNDO_MS = 5_000
 /** After its owner archived it, a row stays hidden until the list drops it, at most this long. */

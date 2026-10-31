@@ -49,6 +49,8 @@ interface AcpConversationBase {
   threadTitle?: string
   /** Listed from a device the account hasn't heard from since then: none of it at work, and the rail says when it was last seen. */
   quietSince?: number
+  /** `LiveSummary.movedAt`: when a conversation listed from another device last moved, as the account's list says. */
+  movedAt?: number
   /** Read from the copy its device keeps in the account, that device being off: when the device wrote it. */
   copy?: { at: number }
   /** The Thread-store Thread and Session, from the host; a `+` tab's start knows them before it does. */

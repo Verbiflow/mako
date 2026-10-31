@@ -21,6 +21,7 @@ import { openInPane, openTabInPane } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { sameThreadStatus, threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
 import { AGENT_TAB_ID, viewer } from "@/state/viewer"
+import { useWindowRoutes } from "@/state/window-routes"
 
 /** A tab that mounts this long after its Thread's strip did joined while you watched. */
 const ARRIVAL_MS = 32
@@ -102,6 +103,7 @@ function SessionTabButton({
   selected,
   stripSince,
   closable,
+  menu,
 }: {
   tab: SessionTab
   thread?: string
@@ -110,6 +112,8 @@ function SessionTabButton({
   stripSince: number
   /** False while this is the Thread's only Session: archiving it is archiving the Thread, from its row. */
   closable: boolean
+  /** Its own menu: opening it in another pane, its transcript, archiving it. */
+  menu: boolean
 }) {
   const [arrived] = useState(() => performance.now() - stripSince > ARRIVAL_MS)
   const composerHarness = useThreads((state) => state.composerHarness)
@@ -148,7 +152,7 @@ function SessionTabButton({
         data-session-tab={tab.id}
         title={tab.kind === "draft" ? `New session in this Thread${selected ? "" : ", not sent yet"}` : title}
         onPointerDown={(event) => {
-          if (thread) pressTab(event, { tab, thread, title }, event.currentTarget)
+          if (thread && menu) pressTab(event, { tab, thread, title }, event.currentTarget)
         }}
         onMouseDown={(event) => {
           if (event.button === 0 && event.detail > 0) open()
@@ -187,7 +191,7 @@ function SessionTabButton({
       </span>
     </div>
   )
-  return tab.kind === "session" && thread ? (
+  return tab.kind === "session" && thread && menu ? (
     <SessionTabMenu tab={tab} thread={thread} title={title} alone={!closable}>{body}</SessionTabMenu>
   ) : body
 }
@@ -211,7 +215,9 @@ export function SessionTabList({
 }) {
   const [since] = useState(() => performance.now())
   const current = onScreenTab(here)
-  const closable = tabs.filter((tab) => tab.kind === "session").length > 1
+  // A window that routes has no host of its own to archive a Session through, nor panes to open one in.
+  const routed = useWindowRoutes((state) => state.routes !== null)
+  const closable = !routed && tabs.filter((tab) => tab.kind === "session").length > 1
   return (
     <>
       {tabs.map((tab) => (
@@ -223,6 +229,7 @@ export function SessionTabList({
           selected={agentActive && tab.id === current}
           stripSince={since}
           closable={closable}
+          menu={!routed}
         />
       ))}
       <AddSessionButton />

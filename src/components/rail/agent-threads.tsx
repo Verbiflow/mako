@@ -63,6 +63,7 @@ import {
   selectSessionOwners,
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
+import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
 import { prefsStore, setPref, setProjectHidden, togglePinnedProject, usePrefs } from "@/state/prefs"
 import { openAppSetup } from "@/state/app-setup"
 import { desktop } from "@/state/desktop"
@@ -142,6 +143,11 @@ const FOLDER_ROWS = 6
 /** Folders quiet longer than this start out collapsed. */
 const COLD_MS = 7 * 24 * 3600_000
 const LIVE_TIME_MS = 60_000
+
+/** Conversations in a folder, the one that moved last first: another device's by its listed time, this Mac's by its start. */
+function byLatestMove(left: AcpPresence, right: AcpPresence): number {
+  return (right.movedAt ?? right.createdAt) - (left.movedAt ?? left.createdAt)
+}
 const INITIAL_TIME = Date.now()
 
 function useLiveTime(): number {
@@ -399,7 +405,7 @@ export function AgentThreads() {
   )
   const recent = useMemo(() => [
     ...shownRefs.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: shownRanks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
-    ...shownLive.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.createdAt).toISOString(), presence })),
+    ...shownLive.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.movedAt ?? presence.createdAt).toISOString(), presence })),
   ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [shownRefs, shownRanks, threadActivity, shownLive])
   const board = useMemo((): BoardSectionData<BoardRow>[] => {
     if (grouping !== "status") return []
@@ -452,7 +458,7 @@ export function AgentThreads() {
       folder={folder}
       now={now}
       fold={fold}
-      liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key)}
+      liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key).sort(byLatestMove)}
       collapsed={collapsed.includes(`ws:${folder.key}`)}
       hidden={hidden}
       onToggle={() => {
@@ -465,7 +471,10 @@ export function AgentThreads() {
         )
       }}
       onNew={() => {
-        if (folder.cwd) void actions.newConversationIn(folder.cwd)
+        if (!folder.cwd) return
+        const { routes } = windowRoutesStore.get()
+        if (routes) routes.newThreadIn(folder.cwd)
+        else void actions.newConversationIn(folder.cwd)
       }}
       onPin={() => {
         if (folder.cwd) togglePinnedProject(folder.cwd)
@@ -975,6 +984,8 @@ function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHid
   onPin?: () => void
   onHide: (hidden: boolean) => void
 }) {
+  // A window that routes reaches the folder's computer through its Sessions alone: no app setup, no editor of its own.
+  const routed = useWindowRoutes((state) => state.routes !== null)
   return (
     <>
       {onNew ? (
@@ -991,12 +1002,14 @@ function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHid
         {closed ? <ChevronsUpDownIcon className="size-3.5" /> : <ChevronsDownUpIcon className="size-3.5" />}{closed ? "Expand" : "Collapse"}
       </MenuItem>
       <MenuSeparator />
-      <MenuItem data-folder-action="app-setup" onSelect={() => openAppSetup(folder.cwd)}>
-        <AppWindowIcon className="size-3.5" />App setup
-      </MenuItem>
-      <MenuItem onSelect={() => { void desktop.openInEditor(folder.cwd, prefsStore.get().externalEditor) }}>
-        <CodeIcon className="size-3.5" />Open in editor
-      </MenuItem>
+      {routed ? null : <>
+        <MenuItem data-folder-action="app-setup" onSelect={() => openAppSetup(folder.cwd)}>
+          <AppWindowIcon className="size-3.5" />App setup
+        </MenuItem>
+        <MenuItem onSelect={() => { void desktop.openInEditor(folder.cwd, prefsStore.get().externalEditor) }}>
+          <CodeIcon className="size-3.5" />Open in editor
+        </MenuItem>
+      </>}
       <IfCanReveal>
         <MenuItem onSelect={() => { void desktop.revealPath(folder.cwd) }}>
           <FolderOpenIcon className="size-3.5" />Show the folder

@@ -1,42 +1,52 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, FolderIcon, LaptopIcon, MoonIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react"
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
+import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
-import { ROW_SURFACE } from "@/components/rail/thread-row"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { AgentThreads } from "@/components/rail/agent-threads"
+import { Divider } from "@/components/shell/divider"
+import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
+import { SessionTabList } from "@/components/stage/session-tabs"
+import { Welcome } from "@/components/transcript/transcript"
+import { OceanScene } from "@/components/ui/ocean-scene"
+import { WorkbenchStrip } from "@/components/stage/stage-strip"
 import { Avatar } from "@/components/ui/avatar"
 import { IconAction, Keys } from "@/components/ui/kit"
 import { MakoMark } from "@/components/ui/mako-mark"
+import { MenuItem } from "@/components/ui/menu"
 import { ConfirmHost } from "@/components/ui/confirm-host"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { commands, formatChord, keysFor, matchesChord, registerCommands } from "@/extend/commands"
-import { copyAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { acp, acpStore, activeLiveAcp } from "@/state/acp"
-import { prefsStore } from "@/state/prefs"
-import type { ThreadStatus } from "@/state/thread-status"
+import { acp, acpStore, activeLiveAcp, useAcp } from "@/state/acp"
+import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
+import { store } from "@/state/session"
+import { useThreadTabs } from "@/state/thread-sessions"
+import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
+import { followListing } from "./desk-listing"
 import { webHarnessLabel } from "./labels"
-import { HarnessMarks } from "./list"
-import { StartForm, StartSheet, type AddingTo } from "./new-thread"
+import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
+import { CLOUD_PLACE } from "./places"
 import type { ScreenRoute, WebRoute } from "./route"
+import { routeHref } from "./route"
 import type { Started } from "./start"
 import { startingWhere } from "./started"
+import { archiveWithUndo } from "./archive-thread"
 import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
-import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
+import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, waitingRank, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
-import { followedWay, listedMove, useMoves } from "./moves"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { ReviewLayer } from "./review-layer"
-import { closeReview, deskReviewCode, openReview, reviewOpenStore } from "./review-open"
-import { WebHarnessIcon } from "./harness-icon"
+import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
 
-/** The rail's width: the desk's own, as its title strip's left segment is. */
-const RAIL_PX = 264
+/** The rail's narrowest and widest, as the desktop's. */
+const RAIL_MIN = 200
+const RAIL_MAX = 420
 /**
  * New thread's chord in a browser. The desk's ⌘N and ⌘T belong to the browser itself (a window, a tab) and never reach a
  * page, so the web takes the chord web apps share for a new conversation; the palette offers it too.
@@ -44,54 +54,91 @@ const RAIL_PX = 264
 const NEW_THREAD_KEYS = "mod+shift+o"
 
 /**
- * Mako in a laptop's browser: the desktop app. The title strip whose left segment heads the rail, the rail of every
- * Thread on the account (each Mac's and the cloud's, by project), the open Thread's Sessions as tabs over the
- * desktop's own transcript and composer, the desktop's command palette, and its keys: ⌘K for everything, arrows
- * through the rail, ⌥↑/⌥↓ between Threads, ⌘L to the composer, ⌘⎋ to stop.
+ * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
+ * the left, without a window's traffic lights), its rail (`AgentThreads`: every Thread on the account by project, its
+ * Sessions folded into one row, Projects, Recent and Status, search and the filter), the open Thread's Sessions as the
+ * desktop's tabs over its own transcript and composer, its command palette, and its keys: ⌘K for everything, ⌘B for
+ * the rail, arrows through the rail, ⌥↑/⌥↓ between Threads, ⌘L to the composer, ⌘⎋ to stop.
+ *
+ * The rail reads the account's list as a Mac's window reads another device's Sessions (`desk-listing.ts`), and what it
+ * opens comes here (`routeWindow`): a Session is an address, its Thread's page opens it through the gateway.
  */
 export default function Desk({ route, navigate, back, onStarted }: { route: WebRoute; navigate: (route: WebRoute, how?: { replace?: boolean }) => void; back: () => void; onStarted: (started: Started, where: string) => void }) {
   const list = useAccountList((state) => state)
-  const { threads, archived } = useMemo(() => foldThreads(list), [list])
-  const ordered = useMemo(() => railGroups(threads).flatMap((group) => group.threads), [threads])
+  const { threads } = useMemo(() => foldThreads(list), [list])
   const starting = route.kind === "new"
   const under: ScreenRoute = route.kind === "new" ? (route.over ?? { kind: "list" }) : route
   const selected = !starting && under.kind === "thread" ? under.thread : undefined
+  const railOpen = usePrefs((prefs) => prefs.railOpen)
+  const rail = useRef<HTMLDivElement>(null)
   // One step of the app at a time: opening another Thread replaces the one open, as the desk's rail does.
   const open = (next: ScreenRoute) => navigate(next, { replace: route.kind !== "list" })
-  const newThread = () => navigate({ kind: "new", over: under }, { replace: route.kind === "new" })
-  useDeskKeys({ ordered, selected, open, newThread, settings: () => open({ kind: "settings" }) })
+  const [startIn, setStartIn] = useState<StartIn | undefined>(undefined)
+  const newThread = (into?: StartIn) => {
+    setStartIn(into)
+    navigate({ kind: "new", over: under }, { replace: route.kind === "new" })
+  }
+  // The Thread on screen's `+`, which its pane answers with its own Add a Session.
+  const addSession = useRef<(() => boolean) | null>(null)
+  useEffect(() => followListing(), [])
+  // A browser has no file manager to show a path in and no folder chooser: the desk's pieces don't offer either.
+  useEffect(() => store.set({ machine: { fileManager: null, chooseFolder: false } }), [])
+  const latest = useRef({ open, newThread, list })
+  useEffect(() => {
+    latest.current = { open, newThread, list }
+  })
+  useEffect(
+    () =>
+      routeWindow({
+        open: (presence) => {
+          if (presence.threadId) latest.current.open({ kind: "thread", thread: presence.threadId, ...(presence.sessionId && { session: presence.sessionId }) })
+        },
+        newSession: () => addSession.current?.() ?? false,
+        newThreadIn: (cwd) => {
+          // Where the folder's Sessions run: its Mac, or the cloud.
+          const row = latest.current.list.rows.find((each) => each.folder === cwd)
+          latest.current.newThread(row ? { place: row.runsOn.kind === "cloud" ? CLOUD_PLACE : row.runsOn.deviceId, project: cwd } : undefined)
+        },
+        threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
+      }),
+    []
+  )
+  useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
 
   return (
     <TooltipProvider delayDuration={350}>
     <div className="web-desk flex min-h-0 min-w-0 flex-1 flex-col bg-shell">
-      <header className="flex h-[38px] shrink-0 items-center border-b border-hairline bg-shell pr-2">
-        <div style={{ width: RAIL_PX }} className="flex h-full shrink-0 items-center gap-1 border-r border-hairline px-2">
-          <span className="flex min-w-0 flex-1 items-center gap-2 pl-1 text-ui font-medium text-foreground">
-            <MakoMark className="size-3.5 opacity-80" />
-            Mako
-          </span>
-          <IconAction label="New thread" keys={formatChord(NEW_THREAD_KEYS)} data-on={starting || undefined} onClick={newThread}>
-            <PlusIcon />
-          </IconAction>
-        </div>
-        <span className="flex-1" />
-        <IconAction label="Search threads and commands" keys={formatChord("mod+k")} onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))}>
-          <SearchIcon />
-        </IconAction>
-      </header>
-      <div className="flex min-h-0 flex-1">
-        <DeskRail threads={threads} archived={archived} selected={selected} settings={!starting && under.kind === "settings"} onOpen={(thread) => open({ kind: "thread", thread: thread.id })} onSettings={() => open({ kind: "settings" })} />
+      <DeskTitleBar starting={starting} onNew={() => newThread()} />
+      <div className="relative flex min-h-0 min-w-0 flex-1">
+        {railOpen ? (
+          <>
+            <nav ref={rail} aria-label="Threads" style={{ width: prefsStore.get().railWidth }} className="flex min-h-0 shrink-0 flex-col overflow-hidden">
+              <AgentThreads />
+              <DeskIdentity settings={!starting && under.kind === "settings"} onSettings={() => open({ kind: "settings" })} />
+            </nav>
+            <Divider
+              side="left"
+              size={prefsStore.get().railWidth}
+              min={RAIL_MIN}
+              max={RAIL_MAX}
+              onResize={(next) => {
+                if (rail.current) rail.current.style.width = `${next}px`
+              }}
+              onCommit={(next) => setPref("railWidth", next)}
+            />
+          </>
+        ) : null}
         <main className="flex min-w-0 flex-1 flex-col bg-surface">
           {starting ? (
-            <DeskStart key="new" onDismiss={back} onStarted={onStarted} />
+            <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
-            <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
+            <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
           ) : under.kind === "settings" ? (
             <Suspense fallback={null}>
               <Settings onBack={undefined} />
             </Suspense>
           ) : (
-            <DeskEmpty onNew={newThread} />
+            <DeskEmpty onNew={() => newThread()} />
           )}
         </main>
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
@@ -104,52 +151,113 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
 }
 
 /**
- * The desk's commands, in its own registry, so its palette lists them with their keys and the keyboard layer runs them:
- * the palette, New, Settings, the composer, Stop, the next and previous Thread, and every Thread by its title.
+ * The desktop's title strip in a browser. The left segment heads the rail, with the rail's toggle and New; the right
+ * holds what the desktop's does: Stop while a turn runs, search, and the right sidebar, which here is the Session's
+ * Changes. The browser's own bar is above it, so there's no window to drag and no traffic lights to make room for.
  */
-function useDeskKeys({ ordered, selected, open, newThread, settings }: { ordered: WebThread[]; selected: string | undefined; open: (route: ScreenRoute) => void; newThread: () => void; settings: () => void }) {
-  const latest = useRef({ ordered, selected, open, newThread, settings })
+function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => void }) {
+  const running = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
+  const live = useAcp((state) => activeLiveAcp(state)?.key)
+  const changes = useReviewOpen((state) => state.open !== null)
+  return (
+    <TitleStrip
+      leading={
+        <>
+          <RailToggle />
+          <IconAction label="New thread" keys={formatChord(NEW_THREAD_KEYS)} data-on={starting || undefined} onClick={onNew}>
+            <PlusIcon />
+          </IconAction>
+        </>
+      }
+      trailing={
+        <>
+          {running ? (
+            <IconAction label="Stop" keys={formatChord("mod+escape")} tone="danger" onClick={() => void acp.cancel()}>
+              <SquareIcon />
+            </IconAction>
+          ) : null}
+          <IconAction label="Search threads and commands" keys={formatChord("mod+k")} onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))}>
+            <SearchIcon />
+          </IconAction>
+          <IconAction label={changes ? "Hide changed files" : "Show changed files"} data-on={changes} disabled={!changes && !live} onClick={toggleChanges}>
+            <PanelRightIcon />
+          </IconAction>
+        </>
+      }
+    />
+  )
+}
+
+/** Changes beside the transcript, for the Session on screen, or away again: the desktop's right sidebar, here. */
+function toggleChanges(): void {
+  if (reviewOpenStore.get().open) return closeReview()
+  const live = activeLiveAcp(acpStore.get())
+  if (!live) return
+  void deskReviewCode.read()
+  openReview({ conversation: live.key, scope: { kind: "thread" } })
+}
+
+/**
+ * The desk's commands, in its own registry, so its palette lists them with their keys and the keyboard layer runs them:
+ * the palette, New, Settings, the rail, the composer, Stop, the next Thread that needs you, the next and previous
+ * Thread, and every Thread by its title.
+ */
+function useDeskKeys({ threads, selected, open, newThread, settings }: { threads: WebThread[]; selected: string | undefined; open: (route: ScreenRoute) => void; newThread: () => void; settings: () => void }) {
+  const latest = useRef({ threads, selected, open, newThread, settings })
   useEffect(() => {
-    latest.current = { ordered, selected, open, newThread, settings }
+    latest.current = { threads, selected, open, newThread, settings }
   })
   useEffect(() => {
+    // ⌥↑ and ⌥↓ walk the rail's rows as it draws them, top to bottom, from the one lit.
     const step = (by: number) => () => {
-      const { ordered: rows, selected: at, open: go } = latest.current
+      const rows = [...document.querySelectorAll<HTMLElement>("[data-thread-row]")].filter((row) => row.offsetParent !== null)
       if (!rows.length) return
-      const index = rows.findIndex((thread) => thread.id === at)
-      const next = rows[index < 0 ? (by > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, index + by))]
-      if (next) go({ kind: "thread", thread: next.id })
+      const at = rows.findIndex((row) => row.dataset.active !== undefined)
+      const next = rows[at < 0 ? (by > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, at + by))]
+      next?.click()
     }
+    // In the desktop palette's order: what to look at, then what to do in a Session.
     return registerCommands([
+      {
+        id: "attention.next",
+        title: "Open the next thread that needs you",
+        section: "View",
+        keys: "mod+shift+u",
+        hint: "Approvals first, then questions, then anything else waiting on you",
+        run: () => {
+          const waiting = latest.current.threads.filter((thread) => thread.standing === "waiting" && thread.id !== latest.current.selected).sort((left, right) => waitingRank(left) - waitingRank(right))
+          const next = waiting[0] ?? latest.current.threads.find((thread) => thread.standing === "failed" && thread.id !== latest.current.selected)
+          if (next) latest.current.open({ kind: "thread", thread: next.id })
+          else toast("Nothing is waiting for you")
+        },
+      },
       { id: "view.command-palette", title: "Open command palette", section: "View", keys: "mod+k", run: () => void window.dispatchEvent(new CustomEvent("mako:palette")) },
-      { id: "session.new", title: "New thread", section: "Session", keys: NEW_THREAD_KEYS, keywords: "start create", run: () => latest.current.newThread() },
+      { id: "view.toggle-rail", title: "Toggle the session list", section: "View", keys: "mod+b", run: () => togglePref("railOpen") },
+      {
+        id: "view.search-sessions",
+        title: "Search sessions…",
+        section: "View",
+        keys: "mod+shift+l",
+        run: () => {
+          setPref("railOpen", true)
+          requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("mako:search-threads")))
+        },
+      },
+      // The desk's own command for Changes: the open Session's turns, beside its transcript, and away again.
+      { id: "view.changes", title: "Show changed files", section: "View", keywords: "review diff turn right sidebar", when: () => Boolean(reviewOpenStore.get().open ?? activeLiveAcp(acpStore.get())), run: toggleChanges },
       { id: "view.settings", title: "Settings", section: "View", keys: "mod+,", keywords: "preferences notifications theme sign out", run: () => latest.current.settings() },
+      { id: "session.new", title: "New thread", section: "Session", keys: NEW_THREAD_KEYS, keywords: "start create", run: () => latest.current.newThread() },
       { id: "session.focus-composer", title: "Focus the composer", section: "Session", keys: "mod+l", run: () => document.querySelector<HTMLTextAreaElement>("main textarea:not([readonly]):not([disabled])")?.focus() },
       { id: "session.stop", title: "Stop the current turn", section: "Session", keys: "mod+escape", when: () => activeLiveAcp(acpStore.get())?.session.status === "running", run: () => void acp.cancel() },
       { id: "thread.next", title: "Next thread", section: "Session", keys: "alt+arrowdown", run: step(1) },
       { id: "thread.previous", title: "Previous thread", section: "Session", keys: "alt+arrowup", run: step(-1) },
-      // The desk's own command for Changes: the open Session's turns, beside its transcript, and away again.
-      {
-        id: "view.changes",
-        title: "Show changed files",
-        section: "View",
-        keywords: "review diff turn",
-        when: () => Boolean(reviewOpenStore.get().open ?? activeLiveAcp(acpStore.get())),
-        run: () => {
-          if (reviewOpenStore.get().open) return closeReview()
-          const live = activeLiveAcp(acpStore.get())
-          if (!live) return
-          void deskReviewCode.read()
-          openReview({ conversation: live.key, scope: { kind: "thread" } })
-        },
-      },
     ])
   }, [])
   // Each Thread by its title: the palette's way to any of them from the keyboard.
   useEffect(
     () =>
       registerCommands(
-        ordered.map((thread) => ({
+        threads.map((thread) => ({
           id: `thread.open:${thread.id}`,
           title: thread.title,
           section: "Session" as const,
@@ -158,12 +266,12 @@ function useDeskKeys({ ordered, selected, open, newThread, settings }: { ordered
           run: () => latest.current.open({ kind: "thread", thread: thread.id }),
         }))
       ),
-    [ordered]
+    [threads]
   )
   // The keyboard layer, as the desk's: a chord runs its command; an unmodified key stays with what's being typed into.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
+      if (event.defaultPrevented || event.isComposing) return
       const mod = event.metaKey || event.ctrlKey
       if (!mod && !event.altKey && typingInto(event.target)) return
       const overrides = prefsStore.get().keybindings
@@ -184,138 +292,58 @@ function typingInto(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select"))
 }
 
-/** The rail's groups, as the desk's Projects view draws them: a project on its Mac (or the cloud), newest first. */
-function railGroups(threads: readonly WebThread[]) {
-  const groups = new Map<string, { key: string; project: string; place: string; cloud: boolean; latest: number; threads: WebThread[] }>()
-  for (const thread of threads) {
-    const cloud = thread.where === CLOUD_WHERE
-    const place = cloud ? "Cloud" : thread.where
-    const project = thread.project ?? place
-    const key = `${place}\u0000${project}`
-    const group = groups.get(key) ?? { key, project, place, cloud, latest: 0, threads: [] }
-    group.threads.push(thread)
-    group.latest = Math.max(group.latest, thread.activityAt)
-    groups.set(key, group)
-  }
-  for (const group of groups.values()) group.threads.sort((left, right) => right.activityAt - left.activityAt)
-  return [...groups.values()].sort((left, right) => right.latest - left.latest)
-}
-
-/** What a row's trailing mark says, in the desk rail's own vocabulary (`ThreadStatusMark`). */
-function statusOf(thread: WebThread): ThreadStatus {
-  if (thread.standing === "waiting") {
-    const waiting: ThreadStatus = { kind: "needs-permission", since: thread.activityAt }
-    if (thread.waitingOn) waiting.detail = thread.waitingOn
-    return waiting
-  }
-  if (thread.standing === "failed") return { kind: "failed", at: thread.activityAt }
-  if (thread.standing === "working" || thread.standing === "moving") return { kind: "working", since: thread.activityAt, detail: thread.standing === "moving" ? "Moving" : "Working" }
-  return { kind: "idle" }
-}
-
-function DeskRail({ threads, archived, selected, settings, onOpen, onSettings }: { threads: WebThread[]; archived: WebThread[]; selected: string | undefined; settings: boolean; onOpen: (thread: WebThread) => void; onSettings: () => void }) {
+/**
+ * The rail's foot, where the desktop's says whose desk it is: the account, and Settings, which the browser keeps in the
+ * pane rather than a menu of the desktop's own accounts (GitHub, harness sign-ins) that live on a Mac.
+ */
+function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings: () => void }) {
   const client = useWebClient()
-  const phase = useAccountList((state) => state.phase)
-  const groups = useMemo(() => railGroups(threads), [threads])
-  const [showArchived, setShowArchived] = useState(false)
-  // Arrows walk the rail's rows, Home and End go to its ends; Enter or Space opens the one focused.
-  const walk = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || event.altKey || event.metaKey || event.ctrlKey) return
-    const rows = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-desk-row]")]
-    if (!rows.length) return
-    event.preventDefault()
-    const at = rows.findIndex((row) => row === document.activeElement)
-    const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : Math.min(rows.length - 1, Math.max(0, at + (event.key === "ArrowDown" ? 1 : -1)))
-    rows[next]?.focus()
-  }
   return (
-    <nav aria-label="Threads" style={{ width: RAIL_PX }} className="flex min-h-0 shrink-0 flex-col border-r border-hairline bg-shell">
-      <div onKeyDown={walk} className="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-4 [scrollbar-width:thin]">
-        {groups.length === 0 ? (
-          phase === "starting" ? (
-            <div className="skeleton-rows flex flex-col gap-2 px-1.5 pt-2" aria-hidden>
-              {[0.7, 0.5, 0.62, 0.44].map((width) => (
-                <span key={width} className="skeleton h-3.5 rounded" style={{ width: `${width * 100}%` }} />
-              ))}
-            </div>
-          ) : (
-            <p className="px-1.5 pt-2 text-ui text-faint">No threads yet.</p>
-          )
-        ) : null}
-        {groups.map((group) => (
-          <section key={group.key} aria-label={`${group.project} on ${group.place}`} className="pb-2">
-            <h2 className="flex h-7 items-center gap-2 px-1.5 text-ui text-muted-foreground">
-              {group.cloud ? <CloudIcon aria-hidden className="size-3.5 shrink-0" /> : <FolderIcon aria-hidden className="size-3.5 shrink-0" />}
-              <span className="min-w-0 shrink-0 truncate font-medium text-foreground/90">{group.project}</span>
-              {group.project !== group.place ? <span className="min-w-0 truncate text-label text-faint">{group.place}</span> : null}
-            </h2>
-            <ul role="list" className="flex flex-col">
-              {group.threads.map((thread) => (
-                <li key={thread.id}>
-                  <DeskRow thread={thread} lit={thread.id === selected} onOpen={() => onOpen(thread)} />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
-        {archived.length ? (
-          <section className="pt-1">
-            <button type="button" aria-expanded={showArchived} onClick={() => setShowArchived((shown) => !shown)} className={cn(ROW_SURFACE, "px-1.5 text-ui text-faint")}>
-              <ArchiveIcon aria-hidden className="size-3.5" />
-              {archived.length === 1 ? "1 archived" : `${archived.length} archived`}
-              <ChevronRightIcon aria-hidden className={cn("size-3.5 transition-transform duration-150 ease-[var(--ease-out)]", showArchived && "rotate-90")} />
-            </button>
-            {showArchived ? (
-              <ul role="list" className="flex flex-col">
-                {archived.map((thread) => (
-                  <li key={thread.id}>
-                    <DeskRow thread={thread} lit={thread.id === selected} onOpen={() => onOpen(thread)} />
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
-        ) : null}
-      </div>
-      <footer className="shrink-0 px-2 pb-2">
-        <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} data-active={settings || undefined} onClick={onSettings} className={cn(ROW_SURFACE, "h-9 gap-2.5 px-1.5")}>
-          <Avatar name={client.account.name} src={client.account.image ?? undefined} size={5} className="rounded-full" />
-          <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">{client.account.name || client.account.email}</span>
-        </button>
-      </footer>
-    </nav>
+    <div className="shrink-0 px-2 pt-1 pb-2">
+      <button
+        type="button"
+        aria-label="Settings"
+        aria-current={settings ? "page" : undefined}
+        onClick={onSettings}
+        className={cn("pressable flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", settings && "bg-fill-selected")}
+      >
+        <Avatar name={client.account.name} src={client.account.image ?? undefined} size={5} className="rounded-full" />
+        <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">{client.account.name || client.account.email}</span>
+      </button>
+    </div>
   )
 }
 
-/** A rail row as the desk draws one: its agents' marks, its title, and its state or its age at the trailing edge. */
-function DeskRow({ thread, lit, onOpen }: { thread: WebThread; lit: boolean; onOpen: () => void }) {
-  const quiet = thread.quietSince ? `${thread.where} is asleep or offline, seen ${copyAge(Date.parse(thread.quietSince))}` : undefined
-  // On its way between a Mac and the cloud: a blinking arrow, up or down, as the phone's row wears.
-  const way = useMoves((state) => followedWay(state.moves.get(thread.id))) ?? listedMove(thread)?.way
-  const Arrow = way === "device" ? ArrowDownIcon : ArrowUpIcon
-  const harnesses = [...new Set(thread.sessions.map((session) => webHarnessLabel(session.row.harness)))].join(", ")
+/**
+ * A Thread's menu in the rail, from its `…` or a right-click: what the browser can do with it, in the desktop's menu
+ * rows. Its link, and archiving it as the list does: gone from the rail at once with Undo, then asked of the computer it
+ * runs on (or its cloud machine ended).
+ */
+function DeskThreadMenu({ thread: id }: { thread: string | undefined }) {
+  const client = useWebClient()
+  const thread = useAccountList((state) => (id ? foldThreads(state).threads.find((each) => each.id === id) : undefined))
+  if (!thread) return null
+  const reachable = !thread.quietSince && !thread.archived
+  const copyLink = async () => {
+    const link = new URL(routeHref({ kind: "thread", thread: thread.id }, client.options.base), location.origin).href
+    try {
+      await navigator.clipboard.writeText(link)
+      toast.success("Link copied", { description: thread.title })
+    } catch {
+      toast.error("The link wasn't copied", { description: link })
+    }
+  }
   return (
-    <button
-      type="button"
-      data-desk-row
-      data-thread={thread.id}
-      data-standing={thread.standing}
-      data-moving={way}
-      data-active={lit || undefined}
-      aria-current={lit ? "page" : undefined}
-      aria-label={`${thread.title}. ${thread.waitingOn ?? (thread.standing === "idle" ? "" : thread.standing)}${harnesses ? ` ${harnesses}.` : ""}${quiet ? ` ${quiet}.` : ""}`.replace(/\.\s+\./g, ".")}
-      title={[thread.title, thread.waitingOn, quiet].filter(Boolean).join("\n")}
-      onClick={onOpen}
-      className={cn(ROW_SURFACE, "pl-1.5", quiet && "opacity-60")}
-    >
-      <HarnessMarks thread={thread} size={14} />
-      <span className={cn("min-w-0 flex-[1_1_60%] truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>{thread.title}</span>
-      {quiet ? <MoonIcon aria-hidden className="size-3 shrink-0 text-faint" /> : null}
-      {way ? <Arrow aria-label={way === "cloud" ? "Moving to the cloud" : "Coming back from the cloud"} data-move-mark={way} className="web-move-blink size-3 shrink-0 text-foreground" /> : null}
-      <span className="flex shrink-0 items-center pr-1">
-        <ThreadStatusMark status={statusOf(thread)} updatedAt={new Date(thread.activityAt).toISOString()} />
-      </span>
-    </button>
+    <>
+      <MenuItem onSelect={() => void copyLink()}>
+        <LinkIcon className="size-3.5" />Copy link
+      </MenuItem>
+      {reachable ? (
+        <MenuItem data-thread-action="archive" onSelect={() => archiveWithUndo(client, thread)}>
+          <ArchiveIcon className="size-3.5" />Archive thread
+        </MenuItem>
+      ) : null}
+    </>
   )
 }
 
@@ -350,29 +378,11 @@ function DeskEmpty({ onNew }: { onNew: () => void }) {
   )
 }
 
-/** The pane's strip, as the desk's: the open Thread's Sessions as tabs, where it runs, and its menu. */
-function DeskStrip({ children, end }: { children: React.ReactNode; end?: React.ReactNode }) {
-  return (
-    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-hairline bg-surface px-2">
-      <div role="tablist" aria-label="Sessions in this Thread" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
-        {children}
-      </div>
-      {end}
-    </div>
-  )
-}
-
-function DeskTab({ selected, onClick, icon, label, waiting }: { selected: boolean; onClick?: () => void; icon: React.ReactNode; label: string; waiting?: boolean }) {
-  return (
-    <button type="button" role="tab" aria-selected={selected} onClick={onClick} className={cn("pressable flex h-8 max-w-[280px] shrink-0 items-center gap-1.5 rounded-md px-2 text-ui font-medium", selected ? "bg-raised text-foreground" : "text-muted-foreground hover:bg-fill-hover hover:text-foreground")}>
-      {icon}
-      <span className="truncate">{label}</span>
-      {waiting ? <span aria-label="waiting for you" className="size-1.5 shrink-0 rounded-full bg-caution" /> : null}
-    </button>
-  )
-}
-
-function DeskThread({ threadId, sessionId, onArchived, onSession }: { threadId: string; sessionId?: string; onArchived: () => void; onSession: (session: string) => void }) {
+/**
+ * The open Thread: the desktop's strip (its Session tabs, the desktop's own, then where it runs and its menu), then
+ * the Session's transcript and composer.
+ */
+function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession }: { threadId: string; sessionId?: string; addSessionRef: React.RefObject<(() => boolean) | null>; onArchived: () => void; onSession: (session: string) => void }) {
   const thread = useThread(threadId)
   const phase = useAccountList((state) => state.phase)
   const client = useWebClient()
@@ -388,45 +398,52 @@ function DeskThread({ threadId, sessionId, onArchived, onSession }: { threadId: 
     document.addEventListener("visibilitychange", seen)
     return () => document.removeEventListener("visibilitychange", seen)
   }, [client, seenThread])
-  if (!thread) {
+  const session = thread ? (thread.sessions.find((each) => each.row.session === (sessionId ?? openedOn)) ?? openingSession(thread)) : undefined
+  if (thread && session && sessionId === undefined && openedOn !== session.row.session && !thread.sessions.some((each) => each.row.session === openedOn)) setOpenedOn(session.row.session)
+  const addingTo: AddingTo | undefined = thread && session?.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner: ownerOf(session), where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
+  const canAdd = addingTo !== undefined
+  useEffect(() => {
+    addSessionRef.current = canAdd
+      ? () => {
+          setAdding(true)
+          return true
+        }
+      : null
+    return () => {
+      addSessionRef.current = null
+    }
+  }, [addSessionRef, canAdd])
+  const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
+  if (!thread || !session) {
     const starting = startingWhere(threadId)
     return (
       <>
-        <DeskStrip>
-          <DeskTab selected icon={<MakoMark className="size-3.5 opacity-70" />} label={starting ? `Starting on ${starting}…` : phase === "live" ? "Not in your list" : "Opening…"} />
-        </DeskStrip>
+        <WorkbenchStrip>
+          <span className="flex h-7 items-center gap-1.5 px-1.5 text-ui font-medium text-faint">
+            <MakoMark className="size-4" />
+            {starting ? `Starting on ${starting}…` : phase === "live" ? "Not in your list" : "Opening…"}
+          </span>
+        </WorkbenchStrip>
         {starting || phase !== "live" ? <TranscriptLoading /> : <p className="mx-auto max-w-[360px] px-6 pt-24 text-center text-ui text-muted-foreground">This Thread isn't in your list any more. It may have been archived or closed on another device.</p>}
       </>
     )
   }
-  const session = thread.sessions.find((each) => each.row.session === (sessionId ?? openedOn)) ?? openingSession(thread)
-  if (sessionId === undefined && openedOn !== session.row.session && !thread.sessions.some((each) => each.row.session === openedOn)) setOpenedOn(session.row.session)
-  const owner = ownerOf(session)
-  const addingTo: AddingTo | undefined = session.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner, where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
   const Place = session.row.runsOn.kind === "cloud" ? CloudIcon : session.quietSince ? MoonIcon : LaptopIcon
-  const tabLabel = (each: WebSession) => (thread.sessions.length === 1 ? thread.title : (each.row.title ?? webHarnessLabel(each.row.harness)))
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-thread-screen={thread.id}>
-      <DeskStrip
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id}>
+      <WorkbenchStrip
         end={
           <>
             <span className="flex min-w-0 shrink items-center gap-1.5 px-2 text-label text-faint">
               <Place aria-hidden className="size-3 shrink-0" />
               <span className="truncate">{subtitle(thread, session)}</span>
             </span>
-            {thread.archived ? null : <ThreadActions thread={thread} session={session} onArchived={onArchived} onAdd={undefined} />}
+            {thread.archived ? null : <ThreadActions desk thread={thread} session={session} onArchived={onArchived} onAdd={undefined} />}
           </>
         }
       >
-        {thread.sessions.map((each) => (
-          <DeskTab key={each.row.session} selected={each.row.session === session.row.session} onClick={() => onSession(each.row.session)} icon={<WebHarnessIcon harness={each.row.harness} className="size-3.5 shrink-0" />} label={tabLabel(each)} waiting={each.row.state === "waiting" && !each.quietSince && each.row.session !== session.row.session} />
-        ))}
-        {addingTo ? (
-          <IconAction label="New session" size="xs" className="shrink-0" onClick={() => setAdding(true)}>
-            <PlusIcon />
-          </IconAction>
-        ) : null}
-      </DeskStrip>
+        {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive /> : null}
+      </WorkbenchStrip>
       <ThreadBody thread={thread} session={session} desk />
       {addingTo ? (
         <StartSheet
@@ -444,8 +461,8 @@ function DeskThread({ threadId, sessionId, onArchived, onSession }: { threadId: 
   )
 }
 
-/** New, as the desk's new tab: a tab of its own, an empty page, and the composer tiled across the foot of the pane. */
-function DeskStart({ onDismiss, onStarted }: { onDismiss: () => void; onStarted: (started: Started, where: string) => void }) {
+/** New, as the desk's new thread: a tab of its own, the opening screen, and the composer tiled across the foot of the pane. */
+function DeskStart({ startIn, onDismiss, onStarted }: { startIn: StartIn | undefined; onDismiss: () => void; onStarted: (started: Started, where: string) => void }) {
   // Escape leaves, unless a choice of the start's is open over it: that one closes first.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -457,19 +474,27 @@ function DeskStart({ onDismiss, onStarted }: { onDismiss: () => void; onStarted:
   }, [onDismiss])
   return (
     <section aria-label="New thread" className="web-start-pane flex min-h-0 flex-1 flex-col">
-      <DeskStrip
+      <WorkbenchStrip
         end={
-          <IconAction label="Close" keys={["Esc"]} onClick={onDismiss}>
+          <IconAction label="Close" keys={["Esc"]} size="xs" className="mr-1" onClick={onDismiss}>
             <XIcon />
           </IconAction>
         }
       >
-        <DeskTab selected icon={<PlusIcon className="size-3.5 shrink-0" />} label="New thread" />
-      </DeskStrip>
-      <div className="web-enter flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-        <MakoMark className="size-8 opacity-25" />
+        <div role="tab" aria-selected data-active className="relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-1.5 overflow-hidden rounded-md bg-raised px-1.5 text-ui font-medium text-foreground">
+          <MakoMark className="size-4" />
+          <span className="truncate">New thread</span>
+        </div>
+      </WorkbenchStrip>
+      {/* The desktop's opening screen, its pane's own: the engraving under the headline and the composer, whose chips
+          say where it runs and in what. */}
+      <div className="agent-surface relative isolate flex min-h-0 flex-1 flex-col overflow-hidden">
+        <OceanScene />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Welcome />
+        </div>
+        <StartForm desk startIn={startIn} onStarted={onStarted} />
       </div>
-      <StartForm desk onStarted={onStarted} />
     </section>
   )
 }

@@ -629,6 +629,15 @@
     @apply size-7 rounded-md;
   }
 
+  /* New in a laptop's browser, over the desk's ocean: the water holds still while the person types, as it does over the
+     desk's own composer. */
+  .agent-surface:has(.web-composer-input:focus) .ocean-light,
+  .agent-surface:has(.web-composer-input:focus) .ocean-light .ocean-engraving,
+  .agent-surface:has(.web-composer-input:focus) .ocean-grain,
+  .agent-surface:has(.web-composer-input:focus) .ocean-fin-glint {
+    animation-play-state: paused;
+  }
+
   /* New: the composer, waiting in the middle of the pane. */
   .web-start-pane-body {
     @apply mx-auto flex w-full min-h-0 max-w-[680px] flex-1 flex-col justify-center px-6 pb-[12vh];
@@ -706,11 +715,11 @@
  * elements.
  *
  * Reuse, edit and rewind are the desk's: they need its composer and its checkout, so the phone shows a message's time
- * and its copy, and nothing it can't do. A reply's fork is the phone's Branch, under it and under a long press
+ * and its copy, and nothing it can't do. A laptop's browser has the desk's composer, so Reuse stays there. A reply's fork is the phone's Branch, under it and under a long press
  * (`reply.tsx`), where the host can make one.
  */
 .web-live [data-transcript-action],
-.desk-live [data-transcript-action] {
+.desk-live [data-transcript-action]:not([data-transcript-action="reuse"]) {
   display: none;
 }
 /*
