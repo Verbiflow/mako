@@ -15,6 +15,7 @@ import {
 } from "./events.js"
 import { sessionStream, streamConversation } from "./socket.js"
 import {
+  type ClientConnection,
   type ClientSession,
   type GatewayUnderTest,
   Inbox,
@@ -33,8 +34,9 @@ import {
 import { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
-import { LINGER_MS, LiveTail } from "./live-tail.js"
+import { COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { LINGER_MS, LiveTail, frameFor, logFor, streamNoticeText } from "./live-tail.js"
+import { type LiveForm, WHOLE_LIVE_FORM, readersForm, readsLiveForm } from "./live-form.js"
 import {
   WireError,
   decodeEventFrame,
@@ -53,7 +55,7 @@ const NIL_ID = "00000000-0000-0000-0000-000000000000"
 
 /** One line per thing the gateway did, for tests and for reading a request's path by its correlation ID. */
 export type GatewayLogLine = {
-  event: "operation" | "enrolled" | "refused" | "disconnected" | "going-quiet"
+  event: "operation" | "enrolled" | "refused" | "disconnected" | "going-quiet" | "live-form"
   correlationId?: string
   operationId?: string
   op?: string
@@ -66,6 +68,15 @@ export type GatewayLogLine = {
   answeredBy?: "runtime" | "gateway" | "earlier-attempt"
   ms?: number
   runtimeId?: string
+  /**
+   * A conversation's or a Thread's readers read another live form now, said to its runtime: which, the form, and why
+   * (`readersForm`): how many read it, and how many of them read only form 1.
+   */
+  conversation?: string
+  threadId?: string
+  form?: LiveForm
+  readers?: number
+  whole?: number
 }
 
 export type FakeGatewayOptions = {
@@ -84,9 +95,14 @@ type Thread = {
   /** 0 until the Thread is first assigned. */
   generation: number
   log: EventFrame[]
+  /** By seq, the live form of each event written in one above 1. */
+  forms: Map<number, LiveForm>
   /** `${generation}:${localSeq}` → seq, so a resent event is acknowledged without being recorded again. */
   recorded: Map<string, number>
-  readers: Set<Inbox<EventFrame>>
+  /** Each reader, and the live form it reads. */
+  readers: Map<Inbox<EventFrame>, LiveForm>
+  /** The form its runtime was last told every reader reads. */
+  form: LiveForm
   /** Operations taken while nobody ran the Thread (`whenAsleep: "defer"`), in order, for when someone does. */
   deferred: Operation[]
 }
@@ -148,7 +164,7 @@ export function createFakeGateway(
    * stream nobody watches lingers `LINGER_MS` (`idleSince`), its runtime still sending, so a watcher back from a dropped
    * link finds what it missed.
    */
-  const sessionStreams = new Map<string, { watchers: Set<Inbox<EventFrame>>; tail: LiveTail; idleSince?: number }>()
+  const sessionStreams = new Map<string, { watchers: Map<Inbox<EventFrame>, LiveForm>; tail: LiveTail; idleSince?: number; form: LiveForm }>()
   /** The highest number any session stream gave: a new stream's numbers start above it, and above the clock. */
   let liveHead = 0
   const nowMs = () => now().getTime()
@@ -175,7 +191,30 @@ export function createFakeGateway(
     const conversations = watched.map(({ conversation }) => conversation)
     if ((runtime.version ?? 0) < NUMBERED_LIVE_VERSION) return runtime.deliver({ type: "watch", conversations })
     const after = Object.fromEntries(watched.flatMap(({ conversation, record }) => (record.tail.runtime === undefined ? [] : [[conversation, record.tail.runtime]])))
-    runtime.deliver({ type: "watch", conversations, ...(Object.keys(after).length && { after }) })
+    const forms = Object.fromEntries(watched.flatMap(({ conversation, record }) => (record.form === WHOLE_LIVE_FORM ? [] : [[conversation, record.form]])))
+    runtime.deliver({ type: "watch", conversations, ...(Object.keys(after).length && { after }), ...((runtime.version ?? 0) >= COMPACT_LIVE_VERSION && Object.keys(forms).length && { forms }) })
+  }
+  /**
+   * A stream's watchers changed: whether the form every one of them reads is another than its runtime was told, which
+   * its next `watch` says. A stream nobody watches keeps the form it had, as its runtime still sends for it while it lingers.
+   */
+  const reformStream = (stream: string, record: { watchers: Map<Inbox<EventFrame>, LiveForm>; form: LiveForm }): boolean => {
+    if (!record.watchers.size) return false
+    const said = readersForm(record.watchers.values())
+    if (said.form === record.form) return false
+    record.form = said.form
+    const target = streamConversation(stream)!
+    log({ event: "live-form", runtimeId: target.runtimeId, conversation: target.conversation, ...said })
+    return true
+  }
+  /** A Thread's readers changed: when the form every one of them reads is another, its runtime is told (`live-form`). */
+  const reformThread = (threadId: string, target: Thread) => {
+    const said = readersForm(target.readers.values())
+    if (said.form === target.form) return
+    target.form = said.form
+    log({ event: "live-form", threadId, ...said })
+    const owner = target.owner ? runtimes.get(target.owner) : undefined
+    if ((owner?.version ?? 0) >= COMPACT_LIVE_VERSION) owner!.deliver({ type: "live-form", threadId, form: said.form })
   }
   /** Streams being watched, each by one client, served by the runtime that ran its Thread when it was asked. */
   const watches = new Map<MediaStreamId, { threadId: string; runtime: Connection; inbox: Inbox<MediaDelivery> }>()
@@ -213,8 +252,10 @@ export function createFakeGateway(
         owner: undefined,
         generation: 0,
         log: [],
+        forms: new Map(),
         recorded: new Map(),
-        readers: new Set(),
+        readers: new Map(),
+        form: WHOLE_LIVE_FORM,
         deferred: [],
       }
       threads.set(threadId, found)
@@ -226,7 +267,8 @@ export function createFakeGateway(
     target: Thread,
     event: Payload,
     generation: number | undefined,
-    correlationId: string | undefined
+    correlationId: string | undefined,
+    form: LiveForm = WHOLE_LIVE_FORM
   ): EventFrame => {
     const frame: EventFrame = {
       v: PROTOCOL_VERSION,
@@ -238,9 +280,12 @@ export function createFakeGateway(
     if (generation !== undefined) frame.generation = generation
     if (correlationId !== undefined) frame.correlationId = correlationId
     target.log.push(frame)
-    for (const reader of target.readers) reader.push(frame)
+    if (form !== WHOLE_LIVE_FORM) target.forms.set(frame.seq, form)
+    for (const [reader, reads] of target.readers) reader.push(readsLiveForm(reads, form) ? frame : rereadFrame(target.stream, frame.seq))
     return frame
   }
+  /** In place of an event a reader doesn't read the form of, under its number: the notice to read the conversation again. */
+  const rereadFrame = (stream: StreamId, seq: number): EventFrame => ({ v: PROTOCOL_VERSION, stream, seq, at: now().toISOString(), event: Payload.encoded(streamNoticeText({ streamNotice: "reread", head: seq })) })
 
   const failure = (id: string, reason: Problem): Reply => ({
     v: PROTOCOL_VERSION,
@@ -329,6 +374,9 @@ export function createFakeGateway(
     connection.deliver({ type: "enrolled", version, heartbeatMs })
     // Whatever is watched of this runtime's conversations, said again on its new link: a new link starts with none.
     watchFrame(frame.runtimeId, true)
+    // And the form each of its Threads' readers read, where that's above 1.
+    if (version >= COMPACT_LIVE_VERSION)
+      for (const [threadId, owned] of threads) if (owned.owner === frame.runtimeId && owned.form !== WHOLE_LIVE_FORM) connection.deliver({ type: "live-form", threadId, form: owned.form })
     const current = new Set<string>()
     for (const claim of frame.threads) {
       const known = threads.get(claim.threadId)
@@ -394,7 +442,8 @@ export function createFakeGateway(
         target,
         frame.event,
         frame.generation,
-        frame.correlationId
+        frame.correlationId,
+        frame.form
       ).seq
       target.recorded.set(key, seq)
     }
@@ -475,10 +524,13 @@ export function createFakeGateway(
       const stream = sessionStream(connection.runtimeId, frame.conversation)
       const record = sessionStreams.get(stream)
       if (!record) return
-      const kept = record.tail.take(frame.event.text, now(), { ...(frame.n !== undefined && { n: frame.n }), ...(frame.correlationId && { correlationId: frame.correlationId }) })
+      const kept = record.tail.take(frame.event.text, now(), { ...(frame.n !== undefined && { n: frame.n }), ...(frame.correlationId && { correlationId: frame.correlationId }), ...(frame.form !== undefined && { form: frame.form }) })
       if (!kept) return
       liveHead = Math.max(liveHead, kept.seq)
-      for (const reader of record.watchers) reader.push({ v: PROTOCOL_VERSION, stream, seq: kept.seq, at: kept.at, ...(kept.correlationId && { correlationId: kept.correlationId }), event: frame.event })
+      for (const [reader, reads] of record.watchers) {
+        const sent = frameFor(kept, reads)
+        reader.push({ v: PROTOCOL_VERSION, stream, seq: sent.seq, at: sent.at, ...(sent.correlationId && { correlationId: sent.correlationId }), event: sent === kept ? frame.event : Payload.encoded(sent.text) })
+      }
       return
     }
     if (frame.type === "reply") {
@@ -644,8 +696,9 @@ export function createFakeGateway(
       }
     },
 
-    async connectClient(actor): Promise<ClientSession> {
+    async connectClient(actor, connection: ClientConnection = {}): Promise<ClientSession> {
       ActorSchema.parse(actor)
+      const reads = connection.live ?? WHOLE_LIVE_FORM
       const answer = (reply: Reply) => decodeReply(encodeReply(reply))
       return {
         async call(sent) {
@@ -677,8 +730,12 @@ export function createFakeGateway(
           const target = stream.startsWith("thread:")
             ? thread(stream.slice("thread:".length))
             : undefined
-          for (const frame of target?.log.slice(after) ?? []) reader.push(frame)
-          target?.readers.add(reader)
+          const backlog = target?.log.slice(after).map((frame) => ({ frame, seq: frame.seq, form: target.forms.get(frame.seq) })) ?? []
+          for (const sent of logFor(backlog, reads)) reader.push(sent.event?.frame ?? rereadFrame(target!.stream, sent.seq))
+          if (target) {
+            target.readers.set(reader, reads)
+            reformThread(stream.slice("thread:".length), target)
+          }
           // A conversation's live updates: its runtime is told it's watched by the first watcher, and not once the last
           // has been gone `LINGER_MS`. The watcher hears the stream's head first, then what it missed after `after` from
           // the tail, or that it must read the conversation again.
@@ -688,27 +745,31 @@ export function createFakeGateway(
             let record = sessionStreams.get(watched)
             const fresh = !record
             if (!record) {
-              record = { watchers: new Set(), tail: new LiveTail(Math.max(liveHead + 1, nowMs())) }
+              record = { watchers: new Map(), tail: new LiveTail(Math.max(liveHead + 1, nowMs())), form: WHOLE_LIVE_FORM }
               liveHead = record.tail.head
               sessionStreams.set(watched, record)
             }
-            for (const opening of record.tail.opening(after))
+            for (const opening of record.tail.opening(after, reads))
               reader.push({ v: PROTOCOL_VERSION, stream: watched, seq: opening.seq, at: opening.at ?? now().toISOString(), ...(opening.correlationId && { correlationId: opening.correlationId }), event: Payload.encoded(opening.text) })
-            record.watchers.add(reader)
+            record.watchers.set(reader, reads)
             delete record.idleSince
-            if (fresh) watchFrame(streamConversation(watched)!.runtimeId)
+            if (reformStream(watched, record) || fresh) watchFrame(streamConversation(watched)!.runtimeId)
           }
           const next = async (timeoutMs?: number) =>
             decodeEventFrame(encodeEventFrame(await reader.next(timeoutMs)))
           return {
             next,
             close: () => {
-              target?.readers.delete(reader)
+              if (target?.readers.delete(reader)) reformThread(stream.slice("thread:".length), target)
               reader.close()
               const record = watched ? sessionStreams.get(watched) : undefined
-              if (record?.watchers.delete(reader) && !record.watchers.size) {
-                record.idleSince = nowMs()
-                if (lingerMs === 0) sweepStreams()
+              if (record?.watchers.delete(reader)) {
+                if (record.watchers.size) {
+                  if (reformStream(watched!, record)) watchFrame(streamConversation(watched!)!.runtimeId)
+                } else {
+                  record.idleSince = nowMs()
+                  if (lingerMs === 0) sweepStreams()
+                }
               }
             },
           }
@@ -766,9 +827,9 @@ export function createFakeGateway(
         generation: target.generation,
       })
       if (previous) endWatchesOf(previous, problem("unavailable", "The Thread moved to another runtime", crypto.randomUUID(), "not-applied", { status: 503 }), threadId)
-      runtimes
-        .get(runtimeId)
-        ?.deliver({ type: "assign", threadId, generation: target.generation })
+      const owner = runtimes.get(runtimeId)
+      owner?.deliver({ type: "assign", threadId, generation: target.generation })
+      if (owner && (owner.version ?? 0) >= COMPACT_LIVE_VERSION && target.form !== WHOLE_LIVE_FORM) owner.deliver({ type: "live-form", threadId, form: target.form })
       if (runtimes.get(runtimeId)) deliverDeferred(target)
       return target.generation
     },

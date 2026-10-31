@@ -14,7 +14,8 @@ import type { Json } from "./ids.js"
 import { type MediaWatch, encodeMediaMessage } from "./media.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame } from "./runtime-frames.js"
-import { MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, type VersionRange } from "./version.js"
+import { COMPACT_LIVE_FORM } from "./live-form.js"
+import { COMPACT_LIVE_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, type VersionRange } from "./version.js"
 
 /** `test` from `node:test`, or any runner's equivalent. */
 export type ConformanceTest = (
@@ -217,6 +218,142 @@ export function runGatewayConformance(
       back.send({ type: "live", conversation: "c-1", n: 7, event: Payload.encoded("update 7") })
       const next = await stream.next()
       assert.deepEqual([next.seq, next.event.text], [head + 3, "update 7"])
+    }
+  )
+
+  /** A client that says it reads the compact live form (`live-form.ts`). */
+  const compactReader = (gateway: GatewayUnderTest, actor = phone) => gateway.connectClient(actor, { live: COMPACT_LIVE_FORM })
+  const compactLive = (runtime: RuntimeLink, n: number, text = `compact ${n}`) =>
+    runtime.send({ type: "live", conversation: "c-1", n, form: COMPACT_LIVE_FORM, event: Payload.encoded(text) })
+
+  scenario(
+    "a conversation whose watchers all read the compact live form is said so in `watch`; a watcher of form 1 joining is said again without, and hears the notice to read again in place of a compact update",
+    async (gateway) => {
+      const runtime = await gateway.connectRuntime()
+      runtime.send({ type: "enroll", runtimeId: "rt-live", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await runtime.next(), "enrolled")
+      const compact = (await compactReader(gateway)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: 0 })
+      const watch = expect(await runtime.next(), "watch")
+      assert.deepEqual([watch.conversations, watch.forms], [["c-1"], { "c-1": COMPACT_LIVE_FORM }])
+      notice(await compact.next())
+      compactLive(runtime, 1)
+      assert.equal((await compact.next()).event.text, "compact 1")
+
+      const whole = (await gateway.connectClient(desktop)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: 0 })
+      const again = expect(await runtime.next(), "watch")
+      assert.deepEqual(again.conversations, ["c-1"])
+      assert.equal(again.forms?.["c-1"], undefined, "form 1 is the one every watcher reads")
+      notice(await whole.next())
+      // Written before the runtime heard: the compact reader takes it, the other reads the conversation again instead.
+      compactLive(runtime, 2)
+      const taken = await compact.next()
+      assert.equal(taken.event.text, "compact 2")
+      const instead = notice(await whole.next())
+      assert.deepEqual([instead.streamNotice, instead.head], ["reread", taken.seq])
+      live(runtime, 3, "whole 3")
+      const [both, also] = [await compact.next(), await whole.next()]
+      assert.deepEqual([both.seq, both.event.text, also.seq, also.event.text], [taken.seq + 1, "whole 3", taken.seq + 1, "whole 3"])
+
+      whole.close()
+      assert.deepEqual(expect(await runtime.next(), "watch").forms, { "c-1": COMPACT_LIVE_FORM }, "back to compact once the form 1 watcher is gone")
+    }
+  )
+
+  scenario(
+    "a watcher back from a dropped link is served what it missed in the form it reads, or told to read again where it was written in another",
+    async (gateway) => {
+      const runtime = await gateway.connectRuntime()
+      runtime.send({ type: "enroll", runtimeId: "rt-live", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await runtime.next(), "enrolled")
+      const watching = (await compactReader(gateway)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: 0 })
+      expect(await runtime.next(), "watch")
+      notice(await watching.next())
+      live(runtime, 1, "whole 1")
+      const first = (await watching.next()).seq
+      compactLive(runtime, 2)
+      live(runtime, 3, "whole 3")
+      await watching.next()
+      await watching.next()
+      const compact = (await compactReader(gateway, desktop)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: first })
+      assert.equal(notice(await compact.next()).streamNotice, "head")
+      assert.deepEqual([(await compact.next()).event.text, (await compact.next()).event.text], ["compact 2", "whole 3"])
+      const whole = (await gateway.connectClient(desktop)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: first })
+      const said = notice(await whole.next())
+      assert.deepEqual([said.streamNotice, said.head], ["reread", first + 2])
+      live(runtime, 4, "whole 4")
+      assert.equal((await whole.next()).event.text, "whole 4")
+    }
+  )
+
+  /** A runtime on the newest link that runs Thread `th-1`, and the generation it runs it under. */
+  const running = async (gateway: GatewayUnderTest) => {
+    const runtime = await gateway.connectRuntime()
+    runtime.send({ type: "enroll", runtimeId: "rt-a", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+    expect(await runtime.next(), "enrolled")
+    return { runtime, generation: await take(gateway, runtime, "th-1", "rt-a") }
+  }
+
+  scenario(
+    "a Thread whose readers all read the compact live form is said so (`live-form`); a reader of form 1 hears the notice to read again in place of a compact event, and a run of them from the log as one",
+    async (gateway) => {
+      const { runtime, generation } = await running(gateway)
+      const event = (localSeq: number, compact: boolean) =>
+        runtime.send({ type: "event", threadId: "th-1", generation, localSeq, event: Payload.encoded(`${compact ? "compact" : "whole"} ${localSeq}`), ...(compact && { form: COMPACT_LIVE_FORM }) })
+      const compact = (await compactReader(gateway)).subscribe({ stream: threadStream("th-1"), after: 0 })
+      assert.deepEqual(expect(await runtime.next(), "live-form"), { type: "live-form", threadId: "th-1", form: COMPACT_LIVE_FORM })
+      event(1, true)
+      expect(await runtime.next(), "ack")
+      assert.deepEqual([(await compact.next()).event.text], ["compact 1"])
+
+      const whole = (await gateway.connectClient(desktop)).subscribe({ stream: threadStream("th-1"), after: 0 })
+      assert.deepEqual(notice(await whole.next()), { streamNotice: "reread", head: 1 })
+      assert.equal(expect(await runtime.next(), "live-form").form, 1)
+      // Written before the runtime heard: the compact reader takes it; the other, the notice under its number.
+      event(2, true)
+      expect(await runtime.next(), "ack")
+      const taken = await compact.next()
+      assert.deepEqual([taken.seq, taken.event.text], [2, "compact 2"])
+      assert.deepEqual(notice(await whole.next()), { streamNotice: "reread", head: 2 })
+      event(3, false)
+      expect(await runtime.next(), "ack")
+      assert.deepEqual([(await compact.next()).event.text, (await whole.next()).event.text], ["whole 3", "whole 3"])
+
+      const later = (await gateway.connectClient(desktop)).subscribe({ stream: threadStream("th-1"), after: 0 })
+      assert.deepEqual(notice(await later.next()), { streamNotice: "reread", head: 2 }, "events 1 and 2, as one notice")
+      assert.deepEqual([(await later.next()).seq], [3])
+
+      whole.close()
+      later.close()
+      assert.equal(expect(await runtime.next(), "live-form").form, COMPACT_LIVE_FORM, "back to compact once the form 1 readers are gone")
+    }
+  )
+
+  scenario(
+    "a runtime given a Thread whose readers read the compact live form hears so with the assignment",
+    async (gateway) => {
+      const reader = (await compactReader(gateway)).subscribe({ stream: threadStream("th-1"), after: 0 })
+      const runtime = await gateway.connectRuntime()
+      runtime.send({ type: "enroll", runtimeId: "rt-a", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await runtime.next(), "enrolled")
+      await take(gateway, runtime, "th-1", "rt-a")
+      assert.deepEqual(expect(await runtime.next(), "live-form"), { type: "live-form", threadId: "th-1", form: COMPACT_LIVE_FORM })
+      reader.close()
+    }
+  )
+
+  scenario(
+    "a runtime on a link before the compact live form is never told what its readers read",
+    async (gateway) => {
+      const runtime = await gateway.connectRuntime()
+      runtime.send({ type: "enroll", runtimeId: "rt-a", versions: { min: 1, max: COMPACT_LIVE_VERSION - 1 }, build: "conformance", threads: [] })
+      expect(await runtime.next(), "enrolled")
+      await take(gateway, runtime, "th-1", "rt-a")
+      const client = await compactReader(gateway)
+      client.subscribe({ stream: threadStream("th-1"), after: 0 })
+      client.subscribe({ stream: sessionStream("rt-a", "c-1"), after: 0 })
+      const watch = expect(await runtime.next(), "watch")
+      assert.deepEqual([watch.conversations, watch.forms], [["c-1"], undefined])
+      await nothingArrives(runtime)
     }
   )
 

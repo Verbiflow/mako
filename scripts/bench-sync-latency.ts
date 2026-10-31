@@ -9,12 +9,12 @@ import { join } from "node:path"
 import { duplexPair } from "node:stream"
 import { parseArgs } from "node:util"
 import { z } from "zod"
-import { NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, clientSessionOverSockets, followAgainInMs, sessionStream, threadStream, type Actor, type Subscription } from "@mako/protocol"
+import { LIVE_FORM, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, clientSessionOverSockets, followAgainInMs, readingLiveForm, sessionStream, threadStream, type Actor, type Subscription } from "@mako/protocol"
 import { accountStream } from "@mako/protocol/account-events"
 import { holdHostLease } from "@mako/host/base/host-idle"
 import { gatewayHostCalls } from "@mako/host/contracts/gateway-host-calls"
 import type { RuntimePacket } from "@mako/host/contracts/runtime"
-import { splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
+import { readEventLine } from "@mako/host/contracts/runtime-value"
 import { invokeRuntime, runtimeInfo, subscribeRuntime } from "@mako/host/transport/connection"
 import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { MachineRuntime } from "@mako/host/usage/machine-runtime"
@@ -47,7 +47,7 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * It prints one JSON report to stdout (progress goes to stderr) and checks it against the budgets below: past any of
  * them it exits 1, unless `--report-only`. A run that fails to finish exits 2 either way.
  *
- *   npm run bench:sync-latency [-- --report-only] [--out <file>] [--quiet] [--trace <file>]
+ *   npm run bench:sync-latency [-- --report-only] [--out <file>] [--quiet] [--trace <file>] [--messages <file>]
  *   npm run bench:sync-latency -- --cloud <url> [--presence]   with a helper on stdin and stdout
  */
 const { values } = parseArgs({
@@ -55,6 +55,7 @@ const { values } = parseArgs({
     cloud: { type: "string" },
     out: { type: "string" },
     trace: { type: "string" },
+    messages: { type: "string" },
     "report-only": { type: "boolean", default: false },
     quiet: { type: "boolean", default: false },
     "quiet-wait": { type: "string", default: "150" },
@@ -182,14 +183,50 @@ function paintedOn(device: string): Map<string, number> {
 const turnWords = (turn: number | string, count = WORDS) => Array.from({ length: count }, (_, index) => `t${turn}w${index + 1}`)
 const saw = (device: string, word: string) => seen.get(device)?.has(word) ?? false
 
-/** Messages and bytes each hop carried during the steady turns. */
-const carried = new Map<string, { messages: number; bytes: number }>()
-function carry(hop: string, bytes: number) {
+/**
+ * Every message each hop carried during the steady turns, kept as it came and read (`partsOf`, `--messages`) only once
+ * the run is over, so reading them never delays an arrival being timed.
+ */
+const carried = new Map<string, Array<{ line: string; payload: string }>>()
+function carry(hop: string, line: string, payload = line) {
   if (phase !== "steady") return
-  const held = carried.get(hop) ?? { messages: 0, bytes: 0 }
-  held.messages++
-  held.bytes += bytes
-  carried.set(hop, held)
+  let held = carried.get(hop)
+  if (!held) carried.set(hop, (held = []))
+  held.push({ line, payload })
+}
+
+/** The parts of a batch's fields a report names; whatever else a batch says is its envelope (its ids and numbering). */
+type Part = "route" | "stream" | "text" | "updates" | "requests" | "control" | "session" | "envelope"
+const BATCH_PARTS = new Map<string, Part>([
+  ["requests", "requests"], ["requestChanges", "requests"], ["requestPatches", "requests"],
+  ["control", "control"], ["session", "session"], ["sessionChanges", "session"], ["sessionCleared", "session"], ["configCurrents", "session"],
+])
+const UpdateSchema = z.object({ text: z.string().optional().catch(undefined), stream: z.json().optional() }).loose()
+const PartsSchema = z.object({ batch: z.object({ updates: z.array(UpdateSchema).optional() }).catchall(z.json()).optional() }).loose()
+/**
+ * Where one message's bytes went: `route`, the line's header around its payload; `stream`, the frames its updates name;
+ * `text`, what they stream; `updates`, the rest of them; `requests`, `control` and `session` as they changed; `envelope`,
+ * the rest of the batch. Each field is measured as it's written, its key and comma included.
+ */
+function partsOf(line: string, payload: string) {
+  const parts = new Map<Part, number>([["route", line.length - payload.length]])
+  const add = (part: Part, bytes: number) => void parts.set(part, (parts.get(part) ?? 0) + bytes)
+  const batch = PartsSchema.safeParse(JSON.parse(payload)).data?.batch
+  let measured = 0
+  for (const [key, value] of Object.entries(batch ?? {})) {
+    const bytes = JSON.stringify({ [key]: value }).length - 1
+    measured += bytes
+    add(key === "updates" ? "updates" : (BATCH_PARTS.get(key) ?? "envelope"), bytes)
+  }
+  for (const { text, stream } of batch?.updates ?? []) {
+    const textBytes = text === undefined ? 0 : JSON.stringify(text).length
+    const streamBytes = stream === undefined ? 0 : JSON.stringify({ stream }).length - 1
+    add("text", textBytes)
+    add("stream", streamBytes)
+    add("updates", -textBytes - streamBytes)
+  }
+  add("envelope", payload.length - measured)
+  return parts
 }
 
 const PermissionSchema = z.object({ id: z.string(), options: z.array(z.object({ optionId: z.string(), kind: z.string().optional() }).loose()) }).loose()
@@ -428,7 +465,7 @@ function watchHost(host: Host, conversation: () => string | undefined, window?: 
     if (packet.type === "live-batch") {
       if (packet.conversation !== C) return
       scan(seen, host.name, packet.payload, at)
-      carry(host.name, packet.payload.length)
+      carry(host.name, packet.payload)
       const batch = batchOf(packet.payload)
       const permission = batch.permissions?.[0]
       showed(host.name, permission ? "waiting" : listedOf(batch.sessionChanges?.status), at)
@@ -440,7 +477,7 @@ function watchHost(host: Host, conversation: () => string | undefined, window?: 
     if (!mentions) return
     if (packet.type === "live-listed" && !listed.has(host.name)) listed.set(host.name, at)
     if (packet.type === "live-unlisted" && !unlisted.has(host.name)) unlisted.set(host.name, at)
-  }, () => note(host.name, "events-ended"))
+  }, () => note(host.name, "events-ended"), { live: LIVE_FORM })
 }
 
 const hosts: Host[] = []
@@ -587,8 +624,8 @@ try {
           failures = 0
           gapsInRow = 0
           scan(seen, "phone", frame.event.text, at)
-          carry("phone", frame.event.text.length)
-          const parts = splitRuntimeEventLine(frame.event.text)
+          const parts = readEventLine(frame.event.text)
+          carry("phone", frame.event.text, parts?.payload)
           if (!parts) continue
           const batch = batchOf(parts.payload)
           const status = batch.sessionChanges?.status
@@ -632,25 +669,34 @@ try {
     machine.start()
     agentEnd.write(`${JSON.stringify({ type: "link", gatewayUrl: place.gatewayUrl, runtimeId: place.runtimeId, credential: place.credential, machine: place.machine, generation: place.generation })}\n`)
     for (const name of ["cloud-1", "cloud-2", "cloud-3"]) {
-      const watcher = clientSessionOverSockets(() => new WebSocket(place.watch))
+      const watcher = clientSessionOverSockets(() => new WebSocket(readingLiveForm(place.watch)))
       const stream = watcher.subscribe({ stream: threadStream(place.threadId), after: Number.MAX_SAFE_INTEGER })
       void (async () => {
         for (;;) {
           const frame = await stream.next()
           const at = now()
           scan(seen, name, frame.event.text, at)
-          carry("cloud", frame.event.text.length)
+          carry("cloud", frame.event.text, readEventLine(frame.event.text)?.payload)
         }
       })().catch(() => undefined)
       stops.push(() => watcher.close())
     }
+    // As the host hands its events to its machine runtime: each batch whole and in the compact form, read here from one
+    // subscription of each form to A and paired by revision, with a sampled batch's trace named beside them.
     let tee = false
-    stops.push(subscribeRuntime(A.socket, A.client, (packet) => {
+    const TeeSchema = z.object({ batch: z.object({ epoch: z.string().optional(), revision: z.number(), trace: z.string().optional() }).loose() })
+    const halves = new Map<string, { whole?: string; compact?: string; trace?: string }>()
+    const teeFrom = (form: "whole" | "compact") => (packet: RuntimePacket) => {
       if (!tee || !("payload" in packet) || packet.type !== "live-batch" || packet.conversation !== C) return
-      // As the host hands its events to its machine runtime: a sampled batch's trace named beside its payload.
-      const trace = z.object({ batch: z.object({ trace: z.string().optional() }).loose() }).safeParse(JSON.parse(packet.payload)).data?.batch.trace
-      machine?.event(packet.channel, { type: packet.type, conversation: packet.conversation, ...(trace && { trace }), payload: packet.payload })
-    }, () => undefined))
+      const { batch } = TeeSchema.parse(JSON.parse(packet.payload))
+      const key = `${batch.epoch}:${batch.revision}`
+      const held = { ...halves.get(key), [form]: packet.payload, ...(batch.trace && { trace: batch.trace }) }
+      if (held.whole === undefined || held.compact === undefined) return void halves.set(key, held)
+      halves.delete(key)
+      machine?.event(packet.channel, { type: packet.type, conversation: packet.conversation, ...(held.trace && { trace: held.trace }), payload: held.whole, ...(held.compact !== held.whole && { compact: held.compact }) })
+    }
+    stops.push(subscribeRuntime(A.socket, A.client, teeFrom("whole"), () => undefined))
+    stops.push(subscribeRuntime(A.socket, A.client, teeFrom("compact"), () => undefined, { live: LIVE_FORM }))
     await sleep(3_000)
     tee = true
   }
@@ -884,7 +930,11 @@ try {
     const held = carried.get(key!)
     if (!held) return []
     const watchers = key === "cloud" ? 3 : 1
-    return [[hop, { messages: held.messages, bytes: held.bytes, messagesPerToken: round((held.messages / watchers / tokens) * 100) / 100, bytesPerToken: round(held.bytes / watchers / tokens) }]]
+    const bytes = held.reduce((sum, { line }) => sum + line.length, 0)
+    const summed: Record<string, number> = {}
+    for (const { line, payload } of held) for (const [part, partBytes] of partsOf(line, payload)) summed[part] = (summed[part] ?? 0) + partBytes
+    const parts = Object.fromEntries(Object.entries(summed).filter(([, partBytes]) => partBytes > 0).map(([part, partBytes]) => [part, round(partBytes / watchers / tokens)]))
+    return [[hop, { messages: held.length, bytes, messagesPerToken: round((held.length / watchers / tokens) * 100) / 100, bytesPerToken: round(bytes / watchers / tokens), parts }]]
   }))
 
   const measured = { ...head, live, paint, status, reconnect, quiet: values.quiet && cloud.presence ? quiet : undefined, cost, skipped, seconds: Math.round((now() - started) / 1000) }
@@ -934,6 +984,7 @@ try {
   await model.close()
   await cloud.close()
   if (values.out) writeFileSync(values.out, `${report}\n`)
+  if (values.messages) writeFileSync(values.messages, `${[...carried].flatMap(([hop, held]) => held.map(({ line }) => JSON.stringify({ hop, line }))).join("\n")}\n`)
   if (values.trace) writeFileSync(values.trace, `${notes.map((item) => JSON.stringify(item)).join("\n")}\n`)
   process.stdout.write(`${report}\n`)
   if (values.keep) progress(`kept ${root}`)

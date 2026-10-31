@@ -217,7 +217,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         sessions: {
           report: (current) => core.current()?.sessions.report(current),
           linked: (current) => core.current()?.sessions.linked(current),
-          watch: (link, conversations, after) => core.current()?.sessions.watch(link, conversations, after),
+          watch: (link, conversations, after, forms) => core.current()?.sessions.watch(link, conversations, after, forms),
         },
         media: () => core.current()?.media,
         linked: async (link) => (await core.load("the machine's link")).machineLinked(link),

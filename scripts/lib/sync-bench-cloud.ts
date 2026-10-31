@@ -11,12 +11,14 @@ import {
   PROTOCOL_VERSION,
   Payload,
   SUBPROTOCOL,
+  declaredLiveForm,
   decodeClientFrame,
   decodeRuntimeFrame,
   encodeGatewayClientFrame,
   encodeGatewayFrame,
   offeredCredential,
   type Actor,
+  type LiveForm,
   type Subscription,
 } from "@mako/protocol"
 import { accountStream, type AccountEvent } from "@mako/protocol/account-events"
@@ -237,7 +239,8 @@ export async function fakeCloud(): Promise<BenchCloud> {
 
   const wss = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => (protocols.has(SUBPROTOCOL) ? SUBPROTOCOL : false) })
   server.on("upgrade", (request, socket, head) => {
-    const path = new URL(request.url ?? "/", "http://cloud").pathname
+    const asked = new URL(request.url ?? "/", "http://cloud")
+    const path = asked.pathname
     const credential = offeredCredential(request.headers["sec-websocket-protocol"])
     const caller = verify(credential)
     const runtime = /^\/v1\/runtimes\/([\w.-]+)\/connect$/.exec(path)?.[1]
@@ -255,7 +258,7 @@ export async function fakeCloud(): Promise<BenchCloud> {
       ws.on("close", () => sockets.delete(ws))
       if (runtime) return bridgeRuntime(ws, runtime)
       const actor: Actor = { kind: "client", client: caller?.kind === "browser" ? "web" : "desktop", deviceId: caller?.id ?? randomUUID() }
-      if (calling || thread) return bridgeClient(ws, actor)
+      if (calling || thread) return bridgeClient(ws, actor, declaredLiveForm(asked))
       followAccount(ws)
     })
   })
@@ -290,8 +293,8 @@ export async function fakeCloud(): Promise<BenchCloud> {
     })
   }
   /** A client's connection to a runtime or a Thread: its calls answered, its subscriptions followed, its token renewed. */
-  const bridgeClient = (ws: ServerSocket, actor: Actor) => {
-    const session = gateway.connectClient(actor)
+  const bridgeClient = (ws: ServerSocket, actor: Actor, live: LiveForm) => {
+    const session = gateway.connectClient(actor, { live })
     const subscriptions = new Map<string, Subscription>()
     ws.on("close", () => {
       for (const subscription of subscriptions.values()) subscription.close()

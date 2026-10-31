@@ -2804,6 +2804,36 @@ waited a second, missed what went by and read a snapshot; a lost last batch
 left a turn looking busy on every other device; a stall went unseen for a
 minute.
 
+A conversation's batches go in the compact live form wherever everyone
+reading them reads it (`@mako/protocol/live-form`, link version 13). A client
+says the form it reads as it connects (`?live=2` on its connection's route,
+`x-mako-live` on a host's `/events`); one that says nothing reads the whole
+form. The gateway tells each owner the form every current watcher of each
+conversation reads (`watch`'s `forms`) and every reader of each Thread it runs
+(`live-form`), again as one comes or goes. The owner's host writes each batch
+both ways (`compactLiveBatch`, in `LiveConversations`' flush) and its link
+sends the compact one only where the gateway said so, from the next update on
+(`SessionPublisher.#send`, `RuntimeThreads`); one still in flight as a reader
+of the whole form came reaches that reader as `reread`, never misread. A
+compact batch says only what changed since the revision before: more of the
+answer last streamed (`more`), the changed fields of a request or binding the
+reader holds, no `changedFrom` the block count implies, no file a call's
+frames are in that the call names, and on the gateway no route around it (its
+line is read by its first characters, `readEventLine`). Every reader decodes
+it in one place, `applyLiveBatch` in `live-recovery.ts` (`expandLiveBatch`),
+the desktop's windows and the web client alike, and one it can't read against
+what it holds (a batch missed, a `more` with no answer to go on) is read again
+as any gap is. A Mac relays another device's conversation to its windows as
+heard, marked compact (`form`), and a window that reads only the whole form
+gets the notice to read again in its place. The owner's host logs each change
+of form under `sync`; the gateway logs `live-form` with how many read it and
+how many of them read only the whole form; Settings › Diagnostics' Sync says
+how many watched conversations go compact, or why they go whole, and each
+followed stream how much of it came compact. `test-live-form.ts` and
+`test-machine-runtime.ts` cover mixed readers on a Mac and a machine, and the
+protocol's conformance runs mixed watchers, an old link and a resumed one
+against any gateway.
+
 One update can be followed from its owner to every device. One batch in
 `TRACE_EVERY` (25) of a conversation, and each that starts or ends a turn or
 asks or answers the person, carries `emittedAt` and a trace (`traceOf`,
@@ -2818,7 +2848,7 @@ traced lag, skipped numbers asked for again, rereads, probes, and why it
 followed again (`closed`, `silent`, `gap`, `failed`); for the account's
 list, its stream's number, its gaps, and each change's time from its owner
 (`changedAt`); and on a Mac what it sends of its own watched conversations
-(resent, notices). Settings › Diagnostics shows them as Sync
+(in which live form, resent, notices). Settings › Diagnostics shows them as Sync
 (`mako:sync-readings`, `SyncReadout`), the phone's Diagnostics in its
 lines, both in the same words (`describeFollow`, `describeList`). Lags are
 each device's clock against its owner's, good to a few milliseconds where
@@ -2844,9 +2874,9 @@ quiet devices, messages and bytes per token per hop, and from each word to
 its paint on each device (`paint`: the device's arrivals through the window's
 own `StreamFrames`, which per-hop latency leaves out). Past the
 plan's budgets it exits 1 unless `--report-only`; a run that doesn't finish
-exits 2. It takes about two minutes and isn't in CI: it needs a real Codex
-CLI, and today's numbers fail several budgets by design. The first baseline
-is `docs/public-audits/2026-10-28/sync-latency/`.
+exits 2. It takes about two minutes and needs a real Codex CLI; CI runs it
+against its budgets with Codex at the tested build (`sync-bench` in
+`checks.yml`). The first baseline is `docs/public-audits/2026-10-28/sync-latency/`.
 
 The account's rows here (`CloudConversations`) take nothing from a catalog that
 isn't read: until `catalog.ready()`, and while a lost reader is replaced,

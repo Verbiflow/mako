@@ -15,6 +15,7 @@ import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtime
 import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, probeRuntime, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
+import { LIVE_FORM } from "@mako/protocol/live-form"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness"
@@ -337,7 +338,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
-    }, { history: true, observer: Boolean(agentView), heard: stream.heard })
+    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: LIVE_FORM })
   }
   connect()
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })

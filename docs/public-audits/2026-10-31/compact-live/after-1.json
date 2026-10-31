@@ -1,0 +1,314 @@
+{
+  "version": 1,
+  "at": "2026-10-31T08:23:37.575Z",
+  "gateway": "fake",
+  "local": true,
+  "pace": 20,
+  "words": 150,
+  "turns": 5,
+  "live": {
+    "owner": {
+      "n": 750,
+      "p50": 26,
+      "p95": 50.2,
+      "max": 54.2
+    },
+    "phone": {
+      "n": 750,
+      "p50": 0.7,
+      "p95": 1.1,
+      "max": 4.5
+    },
+    "secondMac": {
+      "n": 750,
+      "p50": 0.9,
+      "p95": 1.4,
+      "max": 4.8
+    },
+    "cloud": {
+      "n": 2250,
+      "p50": 0.6,
+      "p95": 1,
+      "max": 4.5
+    }
+  },
+  "paint": {
+    "owner": {
+      "n": 750,
+      "p50": 30.4,
+      "p95": 61.8,
+      "max": 93.8
+    },
+    "phone": {
+      "n": 750,
+      "p50": 31.1,
+      "p95": 62.4,
+      "max": 94.5
+    },
+    "secondMac": {
+      "n": 750,
+      "p50": 31.4,
+      "p95": 62.7,
+      "max": 94.7
+    },
+    "cloud": {
+      "n": 2250,
+      "p50": 31.1,
+      "p95": 62.4,
+      "max": 94.4
+    }
+  },
+  "status": {
+    "start": {
+      "phone": {
+        "n": 7,
+        "p50": 3.9,
+        "p95": 7.6,
+        "max": 7.6,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 7,
+        "p50": 29.8,
+        "p95": 41,
+        "max": 41,
+        "missed": 0
+      }
+    },
+    "end": {
+      "phone": {
+        "n": 7,
+        "p50": 16.4,
+        "p95": 19.1,
+        "max": 19.1,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 7,
+        "p50": 0.7,
+        "p95": 1.4,
+        "max": 1.4,
+        "missed": 0
+      }
+    },
+    "waiting": {
+      "phone": {
+        "n": 1,
+        "p50": 2.3,
+        "p95": 2.3,
+        "max": 2.3,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 1,
+        "p50": 1.5,
+        "p95": 1.5,
+        "max": 1.5,
+        "missed": 0
+      }
+    },
+    "new": {
+      "phone": {
+        "n": 1,
+        "p50": 14.2,
+        "p95": 14.2,
+        "max": 14.2
+      },
+      "secondMac": {
+        "n": 1,
+        "p50": 16.4,
+        "p95": 16.4,
+        "max": 16.4
+      }
+    },
+    "title": {
+      "phone": {
+        "n": 3,
+        "p50": 2.1,
+        "p95": 2.5,
+        "max": 2.5,
+        "missed": 0
+      },
+      "secondMac": {
+        "n": 3,
+        "p50": 2.7,
+        "p95": 3,
+        "max": 3,
+        "missed": 0
+      }
+    },
+    "archive": {
+      "phone": {
+        "n": 1,
+        "p50": 1.7,
+        "p95": 1.7,
+        "max": 1.7
+      },
+      "secondMac": {
+        "n": 1,
+        "p50": 2.5,
+        "p95": 2.5,
+        "max": 2.5
+      }
+    }
+  },
+  "reconnect": {
+    "phone link cut": {
+      "link": "phone",
+      "devices": {
+        "phone": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 0,
+          "rereads": 0
+        }
+      }
+    },
+    "B's link stalled 8 s": {
+      "link": "B",
+      "stallNoticedMs": 4516,
+      "devices": {
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 8,
+          "rereads": 0
+        }
+      }
+    },
+    "B's link cut": {
+      "link": "B",
+      "devices": {
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 0,
+          "rereads": 0
+        }
+      }
+    },
+    "A's link stalled 5 s": {
+      "link": "A",
+      "stallNoticedMs": 3795,
+      "devices": {
+        "phone": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 4,
+          "rereads": 0
+        },
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 15,
+          "rereads": 0
+        }
+      }
+    },
+    "A's link cut": {
+      "link": "A",
+      "devices": {
+        "phone": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 277,
+          "rereads": 0
+        },
+        "secondMac": {
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 277,
+          "rereads": 0
+        }
+      }
+    },
+    "A's last batch lost": {
+      "link": "A",
+      "devices": {
+        "phone": {
+          "turnEndShownMs": 215,
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 215,
+          "rereads": 0
+        },
+        "secondMac": {
+          "turnEndShownMs": 215,
+          "wordsMissed": 0,
+          "wordsReread": 0,
+          "timeToCurrentMs": 215,
+          "rereads": 0
+        }
+      }
+    }
+  },
+  "cost": {
+    "owner": {
+      "messages": 370,
+      "bytes": 99977,
+      "messagesPerToken": 0.493,
+      "bytesPerToken": 133.3,
+      "parts": {
+        "updates": 28,
+        "envelope": 74.2,
+        "requests": 20.5,
+        "text": 7.3,
+        "stream": 1.1,
+        "session": 2.2
+      }
+    },
+    "phone": {
+      "messages": 370,
+      "bytes": 99977,
+      "messagesPerToken": 0.493,
+      "bytesPerToken": 133.3,
+      "parts": {
+        "updates": 28,
+        "envelope": 74.2,
+        "requests": 20.5,
+        "text": 7.3,
+        "stream": 1.1,
+        "session": 2.2
+      }
+    },
+    "secondMac": {
+      "messages": 370,
+      "bytes": 99977,
+      "messagesPerToken": 0.493,
+      "bytesPerToken": 133.3,
+      "parts": {
+        "updates": 28,
+        "envelope": 74.2,
+        "requests": 20.5,
+        "text": 7.3,
+        "stream": 1.1,
+        "session": 2.2
+      }
+    },
+    "cloud": {
+      "messages": 1110,
+      "bytes": 299931,
+      "messagesPerToken": 0.493,
+      "bytesPerToken": 133.3,
+      "parts": {
+        "updates": 28,
+        "envelope": 74.2,
+        "requests": 20.5,
+        "text": 7.3,
+        "stream": 1.1,
+        "session": 2.2
+      }
+    }
+  },
+  "skipped": {
+    "quiet": "not asked for (--quiet)"
+  },
+  "seconds": 131,
+  "budgets": {
+    "local": true,
+    "checked": 54,
+    "failed": 0,
+    "over": []
+  },
+  "ok": true
+}

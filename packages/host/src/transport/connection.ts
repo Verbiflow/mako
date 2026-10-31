@@ -1,7 +1,8 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions/daemon-wire"
-import { CORRELATION_HEADER, RuntimeEventHeadSchema, RuntimeFailureSchema, RuntimeInfoSchema, RuntimeReadySchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimePacket, type RuntimeValue } from "../contracts/runtime.js"
+import { WHOLE_LIVE_FORM, type LiveForm } from "@mako/protocol/live-form"
+import { CORRELATION_HEADER, LIVE_FORM_HEADER, RuntimeEventHeadSchema, RuntimeFailureSchema, RuntimeInfoSchema, RuntimeReadySchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimePacket, type RuntimeValue } from "../contracts/runtime.js"
 import { decodeRuntimeValue, runtimeSuccessValue, splitRuntimeEventLine, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { z } from "zod"
@@ -285,8 +286,11 @@ function readRuntimePacket(line: string): RuntimePacket {
   return { ...RuntimeEventHeadSchema.parse(JSON.parse(event.head)), payload: event.payload }
 }
 
-/** `heard`: called for every chunk the stream carries, the host's 15-second heartbeat too. */
-export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void } = {}) {
+/**
+ * `heard`: called for every chunk the stream carries, the host's 15-second heartbeat too. `live`: the live form its
+ * reader reads (`@mako/protocol/live-form`); a batch in the compact one is read by `expandLiveBatch`. Form 1 when unsaid.
+ */
+export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void; live?: LiveForm } = {}) {
   let closed = false
   let ended = false
   const end = () => { if (!ended && !closed) { ended = true; disconnected() } }
@@ -294,6 +298,7 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
   if (options.observer) headers.set("x-mako-observer", "1")
   if (options.history) headers.set("x-mako-history", "1")
   if (options.eventLimit) headers.set("x-mako-event-limit", String(options.eventLimit))
+  if (options.live !== undefined && options.live !== WHOLE_LIVE_FORM) headers.set(LIVE_FORM_HEADER, String(options.live))
   const req = request({ ...OWN_CONNECTION, socketPath: socket, path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
     const lines = new LineAssembler(32 * 1024 * 1024)
     if (response.statusCode !== 200) { response.destroy(); end(); return }

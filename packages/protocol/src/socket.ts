@@ -10,6 +10,7 @@ import {
 } from "./envelope.js"
 import type { EventFrame, StreamId, Subscribe } from "./events.js"
 import {
+  type ClientConnection,
   type ClientSession,
   type GatewayUnderTest,
   Inbox,
@@ -17,6 +18,7 @@ import {
   type Subscription,
 } from "./gateway.js"
 import { PING } from "./heartbeat.js"
+import { type LiveForm, WHOLE_LIVE_FORM, readingLiveForm } from "./live-form.js"
 import {
   BinaryMessageSchema,
   type MediaDelivery,
@@ -70,6 +72,20 @@ export function endpointOfTarget(target: Operation["target"]): ClientEndpoint {
   return target.kind === "thread"
     ? { kind: "thread", threadId: target.threadId }
     : { kind: "runtime", runtimeId: target.runtimeId }
+}
+
+/**
+ * The gateway's route a client's connection to `endpoint` opens, saying the live form its client reads (`live-form.ts`):
+ * every subscription of that connection is sent in it. A client that reads only form 1 says nothing.
+ */
+export function clientEndpointPath(endpoint: ClientEndpoint, form: LiveForm = WHOLE_LIVE_FORM): string {
+  const path =
+    endpoint.kind === "thread"
+      ? `/v1/threads/${encodeURIComponent(endpoint.threadId)}/connect`
+      : endpoint.kind === "runtime"
+        ? `/v1/runtimes/${encodeURIComponent(endpoint.runtimeId)}/clients`
+        : `/v1/accounts/${encodeURIComponent(endpoint.accountId)}/connect`
+  return readingLiveForm(path, form)
 }
 
 export function endpointOfStream(stream: StreamId): ClientEndpoint {
@@ -450,9 +466,11 @@ export function clientSessionOverSockets(
  */
 export function gatewayOverSockets(options: {
   runtime(): MessageSocket | Promise<MessageSocket>
+  /** `connection` says how the client connects: the live form it reads, said on its connection's route (`clientEndpointPath`). */
   client(
     actor: Actor,
-    endpoint: ClientEndpoint
+    endpoint: ClientEndpoint,
+    connection: ClientConnection
   ): MessageSocket | Promise<MessageSocket>
   assign(threadId: string, runtimeId: string): Promise<number>
   close?(): Promise<void>
@@ -465,9 +483,9 @@ export function gatewayOverSockets(options: {
       links.push(link)
       return link
     },
-    async connectClient(actor) {
+    async connectClient(actor, connection = {}) {
       const session = clientSessionOverSockets((endpoint) =>
-        options.client(actor, endpoint)
+        options.client(actor, endpoint, connection)
       )
       sessions.push(session)
       return session

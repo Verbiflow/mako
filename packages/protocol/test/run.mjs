@@ -79,6 +79,14 @@ import {
   followAgainInMs,
   readStreamNotice,
   streamNoticeText,
+  COMPACT_LIVE_FORM,
+  COMPACT_LIVE_VERSION,
+  WHOLE_LIVE_FORM,
+  clientEndpointPath,
+  declaredLiveForm,
+  frameFor,
+  logFor,
+  readersForm,
 } from "../dist/index.js"
 
 const operation = {
@@ -98,7 +106,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 12)
+    assert.equal(SUPPORTED_VERSIONS.max, 13)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -914,6 +922,84 @@ describe("a runtime's outbox", () => {
   })
 })
 
+describe("the live form", () => {
+  const compactEnrolled = { ...enrolled, version: COMPACT_LIVE_VERSION }
+  const sentEvents = (link) => link.sent.filter((frame) => frame.type === "event").map((frame) => [frame.event.text, frame.form])
+
+  test("an event emitted with its compact form goes in it only while the gateway says every reader of its Thread reads it, chosen as it's sent, and again on a new link only once that link says so", async () => {
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 1 }] })
+    const first = scriptedLink()
+    first.push(compactEnrolled)
+    const runtime = await serveRuntime(first, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    const emit = (n) => runtime.emit("th-1", Payload.encoded(`whole ${n}`), undefined, Payload.encoded(`compact ${n}`))
+    emit(1)
+    first.push({ type: "live-form", threadId: "th-1", form: COMPACT_LIVE_FORM })
+    await settle()
+    assert.equal(runtime.form("th-1"), COMPACT_LIVE_FORM)
+    emit(2)
+    runtime.emit("th-1", Payload.encoded("only whole 3"))
+    assert.deepEqual(sentEvents(first), [["whole 1", undefined], ["compact 2", COMPACT_LIVE_FORM], ["only whole 3", undefined]])
+    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], form: COMPACT_LIVE_FORM, compact: 1 })
+    runtime.close()
+
+    const second = scriptedLink()
+    second.push(compactEnrolled)
+    const again = await serveRuntime(second, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    assert.deepEqual(sentEvents(second), [["whole 1", undefined], ["whole 2", undefined], ["only whole 3", undefined]], "sent again in form 1, which every reader reads, until this link says otherwise")
+    again.close()
+
+    const older = scriptedLink()
+    older.push({ ...enrolled, version: COMPACT_LIVE_VERSION - 1 })
+    const old = await serveRuntime(older, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    older.push({ type: "live-form", threadId: "th-1", form: COMPACT_LIVE_FORM })
+    await settle()
+    assert.equal(old.form("th-1"), WHOLE_LIVE_FORM, "a link before the compact form never writes it")
+    old.close()
+  })
+
+  test("a live update in the compact form goes only on a link that agreed it", async () => {
+    const gateway = createFakeGateway()
+    const sent = []
+    const tap = (link) => ({ ...link, send: (frame) => { sent.push(frame); link.send(frame) } })
+    const newer = await serveRuntime(tap(await gateway.connectRuntime()), { runtimeId: "d-new", build: "test", handle: async (operation) => answer(operation, null) })
+    const older = await serveRuntime(tap(await gateway.connectRuntime()), { runtimeId: "d-old", build: "test", versions: { min: 1, max: COMPACT_LIVE_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    assert.equal(newer.live("c-1", Payload.of({}), { n: 1, form: COMPACT_LIVE_FORM }), true)
+    assert.equal(older.live("c-1", Payload.of({}), { n: 1, form: COMPACT_LIVE_FORM }), false)
+    assert.equal(older.live("c-1", Payload.of({}), { n: 2 }), true)
+    assert.deepEqual(sent.filter((frame) => frame.type === "live").map(({ n, form }) => [n, form]), [[1, COMPACT_LIVE_FORM], [2, undefined]])
+    newer.close()
+    older.close()
+    await gateway.close()
+  })
+
+  test("a client says the form it reads on its connection's route; a gateway reads one it doesn't know as the newest it does, and none as form 1", () => {
+    assert.equal(clientEndpointPath({ kind: "runtime", runtimeId: "d 1" }, COMPACT_LIVE_FORM), "/v1/runtimes/d%201/clients?live=2")
+    assert.equal(clientEndpointPath({ kind: "thread", threadId: "th-1" }), "/v1/threads/th-1/connect")
+    assert.equal(clientEndpointPath({ kind: "account", accountId: "a-1" }, COMPACT_LIVE_FORM), "/v1/accounts/a-1/connect?live=2")
+    const declared = (search) => declaredLiveForm(new URL(`wss://gateway.test/v1/threads/th-1/connect${search}`))
+    assert.deepEqual(["?live=2", "?live=9", "", "?live=1", "?live=two"].map(declared), [COMPACT_LIVE_FORM, COMPACT_LIVE_FORM, WHOLE_LIVE_FORM, WHOLE_LIVE_FORM, WHOLE_LIVE_FORM])
+    assert.deepEqual(readersForm([COMPACT_LIVE_FORM, WHOLE_LIVE_FORM, COMPACT_LIVE_FORM]), { form: WHOLE_LIVE_FORM, readers: 3, whole: 1 })
+    assert.deepEqual(readersForm([]), { form: WHOLE_LIVE_FORM, readers: 0, whole: 0 }, "a reader who comes later may read no other")
+  })
+
+  test("a tail's update and a log's events reach each reader in the form it reads, or as the notice to read again in their place", () => {
+    const tail = new LiveTail(100)
+    const at = new Date()
+    tail.take("whole 1", at, { n: 1 })
+    const compact = tail.take("compact 2", at, { n: 2, form: COMPACT_LIVE_FORM })
+    tail.take("whole 3", at, { n: 3, form: WHOLE_LIVE_FORM })
+    assert.equal(frameFor(compact, COMPACT_LIVE_FORM), compact)
+    assert.deepEqual(readStreamNotice(frameFor(compact, WHOLE_LIVE_FORM).text), { streamNotice: "reread", head: 102 })
+    assert.deepEqual(tail.opening(101, COMPACT_LIVE_FORM).map((frame) => frame.text).slice(1), ["compact 2", "whole 3"])
+    assert.equal(readStreamNotice(tail.opening(101, WHOLE_LIVE_FORM)[0].text)?.streamNotice, "reread")
+    assert.equal(tail.opening(102, WHOLE_LIVE_FORM).length, 2, "what it missed after the compact update it reads")
+    assert.deepEqual([tail.view().compact, tail.view().rereads], [1, 1])
+    const log = [{ seq: 1 }, { seq: 2, form: COMPACT_LIVE_FORM }, { seq: 3, form: COMPACT_LIVE_FORM }, { seq: 4 }, { seq: 5, form: COMPACT_LIVE_FORM }]
+    assert.deepEqual(logFor(log, WHOLE_LIVE_FORM).map(({ seq, event }) => [seq, event !== undefined]), [[1, true], [3, false], [4, true], [5, false]])
+    assert.equal(logFor(log, COMPACT_LIVE_FORM).every(({ event }) => event !== undefined), true)
+  })
+})
+
 describe("the fake gateway's log", () => {
   test("has one line per operation, with its correlation ID, target and where the answer came from", async () => {
     const lines = []
@@ -1028,9 +1114,9 @@ function servedOverSockets(gateway) {
       })()
       return near
     },
-    async client(actor, endpoint) {
+    async client(actor, endpoint, connection) {
       const [near, far] = socketPair()
-      const session = await gateway.connectClient(actor)
+      const session = await gateway.connectClient(actor, connection)
       const subscriptions = new Map()
       const watches = new Map()
       far.addEventListener("message", async (event) => {

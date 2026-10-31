@@ -1,6 +1,7 @@
 import type { Actor, Operation, Reply } from "./envelope.js"
 import type { EventFrame, Subscribe } from "./events.js"
 import type { MediaWatch, MediaWatchRequest } from "./media.js"
+import type { LiveForm } from "./live-form.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 
 export class LinkClosedError extends Error {
@@ -44,13 +45,16 @@ export interface ClientSession {
   watch(request: MediaWatchRequest): MediaWatch
 }
 
+/** How a client connects: the live form it reads (`live-form.ts`, said on its connection's URL), form 1 when unsaid. */
+export type ClientConnection = { live?: LiveForm }
+
 /**
  * What the conformance suite drives. The fake gateway implements it in memory; the real gateway
  * implements it over its own transport, with `assign` on an operator-only route.
  */
 export interface GatewayUnderTest {
   connectRuntime(): Promise<RuntimeLink>
-  connectClient(actor: Actor): Promise<ClientSession>
+  connectClient(actor: Actor, connection?: ClientConnection): Promise<ClientSession>
   /** Gives a Thread to a runtime under a new generation, fencing whoever had it. Returns the generation. */
   assign(threadId: string, runtimeId: string): Promise<number>
   close(): Promise<void>

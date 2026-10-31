@@ -6,13 +6,14 @@ import {
 } from "./envelope.js"
 import { type ConnectionCredential, renewal } from "./credential.js"
 import type { RuntimeLink } from "./gateway.js"
+import { type LiveForm, WHOLE_LIVE_FORM } from "./live-form.js"
 import { type MediaHandler, type MediaSender, type MediaStreamId, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { PortHandler, PortRequest } from "./ports.js"
 import type { GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -51,9 +52,10 @@ export type RuntimeOptions = {
    * The conversations another device watches now, the whole set, for this link alone (version 5 on): send their live
    * updates with `live`, and no others'. A new link starts with none watched. From version 9, `after` says by
    * conversation the runtime's number (`live`'s `n`) of the last update the gateway relayed of it: what came after it
-   * is sent on this link.
+   * is sent on this link. From version 13, `forms` says by conversation the live form every one of its watchers reads,
+   * where that's above 1 (`live-form.ts`).
    */
-  watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>) => void
+  watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>, forms?: Readonly<Record<string, LiveForm>>) => void
 }
 
 export type ServedRuntime = {
@@ -62,8 +64,14 @@ export type ServedRuntime = {
   generation(threadId: string): number | undefined
   /** Every Thread it runs, and under which generation: what it claims when it enrols again on a new link. */
   claims(): ThreadClaim[]
-  /** Sends one of the Thread's events, kept until acknowledged; undefined when the runtime doesn't run the Thread. */
-  emit(threadId: string, event: Payload, correlationId?: string): number | undefined
+  /**
+   * Sends one of the Thread's events, kept until acknowledged; undefined when the runtime doesn't run the Thread.
+   * `compact`, the same event in the compact live form, goes in its place while the gateway says the Thread's readers
+   * read it (`RuntimeThreads`).
+   */
+  emit(threadId: string, event: Payload, correlationId?: string, compact?: Payload): number | undefined
+  /** The live form every reader of the Thread reads, as the gateway last said (`live-form`); 1 on an older one. */
+  form(threadId: string): LiveForm
   /**
    * Says whether it's working, for every Thread it runs, on a gateway that speaks version 2 or later (false on an
    * older one, which never hears it). Not kept: a link that drops loses it, and the runtime says it again on the next.
@@ -77,8 +85,9 @@ export type ServedRuntime = {
   /**
    * One live update of a watched conversation, as its event's line; false on a gateway older than version 5 or a closed
    * link. On version 9 and later it goes with the runtime's number for it (`n`) and its trace, if any; before, without.
+   * One in a live form above 1 (`form`) goes only on version 13 and later, where `watch` said its watchers read it.
    */
-  live(conversation: string, event: Payload, numbered?: { n: number; correlationId?: string }): boolean
+  live(conversation: string, event: Payload, numbered?: { n: number; correlationId?: string; form?: LiveForm }): boolean
   /**
    * Says the runtime is going away on purpose, before it goes (`going-quiet`, version 8 on): the gateway takes its link
    * as down at once. False on an older gateway, which finds out from the missed heartbeats, or on a closed link.
@@ -125,7 +134,7 @@ export async function serveRuntime(
       if (!link.closed) link.send({ type: "renew", token })
     })
   const send = (frame: RuntimeFrame) => link.send(frame)
-  threads.attach(send)
+  threads.attach(send, first.version)
 
   const answer = async (
     operation: Operation,
@@ -233,7 +242,7 @@ export async function serveRuntime(
         void answer(frame.operation, frame.generation)
       else if (frame.type === "media-watch") watched(frame)
       else if (frame.type === "port-open") opened(frame)
-      else if (frame.type === "watch") options.watch?.(frame.conversations, frame.after)
+      else if (frame.type === "watch") options.watch?.(frame.conversations, frame.after, frame.forms)
       else if (frame.type === "media-ack") {
         const sender = streams.get(frame.stream)
         if (sender?.kind === "port") options.ports?.acked(frame.stream, frame.received)
@@ -265,7 +274,8 @@ export async function serveRuntime(
     version: first.version,
     generation: (threadId) => threads.generation(threadId),
     claims: () => threads.claims(),
-    emit: (threadId, event, correlationId) => threads.emit(threadId, event, correlationId),
+    emit: (threadId, event, correlationId, compact) => threads.emit(threadId, event, correlationId, compact),
+    form: (threadId) => threads.form(threadId),
     activity: (busy, work) => {
       if (first.version < ACTIVITY_VERSION || link.closed) return false
       for (const { threadId, generation } of threads.claims()) link.send({ type: "activity", threadId, generation, busy, work: work.slice(0, 20).map((item) => item.slice(0, 120)) })
@@ -283,7 +293,9 @@ export async function serveRuntime(
     },
     live: (conversation, event, numbered) => {
       if (first.version < SESSIONS_VERSION || link.closed) return false
-      if (numbered && first.version >= NUMBERED_LIVE_VERSION) link.send({ type: "live", conversation, event, n: numbered.n, ...(numbered.correlationId && { correlationId: numbered.correlationId }) })
+      const form = numbered?.form ?? WHOLE_LIVE_FORM
+      if (form !== WHOLE_LIVE_FORM && first.version < COMPACT_LIVE_VERSION) return false
+      if (numbered && first.version >= NUMBERED_LIVE_VERSION) link.send({ type: "live", conversation, event, n: numbered.n, ...(numbered.correlationId && { correlationId: numbered.correlationId }), ...(form !== WHOLE_LIVE_FORM && { form }) })
       else link.send({ type: "live", conversation, event })
       return true
     },

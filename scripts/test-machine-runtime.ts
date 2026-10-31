@@ -18,8 +18,10 @@ import { duplexPair } from "node:stream"
 import { after, test } from "node:test"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
-import { PING, PONG, SUBPROTOCOL, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, threadStream, type Actor, type MediaHandler } from "@mako/protocol"
-import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { LIVE_FORM, PING, PONG, SUBPROTOCOL, WHOLE_LIVE_FORM, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, sessionStream, threadStream, type Actor, type LiveForm, type MediaHandler, type Subscription } from "@mako/protocol"
+import { createFakeGateway, type FakeGatewayOptions, type GatewayLogLine } from "@mako/protocol/fake-gateway"
+import { compactLiveBatch, type LiveBatch } from "@mako/host/contracts/live-conversations"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { MachineRuntime, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { AgentMessage, ArtifactCapState, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
@@ -27,7 +29,7 @@ import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { SessionPublisher } from "@mako/host/conversations/session-report"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
-import { encodeRuntimeEvent, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
+import { encodeRuntimeEvent, readEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { cpuBetween, type CpuSample } from "@mako/host/usage/process-cpu"
 import { HostProfiler } from "@mako/host/usage/host-profile"
 
@@ -39,8 +41,8 @@ const CREDENTIAL = `mmc_${"k".repeat(43)}`
 const desktop: Actor = { kind: "client", client: "desktop", deviceId: "d-1" }
 
 /** The gateway's runtime route over a fake gateway: the machine credential checked at the upgrade, then frames carried both ways. */
-async function machineGateway(runtimeId = RUNTIME) {
-  const gateway = createFakeGateway()
+async function machineGateway(runtimeId = RUNTIME, options: FakeGatewayOptions = {}) {
+  const gateway = createFakeGateway(options)
   /** The credentials the Machine object takes now. */
   const accepted = new Set([CREDENTIAL])
   const sockets = new Set<ServerSocket>()
@@ -321,6 +323,93 @@ test("the machine reports the Sessions it owns on its link: everything at first,
   // A new link: everything again, since the gateway it reaches may not have heard it.
   cloud.drop()
   await agent.until("linked again and everything said again", () => cloud.gateway.reports(RUNTIME).at(-1)?.owned !== undefined && cloud.gateway.reports(RUNTIME).length === 3, 6_000)
+})
+
+/** A conversation's batch as its host emits it: whole, and compact against the answer it goes on with. */
+function liveBatch(revision: number): Extract<HostEvent, { type: "live-batch" }> {
+  const batch: LiveBatch = { id: "c-1", revision, updates: [{ kind: "text", id: "a", text: ` w${revision}` }] }
+  return { type: "live-batch", batch, compact: compactLiveBatch(batch, { blocks: [{ type: "text", id: "a", text: "w" }], requests: [] }) }
+}
+
+const NoticeSchema = z.object({ streamNotice: z.string() }).loose()
+const RevisionSchema = z.object({ batch: z.object({ revision: z.number() }).loose() }).loose()
+/** The next batch a reader hears, by revision and the live form it came in, or the notice to read again in its place. */
+async function nextBatch(reader: Subscription): Promise<{ revision: number; form: LiveForm } | { notice: string }> {
+  for (;;) {
+    const { text } = (await reader.next(5_000)).event
+    const line = readEventLine(text)
+    if (line?.type === "live-batch") return { revision: RevisionSchema.parse(JSON.parse(line.payload)).batch.revision, form: line.form }
+    const notice = NoticeSchema.safeParse(JSON.parse(text))
+    if (notice.success && notice.data.streamNotice === "reread") return { notice: "reread" }
+  }
+}
+
+/** What the gateway said each time the form every reader reads changed. */
+const formsSaid = (lines: GatewayLogLine[]) => lines.filter((line) => line.event === "live-form").map(({ form, readers, whole }) => ({ form, readers, whole }))
+
+test("a Thread's batches go compact while every reader reads that form, and whole from the next one on while one doesn't", async () => {
+  const lines: GatewayLogLine[] = []
+  const cloud = await machineGateway(RUNTIME, { log: (line) => void lines.push(line) })
+  const agent = machineAgent({ dataRoot: join(scratch, "forms") })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  const generation = await cloud.gateway.assign("th-1", RUNTIME)
+  const reads = (form: LiveForm) => agent.until(`the Thread's readers read form ${form}`, () => {
+    agent.tell({ type: "inspect" })
+    return agent.state()?.threads[0]?.generation === generation && agent.state()?.threads[0]?.form === form
+  })
+  const reader = (live?: LiveForm) => cloud.gateway.connectClient(desktop, live ? { live } : {}).then((session) => session.subscribe({ stream: threadStream("th-1"), after: Number.MAX_SAFE_INTEGER }))
+
+  const compact = await reader(LIVE_FORM)
+  await reads(LIVE_FORM)
+  agent.runtime.event("event", encodeRuntimeEvent(liveBatch(1)))
+  assert.deepEqual(await nextBatch(compact), { revision: 1, form: LIVE_FORM }, "compact while its one reader reads it")
+  // A reader of an older build comes: from the next batch on, whole for both.
+  const whole = await reader()
+  await reads(WHOLE_LIVE_FORM)
+  agent.runtime.event("event", encodeRuntimeEvent(liveBatch(2)))
+  assert.deepEqual(await nextBatch(compact), { revision: 2, form: WHOLE_LIVE_FORM })
+  assert.deepEqual(await nextBatch(whole), { revision: 2, form: WHOLE_LIVE_FORM })
+  // And goes: compact again, with nothing missed or heard twice by the reader that stayed.
+  whole.close()
+  await reads(LIVE_FORM)
+  agent.runtime.event("event", encodeRuntimeEvent(liveBatch(3)))
+  assert.deepEqual(await nextBatch(compact), { revision: 3, form: LIVE_FORM })
+  // Read by nobody, it goes whole: whoever reads it next may read no other.
+  compact.close()
+  assert.deepEqual(formsSaid(lines), [{ form: 2, readers: 1, whole: 0 }, { form: 1, readers: 2, whole: 1 }, { form: 2, readers: 1, whole: 0 }, { form: 1, readers: 0, whole: 0 }], "each change logged with its readers")
+  agent.tell({ type: "inspect" })
+  await agent.until("the compact frames counted", () => agent.state()?.threads[0]?.compact === 2)
+})
+
+test("a watched conversation's updates go compact while every watcher reads that form, and whole from the next one on while one doesn't", async () => {
+  const lines: GatewayLogLine[] = []
+  const cloud = await machineGateway(RUNTIME, { log: (line) => void lines.push(line) })
+  const sessions = new SessionPublisher({ rows: () => undefined })
+  const agent = machineAgent({ dataRoot: join(scratch, "watch-forms"), sessions })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  const watcher = (live?: LiveForm) => cloud.gateway.connectClient(desktop, live ? { live } : {}).then((session) => session.subscribe({ stream: sessionStream(RUNTIME, "c-1"), after: 0 }))
+  const reads = (compact: number) => agent.until(`${compact} conversation watched compact`, () => sessions.readings().watched === 1 && sessions.readings().compact === compact)
+
+  const compact = await watcher(LIVE_FORM)
+  await reads(1)
+  assert.equal(sessions.readings().negotiated, true)
+  sessions.own(liveBatch(1))
+  assert.deepEqual(await nextBatch(compact), { revision: 1, form: LIVE_FORM }, "compact while its one watcher reads it")
+  const whole = await watcher()
+  await reads(0)
+  sessions.own(liveBatch(2))
+  assert.deepEqual(await nextBatch(compact), { revision: 2, form: WHOLE_LIVE_FORM })
+  assert.deepEqual(await nextBatch(whole), { revision: 2, form: WHOLE_LIVE_FORM })
+  whole.close()
+  await reads(1)
+  sessions.own(liveBatch(3))
+  assert.deepEqual(await nextBatch(compact), { revision: 3, form: LIVE_FORM })
+  compact.close()
+  assert.deepEqual(formsSaid(lines), [{ form: 2, readers: 1, whole: 0 }, { form: 1, readers: 2, whole: 1 }, { form: 2, readers: 1, whole: 0 }], "each change logged with its watchers")
 })
 
 test("a change a list shows on the machine goes out at once, not at its next tick", async () => {

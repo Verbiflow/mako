@@ -4,8 +4,9 @@ import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { conversationCallId } from "@mako/host/contracts/conversation-calls"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
 import { createMakoBridge, type MakoBridge } from "@mako/host/contracts/renderer-bridge"
-import { decodeRuntimeValue, splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
+import { decodeRuntimeValue, readEventLine } from "@mako/host/contracts/runtime-value"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { isCompactBatch, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
 import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { listedOwner, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import type { ListedSession } from "@mako/protocol/thread-listing"
@@ -45,10 +46,6 @@ const MoveStepEventSchema = z.object({ type: z.enum(["thread-move-step", "thread
 
 /** One owner's stream as this browser follows it: its conversations, and how many follow each. */
 type Follow = { subscription?: Subscription; conversations: Set<string>; holds: Map<string, number>; stopped: boolean }
-
-/** The head of an owner's stream line: which conversation's event it carries, and what kind. */
-const LineHeadSchema = z.object({ channel: z.string().optional(), type: z.string().optional(), conversation: z.string().optional() })
-
 /**
  * The browser's conversations, each answered by its owner through the gateway exactly as a Mac's window answers
  * another device's: the host's own operations, by the routing every client shares (`conversationCallId`), with the
@@ -324,7 +321,8 @@ export class WebConversations {
           // A Mac's update is the Mac answering, live: one streaming a turn isn't said to be unreachable. (A cloud Thread's
           // stream is its log, which a sleeping machine's past still fills.)
           if (owner.kind === "device") answered(macPlace(owner.deviceId))
-          readings.heard(this.#heard(frame.event.text, follow.conversations))
+          const heard = this.#heard(frame.event.text, follow.conversations)
+          readings.heard(heard?.emittedAt, heard?.compact)
         }
         // A number skipped: asked for again at once after the last one heard. Gap after gap is a stream that fails.
         if (++gapsInRow <= 3) continue
@@ -404,21 +402,23 @@ export class WebConversations {
    * One line of an owner's stream: a batch of an open conversation goes to the renderer's live state. Returns when its
    * owner emitted it, for a traced batch, and logs its trace.
    */
-  #heard(line: string, open: ReadonlySet<string>): number | undefined {
-    const parts = splitRuntimeEventLine(line)
-    if (!parts) return undefined
-    const head = LineHeadSchema.safeParse(JSON.parse(parts.head)).data
-    if (head?.channel === "event" && head.conversation && open.has(head.conversation) && (head.type === "thread-move-step" || head.type === "thread-return-step")) {
-      this.#moveStep(head.conversation, parts.payload)
+  #heard(line: string, open: ReadonlySet<string>): { emittedAt?: number; compact: boolean } | undefined {
+    const head = readEventLine(line)
+    if (!head || head.channel !== "event" || !head.conversation || !open.has(head.conversation)) return undefined
+    if (head.type === "thread-move-step" || head.type === "thread-return-step") {
+      this.#moveStep(head.conversation, head.payload)
       return undefined
     }
-    if (!head || head.channel !== "event" || head.type !== "live-batch" || !head.conversation || !open.has(head.conversation)) return undefined
-    // SAFETY: the owner's host encoded this line from its own `live-batch` event, as its windows read it.
-    const event = JSON.parse(parts.payload) as Extract<HostEvent, { type: "live-batch" }>
+    if (head.type !== "live-batch") return undefined
+    // SAFETY: the owner's host encoded this line from its own `live-batch` event, as its windows read it: whole, or in
+    // the compact live form this browser said it reads.
+    const event = JSON.parse(head.payload) as { type: "live-batch"; batch: HeardLiveBatch }
     applyLiveBatch(event.batch)
-    for (const listener of this.#listeners) listener(event)
+    // SAFETY: as a desk window hears it from a host it said it reads the compact form to (`HostEvent`'s `live-batch`).
+    const told = event as Extract<HostEvent, { type: "live-batch" }>
+    for (const listener of this.#listeners) listener(told)
     if (event.batch.trace) CONSOLE_LOG.info("traced update heard", { trace: event.batch.trace, conversation: head.conversation, ...(event.batch.emittedAt !== undefined && { lagMs: Date.now() - event.batch.emittedAt }) })
-    return event.batch.emittedAt
+    return { ...(event.batch.emittedAt !== undefined && { emittedAt: event.batch.emittedAt }), compact: isCompactBatch(event.batch) }
   }
 
   /** A move's step, as its owner sent it: the Thread's card follows it (`moves.ts`). */

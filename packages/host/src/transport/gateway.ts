@@ -1,8 +1,8 @@
 import { z } from "zod"
-import { MAX_EVENT_BYTES, serveRuntime, type Actor, type ConnectionCredential, type Operation, type Reply, type RuntimeLink, type RuntimeOptions, type ServedRuntime } from "@mako/protocol"
+import { COMPACT_LIVE_FORM, MAX_EVENT_BYTES, WHOLE_LIVE_FORM, serveRuntime, type Actor, type ConnectionCredential, type Operation, type Reply, type RuntimeLink, type RuntimeOptions, type ServedRuntime } from "@mako/protocol"
 import { fromHostOperation, hostFailure, hostOperations, hostSuccess } from "../contracts/host-operations.js"
 import { runtimeEventRouting, runtimeFailure, type RuntimeFailure } from "../contracts/runtime.js"
-import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { encodeRuntimeEvent, payloadFor, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { HostInvoke } from "./server.js"
 
@@ -106,12 +106,25 @@ export function historyChangedNotice(event: RuntimeEvent): RuntimeEvent | null {
  */
 export function gatewayEventLine(channel: RuntimeEventChannel, event: RuntimeEvent, maxBytes = MAX_EVENT_BYTES):
   { fit: "whole" | "reread"; text: string } | { fit: "too-large"; type: string | undefined; bytes: number } {
+  // A batch heard in the compact form only has no whole line: a reader of the whole form reads its conversation again.
+  const whole = payloadFor(event, WHOLE_LIVE_FORM) !== undefined
   const text = runtimeEventLine(channel, event).slice(0, -1)
-  // A character is at most three bytes: most lines are measured without encoding them.
-  if (text.length * 3 <= maxBytes) return { fit: "whole", text }
-  const bytes = Buffer.byteLength(text)
-  if (bytes <= maxBytes) return { fit: "whole", text }
+  if (whole && fits(text, maxBytes)) return { fit: "whole", text }
   const notice = historyChangedNotice(event)
-  if (!notice) return { fit: "too-large", type: runtimeEventRouting(event).type, bytes }
+  if (!notice) return { fit: "too-large", type: runtimeEventRouting(event).type, bytes: Buffer.byteLength(text) }
   return { fit: "reread", text: runtimeEventLine(channel, notice).slice(0, -1) }
+}
+
+/**
+ * An event's line in the compact live form as it goes out through the gateway: its compact payload alone, read by its
+ * first characters (`readEventLine`). Undefined when it has none, or none under `MAX_EVENT_BYTES`: its whole line goes.
+ */
+export function gatewayCompactLine(event: RuntimeEvent, maxBytes = MAX_EVENT_BYTES): string | undefined {
+  const text = event.compact ?? (event.form === COMPACT_LIVE_FORM ? event.payload : undefined)
+  return text !== undefined && fits(text, maxBytes) ? text : undefined
+}
+
+/** Whether `text` is within `maxBytes` in UTF-8. A character is at most three bytes: most lines are measured without encoding them. */
+function fits(text: string, maxBytes: number): boolean {
+  return text.length * 3 <= maxBytes || Buffer.byteLength(text) <= maxBytes
 }

@@ -392,7 +392,7 @@ function Diagnostics() {
         {lines.map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-faint">{label}</dt>
-            <dd className="min-w-0 break-all text-muted-foreground">{value}</dd>
+            <dd className="min-w-0 wrap-anywhere text-muted-foreground">{value}</dd>
           </div>
         ))}
       </dl>
