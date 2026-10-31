@@ -28,7 +28,7 @@ import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-in
 import type { GitHubPerson } from "../contracts/github-person.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type ArtifactCapState, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import type { RuntimeEvent, RuntimeEventChannel } from "../contracts/runtime-value.js"
-import { gatewayCompactLine, gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
+import { gatewayCompactLine, gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway, SshRelay } from "../transport/index.js"
 import { appPorts } from "./app-ports.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
@@ -103,7 +103,7 @@ export type SessionPublishing = {
 }
 
 /** A stream's frames come as often as its acks; they change nothing the agent hears about. */
-const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", "media-ack", "media-unwatch", "port-open"])
+const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", "media-ack", "media-unwatch", "port-open", "ssh-open"])
 
 /**
  * Host-wide readings about this machine's own harnesses and accounts. No client of a cloud Thread reads them (the
@@ -186,6 +186,9 @@ export class MachineRuntime {
   #restoring: string | undefined
   /** The link the served runtime runs on: what's watched belongs to it. */
   #servedLink: RuntimeLink | undefined
+  /** Where the machine's SSH server listens on the loopback, as the agent said; every link's streams reach it. */
+  #sshPort: number | undefined
+  readonly #ssh = new SshRelay({ port: () => this.#sshPort })
   /** A watch that comes before the core has loaded ends; its viewer asks again when the agent next acts. */
   readonly #media: MediaHandler = {
     watch: (stream, threadId, request, sender) => {
@@ -303,6 +306,10 @@ export class MachineRuntime {
         this.#personAsked.delete(message.answers)
         return answer?.(message.person)
       }
+      case "ssh":
+        hostLog("machine", "the machine serves SSH", { port: message.port })
+        this.#sshPort = message.port
+        return
     }
   }
 
@@ -564,7 +571,7 @@ export class MachineRuntime {
     }
     // A phone reaches this machine's Threads' apps and signed files through the same link, as it does a Mac's.
     const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), signedFiles: this.#options.signedFiles })
-    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations, after, forms) => this.#options.sessions?.watch(runtimeLink, conversations, after, forms) }).then(
+    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, ssh: this.#ssh, onFrame, watch: (conversations, after, forms) => this.#options.sessions?.watch(runtimeLink, conversations, after, forms) }).then(
       (served) => {
         if (closed) return served.close()
         this.#served = served

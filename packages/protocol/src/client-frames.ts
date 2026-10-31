@@ -59,6 +59,11 @@ export const ClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("media-unwatch"), stream: MediaStreamIdSchema }).strict(),
+  /**
+   * SSH to the machine that runs this Thread (`ssh.ts`), on `stream`: once the gateway says `ssh-opened`, the client's
+   * bytes follow as binary messages. `media-ack` and `media-unwatch` pace and end it as they do a watch.
+   */
+  z.object({ type: z.literal("ssh-open"), stream: MediaStreamIdSchema }).strict(),
 ])
 
 export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
@@ -99,6 +104,16 @@ export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
       type: z.literal("media-ended"),
       stream: MediaStreamIdSchema,
       problem: ProblemSchema.optional(),
+    })
+    .strict(),
+  /** The machine's SSH server took the connection an `ssh-open` asked for: the client may send. */
+  z.object({ type: z.literal("ssh-opened"), stream: MediaStreamIdSchema }).strict(),
+  /** Every byte of an SSH stream's client's messages the machine has taken so far. */
+  z
+    .object({
+      type: z.literal("media-ack"),
+      stream: MediaStreamIdSchema,
+      received: z.number().int().nonnegative(),
     })
     .strict(),
 ])

@@ -28,9 +28,18 @@ import {
   type MediaWatch,
   type MediaWatchRequest,
   decodeMediaMessage,
+  encodeMediaMessage,
 } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { GatewayFrame } from "./runtime-frames.js"
+import {
+  type SshClient,
+  SshIncoming,
+  type SshOpenRequest,
+  SshOutgoing,
+  SshRefusedError,
+  type SshStream,
+} from "./ssh.js"
 import { PROTOCOL_VERSION } from "./version.js"
 import {
   WireError,
@@ -127,6 +136,7 @@ const endpointKey = (endpoint: ClientEndpoint) =>
 export function runtimeLinkOverSocket(socket: MessageSocket): RuntimeLink {
   const inbox = new Inbox<GatewayFrame>()
   let closed = false
+  let media: ((message: Uint8Array) => void) | undefined
   const end = () => {
     closed = true
     inbox.close()
@@ -134,6 +144,8 @@ export function runtimeLinkOverSocket(socket: MessageSocket): RuntimeLink {
   socket.addEventListener("message", (event) => {
     const text = TextMessageSchema.safeParse(event.data)
     if (!text.success) {
+      const bytes = media ? BinaryMessageSchema.safeParse(event.data) : undefined
+      if (bytes?.success) return media?.(bytes.data)
       socket.close(1003, "frames are text")
       return end()
     }
@@ -159,6 +171,10 @@ export function runtimeLinkOverSocket(socket: MessageSocket): RuntimeLink {
     send: (frame) => send(encodeRuntimeFrame(frame)),
     sendUnchecked: send,
     sendMedia: send,
+    receiveMedia: (listener) => {
+      socket.binaryType = "arraybuffer"
+      media = listener
+    },
     next: (timeoutMs) => inbox.next(timeoutMs),
     frames: () => inbox,
     close: () => {
@@ -182,11 +198,13 @@ type Connection = {
   correlations: Map<string, string>
   streams: Map<StreamId, Inbox<EventFrame>>
   media: Map<MediaStreamId, Inbox<MediaDelivery>>
+  /** SSH streams, whose bytes arrive in `media` too: their sending, and how each hears it opened or ended. */
+  sshes: Map<MediaStreamId, { outgoing: SshOutgoing; open(): void; refuse(reason?: Problem): void }>
   heartbeat: ReturnType<typeof setInterval> | undefined
   renewal: Renewal | undefined
 }
 
-export type ClientSessionOverSockets = ClientSession & {
+export type ClientSessionOverSockets = ClientSession & SshClient & {
   close(): void
   /**
    * After a sleep or a network change: a connection not heard from within a heartbeat ends now, and one heard just
@@ -250,6 +268,7 @@ export function clientSessionOverSockets(
       correlations: new Map(),
       streams: new Map(),
       media: new Map(),
+      sshes: new Map(),
       heartbeat: undefined,
       renewal: undefined,
     }
@@ -276,6 +295,11 @@ export function clientSessionOverSockets(
       }
       for (const stream of connection.streams.values()) stream.close()
       const gone = problem("unavailable", "The connection to the gateway closed", crypto.randomUUID(), "not-applied", { status: 503 })
+      for (const ssh of connection.sshes.values()) {
+        ssh.outgoing.close()
+        ssh.refuse(gone)
+      }
+      connection.sshes.clear()
       for (const watch of connection.media.values()) {
         watch.push({ kind: "ended", problem: gone })
         watch.close()
@@ -326,10 +350,16 @@ export function clientSessionOverSockets(
             connection.streams.delete(frame.stream)
           } else if (frame.type === "media-ended") {
             const watch = connection.media.get(frame.stream)
+            const ssh = connection.sshes.get(frame.stream)
             connection.media.delete(frame.stream)
+            connection.sshes.delete(frame.stream)
+            ssh?.outgoing.close()
+            ssh?.refuse(frame.problem)
             watch?.push(frame.problem ? { kind: "ended", problem: frame.problem } : { kind: "ended" })
             watch?.close()
-          } else if (frame.type === "renewed") connection.renewal?.renewed()
+          } else if (frame.type === "ssh-opened") connection.sshes.get(frame.stream)?.open()
+          else if (frame.type === "media-ack") connection.sshes.get(frame.stream)?.outgoing.acked(frame.received)
+          else if (frame.type === "renewed") connection.renewal?.renewed()
           else if (frame.type === "closing") {
             // Ended now, not when the close arrives, which a proxy can hold back.
             lost()
@@ -425,6 +455,65 @@ export function clientSessionOverSockets(
           inbox.close()
           if (!current()) return
           connection.media.delete(stream)
+          send({ type: "media-unwatch", stream })
+        },
+      }
+    },
+    ssh({ threadId, stream }: SshOpenRequest): SshStream {
+      MediaStreamIdSchema.parse(stream)
+      const connection = connect({ kind: "thread", threadId })
+      connection.media.get(stream)?.close()
+      connection.sshes.get(stream)?.outgoing.close()
+      const inbox = new Inbox<MediaDelivery>()
+      const current = () => connection.media.get(stream) === inbox
+      const socketOf = () => connection.socket.catch(() => undefined)
+      let open = () => {}
+      let refuse = (_reason?: Problem) => {}
+      const opened = new Promise<void>((resolve, reject) => {
+        open = resolve
+        refuse = (reason) => reject(new SshRefusedError(reason))
+      })
+      // Read by whoever waits for it; a stream nobody waited on ends without an unhandled rejection.
+      opened.catch(() => undefined)
+      let socketNow: MessageSocket | undefined
+      const outgoing = new SshOutgoing((piece) => {
+        if (!current() || socketNow?.readyState !== OPEN) return false
+        socketNow.send(encodeMediaMessage(stream, piece))
+        return true
+      })
+      const send = (frame: ClientFrame) =>
+        void socketOf().then((socket) => {
+          if (socket?.readyState === OPEN) socket.send(encodeClientFrame(frame))
+        })
+      const taken = new SshIncoming((received) => {
+        if (current()) send({ type: "media-ack", stream, received })
+      })
+      connection.media.set(stream, inbox)
+      connection.sshes.set(stream, {
+        outgoing,
+        open: () => {
+          open()
+          outgoing.release()
+        },
+        refuse,
+      })
+      void socketOf().then((socket) => {
+        socketNow = socket
+        send({ type: "ssh-open", stream })
+      })
+      return {
+        opened,
+        next: (timeoutMs) => inbox.next(timeoutMs),
+        send: (data) => outgoing.write(data),
+        drained: () => outgoing.drained(),
+        took: (bytes) => taken.took(bytes),
+        close: () => {
+          inbox.close()
+          outgoing.close()
+          if (!current()) return
+          connection.media.delete(stream)
+          connection.sshes.delete(stream)
+          refuse()
           send({ type: "media-unwatch", stream })
         },
       }

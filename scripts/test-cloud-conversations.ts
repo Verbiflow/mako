@@ -23,6 +23,7 @@ import {
   decodeClientFrame,
   encodeGatewayClientFrame,
   type ClientSession,
+  type SshClient,
   type ClientSessionOverSockets,
   type Subscription,
 } from "@mako/protocol"
@@ -271,11 +272,12 @@ async function sleepyNetwork(gateway: ReturnType<typeof createFakeGateway>, devi
 }
 
 /** The fake gateway's client session as the account's session is: opened at once, used as it opens. */
-function sessionOf(client: ClientSession): ClientSessionOverSockets {
+function sessionOf(client: ClientSession & SshClient): ClientSessionOverSockets {
   return {
     call: (operation) => client.call(operation),
     subscribe: (request): Subscription => client.subscribe(request),
     watch: (request) => client.watch(request),
+    ssh: (request) => client.ssh(request),
     close: () => {},
     wake: () => {},
     probe: () => {},

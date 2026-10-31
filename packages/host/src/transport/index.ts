@@ -8,6 +8,7 @@ export { HostMethods, type HostMethodsOptions, type RoutedCall } from "./methods
 export { startWebHost, type HostInvoke } from "./server.js"
 export { gatewayCompactLine, gatewayEventLine, historyChangedNotice, serveHostThroughGateway, type GatewayHostOptions } from "./gateway.js"
 export { PortRelay } from "./port-relay.js"
+export { SshRelay } from "./ssh-relay.js"
 export { gatewayHostCalls, type GatewayHostCallsOptions } from "./gateway-client.js"
 export { invokeRuntime, invokeRuntimeEncoded, jsonBody, probeRuntime, runtimeInfo, runtimeRequest, settleRuntime, subscribeRuntime } from "./connection.js"
 export { AGENT_VIEWS_CLIENT, appDataFolder, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "./service.js"

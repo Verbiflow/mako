@@ -124,6 +124,16 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       problem: ProblemSchema.optional(),
     })
     .strict(),
+  /** The machine's SSH server took the connection `ssh-open` asked for (version 15 on, `ssh.ts`): its client may send. */
+  z.object({ type: z.literal("ssh-opened"), stream: MediaStreamIdSchema }).strict(),
+  /** Every byte of an SSH stream's client's messages the runtime has taken so far (version 15 on). */
+  z
+    .object({
+      type: z.literal("media-ack"),
+      stream: MediaStreamIdSchema,
+      received: z.number().int().nonnegative(),
+    })
+    .strict(),
   /**
    * The runtime is going away on purpose, said before it goes (version 8 on): its Mac is going to sleep, Mako is
    * quitting, or the device is signing out. The gateway takes the link as down at once, and the device as quiet,
@@ -233,6 +243,12 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * media: its head, then its body. `media-ack` and `media-unwatch` pace and stop it as they do a watch.
    */
   PortRequestSchema.extend({ type: z.literal("port-open"), stream: MediaStreamIdSchema }).strict(),
+  /**
+   * A client asks for the SSH server of the machine that runs this Thread (version 15 on, `ssh.ts`), on `stream`: its
+   * bytes follow as binary messages once the runtime says `ssh-opened`. `media-ack` and `media-unwatch` pace and end
+   * it as they do a watch.
+   */
+  z.object({ type: z.literal("ssh-open"), threadId: ThreadIdSchema, stream: MediaStreamIdSchema }).strict(),
   /**
    * The conversations of this runtime someone watches now, the whole set, replacing the last (version 5 on): send their
    * live updates and no others'. A new link starts with none watched; this is said on enrolment when some are, and on

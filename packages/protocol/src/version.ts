@@ -26,9 +26,11 @@ export const PROTOCOL_VERSION = 1
  * each watched conversation's readers read (`forms`), `live-form` says it of a Thread's, and `live` and `event` say the
  * form an update is in (`form`). 14 lets a `sessions` row say when the person last sent its Session a message, from any
  * device (`promptedAt`), which every rail orders its projects by, and that another app has a session Mako hasn't opened
- * open (`openElsewhere`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * open (`openElsewhere`). 15 adds SSH to a cloud Thread's machine (`ssh.ts`): `ssh-open` and `ssh-opened`, binary
+ * messages from the gateway, and the runtime's `media-ack` for what it took of them. Every envelope stays at
+ * `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 14
+export const LINK_VERSION = 15
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -82,6 +84,9 @@ export const COMPACT_LIVE_VERSION = 13
  * another app has them open (`openElsewhere`); a gateway that agreed less refuses both.
  */
 export const PROMPTED_VERSION = 14
+
+/** The first link version a gateway may send `ssh-open` and binary messages on; a runtime that agreed less is never asked. */
+export const SSH_VERSION = 15
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

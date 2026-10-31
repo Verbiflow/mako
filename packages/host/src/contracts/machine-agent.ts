@@ -14,9 +14,10 @@ import { GitHubPersonSchema } from "./github-person.js"
  * the agent waits for before it calls the host ready. 5: and takes `prepare`, answering `prepared`. 6: and takes
  * `prefetch`, and sends its start's lines as `log`. 7: and takes `carried-files`, asking for them again as a move
  * arrives (`carried-files-refresh`). 8: and asks `github-person-refresh` before a pull request, answered with
- * `github-person`. An agent sends only what the host's `hello` says it takes.
+ * `github-person`. 9: and takes `ssh`, where the machine's SSH server listens. An agent sends only what the host's
+ * `hello` says it takes.
  */
-export const MACHINE_AGENT_PROTOCOL = 8
+export const MACHINE_AGENT_PROTOCOL = 9
 
 /**
  * Set by the agent as it starts the host: the folder in memory that holds the machine's GitHub access, an hour-long
@@ -109,6 +110,11 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   /** Whether the machine's pull requests open as its person, asked again just now: `answers` the host's `github-person-refresh`. Never the token. */
   z.object({ type: z.literal("github-person"), answers: z.string().max(100), person: GitHubPersonSchema }).strict(),
+  /**
+   * The machine's SSH server listens on the loopback at `port`, the agent's to keep to the person's key: their editor
+   * reaches it through the Thread's link (`SshRelay`), never from the network. Without it, every SSH stream is refused.
+   */
+  z.object({ type: z.literal("ssh"), port: z.number().int().min(1).max(65_535) }).strict(),
 ])
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
