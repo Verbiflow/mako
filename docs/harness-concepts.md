@@ -138,7 +138,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | Claude Code | 2.1.314 | 2026-10-30 | 27 (15 deferred) | 6 | 16 | the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off |
 | Codex | 0.166.0 | 2026-10-30 | 25 (12 called from a script) | 18 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan |
 | Cursor | 1.2.0 | 2026-10-28 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
-| OpenCode | 2.2.3 | 2026-10-30 | 14 | 4 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model |
+| OpenCode | 2.2.5 | 2026-10-31 | 14 | 4 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model |
 | Grok | 1.0.70 | 2026-10-25 | 26 | 4 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode |
 | Devin | 3000.11.234 | 2026-10-30 | 24 | 4 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode; not smart, which Devin offers only to an account whose settings allow it |
 
