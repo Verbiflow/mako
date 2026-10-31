@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url"
  * bridge), at a laptop's size with a mouse:
  *
  * - The rail is the desktop's own (`AgentThreads`): the account's Threads under their projects, indented from a
- *   hairline, a Thread's four Sessions one row wearing their count, Projects, Recent and Status.
+ *   hairline, a Thread's four Sessions one row wearing their count, Projects, Recent and Status; each project with what
+ *   its checkout has checked out, a row with the agent it ran in before, and a Thread waiting on background work with
+ *   the hourglass before it's opened, all as the Mac's list says them.
  * - The page never grows past the window, however many tabs a Thread has or how wide its transcript's lines are: the
  *   transcript's column, the composer and the strip's end stay on screen.
  * - The strip's tabs are the desktop's; a tab opens its Session, a rail row its Thread, each at its address.
@@ -100,6 +102,18 @@ async function checkDesk() {
   }
 
   try {
+    // 0. Before anything is opened, the rail says what the Mac's rail shows: each project's checkout, the agent a row
+    //    ran in before, and the Thread waiting on background work.
+    await desk("dark", "list")
+    const heads = await evaluate("[...document.querySelectorAll('[data-flip-key^=\"folder:\"]')].map(node => node.textContent.replace(/\\s+/g, ' ').trim())")
+    assert.ok(heads.some((head) => head.startsWith("api") && head.includes("billing-webhook-retries")), `the api project's branch: ${JSON.stringify(heads)}`)
+    assert.ok(heads.some((head) => head.startsWith("site") && head.includes("Rebasing pricing-table")), `the site project mid-rebase: ${JSON.stringify(heads)}`)
+    const busy = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Thread Environments'))"
+    assert.equal(await evaluate(`${busy}.getAttribute('aria-label').includes('background task')`), true, "the busy Thread waits on its background work, before it's opened")
+    assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).querySelectorAll('.mark-stack > *').length"), 2, "a row wears the agent it ran in before, beside its own")
+    await capture("list-1280-dark.png")
+    console.log("Rail: checkouts, earlier agents and background work from the Mac's list")
+
     await desk("dark")
     assert.equal(await evaluate("matchMedia('(pointer: fine) and (hover: hover)').matches"), true, "the page reads as under a mouse")
     await until("Boolean(document.querySelector('[data-background-work]'))", "the busy Session's background work")

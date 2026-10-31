@@ -1,5 +1,8 @@
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
+import type { CheckoutHead, CheckoutHeads } from "@mako/host/contracts/checkout-heads"
+import type { ListedSession } from "@mako/protocol/thread-listing"
 import { acpStore } from "@/state/acp"
+import { applyCheckoutHeads } from "@/state/checkout-heads"
 import { listLive, unlistLive } from "@/state/live-recovery"
 import { threadsStore } from "@/state/thread-store"
 import { accountListStore, type AccountListState } from "./account-list"
@@ -60,6 +63,22 @@ export function listedSummaries(list: Pick<AccountListState, "rows" | "devices" 
 }
 
 /**
+ * What each project the list names has checked out, as its owner's rail shows it beside the project (`ListedRail`):
+ * the newest row's word on each, the one the store of checkouts the rail reads (`checkoutHeadsStore`) takes. A project
+ * with no word on it yet says nothing, never "none".
+ */
+export function listedHeads(rows: readonly Pick<ListedSession, "project" | "activityAt">[]): CheckoutHeads {
+  const newest = new Map<string, { at: string; head: CheckoutHead }>()
+  for (const row of rows) {
+    const head = row.project?.head
+    if (!row.project || !head) continue
+    const held = newest.get(row.project.folder)
+    if (!held || held.at < row.activityAt) newest.set(row.project.folder, { at: row.activityAt, head })
+  }
+  return Object.fromEntries([...newest].map(([folder, { head }]) => [folder, head]))
+}
+
+/**
  * Says the account's list to the window while the desk shows: every listed Session in the rail, kept current as the
  * list and the open conversation change. Returns how to stop.
  */
@@ -74,6 +93,7 @@ export function followListing(): () => void {
     before = changes.now
     if (changes.listed.length) listLive(changes.listed)
     if (changes.gone.length) unlistLive(changes.gone)
+    applyCheckoutHeads(listedHeads(list.rows))
   }
   say()
   const stopList = accountListStore.subscribe(say)

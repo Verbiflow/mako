@@ -15,8 +15,8 @@ import type { WebRoute } from "@/web-client/route"
 import { applyTheme } from "@/web-client/theme"
 import type { WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
-import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busySnapshot } from "./mock-busy-thread"
-import { installMockBridge } from "./mock-bridge"
+import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busyActivity, busySnapshot } from "./mock-busy-thread"
+import { installMockBridge, MOCK_HEADS } from "./mock-bridge"
 import { mockThreads } from "./mock-runtime-fixtures"
 import "../web-client/style.css"
 
@@ -58,13 +58,22 @@ function uuid(seed: string, kind: number): string {
   return `${hash.toString(16).padStart(8, "0")}-000${kind}-4000-8000-${hash.toString(16).padStart(12, "0")}`
 }
 
+/**
+ * A row as the Mac running it lists it (link version 12): with what its rail shows, the project it's filed under and
+ * what that project has checked out (the desktop fixture's own checkouts).
+ */
 function row(fields: Pick<ListedSession, "session" | "thread" | "conversation" | "harness" | "createdAt" | "activityAt"> & Partial<ListedSession>): ListedSession {
-  return { state: "idle", generation: 1, runsOn: { kind: "device", deviceId: STUDIO }, listedAt: now, ...fields }
+  const listed: ListedSession = { state: "idle", generation: 1, runsOn: { kind: "device", deviceId: STUDIO }, listedAt: now, ...fields }
+  if (fields.folder) {
+    const head = MOCK_HEADS.get(fields.folder)
+    listed.project = head ? { folder: fields.folder, head } : { folder: fields.folder }
+  }
+  return listed
 }
 
 // The desktop's native threads, as the Mac running them lists them to the account.
-const native = mockThreads().threads.map((ref) =>
-  row({
+const native = mockThreads().threads.map((ref) => {
+  const listed = row({
     session: uuid(ref.path, 1),
     thread: uuid(ref.path, 2),
     conversation: uuid(ref.path, 3),
@@ -74,7 +83,9 @@ const native = mockThreads().threads.map((ref) =>
     createdAt: ref.startedAt ?? ref.updatedAt,
     activityAt: ref.updatedAt,
   })
-)
+  if ("lineage" in ref && ref.lineage) listed.lineage = ref.lineage.map((origin) => origin.harness)
+  return listed
+})
 const busy = BUSY_SESSIONS.map((entry, index) => {
   const snapshot = busySnapshot(index)
   return row({
@@ -86,9 +97,9 @@ const busy = BUSY_SESSIONS.map((entry, index) => {
     title: entry.title,
     folder: BUSY_CWD,
     createdAt: new Date(snapshot.createdAt).toISOString(),
-    activityAt: new Date(Date.now() - (index + 1) * 90_000).toISOString(),
-    // The long Session's turn ended with its background work still running: at work, as its owner lists it.
-    ...(index === 0 && { state: "working" as const }),
+    activityAt: new Date(busyActivity(index)).toISOString(),
+    // The long Session's turn ended with its background work still running: at work on it, as its owner lists it.
+    ...(index === 0 && { state: "working" as const, background: 25 }),
   })
 })
 

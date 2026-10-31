@@ -4,7 +4,7 @@ import type { WorktreeBranch, WorktreePull } from "@mako/host/contracts/thread-w
 import { Keys } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
 import { formatRelative } from "@/lib/format"
-import { plainPath } from "@/lib/worktree-paths"
+import { plainPath } from "@mako/host/contracts/worktree-paths"
 import { cn } from "@/lib/utils"
 import { readWorktreeBranches, readWorktreePulls, type WorktreeStartChoice } from "@/state/worktrees"
 

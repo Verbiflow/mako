@@ -81,6 +81,17 @@ export class CheckoutHeadService {
     return Object.fromEntries(entries)
   }
 
+  /**
+   * What a folder read before has checked out, without reading anything: undefined for a folder not followed (or let
+   * go since), or whose first read hasn't finished. The account's list says it beside each project (`ownedSessions`).
+   */
+  known(folder: string): CheckoutHead | null | undefined {
+    const location = this.locations.get(folder)
+    const checkout = location && this.checkouts.get(location.gitDir)
+    if (!checkout || (checkout.reading && checkout.head === null)) return undefined
+    return shown(checkout)
+  }
+
   close(): void {
     this.closed = true
     for (const checkout of this.checkouts.values()) checkout.watcher?.close()

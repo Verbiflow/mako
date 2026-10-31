@@ -3,7 +3,7 @@ import type { ThreadWorktree, WorktreeSummary } from "@mako/host/contracts/threa
 import { worktreeMark, worktreeMarkLabel } from "@/lib/worktree-marks"
 
 /** A rail row's worktree mark, at the width of the folder mark it replaced: the branch's state in one glyph and a count. */
-export function WorktreeMark({ worktree, summary }: { worktree: ThreadWorktree; summary: WorktreeSummary | undefined }) {
+export function WorktreeMark({ worktree, summary }: { worktree: Pick<ThreadWorktree, "branch">; summary: WorktreeSummary | undefined }) {
   const mark = worktreeMark(summary)
   const Icon = mark.kind === "pull"
     ? mark.draft ? GitPullRequestDraftIcon : GitPullRequestIcon

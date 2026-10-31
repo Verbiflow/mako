@@ -24,7 +24,7 @@ function files(count: number): string {
   return count === 1 ? "1 file" : `${count} files`
 }
 
-export function worktreeMarkLabel(mark: WorktreeMarkState, worktree: ThreadWorktree, into: string | null): string {
+export function worktreeMarkLabel(mark: WorktreeMarkState, worktree: Pick<ThreadWorktree, "branch">, into: string | null): string {
   const main = into ?? "main"
   if (mark.kind === "pull") return `${mark.draft ? "Draft pull request" : "Pull request"} #${mark.number} on ${worktree.branch}`
   if (mark.kind === "landed") return `${worktree.branch}: its work is in ${main}`

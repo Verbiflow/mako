@@ -1,6 +1,6 @@
 import { workspaceName } from "@/lib/format"
 import type { ThreadRef } from "@/lib/types"
-import { projectFolder } from "@/lib/worktree-paths"
+import { projectFolder } from "@mako/host/contracts/worktree-paths"
 import type { RailSortBy } from "@/state/prefs"
 import type { AcpPresence } from "@/state/acp-presence"
 

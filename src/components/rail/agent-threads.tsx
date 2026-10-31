@@ -396,9 +396,11 @@ export function AgentThreads() {
     () => stableFolderRanks(grouped, folderUse, railRanksStore.get().folderRanks),
     [grouped, folderUse]
   )
+  // Held only once the catalog is in: a folder's first place is its newest thread's, which the conversations a window
+  // hears at its start can't say alone. Taken from them, it was a place this launch's timing chose.
   useEffect(() => {
-    railRanksStore.set({ ranks, folderRanks })
-  }, [ranks, folderRanks])
+    if (loaded) railRanksStore.set({ ranks, folderRanks })
+  }, [loaded, ranks, folderRanks])
   const folders = useMemo(
     () => orderThreadFolders(grouped, hold?.folderRanks ?? folderRanks, sortBy),
     [grouped, hold, folderRanks, sortBy]

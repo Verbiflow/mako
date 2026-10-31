@@ -1,5 +1,6 @@
 import { sessionStream } from "@mako/protocol"
 import type { ListedSession, ListedState } from "@mako/protocol/thread-listing"
+import type { ListedRail } from "./live-conversations.js"
 import { rowWaitingFor } from "@mako/protocol/attention"
 import type { LiveSummary } from "./live-conversations.js"
 
@@ -23,12 +24,14 @@ export const QUIET_STATUS = { ...LISTED_STATUS, working: "ready", waiting: "read
  */
 export function listedSummary(row: ListedSession, where: string, quietSince: string | undefined): LiveSummary {
   const quiet = quietSince !== undefined
+  // At work only on what its ended turn left running: its turn is over, and the rail says what it waits on.
+  const background = !quiet && row.state === "working" && row.background !== undefined
   const summary: LiveSummary = {
     session: {
       id: row.conversation,
       harness: row.harness,
       cwd: row.folder ?? "",
-      status: (quiet ? QUIET_STATUS : LISTED_STATUS)[row.state],
+      status: background ? "ready" : (quiet ? QUIET_STATUS : LISTED_STATUS)[row.state],
       connection: "hibernated",
       modes: [],
       currentMode: null,
@@ -46,6 +49,12 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
   if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
   if (row.state === "waiting" && !quiet) summary.waitingFor = rowWaitingFor(row)
   if (quiet) summary.quietSince = Date.parse(quietSince)
+  const rail: ListedRail = {}
+  if (row.project) rail.project = row.project
+  if (row.worktree) rail.worktree = row.worktree
+  if (row.lineage) rail.lineage = row.lineage
+  if (background) rail.background = row.background
+  if (Object.keys(rail).length) summary.rail = rail
   return summary
 }
 

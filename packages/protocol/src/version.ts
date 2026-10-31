@@ -19,9 +19,12 @@ export const PROTOCOL_VERSION = 1
  * `after`), and lets `live` carry a trace (`correlationId`) and `sessions` say when each row changed and when it was
  * reported (`changedAt`, `reportedAt`). 10 lets a `sessions` row say what a waiting Session waits on the person for
  * (`waitingFor`: an approval, a question, or anything else). 11 lets a `sessions` row say that its Thread is on its way
- * between a device and the cloud, and how far (`move`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * between a device and the cloud, and how far (`move`). 12 lets a `sessions` row say what its owner's rail shows of it:
+ * the project it's filed under and what that project has checked out (`project`), the worktree branch it works on
+ * (`worktree`), the agents it ran in before (`lineage`), and the background work it waits on (`background`). Every
+ * envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 11
+export const LINK_VERSION = 12
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -56,6 +59,12 @@ export const WAITING_FOR_VERSION = 10
 
 /** The first link version whose `sessions` rows say a Thread on its way between a device and the cloud (`move`); a gateway that agreed less refuses it. */
 export const MOVES_VERSION = 11
+
+/**
+ * The first link version whose `sessions` rows say what their owner's rail shows of them (`project`, `worktree`,
+ * `lineage`, `background`); a gateway that agreed less refuses them.
+ */
+export const RAIL_VERSION = 12
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

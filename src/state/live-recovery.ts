@@ -122,6 +122,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     // doesn't repeat: kept from the listing, so the rail row doesn't fall back to the Session's title once it's opened.
     threadTitle: snapshot.threadTitle ?? existing?.threadTitle,
     movedAt: snapshot.movedAt ?? existing?.movedAt,
+    rail: snapshot.rail ?? existing?.rail,
     threadId: snapshot.threadId ?? existing?.threadId,
     sessionId: snapshot.sessionId ?? existing?.sessionId,
     createdAt: snapshot.createdAt,
@@ -579,6 +580,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         threadTitle: summary.threadTitle,
         quietSince: summary.quietSince,
         movedAt: summary.movedAt ?? previous.movedAt,
+        rail: summary.rail,
         threadId: summary.threadId ?? previous.threadId,
         sessionId: summary.sessionId ?? previous.sessionId,
         permission: null,
@@ -617,6 +619,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       threadTitle: summary.threadTitle,
       quietSince: summary.quietSince,
       movedAt: summary.movedAt,
+      rail: summary.rail,
       threadId: summary.threadId,
       sessionId: summary.sessionId,
       revision: summary.revision,

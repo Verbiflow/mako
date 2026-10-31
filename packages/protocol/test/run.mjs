@@ -74,6 +74,7 @@ import {
   NUMBERED_LIVE_VERSION,
   WAITING_FOR_VERSION,
   MOVES_VERSION,
+  RAIL_VERSION,
   StreamCursor,
   followAgainInMs,
   readStreamNotice,
@@ -97,7 +98,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 11)
+    assert.equal(SUPPORTED_VERSIONS.max, 12)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1723,6 +1724,22 @@ describe("an account's list of Threads, one row per Session", () => {
     const listedGoing = { ...going, runsOn: mac, listedAt: listed.listedAt }
     assert.equal(sameListed(listedGoing, { ...listedGoing, move: { ...going.move, step: "handing-over" } }), false, "a move's next step is news")
     assert.equal(sameListed(listedGoing, { ...listedGoing, move: { ...going.move, since: "2026-10-24T20:07:00.000Z" } }), true, "its clock alone isn't")
+    const railed = { ...session, state: "working", project: { folder: "/Users/ana/api", head: { kind: "rebasing", name: "pricing-table" } }, worktree: { branch: "mako/retry-webhooks" }, lineage: ["devin", "codex"], background: 25 }
+    assert.deepEqual(ReportedSessionSchema.parse(railed), railed, "a row says what its owner's rail shows: its project and its checkout, its worktree, its earlier agents, its background work")
+    assert.deepEqual(ReportedSessionSchema.parse({ ...railed, project: { folder: "/Users/ana/api", head: { kind: "detached", commit: "4f2a9c1" } } }).project.head, { kind: "detached", commit: "4f2a9c1" })
+    assert.throws(() => ReportedSessionSchema.parse({ ...railed, project: { folder: "/Users/ana/api", head: { kind: "merging", name: "main" } } }), "a head is a branch, a rebase or a commit")
+    assert.throws(() => ReportedSessionSchema.parse({ ...railed, lineage: [] }), "no earlier agents is no lineage at all")
+    assert.throws(() => ReportedSessionSchema.parse({ ...railed, background: 0 }), "no background work is no count at all")
+    assert.deepEqual(rowsForLink([railed], RAIL_VERSION), [railed])
+    const older = rowsForLink([railed], RAIL_VERSION - 1)[0]
+    assert.deepEqual([older.project, older.worktree, older.lineage, older.background], [undefined, undefined, undefined, undefined], "a gateway before 12 refuses them, so they go without")
+    assert.equal(older.state, "working", "and the row still reads as at work")
+    assert.deepEqual(rowsForLink([{ ...railed, move: going.move }], MOVES_VERSION)[0].move, going.move, "at 11 it keeps what 11 knows")
+    const listedRailed = { ...railed, runsOn: mac, listedAt: listed.listedAt }
+    assert.equal(sameListed(listedRailed, { ...listedRailed }), true)
+    assert.equal(sameListed(listedRailed, { ...listedRailed, project: { folder: "/Users/ana/api", head: { kind: "branch", name: "pricing-table" } } }), false, "a rebase that finished is news")
+    assert.equal(sameListed(listedRailed, { ...listedRailed, background: 24 }), false, "so is a background task that settled")
+    assert.equal(sameListed(listedRailed, { ...listedRailed, lineage: ["codex"] }), false)
     assert.equal(sameListed(listedGoing, { ...listedGoing, move: undefined }), false, "nor is its end")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, state: "thinking" }), "a state is one of five")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")

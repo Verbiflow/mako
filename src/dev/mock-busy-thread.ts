@@ -23,6 +23,27 @@ export const BUSY_SESSIONS = [
 
 export const BUSY_TITLE = "Thread Environments and the phone's review screen"
 
+/** When each Session last moved: the long one a minute and a half ago, each later one a little before. */
+export function busyActivity(index: number): number {
+  return Date.now() - (index + 1) * 90_000
+}
+
+/** The native session each conversation reads, as the desktop's catalog lists it, so its rail row is the Thread's own. */
+export function busyRefs() {
+  return BUSY_SESSIONS.map((entry, index) => ({
+    harness: entry.harness,
+    nativeId: `busy-native-${index}`,
+    path: `/mock/busy-${index}.jsonl`,
+    cwd: BUSY_CWD,
+    title: entry.title,
+    updatedAt: new Date(busyActivity(index)).toISOString(),
+    startedAt: new Date(STARTED + index * 60_000).toISOString(),
+    threadId: BUSY_THREAD,
+    sessionId: entry.session,
+    bytes: 40_000,
+  }))
+}
+
 const AGENTS = [
   ["Cloud PRs as the person, opt-in", "Running Wait once more for final checks", 308, 3 * 3_600_000 + 36 * 60_000],
   ["Fix #255 review screen and cases", "Running Wait up to ten more minutes", 328, 3 * 3_600_000 + 25 * 60_000],
@@ -152,6 +173,7 @@ export function busySnapshot(index: number): LiveSnapshot {
     },
     revision: 1,
     createdAt: STARTED + index * 60_000,
+    threadPath: `/mock/busy-${index}.jsonl`,
     threadId: BUSY_THREAD,
     sessionId: entry.session,
     base: null,
@@ -166,7 +188,7 @@ export function busySnapshot(index: number): LiveSnapshot {
 /** The Thread's Sessions as the desktop's host lists them at boot. */
 export function busySummaries(): LiveSummary[] {
   return BUSY_SESSIONS.map((_, index) => {
-    const { session, revision, createdAt, threadId, sessionId } = busySnapshot(index)
-    return { session, revision, createdAt, threadId, sessionId, threadTitle: BUSY_TITLE }
+    const { session, revision, createdAt, threadPath, threadId, sessionId } = busySnapshot(index)
+    return { session, revision, createdAt, threadPath, threadId, sessionId, threadTitle: BUSY_TITLE }
   })
 }

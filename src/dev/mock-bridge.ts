@@ -79,7 +79,7 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
-import { busySnapshot, busySummaries, BUSY_SESSIONS } from "./mock-busy-thread"
+import { busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -92,7 +92,7 @@ const MOCK_PULLS: PullRequestListing[] = [
 const SETUP_WORKTREE_ROOT = "/Users/you/.mako/worktrees"
 
 /** The fixture projects' checkouts: one on its default branch, one mid-feature, one mid-rebase. */
-const MOCK_HEADS = new Map<string, CheckoutHead>([
+export const MOCK_HEADS = new Map<string, CheckoutHead>([
   ["/Users/you/mako", { kind: "branch", name: "main" }],
   ["/Users/you/api", { kind: "branch", name: "billing-webhook-retries" }],
   ["/Users/you/site", { kind: "rebasing", name: "pricing-table" }],
@@ -536,6 +536,7 @@ export function installMockBridge() {
   const purposes: ThreadPurpose[] = scene === "rail" ? [...RAIL_PURPOSES] : []
   /** Threads renamed in this page, as the Thread store keeps them. */
   const titles = new Map<string, ThreadTitleEntry>()
+  if (scene === "busy") titles.set(BUSY_THREAD, { thread: BUSY_THREAD, title: BUSY_TITLE, source: "user" })
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false
   // The host gives every profile Mako's default for new conversations.
@@ -1426,7 +1427,7 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
-      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...fixture.threads]
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
         setTimeout(() => {

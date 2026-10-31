@@ -1,4 +1,5 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
+import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
 import type {
@@ -409,7 +410,16 @@ export interface LiveSummary {
    * the account's list says: its row says how long ago, as this Mac's own rows do.
    */
   movedAt?: number
+  /** For a conversation listed from another device, what its owner's rail shows of it besides its state (`ListedRail`). */
+  rail?: ListedRail
 }
+
+/**
+ * What a Session's owner's rail shows of it besides its state, as the account's list says it (link version 12 on): the
+ * project it's filed under and what that project has checked out, the Thread worktree it works on, the agents it ran in
+ * before, and how many things its ended turn left running, which it waits on.
+ */
+export type ListedRail = Pick<ReportedSession, "project" | "worktree" | "lineage" | "background">
 
 /** A native session, as the catalog reads it. */
 export interface BaseSource {

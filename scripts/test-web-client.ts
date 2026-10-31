@@ -27,7 +27,7 @@ import { appendHeard, DictationSession, elapsedWords, frameDecibels, MeterLevels
 import { freshStep, stepsLine } from "../src/web-client/steps-words"
 import { recordedSwitches, sameSwitches, switchedWords, switchesOf } from "../src/web-client/answered"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
-import { listedSummaries, listingChanges } from "../src/web-client/desk-listing"
+import { listedHeads, listedSummaries, listingChanges } from "../src/web-client/desk-listing"
 import { selectAcpPresence } from "../src/state/acp-presence"
 import { acpStore } from "../src/state/acp-state"
 import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
@@ -1183,4 +1183,25 @@ test("a listed Session keeps its Thread's name and its time once its owner's sna
   applyLiveSnapshot({ ...summary!, session: { ...summary!.session, connection: "connected", status: "ready" }, threadTitle: undefined, movedAt: undefined, revision: 2, base: null, permissions: [], requests: [], blocks: [] })
   assert.equal(listed()?.threadTitle, "Rotate the keys", "the owner's snapshot doesn't say the Thread's name; the list's stays")
   assert.equal(listed()?.movedAt, Date.parse(at(40)))
+})
+
+test("what a Mac's rail shows of a row reaches the desk's rail: its project and its checkout, its worktree, its earlier agents, the background work it waits on", () => {
+  const rows = [
+    row(51, { thread: uuid(510), runsOn: { kind: "device", deviceId: STUDIO }, folder: "/Users/ana/.mako/worktrees/api-1/retry/src", project: { folder: "/Users/ana/api/src", head: { kind: "rebasing", name: "pricing-table" } }, worktree: { branch: "mako/retry" }, lineage: ["devin"], state: "working", background: 25, activityAt: at(51) }),
+    row(52, { thread: uuid(520), runsOn: { kind: "device", deviceId: STUDIO }, project: { folder: "/Users/ana/api/src", head: { kind: "branch", name: "main" } }, activityAt: at(40) }),
+    row(53, { thread: uuid(530), runsOn: { kind: "device", deviceId: STUDIO }, state: "working", activityAt: at(53) }),
+  ]
+  const [waiting, other, turn] = listedSummaries({ rows, devices, quiet: new Map<string, string>(), waiting: new Map() })
+  assert.deepEqual(waiting!.rail, { project: rows[0]!.project, worktree: { branch: "mako/retry" }, lineage: ["devin"], background: 25 })
+  assert.equal(waiting!.session.status, "ready", "its turn is over: it waits on what it left running")
+  assert.equal(turn!.session.status, "running", "a row without a count is a turn at work, as a list before version 12 says it")
+  assert.equal(other!.rail?.background, undefined)
+  listLive([waiting!, turn!])
+  const presence = (key: string) => selectAcpPresence(acpStore.get()).find((each) => each.key === key)
+  assert.deepEqual([presence("c51")?.status, presence("c51")?.background], ["background", 25], "the rail's hourglass, without opening it")
+  assert.equal(presence("c53")?.status, "running")
+  assert.deepEqual([presence("c51")?.workspace, presence("c51")?.worktreeBranch, presence("c51")?.lineage], ["/Users/ana/api/src", "mako/retry", ["devin"]], "filed under its project, on its worktree's branch, with the agent before")
+  assert.deepEqual(listedHeads(rows), { "/Users/ana/api/src": { kind: "rebasing", name: "pricing-table" } }, "a project's checkout is its newest row's word on it")
+  const quiet = listedSummaries({ rows: rows.slice(0, 1), devices, quiet: new Map([[STUDIO, at(60)]]), waiting: new Map() })[0]!
+  assert.equal(quiet.rail?.background, undefined, "nothing on a quiet device is shown at work")
 })

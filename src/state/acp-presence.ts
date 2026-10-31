@@ -31,6 +31,12 @@ export interface AcpPresence {
   quietSince?: number
   /** When it last moved, for a conversation listed from another device (`LiveSummary.movedAt`). */
   movedAt?: number
+  /** The project folder its owner's rail files it under, for one listed from another device (`ListedRail.project`). */
+  workspace?: string
+  /** The Thread worktree's branch it works on there. */
+  worktreeBranch?: string
+  /** The agents it ran in before its current one, oldest first. */
+  lineage?: readonly string[]
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -53,7 +59,9 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
         return [presence]
       }
       if (conversation.session.status === "closed") return []
-      const work = backgroundWork(conversation.session, conversation.nativeAgents)
+      // Listed from another device and not opened here: the account's list says what its ended turn waits on.
+      const listedBackground = conversation.session.connection === "hibernated" ? conversation.rail?.background : undefined
+      const work = backgroundWork(conversation.session, conversation.nativeAgents) ?? (listedBackground ? { count: listedBackground } : null)
       const presence: AcpPresence = {
         key: conversation.key,
         harness: conversation.harness,
@@ -88,6 +96,10 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
       if (conversation.quietSince !== undefined) presence.quietSince = conversation.quietSince
       if (conversation.movedAt !== undefined) presence.movedAt = conversation.movedAt
+      const rail = conversation.rail
+      if (rail?.project) presence.workspace = rail.project.folder
+      if (rail?.worktree) presence.worktreeBranch = rail.worktree.branch
+      if (rail?.lineage) presence.lineage = rail.lineage
       return [presence]
     })
     .sort((left, right) => right.createdAt - left.createdAt)
@@ -120,6 +132,9 @@ export function sameAcpPresence(
         candidate.threadTitle === presence.threadTitle &&
         candidate.quietSince === presence.quietSince &&
         candidate.movedAt === presence.movedAt &&
+        candidate.workspace === presence.workspace &&
+        candidate.worktreeBranch === presence.worktreeBranch &&
+        candidate.lineage === presence.lineage &&
         candidate.background === presence.background
       )
     })

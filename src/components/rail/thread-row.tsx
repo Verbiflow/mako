@@ -32,7 +32,7 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import { threadReferenceId, threadToken } from "@/lib/mentions"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
-import { checkoutOf, projectFolder } from "@/lib/worktree-paths"
+import { checkoutOf, projectFolder } from "@mako/host/contracts/worktree-paths"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { togglePinned, usePrefs } from "@/state/prefs"
@@ -109,6 +109,12 @@ const Detach = memo(function Detach({ path }: { path: string }) {
     </button>
   )
 })
+
+/** Where a conversation lived before its current agent, as a row wears it: the one before, dimmed and tucked behind. */
+export function EarlierAgentMark({ lineage }: { lineage: readonly string[] }) {
+  const harness = lineage.at(-1)
+  return harness ? <HarnessIcon harness={harness} className="size-3 opacity-40" /> : null
+}
 
 /** A rail row's box and paint: hover, an open menu, and the one lit row (`data-active`). */
 export const ROW_SURFACE =
@@ -311,13 +317,7 @@ export const ThreadRow = memo(function ThreadRow({
             several Sessions shows the agent of each, first Session first. */}
         <MarkStack>
           {[
-            ...(folded ? [] : (ref.lineage ?? []).slice(-1).map((origin, index) => (
-              <HarnessIcon
-                key={`lineage:${origin.harness}-${index}`}
-                harness={origin.harness}
-                className="size-3 opacity-40"
-              />
-            ))),
+            ...(folded || !ref.lineage?.length ? [] : [<EarlierAgentMark key="lineage" lineage={ref.lineage.map((origin) => origin.harness)} />]),
             ...(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member, index) => {
               const session = foldState?.sessions[index]
               return (
