@@ -4,7 +4,7 @@ import { join } from "node:path"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { BACKFILL_PROGRESS, BackfillProgressSchema } from "@mako/sessions/record-backfill"
 import type { RecordsLink } from "@mako/sessions/record-sync"
-import { SYNC_TIERS, type CatalogSyncStatus, type SyncFailure, type SyncScope } from "@mako/sessions/scoped-uploads"
+import { SYNC_TIERS, longestFailing, type CatalogSyncStatus, type SyncFailure, type SyncScope } from "@mako/sessions/scoped-uploads"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { MethodTable } from "../base/methods.js"
 import type { PowerReading } from "../base/power.js"
@@ -174,7 +174,15 @@ export class SessionUploads {
 export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null, backfill: Backfill | undefined): SyncStatus {
   if (!catalog?.copies && !catalog?.originals) return { state: "starting", sessions: scope.sessions.length }
   const tiers = SYNC_TIERS.map((tier) => ({ tier, ...catalog.tiers[tier] }))
-  const failures = [...(catalog.copies?.failures ?? []), ...(catalog.originals?.failures ?? [])].sort((left, right) => right.at - left.at).slice(0, 5)
+  // One line a Session, its copy's or its records' (whichever began failing first), the longest failing first.
+  const bySession = new Map<string, SyncFailure>()
+  for (const failure of [...(catalog.copies?.failures ?? []), ...(catalog.originals?.failures ?? [])].sort(longestFailing)) {
+    const key = `${failure.harness}\n${failure.nativeId}`
+    if (!bySession.has(key)) bySession.set(key, failure)
+  }
+  const notSynced = [...bySession.values()]
+  const failures = notSynced.slice(0, FAILURES_SHOWN)
+  const retrying = (catalog.copies?.retrying ?? 0) + (catalog.originals?.retrying ?? 0)
   const lastSuccessAt = Math.max(catalog.copies?.lastSuccessAt ?? 0, catalog.originals?.lastSuccessAt ?? 0)
   const status: SyncStatus = {
     state: failures.length ? "failing" : scope.paused ? "paused" : "syncing",
@@ -182,13 +190,18 @@ export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null
     tiers,
     sending: [...(catalog.copies?.sending ?? []), ...(catalog.originals?.sending ?? [])].length,
     stale: catalog.stale,
-    failures: failures.map(({ at, harness, nativeId, message, correlationId, since }) => ({ at, harness, nativeId, message, ...correlationId && { correlationId }, ...since !== undefined && { since } })),
+    failures: failures.map(({ at, harness, nativeId, message, correlationId, kind, since }) => ({ at, harness, nativeId, message, ...correlationId && { correlationId }, ...kind && { kind }, ...since !== undefined && { since } })),
+    ...notSynced.length > failures.length && { notSynced: notSynced.length },
+    ...retrying > 0 && { retrying },
     ...lastSuccessAt > 0 && { lastSuccessAt },
     ...backfill && { backfill },
   }
   if (status.state === "syncing" && tiers.every((tier) => tier.inCloud === tier.sessions)) status.state = "synced"
   return status
 }
+
+/** The Sessions not synced the status names; `notSynced` counts the rest. */
+const FAILURES_SHOWN = 5
 
 type Backfill = NonNullable<Extract<SyncStatus, { tiers: unknown }>["backfill"]>
 

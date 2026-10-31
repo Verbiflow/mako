@@ -12,6 +12,7 @@ import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contra
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
 import { SyncReadout } from "@/components/settings/sync-readout"
+import { syncStatus, useSyncStatus } from "@/state/sync-status"
 import type { SyncReadings } from "@mako/host/contracts/sync-readings"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
 import { changedStores } from "@/lib/store-formats"
@@ -37,6 +38,9 @@ export function DiagnosticsSection() {
   const [unread, setUnread] = useState<UnreadReport | null>(null)
   const [sync, setSync] = useState<SyncReadings | null>(null)
   const stores = useStoreFormats((state) => state.stores)
+  // The sync daemon's status, as the rail and Settings › Account read it.
+  const sending = useSyncStatus((state) => state.status)
+  useEffect(() => syncStatus.watch(), [])
 
   const load = useCallback(() => {
     void diagnostics.list().then(setCrashes).catch(() => setCrashes([]))
@@ -157,7 +161,7 @@ export function DiagnosticsSection() {
 
       {reader ? <SessionReaderRow history={reader} /> : null}
 
-      {sync ? <SyncReadout readings={sync} /> : null}
+      {sync ? <SyncReadout readings={sync} sending={sending} /> : null}
 
       <UnreadRecords report={unread} />
 

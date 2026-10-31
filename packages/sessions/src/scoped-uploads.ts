@@ -32,6 +32,15 @@ export const SyncScopeSchema = z.object({
 })
 export type SyncScope = z.infer<typeof SyncScopeSchema>
 
+/**
+ * What kind of failure it is, for the words a person reads (the message is an operator's): `refused`, the account
+ * answered and turned down what was sent; `unreachable`, no answer, or the account couldn't take it then (5xx, 429);
+ * `conflict`, records that went on in two places; `unread`, this Mac couldn't read the Session into its records;
+ * `failed`, anything else.
+ */
+export const SyncFailureKindSchema = z.enum(["refused", "unreachable", "conflict", "unread", "failed"])
+export type SyncFailureKind = z.infer<typeof SyncFailureKindSchema>
+
 /** A push that failed, said as the person and an operator need it: the gateway's words and its correlation ID. */
 export const SyncFailureSchema = z.object({
   at: z.number(),
@@ -41,9 +50,10 @@ export const SyncFailureSchema = z.object({
   correlationId: z.string().optional(),
   /** The account refused it as records that went on in two places: tried again only once something new is captured. */
   conflict: z.boolean().optional(),
+  kind: SyncFailureKindSchema.optional(),
   /**
-   * When the Session's pushes began failing this way: `at` moves with each try, this stays until one goes or the
-   * failure's words change, so a failure tried again is said once.
+   * When the Session's pushes began failing, in a row: `at` moves with each try, this stays until one goes, whatever
+   * each try's words, so a failure tried again is said once.
    */
   since: z.number().optional(),
 })
@@ -60,8 +70,13 @@ export const UploadsStatusSchema = z.object({
   failed: z.number().int().nonnegative(),
   /** The last push that ended with the account holding the session whole, ever (`RecordStore.pushed`). */
   lastSuccessAt: z.number().optional(),
-  /** The newest failures, newest first, and only those not since pushed. */
+  /**
+   * The Sessions not synced: each one's pushes failing for `LASTING_MS` or more and tried again since, the longest
+   * failing first, and only while it's behind. A failure the next try heals is never here.
+   */
   failures: z.array(SyncFailureSchema),
+  /** Sessions whose last push failed but not yet for long: tried again soon, said nowhere a person looks. */
+  retrying: z.number().int().nonnegative().optional(),
 })
 export type UploadsStatus = z.infer<typeof UploadsStatusSchema>
 
@@ -106,8 +121,15 @@ const RETRY_MOST_MS = 5 * 60_000
  * about hourly once it has been tried a dozen times. A refused pack once went again every few seconds for hours.
  */
 const REFUSED_MOST_MS = 60 * 60_000
-/** Failures kept for the status, one per Session. */
-const FAILURES_KEPT = 5
+/**
+ * A Session is not synced once its pushes have failed this long in a row, tried at least twice: a refusal or a
+ * dropped connection the next try heals is never said. The first retries go at 2, 4, 8… seconds, so a lasting failure
+ * has been tried six times or more by then.
+ */
+export const LASTING_MS = 2 * 60_000
+const LASTING_TRIES = 2
+/** The most failures the status carries; the scope's Sessions are hundreds at most, and each is one line. */
+export const FAILURES_SAID = 50
 /**
  * How often what the account says it holds is set against what the store believes it holds, and at the first look
  * after a link is given. One list of the account's sessions, and each one it holds less of than believed is sent again.
@@ -118,10 +140,11 @@ const RECONCILE_MS = 30 * 60_000
 
 type Wanted = SyncScope["sessions"][number]
 /**
- * A Session's pushes failing in a row: how many, when the next may go, and the first failure's time and words, which
- * the next failure keeps when it says the same. `refused`: the account answered and refused what was sent.
+ * A Session's pushes failing in a row: how many, when the next may go, when the first of them failed (`failingSince`,
+ * whatever each said), and the time and words of the first that said what the last did, which is logged once.
+ * `refused`: the account answered and refused what was sent.
  */
-type Retry = { failures: number; after: number; conflictAt?: number; refused?: boolean; since: number; words: string }
+type Retry = { failures: number; after: number; conflictAt?: number; refused?: boolean; failingSince: number; since: number; words: string }
 
 /**
  * One record store kept in step with one remote for a device's scope, the most wanted Session first. What's in the
@@ -151,7 +174,8 @@ export class ScopedUploads {
   #pushed: Map<string, { capture: number; at: number }> | null = null
   readonly #flights = new Map<string, { busy: boolean; done: Promise<void> }>()
   readonly #retries = new Map<string, Retry>()
-  readonly #failures: SyncFailure[] = []
+  /** Each Session's last failure, while its pushes fail in a row: gone once one goes. */
+  readonly #failures = new Map<string, SyncFailure>()
   #pushes = 0
   #bytes = 0
   #failed = 0
@@ -286,8 +310,22 @@ export class ScopedUploads {
       pushes: this.#pushes,
       bytes: this.#bytes,
       failed: this.#failed,
-      failures: this.#failures.filter((failure) => this.#behind(`${failure.harness}\n${failure.nativeId}`)),
+      failures: [],
     }
+    // Said only once lasting, and kept while behind: a Session the next try heals never shows, one failing stays until it goes.
+    const now = this.#now()
+    const inScope = new Set(this.#scope.sessions.map(keyOf))
+    let retrying = 0
+    for (const [key, failure] of this.#failures) {
+      if (!inScope.has(key) || !this.#behind(key)) continue
+      const retry = this.#retries.get(key)
+      // Records that went on in two places wait for something new, tried once: lasting by their time alone.
+      const tried = retry !== undefined && (retry.failures >= LASTING_TRIES || retry.conflictAt !== undefined)
+      if (retry && tried && now - retry.failingSince >= LASTING_MS) status.failures.push(failure)
+      else retrying += 1
+    }
+    status.failures.sort(longestFailing).splice(FAILURES_SAID)
+    if (retrying) status.retrying = retrying
     if (lastSuccessAt !== undefined) status.lastSuccessAt = lastSuccessAt
     return status
   }
@@ -357,6 +395,7 @@ export class ScopedUploads {
       this.#pushed?.set(key, { capture: Math.max(head, this.#pushed.get(key)?.capture ?? 0), at })
       const streak = this.#retries.get(key)
       this.#retries.delete(key)
+      this.#failures.delete(key)
       if (streak) this.#log("info", "pushed after failing", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, failures: streak.failures, failingMs: at - streak.since })
       if (report.versions || report.chunks) {
         this.#pushes += 1
@@ -369,9 +408,9 @@ export class ScopedUploads {
       const failure = failureOf(failed, session, started)
       const words = failureWords(failed)
       const before = this.#retries.get(key)
-      const retry: Retry = before?.words === words ? before : { failures: before?.failures ?? 0, after: 0, since: started, words }
+      const retry: Retry = before?.words === words ? before : { failures: before?.failures ?? 0, after: 0, failingSince: before?.failingSince ?? started, since: started, words }
       retry.failures += 1
-      failure.since = retry.since
+      failure.since = retry.failingSince
       if (failure.conflict) retry.conflictAt = started
       else {
         retry.refused = refusedBy(failed)
@@ -380,10 +419,7 @@ export class ScopedUploads {
       this.#retries.set(key, retry)
       this.#failed += 1
       // The Session's newest failure stands for the ones before it.
-      const kept = this.#failures.findIndex((each) => keyOf(each) === key)
-      if (kept >= 0) this.#failures.splice(kept, 1)
-      this.#failures.unshift(failure)
-      this.#failures.splice(FAILURES_KEPT)
+      this.#failures.set(key, failure)
       if (retry !== before) this.#log("warn", failure.conflict ? "records went on in two places; the account's stand" : "push failed", {
         remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, tier: session.tier, failures: retry.failures, error: failure.message,
         ...retry.refused && { retryMostMs: REFUSED_MOST_MS },
@@ -394,6 +430,14 @@ export class ScopedUploads {
 }
 
 const keyOf = (session: { harness: string; nativeId: string }) => `${session.harness}\n${session.nativeId}`
+
+/**
+ * The order failures are said in, the same at every read: the longest failing first, then by Session. Newest first,
+ * as before, moved a Session to the top at each of its tries, and the rail's first reason changed with it.
+ */
+export function longestFailing(left: SyncFailure, right: SyncFailure): number {
+  return (left.since ?? left.at) - (right.since ?? right.at) || keyOf(left).localeCompare(keyOf(right))
+}
 
 /**
  * Counts a scope by tier from what each form says of each Session (`readable`, `held`, `whole`): one place reads the
@@ -432,10 +476,18 @@ function failureWords(error: Error): string {
 }
 
 function failureOf(error: Error, session: Wanted, at: number): SyncFailure {
-  const failure: SyncFailure = { at, harness: session.harness, nativeId: session.nativeId, message: describeGatewayFailure(error) }
+  const failure: SyncFailure = { at, harness: session.harness, nativeId: session.nativeId, message: describeGatewayFailure(error), kind: kindOf(error) }
   if (error instanceof GatewayHttpError && error.call?.correlationId) failure.correlationId = error.call.correlationId
   if (error instanceof RecordSyncConflictError) failure.conflict = true
   return failure
+}
+
+function kindOf(error: Error): SyncFailureKind {
+  if (error instanceof RecordSyncConflictError) return "conflict"
+  if (refusedBy(error)) return "refused"
+  if (error instanceof GatewayHttpError) return error.status >= 500 || error.status === 429 ? "unreachable" : "failed"
+  // No answer: the network's error (a TypeError from fetch, its cause naming the code) or the call's timeout.
+  return error instanceof TypeError || error.name === "TimeoutError" || error.name === "AbortError" ? "unreachable" : "failed"
 }
 
 /**

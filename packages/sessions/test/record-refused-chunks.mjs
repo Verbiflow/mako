@@ -9,7 +9,7 @@ import { GatewayHttpError } from "@mako/protocol/gateway-http"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordStore } from "../dist/record-store.js"
 import { RecordChunksRefusedError, RecordSync } from "../dist/record-sync.js"
-import { ScopedUploads } from "../dist/scoped-uploads.js"
+import { LASTING_MS, ScopedUploads } from "../dist/scoped-uploads.js"
 
 /**
  * A chunk the account refuses keeps only what needs it from the account, and says which it is. 2026-10-28 to 30, the
@@ -149,8 +149,14 @@ test("a device's uploads say which chunk the account refused, and don't count th
     const uploads = new ScopedUploads(store, remote, () => {}, { now: () => now })
     uploads.scope({ sessions: [{ harness: "synthetic", nativeId: "s1", path: file, thread: "t-1", busy: true, tier: "now" }], paused: false })
     await uploads.settled()
+    assert.equal(uploads.status().failures.length, 0, "not said while it may heal at its next try")
+    // Its retries go on refused past the time a failure lasts: said, with the chunk.
+    now += LASTING_MS
+    uploads.look()
+    await uploads.settled()
     const [failure] = uploads.status().failures
     assert.match(failure.message, /refused one chunk of this Session \([0-9a-f]{12}, 40,960 bytes\)/)
+    assert.equal(failure.kind, "refused")
     assert.equal(uploads.inCloud("synthetic", "s1"), false, "not in the cloud while it waits")
     uploads.stop()
     await store.close()

@@ -3980,10 +3980,31 @@ of the cloud and is a failure in the status until one is taken. Every 30
 minutes, and when a link is given, `ScopedUploads` sets the account's list of
 its sessions (`GET …/sessions`) against what the store believes it holds
 (`RecordStore.remoteVersionCounts`); a Session it holds less of is caught up
-from its holdings. Failures a minute old show in the rail ("2 Sessions not
-synced", `SyncRailLine`), opening Settings › Account, which names each
-Session. `test/record-refused-chunks.mjs`, `test/record-reconcile.mjs` and
-`npm run test:sync-status-ui` cover these.
+from its holdings. Whether a Session is not synced is the daemon's word, never
+a clock read in a window: `ScopedUploads.status` says a failure only once the
+Session's pushes have failed for `LASTING_MS` (2 minutes) and been tried again,
+whatever each try said, keeps it while the Session is behind, and drops it the
+moment a push goes; a failure not yet lasting is only counted (`retrying`). A
+refusal the next try heals is never said, and a healed one is never said again
+when the Session falls behind at its next capture (it was, so the rail's line
+came and went at every capture of a live Session). Each failure carries its
+`kind` (refused, unreachable, conflict, unread), which the rail ("2 Sessions not
+synced · The account turned down part of it · since 5:20 AM", `SyncRailLine`),
+Settings › Account and Diagnostics say in the same words (`syncFailureWords`,
+`describeSending` in `contracts/sync-status.ts`), the account's own words and
+correlation ID one disclosure away. A refusal carries the gateway's `detail`
+(`GatewayHttpError.detail`: which chunk, and why). `test/record-refused-chunks.mjs`,
+`test/sync-not-synced.mjs`, `test/record-reconcile.mjs` and `npm run
+test:sync-status-ui` cover these.
+
+The sync daemon and the backfill's process write one record store, the same
+newest pack in turn under its write lock. A process's buffer of pack entries
+waiting for its transaction answers reads only for those entries (`written` to
+`size`, `Packs.copyWaiting`); a chunk the other process appended since is read
+from the pack, and a rollback drops what waited (`Packs.abandon`). The buffer
+once answered every read past where its own process last wrote, so the daemon
+sent chunks the backfill had just captured with stale bytes and the account
+refused each (`test/record-pack-reads.mjs`).
 
 When the sync daemon is not enabled, the host still never reads a store on
 its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a

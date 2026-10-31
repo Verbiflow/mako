@@ -1,10 +1,10 @@
 import { useEffect } from "react"
-import { CheckIcon, CopyIcon } from "lucide-react"
+import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
-import type { SyncStatus, SyncTier, SyncTierName } from "@mako/host/contracts/sync-status"
+import { syncFailureWords, type SyncFailureView, type SyncStatus, type SyncTier, type SyncTierName } from "@mako/host/contracts/sync-status"
 import { Action, Chip, Eyebrow, ListCard, ListCardRow, Meter } from "@/components/ui/kit"
 import { syncStatus, useSyncStatus } from "@/state/sync-status"
-import { formatDay, formatRelative } from "@/lib/format"
+import { formatDay, formatRelative, formatTime } from "@/lib/format"
 import { useThreads } from "@/state/thread-store"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -133,31 +133,67 @@ function footer(status: Running): string {
   return parts.join(" ")
 }
 
+/**
+ * The Sessions not synced, as the sync daemon says (a failure that lasted, never one the next try healed): each in a
+ * person's words, what Mako does next, and one disclosure away the account's own words with the correlation ID.
+ */
 function Failures({ status }: { status: Running }) {
   const name = useSessionName()
   const [first] = status.failures
   if (!first) return null
-  const details = status.failures
-    .map((failure) => [new Date(failure.at).toISOString(), failure.harness, failure.nativeId, failure.correlationId ?? "-", failure.message].join("\t"))
-    .join("\n")
+  const notSynced = status.notSynced ?? status.failures.length
+  const details = status.failures.map(detailLine).join("\n")
   return (
-    <div role="alert" className="flex items-start justify-between gap-4 rounded-lg bg-negative/8 px-3 py-2 ring-1 ring-negative/20 ring-inset" data-sync-failures>
-      <div className="min-w-0 text-ui leading-relaxed text-negative">
-        {status.failures.length === 1
-          ? `${name(first)} hasn't gone up since ${ago(first.since ?? first.at)}. Mako tries again on its own.`
-          : `${status.failures.length} Sessions haven't gone up, the first since ${ago(Math.min(...status.failures.map((failure) => failure.since ?? failure.at)))}. Mako tries again on its own.`}
-        {status.failures.map((failure) => (
-          <p key={`${failure.harness}:${failure.nativeId}`} className="mt-0.5 truncate text-label opacity-80" title={failure.message} data-sync-failure={failure.nativeId}>
-            {status.failures.length === 1 ? failure.message : `${name(failure)}: ${failure.message}`}
-          </p>
-        ))}
+    <div role="alert" className="flex flex-col gap-2 rounded-lg bg-negative/8 px-3 py-2.5 ring-1 ring-negative/20 ring-inset" data-sync-failures>
+      <div className="flex items-start justify-between gap-4">
+        <p className="min-w-0 text-ui font-medium text-negative">
+          {notSynced === 1 ? `${name(first)} isn't synced` : `${count(notSynced, "Session")} aren't synced`}
+        </p>
+        <Action tone="outline" size="xs" className="shrink-0" onClick={() => copy(details)}>
+          <CopyIcon />
+          Copy details
+        </Action>
       </div>
-      <Action tone="outline" size="xs" className="shrink-0" onClick={() => copy(details)}>
-        <CopyIcon />
-        Copy details
-      </Action>
+      {status.failures.map((failure) => {
+        const words = syncFailureWords(failure.kind)
+        return (
+          <div key={`${failure.harness}:${failure.nativeId}`} className="min-w-0" data-sync-failure={failure.nativeId}>
+            <p className="text-label text-foreground">
+              {notSynced === 1 ? null : <span className="font-medium">{name(failure)}: </span>}
+              {words.what} · since {sinceAt(failure.since ?? failure.at)}
+            </p>
+            <p className="text-label text-muted-foreground">{words.next}</p>
+            <details className="group/failure mt-0.5">
+              <summary className="pressable -mx-1 flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm px-1 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground [&::-webkit-details-marker]:hidden">
+                <ChevronRightIcon aria-hidden className="size-3 shrink-0 transition-transform duration-150 ease-(--ease-out) group-open/failure:rotate-90" />
+                Details
+              </summary>
+              <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 pl-4 text-label">
+                <dt className="text-faint">The account said</dt>
+                <dd className="min-w-0 break-words font-mono text-muted-foreground select-text">{failure.message}</dd>
+                {failure.correlationId ? (
+                  <>
+                    <dt className="text-faint">Correlation</dt>
+                    <dd className="min-w-0 truncate font-mono text-muted-foreground select-text">{failure.correlationId}</dd>
+                  </>
+                ) : null}
+                <dt className="text-faint">Session</dt>
+                <dd className="min-w-0 truncate font-mono text-muted-foreground select-text">{failure.harness} {failure.nativeId}</dd>
+                <dt className="text-faint">Last tried</dt>
+                <dd className="text-muted-foreground">{ago(failure.at)}</dd>
+              </dl>
+            </details>
+          </div>
+        )
+      })}
+      {notSynced > status.failures.length ? <p className="text-label text-faint">And {count(notSynced - status.failures.length, "more Session")}.</p> : null}
     </div>
   )
+}
+
+/** One failure for a report: when it began and was last tried, the Session, the correlation ID, the account's words. */
+function detailLine(failure: SyncFailureView): string {
+  return [new Date(failure.since ?? failure.at).toISOString(), new Date(failure.at).toISOString(), failure.kind ?? "-", failure.harness, failure.nativeId, failure.correlationId ?? "-", failure.message].join("\t")
 }
 
 /** A Session as the person knows it: its Thread's title where the rail lists it, else its harness's session. */
@@ -171,33 +207,32 @@ function useSessionName(): (failure: { harness: string; nativeId: string }) => s
   }
 }
 
-/** Failures this old are said in the rail too: a push that fails once and goes on its next try isn't worth a line. */
-const RAIL_AFTER_MS = 60_000
 /** How often the rail reads the status: the host keeps it, so a read costs nothing but the call. */
 const RAIL_READ_EVERY_MS = 10_000
 
 /**
- * Above the rail's footer while Sessions haven't gone up for a minute or more: how many, and why the first didn't,
- * opening Settings › Account, where each is named with the account's words. Nothing at all while sync is well.
+ * Above the rail's footer while Sessions aren't synced, as the sync daemon says (a failure that lasted, kept until the
+ * Session goes): how many, and what kept the first out, opening Settings › Account, where each is said. Nothing at all
+ * while sync is well, and nothing for a failure the next try heals: the rule is the daemon's, not read off a clock here.
  */
 export function SyncRailLine() {
   const status = useSyncStatus((state) => state.status)
-  const readAt = useSyncStatus((state) => state.readAt ?? 0)
   useEffect(() => syncStatus.watch(RAIL_READ_EVERY_MS), [])
-  if (!status || !("tiers" in status) || status.state !== "failing") return null
-  const stuck = status.failures.filter((failure) => readAt - (failure.since ?? failure.at) >= RAIL_AFTER_MS)
-  const [first] = stuck
+  if (!status || !("tiers" in status)) return null
+  const [first] = status.failures
   if (!first) return null
+  const notSynced = status.notSynced ?? status.failures.length
+  const reason = `${syncFailureWords(first.kind).what} · since ${sinceAt(first.since ?? first.at)}`
   return (
     <button
       type="button"
-      data-sync-rail={stuck.length}
+      data-sync-rail={notSynced}
       onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" }))}
       className="pressable flex w-full items-center gap-2.5 border-t border-hairline px-3 py-2.5 text-left hover:bg-fill-hover"
     >
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-label font-medium text-negative">{count(stuck.length, "Session")} not synced</span>
-        <span className="truncate text-label text-faint" title={first.message}>{first.message}</span>
+        <span className="truncate text-label font-medium text-negative">{count(notSynced, "Session")} not synced</span>
+        <span className="truncate text-label text-faint" title={reason}>{reason}</span>
       </span>
       <span className="shrink-0 text-label text-muted-foreground">Why</span>
     </button>
@@ -206,6 +241,11 @@ export function SyncRailLine() {
 
 function count(n: number, noun: string): string {
   return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`
+}
+
+/** When something began, as a clock reads it: "5:20 AM" today, else its day. */
+function sinceAt(at: number): string {
+  return new Date(at).toDateString() === new Date().toDateString() ? formatTime(at) : formatDay(at)
 }
 
 /** "just now", "12m ago", "3h ago", or the day. */

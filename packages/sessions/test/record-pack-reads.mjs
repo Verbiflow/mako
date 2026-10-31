@@ -43,6 +43,56 @@ try {
 }
 
 /**
+ * Two processes writing one store (the sync daemon and its backfill pass, as on every Mac) append to the same pack, in
+ * turn under the index's write lock. A chunk the other appended is read from the pack, never from this one's buffer of
+ * waiting entries: its place lies past where this one last wrote, and the buffer answered every such read with its own
+ * old bytes. The daemon sent 18 chunks of a live Session that way, the backfill had just captured them, and the account
+ * refused each as not the chunk its hash names (2026-10-31): they stayed off the account, and the rail said so.
+ */
+const shared = await mkdtemp(join(tmpdir(), "mako-pack-two-writers-"))
+try {
+  const daemon = new Packs(shared)
+  const backfill = new Packs(shared)
+  const sha256 = (bytes) => createHash("sha256").update(bytes).digest()
+  const kept = (text, times) => Buffer.from(text.repeat(times))
+  // Each writes in turn, as the write lock has them: `begin` once it holds the lock, `sync` before its commit.
+  const written = async (packs, bytes) => {
+    await packs.begin()
+    const place = await packs.write(sha256(bytes), bytes)
+    await packs.sync()
+    return place
+  }
+  const own = kept("the daemon's own turn ", 400)
+  const ownPlace = await written(daemon, own)
+  const theirs = []
+  for (const [text, times] of [["a live Session's next turn ", 18], ["and one stored plain \u0000\u00ff ", 1], ["a third, longer than the daemon's own ", 600]]) {
+    const bytes = kept(text, times)
+    theirs.push({ bytes, place: await written(backfill, bytes) })
+  }
+  assert.ok(theirs.some(({ place }) => place.codec === 0) && theirs.some(({ place }) => place.codec === 1), "chunks stored both plain and compressed")
+  for (const { bytes, place } of theirs) {
+    assert.equal(place.pack, ownPlace.pack, "both write the one newest pack")
+    assert.ok((await daemon.read(place)).equals(bytes), `the backfill's chunk at ${place.offset} reads as itself`)
+    const stored = await daemon.readStored(place)
+    assert.ok(stored.body.equals(await backfill.readStored(place).then((chunk) => chunk.body)), `and goes to the account as stored, at ${place.offset}`)
+  }
+  assert.ok((await daemon.read(ownPlace)).equals(own))
+
+  // A transaction that rolled back leaves no entry waiting: the next one's places, the other process's, are read from the pack.
+  await daemon.begin()
+  await daemon.write(sha256(Buffer.from("never committed")), kept("never committed ", 300))
+  daemon.abandon()
+  const after = kept("written after the daemon rolled back ", 200)
+  const afterPlace = await written(backfill, after)
+  assert.ok((await daemon.read(afterPlace)).equals(after), "a chunk placed where a rolled-back entry waited reads as itself")
+  await daemon.close()
+  await backfill.close()
+  console.log("PASS: two processes writing one pack read each other's chunks from the pack, never from their own waiting entries")
+} finally {
+  await rm(shared, { recursive: true, force: true })
+}
+
+/**
  * A chunk whose zstd frame ends exactly where zlib's output buffer does (16 KiB) is stored as that one frame, and its
  * session reads back. zlib asks the encoder again at a full buffer, and zstd answers a frame already ended with an
  * empty one, 9 bytes: such a chunk was stored as its frame and an empty frame after it, by every build (the one-shot

@@ -316,7 +316,7 @@ try {
       { sessions: 2, threads: 1, readable: 2, held: 2, whole: 2, inCloud: 2, threadsInCloud: 1 },
       { sessions: 1, threads: 1, readable: 1, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 },
     ])
-    // A refusal is kept with the gateway's correlation ID, and the next capture tries again at once.
+    // A failure is retrying, not said until it lasts (sync-not-synced.mjs), and the next capture tries again at once.
     scoped.pushWith = async () => {
       throw new GatewayHttpError(503, "The archive's storage couldn't be read; try again", { method: "POST", path: "/sessions/with-chunks", tries: 4, correlationId: "c-123" })
     }
@@ -324,15 +324,13 @@ try {
     await store.capture({ harness: "synthetic", nativeId: "s3", home, records: recordsOf("s3") })
     again.look()
     await again.settled()
-    const [failure] = again.status().failures
-    assert.deepEqual([failure.nativeId, failure.correlationId, ...inCloud(again, "s3")], ["s3", "c-123", false])
-    assert.match(failure.message, /correlation c-123/)
+    assert.deepEqual([again.status().failures.length, again.status().retrying, ...inCloud(again, "s3")], [0, 1, false])
     scoped.pushWith = async (bundle, pack) => (order.push(bundle.nativeId), pushWith(bundle, pack))
     await appendFile(own("s3"), line(3, 1))
     await store.capture({ harness: "synthetic", nativeId: "s3", home, records: recordsOf("s3") })
     again.look()
     await again.settled()
-    assert.deepEqual([order.at(-1), again.status().failures.length, ...inCloud(again, "s3")], ["s3", 0, true], "pushed on its next capture; the failure is no longer said")
+    assert.deepEqual([order.at(-1), again.status().retrying, ...inCloud(again, "s3")], ["s3", undefined, true], "pushed on its next capture; nothing retrying")
     again.stop()
     store.close()
   }
@@ -401,6 +399,7 @@ try {
     const [kept, ...others] = uploads.status().failures
     assert.deepEqual([kept.nativeId, kept.since, others.length], ["s6", 1_800_000_000_000, 0], "one failure kept for the Session, saying when it began")
     assert.ok(kept.at > kept.since && kept.correlationId === `c-${tries.s6}`, "its newest try, with the correlation the gateway logged it under")
+    assert.match(kept.message, /correlation c-\d+/)
 
     // Unanswered twice in a row: the first capture after the first failure goes at once, the next waits out its 4 s.
     unanswered = 2
