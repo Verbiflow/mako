@@ -1153,9 +1153,116 @@
   mask-image: linear-gradient(to bottom, transparent, #000 10px, #000 calc(100% - 14px), transparent);
 }
 
-/* Under a Thread's access: what every new session of its harness starts with, the account's choice, apart from it. */
+/*
+ * A Thread's settings (`thread-chips.tsx`). In the composer's bar, one chip: the model, its effort a soft suffix, and a
+ * caution mark before them while nothing waits for approval. Its sheet: the harness's models, the chosen one's effort as
+ * a segmented control, and the access as the last row, opened in place. Effort and access sit at the sheet's foot, in
+ * the thumb's reach, and stay put while the list above them scrolls.
+ */
+.web-settings-chip {
+  @apply gap-1.5 pr-1.5 pl-2 text-foreground/85;
+}
+.web-settings-chip-effort {
+  @apply shrink-0 font-normal whitespace-nowrap text-faint;
+}
+.web-settings-head {
+  @apply flex shrink-0 items-center gap-2 px-5 pt-0.5 pb-2;
+}
+.web-settings-search {
+  @apply mx-3 mb-1.5 flex h-11 shrink-0 items-center gap-2 rounded-xl bg-fill-hover px-3 text-ui;
+}
+.web-settings-search input {
+  /* 16px or more, or iOS zooms the page into a field it focuses. */
+  font-size: max(16px, var(--text-ui));
+}
+.web-settings-models {
+  @apply px-2 pb-2;
+}
+.web-settings-quiet {
+  @apply flex items-center gap-2 px-3 py-3 text-ui text-muted-foreground;
+}
+.web-settings-foot {
+  @apply flex shrink-0 flex-col border-t border-hairline px-2 pt-3;
+  padding-bottom: calc(env(safe-area-inset-bottom) + 14px);
+}
+.web-settings-effort {
+  @apply flex flex-col gap-2 px-3 pb-3;
+}
+.web-settings-label {
+  @apply text-label font-medium text-faint;
+}
+.web-settings-effort-note {
+  @apply flex h-11 items-center text-ui text-faint;
+}
+
+/* A segmented control, as iOS draws one: a tinted track, the chosen segment raised on a thumb that slides. */
+.web-segmented {
+  @apply relative flex h-11 items-stretch rounded-xl bg-fill-hover p-[3px];
+}
+.web-segmented-thumb {
+  @apply absolute top-[3px] bottom-[3px] left-0 rounded-[9px];
+  background: color-mix(in oklab, var(--foreground) 13%, var(--popover));
+  box-shadow:
+    0 0 0 0.5px var(--hairline),
+    0 2px 6px -1px rgb(0 0 0 / 0.3);
+  transition:
+    transform 280ms var(--ease-out),
+    width 280ms var(--ease-out);
+}
+:root.light .web-segmented-thumb {
+  background: var(--popover);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    0 2px 6px -1px rgb(0 0 0 / 0.12);
+}
+.web-segment {
+  @apply relative flex min-w-0 flex-auto items-center justify-center rounded-[9px] px-2 text-label font-medium whitespace-nowrap text-muted-foreground;
+  transition: color 160ms ease;
+}
+.web-segment[aria-checked="true"] {
+  @apply text-foreground;
+}
+/* Each segment takes the track's whole height under a finger: 44 px, the thumb's inset included. */
+.web-segment::after {
+  content: "";
+  position: absolute;
+  inset: -3px 0;
+}
+
+.web-settings-access-chevron {
+  transition: transform 240ms var(--ease-out);
+}
+.web-settings-access[data-open] .web-settings-access-chevron {
+  transform: rotate(180deg);
+}
+/* The other levels open under the row: the sheet's top rises with them, never a jump. */
+.web-settings-access-more {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 220ms var(--ease-swift),
+    opacity 120ms var(--ease-swift);
+}
+.web-settings-access[data-open] .web-settings-access-more {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 260ms var(--ease-out),
+    opacity 200ms var(--ease-out) 60ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .web-segmented-thumb,
+  .web-settings-access-chevron,
+  .web-settings-access-more,
+  .web-settings-access[data-open] .web-settings-access-more {
+    transition: none;
+  }
+}
+
+/* Under a Thread's other levels: what every new session of its harness starts with, the account's choice, apart from it. */
 .web-access-new {
-  @apply mx-3 mt-1 mb-[calc(env(safe-area-inset-bottom)+10px)] flex min-h-12 items-center gap-2 rounded-xl bg-fill-hover pr-1.5 pl-3.5;
+  @apply mx-1 mt-1 mb-1 flex min-h-12 flex-wrap items-center gap-x-2 rounded-xl bg-fill-hover py-1 pr-1.5 pl-3.5;
 }
 
 /* Copy and Branch under the newest reply, a thumb's size; every reply keeps them under a long press. */

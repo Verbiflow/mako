@@ -40,6 +40,9 @@ import { gatewayHostCalls } from "@mako/host/contracts/gateway-host-calls"
 import { Payload, problem, type ClientSession, type Operation, type Reply } from "@mako/protocol"
 import { connectStep, macConnection } from "../src/web-client/mac-connection"
 import { reachLog, reachStore } from "../src/web-client/reach"
+import { chipReading, effortControl, modeLabel, modeSummary, type SettingsReading } from "../src/web-client/thread-settings"
+import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
+import type { ModelOption, SessionModel } from "@mako/sessions/settings"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -1081,4 +1084,66 @@ test("a Mac to connect: none yet, one that joined and isn't heard from, one that
   const asleep = macConnection({ devices, rows: [], quiet: new Map([[STUDIO, at(1)]]) }, new Set())
   assert.equal(asleep.connected, false, "a quiet one isn't there")
   assert.equal(connectStep(asleep), "done", "but it connected before, with nothing to list: a Mac to wake, not to connect")
+})
+
+/** Effort as a catalog reports it: the harness's own words for each level. */
+function effortOption(values: string[], fields: { labels?: string[]; disabledReason?: string } = {}): ModelOption {
+  const label = (value: string, at: number) => fields.labels?.[at] ?? (value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1))
+  return { kind: "select", id: "effort", label: "Reasoning", role: "reasoning", values: values.map((value, at) => ({ value, label: label(value, at) })), ...(fields.disabledReason && { disabledReason: fields.disabledReason }) }
+}
+const catalog: SessionModel[] = [
+  { id: "opus", label: "Opus 5.5", options: [effortOption(["low", "medium", "high", "xhigh", "max"])] },
+  { id: "sonnet", label: "Sonnet 5", options: [effortOption(["low", "medium", "high"])] },
+  { id: "haiku", label: "Haiku 4.5", options: [] },
+]
+/** What the chip and sheet read when `model` is chosen at `effort`, as `useComposerSettings` resolves it. */
+function reading(model: SessionModel | undefined, effort?: string, models: readonly SessionModel[] = catalog): SettingsReading {
+  return {
+    models,
+    model,
+    modelLabel: model?.label ?? "Loading model…",
+    options: model?.options ?? [],
+    resolved: { model: model ? { kind: "known", value: model.id, source: "session" } : { kind: "unknown" }, options: effort ? { effort: { kind: "known", value: effort, source: "override" } } : {}, settings: {}, issues: [] },
+  }
+}
+const full: LiveSessionMode = { id: "bypass", name: "Bypass permissions", access: "full" }
+const ask: LiveSessionMode = { id: "default", name: "Default", access: "ask" }
+
+test("the settings chip: the model, its effort as a suffix, a caution mark under Full access and only there", () => {
+  const opus = catalog[0]!
+  assert.deepEqual(chipReading(reading(opus, "high"), ask), { model: "Opus 5.5", effort: "High", risky: false, spoken: "Model and access: Opus 5.5, High reasoning, Ask before acting" })
+  assert.deepEqual(chipReading(reading(opus, "xhigh"), full), { model: "Opus 5.5", effort: "Extra high", risky: true, spoken: "Model and access: Opus 5.5, Extra high reasoning, Full access" })
+  assert.deepEqual(chipReading(reading(catalog[2]!), full), { model: "Haiku 4.5", effort: undefined, risky: true, spoken: "Model and access: Haiku 4.5, Full access" }, "a model without effort has no suffix")
+  assert.equal(chipReading(reading(opus), undefined).effort, undefined, "an effort not reported isn't guessed")
+  assert.equal(chipReading(reading(opus, "high"), undefined).risky, false, "a harness without a ladder warns of nothing")
+  assert.equal(chipReading(reading(opus, "high"), { id: "yolo", name: "Yolo" }).risky, false, "a mode without a tier isn't called risky by its name")
+  const grok = { ...opus, options: [effortOption(["low", "high"], { labels: ["Low Effort", "High Effort"] })] }
+  assert.equal(chipReading(reading(grok, "high"), undefined).spoken, "Model and access: Opus 5.5, High Effort", "a harness's own words that already say effort aren't doubled")
+})
+
+test("the sheet's effort: the chosen model's own levels, its absence said in place, and nothing for a harness without", () => {
+  const opus = catalog[0]!
+  const sonnet = catalog[1]!
+  const haiku = catalog[2]!
+  const levels = (control: ReturnType<typeof effortControl>) => (control.kind === "choose" ? control.choices.map((choice) => choice.value) : control.kind)
+  assert.deepEqual(levels(effortControl(reading(opus, "high"))), ["low", "medium", "high", "xhigh", "max"])
+  assert.deepEqual(levels(effortControl(reading(sonnet, "medium"))), ["low", "medium", "high"], "only what this model offers")
+  const chosen = effortControl(reading(sonnet, "medium"))
+  assert.equal(chosen.kind === "choose" && chosen.current, "medium")
+  assert.deepEqual(effortControl(reading(haiku)), { kind: "absent", model: "Haiku 4.5" }, "another model has effort: said where the levels were")
+  assert.deepEqual(effortControl(reading(haiku, undefined, [haiku])), { kind: "none" }, "a harness without effort draws none")
+  assert.deepEqual(effortControl(reading(undefined, undefined, [])), { kind: "none" }, "nor does one still reading its models")
+  const fixed = { ...opus, options: [effortOption(["low", "high"], { disabledReason: "Reasoning cannot be changed in this running session." })] }
+  assert.deepEqual(effortControl(reading(fixed, "high")), { kind: "fixed", label: "High", reason: "Reasoning cannot be changed in this running session." })
+  const one = { ...opus, options: [effortOption(["high"])] }
+  assert.deepEqual(effortControl(reading(one, "high")), { kind: "fixed", label: "High", reason: undefined }, "one level is nothing to choose")
+  const onOff: ModelOption = { kind: "boolean", id: "thinking", label: "Thinking", role: "reasoning" }
+  const thinking = { ...opus, options: [onOff] }
+  assert.deepEqual(levels(effortControl(reading(thinking))), [false, true], "an on/off effort is two segments")
+})
+
+test("an access level in plain words: its tier's, else the harness's own", () => {
+  assert.deepEqual([modeLabel(full), modeSummary(full)], ["Full access", "Nothing waits for approval. Use in a workspace you can throw away."])
+  assert.equal(modeLabel({ id: "plan", name: "Plan", access: "plan" }), "Read-only")
+  assert.deepEqual([modeLabel({ id: "x", name: "Agent", description: "Cursor's own." }), modeSummary({ id: "x", name: "Agent", description: "Cursor's own." })], ["Agent", "Cursor's own."])
 })

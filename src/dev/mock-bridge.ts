@@ -3176,13 +3176,14 @@ function mockClaudeBreakdown(used: number, size: number): ContextBreakdown {
   }
 }
 
+/** Effort levels in the catalog's words (`model-catalog.ts`): "Medium", "Extra high". */
 const mockEffort = (current: string, values: string[]) => ({
   kind: "select" as const,
   id: "effort",
   label: "Reasoning",
   role: "reasoning" as const,
   current,
-  values: values.map((value) => ({ value, label: value })),
+  values: values.map((value) => ({ value, label: value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1) })),
 })
 const mockFast = {
   kind: "boolean" as const,

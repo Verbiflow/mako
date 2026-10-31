@@ -8,6 +8,7 @@ import { acpStore } from "@/state/acp"
 import { threadsStore } from "@/state/thread-store"
 import { store } from "@/state/session"
 import type { LiveRequest, LiveSnapshot } from "@/lib/types"
+import type { SessionSettings } from "@mako/sessions/settings"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { listedOwner, listedSummary } from "@mako/host/contracts/listed-conversations"
 import { WebClient, WebClientContext } from "@/web-client/client"
@@ -55,9 +56,61 @@ window.webkitSpeechRecognition = FakeRecognition
 localStorage.setItem("mako.dictation.meter", "off")
 
 const mock = installMockBridge()
-const harness = "codex"
 const conversation = "cccccccc-3333-4333-8333-333333333333"
 const cwd = "/fixture/payments"
+
+/**
+ * The Session's harness and what its record ran with (`?harness=`), from the mock's catalogs: Codex, whose every model
+ * has effort, or Grok, ending on a model that has none. Its access is raised before the last turn, unless `?mode=before`.
+ */
+const SCENES = {
+  codex: {
+    modes: [
+      { id: "read-only", name: "Read Only", access: "plan" as const },
+      { id: "auto", name: "Auto", access: "ask" as const },
+      { id: "full-access", name: "Full Access", access: "full" as const },
+    ],
+    before: { model: "gpt-5.5", options: { effort: "medium" } },
+    after: { model: "gpt-5.6-sol", options: { effort: "high" } },
+    quiet: "auto",
+    raised: "full-access",
+  },
+  grok: {
+    modes: [
+      { id: "plan", name: "Plan", access: "plan" as const, enforcement: "provider" as const },
+      { id: "access:ask", name: "Ask before acting", access: "ask" as const, enforcement: "launch" as const },
+      { id: "access:auto", name: "Auto review", access: "auto" as const, enforcement: "launch" as const },
+      { id: "access:full", name: "Full access", access: "full" as const, enforcement: "launch" as const },
+    ],
+    before: { model: "grok-4.7", options: { effort: "high" } },
+    after: { model: "grok-4.6" },
+    quiet: "access:ask",
+    raised: "access:auto",
+  },
+}
+const harness = search.get("harness") === "grok" ? "grok" : "codex"
+const scene = SCENES[harness]
+const modeBefore = scene.quiet
+const modeAfter = search.get("mode") === "before" ? scene.quiet : scene.raised
+
+/** What each message went with, as the host was asked to send it: the check's proof that a choice rides the next one. */
+const sent: { text: string; tuning: SessionSettings | undefined }[] = []
+const bridge = window.mako!
+const prompt = bridge.livePrompt
+bridge.livePrompt = (id, requestId, text, attachments, tuning) => {
+  sent.push({ text, tuning })
+  return prompt(id, requestId, text, attachments, tuning)
+}
+/** Why the owner refuses an access change, while it does: as a launch-time ladder refuses a running Session. */
+let refusing: string | undefined
+const setMode = bridge.liveSetMode
+bridge.liveSetMode = async (id, mode) => {
+  if (refusing) throw new Error(refusing)
+  await setMode(id, mode)
+  // This page follows no host events: the Session's new mode arrives as the host's next batch would bring it.
+  const moved = await bridge.liveSnapshot(id)
+  if (moved) applyLiveSnapshot(moved)
+}
 
 const answer = [
   "The retry fix holds. The backoff now doubles from 200 ms and stops at 6.4 s, so a slow runner gets six tries before the job fails, and the jitter keeps two runners from retrying in step.",
@@ -77,15 +130,15 @@ const answer = [
   "Every case passes, including the one that used to time out on the slow runner.",
 ].join("\n")
 
-function request(id: string, text: string, model: string, effort: string, mode: string): LiveRequest {
-  return { id, text, attachments: [], status: "completed", tuning: { model, options: { effort } }, mode }
+function request(id: string, text: string, tuning: SessionSettings, mode: string): LiveRequest {
+  return { id, text, attachments: [], status: "completed", tuning, mode }
 }
 
 /** The Session's record: three turns, the access raised and the model changed before the third. */
 const requests: LiveRequest[] = [
-  request("11111111-1111-4111-8111-111111111111", "Check the retry fix", "gpt-5.5", "medium", "auto"),
-  request("22222222-2222-4222-8222-222222222222", "Run the payments tests again", "gpt-5.5", "medium", "auto"),
-  request("33333333-3333-4333-8333-333333333333", "Explain what changed", "gpt-5.6-sol", "high", "full-access"),
+  request("11111111-1111-4111-8111-111111111111", "Check the retry fix", scene.before, modeBefore),
+  request("22222222-2222-4222-8222-222222222222", "Run the payments tests again", scene.before, modeBefore),
+  request("33333333-3333-4333-8333-333333333333", "Explain what changed", scene.after, modeAfter),
 ]
 
 function snapshot(status: "ready" | "running", extra: LiveRequest[] = []): LiveSnapshot {
@@ -98,13 +151,10 @@ function snapshot(status: "ready" | "running", extra: LiveRequest[] = []): LiveS
       title: "Retry backoff on slow runners",
       connection: "connected",
       status,
-      modes: [
-        { id: "read-only", name: "Read Only", access: "plan" },
-        { id: "auto", name: "Auto", access: "ask" },
-        { id: "full-access", name: "Full Access", access: "full" },
-      ],
-      currentMode: "full-access",
+      modes: scene.modes,
+      currentMode: modeAfter,
       configOptions: [],
+      settings: scene.after,
     },
     revision: Date.now(),
     createdAt: 1,
@@ -162,13 +212,13 @@ const check = {
   renders,
   /** A turn starts (with a message queued behind it) or ends, as the host's batch says. */
   setRunning(running: boolean) {
-    const queued: LiveRequest[] = running ? [{ id: "44444444-4444-4444-8444-444444444444", text: "Now check the webhook retries too", attachments: [], status: "dispatching", tuning: requests[2]!.tuning, mode: "full-access" }] : []
+    const queued: LiveRequest[] = running ? [{ id: "44444444-4444-4444-8444-444444444444", text: "Now check the webhook retries too", attachments: [], status: "dispatching", tuning: requests[2]!.tuning, mode: modeAfter }] : []
     applyLiveSnapshot(snapshot(running ? "running" : "ready", queued))
   },
   /** A message waits behind the running turn. */
   queue(text: string) {
     const current = snapshot("running", [
-      { id: "44444444-4444-4444-8444-444444444444", text: "Now check the webhook retries too", attachments: [], status: "dispatching", tuning: requests[2]!.tuning, mode: "full-access" },
+      { id: "44444444-4444-4444-8444-444444444444", text: "Now check the webhook retries too", attachments: [], status: "dispatching", tuning: requests[2]!.tuning, mode: modeAfter },
       { id: "55555555-5555-4555-8555-555555555555", text, attachments: [], status: "queued", tuning: requests[2]!.tuning },
     ])
     applyLiveSnapshot(current)
@@ -178,6 +228,12 @@ const check = {
     for (const recognizer of listening) recognizer.onresult?.({ resultIndex: 0, results: [{ isFinal: final, 0: { transcript: words } }] })
   },
   listening: () => listening.size > 0,
+  /** What each message went with, in the order sent. */
+  sent,
+  /** The owner refuses access changes with `why`, or takes them again. */
+  refuseAccess(why: string | undefined) {
+    refusing = why
+  },
 }
 Reflect.set(window, "phoneCheck", check)
 
@@ -189,7 +245,7 @@ createRoot(document.getElementById("root")!).render(
           <LiveSession session={session} />
         </Profiler>
       </div>
-      <Toaster />
+      <Toaster position="top-center" />
     </WebClientContext>
   </TooltipProvider>
 )
