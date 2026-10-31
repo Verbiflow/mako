@@ -16,6 +16,11 @@ const MEDIUM = 0.55
 /** A popover keeps this far from its chip and from the window's edges. */
 const GAP_PX = 6
 const EDGE_PX = 12
+/**
+ * What an opening sheet focuses, so keys never reach what's behind it: its first field or button. A search isn't one: on a
+ * phone it would raise the keyboard over the choices it filters before anyone asked to type.
+ */
+const FIRST_FOCUS = "textarea:not([disabled]), input:not([disabled]):not([type='search']), button:not([disabled])"
 
 /**
  * How a sheet is drawn: from the bottom on a phone; wide, as the desk draws a choice, a popover under (or over) the chip
@@ -82,7 +87,7 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
       if (open) {
         opener.current = document.activeElement
         if (form === "pop" && anchor) place(sheet, anchor)
-        if (!sheet.contains(document.activeElement)) sheet.querySelector<HTMLElement>("textarea:not([disabled]), input:not([disabled]), button:not([disabled])")?.focus({ preventScroll: true })
+        if (!sheet.contains(document.activeElement)) sheet.querySelector<HTMLElement>(FIRST_FOCUS)?.focus({ preventScroll: true })
         sheet.animate([from, { opacity: 1, transform: "none" }], { duration: 180, easing: EASE_OUT })
         shade.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: EASE_OUT, fill: "forwards" })
         return
@@ -94,7 +99,7 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
     if (open) {
       opener.current = document.activeElement
       // Focus goes into the sheet, so keys never reach what's behind it (a field asks for it first by `autoFocus`).
-      if (!sheet.contains(document.activeElement)) sheet.querySelector<HTMLElement>("textarea:not([disabled]), input:not([disabled]), button:not([disabled])")?.focus({ preventScroll: true })
+      if (!sheet.contains(document.activeElement)) sheet.querySelector<HTMLElement>(FIRST_FOCUS)?.focus({ preventScroll: true })
       if (reducedMotion()) {
         if (expandable) sheet.style.transform = `translate3d(0, ${height * (1 - MEDIUM)}px, 0)`
         sheet.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: "ease-out" })

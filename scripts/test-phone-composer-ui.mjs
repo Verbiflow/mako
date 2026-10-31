@@ -16,6 +16,10 @@ import { fileURLToPath } from "node:url"
  * - "Switched to" lines come from the Session's record, so a reload draws the same ones.
  * - The queue's actions, the steps line and the edit's Cancel are 44 px targets.
  * - The queue's count is said once, by the queue; a phone's transcript keeps no rail of turns, nor a gutter for one.
+ * - The model, its effort and the access are one chip ("GPT-5.6 Sol · High", a caution mark under Full access) opening
+ *   one sheet: the harness's models, the chosen one's effort levels and nothing for a model without, the access as its
+ *   last row. A choice made there goes with the next message; an access change the owner refuses says why. A flick
+ *   down closes it.
  *
  * Screenshots go to the printed directory, or to the directory given as the first argument; `--port` serves the page
  * on that port (default: any free one).
@@ -77,9 +81,13 @@ async function checkPhone() {
       await wait(30)
     }
   }
-  const capture = async (name) => {
+  /** Every finite animation on the page finished, or 800 ms gone. */
+  const settled = async () => {
     await frames(3)
     await evaluate("Promise.race([Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => undefined))), new Promise(done => setTimeout(done, 800))]).then(() => true)")
+  }
+  const capture = async (name) => {
+    await settled()
     await writeFile(join(evidence, name), (await page.capturePage()).toPNG())
   }
   const centre = (selector) => evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing ' + ${JSON.stringify(selector)}); const r = node.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } })()`)
@@ -103,10 +111,148 @@ async function checkPhone() {
     await wait(400)
   }
   const typeText = (text) => page.debugger.sendCommand("Input.insertText", { text })
-  const phone = async (theme) => {
-    await window.loadURL(`${new URL("scripts/phone-composer.html", process.env.MAKO_PHONE_URL).href}?theme=${theme}`)
+  const phone = async (theme, scene = "") => {
+    // Each page starts from the fixture's own record: no choice kept by the one before.
+    if ((await evaluate("location.protocol")) === "http:") await evaluate("localStorage.clear(), true")
+    await window.loadURL(`${new URL("scripts/phone-composer.html", process.env.MAKO_PHONE_URL).href}?theme=${theme}${scene}`)
     await until("document.querySelectorAll('[data-answer]').length >= 3 && Boolean(document.querySelector('.web-composer-input'))", "the phone's transcript and composer")
     await evaluate("document.fonts.ready.then(() => true)")
+  }
+
+  const sheet = '[role="dialog"][aria-label="Model and access"]'
+  /** The chip as it reads: the model, its effort suffix, and whether it carries the caution mark. */
+  const chip = () => evaluate(`(() => {
+    const chip = document.querySelector('[data-thread-chip="settings"]')
+    const words = chip.querySelector('.truncate')
+    return { model: words.textContent, effort: chip.querySelector('.web-settings-chip-effort')?.textContent ?? null, risky: Boolean(chip.querySelector('[data-risky-mark]')), cut: words.scrollWidth > words.clientWidth, spoken: chip.getAttribute('aria-label') }
+  })()`)
+  /** The effort levels the sheet offers, and the one chosen. */
+  const efforts = () => evaluate(`(() => {
+    const row = document.querySelector('${sheet} [data-effort]')
+    if (!row) return null
+    return { kind: row.dataset.effort, values: [...row.querySelectorAll('[role="radio"]')].map(node => node.dataset.value), chosen: row.querySelector('[aria-checked="true"]')?.dataset.value ?? null, note: row.querySelector('.web-settings-effort-note')?.textContent ?? null }
+  })()`)
+  /** A tap on what `selector` names, once what's moving has come to rest, as a finger would aim. */
+  const tap = async (selector) => {
+    await settled()
+    await press(await centre(selector), 40)
+  }
+  const openSheet = async () => {
+    await tap('[data-thread-chip="settings"]')
+    await until(`Boolean(document.querySelector('${sheet}'))`, "the settings sheet")
+    await settled()
+  }
+  /** A finger flicked down from the sheet's top: 240 px in about 80 ms. */
+  const flickDown = async () => {
+    await settled()
+    const from = await centre(`${sheet} .web-settings-head`)
+    await touch("touchStart", from)
+    for (let step = 1; step <= 6; step += 1) {
+      await wait(14)
+      await touch("touchMove", { x: from.x, y: from.y + step * 40 })
+    }
+    await touch("touchEnd")
+    await until(`!document.querySelector('${sheet}')`, "the sheet closing on a flick")
+  }
+
+  /** The one chip and its sheet, on Codex (every model with effort) and on Grok (ending on a model without). */
+  const checkSettings = async () => {
+    // The bar keeps what a thumb needs: add, the one chip, the mic and send.
+    await phone("dark", "&mode=before")
+    const bar = await evaluate("[...document.querySelector('.web-composer-bar').querySelectorAll('button')].filter(node => node.offsetParent).map(node => node.dataset.threadChip ? 'chip' : node.dataset.sendAction ? 'send' : node.getAttribute('aria-label'))")
+    assert.deepEqual(bar, ["Add photos or files", "chip", "Dictate", "send"], `the composer's bar: ${JSON.stringify(bar)}`)
+    let read = await chip()
+    assert.deepEqual([read.model, read.effort, read.risky, read.cut], ["GPT-5.6 Sol", "· High", false, false], `the chip reads the model and its effort, whole: ${JSON.stringify(read)}`)
+    assert.equal(read.spoken, "Model and access: GPT-5.6 Sol, High reasoning, Ask before acting")
+    const reach = await evaluate(`(() => { const chip = document.querySelector('[data-thread-chip="settings"]'); const r = chip.getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top - 3, r.bottom + 3].every(y => chip.contains(document.elementFromPoint(x, y))) })()`)
+    assert.ok(reach, "the chip takes a touch 44 px tall")
+    await evaluate("document.activeElement?.blur(), true")
+    await capture("composer-iphone-dark.png")
+
+    await phone("dark")
+    read = await chip()
+    assert.deepEqual([read.model, read.effort, read.risky], ["GPT-5.6 Sol", "· High", true], `under Full access the chip carries the caution mark: ${JSON.stringify(read)}`)
+    await evaluate("document.activeElement?.blur(), true")
+    await capture("composer-full-access-iphone-dark.png")
+
+    // The sheet: Codex's models, the chosen one's levels, the access as its last row.
+    await openSheet()
+    assert.deepEqual(await efforts(), { kind: "choose", values: ["low", "medium", "high", "xhigh", "max", "ultra"], chosen: "high", note: null }, "GPT-5.6 Sol's levels")
+    assert.equal(await evaluate(`document.querySelector('${sheet} [aria-checked="true"][data-model]')?.dataset.model`), "gpt-5.6-sol")
+    for (const target of ['[data-model]', '[data-effort] [role="radiogroup"]', '[data-access-row]']) {
+      const size = await box(`${sheet} ${target}`)
+      assert.ok(size.height >= 44, `${target} is ${size.height} px tall`)
+    }
+    // A segment takes a touch anywhere on the track's height, its inset around the thumb included.
+    const segmentReach = await evaluate(`(() => { const track = document.querySelector('${sheet} [data-effort] [role="radiogroup"]'); const r = track.getBoundingClientRect(); const segment = track.querySelector('[data-value="low"]').getBoundingClientRect(); const x = segment.left + segment.width / 2; return [r.top + 1, r.bottom - 1].every(y => document.elementFromPoint(x, y)?.dataset.value === 'low') })()`)
+    assert.ok(segmentReach, "an effort segment takes a touch the track's full 44 px")
+    await capture("sheet-iphone-dark.png")
+
+    // Another model: its own levels, at once, and the chip follows; then a level of its own.
+    await tap(`${sheet} [data-model="gpt-5.6-luna"]`)
+    await until(`document.querySelector('${sheet} [data-effort] [role="radio"]:last-child')?.dataset.value === 'medium'`, "GPT-5.6 Luna's levels")
+    assert.deepEqual((await efforts()).values, ["low", "medium"], "only the levels GPT-5.6 Luna offers")
+    await tap(`${sheet} [data-effort] [data-value="medium"]`)
+    await until(`document.querySelector('${sheet} [data-effort] [aria-checked="true"]')?.dataset.value === 'medium'`, "Medium chosen")
+    read = await chip()
+    assert.deepEqual([read.model, read.effort], ["GPT-5.6 Luna", "· Medium"], `the chip follows the sheet: ${JSON.stringify(read)}`)
+
+    // The access: one row saying what it allows; tapped, the other levels open under it.
+    assert.match(await evaluate(`document.querySelector('${sheet} [data-access-row]').textContent`), /Full access.*Nothing waits for approval/)
+    await tap(`${sheet} [data-access-row]`)
+    await until(`document.querySelector('${sheet} [data-access-row]').getAttribute('aria-expanded') === 'true'`, "the access opened")
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('${sheet} [data-access-mode]')].map(node => node.dataset.accessMode)`), ["read-only", "auto"])
+    await capture("sheet-access-iphone-dark.png")
+    await tap(`${sheet} [data-access-mode="auto"]`)
+    await until("!document.querySelector('[data-thread-chip=\"settings\"] [data-risky-mark]')", "the caution mark gone with Full access")
+    assert.match(await evaluate(`document.querySelector('${sheet} [data-access-row]').textContent`), /^Ask before acting/)
+
+    // Refused by the owner, the access stays where the Session is and says why.
+    await evaluate("window.phoneCheck.refuseAccess('This session keeps the access it started with.'), true")
+    await tap(`${sheet} [data-access-row]`)
+    await until(`document.querySelector('${sheet} [data-access-row]').getAttribute('aria-expanded') === 'true'`, "the access opened again")
+    await tap(`${sheet} [data-access-mode="full-access"]`)
+    await until("[...document.querySelectorAll('[data-sonner-toast]')].some(node => node.textContent.includes('Not switched to Full access') && node.textContent.includes('keeps the access it started with'))", "the refusal, saying why")
+    assert.equal((await chip()).risky, false, "a refused change leaves the chip where the Session is")
+    await evaluate("window.phoneCheck.refuseAccess(undefined), true")
+
+    // A flick down closes it; the next message goes with what was chosen.
+    await flickDown()
+    await evaluate("document.querySelector('.web-composer-input').focus(), true")
+    await typeText("Then tidy the retry names")
+    await tap('[data-send-action="send"]')
+    await until("window.phoneCheck.sent.length === 1", "the next message sent")
+    const [message] = await evaluate("window.phoneCheck.sent")
+    assert.deepEqual([message.tuning?.model, message.tuning?.options?.effort], ["gpt-5.6-luna", "medium"], `the next message goes with the sheet's choice: ${JSON.stringify(message)}`)
+    console.log(`Settings: one chip (${read.model} ${read.effort}), the levels each model offers, sent with the next message`)
+
+    // Grok, its last model without effort: no suffix, and the sheet says so where the levels were.
+    await phone("dark", "&harness=grok")
+    read = await chip()
+    assert.deepEqual([read.model, read.effort, read.risky], ["Grok 4.6", null, false], `a model without effort reads as itself: ${JSON.stringify(read)}`)
+    await openSheet()
+    assert.deepEqual(await efforts(), { kind: "absent", values: [], chosen: null, note: "Grok 4.6 has no effort setting" })
+    await capture("no-effort-iphone-dark.png")
+    await tap(`${sheet} [data-model="grok-4.7"]`)
+    await until(`document.querySelector('${sheet} [data-effort]')?.dataset.effort === 'choose'`, "Grok 4.7's levels")
+    assert.deepEqual((await efforts()).values, ["low", "high"], "only the levels Grok 4.7 offers")
+    console.log("Settings: a model without effort has no control and no suffix")
+
+    // The same four, light.
+    await phone("light", "&mode=before")
+    await evaluate("document.activeElement?.blur(), true")
+    await capture("composer-iphone-light.png")
+    await phone("light")
+    await evaluate("document.activeElement?.blur(), true")
+    await capture("composer-full-access-iphone-light.png")
+    await openSheet()
+    await capture("sheet-iphone-light.png")
+    await tap(`${sheet} [data-access-row]`)
+    await until(`document.querySelector('${sheet} [data-access-row]').getAttribute('aria-expanded') === 'true'`, "the access opened")
+    await capture("sheet-access-iphone-light.png")
+    await phone("light", "&harness=grok")
+    await openSheet()
+    await capture("no-effort-iphone-light.png")
   }
 
   // A page first: emulating a window that has drawn nothing yet crashes Electron.
@@ -245,6 +391,8 @@ async function checkPhone() {
 
     await phone("light")
     await capture("answer-iphone-light.png")
+
+    await checkSettings()
   } finally {
     clearTimeout(watchdog)
   }
