@@ -124,7 +124,7 @@ function TurnChangesRow({ summary, conversation, requestId, workspace, undoable 
       data-turn-undone={undone ? "" : undefined}
       data-turn-changes-settling={summary.settling || undefined}
       title={summary.settling ? "Still settling: a change heard as the turn ended may yet be counted" : undefined}
-      className="flex h-7 min-w-0 max-w-full items-center gap-2 text-ui"
+      className="flex min-h-7 min-w-0 max-w-full flex-wrap items-center gap-x-2 text-ui"
     >
       <FileDiffIcon aria-hidden className="size-3.5 shrink-0 text-faint" />
       {summary.files > 0 ? (

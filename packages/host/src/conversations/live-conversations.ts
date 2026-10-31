@@ -819,6 +819,11 @@ export class LiveConversations {
     return this.turnReview.diff(id, requestId, path, options)
   }
 
+  /** A turn's diff of one file as stretches, bounded, with its writers when another writer shares a change. */
+  turnHunks(id: string, requestId: string, path: string, options?: { context?: number }) {
+    return this.turnReview.hunks(id, requestId, path, options)
+  }
+
   /** Who wrote each changed line of a turn's diff of one file. */
   turnWriters(id: string, requestId: string, path: string) {
     return this.turnReview.writers(id, requestId, path)

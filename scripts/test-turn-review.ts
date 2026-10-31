@@ -19,6 +19,8 @@ import type { TurnChanges } from "@mako/host/contracts/turn-changes"
 import type { WriterRun } from "@mako/host/contracts/turn-review"
 import { LiveJournal, storedRequest } from "@mako/host/conversations/live-journal"
 import { LiveTurnReview, undoneTurns, type TurnReviewLedger } from "@mako/host/conversations/live-turn-review"
+import { patchHunks, textHunks } from "@mako/host/conversations/turn-hunks"
+import { TURN_HUNK_LIMITS } from "@mako/host/contracts/turn-review"
 import { rewriteInPlace, type InPlaceFile } from "@mako/host/workspaces/worktree-move"
 
 /*
@@ -241,11 +243,55 @@ test("Changes › Turn reads turn 2 of 3 from a conversation nobody has open", a
   assert.deepEqual(runsOf(writers?.runs), runsOf(turnWriters(f.view, "T1", R2, appRecord(records[1]!))))
   const only = await review.diff(id, R2, "app.ts", { only: true })
   assert.equal(only.oldFile?.contents, lines(20, { 2: "line 2 by turn 1", 8: "line 8 by you", 12: "line 12 by T2" }))
+  // Another device reads the same diff in stretches, its writers with it: the person's and T2's lines share its blocks.
+  const hunks = await review.hunks(id, R2, "app.ts")
+  assert.equal(hunks.kind, "text")
+  if (hunks.kind === "text") {
+    const rows = hunks.hunks.flatMap((hunk) => [...hunk.kinds].map((kind, index) => `${kind}${hunk.lines[index]}`))
+    assert.ok(rows.includes("-line 5") && rows.includes("+line 5 by turn 2") && rows.includes("+line 8 by you") && rows.includes("+line 21 by turn 2") && rows.includes("-line 15"))
+    assert.ok(!rows.includes(" line 1"), "line 1 is past the context")
+    assert.equal(hunks.hunks[0]?.oldStart, 2)
+    assert.equal(hunks.oldLines, 20)
+    assert.equal(hunks.newLines, 21)
+    assert.deepEqual(runsOf(hunks.writers), runsOf(writers?.runs), "the writers are the review's own")
+  }
   // Turn 3 is a different file; turn 1's diff is its own line.
   assert.deepEqual((await review.files(id, R3, f.repo)).files.map((file) => file.path), ["util.ts"])
   assert.equal((await review.diff(id, R1, "app.ts")).newFile?.contents, app.r1)
   await f.tracker.close()
   rmSync(f.base, { recursive: true, force: true })
+})
+
+test("a turn's diff in stretches: a few rows for a line in a long file, numbered on each side, bounded", () => {
+  const long = Array.from({ length: 1_000 }, (_, i) => `row ${i + 1}`).join("\n") + "\n"
+  const one = textHunks(long, long.replace("row 500\n", "row 500 changed\n"))
+  assert.equal(one.hunks.length, 1)
+  assert.deepEqual(one.hunks[0], { oldStart: 497, newStart: 497, kinds: "   -+   ", lines: ["row 497", "row 498", "row 499", "row 500", "row 500 changed", "row 501", "row 502", "row 503"] })
+  // Two changes far apart are two stretches; close ones share one.
+  const two = textHunks(long, long.replace("row 10\n", "row ten\n").replace("row 900\n", "").replace("row 14\n", "row 14\nrow 14b\n"))
+  assert.deepEqual(two.hunks.map((hunk) => [hunk.oldStart, hunk.newStart, hunk.kinds]), [[7, 7, "   -+    +   "], [897, 898, "   -   "]])
+  // A new file is all additions after line 0 of nothing.
+  assert.deepEqual(textHunks(null, "a\nb\n").hunks, [{ oldStart: 0, newStart: 1, kinds: "++", lines: ["a", "b"] }])
+  // A rewrite of every line stops at the bound and says so.
+  const rewritten = textHunks(long.repeat(6), long.repeat(6).replaceAll("row", "line"))
+  assert.equal(rewritten.limited, true)
+  assert.ok(rewritten.hunks.reduce((total, hunk) => total + hunk.kinds.length, 0) <= TURN_HUNK_LIMITS.rows)
+  // A new file is one stretch; the characters bound it too, inside that stretch, and say so.
+  const chars = (hunks: ReturnType<typeof textHunks>) => hunks.hunks.reduce((total, hunk) => total + hunk.lines.reduce((sum, line) => sum + line.length + 1, 0), 0)
+  const wide = textHunks(null, Array.from({ length: 3_000 }, (_, i) => `${i}`.padEnd(218, "x")).join("\n"))
+  assert.equal(wide.hunks.length, 1)
+  assert.equal(wide.limited, true)
+  assert.ok(chars(wide) <= TURN_HUNK_LIMITS.chars, `${chars(wide)} characters`)
+  assert.ok(wide.hunks[0]!.lines.length < 3_000)
+  // A line past the bound is cut at it, and the cut is said.
+  const huge = textHunks("a\n", `a\n${"y".repeat(300 * 1024)}\n`)
+  assert.equal(huge.limited, true)
+  assert.ok(chars(huge) <= TURN_HUNK_LIMITS.chars)
+  assert.equal(huge.hunks[0]!.lines.at(-1)!.length < 300 * 1024, true)
+  // Within the bound nothing is cut, and nothing says it was.
+  assert.equal(textHunks("a\n", "b\n").limited, false)
+  // A shortened patch's own @@ lines place its stretches.
+  assert.deepEqual(patchHunks("diff --git a/x b/x\n@@ -3,2 +3,3 @@ fn\n a\n-b\n+c\n+d\n"), [{ oldStart: 3, newStart: 3, kinds: " -++", lines: ["a", "b", "c", "d"] }])
 })
 
 test("undo turn 2 keeps the person's line, the other Thread's and turn 1's", async () => {

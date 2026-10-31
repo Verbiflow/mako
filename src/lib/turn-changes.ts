@@ -1,5 +1,5 @@
 import type { GitFile } from "@/lib/types"
-import { countedChanges, type RequestChanges, type TurnChangedFile, type TurnChangeShare } from "@mako/host/contracts/turn-changes"
+import { countedChanges, turnFileRoot, type RequestChanges, type TurnChangeShare } from "@mako/host/contracts/turn-changes"
 
 /** Changed lines, and files not counted by lines, not sure whose. */
 export interface Unsure {
@@ -99,9 +99,7 @@ export function unsureWords({ lines, files }: Unsure): string {
 export const UNSURE_MEANING = "Changed while the turn ran, with nothing tying the change to the agent or to anyone else: a save of yours or another app's fits as well as the agent's. Not counted as the turn's."
 
 /** The repository a record's file is in: its path less its path inside the journal's root. */
-export function fileRoot(file: Pick<TurnChangedFile, "path" | "relative">): string {
-  return file.path.slice(0, file.path.length - file.relative.length - 1)
-}
+export const fileRoot = turnFileRoot
 
 /**
  * The repositories a turn's record names, in its order: what Review opens

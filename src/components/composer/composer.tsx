@@ -552,8 +552,11 @@ export function Composer() {
   const addRecord = attachments.addRecord
   useEffect(() => {
     const add = (event: WindowEventMap["mako:add-context"]) => {
+      // A chip about one conversation is that conversation's composer's alone.
+      if (event.conversation !== undefined && event.conversation !== activeAcp(acpStore.get())?.key) return
       const anchor = addRecord(event.detail)
       if (!anchor) return
+      event.preventDefault()
       const current = draftRef.current
       const kept = keptSelection.current
       const at = kept && kept.draft === current ? kept.end : current.length

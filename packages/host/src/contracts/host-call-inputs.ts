@@ -768,6 +768,13 @@ const inputs = {
       z.string(),
       z.object({ only: z.boolean().optional() }).optional(),
     ]),
+  "mako:live-turn-hunks": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.string(),
+      z.object({ context: z.number().optional() }).optional(),
+    ]),
   "mako:live-turn-undo": () =>
     z.tuple([
       z.string(),
@@ -1905,6 +1912,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-transfer", "conversations"],
   ["mako:live-turn-changes", "conversations"],
   ["mako:live-turn-diff", "conversations"],
+  ["mako:live-turn-hunks", "conversations"],
   ["mako:live-turn-undo", "conversations"],
   ["mako:live-turn-undo-preview", "conversations"],
   ["mako:live-turn-writers", "conversations"],

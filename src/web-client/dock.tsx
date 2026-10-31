@@ -26,6 +26,8 @@ import { noteAnswered } from "./install"
 import { dropUnsent, keepUnsent, retryUnconfirmed, retryUnsent, sendMessage, useOutbox, type SendTarget } from "./outbox"
 import { useWaking, wakeThread } from "./wake"
 import { askPreview, useAppStanding } from "./previews"
+import { sendWithReviewNotes } from "./review-notes"
+import { ReviewTray } from "./review-tray"
 
 /**
  * The phone's dock: everything between the transcript and the keyboard, one column pinned to the bottom of the screen.
@@ -82,9 +84,19 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   const send = async (text: string, attachments: PromptAttachment[], id: string): Promise<boolean> => {
     // A question waiting: the words are its answer, not a message.
     if (ask?.kind === "question" && attachments.length === 0 && typed.current?.(text)) return true
-    return sendMessage(target, id, text, attachments)
+    // Comments on a turn's lines waiting in this Session's draft go with it, as its context, marked with its ID
+    // while it goes, so a reload never sends them twice (`review-notes.ts`).
+    return sendWithReviewNotes(conversation, id, text, (message) => sendMessage(target, id, message, attachments))
   }
-  const steering = useSteering()
+  const steered = useSteering()
+  // A steer carries the waiting comments too: they go with whatever is sent next, never by themselves.
+  const steering = useMemo<Steering>(
+    () => ({
+      ...steered,
+      steer: (text, attachments, id) => sendWithReviewNotes(conversation, id, text, (message) => steered.steer(message, attachments, id)),
+    }),
+    [steered, conversation]
+  )
   const steerByDefault = usePrefs((prefs) => prefs.steerOnEnter)
   const harnessId = useAcp((state) => activeLiveAcp(state)?.harness)
   const switching = useSwitching((state) => state.pending.has(conversation))
@@ -114,6 +126,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
       <div className="mx-auto w-full max-w-content px-3">
         <PromptQueue onEdit={editing.begin} />
       </div>
+      <ReviewTray conversation={conversation} />
       <Composer
         key={draftKey}
         draftKey={draftKey}

@@ -118,8 +118,8 @@ const DeltaEvent = z.object({ type: z.string().regex(/delta$/) })
 export interface ScriptedModelOptions {
   /** GETs whose path starts with a key, answered with its JSON. */
   answers?: ReadonlyMap<string, string>
-  /** The reply to a conversation request, one that carries tools, given the request's text. */
-  reply: (heard: string) => ScriptedReply | undefined
+  /** The reply to a conversation request, one that carries tools, given the request's text and, where its wire says, the model it names. */
+  reply: (heard: string, request?: { model: string | undefined }) => ScriptedReply | undefined
   /** What a side request (a title, a summary) gets. */
   aside?: string
   /** A side request that carries the conversation's tools without forcing one, told apart by what it asks. */
@@ -186,7 +186,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
         response.statusCode = 400
         return void json(response, JSON.stringify({ error: { type: "invalid_request_error", message: "The scripted model answers Chat Completions, Anthropic Messages and OpenAI Responses only" } }))
       }
-      const reply = compacting(body.input, answer(`${request.method} ${path}`, { tools: offeredTools(body), tool_choice: body.tool_choice }, text))
+      const reply = compacting(body.input, answer(`${request.method} ${path}`, { tools: offeredTools(body), tool_choice: body.tool_choice, model: body.model }, text))
       if (reply.fail) {
         response.statusCode = reply.fail.status
         return void json(response, JSON.stringify(failure(wire, reply.fail.message)))
@@ -210,18 +210,18 @@ export async function scriptedModel(options: ScriptedModelOptions) {
     }
   }
   /** The script's next step for a conversation request, the aside for any other. */
-  const answer = (path: string, body: { tools?: JsonValue[]; tool_choice?: JsonValue }, heard: string): ScriptedReply => {
+  const answer = (path: string, body: { tools?: JsonValue[]; tool_choice?: JsonValue; model?: string | undefined }, heard: string): ScriptedReply => {
     const aside = options.aside ?? "Notes"
     const forced = forcedReply(body.tool_choice, body.tools, aside)
     const conversation = Boolean(body.tools?.length) && !forced && !options.side?.(heard)
-    const scripted = conversation ? options.reply(heard) : forced ?? { text: aside }
+    const scripted = conversation ? options.reply(heard, { model: body.model }) : forced ?? { text: aside }
     requests.push({ path, conversation, ...!scripted && { unscripted: true } })
     return scripted ? namespaced(scripted, body.tools) : { text: "The script has no more steps." }
   }
   /** Upgraded sockets, which `closeAllConnections` leaves open. */
   const sockets = new Set<Duplex>()
   /** What each served response's conversation carried, for a request that continues it: a subagent's runs beside its parent's, on its own socket or the same one. */
-  const chains = new Map<string, { tools?: JsonValue[]; heard: string }>()
+  const chains = new Map<string, { tools?: JsonValue[]; heard: string; model?: string | undefined }>()
   server.on("upgrade", (request: IncomingMessage, socket: Duplex) => {
     sockets.add(socket)
     socket.on("close", () => sockets.delete(socket))
@@ -233,11 +233,11 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       if (!body) return void send(JSON.stringify({ type: "error", status: 400, error: { type: "invalid_request_error", message: "The scripted model answers response.create only" } }))
       const continued = body.previous_response_id === undefined ? undefined : chains.get(body.previous_response_id)
       // The whole conversation the request carries, as one sent without `previous_response_id` would.
-      const chain = { tools: offeredTools(body) ?? continued?.tools, heard: `${continued?.heard ?? ""}${text}` }
+      const chain = { tools: offeredTools(body) ?? continued?.tools, heard: `${continued?.heard ?? ""}${text}`, model: body.model ?? continued?.model }
       const id = responseId()
       chains.set(`resp_${id}`, chain)
       if (body.generate === false) return void warmUpAnswer(id).forEach(send)
-      const reply = compacting(body.input, answer(`WS ${path}`, { tools: chain.tools, tool_choice: body.tool_choice }, chain.heard))
+      const reply = compacting(body.input, answer(`WS ${path}`, { tools: chain.tools, tool_choice: body.tool_choice, model: chain.model }, chain.heard))
       if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
       void paced(responsesStreamed(reply, id).map((event) => served(event, { model: body.model, usage: options.usage })), (event) => send(JSON.stringify(event)), reply.pace ?? options.pace)
     })
