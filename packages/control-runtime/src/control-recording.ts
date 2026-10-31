@@ -19,7 +19,6 @@ import {
   type FileHandle,
 } from "node:fs/promises"
 import { join, isAbsolute } from "node:path"
-import { tmpdir } from "node:os"
 import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
 import { heavy } from "./heavy-packages.js"
@@ -32,6 +31,7 @@ import {
   type RecordingReceipt,
   type ControlTarget,
 } from "@mako/control/control"
+import { controlRecordingsRoot } from "@mako/control/program"
 
 const execute = promisify(execFile)
 /** Whether this FFmpeg can rewrite packet timestamps without decoding. */
@@ -184,11 +184,7 @@ export class ControlRecording {
       ...parsed,
       fps: parsed.fps ?? (target.kind === "page" ? 60 : 30),
     }
-    const root =
-      options.directory ??
-      (process.env.MAKO_CONTROL_ARTIFACTS
-        ? join(process.env.MAKO_CONTROL_ARTIFACTS, "recordings")
-        : join(tmpdir(), "mako-recordings"))
+    const root = options.directory ?? controlRecordingsRoot()
     if (!isAbsolute(root))
       throw new Error("Recording directory must be absolute")
     // Preflight before the capture stream starts; no silent screenshots-only fallback.

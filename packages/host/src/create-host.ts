@@ -227,6 +227,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
           working: (busy) => core.current()?.machineSaves?.working(busy),
           settle: async (why) => core.current()?.machineSaves?.settle(why),
         },
+        artifacts: () => core.current()?.machineArtifacts?.state(),
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {

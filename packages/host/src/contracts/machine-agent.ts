@@ -142,6 +142,18 @@ export type MachineRuntimeState = {
    * why its last try failed while it tries again.
    */
   restore?: { state: "restoring" | "restored" | "none"; at: string; attempts: number; from?: number; ms?: number; failed?: string }
+  /** The machine's recordings and artifacts against their caps, as last swept (`MachineArtifacts`). */
+  artifacts?: ArtifactCapState
+}
+
+export type ArtifactKind = "recordings" | "artifacts" | "media"
+
+export type ArtifactCapState = {
+  at: string
+  kinds: Array<{ kind: ArtifactKind; bytes: number; items: number; capBytes: number; removed: number; removedBytes: number }>
+  /** The last thing removed to keep its kind under its cap, by its path in its kind's folder. */
+  lastRemoved?: { at: string; kind: ArtifactKind; path: string; bytes: number; ageMs: number }
+  failing?: string
 }
 
 /** What the host tells the agent. */
