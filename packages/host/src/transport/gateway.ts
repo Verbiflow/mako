@@ -28,6 +28,8 @@ export type GatewayHostOptions = {
   watch?: RuntimeOptions["watch"]
   /** Requests to its Threads' apps from the account's other devices (`RuntimeOptions.ports`); without it, each is refused. */
   ports?: RuntimeOptions["ports"]
+  /** SSH from the person's editor to its machine's SSH server (`RuntimeOptions.ssh`); without it, each is refused. */
+  ssh?: RuntimeOptions["ssh"]
 }
 
 /**
@@ -83,6 +85,7 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
   if (options.media) runtime.media = options.media
   if (options.watch) runtime.watch = options.watch
   if (options.ports) runtime.ports = options.ports
+  if (options.ssh) runtime.ssh = options.ssh
   return serveRuntime(link, runtime)
 }
 

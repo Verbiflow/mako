@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
+import { runGatewayConformance, runMediaConformance, runSshConformance } from "../dist/conformance.js"
+import { SSH_ACK_EVERY_BYTES, SSH_CHUNK_BYTES, SSH_WINDOW_BYTES, SshIncoming, SshOutgoing, SshRefusedError } from "../dist/ssh.js"
+import { SSH_VERSION } from "../dist/version.js"
 import { CORRELATION_HEADER, GatewayHttpError, RETRY_AFTER_MOST_MS, gatewayCalls, retryAfterMs } from "../dist/gateway-http.js"
 import { recordsOverHttp } from "../dist/records-http.js"
 import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema, ReturnStateSchema, ReturnBeginRequestSchema } from "../dist/moves.js"
@@ -107,7 +109,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 14)
+    assert.equal(SUPPORTED_VERSIONS.max, 15)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1105,6 +1107,7 @@ function servedOverSockets(gateway) {
     async runtime() {
       const [near, far] = socketPair()
       const link = await gateway.connectRuntime()
+      link.receiveMedia((message) => far.readyState === 1 && far.send(message))
       far.addEventListener("message", (event) =>
         event.data instanceof Uint8Array ? link.sendMedia(event.data) : link.sendUnchecked(event.data)
       )
@@ -1120,7 +1123,20 @@ function servedOverSockets(gateway) {
       const session = await gateway.connectClient(actor, connection)
       const subscriptions = new Map()
       const watches = new Map()
+      const sshes = new Map()
       far.addEventListener("message", async (event) => {
+        if (event.data instanceof Uint8Array) {
+          const { stream, data } = decodeMediaMessage(event.data)
+          const ssh = sshes.get(stream)
+          if (!ssh) return
+          // The client hears it took its bytes once they went on to the runtime, so it sends no more than a window ahead.
+          ssh.passing += data.byteLength
+          ssh.stream.send(data)
+          return void ssh.stream.drained().then(() => {
+            ssh.taken.took(ssh.passing)
+            ssh.passing = 0
+          })
+        }
         let frame
         try {
           frame = decodeClientFrame(event.data)
@@ -1157,8 +1173,36 @@ function servedOverSockets(gateway) {
               }
             }
           })()
+        } else if (frame.type === "ssh-open") {
+          const stream = session.ssh({ threadId: endpoint.threadId, stream: frame.stream })
+          const ssh = {
+            stream,
+            passing: 0,
+            received: 0,
+            taken: new SshIncoming((received) => far.readyState === 1 && far.send(encodeGatewayClientFrame({ type: "media-ack", stream: frame.stream, received }))),
+          }
+          sshes.set(frame.stream, ssh)
+          void stream.opened.then(() => far.readyState === 1 && far.send(encodeGatewayClientFrame({ type: "ssh-opened", stream: frame.stream })), () => undefined)
+          void (async () => {
+            for (;;) {
+              const delivery = await stream.next().catch(() => undefined)
+              if (!delivery || far.readyState !== 1) return
+              if (delivery.kind === "data") far.send(encodeMediaMessage(frame.stream, delivery.data))
+              else {
+                sshes.delete(frame.stream)
+                return far.send(encodeGatewayClientFrame({ type: "media-ended", stream: frame.stream, problem: delivery.problem }))
+              }
+            }
+          })()
+        } else if (frame.type === "media-ack" && sshes.has(frame.stream)) {
+          const ssh = sshes.get(frame.stream)
+          ssh.stream.took(frame.received - ssh.received)
+          ssh.received = Math.max(ssh.received, frame.received)
         } else if (frame.type === "media-ack") watches.get(frame.stream)?.ack(frame.received)
-        else if (frame.type === "media-unwatch") {
+        else if (frame.type === "media-unwatch" && sshes.has(frame.stream)) {
+          sshes.get(frame.stream).stream.close()
+          sshes.delete(frame.stream)
+        } else if (frame.type === "media-unwatch") {
           watches.get(frame.stream)?.close()
           watches.delete(frame.stream)
         }
@@ -1198,6 +1242,14 @@ describe("media conformance", () => {
 
 describe("media conformance over sockets", () => {
   runMediaConformance(async () => mediaGateway(servedOverSockets(createFakeGateway())), test)
+})
+
+describe("SSH conformance", () => {
+  runSshConformance(async () => mediaGateway(createFakeGateway()), test)
+})
+
+describe("SSH conformance over sockets", () => {
+  runSshConformance(async () => mediaGateway(servedOverSockets(createFakeGateway())), test)
 })
 
 describe("media messages", () => {
@@ -1398,6 +1450,182 @@ describe("a runtime's port requests", () => {
     assert.throws(() => GatewayFrameEnvelopeSchema.parse({ type: "port-open", stream: "port-req-3", ...request, body: "x".repeat(PORT_BODY_LIMIT * 2) }))
     const files = { to: { kind: "files" }, method: "GET", path: "/file/asset/abc/def/shot.png", headers: [["range", "bytes=0-"]] }
     assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame({ type: "port-open", stream: "port-req-4", ...files })), { type: "port-open", stream: "port-req-4", ...files })
+  })
+})
+
+describe("a runtime's SSH streams", () => {
+  /** A runtime serving SSH on the fake gateway, running th-1, with a handler that records, and a client of it. */
+  async function served(options = {}) {
+    const gateway = createFakeGateway()
+    const calls = []
+    const senders = new Map()
+    const ssh = {
+      open: (stream, threadId, sender) => {
+        calls.push(["open", stream, threadId])
+        senders.set(stream, sender)
+      },
+      data: (stream, data) => calls.push(["data", stream, data]),
+      acked: (stream, received) => calls.push(["acked", stream, received]),
+      closed: (stream) => calls.push(["closed", stream]),
+    }
+    const runtime = await serveRuntime(await gateway.connectRuntime(), {
+      runtimeId: "machine",
+      build: "test",
+      handle: async (operation) => answer(operation, null),
+      ssh: options.noSsh ? undefined : ssh,
+      versions: options.versions,
+    })
+    await gateway.assign("th-1", "machine")
+    while (runtime.generation("th-1") === undefined) await settle()
+    return { gateway, runtime, calls, senders, session: await gateway.connectClient(client) }
+  }
+  const until = async (check) => {
+    while (!check()) await settle()
+  }
+
+  test("an open reaches the handler, and once it says so each side's bytes and taking reach the other", async () => {
+    const { gateway, runtime, calls, senders, session } = await served()
+    const ssh = session.ssh({ threadId: "th-1", stream: "ssh-stream-1" })
+    ssh.send(Uint8Array.of(1, 2))
+    await until(() => senders.has("ssh-stream-1"))
+    assert.deepEqual(calls, [["open", "ssh-stream-1", "th-1"]])
+    const sender = senders.get("ssh-stream-1")
+    sender.opened()
+    await ssh.opened
+    await until(() => calls.length === 2)
+    assert.deepEqual([calls[1][0], calls[1][1], [...calls[1][2]]], ["data", "ssh-stream-1", [1, 2]])
+    assert.equal(sender.send(Uint8Array.of(3)), true)
+    assert.deepEqual(await ssh.next(), { kind: "data", data: Uint8Array.of(3) })
+    ssh.took(SSH_ACK_EVERY_BYTES)
+    await until(() => calls.length === 3)
+    assert.deepEqual(calls[2], ["acked", "ssh-stream-1", SSH_ACK_EVERY_BYTES])
+    ssh.close()
+    await until(() => calls.length === 4)
+    assert.deepEqual(calls[3], ["closed", "ssh-stream-1"])
+    assert.equal(sender.send(Uint8Array.of(4)), false, "nothing is sent on a stream its client closed")
+    runtime.close()
+    await runtime.done
+    await gateway.close()
+  })
+
+  test("a client sends past its window only once the runtime says it took the bytes", async () => {
+    const { gateway, runtime, calls, senders, session } = await served()
+    const ssh = session.ssh({ threadId: "th-1", stream: "ssh-stream-1" })
+    await until(() => senders.has("ssh-stream-1"))
+    const sender = senders.get("ssh-stream-1")
+    sender.opened()
+    await ssh.opened
+    const arrived = () => calls.filter(([kind]) => kind === "data").reduce((sum, [, , data]) => sum + data.byteLength, 0)
+    let drained = false
+    ssh.send(new Uint8Array(SSH_WINDOW_BYTES + 1))
+    void ssh.drained().then(() => (drained = true))
+    await until(() => arrived() === SSH_WINDOW_BYTES)
+    for (let turn = 0; turn < 20; turn++) await settle()
+    assert.equal(arrived(), SSH_WINDOW_BYTES)
+    assert.equal(drained, false)
+    sender.took(SSH_ACK_EVERY_BYTES - 1)
+    for (let turn = 0; turn < 20; turn++) await settle()
+    assert.equal(arrived(), SSH_WINDOW_BYTES, "under a quarter window isn't said")
+    sender.took(1)
+    await until(() => arrived() === SSH_WINDOW_BYTES + 1)
+    await ssh.drained()
+    runtime.close()
+    await runtime.done
+    await gateway.close()
+  })
+
+  test("a runtime ending a stream ends it for its client with its reason, and hears nothing more of it", async () => {
+    const { gateway, runtime, calls, senders, session } = await served()
+    const ssh = session.ssh({ threadId: "th-1", stream: "ssh-stream-1" })
+    await until(() => senders.has("ssh-stream-1"))
+    const reason = problem("unavailable", "The machine's SSH server isn't running", "c-1", "not-applied", { status: 503 })
+    senders.get("ssh-stream-1").end(reason)
+    await assert.rejects(ssh.opened, (error) => error instanceof SshRefusedError && error.problem.title === reason.title)
+    assert.deepEqual(await ssh.next(), { kind: "ended", problem: reason })
+    runtime.close()
+    await runtime.done
+    assert.deepEqual(calls.map(([kind]) => kind), ["open"], "a stream the runtime ended isn't closed again")
+    await gateway.close()
+  })
+
+  test("a Thread taken from the runtime, or a fence, ends its SSH streams for both sides", async () => {
+    const { gateway, runtime, calls, senders, session } = await served()
+    const ssh = session.ssh({ threadId: "th-1", stream: "ssh-stream-1" })
+    await until(() => senders.has("ssh-stream-1"))
+    senders.get("ssh-stream-1").opened()
+    await ssh.opened
+    await gateway.assign("th-1", "elsewhere")
+    assert.equal((await ssh.next()).kind, "ended")
+    await until(() => calls.some(([kind]) => kind === "closed"))
+    assert.equal(senders.get("ssh-stream-1").send(Uint8Array.of(1)), false)
+    runtime.close()
+    await runtime.done
+    await gateway.close()
+  })
+
+  test("a runtime without a handler, or that agreed a version before SSH, never serves one", async () => {
+    for (const options of [{ noSsh: true }, { versions: { min: 1, max: SSH_VERSION - 1 } }]) {
+      const { gateway, runtime, calls, session } = await served(options)
+      const ssh = session.ssh({ threadId: "th-1", stream: "ssh-stream-1" })
+      await assert.rejects(ssh.opened, SshRefusedError)
+      const end = await ssh.next()
+      assert.equal(end.kind, "ended")
+      assert.equal(problemType(end.problem), "unsupported-version")
+      assert.deepEqual(calls, [])
+      runtime.close()
+      await runtime.done
+      await gateway.close()
+    }
+  })
+
+  test("SSH frames cross the wire as they were sent", () => {
+    assert.deepEqual(decodeClientFrame(encodeClientFrame({ type: "ssh-open", stream: "ssh-stream-1" })), { type: "ssh-open", stream: "ssh-stream-1" })
+    assert.deepEqual(decodeGatewayClientFrame(encodeGatewayClientFrame({ type: "ssh-opened", stream: "ssh-stream-1" })), { type: "ssh-opened", stream: "ssh-stream-1" })
+    assert.deepEqual(decodeGatewayClientFrame(encodeGatewayClientFrame({ type: "media-ack", stream: "ssh-stream-1", received: 9 })), { type: "media-ack", stream: "ssh-stream-1", received: 9 })
+    assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame({ type: "ssh-open", threadId: "th-1", stream: "ssh-stream-1" })), { type: "ssh-open", threadId: "th-1", stream: "ssh-stream-1" })
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "ssh-opened", stream: "ssh-stream-1" })), { type: "ssh-opened", stream: "ssh-stream-1" })
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "media-ack", stream: "ssh-stream-1", received: 9 })), { type: "media-ack", stream: "ssh-stream-1", received: 9 })
+  })
+})
+
+describe("SSH pacing", () => {
+  test("sends nothing until released, then pieces of at most a chunk while under a window not taken", () => {
+    const sent = []
+    const outgoing = new SshOutgoing((piece) => (sent.push(piece.byteLength), true))
+    outgoing.write(new Uint8Array(SSH_WINDOW_BYTES + SSH_CHUNK_BYTES + 3))
+    assert.deepEqual(sent, [])
+    outgoing.release()
+    assert.equal(sent.length, SSH_WINDOW_BYTES / SSH_CHUNK_BYTES)
+    assert.ok(sent.every((bytes) => bytes === SSH_CHUNK_BYTES))
+    assert.equal(outgoing.queued, SSH_CHUNK_BYTES + 3)
+    outgoing.acked(10)
+    assert.equal(sent.at(-1), 10, "only as much as was taken")
+    outgoing.acked(SSH_WINDOW_BYTES + 10)
+    assert.equal(outgoing.queued, 0)
+    assert.equal(sent.reduce((sum, bytes) => sum + bytes, 0), SSH_WINDOW_BYTES + SSH_CHUNK_BYTES + 3)
+  })
+
+  test("closes once it can't transmit, and settles whoever waits for it to drain", async () => {
+    let open = true
+    const outgoing = new SshOutgoing(() => open)
+    outgoing.release()
+    outgoing.write(new Uint8Array(SSH_WINDOW_BYTES * 2))
+    const drained = outgoing.drained()
+    open = false
+    outgoing.acked(SSH_WINDOW_BYTES)
+    await drained
+    assert.equal(outgoing.queued, 0)
+    outgoing.write(Uint8Array.of(1))
+    assert.equal(outgoing.queued, 0, "nothing more is taken once closed")
+  })
+
+  test("says what it took once a quarter window more, and not for every keystroke", () => {
+    const said = []
+    const incoming = new SshIncoming((received) => said.push(received))
+    for (let index = 0; index < 100; index++) incoming.took(1)
+    assert.deepEqual(said, [])
+    incoming.took(SSH_ACK_EVERY_BYTES)
+    assert.deepEqual(said, [SSH_ACK_EVERY_BYTES + 100])
   })
 })
 

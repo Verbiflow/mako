@@ -7,13 +7,15 @@ import {
 import { type ConnectionCredential, renewal } from "./credential.js"
 import type { RuntimeLink } from "./gateway.js"
 import { type LiveForm, WHOLE_LIVE_FORM } from "./live-form.js"
-import { type MediaHandler, type MediaSender, type MediaStreamId, encodeMediaMessage } from "./media.js"
+import { type MediaHandler, type MediaSender, type MediaStreamId, decodeMediaMessage, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { PortHandler, PortRequest } from "./ports.js"
 import type { GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
+import { type SshHandler, type SshSender, SshIncoming } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { WireError } from "./wire-error.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -48,6 +50,8 @@ export type RuntimeOptions = {
   media?: MediaHandler
   /** Makes requests to the apps this runtime serves on its ports (`ports.ts`); without it, every request ends at once. */
   ports?: PortHandler
+  /** Connects clients to its machine's SSH server (`ssh.ts`); without it, every SSH stream ends at once. */
+  ssh?: SshHandler
   /**
    * The conversations another device watches now, the whole set, for this link alone (version 5 on): send their live
    * updates with `live`, and no others'. A new link starts with none watched. From version 9, `after` says by
@@ -177,9 +181,13 @@ export async function serveRuntime(
     if (!link.closed) link.send({ type: "reply", reply })
   }
 
-  /** The streams this link serves, each until its viewer leaves, the runtime ends it, or the link closes: a Thread's media, or a port request's answer. */
-  const streams = new Map<MediaStreamId, MediaSender & ({ kind: "media"; threadId: string } | { kind: "port" })>()
-  const released = (stream: MediaStreamId, sender: { kind: "media" | "port" }) => (sender.kind === "port" ? options.ports?.closed(stream) : options.media?.unwatched(stream))
+  /**
+   * The streams this link serves, each until its viewer leaves, the runtime ends it, or the link closes: a Thread's
+   * media, a port request's answer, or an SSH connection to the machine's server.
+   */
+  const streams = new Map<MediaStreamId, MediaSender & ({ kind: "media"; threadId: string } | { kind: "port" } | { kind: "ssh"; threadId: string })>()
+  const released = (stream: MediaStreamId, sender: { kind: "media" | "port" | "ssh" }) =>
+    sender.kind === "port" ? options.ports?.closed(stream) : sender.kind === "ssh" ? options.ssh?.closed(stream) : options.media?.unwatched(stream)
   const sending = (stream: MediaStreamId, current: () => MediaSender | undefined): MediaSender => ({
     send: (data) => {
       if (current() === undefined || link.closed) return false
@@ -232,6 +240,49 @@ export async function serveRuntime(
     handler.open(stream, request, made)
   }
 
+  const sshHandler = first.version >= SSH_VERSION ? options.ssh : undefined
+  const sshOpened = (frame: Extract<GatewayFrame, { type: "ssh-open" }>) => {
+    if (!sshHandler)
+      return endStream(frame.stream, problem("unsupported-version", "This runtime serves no SSH", crypto.randomUUID(), "not-applied", { status: 501 }))
+    if (threads.generation(frame.threadId) === undefined)
+      return endStream(frame.stream, problem("fenced", "This runtime doesn't run the Thread", crypto.randomUUID(), "not-applied", { status: 409 }))
+    const { stream, threadId } = frame
+    const before = streams.get(stream)
+    if (before) {
+      streams.delete(stream)
+      released(stream, before)
+    }
+    const current = () => (streams.get(stream) === made ? made : undefined)
+    const taken = new SshIncoming((received) => {
+      if (current() && !link.closed) link.send({ type: "media-ack", stream, received })
+    })
+    const made: MediaSender & SshSender & { kind: "ssh"; threadId: string } = {
+      kind: "ssh",
+      threadId,
+      ...sending(stream, current),
+      opened: () => {
+        if (current() && !link.closed) link.send({ type: "ssh-opened", stream })
+      },
+      took: (bytes) => taken.took(bytes),
+    }
+    streams.set(stream, made)
+    sshHandler.open(stream, threadId, made)
+  }
+  // A client's bytes come only after `ssh-opened`, so the stream they name is already open here.
+  if (sshHandler)
+    link.receiveMedia?.((message) => {
+      let decoded: ReturnType<typeof decodeMediaMessage>
+      try {
+        decoded = decodeMediaMessage(message)
+      } catch (error) {
+        if (!(error instanceof WireError)) throw error
+        return link.close()
+      }
+      const sender = streams.get(decoded.stream)
+      if (sender?.kind === "ssh") sshHandler.data(decoded.stream, decoded.data)
+      else endStream(decoded.stream)
+    })
+
   let ending: Problem | undefined
   const done = (async () => {
     for await (const frame of link.frames()) {
@@ -242,10 +293,12 @@ export async function serveRuntime(
         void answer(frame.operation, frame.generation)
       else if (frame.type === "media-watch") watched(frame)
       else if (frame.type === "port-open") opened(frame)
+      else if (frame.type === "ssh-open") sshOpened(frame)
       else if (frame.type === "watch") options.watch?.(frame.conversations, frame.after, frame.forms)
       else if (frame.type === "media-ack") {
         const sender = streams.get(frame.stream)
         if (sender?.kind === "port") options.ports?.acked(frame.stream, frame.received)
+        else if (sender?.kind === "ssh") options.ssh?.acked(frame.stream, frame.received)
         else if (sender) options.media?.acked(frame.stream, frame.received)
       } else if (frame.type === "media-unwatch") {
         const sender = streams.get(frame.stream)
@@ -255,9 +308,9 @@ export async function serveRuntime(
         // A Thread taken from this runtime takes its streams with it.
         if (frame.type === "fence")
           for (const [stream, sender] of streams)
-            if (sender.kind === "media" && sender.threadId === frame.threadId && threads.generation(frame.threadId) === undefined) {
+            if (sender.kind !== "port" && sender.threadId === frame.threadId && threads.generation(frame.threadId) === undefined) {
               streams.delete(stream)
-              options.media?.unwatched(stream)
+              released(stream, sender)
             }
       }
     }

@@ -1,5 +1,6 @@
 import { z } from "zod"
 import {
+  type Actor,
   ActorSchema,
   type Operation,
   type Problem,
@@ -29,12 +30,14 @@ import {
   MediaStreamIdSchema,
   type MediaWatch,
   decodeMediaMessage,
+  encodeMediaMessage,
   mediaStreamOf,
 } from "./media.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import { type SshClient, SshIncoming, SshOutgoing, SshRefusedError, type SshStream } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
 import { LINGER_MS, LiveTail, frameFor, logFor, streamNoticeText } from "./live-tail.js"
 import { type LiveForm, WHOLE_LIVE_FORM, readersForm, readsLiveForm } from "./live-form.js"
 import {
@@ -115,6 +118,8 @@ type Connection = {
   closed: boolean
   inbox: Inbox<GatewayFrame>
   deliver(frame: GatewayFrame): void
+  /** A binary message to the runtime: an SSH client's bytes. */
+  deliverMedia(message: Uint8Array): void
   close(): void
 }
 
@@ -137,7 +142,9 @@ type Running = {
  * alone: inputs, values and events reach their consumers as their producers encoded them.
  */
 /** The fake, plus what its tests read of it: each Thread's runtime's last word on whether it's working, and on its conversations. */
-export type FakeGateway = GatewayUnderTest & {
+export type FakeGateway = Omit<GatewayUnderTest, "connectClient"> & {
+  /** A client of the gateway, which also opens SSH streams (`ssh.ts`). */
+  connectClient(actor: Actor, connection?: ClientConnection): Promise<ClientSession & SshClient>
   activity(threadId: string): { busy: boolean; work: string[]; at: Date } | undefined
   /** Each report of its Sessions a runtime sent, in order, for a test of what it says and when. */
   reports(runtimeId: string): SessionsReport[]
@@ -230,6 +237,25 @@ export function createFakeGateway(
     for (const [stream, watch] of watches)
       if (watch.runtime === runtime && (threadId === undefined || watch.threadId === threadId)) endWatch(stream, reason)
   }
+  /**
+   * SSH streams (`ssh.ts`), each one client's to the runtime that ran its Thread when it asked: what the client reads,
+   * its sending, held until the runtime says `ssh-opened`, and how it hears that.
+   */
+  const sshes = new Map<MediaStreamId, { threadId: string; runtime: Connection; inbox: Inbox<MediaDelivery>; outgoing: SshOutgoing; open(): void; refuse(reason?: Problem): void }>()
+  const endSsh = (stream: MediaStreamId, reason?: Problem) => {
+    const ssh = sshes.get(stream)
+    if (!ssh) return
+    sshes.delete(stream)
+    ssh.outgoing.close()
+    ssh.refuse(reason)
+    ssh.inbox.push(reason ? { kind: "ended", problem: reason } : { kind: "ended" })
+    ssh.inbox.close()
+  }
+  const endSshesOf = (runtime: Connection, reason: Problem, threadId?: string) => {
+    for (const [stream, ssh] of sshes)
+      if (ssh.runtime === runtime && (threadId === undefined || ssh.threadId === threadId)) endSsh(stream, reason)
+  }
+
   /** A runtime's media message, as the hosted gateway routes it: by its header alone, to the stream's one viewer. */
   const media = (connection: Connection, message: Uint8Array) => {
     let stream: MediaStreamId
@@ -239,9 +265,9 @@ export function createFakeGateway(
       if (!(error instanceof WireError)) throw error
       return refuse(connection, problem("bad-request", "Not a media message", connection.correlationId, "not-applied", { status: 400, detail: error.message }))
     }
-    const watch = watches.get(stream)
-    if (!watch || watch.runtime !== connection) return connection.deliver({ type: "media-unwatch", stream })
-    watch.inbox.push({ kind: "data", data: decodeMediaMessage(message).data })
+    const viewer = watches.get(stream) ?? sshes.get(stream)
+    if (!viewer || viewer.runtime !== connection) return connection.deliver({ type: "media-unwatch", stream })
+    viewer.inbox.push({ kind: "data", data: decodeMediaMessage(message).data })
   }
 
   const thread = (threadId: string): Thread => {
@@ -304,7 +330,9 @@ export function createFakeGateway(
       return
     runtimes.delete(connection.runtimeId)
     log({ event: "disconnected", runtimeId: connection.runtimeId })
-    endWatchesOf(connection, problem("unavailable", "The Thread's runtime left", connection.correlationId, "not-applied", { status: 503 }))
+    const left = problem("unavailable", "The Thread's runtime left", connection.correlationId, "not-applied", { status: 503 })
+    endWatchesOf(connection, left)
+    endSshesOf(connection, left)
     for (const [id, waiting] of running)
       if (waiting.runtimeId === connection.runtimeId)
         waiting.settle(
@@ -539,6 +567,9 @@ export function createFakeGateway(
       waiting.settle(frame.reply, true)
     }
     if (frame.type === "media-end" && watches.get(frame.stream)?.runtime === connection) endWatch(frame.stream, frame.problem)
+    if (frame.type === "media-end" && sshes.get(frame.stream)?.runtime === connection) endSsh(frame.stream, frame.problem)
+    if (frame.type === "ssh-opened" && sshes.get(frame.stream)?.runtime === connection) sshes.get(frame.stream)?.open()
+    if (frame.type === "media-ack" && sshes.get(frame.stream)?.runtime === connection) sshes.get(frame.stream)?.outgoing.acked(frame.received)
     // Going away on purpose: its link is let go now, as the gateway does, not when its heartbeats stop.
     if (frame.type === "going-quiet") {
       log({ event: "going-quiet", runtimeId: connection.runtimeId, correlationId: connection.correlationId })
@@ -656,6 +687,7 @@ export function createFakeGateway(
   return {
     async connectRuntime(): Promise<RuntimeLink> {
       const inbox = new Inbox<GatewayFrame>()
+      let mediaListener: ((message: Uint8Array) => void) | undefined
       const connection: Connection = {
         runtimeId: undefined,
         version: undefined,
@@ -665,6 +697,13 @@ export function createFakeGateway(
         deliver: (frame) => {
           if (!connection.closed)
             inbox.push(decodeGatewayFrame(encodeGatewayFrame(frame)))
+        },
+        deliverMedia: (message) => {
+          if (connection.closed) return
+          // In order behind the frames already delivered, as a socket keeps them.
+          const copy = message.slice()
+          if (mediaListener) queueMicrotask(() => mediaListener?.(copy))
+          else connection.close()
         },
         close: () => {
           if (connection.closed) return
@@ -687,6 +726,9 @@ export function createFakeGateway(
           const copy = message.slice()
           queueMicrotask(() => media(connection, copy))
         },
+        receiveMedia: (listener) => {
+          mediaListener = listener
+        },
         next: (timeoutMs) => inbox.next(timeoutMs),
         frames: () => inbox,
         close: () => connection.close(),
@@ -696,10 +738,11 @@ export function createFakeGateway(
       }
     },
 
-    async connectClient(actor, connection: ClientConnection = {}): Promise<ClientSession> {
+    async connectClient(actor, connection: ClientConnection = {}): Promise<ClientSession & SshClient> {
       ActorSchema.parse(actor)
       const reads = connection.live ?? WHOLE_LIVE_FORM
       const answer = (reply: Reply) => decodeReply(encodeReply(reply))
+      const ownSshes = new Map<MediaStreamId, SshStream>()
       return {
         async call(sent) {
           const text = encodeOperation(sent)
@@ -813,6 +856,74 @@ export function createFakeGateway(
             },
           }
         },
+        ssh({ threadId, stream }): SshStream {
+          MediaStreamIdSchema.parse(stream)
+          ownSshes.get(stream)?.close()
+          const inbox = new Inbox<MediaDelivery>()
+          const mine = () => {
+            const ssh = sshes.get(stream)
+            return ssh?.inbox === inbox ? ssh : undefined
+          }
+          let open = () => {}
+          let refuse = (_reason?: Problem) => {}
+          const opened = new Promise<void>((resolve, reject) => {
+            open = resolve
+            refuse = (reason) => reject(new SshRefusedError(reason))
+          })
+          // Read by whoever waits for it; a stream nobody waited on ends without an unhandled rejection.
+          opened.catch(() => undefined)
+          const outgoing = new SshOutgoing((piece) => {
+            const ssh = mine()
+            if (!ssh) return false
+            ssh.runtime.deliverMedia(encodeMediaMessage(stream, piece))
+            return true
+          })
+          const taken = new SshIncoming((received) => mine()?.runtime.deliver({ type: "media-ack", stream, received }))
+          const target = threads.get(threadId)
+          const owner = target?.owner ? runtimes.get(target.owner) : undefined
+          const ended = (type: "unavailable" | "unsupported-version" | "conflict", title: string, status: number) => {
+            const reason = problem(type, title, crypto.randomUUID(), "not-applied", { status })
+            refuse(reason)
+            inbox.push({ kind: "ended", problem: reason })
+            inbox.close()
+          }
+          if (watches.has(stream) || sshes.has(stream)) ended("conflict", "Another stream of that name is open on this Thread", 409)
+          else if (!owner) ended("unavailable", "Nothing runs this Thread now", 503)
+          else if ((owner.version ?? 0) < SSH_VERSION) ended("unsupported-version", "This Thread's runtime is too old for SSH", 501)
+          else {
+            sshes.set(stream, {
+              threadId,
+              runtime: owner,
+              inbox,
+              outgoing,
+              open: () => {
+                open()
+                outgoing.release()
+              },
+              refuse,
+            })
+            owner.deliver({ type: "ssh-open", threadId, stream })
+          }
+          const made: SshStream = {
+            opened,
+            next: (timeoutMs) => inbox.next(timeoutMs),
+            send: (data) => outgoing.write(data),
+            drained: () => outgoing.drained(),
+            took: (bytes) => taken.took(bytes),
+            close: () => {
+              if (ownSshes.get(stream) === made) ownSshes.delete(stream)
+              const ssh = mine()
+              inbox.close()
+              outgoing.close()
+              refuse()
+              if (!ssh) return
+              sshes.delete(stream)
+              ssh.runtime.deliver({ type: "media-unwatch", stream })
+            },
+          }
+          ownSshes.set(stream, made)
+          return made
+        },
       }
     },
 
@@ -826,7 +937,11 @@ export function createFakeGateway(
         threadId,
         generation: target.generation,
       })
-      if (previous) endWatchesOf(previous, problem("unavailable", "The Thread moved to another runtime", crypto.randomUUID(), "not-applied", { status: 503 }), threadId)
+      if (previous) {
+        const moved = problem("unavailable", "The Thread moved to another runtime", crypto.randomUUID(), "not-applied", { status: 503 })
+        endWatchesOf(previous, moved, threadId)
+        endSshesOf(previous, moved, threadId)
+      }
       const owner = runtimes.get(runtimeId)
       owner?.deliver({ type: "assign", threadId, generation: target.generation })
       if (owner && (owner.version ?? 0) >= COMPACT_LIVE_VERSION && target.form !== WHOLE_LIVE_FORM) owner.deliver({ type: "live-form", threadId, form: target.form })

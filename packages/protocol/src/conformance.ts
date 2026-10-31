@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { isDeepStrictEqual } from "node:util"
 import {
   type Actor,
   type Operation,
@@ -9,13 +10,21 @@ import {
 import { type EventFrame, threadStream } from "./events.js"
 import { readStreamNotice } from "./live-tail.js"
 import { sessionStream } from "./socket.js"
-import { type ClientSession, type GatewayUnderTest, LinkClosedError, type RuntimeLink } from "./gateway.js"
+import { type ClientSession, type GatewayUnderTest, Inbox, LinkClosedError, type RuntimeLink } from "./gateway.js"
 import type { Json } from "./ids.js"
-import { type MediaWatch, encodeMediaMessage } from "./media.js"
+import { type MediaMessage, type MediaWatch, decodeMediaMessage, encodeMediaMessage } from "./media.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame } from "./runtime-frames.js"
 import { COMPACT_LIVE_FORM } from "./live-form.js"
-import { COMPACT_LIVE_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, type VersionRange } from "./version.js"
+import {
+  SSH_ACK_EVERY_BYTES,
+  SSH_CHUNK_BYTES,
+  SSH_WINDOW_BYTES,
+  type SshClient,
+  SshRefusedError,
+  type SshStream,
+} from "./ssh.js"
+import { COMPACT_LIVE_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, type VersionRange } from "./version.js"
 
 /** `test` from `node:test`, or any runner's equivalent. */
 export type ConformanceTest = (
@@ -907,22 +916,7 @@ export function runMediaConformance(
   test: ConformanceTest,
   options: { deadlineMs?: number } = {}
 ): void {
-  const deadlineMs = options.deadlineMs ?? 5_000
-  const scenario = (name: string, body: (gateway: MediaGatewayUnderTest) => Promise<void>) =>
-    test(name, async () => {
-      const gateway = await makeGateway()
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`no outcome within ${deadlineMs} ms; a frame or message never came`)), deadlineMs)
-      })
-      try {
-        await Promise.race([body(gateway), deadline])
-      } finally {
-        clearTimeout(timer)
-        await gateway.close()
-      }
-    })
-  const streamName = () => `s-${crypto.randomUUID()}`
+  const scenario = scenarios(makeGateway, test, options.deadlineMs)
   const watched = async (runtime: RuntimeLink, threadId: string, stream: string) => {
     const frame = expect(await runtime.next(), "media-watch")
     assert.deepEqual({ type: frame.type, threadId: frame.threadId, stream: frame.stream }, { type: "media-watch", threadId, stream })
@@ -1047,6 +1041,227 @@ export function runMediaConformance(
     assert.equal(reason && problemType(reason), "unsupported-version")
     await nothingArrives(runtime)
   })
+}
+
+/** Each case on a fresh gateway from `makeGateway`, failing if it hasn't ended by the deadline. */
+function scenarios<Gateway extends { close(): Promise<void> }>(
+  makeGateway: () => Promise<Gateway>,
+  test: ConformanceTest,
+  deadlineMs = 5_000
+) {
+  return (name: string, body: (gateway: Gateway) => Promise<void>) =>
+    test(name, async () => {
+      const gateway = await makeGateway()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no outcome within ${deadlineMs} ms; a frame or message never came`)), deadlineMs)
+      })
+      try {
+        await Promise.race([body(gateway), deadline])
+      } finally {
+        clearTimeout(timer)
+        await gateway.close()
+      }
+    })
+}
+
+const streamName = () => `s-${crypto.randomUUID()}`
+
+/** A gateway that relays SSH to a Thread's machine (`ssh.ts`), as the SSH suite drives it. */
+export type SshGatewayUnderTest = Omit<MediaGatewayUnderTest, "client"> & {
+  /** A client admitted to every Thread `thread` makes. */
+  client(): Promise<ClientSession & SshClient>
+}
+
+/**
+ * What every gateway owes SSH to a Thread's machine: the open reaches the runtime that runs the Thread and nothing is
+ * sent before it says the server took it; each side's bytes cross byte for byte and no more than a window of them
+ * before the other says it took them; nothing of it enters the Thread's stream; and each side hears when the other
+ * ends it. The suite plays the runtime; each case gets a fresh gateway from `makeGateway`.
+ */
+export function runSshConformance(
+  makeGateway: () => Promise<SshGatewayUnderTest>,
+  test: ConformanceTest,
+  options: { deadlineMs?: number } = {}
+): void {
+  const scenario = scenarios(makeGateway, test, options.deadlineMs)
+  /** The runtime's side: the client's bytes as they arrive, and the open it was asked for. */
+  const machine = (runtime: RuntimeLink) => {
+    if (!runtime.receiveMedia) assert.fail("the runtime's link takes no binary messages")
+    const arrived = new Inbox<MediaMessage>()
+    runtime.receiveMedia((message) => arrived.push(decodeMediaMessage(message)))
+    return {
+      async opens(threadId: string, stream: string) {
+        assert.deepEqual(expect(await runtime.next(), "ssh-open"), { type: "ssh-open", threadId, stream })
+      },
+      /** At least `bytes` more of the client's bytes, on `stream` only, joined. */
+      async reads(stream: string, bytes: number) {
+        const pieces: Uint8Array[] = []
+        let read = 0
+        while (read < bytes) {
+          const message = await arrived.next()
+          assert.equal(message.stream, stream)
+          pieces.push(message.data)
+          read += message.data.byteLength
+        }
+        return joined(pieces)
+      },
+      async readsNothing() {
+        await assert.rejects(arrived.next(100), /nothing arrived/)
+      },
+    }
+  }
+  const opened = async (gateway: SshGatewayUnderTest) => {
+    const { threadId, runtime } = await gateway.thread()
+    const server = machine(runtime)
+    const client = await gateway.client()
+    const stream = streamName()
+    const ssh = client.ssh({ threadId, stream })
+    await server.opens(threadId, stream)
+    runtime.send({ type: "ssh-opened", stream })
+    await ssh.opened
+    return { threadId, runtime, server, client, stream, ssh }
+  }
+  const reads = async (ssh: SshStream, bytes: number) => {
+    const pieces: Uint8Array[] = []
+    let read = 0
+    while (read < bytes) {
+      const delivery = await ssh.next()
+      if (delivery.kind !== "data") assert.fail(`expected data, got the end: ${JSON.stringify(delivery)}`)
+      pieces.push(delivery.data)
+      read += delivery.data.byteLength
+    }
+    return joined(pieces)
+  }
+  const ended = async (ssh: SshStream) => {
+    const delivery = await ssh.next()
+    if (delivery.kind !== "ended") assert.fail(`expected the end, got ${delivery.data.byteLength} bytes`)
+    return delivery.problem
+  }
+  const pattern = (bytes: number, seed = 0) => new Uint8Array(bytes).map((_, index) => (index + seed) % 251)
+
+  scenario("an open reaches the runtime that runs the Thread, and the client's bytes wait until it says the server took it", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const server = machine(runtime)
+    const client = await gateway.client()
+    const stream = streamName()
+    const ssh = client.ssh({ threadId, stream })
+    const hello = new TextEncoder().encode("SSH-2.0-OpenSSH_9.6\r\n")
+    ssh.send(hello)
+    await server.opens(threadId, stream)
+    await server.readsNothing()
+    runtime.send({ type: "ssh-opened", stream })
+    await ssh.opened
+    assert.deepEqual(await server.reads(stream, hello.byteLength), hello)
+    ssh.close()
+  })
+
+  scenario("each side's bytes cross byte for byte, and each side's taking reaches the other", async (gateway) => {
+    const { runtime, server, stream, ssh } = await opened(gateway)
+    const up = pattern(300_000)
+    ssh.send(up)
+    assert.deepEqual(await server.reads(stream, up.byteLength), up)
+    const down = [Uint8Array.of(0, 255, 10, 13), pattern(SSH_CHUNK_BYTES, 7)]
+    for (const each of down) runtime.sendMedia(encodeMediaMessage(stream, each))
+    assert.deepEqual(await reads(ssh, 4 + SSH_CHUNK_BYTES), joined(down))
+    ssh.took(SSH_ACK_EVERY_BYTES)
+    assert.deepEqual(await runtime.next(), { type: "media-ack", stream, received: SSH_ACK_EVERY_BYTES })
+    ssh.close()
+  })
+
+  scenario("a client sends no more than a window the runtime hasn't said it took", async (gateway) => {
+    const { runtime, server, stream, ssh } = await opened(gateway)
+    const up = pattern(SSH_WINDOW_BYTES * 2 + 5)
+    ssh.send(up)
+    const first = await server.reads(stream, SSH_WINDOW_BYTES)
+    assert.equal(first.byteLength, SSH_WINDOW_BYTES)
+    await server.readsNothing()
+    runtime.send({ type: "media-ack", stream, received: SSH_WINDOW_BYTES })
+    const second = await server.reads(stream, SSH_WINDOW_BYTES)
+    await server.readsNothing()
+    runtime.send({ type: "media-ack", stream, received: SSH_WINDOW_BYTES * 2 })
+    const rest = await server.reads(stream, 5)
+    assert.deepEqual(joined([first, second, rest]), up)
+    await ssh.drained()
+    ssh.close()
+  })
+
+  scenario("SSH never enters the Thread's stream", async (gateway) => {
+    const { threadId, runtime, client, stream, ssh, server } = await opened(gateway)
+    const events = client.subscribe({ stream: threadStream(threadId), after: 0 })
+    const before = await drain(events)
+    ssh.send(Uint8Array.of(1, 2, 3))
+    await server.reads(stream, 3)
+    runtime.sendMedia(encodeMediaMessage(stream, Uint8Array.of(4, 5)))
+    await reads(ssh, 2)
+    assert.deepEqual(await drain(events), [], `nothing was recorded after the ${before.length} events already there`)
+    events.close()
+    ssh.close()
+  })
+
+  scenario("a client that closes its stream tells the runtime", async (gateway) => {
+    const { runtime, stream, ssh } = await opened(gateway)
+    ssh.close()
+    assert.deepEqual(await runtime.next(), { type: "media-unwatch", stream })
+    await assert.rejects(ssh.next(), LinkClosedError)
+  })
+
+  scenario("a runtime that can't reach its server ends the stream before it opens, with its reason", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const server = machine(runtime)
+    const client = await gateway.client()
+    const stream = streamName()
+    const ssh = client.ssh({ threadId, stream })
+    await server.opens(threadId, stream)
+    const reason = problem("unavailable", "The machine's SSH server isn't running", crypto.randomUUID(), "not-applied", { status: 503 })
+    runtime.send({ type: "media-end", stream, problem: reason })
+    await assert.rejects(ssh.opened, (error) => error instanceof SshRefusedError && isDeepStrictEqual(error.problem, reason))
+    assert.deepEqual(await ended(ssh), reason)
+  })
+
+  scenario("a runtime ending an open stream ends it for its client", async (gateway) => {
+    const { runtime, stream, ssh } = await opened(gateway)
+    runtime.send({ type: "media-end", stream })
+    assert.equal(await ended(ssh), undefined)
+    await assert.rejects(ssh.next(), LinkClosedError)
+  })
+
+  scenario("a client's stream ends when its runtime's link closes", async (gateway) => {
+    const { runtime, ssh } = await opened(gateway)
+    runtime.close()
+    const reason = await ended(ssh)
+    assert.equal(reason && problemType(reason), "unavailable")
+  })
+
+  scenario("a Thread whose runtime isn't connected refuses SSH", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const client = await gateway.client()
+    runtime.close()
+    const ssh = client.ssh({ threadId, stream: streamName() })
+    await assert.rejects(ssh.opened, SshRefusedError)
+    const reason = await ended(ssh)
+    assert.equal(reason && problemType(reason), "unavailable")
+  })
+
+  scenario("a runtime that agreed a version before SSH is never asked for it", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread({ min: 1, max: SSH_VERSION - 1 })
+    const client = await gateway.client()
+    const ssh = client.ssh({ threadId, stream: streamName() })
+    await assert.rejects(ssh.opened, SshRefusedError)
+    const reason = await ended(ssh)
+    assert.equal(reason && problemType(reason), "unsupported-version")
+    await nothingArrives(runtime)
+  })
+}
+
+function joined(pieces: readonly Uint8Array[]): Uint8Array {
+  const all = new Uint8Array(pieces.reduce((sum, piece) => sum + piece.byteLength, 0))
+  let at = 0
+  for (const piece of pieces) {
+    all.set(piece, at)
+    at += piece.byteLength
+  }
+  return all
 }
 
 /** Every event that arrives within a short wait. */

@@ -30,6 +30,11 @@ export interface Link<Incoming, Outgoing> {
 export type RuntimeLink = Link<GatewayFrame, RuntimeFrame> & {
   /** A binary media message (`encodeMediaMessage`), on a link of `MEDIA_VERSION` or later. */
   sendMedia(message: Uint8Array<ArrayBuffer>): void
+  /**
+   * Takes the gateway's binary media messages from now on: an SSH client's bytes (`ssh.ts`, link version 15 on), which
+   * the gateway sends only once the runtime said `ssh-opened`. Without a listener, one closes the link as text-only.
+   */
+  receiveMedia?(listener: (message: Uint8Array) => void): void
 }
 
 export interface Subscription {
