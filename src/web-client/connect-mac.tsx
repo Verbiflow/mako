@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { answered, macPlace, useReach } from "./reach"
+import { useForm } from "./route"
+import { hereOf } from "./trouble-state"
 import { connectStep, macConnection, type ConnectStep } from "./mac-connection"
 
 /** A Mac that joined is asked this often whether it's there, while the checklist shows and until it answers. */
@@ -21,6 +23,7 @@ const SHOWN_DONE_MS = 1_600
  */
 export function ConnectMac({ onDone }: { onDone?: () => void }) {
   const client = useWebClient()
+  const here = hereOf(useForm())
   const list = useAccountList((state) => state)
   const places = useReach((state) => state.places)
   const answeredMacs = useMemo(() => new Set([...list.devices.keys()].filter((id) => places.get(macPlace(id))?.ok)), [list.devices, places])
@@ -67,7 +70,7 @@ export function ConnectMac({ onDone }: { onDone?: () => void }) {
   return (
     <section className="web-connect" data-connect-step={step} aria-label="Connect your Mac">
       <p className="text-title font-semibold">Connect your Mac</p>
-      <p className="mt-1 text-ui text-muted-foreground">Threads run on your Mac, or in the cloud. This phone follows them all.</p>
+      <p className="mt-1 text-ui text-muted-foreground">Threads run on your Mac, or in the cloud. {here} follows them all.</p>
       <ol className="mt-5 flex flex-col">
         {steps.map((each, index) => {
           const state = done[each.id] ? "done" : each.id === current ? "current" : "next"

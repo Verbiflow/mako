@@ -36,6 +36,7 @@ import { appKey, appShownAs, appsStore, loopbackTarget, readApp, serversOf, with
 import { cloudReach } from "../src/web-client/trouble-state"
 import { OwnerUnavailableError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
+import { gatewayHostCalls } from "@mako/host/contracts/gateway-host-calls"
 import { Payload, problem, type ClientSession, type Operation, type Reply } from "@mako/protocol"
 import { connectStep, macConnection } from "../src/web-client/mac-connection"
 import { reachLog, reachStore } from "../src/web-client/reach"
@@ -788,6 +789,36 @@ test("what a call met is kept by the place it went to: refused as not connected 
     }
     log.warn("operation lost", { op: "live.read", correlationId: "c-6", attempt: 1, error: "socket closed" })
     assert.equal(reachStore.get().places.get("d-studio")?.ok, true, "a call this browser's socket lost says nothing of the Mac")
+  } finally {
+    console.warn = quiet
+  }
+})
+
+test("a call's refusal reaches the place's reach as the gateway said it: a Mac that joined and never connected hasn't answered", async () => {
+  const place = "d-joined"
+  let refusal: Parameters<typeof problem>[0] = "unavailable"
+  const session: ClientSession = {
+    subscribe: () => {
+      throw new Error("nothing is followed here")
+    },
+    watch: () => {
+      throw new Error("nothing is watched here")
+    },
+    call: async (operation: Operation): Promise<Reply> => ({ v: 1, id: operation.id, ok: false, problem: problem(refusal, "Refused", operation.correlationId, "not-applied") }),
+  }
+  const ask = () => gatewayHostCalls(session, { runtimeId: place, actor: { kind: "client", client: "web", deviceId: uuid(1) }, log: reachLog(place) }).call("mako:harness-order-saved", [])(1).catch(() => undefined)
+  const quiet = console.warn
+  console.warn = () => undefined
+  try {
+    for (const outcome of ["unavailable", "owner-unavailable", "restarting"] as const) {
+      refusal = outcome
+      await ask()
+      assert.equal(reachStore.get().places.get(place)?.ok, false, `${outcome}: not reached, so Connected isn't ticked`)
+      assert.equal(reachStore.get().places.get(place)?.outcome, outcome, "said in the gateway's word")
+    }
+    refusal = "not-found"
+    await ask()
+    assert.equal(reachStore.get().places.get(place)?.ok, true, "a refusal of the Mac's own came from a Mac that answered")
   } finally {
     console.warn = quiet
   }

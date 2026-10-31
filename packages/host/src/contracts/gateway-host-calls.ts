@@ -25,7 +25,11 @@ export type GatewayHostCallsOptions = (
   log?: GatewayCallLog
 }
 
-/** The lines a caller's log takes: a call lost or refused (`warn`), and a call repeated or traced (`info`). */
+/**
+ * The lines a caller's log takes: a call lost or refused (`warn`), and a call repeated or traced (`info`). A call's
+ * `outcome` is `ok`, `deferred`, or the refusal's problem type in the gateway's own word (`owner-unavailable`,
+ * `unavailable`, `not-found`, …), which a caller can match as it is.
+ */
 export type GatewayCallLog = {
   warn(message: string, fields: Record<string, string | number>): void
   info(message: string, fields: Record<string, string | number>): void
@@ -71,7 +75,7 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
           options.log?.warn("operation lost", { op: operation.op, correlationId, attempt, error: error instanceof Error ? error.message : "unknown" })
           throw new RuntimeDisconnectedError(true)
         }
-        const fields = { op: hostOperationName(channel), correlationId, attempt, outcome: reply.ok ? (reply.deferred ? "deferred" : "ok") : reply.problem.type, ms: Date.now() - started }
+        const fields = { op: hostOperationName(channel), correlationId, attempt, outcome: reply.ok ? (reply.deferred ? "deferred" : "ok") : problemType(reply.problem), ms: Date.now() - started }
         // A passive look the gateway didn't apply because nothing runs the Thread is its answer by design (its machine
         // sleeps), not a failure: its caller says what it means once, as it changes. Every other refusal is a warning.
         if (!reply.ok && !(options.passive && passedOver(reply.problem))) options.log?.warn("operation failed", fields)
