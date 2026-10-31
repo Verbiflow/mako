@@ -8,7 +8,7 @@ import type {
   PromptAttachment,
   ThreadRef,
 } from "@/lib/types"
-import { noteFolderUse } from "@/state/prefs"
+import { revealWorkedProject } from "@/state/prefs"
 import {
   appendOptimisticReply,
   removeOptimisticReply,
@@ -56,7 +56,7 @@ export const threadContinuationActions = {
     attachments: PromptAttachment[] = []
   ): Promise<boolean> {
     if (!hasBridge()) return false
-    noteFolderUse(ref.cwd)
+    revealWorkedProject(ref.cwd)
     // Paint the message NOW. The plan, provider startup, session translation,
     // and the native tail all happen after the send is already visible.
     const echoed = appendOptimisticReply(ref, prompt)

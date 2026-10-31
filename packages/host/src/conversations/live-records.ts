@@ -8,6 +8,7 @@ import { disconnectNativeAgents, isBusyNativeAgent } from "../contracts/native-a
 import type { ConversationMemory } from "../contracts/provider-residency.js"
 import { ContentWeights, residencyPlan, type ResidencyPlan } from "../contracts/residency.js"
 import { SessionIdSchema } from "../contracts/thread-identity.js"
+import { personPromptedAt } from "../contracts/worked-at.js"
 import type { JournalFacts } from "../threads/index.js"
 import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { Entry } from "@mako/sessions/entries"
@@ -725,6 +726,7 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
 /** The listing's line for a conversation, loaded or not. */
 function residentSummary(snapshot: LiveSnapshot): LiveSummary {
   const wakes = wakeAt(snapshot.requests)
+  const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
     nativePaths: snapshot.control?.bindings.flatMap((binding) =>
@@ -738,6 +740,7 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
     threadPath: snapshot.threadPath,
     createdAt: snapshot.createdAt,
     ...wakes !== undefined && { wakeAt: wakes },
+    ...promptedAt !== undefined && { promptedAt },
   }
 }
 

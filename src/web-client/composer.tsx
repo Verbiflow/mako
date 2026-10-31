@@ -158,13 +158,15 @@ export function Composer({
   const over = encodedBytes(picked) > ATTACHMENT_BUDGET
   const hasContent = Boolean(text.trim() || dictation.hearing) || picked.length > 0
   const presentation = sendPresentation({ running, hasContent, editingQueued: editing !== undefined, canSteer: steering?.canSteer === true, steerByDefault, sendLabel, answering })
-  const ready = hasContent && !over && !disabled && sendable
+  // A file still being read isn't in `picked` yet: the message waits for it rather than going without it.
+  const reads = reading === 0 ? undefined : reading === 1 ? "Reading a file" : `Reading ${reading} files`
+  const ready = hasContent && !over && !disabled && sendable && reads === undefined
 
   const send = async (how?: "queue" | "steer") => {
     // What's still being heard goes with it, as the person heard it said.
     const spoken = dictation.listening ? dictation.hearing : ""
     const full = appendHeard(text, spoken)
-    if ((!full.trim() && picked.length === 0) || over || disabled || !sendable || waiting !== undefined || taken.current === full) return
+    if ((!full.trim() && picked.length === 0) || over || disabled || !sendable || waiting !== undefined || reads !== undefined || taken.current === full) return
     if (dictation.listening) dictation.cancel()
     if (editing) {
       if (!full.trim()) return
@@ -322,7 +324,7 @@ export function Composer({
       presentation={onStop || presentation.kind !== "stop" ? presentation : { kind: "send", label: sendLabel }}
       ready={ready}
       stopping={stopping}
-      waiting={waiting}
+      waiting={waiting ?? reads}
       lands={steering?.lands ?? null}
       onSend={(how) => void send(how)}
       onStop={() => onStop?.()}

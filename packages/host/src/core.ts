@@ -61,6 +61,7 @@ import { declareApplicationMethods, Updates, type Application } from "./applicat
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
 import { backgroundWork } from "./contracts/background-work.js"
+import { personPromptedAt } from "./contracts/worked-at.js"
 import { projectFolder, worktreeAt } from "./contracts/worktree-paths.js"
 
 type WebHost = Awaited<ReturnType<typeof startWebHost>>
@@ -476,7 +477,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const session = live?.session(id)
       if (!live || !session) return undefined
       const held = live.held(id)
-      return conversationShown({ session, working: live.workOf(id)?.status, waitingOn: (conversation) => live.waitingOn(conversation), background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined })
+      return conversationShown({
+        session,
+        working: live.workOf(id)?.status,
+        waitingOn: (conversation) => live.waitingOn(conversation),
+        background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined,
+        promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
+      })
     },
     // A change goes to the account within a fraction of a second, on the link this host serves then, named as the tick's
     // job is: a Mac's account link, or a cloud machine's runtime link.

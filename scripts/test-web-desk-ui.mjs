@@ -11,8 +11,9 @@ import { fileURLToPath } from "node:url"
  *
  * - The rail is the desktop's own (`AgentThreads`): the account's Threads under their projects, indented from a
  *   hairline, a Thread's four Sessions one row wearing their count, Projects, Recent and Status; each project with what
- *   its checkout has checked out, a row with the agent it ran in before, and a Thread waiting on background work with
- *   the hourglass before it's opened, all as the Mac's list says them.
+ *   its checkout has checked out, a row with the agent it ran in before, a Thread waiting on background work with
+ *   the hourglass before it's opened, and a session another app holds with the hollow ring, all as the Mac's list
+ *   says them.
  * - The page never grows past the window, however many tabs a Thread has or how wide its transcript's lines are: the
  *   transcript's column, the composer and the strip's end stay on screen.
  * - The strip's tabs are the desktop's; a tab opens its Session, a rail row its Thread, each at its address.
@@ -111,8 +112,10 @@ async function checkDesk() {
     const busy = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Thread Environments'))"
     assert.equal(await evaluate(`${busy}.getAttribute('aria-label').includes('background task')`), true, "the busy Thread waits on its background work, before it's opened")
     assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).querySelectorAll('.mark-stack > *').length"), 2, "a row wears the agent it ran in before, beside its own")
+    const held = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Wire the payments retry queue'))"
+    assert.equal(await evaluate(`Boolean(${held}.querySelector('[aria-label^="Open in Devin"] .ring-1'))`), true, "a session Devin's own app holds wears the Mac's hollow ring")
     await capture("list-1280-dark.png")
-    console.log("Rail: checkouts, earlier agents and background work from the Mac's list")
+    console.log("Rail: checkouts, earlier agents, background work and another app's ring from the Mac's list")
 
     await desk("dark")
     assert.equal(await evaluate("matchMedia('(pointer: fine) and (hover: hover)').matches"), true, "the page reads as under a mouse")

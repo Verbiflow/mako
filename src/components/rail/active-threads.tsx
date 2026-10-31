@@ -87,7 +87,9 @@ export function LiveAgentRow({
             ? "Failed"
             : presence.status === "background"
               ? presence.background === 1 ? "Waiting on a background task" : `Waiting on ${presence.background ?? 0} background tasks`
-              : "Ready"
+              : presence.openElsewhere
+                ? `Open in ${harnessLabel(presence.harness)}`
+                : "Ready"
   const state: ActivityState =
     presence.status === "needs-permission"
       ? "waiting"
@@ -196,6 +198,9 @@ export function LiveAgentRow({
             {/* "seen", so it doesn't read as an idle row's time of its last change. */}
             seen {formatRelative(presence.quietSince)}
           </span>
+        ) : presence.openElsewhere ? (
+          // Open in its harness's own app there: the hollow ring that device's rail draws, beside the same time.
+          <ThreadStatusMark status={presenceThreadStatus(presence)} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} />
         ) : presence.status === "ready" && presence.movedAt !== undefined ? (
           // Listed from another device and ready: how long ago it last moved, as this Mac's own rows say.
           <ThreadStatusMark status={IDLE} updatedAt={new Date(presence.movedAt).toISOString()} />

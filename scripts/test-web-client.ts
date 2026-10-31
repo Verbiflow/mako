@@ -31,6 +31,7 @@ import { recordedSwitches, sameSwitches, switchedWords, switchesOf } from "../sr
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { listedHeads, listedSummaries, listingChanges } from "../src/web-client/desk-listing"
 import { selectAcpPresence } from "../src/state/acp-presence"
+import { presenceThreadStatus } from "../src/lib/thread-fold"
 import { acpStore } from "../src/state/acp-state"
 import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
 import type { ToolCall } from "../src/extend/slots"
@@ -1216,6 +1217,19 @@ test("a listed Session keeps its Thread's name and its time once its owner's sna
   assert.equal(listed()?.movedAt, Date.parse(at(40)))
 })
 
+test("when the person last sent a listed Session a message reaches the desk's rail, and its owner's snapshot only moves it later", () => {
+  const [summary] = listedSummaries({ rows: [row(41, { thread: uuid(410), runsOn: { kind: "device", deviceId: STUDIO }, createdAt: at(0), promptedAt: at(30), activityAt: at(45) })], devices, quiet: new Map(), waiting: new Map() })
+  assert.equal(summary!.promptedAt, Date.parse(at(30)))
+  listLive([summary!])
+  const listed = () => selectAcpPresence(acpStore.get()).find((presence) => presence.key === "c41")
+  assert.equal(listed()?.promptedAt, Date.parse(at(30)), "the owner's word, as every rail ranks its project by")
+  const snapshot = { ...summary!, session: { ...summary!.session, connection: "connected" as const, status: "ready" as const }, revision: 2, base: null, permissions: [], blocks: [] }
+  applyLiveSnapshot({ ...snapshot, promptedAt: undefined, requests: [] })
+  assert.equal(listed()?.promptedAt, Date.parse(at(30)), "a snapshot whose requests start later doesn't forget it")
+  applyLiveSnapshot({ ...snapshot, revision: 3, promptedAt: undefined, requests: [{ id: uuid(4101), text: "Ship it", attachments: [], status: "queued", createdAt: Date.parse(at(50)) }] })
+  assert.equal(listed()?.promptedAt, Date.parse(at(50)), "a message sent from here moves it at once, before the list says so")
+})
+
 test("what a Mac's rail shows of a row reaches the desk's rail: its project and its checkout, its worktree, its earlier agents, the background work it waits on", () => {
   const rows = [
     row(51, { thread: uuid(510), runsOn: { kind: "device", deviceId: STUDIO }, folder: "/Users/ana/.mako/worktrees/api-1/retry/src", project: { folder: "/Users/ana/api/src", head: { kind: "rebasing", name: "pricing-table" } }, worktree: { branch: "mako/retry" }, lineage: ["devin"], state: "working", background: 25, activityAt: at(51) }),
@@ -1316,4 +1330,18 @@ test("a browser reads a Mac's copy as a Mac's window does: its newest page from 
     accountListStore.set(before)
     gateway.close()
   }
+})
+
+test("a terminal's session its own app has open on a Mac wears that Mac's hollow ring on the desk's rail, while the Mac can be heard", () => {
+  const ringed = row(54, { thread: uuid(540), runsOn: { kind: "device", deviceId: STUDIO }, capture: { path: "/Users/ana/.codex/sessions/rollout-54.jsonl" }, openElsewhere: true, activityAt: at(54) })
+  const [summary] = listedSummaries({ rows: [ringed], devices, quiet: new Map(), waiting: new Map() })
+  assert.equal(summary!.rail?.openElsewhere, true)
+  listLive([summary!])
+  const presence = () => selectAcpPresence(acpStore.get()).find((each) => each.key === "c54")
+  assert.equal(presence()?.openElsewhere, true)
+  assert.deepEqual(presenceThreadStatus(presence()!), { kind: "external-open", app: ringed.harness }, "the status the Mac's own row has")
+  const quiet = listedSummaries({ rows: [ringed], devices, quiet: new Map([[STUDIO, at(60)]]), waiting: new Map() })[0]!
+  assert.equal(quiet.rail?.openElsewhere, undefined, "a Mac that can't be heard says nothing of what it has open")
+  const working = listedSummaries({ rows: [{ ...ringed, state: "working" }], devices, quiet: new Map(), waiting: new Map() })[0]!
+  assert.equal(working.rail?.openElsewhere, undefined, "a turn at work there is the working mark, not the ring")
 })

@@ -7,7 +7,8 @@ import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
 import { attentionFact } from "@mako/protocol/attention"
-import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary } from "../contracts/listed-conversations.js"
+import { CLOUD_FOLDER_WHERE, listedOwner, listedPromptedAt, listedSummary } from "../contracts/listed-conversations.js"
+import { laterPrompt, promptedAfter } from "../contracts/worked-at.js"
 import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
 import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
 import { hostHistoryPaging } from "../base/host-client.js"
@@ -428,6 +429,7 @@ export class CloudConversations {
       },
     })
     this.controlPreviews = new CloudControlPreviews({ session: async () => (await this.#connected()).session })
+    options.readings?.listFrom(() => this.#list.sessions().values())
   }
 
   /** Reads what this Mac remembers and follows each open conversation's Thread. */
@@ -1542,6 +1544,8 @@ export class CloudConversations {
     if (target.summary) {
       const summary: LiveSummary = { ...target.summary, session: sessionAfter(target.summary.session, batch), revision: batch.revision }
       if (batch.epoch) summary.epoch = batch.epoch
+      const promptedAt = promptedAfter(summary.promptedAt, batch)
+      if (promptedAt !== undefined) summary.promptedAt = promptedAt
       target.summary = summaryOf(summary)
     }
     // A turn ended there: a request of its reached its end in this batch, or the session stopped running with no
@@ -1739,7 +1743,17 @@ export class CloudConversations {
     const listed: LiveSummary[] = []
     for (const [id, { row, threadId, runtime, where, quietSince, archived }] of wanted) {
       const known = this.#entries.get(id)
-      if (known && !known.listed) continue
+      if (known && !known.listed) {
+        // A cloud conversation this Mac started or moved: its machine's row says when the person last wrote to it, from
+        // any device, which every rail ranks its project by. Its windows hear that in its batches while it's followed.
+        const promptedAt = laterPrompt(known.summary?.promptedAt, listedPromptedAt(row))
+        if (known.summary && promptedAt !== undefined && promptedAt !== known.summary.promptedAt) {
+          known.summary = { ...known.summary, promptedAt }
+          if (!this.#following.has(known.threadId)) listed.push(known.summary)
+          this.#saveSoon()
+        }
+        continue
+      }
       const summary = listedSummary(row, where, quietSince)
       // What its change says, by the rule the account's notices use: only of a row heard here before (the first
       // listing is where things stand, which a window marks without announcing), never of an archive's rows (listed
@@ -1937,5 +1951,6 @@ function summaryOf(snapshot: LiveSummary): LiveSummary {
   if (snapshot.nativePaths) summary.nativePaths = snapshot.nativePaths
   if (snapshot.nativeIds) summary.nativeIds = snapshot.nativeIds
   if (snapshot.hasSessionQuestions) summary.hasSessionQuestions = snapshot.hasSessionQuestions
+  if (snapshot.promptedAt !== undefined) summary.promptedAt = snapshot.promptedAt
   return summary
 }

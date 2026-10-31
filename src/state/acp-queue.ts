@@ -5,7 +5,7 @@ import { threadsStore } from "@/state/thread-store"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
 import { stagePrompt, removePendingPrompt } from "@/state/acp-pending"
 import { liveSettingsTarget, settingsForSend } from "@/state/composer-settings"
-import { noteFolderUse } from "@/state/prefs"
+import { revealWorkedProject } from "@/state/prefs"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveActionInput, PromptAttachment } from "@/lib/types"
 import { readLiveSnapshot } from "@/state/live-history"
@@ -68,7 +68,7 @@ async function attemptSend(
   const current = acpStore.get().conversations[id]
   if (!current || current.kind !== "live" || !hasBridge()) return false
   attachments = durableAttachments(attachments)
-  noteFolderUse(current.session.cwd)
+  revealWorkedProject(current.session.cwd)
   stagePrompt(id, { id: requestId, text, attachments, bindingId })
   updateLive(id, (conversation) => ({
     ...conversation,

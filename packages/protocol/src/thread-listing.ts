@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
-import { MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -127,6 +127,18 @@ export const ReportedSessionSchema = z
      * on). Said with `state: "working"`, which a list before it reads as at work.
      */
     background: z.number().int().positive().max(1_000).optional(),
+    /**
+     * When the person last sent it a message, on its owner's clock, from whichever device they sent it: its owner takes
+     * every message in, so it's the one that knows (link version 14 on). Absent while they've sent none, and on a session
+     * a terminal or another app runs. Every rail orders its projects by it (`promptedAt ?? createdAt`), so a project
+     * moves when the person works there, never when an agent does, and in the same order on every device.
+     */
+    promptedAt: z.iso.datetime().optional(),
+    /**
+     * A session Mako hasn't opened (`capture`) that its harness's own app or terminal has open, with no turn running
+     * there: said only with `state: "idle"`, as the hollow ring its owner's rail draws (link version 14 on).
+     */
+    openElsewhere: z.literal(true).optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -219,23 +231,28 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 12, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 14, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= RAIL_VERSION) return [...rows]
+  if (version >= PROMPTED_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
-    // Before version 12 a gateway knows none of what a rail shows (the row's `state` still says it's at work); before
-    // 11, no `move` (the row says `moving` once the Thread is in transit); before 10, no `waitingFor` (it reads
-    // `waitingOn`'s words); before 9, no `changedAt`; before 6, no native IDs either.
-    delete older.project
-    delete older.worktree
-    delete older.lineage
-    delete older.background
+    // Before version 14 a gateway knows no `promptedAt` (a rail ranks the row by its start) and no `openElsewhere` (the
+    // row reads idle); before 12, none of what a rail shows (the row's `state` still says it's at work); before 11, no
+    // `move` (the row says `moving` once the Thread is in transit); before 10, no `waitingFor` (it reads `waitingOn`'s
+    // words); before 9, no `changedAt`; before 6, no native IDs either.
+    delete older.promptedAt
+    delete older.openElsewhere
+    if (version < RAIL_VERSION) {
+      delete older.project
+      delete older.worktree
+      delete older.lineage
+      delete older.background
+    }
     if (version < MOVES_VERSION) delete older.move
     if (version < WAITING_FOR_VERSION) delete older.waitingFor
     if (version < NUMBERED_LIVE_VERSION) delete older.changedAt
@@ -297,6 +314,8 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.worktree?.branch === right.worktree?.branch &&
     (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
     left.background === right.background &&
+    left.promptedAt === right.promptedAt &&
+    left.openElsewhere === right.openElsewhere &&
     sameRunsOn(left.runsOn, right.runsOn)
   )
 }

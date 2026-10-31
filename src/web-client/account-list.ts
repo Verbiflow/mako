@@ -60,6 +60,7 @@ export const accountListStore = createStore<AccountListState>({
   archived: [],
   devices: new Map(),
 })
+webSync.listFrom(() => accountListStore.get().rows)
 export const useAccountList = createHook(accountListStore)
 
 /** What a list paints from before the gateway answers: the last one this browser saw, and when. */

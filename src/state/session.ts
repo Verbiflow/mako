@@ -1,7 +1,7 @@
 import { accounts } from "@/state/accounts"
 import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
-import { noteFolderUse } from "@/state/prefs"
+import { revealWorkedProject } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
@@ -1003,7 +1003,7 @@ export const actions = {
   ): Promise<boolean> {
     try {
       await getMako().prompt(text, mode, images)
-      noteFolderUse(store.get().meta?.cwd)
+      revealWorkedProject(store.get().meta?.cwd)
       return true
     } catch (error) {
       report(error instanceof Error ? error.message : String(error))
@@ -1054,7 +1054,7 @@ export const actions = {
       )
       return false
     }
-    noteFolderUse(folder)
+    revealWorkedProject(folder)
     viewer.close()
     stage.close()
     requestAnimationFrame(() =>

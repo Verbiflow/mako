@@ -24,9 +24,11 @@ export const PROTOCOL_VERSION = 1
  * (`worktree`), the agents it ran in before (`lineage`), and the background work it waits on (`background`). 13 lets
  * a runtime write live updates in the compact form where every reader reads it (`live-form.ts`): `watch` says the form
  * each watched conversation's readers read (`forms`), `live-form` says it of a Thread's, and `live` and `event` say the
- * form an update is in (`form`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * form an update is in (`form`). 14 lets a `sessions` row say when the person last sent its Session a message, from any
+ * device (`promptedAt`), which every rail orders its projects by, and that another app has a session Mako hasn't opened
+ * open (`openElsewhere`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 13
+export const LINK_VERSION = 14
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -74,6 +76,12 @@ export const RAIL_VERSION = 12
  * on a link that agreed less is told neither, so it writes form 1 alone, which every reader reads.
  */
 export const COMPACT_LIVE_VERSION = 13
+
+/**
+ * The first link version whose `sessions` rows say when the person last sent them a message (`promptedAt`) and that
+ * another app has them open (`openElsewhere`); a gateway that agreed less refuses both.
+ */
+export const PROMPTED_VERSION = 14
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

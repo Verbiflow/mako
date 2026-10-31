@@ -14,7 +14,8 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
  * none of them, the status board regroups by state in a fixed order,
  * Archived lives behind the filter, and a Thread Mako started to set a
  * project up says so.
- * Screenshots of every view, dark and light, stay in the printed directory.
+ * Screenshots of every view, dark and light, stay in the printed directory;
+ * `--port` serves the page on that port (default: any free one).
  */
 
 if (process.versions.electron) {
@@ -25,12 +26,14 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
+  const portAt = process.argv.indexOf("--port")
+  const port = portAt === -1 ? 0 : Number(process.argv[portAt + 1])
   const root = await mkdtemp(join(tmpdir(), "mako-rail-ui-"))
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
-    server: { host: "127.0.0.1", port: 0 },
+    server: { host: "127.0.0.1", port, strictPort: port !== 0 },
   })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-rail-check", main: fileURLToPath(import.meta.url) }))
@@ -266,12 +269,18 @@ async function checkWindow() {
   await frames()
   console.log("PASS: a row's controls float over it; hovering never re-truncates its title")
 
-  // 4. Only working there lifts a folder.
-  await evaluate(`import('/src/state/prefs.ts').then(({noteFolderUse}) => noteFolderUse(${JSON.stringify(victimRef.cwd)}))`)
+  // 4. Only working there lifts a folder: a message to a Session there, from any device, as its owner lists it.
+  const prompted = {
+    session: { id: "prompted-elsewhere", harness: victimRef.harness, cwd: victimRef.workspace ?? victimRef.cwd, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] },
+    revision: 1,
+    createdAt: Date.now() - 30 * 86_400_000,
+    promptedAt: Date.now(),
+  }
+  await evaluate(`import('/src/state/live-recovery.ts').then(({listLive}) => listLive([${JSON.stringify(prompted)}]))`)
   await until(`document.querySelector('.thread-jump-scope [data-flip-key^="folder:"]')?.dataset.flipKey === ${JSON.stringify(lastFolder)}`, "your own prompt lifts the folder")
   assert.equal(await flipping(lastFolder), true, "the lifted folder glides up")
   await capture("rail-projects-lifted.png")
-  console.log("PASS: a prompt sent in a folder lifts it, with a glide")
+  console.log("PASS: a prompt sent in a folder, from any device, lifts it, with a glide")
 
   // 5. Recent is the same rows in one list, held the same way.
   await click('[aria-label="Thread view"] button:nth-child(2)')

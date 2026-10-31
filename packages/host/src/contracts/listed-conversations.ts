@@ -44,6 +44,8 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
     sessionId: row.session,
     movedAt: Date.parse(row.activityAt),
   }
+  const promptedAt = listedPromptedAt(row)
+  if (promptedAt !== undefined) summary.promptedAt = promptedAt
   if (row.title) summary.session.title = row.title
   if (row.threadTitle) summary.threadTitle = row.threadTitle
   if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
@@ -54,8 +56,15 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
   if (row.worktree) rail.worktree = row.worktree
   if (row.lineage) rail.lineage = row.lineage
   if (background) rail.background = row.background
+  // Another app's window on it says nothing while its device can't be reached.
+  if (row.openElsewhere && row.state === "idle" && !quiet) rail.openElsewhere = true
   if (Object.keys(rail).length) summary.rail = rail
   return summary
+}
+
+/** When the person last sent a listed Session a message, as its owner says it (`ReportedSession.promptedAt`), in epoch ms. */
+export function listedPromptedAt(row: Pick<ListedSession, "promptedAt">): number | undefined {
+  return row.promptedAt === undefined ? undefined : Date.parse(row.promptedAt)
 }
 
 /** Where a cloud conversation's folder is, in words. */

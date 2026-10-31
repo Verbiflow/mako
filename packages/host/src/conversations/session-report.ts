@@ -3,6 +3,7 @@ import type { ThreadRef } from "@mako/sessions"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { CheckoutHead } from "../contracts/checkout-heads.js"
 import { projectFolder } from "../contracts/worktree-paths.js"
+import { nativeStartedAt } from "../contracts/worked-at.js"
 import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
 import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
@@ -20,7 +21,7 @@ import { syncTier } from "./sync-window.js"
 import { needsYouWaiting, type Waiting } from "@mako/protocol/attention"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
-export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived">
+export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived" | "locked" | "heldBy">
 
 /** What the report reads of this host: its conversations, their work, the sessions its harnesses keep, and its Thread store. */
 export type ReportSources = {
@@ -88,14 +89,15 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
 }
 
 /** What a list shows of a conversation that its own turns move: where it stands, its title, what it waits on, and its background work. */
-export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background">
+export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background" | "promptedAt">
 
 /**
  * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
  * row is made with this (`ownedSessions`), and each of its batches is checked against it (`SessionPublisher.own`), so
  * whether a batch moved anything a list shows is decided by the row's own rule, never a second one. `working` is the
  * lifecycle's word on it; `execution`, when known, whether it's leaving this host; `background`, what its ended turn
- * left running, said only while that's why it's at work.
+ * left running, said only while that's why it's at work; `promptedAt`, the person's last message to it
+ * (`personPromptedAt`), which moves its project on every rail, a steer into a running turn included.
  */
 export function conversationShown(conversation: {
   session: Pick<LiveSummary["session"], "id" | "status" | "title">
@@ -103,6 +105,7 @@ export function conversationShown(conversation: {
   execution?: SessionExecution | undefined
   waitingOn: (conversationId: string) => Waiting | undefined
   background?: number | undefined
+  promptedAt?: number | undefined
 }): ConversationShown {
   const { session, working, execution } = conversation
   const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
@@ -113,6 +116,7 @@ export function conversationShown(conversation: {
     : "idle"
   const shown: ConversationShown = { state }
   if (session.title) shown.title = line(session.title)
+  if (conversation.promptedAt !== undefined) shown.promptedAt = iso(conversation.promptedAt)
   if (state === "working" && session.status !== "running" && session.status !== "starting" && conversation.background) shown.background = conversation.background
   if (state === "waiting") {
     // A native agent of its waiting on the person says nothing more than that it does.
@@ -218,7 +222,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const { session } = summary
     const execution = executions.get(placed.session)
     if (execution?.state === "elsewhere") continue
-    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn, background: sources.background?.(session.id) })
+    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn, background: sources.background?.(session.id), promptedAt: summary.promptedAt })
     const movedAt = Math.max(summary.createdAt, sources.lastMoved(session.id, summary.revision) ?? 0)
     const row: ReportedSession = {
       session: placed.session,
@@ -252,15 +256,15 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
       : activity?.status === "active" ? "working"
       : "idle"
     const movedAt = Date.parse(ref.updatedAt ?? "")
-    if (!Number.isFinite(movedAt)) continue
-    const startedAt = ref.startedAt ? Date.parse(ref.startedAt) : Number.NaN
+    const startedAt = nativeStartedAt(ref)
+    if (!Number.isFinite(movedAt) || startedAt === undefined) continue
     const row: ReportedSession = {
       session,
       thread,
       conversation: nativeConversation(session),
       harness: ref.harness,
       state,
-      createdAt: iso(Number.isFinite(startedAt) ? Math.min(startedAt, movedAt) : movedAt),
+      createdAt: iso(startedAt),
       activityAt: iso(movedAt),
       generation: execution?.generation ?? 1,
       nativeId: ref.nativeId,
@@ -271,6 +275,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const move = sources.moving?.(thread)
     if (move) row.move = move
     if (ref.title) row.title = line(ref.title)
+    // The hollow ring this Mac's rail draws (`threadStatus`): its harness's app holds it, not another Mako host.
+    if (state === "idle" && !ref.heldBy && (activity?.status === "open" || ref.locked)) row.openElsewhere = true
     if (state === "waiting") {
       // A terminal's harness says only that it waits for input, in its own words when it has some.
       const on = needsYouWaiting(activity?.detail)
@@ -302,7 +308,8 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.folder === right.folder && left.createdAt === right.createdAt && left.generation === right.generation &&
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path && left.background === right.background &&
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
-    left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0")
+    left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
+    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere
 }
 
 /**
@@ -432,7 +439,7 @@ export class SessionPublisher {
   #soonAsked = false
   readonly #shown: ((conversation: string) => ConversationShown | undefined) | undefined
   /** What a list shows of each conversation as its last batch left it, so a batch that moved it is told from one that didn't. */
-  readonly #shownOf = new Map<string, string>()
+  readonly #shownOf = new Map<string, { key: string; promptedAt: string | undefined }>()
   /** A change a list shows is waiting for its report: the next report goes whatever the second's pacing says. */
   #urgent = false
   #shownAsked = false
@@ -697,17 +704,20 @@ export class SessionPublisher {
     }
     if (event.type !== "live-batch") return
     this.#dirty = true
-    this.#sawBatch(event.batch.id)
+    this.#sawBatch(event.batch.id, event.batch.trace)
     if (this.#watching?.conversations.has(event.batch.id)) this.event("event", encodeRuntimeEvent(event))
   }
 
   /** A conversation's batch came: whether it moved what a list shows of it, which then goes at once (`showsChanged`). */
-  #sawBatch(conversation: string): void {
+  #sawBatch(conversation: string, trace: string | undefined): void {
     const shown = this.#shown?.(conversation)
     if (!shown) return
-    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}`
-    if (this.#shownOf.get(conversation) === key) return
-    this.#shownOf.set(conversation, key)
+    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}\0${shown.promptedAt ?? ""}`
+    const before = this.#shownOf.get(conversation)
+    if (before?.key === key) return
+    this.#shownOf.set(conversation, { key, promptedAt: shown.promptedAt })
+    if (before && shown.promptedAt !== before.promptedAt)
+      hostLog("sync", "a message the person sent goes on its row at once, and every rail moves its project", { conversation, promptedAt: shown.promptedAt, ...(trace && { trace }) })
     this.#changedAt.set(conversation, this.#now())
     this.showsChanged()
   }

@@ -1418,6 +1418,50 @@ test("a quiet device's conversation a window has open stops working there too, a
   assert.equal(told().length, before + 2)
 })
 
+test("a cloud conversation this Mac started is ranked here by its machine's word on when the person last wrote to it, from any device, and remembers it", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const conversation = randomUUID()
+  const threadId = "t-00000000000000c1"
+  const createdAt = Date.parse("2026-10-27T07:00:00.000Z")
+  const file = join(await mkdtemp(join(tmpdir(), "mako-prompted-here-")), "conversations.json")
+  // Remembered from an earlier start, its turn over; nothing follows its stream.
+  const summary: LiveSummary = { session: { id: conversation, harness: "claude", cwd: "/workspace/api", status: "closed", connection: "hibernated", modes: [], currentMode: null, configOptions: [] }, revision: 3, createdAt, elsewhere: "a cloud machine" }
+  await writeFile(file, JSON.stringify({ conversations: [{ conversationId: conversation, threadId, harness: "claude", createdAt, created: true, seq: 0, summary }] }))
+  const row: ListedSession = {
+    session: randomUUID(), thread: randomUUID(), conversation, harness: "claude", title: "Retry the webhooks", state: "idle", folder: "/workspace/api", createdAt: new Date(createdAt).toISOString(),
+    activityAt: "2026-10-27T08:00:00.000Z", promptedAt: "2026-10-27T08:00:00.000Z", generation: 1, runsOn: { kind: "cloud", threadId }, listedAt: "2026-10-27T08:00:01.000Z",
+  }
+  machine.account.sessionListings = async () => ({ sessions: [row], seq: 1 })
+  machine.account.devices = async () => ({ devices: [], current: myDevice! })
+  const listeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
+  machine.account.onThreadListings = (listener) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  const say = (heard: AccountListHeard) => {
+    for (const listener of listeners) listener(heard)
+  }
+  const events: RuntimeEvent[] = []
+  const router = new CloudConversations({ account: () => machine.account, file, emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY })
+  after(() => router.dispose())
+  await router.start()
+  const promptedAt = () => router.summaries().find((each) => each.session.id === conversation)?.promptedAt
+  const told = () => events.flatMap((event) => event.type === "live-listed" ? decodeRuntimeEvent<Extract<HostEvent, { type: "live-listed" }>>(event.payload).summaries : [])
+    .filter((each) => each.session.id === conversation)
+  await until("the machine's word on it", () => promptedAt() === Date.parse("2026-10-27T08:00:00.000Z"))
+  assert.equal(told().at(-1)?.promptedAt, Date.parse("2026-10-27T08:00:00.000Z"), "its windows are told")
+  assert.equal(told().at(-1)?.elsewhere, "a cloud machine", "as the conversation this Mac started, not a listed one")
+  // A message from the phone reaches its machine, whose row says so.
+  say({ seq: 2, event: { type: "sessions-listed", sessions: [{ ...row, promptedAt: "2026-10-27T09:00:00.000Z", listedAt: "2026-10-27T09:00:01.000Z" }] } })
+  assert.equal(promptedAt(), Date.parse("2026-10-27T09:00:00.000Z"))
+  const heard = told().length
+  say({ seq: 3, event: { type: "sessions-listed", sessions: [{ ...row, title: "Retry the webhooks again", listedAt: "2026-10-27T09:01:00.000Z" }] } })
+  assert.equal(promptedAt(), Date.parse("2026-10-27T09:00:00.000Z"), "an older word never takes it back")
+  assert.equal(told().length, heard, "nor tells its windows anything")
+  await until("remembered for the next start", () => existsSync(file) && readFileSync(file, "utf8").includes(String(Date.parse("2026-10-27T09:00:00.000Z"))))
+})
+
 test("the account's archived cloud Threads are said only from a list it answered, never as none at a sign-out or before the list is read", async () => {
   const machine = await cloudMachine()
   const archivedThread = { thread: "t-00000000000000ae", move: randomUUID(), archivedAt: "2026-10-27T09:00:00.000Z", sessions: [] }

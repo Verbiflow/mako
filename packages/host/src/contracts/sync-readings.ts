@@ -38,6 +38,7 @@ export type SyncReadings = {
     gaps: Array<{ at: number; after: number; seq: number; why: string }>
     /** From its owner's change to its arrival here, for each row that said when it changed (`changedAt`). */
     changeMs: Spread
+    prompted?: PromptedReading
   }
   /** What this device sends of its own conversations that others watch; absent where it runs none (a phone). */
   owner?: OwnerReading
@@ -135,6 +136,7 @@ export class SyncRecorder {
   readonly #gaps: SyncReadings["list"]["gaps"] = []
   readonly #changes: number[] = []
   #owner: (() => OwnerReading) | undefined
+  #rows: (() => Iterable<{ promptedAt?: string }>) | undefined
 
   constructor(now: () => number = Date.now) {
     this.#now = now
@@ -170,6 +172,11 @@ export class SyncRecorder {
     if (Number.isFinite(at)) keep(this.#changes, Math.max(0, this.#now() - at), KEPT_SAMPLES)
   }
 
+  /** Where the account's list as this device holds it is read from. */
+  listFrom(read: () => Iterable<{ promptedAt?: string }>): void {
+    this.#rows = read
+  }
+
   /** Where what this device sends of its own watched conversations is read from. */
   ownerFrom(read: () => OwnerReading): void {
     this.#owner = read
@@ -179,10 +186,25 @@ export class SyncRecorder {
     return {
       at: this.#now(),
       follows: [...this.#follows.values()].map((follow) => follow.reading()),
-      list: { ...(this.#seq !== undefined && { seq: this.#seq }), gaps: [...this.#gaps], changeMs: spread(this.#changes) },
+      list: { ...(this.#seq !== undefined && { seq: this.#seq }), gaps: [...this.#gaps], changeMs: spread(this.#changes), ...(this.#rows && { prompted: prompted(this.#rows()) }) },
       ...(this.#owner && { owner: this.#owner() }),
     }
   }
+}
+
+/**
+ * How many of the Sessions the account's list holds say when the person last wrote to them (`promptedAt`), which every
+ * rail ranks their projects by; the rest (a terminal's sessions, an owner before link version 14) rank by their start.
+ */
+export type PromptedReading = { sessions: number; said: number }
+
+function prompted(rows: Iterable<{ promptedAt?: string }>): PromptedReading {
+  const reading: PromptedReading = { sessions: 0, said: 0 }
+  for (const row of rows) {
+    reading.sessions++
+    if (row.promptedAt) reading.said++
+  }
+  return reading
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
@@ -203,12 +225,16 @@ export function describeFollow(follow: FollowReading): string {
   ].filter(Boolean).join(" · ")
 }
 
-/** The account's list in a line: where its stream is, how fast a change arrives, and what was read again after a gap. */
+/**
+ * The account's list in a line: where its stream is, how fast a change arrives, what was read again after a gap, and
+ * how many of its Sessions say when you last wrote to them.
+ */
 export function describeList(list: SyncReadings["list"]): string {
   return [
     list.seq === undefined ? "not followed yet" : `at event ${list.seq}`,
     spreadText("changes arrive", list.changeMs),
     list.gaps.length ? `read whole again after ${plural(list.gaps.length, "gap")}` : undefined,
+    list.prompted?.sessions ? `${list.prompted.said} of ${plural(list.prompted.sessions, "Session")} say when you last wrote to them; the rest rank by their start` : undefined,
   ].filter(Boolean).join(" · ")
 }
 

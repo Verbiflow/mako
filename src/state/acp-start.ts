@@ -1,7 +1,7 @@
 import { MARKER, readMessage } from "@/lib/context/wire"
 import { readLiveSnapshot } from "@/state/live-history"
 import { stagePrompt } from "@/state/acp-pending"
-import { noteFolderUse } from "@/state/prefs"
+import { revealWorkedProject } from "@/state/prefs"
 import { chosenAccessModes } from "@/state/access-choices"
 import { projectAcp } from "@/state/live-projection"
 import {
@@ -88,7 +88,7 @@ interface BeginStartInput {
 
 export function beginStart(input: BeginStartInput): StartingAcpConversation {
   const now = Date.now()
-  noteFolderUse(input.cwd)
+  revealWorkedProject(input.cwd)
   const key = crypto.randomUUID()
   const conversation: StartingAcpConversation = {
     kind: "starting",
