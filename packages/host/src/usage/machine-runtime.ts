@@ -25,7 +25,7 @@ import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } f
 import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
-import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
+import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type ArtifactCapState, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import type { RuntimeEvent, RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
 import { appPorts } from "./app-ports.js"
@@ -84,6 +84,8 @@ export type MachineRuntimeOptions = {
   restore?(link: MachineGatewayLink, generation: number): Promise<{ from: number; ms: number } | undefined>
   /** The machine tracker (`MachineSaves`): told whether anything works, and asked for a save a turn's end waits for. */
   saves?: { working(busy: boolean): void; settle(why: string): Promise<void> }
+  /** The machine's recordings and artifacts against their caps (`MachineArtifacts`), once the core has loaded. */
+  artifacts?(): ArtifactCapState | undefined
   /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
   sampleCpu?: () => Promise<CpuSample | undefined>
   /** Whether to profile the host's own JavaScript while a launch runs (`MAKO_LAUNCH_PROFILE=1`); off unless asked. */
@@ -678,6 +680,8 @@ export class MachineRuntime {
     clearTimeout(this.#report)
     this.#report = undefined
     this.#state.threads = this.#threads?.stats() ?? []
+    const artifacts = this.#options.artifacts?.()
+    if (artifacts) this.#state.artifacts = artifacts
     this.#send({ type: "state", state: this.#state })
   }
 

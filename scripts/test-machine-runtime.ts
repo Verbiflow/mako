@@ -22,7 +22,7 @@ import { PING, PONG, SUBPROTOCOL, decodeRuntimeFrame, encodeGatewayFrame, offere
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { MachineRuntime, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import type { AgentMessage, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
+import type { AgentMessage, ArtifactCapState, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { SessionPublisher } from "@mako/host/conversations/session-report"
@@ -108,7 +108,7 @@ async function machineGateway(runtimeId = RUNTIME) {
 }
 
 /** The machine's agent: its end of the host's channel, and every message the host sent on it. */
-function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[]; sessions?: SessionPublisher; media?: () => MediaHandler | undefined; sampleCpu?: () => Promise<CpuSample | undefined>; restore?: MachineRuntimeOptions["restore"]; saves?: MachineRuntimeOptions["saves"] }) {
+function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[]; sessions?: SessionPublisher; media?: () => MediaHandler | undefined; sampleCpu?: () => Promise<CpuSample | undefined>; restore?: MachineRuntimeOptions["restore"]; saves?: MachineRuntimeOptions["saves"]; artifacts?: MachineRuntimeOptions["artifacts"] }) {
   const [agentEnd, hostEnd] = duplexPair()
   const messages: HostMessage[] = []
   // SAFETY: the host under test writes only HostMessage lines on its channel; the assertions read what it said.
@@ -156,6 +156,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     linked: async (link) => void links.push(link),
     ...options.restore && { restore: options.restore },
     ...options.saves && { saves: options.saves },
+    ...options.artifacts && { artifacts: options.artifacts },
     carriedFiles: (files) => void carried.push(files.flatMap((file) => file.names)),
     installSignIns: async (signIns, secrets) => {
       installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })
@@ -599,6 +600,19 @@ test("a clock that jumps is told to the agent within a second, and counted in th
   const resumed = agent.messages.find((message) => message.type === "resumed")
   assert.ok(resumed?.type === "resumed" && resumed.gapMs >= 29_000, JSON.stringify(resumed))
   await agent.until("counted in its state", () => agent.state()?.resumes === 1)
+})
+
+test("the machine's recordings and artifacts against their caps are in the state the agent shows", async () => {
+  const swept: ArtifactCapState = { at: "2026-10-30T20:00:00.000Z", kinds: [{ kind: "recordings", bytes: 2_000, items: 2, capBytes: 4_000, removed: 3, removedBytes: 9_000 }] }
+  let current: ArtifactCapState | undefined
+  const agent = machineAgent({ dataRoot: join(scratch, "artifacts"), artifacts: () => current })
+  agent.tell({ type: "inspect" })
+  await agent.until("a state before any sweep", () => agent.state() !== undefined)
+  assert.equal(agent.state()?.artifacts, undefined, "nothing said before the first sweep")
+  current = swept
+  agent.tell({ type: "inspect" })
+  await agent.until("the sweep in its state", () => agent.state()?.artifacts !== undefined)
+  assert.deepEqual(agent.state()?.artifacts, swept)
 })
 
 test("a host that restarts numbers its Thread's events after what it reserved, so none is taken for a repeat", async () => {

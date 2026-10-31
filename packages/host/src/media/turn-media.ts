@@ -22,6 +22,8 @@ const MAX_VIDEO_COPY = 500 * 1024 * 1024
 const PARALLEL = 8
 /** What an image's header is read from for its size. */
 const HEADER_BYTES = 512 * 1024
+/** The answers' database in the media's root, beside the copies (its `-wal` and `-shm` too). */
+export const MEDIA_DATABASE = "media.db"
 
 const KeptSchema = z.object({
   path: z.string(),
@@ -59,7 +61,7 @@ export class TurnMedia {
     this.root = root
     this.now = now
     mkdirSync(root, { recursive: true })
-    this.db = new DatabaseSync(join(root, "media.db"))
+    this.db = new DatabaseSync(join(root, MEDIA_DATABASE))
     this.db.exec([
       "PRAGMA journal_mode=WAL",
       "CREATE TABLE IF NOT EXISTS answers (call TEXT NOT NULL, path TEXT NOT NULL, answer TEXT NOT NULL, PRIMARY KEY (call, path))",
@@ -106,7 +108,8 @@ export class TurnMedia {
     const row = this.db.prepare("SELECT answer FROM answers WHERE call = ? AND path = ?").get(check.callId, check.path)
     if (row) {
       const answer = AnswerSchema.safeParse(JSON.parse(z.object({ answer: z.string() }).parse(row).answer))
-      if (answer.success) return answer.data
+      // A copy removed since (a machine's cap removes the oldest, `MachineArtifacts`) is decided again from the original.
+      if (answer.success && (answer.data.kind === "dropped" || await this.present(answer.data.media))) return answer.data
     }
     const answer = await this.decide(check, kind)
     // A call still running may yet write the file; only a finished call's answer stands.
@@ -119,7 +122,7 @@ export class TurnMedia {
     const end = (check.endedAt ?? this.now()) + AFTER_MS
     if (check.evidence === "shown" || check.digest) {
       const kept = check.digest ? await this.kept(check.path, check.digest, kind) : this.shownBetween(check.path, (check.startedAt ?? 0) - BEFORE_MS, end)
-      if (kept) return { kind: "kept", media: kept }
+      if (kept && await this.present(kept)) return { kind: "kept", media: kept }
     }
     const found = await stat(check.path).catch(() => undefined)
     if (!found) return check.endedAt === undefined ? { kind: "pending" } : { kind: "dropped", reason: `No file at ${check.path}` }
@@ -141,6 +144,11 @@ export class TurnMedia {
     if (!row) return undefined
     const media = KeptSchema.safeParse(JSON.parse(z.object({ media: z.string() }).parse(row).media))
     return media.success ? media.data : undefined
+  }
+
+  /** Whether a kept answer's file is still there: its copy, or the original when it was too large to copy. */
+  private async present(media: KeptMedia): Promise<boolean> {
+    return media.file === media.path || (await stat(media.file).catch(() => undefined))?.isFile() === true
   }
 
   /** The copy named `digest`, when it is still here. */

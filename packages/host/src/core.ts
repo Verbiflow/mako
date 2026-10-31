@@ -6,6 +6,7 @@ import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } fro
 import { watch, type FSWatcher } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
+import { controlArtifactsRoot, controlRecordingsRoot } from "@mako/control/program"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
@@ -53,7 +54,7 @@ import { SyncRecorder } from "./contracts/sync-readings.js"
 import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
-import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
+import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
 import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
@@ -132,6 +133,8 @@ export interface Core {
   restoreMachineSave(link: MachineGatewayLink, generation: number): Promise<{ from: number; ms: number } | undefined>
   /** On a cloud machine: its tracker's saves, told whether anything works and asked for the save a turn's end waits for. */
   machineSaves: { working(busy: boolean): void; settle(why: string): Promise<void> } | undefined
+  /** On a cloud machine: its recordings and artifacts, held to their caps. */
+  machineArtifacts: MachineArtifacts | undefined
   /** On a project base's builder: what a start in `path` does first, done before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** On a cloud machine as it boots: what `harness`'s start runs first, run ahead (`startPrefetch`). */
@@ -1042,7 +1045,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     store: () => threads.store,
     catalog: threads.catalog,
   })
-  const turnMedia = new TurnMedia(join(environment.dataRoot, "media"))
+  const mediaRoot = join(environment.dataRoot, "media")
+  const turnMedia = new TurnMedia(mediaRoot)
+  const machineArtifacts = config.machineAgentFd === undefined ? undefined : new MachineArtifacts({
+    places: machineArtifactPlaces({ artifacts: controlArtifactsRoot(), recordings: controlRecordingsRoot(), media: mediaRoot }),
+  })
+  machineArtifacts?.schedule(shell.jobs)
   late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), [
     ...workspaceMovers.agentTools,
     (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
@@ -1350,6 +1358,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       working: (busy) => machineTracker?.saves.working(busy),
       settle: (why) => machineTracker?.saves.settle(why) ?? Promise.resolve(),
     },
+    machineArtifacts,
     machineWorkspaceFailed: (problem, reason) => machineWorkspace.failed(problem, reason),
     machineCarriedFiles: (files) => {
       machineCarried = files

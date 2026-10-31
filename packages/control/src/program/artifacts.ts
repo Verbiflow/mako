@@ -65,8 +65,21 @@ export function controlArtifactsDirectory(
 ): string {
   const root =
     process.env.MAKO_CONTROL_ARTIFACTS ??
-    join(tmpdir(), "mako-control-artifacts", taskId ?? `pid-${process.pid}`)
+    join(controlArtifactsRoot(), taskId ?? `pid-${process.pid}`)
   return join(root, namespace)
+}
+
+/** The folder every task's artifacts go under, each task's in a folder of
+ * its own; `MAKO_CONTROL_ARTIFACTS` names a single task's. */
+export function controlArtifactsRoot(): string {
+  return process.env.MAKO_CONTROL_ARTIFACTS ?? join(tmpdir(), "mako-control-artifacts")
+}
+
+/** Where a recording goes when its caller names no folder. */
+export function controlRecordingsRoot(): string {
+  return process.env.MAKO_CONTROL_ARTIFACTS
+    ? join(process.env.MAKO_CONTROL_ARTIFACTS, "recordings")
+    : join(tmpdir(), "mako-recordings")
 }
 
 const jsonString = z.string()

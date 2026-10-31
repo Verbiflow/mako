@@ -22,6 +22,8 @@ export {
   INLINE_TOTAL_BUDGET,
   artifactFileName,
   controlArtifactsDirectory,
+  controlArtifactsRoot,
+  controlRecordingsRoot,
   outlineOf,
   spillImage,
   spillJson,

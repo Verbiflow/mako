@@ -98,9 +98,12 @@ export async function keepPage(page: string, copy: string, digest: string, root:
   }
 }
 
+/** The folder in the media's root that holds each page's own folder. */
+export const PAGES_FOLDER = "pages"
+
 /** One folder per page and content: the same bytes written in two places may link different files. */
 function pageFolder(page: string, digest: string, root: string): string {
-  return join(root, "pages", `${digest}-${createHash("sha256").update(page).digest("hex").slice(0, 12)}`)
+  return join(root, PAGES_FOLDER, `${digest}-${createHash("sha256").update(page).digest("hex").slice(0, 12)}`)
 }
 
 /** The page kept as `digest`, when it is still here. */
