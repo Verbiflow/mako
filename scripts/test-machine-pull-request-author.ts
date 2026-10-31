@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 // "Open pull requests as me" on a cloud machine: who a pull request goes as is settled before anything is pushed,
 // said in the line that reports it, and a token that can't be used refuses with the problem and pushes nothing, never
 // going as the App instead unless the person chose that for this one. Real Git against a local origin; a `gh` that
