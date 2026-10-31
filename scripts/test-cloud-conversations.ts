@@ -1512,7 +1512,6 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
       const start = Math.max(0, end - limit)
       return { header: { copy: 1, harness, nativeId, title: "Retry the webhooks", cwd: CLONE, translator: "t-1", total: entries.length, stamp: "n:7", at }, entries: entries.slice(start, end), start, total: entries.length }
     },
-    entry: async (_device, _harness, _nativeId, id) => entries.find((entry) => entry.id === id) ?? null,
   }
   const { router, events } = conversations(machine.account, join(scratch, "copies", "conversations.json"), copies, 200)
   await router.start()

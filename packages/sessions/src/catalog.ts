@@ -21,7 +21,7 @@ import type { InstalledReading } from "./record-writers.js"
 import { UNREAD_INDEX_FILE, UnreadIndex } from "./unread-index.js"
 import { observedInstall } from "./record-observed.js"
 import { existsSync, realpathSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, join, sep } from "node:path"
 import {
@@ -1792,14 +1792,12 @@ export class SessionCatalog {
     return (await this.received()?.page(link, harness, nativeId, before, limit)) ?? null
   }
 
-  /** One entry of such a copy, by ID. */
-  async copyEntry(link: RecordsLink, harness: string, nativeId: string, id: string): Promise<Entry | null> {
-    return (await this.received()?.entry(link, harness, nativeId, id)) ?? null
-  }
-
   private received(): ReceivedCopies | null {
     if (this.receivedCopies || !this.recordsFolder || this.readOnly || this.stopped) return this.receivedCopies
-    this.receivedCopies = new ReceivedCopies(join(this.recordsFolder, "copies", "received"))
+    const log = (level: "info" | "warn", message: string, fields: Record<string, string | number | boolean>) => (level === "warn" ? console.warn : console.info)(`Received copies: ${message}`, JSON.stringify(fields))
+    this.receivedCopies = new ReceivedCopies(join(this.recordsFolder, "copies", "read"), { log })
+    // Where copies were read into a record store of their own, before each was kept as its chunks.
+    void rm(join(this.recordsFolder, "copies", "received"), { recursive: true, force: true }).catch(() => undefined)
     return this.receivedCopies
   }
 

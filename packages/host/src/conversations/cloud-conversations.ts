@@ -16,9 +16,7 @@ import { bootFolder, CloudRepositorySchema, githubRepositoryUrl, type CloudPrepa
 import { deferredWhenAsleep } from "../contracts/host-call-policy.js"
 import { OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { ForkInputSchema } from "../contracts/conversation-control.js"
-import { sessionAfter, type CompactLiveBatch, type HeardLiveBatch, type LiveRequest, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
-import type { PromptAttachment } from "../contracts/providers-acp.js"
-import type { QueuedPromptEdit } from "../contracts/live-queue.js"
+import { sessionAfter, type CompactLiveBatch, type HeardLiveBatch, type LiveRequest, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, readEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
@@ -34,20 +32,13 @@ import { AccountSessions, type AccountListHeard } from "@mako/protocol/account-s
 import { CloudPreviews } from "./cloud-previews.js"
 import { conversationCallId } from "../contracts/conversation-calls.js"
 import type { ConversationRoutingResult } from "./shared-conversations.js"
-import { LiveHistoryReader } from "./live-history-reader.js"
-import type { LiveHistoryRead } from "../contracts/live-history.js"
-import type { ThreadPage } from "@mako/sessions"
-import type { Entry as HistoryEntry } from "@mako/sessions/entries"
-import type { CopyPage } from "@mako/sessions/reading-copies"
+import { COPY_PAGE, CopyHistory, copySnapshot, copyThreadPage, type CopyCall, type CopyCapture, type CopyConversation, type CopySource } from "../contracts/copy-history.js"
+import type { CopyPage } from "@mako/sessions/copy-reader"
 
 /** The newest this many are kept, and followed while they're open. */
 const KEPT = 50
 /** A device found off is read from the account's copy for this long before it's asked again. */
 const ASLEEP_MS = 15_000
-/** Entries a copy's snapshot holds; a reader asks for earlier ones by the page. */
-const COPY_PAGE = 100
-/** The calls a copy answers: reading the conversation. Anything else needs its device, or waits for it. */
-const COPY_READS = new Set(["mako:live-snapshot", "mako:live-read"])
 /** A message for this Mac's own Session that couldn't be taken yet (the host still starting) is tried again after this. */
 const TAKE_AGAIN_MS = 30_000
 /** For this long after a wake, a follow tries again this often: the network comes back within a second or two. */
@@ -268,7 +259,6 @@ export type CloudConversationsOptions = {
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
 export type CloudCopies = {
   page(device: string, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null>
-  entry(device: string, harness: string, nativeId: string, id: string): Promise<HistoryEntry | null>
 }
 
 /** What a conversation begun in a moved Thread reads and records of this Mac's Thread store. */
@@ -420,14 +410,8 @@ export class CloudConversations {
   /** Waiting messages being taken here now, by ID: a list heard twice meanwhile takes each once. */
   readonly #taking = new Set<string>()
   #takeAgain: ReturnType<typeof setTimeout> | undefined
-  /** The windows' reads of copies, paged as a conversation's history is (`LiveHistoryReader`), by `copy:<conversation>`. */
-  readonly #copyHistory = new LiveHistoryReader(
-    (path, before) => this.#copyThreadPage(path, before),
-    async (path, id) => {
-      const copy = this.#copyOf(path)
-      return copy ? (this.#options.copies?.entry(copy.device, copy.entry.harness, copy.nativeId, id) ?? null) : null
-    }
-  )
+  /** The windows' reads of copies, answered as every client answers them (`CopyHistory`). */
+  readonly #copyHistory = new CopyHistory()
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -550,45 +534,60 @@ export class CloudConversations {
     }
   }
 
-  /** A call for a conversation whose device is off: a read is answered from its copy in the account; anything else is refused, saying why. */
+  /** A call for a conversation whose device is off: answered from its copy in the account, as every client answers it (`CopyHistory`). */
   async #offCall(entry: Entry, channel: string, args: unknown[]): Promise<EncodedValue> {
-    const where = entry.summary?.elsewhere ?? "Its computer"
-    if (channel === "mako:live-prompt" || channel === "mako:live-edit-queued") return this.#wait(entry, channel, args, where)
-    if (!COPY_READS.has(channel) || !this.#options.copies || !entry.nativeId)
-      throw new Error(`${where} is off, so this conversation can't be changed from here until it's back.`)
-    if (channel === "mako:live-snapshot") return encodeRuntimeValue(this.#copyHistory.present(await this.#copySnapshot(entry)))
-    // SAFETY: the dispatcher parsed this call's arguments with `mako:live-read`'s schema before routing it.
-    const [, input] = args as [string, LiveHistoryRead]
-    return encodeRuntimeValue(await this.#copyHistory.read(entry.conversationId, input, () => this.#copySnapshot(entry)))
+    return encodeRuntimeValue(await this.#copyHistory.call(channel, args, this.#copyCall(entry)))
   }
 
   /**
-   * A message for a conversation whose device is off: kept by the account until that device takes it, under the
-   * request's own ID, so the device runs it once whichever way it hears of it. Text only: a file attached stays where
-   * it was sent from. Editing or removing a queued one acts on the account's, while it still waits. Windows read the
-   * conversation again, so every one shows it waiting.
+   * How a conversation of a device that's off is read here: its copy by this Mac's catalog (`HostCatalog.copyPage`),
+   * and a message to it kept by the account until that device takes it, under the request's own ID.
    */
-  async #wait(entry: Entry, channel: string, args: unknown[], where: string): Promise<EncodedValue> {
-    const account = this.#account()
+  #copyCall(entry: Entry): CopyCall {
     const session = entry.summary?.sessionId
-    if (!session || !account.waitMessage || !account.editWaiting || !account.unwaitMessage) throw new Error(`${where} is off, so this conversation can't be changed from here until it's back.`)
-    if (channel === "mako:live-prompt") {
-      // SAFETY: the dispatcher parsed this call's arguments with `mako:live-prompt`'s schema before routing it.
-      const [, requestId, text, attachments] = args as [string, string, string, PromptAttachment[] | undefined]
-      if (attachments?.length) throw new Error(`${where} is off. A message with files can't wait for it: send it once ${where} is back, or without them.`)
-      await account.waitMessage(session, requestId, { conversation: entry.conversationId, text })
-      hostLog("cloud-conversations", "a message waits in the account for another device that's off", { conversationId: entry.conversationId, session, requestId })
-      this.#retold(entry)
-      const request: LiveRequest = { id: requestId, text, attachments: [], status: "queued" }
-      return encodeRuntimeValue(request)
+    const account = this.#account()
+    const { waitMessage, editWaiting, unwaitMessage } = account
+    return {
+      conversationId: entry.conversationId,
+      where: entry.summary?.elsewhere ?? "Its computer",
+      capture: () => this.#copyCapture(entry),
+      ...session && waitMessage && editWaiting && unwaitMessage && {
+        waiting: {
+          wait: async (requestId, text) => {
+            await waitMessage.call(account, session, requestId, { conversation: entry.conversationId, text })
+            hostLog("cloud-conversations", "a message waits in the account for another device that's off", { conversationId: entry.conversationId, session, requestId })
+          },
+          edit: async (requestId, expectedText, text) => {
+            await editWaiting.call(account, session, requestId, expectedText, text)
+          },
+          remove: async (requestId) => {
+            await unwaitMessage.call(account, session, requestId)
+          },
+        },
+      },
+      retold: () => this.#retold(entry),
     }
-    // SAFETY: the dispatcher parsed this call's arguments with `mako:live-edit-queued`'s schema before routing it.
-    const [, edit] = args as [string, QueuedPromptEdit]
-    if (edit.change.kind === "remove") await account.unwaitMessage(session, edit.requestId)
-    else if (edit.change.kind === "edit") await account.editWaiting(session, edit.requestId, edit.expectedText, edit.change.text)
-    // Pausing and resuming a waiting message changes nothing: it waits for its device either way.
-    this.#retold(entry)
-    return encodeRuntimeValue(await this.#copySnapshot(entry))
+  }
+
+  /** The conversation's copy as this Mac reads it now: its newest page, and earlier ones by the page. */
+  async #copyCapture(entry: Entry): Promise<CopyCapture | null> {
+    const copies = this.#options.copies
+    const nativeId = entry.nativeId
+    if (!copies || !entry.runtime || !nativeId) return null
+    const device = entry.runtime.slice("d-".length)
+    const source: CopySource = { page: (before, limit) => copies.page(device, entry.harness, nativeId, before, limit) }
+    const page = await source.page(undefined, COPY_PAGE)
+    if (!page) return null
+    const session = entry.summary?.sessionId
+    const conversation: CopyConversation = {
+      conversationId: entry.conversationId,
+      harness: entry.harness,
+      createdAt: entry.createdAt,
+      waiting: session ? this.#list.waiting(session) : [],
+      waitingChanges: session ? (this.#waitingChanges.get(session) ?? 0) : 0,
+      ...entry.summary && { listed: entry.summary },
+    }
+    return { snapshot: copySnapshot(conversation, copyThreadPage(page, `copy:${entry.conversationId}`)), source }
   }
 
   /** Another device changed a Session's waiting messages: a window reading one of its conversations from its copy reads it again. */
@@ -643,60 +642,6 @@ export class CloudConversations {
       this.#takeWaiting()
     }, TAKE_AGAIN_MS)
     this.#takeAgain.unref?.()
-  }
-
-  /** Where a copy read names a conversation's copy: by the conversation, which says its device and native session. */
-  #copyOf(path: string): { entry: Entry; device: string; nativeId: string } | undefined {
-    const entry = path.startsWith("copy:") ? this.#entries.get(path.slice("copy:".length)) : undefined
-    if (!entry?.runtime || !entry.nativeId) return undefined
-    return { entry, device: entry.runtime.slice("d-".length), nativeId: entry.nativeId }
-  }
-
-  /** A page of a conversation's copy, as a page of its history: its revision is the copy's records' stamp. */
-  async #copyThreadPage(path: string, before?: number): Promise<ThreadPage | null> {
-    const copy = this.#copyOf(path)
-    const page = copy && (await this.#options.copies?.page(copy.device, copy.entry.harness, copy.nativeId, before, COPY_PAGE))
-    if (!copy || !page) return null
-    const { header } = page
-    const ref: ThreadPage["ref"] = { harness: header.harness, nativeId: header.nativeId, path, revision: header.stamp, updatedAt: new Date(header.at).toISOString() }
-    if (header.title) ref.title = header.title
-    if (header.cwd) ref.cwd = header.cwd
-    if (header.model) ref.model = header.model
-    return { ref, entries: page.entries, start: page.start, total: page.total, hasEarlier: page.start > 0, translator: header.translator }
-  }
-
-  /** The conversation as its copy has it: its history, and nothing at work, since nothing runs while its device is off. */
-  async #copySnapshot(entry: Entry): Promise<LiveSnapshot> {
-    const base = await this.#copyThreadPage(`copy:${entry.conversationId}`)
-    if (!base) throw new Error(`${entry.summary?.elsewhere ?? "Its computer"} is off, and the account has no copy of this conversation yet.`)
-    const at = Date.parse(base.ref.updatedAt ?? "") || Date.now()
-    const listed = entry.summary
-    const snapshot: LiveSnapshot = {
-      session: {
-        ...(listed?.session ?? { harness: entry.harness, cwd: base.ref.cwd ?? "", modes: [], currentMode: null, configOptions: [] }),
-        id: entry.conversationId,
-        status: "ready",
-        connection: "hibernated",
-      },
-      revision: at + (listed?.sessionId ? (this.#waitingChanges.get(listed.sessionId) ?? 0) : 0),
-      epoch: `copy-${at}`,
-      createdAt: listed?.createdAt ?? entry.createdAt,
-      copy: { at },
-      base,
-      blocks: [],
-      permissions: [],
-      // What waits in the account for its device, as messages queued for it.
-      requests: (listed?.sessionId ? this.#list.waiting(listed.sessionId) : []).map((message): LiveRequest => {
-        const request: LiveRequest = { id: message.id, text: message.text, attachments: [], status: "queued" }
-        if (message.displayText) request.displayText = message.displayText
-        return request
-      }),
-    }
-    if (listed?.elsewhere) snapshot.elsewhere = listed.elsewhere
-    if (listed?.threadId) snapshot.threadId = listed.threadId
-    if (listed?.sessionId) snapshot.sessionId = listed.sessionId
-    if (base.ref.title && !snapshot.session.title) snapshot.session.title = base.ref.title
-    return snapshot
   }
 
   /**

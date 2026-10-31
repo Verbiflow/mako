@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { createReadStream } from "node:fs"
-import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises"
+import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { z } from "zod"
@@ -8,12 +8,12 @@ import { recordsOverHttp } from "@mako/protocol/records-http"
 import type { ThreadRef } from "./format.js"
 import { NativeStores } from "./read-only-sqlite.js"
 import { RecordStore } from "./record-store.js"
-import { RecordSync, type RecordRemote, type RecordsLink } from "./record-sync.js"
+import type { RecordRemote, RecordsLink } from "./record-sync.js"
 import { namedWork, type WorkUnderWay } from "./loop-watch.js"
 import { ScopedUploads, type SyncScope, type UploadsStatus } from "./scoped-uploads.js"
-import { EntrySchema, type Entry } from "./entries.js"
 import type { SessionView } from "./view-cache.js"
 import { ZstdFrames } from "./zstd-frames.js"
+import { COPY_FORMAT, CopyHeaderSchema, CopyManifestSchema, CopyReader, type CopyHeader, type CopyManifest, type CopyPage, type CopyReaderOptions, type CopyStore, type HeldCopy, type ReadCopy } from "./copy-reader.js"
 import type { UploadBudget } from "./upload-budget.js"
 
 /**
@@ -29,23 +29,7 @@ import type { UploadBudget } from "./upload-budget.js"
  * store of its own, so content-defined chunks carry only what changed, and pushed to the account in the same order
  * (`ScopedUploads`), which keeps in that store what the account holds.
  */
-export const COPY_FORMAT = 1
-
-/** A copy's first line: what it's a copy of, drawn by which decoder build, from which state of its records, and when. */
-export const CopyHeaderSchema = z.object({
-  copy: z.literal(COPY_FORMAT),
-  harness: z.string(),
-  nativeId: z.string(),
-  title: z.string().optional(),
-  cwd: z.string().optional(),
-  model: z.string().optional(),
-  translator: z.string(),
-  total: z.number().int().nonnegative(),
-  /** The records' stamp the view was drawn from (`SessionCatalog.stampOf`), with the decoder build. */
-  stamp: z.string(),
-  at: z.number(),
-})
-export type CopyHeader = z.infer<typeof CopyHeaderSchema>
+export { COPY_FORMAT, CopyHeaderSchema, CopyPageSchema, parseCopy, type CopyHeader, type CopyPage, type ReadCopy } from "./copy-reader.js"
 
 /** How the catalog reads a Session as Mako draws it, decoding only when its view is out of date: what a copy reads of it. */
 export type CopyViews = {
@@ -377,131 +361,134 @@ export class ReadingCopies {
   }
 }
 
-/** A copy as read here: its header, and its entries in order. */
-export type ReadCopy = { header: CopyHeader; entries: Entry[] }
-/** A run of a copy's entries ending before `before` (the newest when it isn't given), with the copy's header. */
-export const CopyPageSchema = z.object({
-  header: CopyHeaderSchema,
-  entries: z.array(EntrySchema),
-  start: z.number().int().nonnegative(),
-  total: z.number().int().nonnegative(),
-})
-export type CopyPage = z.infer<typeof CopyPageSchema>
-
-/** A copy read again at most this often: a reader paging back through one asks every page. */
-const PULL_EVERY_MS = 10_000
-/** Copies held parsed: the ones the windows read now. */
-const HELD_COPIES = 3
-
-type HeldCopy = { copy: ReadCopy; through: number; pulledAt: number; used: number }
-
 /**
- * Copies other devices keep (`ReadingCopies`), read here: pulled into a record store of their own (only the versions
- * past the last pull, and only the chunks this store lacks), the newest version restored into a home made for the
- * read and parsed, entry by entry against `EntrySchema`. The last few read are held, and pulled again at most every 10
- * seconds, so paging back through one reads it once.
+ * Copies other devices keep (`ReadingCopies`), read here by the reader every device runs (`CopyReader`): what it
+ * reads kept in a folder of this device's (`FolderCopyStore`), so a copy read again fetches only its new chunks, and
+ * one whose device and account are both out of reach still reads as it was last read.
  */
 export class ReceivedCopies {
-  readonly #folder: string
+  readonly #reader: CopyReader
+  /** Each device's records as read from: the link renewed in place, and its remote. */
+  readonly #links = new Map<string, { holder: { current: RecordsLink }; remote: RecordRemote }>()
+  /** The zstd context the chunks read here are decoded through (`ZstdFrames`). */
+  readonly #frames = new ZstdFrames()
   readonly #remote: (link: { current: RecordsLink }) => RecordRemote
-  readonly #now: () => number
-  #store: RecordStore | null = null
-  /** Each device's records as pulled from: the link renewed in place, and the remote's own ID, which names its cursors. */
-  readonly #links = new Map<string, { holder: { current: RecordsLink }; sync: RecordSync; remote: string }>()
-  readonly #held = new Map<string, HeldCopy>()
-  readonly #reading = new Map<string, Promise<HeldCopy | null>>()
 
-  constructor(folder: string, options: { now?: () => number; remote?: (link: { current: RecordsLink }) => RecordRemote } = {}) {
-    this.#folder = folder
-    this.#now = options.now ?? Date.now
-    this.#remote = options.remote ?? ((link) => recordsOverHttp({ id: link.current.id, base: link.current.base, authorization: () => link.current.authorization }))
+  constructor(folder: string, options: { now?: () => number; remote?: (link: { current: RecordsLink }) => RecordRemote; log?: CopyReaderOptions["log"] } = {}) {
+    const remote = options.remote ?? ((link) => recordsOverHttp({ id: link.current.id, base: link.current.base, authorization: () => link.current.authorization }))
+    this.#remote = remote
+    this.#reader = new CopyReader({
+      remote: (device) => {
+        const held = this.#links.get(device)
+        if (!held) throw new Error(`No link to the records of ${device}`)
+        return held.remote
+      },
+      store: new FolderCopyStore(folder),
+      decode: (frame) => this.#frames.decompress(frame),
+      ...options.now && { now: options.now },
+      ...options.log && { log: options.log },
+    })
   }
 
   /** The copy of a Session another device keeps at `link`, as of now; null when it keeps none. */
   async read(link: RecordsLink, harness: string, nativeId: string): Promise<ReadCopy | null> {
-    return (await this.#copy(link, harness, nativeId))?.copy ?? null
+    return (await (await this.#copy(link, harness, nativeId))?.read()) ?? null
   }
 
   /** A page of it, newest first (`ThreadPage`'s paging): entries ending before `before`. */
   async page(link: RecordsLink, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null> {
-    const held = await this.#copy(link, harness, nativeId)
-    if (!held) return null
-    const { header, entries } = held.copy
-    const end = Math.min(before ?? entries.length, entries.length)
-    const start = Math.max(0, end - limit)
-    return { header, entries: entries.slice(start, end), start, total: entries.length }
-  }
-
-  /** One of its entries, by ID. */
-  async entry(link: RecordsLink, harness: string, nativeId: string, id: string): Promise<Entry | null> {
-    return (await this.#copy(link, harness, nativeId))?.copy.entries.find((entry) => entry.id === id) ?? null
+    const copy = await this.#copy(link, harness, nativeId)
+    if (!copy) return null
+    const page = await copy.page(before, limit)
+    void copy.fill()
+    return page
   }
 
   close(): void {
-    this.#store?.close()
-    this.#store = null
+    this.#frames.close()
   }
 
   #copy(link: RecordsLink, harness: string, nativeId: string): Promise<HeldCopy | null> {
-    const key = `${link.id}\n${harness}\n${nativeId}`
-    const held = this.#held.get(key)
-    if (held && this.#now() - held.pulledAt < PULL_EVERY_MS) {
-      held.used = this.#now()
-      return Promise.resolve(held)
-    }
-    let reading = this.#reading.get(key)
-    if (!reading) {
-      reading = this.#pull(key, link, harness, nativeId).finally(() => this.#reading.delete(key))
-      this.#reading.set(key, reading)
-    }
-    return reading
-  }
-
-  async #pull(key: string, link: RecordsLink, harness: string, nativeId: string): Promise<HeldCopy | null> {
-    const store = (this.#store ??= new RecordStore(join(this.#folder, "store"), new NativeStores(true, join(this.#folder, "restored"))))
-    let remote = this.#links.get(link.id)
-    if (remote) remote.holder.current = link
+    const held = this.#links.get(link.id)
+    if (held) held.holder.current = link
     else {
       const holder = { current: link }
-      const records = this.#remote(holder)
-      remote = { holder, sync: new RecordSync(store, records), remote: records.id }
-      this.#links.set(link.id, remote)
+      this.#links.set(link.id, { holder, remote: this.#remote(holder) })
     }
-    await remote.sync.pull(harness, nativeId)
-    const through = store.pulledThrough(remote.remote, harness, nativeId)
-    const held = this.#held.get(key)
-    if (held && held.through === through) {
-      held.pulledAt = held.used = this.#now()
-      return held
-    }
-    if (!store.units(harness, nativeId).length) return null
-    // A home of its own for each read, gone once it's parsed: nothing here is read again from it.
-    const home = join(this.#folder, "homes", createHash("sha1").update(key).digest("hex"), String(through))
-    try {
-      await store.restore({ harness, nativeId, home, roots: [{ name: "copy", path: home }] })
-      const text = await readFile(join(home, copyName(harness, nativeId)), "utf8")
-      const copy = parseCopy(text)
-      const fresh: HeldCopy = { copy, through, pulledAt: this.#now(), used: this.#now() }
-      this.#held.set(key, fresh)
-      for (const [other, value] of [...this.#held].sort((left, right) => right[1].used - left[1].used).slice(HELD_COPIES)) {
-        if (value !== fresh) this.#held.delete(other)
-      }
-      return fresh
-    } finally {
-      await rm(home, { recursive: true, force: true })
-    }
+    return this.#reader.open(link.id, harness, nativeId)
   }
 }
 
-/** A copy's text, read: its header line, then an entry a line, each checked; a line that isn't one fails the read. */
-export function parseCopy(text: string): ReadCopy {
-  const lines = text.split("\n")
-  const header = CopyHeaderSchema.parse(JSON.parse(lines[0] ?? ""))
-  const entries: Entry[] = []
-  for (let index = 1; index < lines.length; index++) {
-    const line = lines[index]
-    if (!line) continue
-    entries.push(EntrySchema.parse(JSON.parse(line)))
+/**
+ * What a Mac keeps of the copies it read (`CopyStore`), in a folder: each Session's manifest a JSON file by its key's
+ * hash, each chunk's plain bytes a file by its hash. Written to a temporary name and renamed, so a read never meets
+ * half a file; one that fails to read is a chunk to fetch again.
+ */
+export class FolderCopyStore implements CopyStore {
+  readonly #folder: string
+
+  constructor(folder: string) {
+    this.#folder = folder
   }
-  return { header, entries }
+
+  async manifest(key: string): Promise<CopyManifest | undefined> {
+    return (await this.#readManifest(this.#manifestFile(key)))?.manifest
+  }
+
+  async keepManifest(key: string, manifest: CopyManifest): Promise<void> {
+    await this.#write(this.#manifestFile(key), Buffer.from(JSON.stringify({ key, manifest })))
+  }
+
+  async manifests(): Promise<Array<[string, CopyManifest]>> {
+    const folder = join(this.#folder, "manifests")
+    const names = await readdir(folder).catch(() => [])
+    const read = await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => this.#readManifest(join(folder, name))))
+    return read.flatMap((each): Array<[string, CopyManifest]> => (each ? [[each.key, each.manifest]] : []))
+  }
+
+  async chunks(hashes: readonly string[]): Promise<Map<string, Uint8Array>> {
+    const found = new Map<string, Uint8Array>()
+    await Promise.all(
+      [...new Set(hashes)].map(async (hash) => {
+        const bytes = await readFile(this.#chunkFile(hash)).catch(() => null)
+        if (bytes) found.set(hash, bytes)
+      })
+    )
+    return found
+  }
+
+  async keepChunks(chunks: ReadonlyMap<string, Uint8Array>): Promise<void> {
+    await Promise.all([...chunks].map(([hash, bytes]) => this.#write(this.#chunkFile(hash), bytes)))
+  }
+
+  async forget(keys: readonly string[], chunks: readonly string[]): Promise<void> {
+    await Promise.all([...keys.map((key) => this.#manifestFile(key)), ...chunks.map((hash) => this.#chunkFile(hash))].map((file) => rm(file, { force: true })))
+  }
+
+  #manifestFile(key: string): string {
+    return join(this.#folder, "manifests", `${createHash("sha1").update(key).digest("hex")}.json`)
+  }
+
+  #chunkFile(hash: string): string {
+    return join(this.#folder, "chunks", hash.slice(0, 2), hash)
+  }
+
+  async #readManifest(file: string): Promise<{ key: string; manifest: CopyManifest } | undefined> {
+    const text = await readFile(file, "utf8").catch(() => null)
+    if (!text) return undefined
+    try {
+      return KeptManifestSchema.parse(JSON.parse(text))
+    } catch {
+      return undefined
+    }
+  }
+
+  async #write(file: string, bytes: Uint8Array): Promise<void> {
+    await mkdir(dirname(file), { recursive: true })
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+    await writeFile(temporary, bytes)
+    await rename(temporary, file)
+  }
 }
+
+const KeptManifestSchema = z.object({ key: z.string(), manifest: CopyManifestSchema })

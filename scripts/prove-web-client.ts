@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdir, readdir, rm, utimes, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
+import { connect, createServer, type Socket } from "node:net"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { parseArgs } from "node:util"
@@ -35,6 +36,11 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  *   `SESSION {"mode": …, "model": …}`
  * - `heard <words>`: the model named by the newest conversation request the scripted model heard those words in, of
  *   its last 64; null when none did. `HEARD {"model": …}`
+ * - `copies [ms]`: waits, up to `ms` (2 minutes), for every Session in the sync window to be readable on another device
+ *   with its copy up to date, as `mako:sync-status` counts them. `COPIES {"readable": …, "sessions": …, "ms": …}`
+ * - `offline`: the Mac drops off the network, as one whose lid closed is gone to the cloud: its link and every call cut,
+ *   none let through, the host left running so it stays signed in. `OFFLINE`
+ * - `online`: its network back on the same address; the host finds the cloud again by itself. `ONLINE`
  * - `quit` (or stdin's end): signs the host out, so its device leaves the account, stops it, and removes the root unless `--keep`.
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
@@ -322,7 +328,27 @@ for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["-c", "user.na
 const { socket } = runtimeLocation(dataRoot)
 // SAFETY: the electron package's main export is the path of its executable.
 const electron = createRequire(import.meta.url)("electron") as string
-const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" }
+// The Mac's network: the host reaches the cloud only through this relay, so `offline` can cut it. A scratch home has no
+// keychain to keep a sign-in through a restart, so a Mac gone off is its network cut rather than its host stopped.
+const cloud = new URL(values.cloud)
+if (cloud.protocol !== "http:") throw new Error("--cloud is a local gateway, on http")
+const carried = new Set<Socket>()
+const relay = createServer((inbound) => {
+  const outbound = connect(Number(cloud.port) || 80, cloud.hostname)
+  for (const [from, to] of [[inbound, outbound], [outbound, inbound]] as const) {
+    carried.add(from)
+    from.once("close", () => {
+      carried.delete(from)
+      to.destroy()
+    })
+    from.on("error", () => to.destroy())
+  }
+  inbound.pipe(outbound).pipe(inbound)
+})
+const listen = (port: number) => new Promise<void>((done, fail) => relay.once("error", fail).listen(port, "127.0.0.1", () => (relay.off("error", fail), done())))
+await listen(0)
+const relayPort = z.object({ port: z.number() }).parse(relay.address()).port
+const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: `http://127.0.0.1:${relayPort}${cloud.pathname.replace(/\/$/, "")}`, MAKO_SCREENLESS: "1" }
 for (const name of ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_DATA_HOME", "OPENCODE_DB", "MAKO_THREAD_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL"]) delete env[name]
 const command = hostCommand({ executable: electron, args: [process.cwd()], env })
 const host = spawn(command.executable, command.args, { env: command.env, stdio: "ignore" })
@@ -347,7 +373,16 @@ for (const deadline = Date.now() + 5 * 60_000; !(account.state.status === "signe
 if (values.app) await call("mako:thread-app-start", [api])
 console.log(`READY ${JSON.stringify({ dataRoot, sessions: SESSIONS.length + 1 })}`)
 
+/** The Mac off the network: what the relay carries dropped, and nothing more let in. */
+function cut(): Promise<void> {
+  const closed = new Promise<void>((done) => relay.close(() => done()))
+  for (const socket of carried) socket.destroy()
+  return closed
+}
+
 const stop = async () => {
+  // Its sign-out reaches the cloud, so its device leaves the account.
+  if (!relay.listening) await listen(relayPort)
   // Its app is a process of its own: stopped here, or it outlives the host.
   if (values.app || values.recipe) await call("mako:thread-app-stop", [api]).catch(() => undefined)
   await call("mako:cloud-sign-out", []).catch(() => undefined)
@@ -356,6 +391,7 @@ const stop = async () => {
   host.kill("SIGTERM")
   await exited
   await release()
+  await cut()
   await model.close()
   if (!values.keep) await rm(root, { recursive: true, force: true })
   process.exit(0)
@@ -365,6 +401,18 @@ const SnapshotSchema = z.object({ session: z.object({ currentMode: z.string().nu
 /** What `mako:live-start` and `mako:thread-create-session` answer that a start reads: the Thread, and the new Session. */
 const StartedSchema = z.object({ threadId: z.string() }).loose()
 const PlacedSchema = z.object({ session: z.string() }).loose()
+const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), readable: z.number() }).loose()).optional() }).loose()
+/** Every Session in the sync window readable by another device, its copy up to date: so long as `ms` allows. */
+async function copiesUp(ms: number): Promise<{ readable: number; sessions: number; ms: number }> {
+  const began = Date.now()
+  for (;;) {
+    const sync = SyncSchema.parse(await call("mako:sync-status", []))
+    const readable = (sync.tiers ?? []).reduce((sum, tier) => sum + tier.readable, 0)
+    const sessions = (sync.tiers ?? []).reduce((sum, tier) => sum + tier.sessions, 0)
+    if ((sessions && readable >= sessions && !sync.stale && !sync.sending) || Date.now() - began > ms) return { readable, sessions, ms: Date.now() - began }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+}
 // `start`: a live Session asking for approval. The first makes its Thread; each after is a Session added to that Thread,
 // as Add a Session does, so however many a proof asks for, every list shows one Thread.
 let flaky: string | undefined
@@ -397,6 +445,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     const words = line.trim().slice("heard ".length)
     console.log(`HEARD ${JSON.stringify({ model: heardRequests.findLast((request) => request.heard.includes(words))?.model ?? null })}`)
   }
-  else if (line.trim() === "quit") break
+  else if (line.startsWith("copies")) console.log(`COPIES ${JSON.stringify(await copiesUp(Number(line.trim().split(/\s+/)[1]) || 2 * 60_000))}`)
+  else if (line.trim() === "offline") {
+    await cut()
+    console.log("OFFLINE")
+  } else if (line.trim() === "online") {
+    await listen(relayPort)
+    console.log("ONLINE")
+  } else if (line.trim() === "quit") break
 }
 await stop()

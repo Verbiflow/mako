@@ -184,7 +184,7 @@ async function checkWindow() {
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
     await until(`!${more}.includes('A message you send')`, "the detail closed")
     await until(`document.body.innerText.includes('Waiting on CI.')`, "the copy's history on screen")
-    assert.equal(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Message — waits for Studio to come back", "the composer says a message waits")
+    assert.equal(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Message — waits until it's back", "the composer says a message waits")
     // Its panels ask nothing of the Studio: each says it's off, once, instead of waiting on it.
     await until(`Boolean(document.querySelector('[data-device-off]'))`, "the panel saying the Studio is off")
     assert.match(await evaluate(`document.querySelector('[data-device-off]').innerText`), /Studio is off[\s\S]*once Studio is back/)
@@ -198,7 +198,7 @@ async function checkWindow() {
     // A message sent meanwhile waits in the account for the Studio: queued, saying for whom and when it runs.
     await evaluate(`import('/src/state/live-recovery.ts').then(({ applyLiveSnapshot }) => (applyLiveSnapshot(${JSON.stringify({ ...copySnapshot, revision: copyAt + 1, requests: [{ id: "6b1f0e2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b", text: "Merge it once CI is green, then tag the release", attachments: [], status: "queued" }] })}), true))`)
     await until(`document.querySelector('[aria-label="Queued messages"]')?.innerText.includes('Waiting for Studio')`, "the message waiting for the Studio")
-    assert.match(await evaluate(`document.querySelector('[data-queue-when]').innerText`), /Runs there once Studio is back/)
+    assert.match(await evaluate(`document.querySelector('[data-queue-when]').innerText`), /Runs there once it's back/)
     await settle()
     await both("waiting-for-studio", ["[aria-label=\"Queued messages\"]", "[data-copy-notice]"])
     await capture("waiting-for-studio-window")
@@ -206,7 +206,7 @@ async function checkWindow() {
     // The Studio is back: the conversation is read there again, live, and the notice and the panels' line go.
     await evaluate(`import('/src/state/live-recovery.ts').then(({ applyLiveSnapshot }) => (applyLiveSnapshot(${JSON.stringify({ ...copySnapshot, copy: undefined, epoch: "studio-live", revision: 1 })}), true))`)
     await until(`!document.querySelector('[data-copy-notice]') && !document.querySelector('[data-device-off]')`, "the copy's notice and panel gone")
-    assert.notEqual(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Message — waits for Studio to come back")
+    assert.notEqual(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Message — waits until it's back")
     await settle()
     await capture("studio-back-window")
 

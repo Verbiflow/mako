@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import { resolveObjectURL } from "node:buffer"
+import { createHash } from "node:crypto"
+import { zstdCompressSync } from "node:zlib"
 import { test } from "node:test"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { foldThreads, openingSession } from "../src/web-client/threads"
@@ -41,12 +43,18 @@ import { cloudReach } from "../src/web-client/trouble-state"
 import { OwnerUnavailableError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { gatewayHostCalls } from "@mako/host/contracts/gateway-host-calls"
-import { Payload, problem, type ClientSession, type Operation, type Reply } from "@mako/protocol"
+import { JsonSchema, Payload, problem, type ClientSession, type Json, type Operation, type Reply } from "@mako/protocol"
 import { connectStep, macConnection } from "../src/web-client/mac-connection"
 import { reachLog, reachStore } from "../src/web-client/reach"
 import { chipReading, effortControl, modeLabel, modeSummary, type SettingsReading } from "../src/web-client/thread-settings"
 import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
 import type { ModelOption, SessionModel } from "@mako/sessions/settings"
+import { encodeChunkPack, type PackedChunk } from "@mako/protocol/records"
+import type { WaitingMessage } from "@mako/protocol/waiting"
+import { z } from "zod"
+import { AccountList, accountListStore } from "../src/web-client/account-list"
+import { WebCopies } from "../src/web-client/copies"
+import type { CopyAnswer } from "@mako/host/contracts/copy-history"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -452,6 +460,25 @@ function withStorage<T>(run: (storage: Map<string, string>) => T): T {
   }
 }
 
+test("a list painted from this browser's last one answers for what it shows until the gateway's is followed, so a Thread opened by a reload is read at once", () => {
+  const before = accountListStore.get()
+  withStorage((storage) => {
+    const shown = row(40, { runsOn: { kind: "device", deviceId: STUDIO } })
+    storage.set("mako:web:list:ana", JSON.stringify({ at: Date.parse(at(0)), listings: { sessions: [shown], seq: 7, quiet: [{ deviceId: STUDIO, since: at(-5) }] }, devices: [...devices.values()] }))
+    try {
+      // SAFETY: a list only paints what it kept as it's made; nothing here asks the gateway.
+      const list = new AccountList({} as Gateway, "ana")
+      assert.equal(accountListStore.get().phase, "cached")
+      assert.equal(list.byConversation("c40")?.session, shown.session, "the row on screen, with its Mac")
+      assert.ok(accountListStore.get().quiet.has(STUDIO), "and that its Mac was off, so its copy is read without asking it")
+      accountListStore.set({ ...accountListStore.get(), phase: "live" })
+      assert.equal(list.byConversation("c40"), undefined, "once followed, only what the gateway lists")
+    } finally {
+      accountListStore.set(before)
+    }
+  })
+})
+
 test("a draft is kept by place and by account, and outlives the composer until its message is confirmed sent", () => {
   withStorage((storage) => {
     const here = threadDraftKey("ana", "c1")
@@ -758,6 +785,10 @@ test("what can't be reached is said at the first hop that failed, every hop befo
   assert.equal(asleep?.detail, "Last seen 5 minutes ago")
   assert.deepEqual(asleep?.hops.map((hop) => [hop.label, hop.state]), [["This phone", "ok"], ["Mako Cloud", "ok"], ["Studio", "failed"], ["Codex", "unknown"]])
   assert.equal(asleep?.causes[0], "It may be asleep, or its lid closed.")
+  const copied = diagnose(reach({ mac: { ...studio, quietSince: "2026-10-30T11:55:00Z" }, copy: { at: reach().now - 7 * 60_000, read: "head through 12, 4 MB in 300 chunks, 33 fetched (400 KB), 180 ms" } }))
+  assert.equal(copied?.detail, "Last seen 5 minutes ago · reading its copy from 7 minutes ago", "its copy, and how old it is, beside when it was last seen")
+  assert.ok(copied && diagnosisText(copied).includes("Copy read: head through 12"), "how the copy was read goes with the diagnostics")
+  assert.equal(diagnose(reach({ mac: { ...studio, link: "failed" }, copy: { at: reach().now } }))?.detail, "Reading its copy from a moment ago")
   const ahead = diagnose(reach({ mac: { ...studio, quietSince: "2026-10-30T12:09:00Z" } }))
   assert.equal(ahead?.detail, "Last seen a moment ago", "a clock ahead of this one never makes it seen in the future")
   assert.equal(lastSeen("not a time", reach().now), "a moment ago")
@@ -1204,4 +1235,85 @@ test("what a Mac's rail shows of a row reaches the desk's rail: its project and 
   assert.deepEqual(listedHeads(rows), { "/Users/ana/api/src": { kind: "rebasing", name: "pricing-table" } }, "a project's checkout is its newest row's word on it")
   const quiet = listedSummaries({ rows: rows.slice(0, 1), devices, quiet: new Map([[STUDIO, at(60)]]), waiting: new Map() })[0]!
   assert.equal(quiet.rail?.background, undefined, "nothing on a quiet device is shown at work")
+})
+
+test("a browser reads a Mac's copy as a Mac's window does: its newest page from the account at once, earlier pages as it scrolls, and a message sent waits in the account", async () => {
+  const mac = uuid(901)
+  const session = uuid(31)
+  const listed = row(31, { session, conversation: "c31", harness: "codex", nativeId: "s-31", runsOn: { kind: "device", deviceId: mac } })
+  // A copy as a Mac's `ReadingCopies` writes it, cut at byte offsets that fall inside lines, some chunks zstd and some plain.
+  const entries = Array.from({ length: 260 }, (_, n) => ({ id: `e-${n}`, type: "text" as const, text: `Answer ${n}: ${"the retry schema ".repeat(n % 7 + 1)}` }))
+  const header = { copy: 1, harness: "codex", nativeId: "s-31", title: "Retry the webhooks", cwd: "/Users/ana/api", translator: "t-1", total: entries.length, stamp: "n:7", at: Date.parse(at(-20)) }
+  const text = Buffer.from([header, ...entries].map((line) => JSON.stringify(line)).join("\n") + "\n")
+  const chunks: PackedChunk[] = []
+  for (let start = 0; start < text.length; start += 1500) {
+    const plain = text.subarray(start, start + 1500)
+    const hash = createHash("sha256").update(plain).digest("hex")
+    chunks.push(chunks.length % 3 ? { hash, codec: 1, size: plain.length, body: new Uint8Array(zstdCompressSync(plain)) } : { hash, codec: 0, size: plain.length, body: new Uint8Array(plain) })
+  }
+  const version = { seq: 0, kind: "replace" as const, at: header.at, size: text.length, digest: null, tail: null, chunks: chunks.map((chunk) => chunk.hash).join(""), detail: null, writer: null, writerSource: null }
+  const head = { through: 7, units: [{ key: "copy:codex/s-31.copy", role: "file" as const, path: "copy:codex/s-31.copy", places: null, versions: [version] }] }
+  const asked: string[] = []
+  const waiting: WaitingMessage[] = []
+  const real = globalThis.fetch
+  // SAFETY: the gateway's records and waiting routes as fetch answers them: a promise of a Response.
+  globalThis.fetch = (async (input: URL, init: RequestInit) => {
+    const path = new URL(input).pathname
+    asked.push(`${init.method ?? "GET"} ${path.replace(`/v1/devices/${mac}/records`, "…/records")}`)
+    if (path === `/v1/devices/${mac}/records/sessions/head`) return Response.json({ head })
+    if (path === `/v1/devices/${mac}/records/chunks/read`) {
+      const { hashes } = z.object({ hashes: z.array(z.string()) }).parse(JSON.parse(String(init.body)))
+      return new Response(encodeChunkPack(hashes.map((hash) => chunks.find((chunk) => chunk.hash === hash)!)), { headers: { "content-type": "application/octet-stream" } })
+    }
+    const wait = new RegExp(`^/v1/sessions/${session}/waiting/([^/]+)$`).exec(path)
+    if (wait && init.method === "PUT") {
+      const { conversation, text } = z.object({ conversation: z.string(), text: z.string() }).parse(JSON.parse(String(init.body)))
+      waiting.push({ id: wait[1]!, session, from: uuid(1), at: at(0), conversation, text })
+      return Response.json({ messages: waiting })
+    }
+    return Response.json({ title: "Not found" }, { status: 404 })
+  }) as typeof fetch
+  const before = accountListStore.get()
+  accountListStore.set({ ...before, rows: [listed], devices: new Map([[mac, { id: mac, kind: "desktop", name: "Studio", platform: "macOS" }]]), quiet: new Map([[mac, at(-5)]]) })
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Date.now() + 600_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  const retold: string[] = []
+  const copies = new WebCopies({ gateway, retold: (conversation) => retold.push(conversation) })
+  /** A read's whole answer, its parts read in turn. */
+  const Part = z.object({ record: z.string(), data: z.string(), next: z.number().nullable() })
+  const whole = async (first: CopyAnswer): Promise<Json> => {
+    let chunk = Part.parse(first)
+    let data = chunk.data
+    while (chunk.next !== null) {
+      chunk = Part.parse(await copies.call(listed, "mako:live-read", ["c31", { kind: "part", record: chunk.record, offset: chunk.next }]))
+      data += chunk.data
+    }
+    return JsonSchema.parse(JSON.parse(data))
+  }
+  try {
+    const snapshot = z.object({ copy: z.object({ at: z.number() }), elsewhere: z.string(), session: z.object({ connection: z.string(), title: z.string() }), base: z.object({ start: z.number(), total: z.number(), entries: z.array(z.object({ id: z.string() })) }), history: z.object({ token: z.string(), before: z.object({ blocks: z.number(), base: z.number() }).nullable() }), requests: z.array(z.object({ id: z.string(), status: z.string() })) })
+    const opened = snapshot.parse(await copies.call(listed, "mako:live-snapshot", ["c31"]))
+    assert.deepEqual([opened.copy.at, opened.elsewhere, opened.session.connection, opened.session.title], [header.at, "Studio", "hibernated", "Retry the webhooks"], "the Mac's copy, said as its, from when it was written")
+    assert.equal(opened.base.total, 260)
+    assert.equal(opened.base.entries.at(-1)?.id, "e-259", "it opens at the newest entry")
+    assert.deepEqual(asked.slice(0, 2), ["GET …/records/sessions/head", "POST …/records/chunks/read"], "what the account holds now, then the chunks the newest page needs")
+
+    // Scrolled back: the page before, from the same version, as a Mac's window reads one.
+    const earlier = z.object({ base: z.object({ start: z.number(), entries: z.array(z.object({ id: z.string() })) }) }).parse(await whole(await copies.call(listed, "mako:live-read", ["c31", { kind: "earlier", token: opened.history.token, before: opened.history.before! }])))
+    assert.equal(earlier.base.entries.at(-1)?.id, `e-${opened.base.start - 1}`, "the page just before the newest")
+    assert.ok(earlier.base.start < opened.base.start)
+
+    // A message sent waits in the account for the Mac, shown queued; anything else says the Mac is off.
+    const request = z.object({ id: z.string(), status: z.string() }).parse(await copies.call(listed, "mako:live-prompt", ["c31", uuid(77), "Run the tests"]))
+    assert.deepEqual([request.id, request.status], [uuid(77), "queued"])
+    assert.ok(asked.includes(`PUT /v1/sessions/${session}/waiting/${uuid(77)}`))
+    assert.deepEqual(retold, ["c31"], "the open conversation is read again")
+    const queued = snapshot.parse(await copies.call(listed, "mako:live-snapshot", ["c31"]))
+    assert.deepEqual(queued.requests.map((each) => [each.id, each.status]), [[uuid(77), "queued"]], "drawn where the transcript draws a queued message")
+    await assert.rejects(Promise.resolve().then(() => copies.call(listed, "mako:live-cancel", ["c31"])), /Studio is off, so this conversation can't be changed from here until it's back/)
+    assert.equal(asked.filter((each) => each.endsWith("/sessions/head")).length, 1, "read again within 10 s: the copy already held")
+  } finally {
+    globalThis.fetch = real
+    accountListStore.set(before)
+    gateway.close()
+  }
 })

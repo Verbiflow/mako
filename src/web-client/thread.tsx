@@ -32,6 +32,7 @@ import { checkReach, useSessionDiagnosis } from "./thread-trouble"
 import { DiagnosisCard } from "./trouble"
 import { useTryAgain } from "./trouble-state"
 import { openReview } from "./review-open"
+import { useCopyMissing } from "./copies"
 
 /** The renderer's live conversation: its transcript, approvals and questions, the desktop's own code. Its own chunk. */
 const LiveSession = lazy(() => import("./live-session"))
@@ -113,10 +114,11 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
 }
 
 /**
- * What a Thread shows under its bar, on a phone, a tablet and a laptop's browser alike: archived, its Mac asleep or
- * offline (with why, and what still works), or the Session live. Above it, a move while one goes, the transcript and
- * composer kept under it; above a live one, what can't be reached, when something can't, and the servers its app runs.
- * Links in it to the app's own address open the app here.
+ * What a Thread shows under its bar, on a phone, a tablet and a laptop's browser alike: archived, or the Session, live
+ * or, while its Mac is asleep or offline, read from the copy that Mac keeps in the account, a message sent waiting for
+ * it; with no copy to read, why its Mac can't be reached instead. Above it, a move while one goes, the transcript and
+ * composer kept under it; above the transcript, what can't be reached, when something can't (its Mac off, and since
+ * when), and the servers its app runs. Links in it to the app's own address open the app here.
  */
 export function ThreadBody({ thread, session, desk = false }: { thread: WebThread; session: WebSession; desk?: boolean }) {
   const client = useWebClient()
@@ -124,6 +126,7 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
   const moving = useMoves((state) => state.moves.has(thread.id)) || listedMove(thread) !== undefined
   const owner = ownerOf(session)
   const live = !thread.archived && !session.quietSince && !moving
+  const noCopy = useCopyMissing((state) => (session.quietSince ? state.missing.get(session.row.conversation) : undefined))
   useThreadApp(client, session.row.conversation, owner, session.row.folder, live)
   // A link to the app's own address (`localhost:5173/login`) opens the app here, through its owner, not this phone's own.
   const openLinks = (event: React.MouseEvent) => {
@@ -141,12 +144,12 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
       ) : (
         <div className="flex min-h-0 flex-1 flex-col" onClickCapture={openLinks}>
           {moving ? <ThreadMove thread={thread} session={session} /> : null}
-          {session.quietSince ? (
+          {noCopy ? (
             <QuietSession key={session.row.session} session={session} />
           ) : (
             <>
               <ThreadTrouble session={session} />
-              {moving ? null : <ServerCards session={session} />}
+              {moving || session.quietSince ? null : <ServerCards session={session} />}
               <MoveDividersContext value>
                 <Suspense fallback={<TranscriptLoading />}>
                   <LiveSession key={session.row.conversation} session={session} desk={desk} />
@@ -161,7 +164,7 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
   )
 }
 
-/** What can't be reached for a live Session, in a strip above its transcript: the headline, Details a tap away. */
+/** What can't be reached for a Session, in a strip above its transcript (its Mac off, and since when): the headline, Details a tap away. */
 function ThreadTrouble({ session }: { session: WebSession }) {
   const client = useWebClient()
   const diagnosis = useSessionDiagnosis(session)
@@ -341,9 +344,10 @@ function SessionTabs({ thread, current, onSession, onAdd }: { thread: WebThread;
 }
 
 /**
- * A Session whose Mac can't be reached: why, hop by hop (this phone, Mako Cloud, the Mac, its harness), with what it may
- * be, Try again and Copy diagnostics. Nothing runs it and nothing answers for it meanwhile; a message sent here waits in
- * the account and runs once the Mac is back.
+ * A Session whose Mac can't be reached and whose copy can't be read (the account has none yet, or neither it nor this
+ * browser has it now): why, hop by hop (this phone, Mako Cloud, the Mac, its harness), with what it may be, Try again
+ * and Copy diagnostics. Nothing runs it and nothing answers for it meanwhile; a message sent here waits in the account
+ * and runs once the Mac is back.
  */
 export function QuietSession({ session }: { session: WebSession }) {
   const client = useWebClient()

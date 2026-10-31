@@ -4,6 +4,7 @@ import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } f
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { bareCommand, identifyTool } from "@mako/sessions/tool-identity"
 import { PromptQueue } from "@/components/composer/prompt-queue"
+import { WAITING_PLACEHOLDER } from "@/components/composer/copy-notice"
 import { editQueuedPrompt } from "@/state/acp-queue"
 import { descriptorFor } from "@/state/descriptors"
 import { usePrefs } from "@/state/prefs"
@@ -101,7 +102,10 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   const harnessId = useAcp((state) => activeLiveAcp(state)?.harness)
   const switching = useSwitching((state) => state.pending.has(conversation))
   const editing = useEditingQueued(conversation)
-  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : running ? (steering.canSteer && steerByDefault ? `Steer ${harness}` : `Queue a message for ${harness}`) : `Message ${harness}`
+  // Read from its Mac's copy while that Mac is off: a message waits in the account for it, its words alone, so nothing
+  // to attach and no choices to make here.
+  const waits = useAcp((state) => Boolean(activeLiveAcp(state)?.copy))
+  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer ${harness}` : `Queue a message for ${harness}`) : `Message ${harness}`
   return (
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : undefined}>
       <div aria-hidden className="web-dock-fade" />
@@ -138,13 +142,13 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         onWrite={target.cloudThread ? () => void wakeThread(target.cloudThread!, conversation) : undefined}
         onUnsent={(message: Outgoing) => keepUnsent({ ...message, conversation })}
         // A question is answered in words: nothing to attach, and the hint gets the room.
-        attach={ask?.kind !== "question"}
+        attach={ask?.kind !== "question" && !waits}
         // A question waiting: typed words are its answer, which a send takes; nothing steers past it.
         steering={ask?.kind === "question" ? undefined : steering}
         answering={ask?.kind === "question"}
         editing={editing.current}
         waiting={switching ? "Switching access…" : undefined}
-        tools={harnessId ? <ThreadChips conversation={conversation} harness={harnessId} /> : undefined}
+        tools={harnessId && !waits ? <ThreadChips conversation={conversation} harness={harnessId} /> : undefined}
       />
     </div>
   )

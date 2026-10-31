@@ -476,9 +476,6 @@ function catalogService(
           case "copy-page":
             reply({ id: frame.id, ok: true, result: await catalog.copyPage(frame.link, frame.harness, frame.nativeId, frame.before, frame.limit) })
             return
-          case "copy-entry":
-            reply({ id: frame.id, ok: true, result: await catalog.copyEntry(frame.link, frame.harness, frame.nativeId, frame.entry) })
-            return
           case "retire": {
             // A newer client wants this vintage gone. Answer, then leave —
             // the socket frees, and the successor takes over the watchers.
@@ -676,8 +673,6 @@ export interface DaemonClient {
   stageRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<StagedRecords[]>
   /** A page of the copy another device keeps of a Session (`SessionCatalog.copyPage`). */
   copyPage(link: RecordsLink, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null>
-  /** One entry of such a copy (`SessionCatalog.copyEntry`). */
-  copyEntry(link: RecordsLink, harness: string, nativeId: string, entry: string): Promise<Entry | null>
   onEvent(listener: (event: DaemonEvent) => void): () => void
   /**
    * Fires once if the daemon goes away, with why: `closed here` when this
@@ -997,14 +992,6 @@ async function connectDaemonLink(
       send({ id, op: "sync-status" })
     })
 
-  const requestCopyEntry = (link: RecordsLink, harness: string, nativeId: string, entry: string): Promise<Entry | null> =>
-    new Promise((resolve, reject) => {
-      const id = nextId++
-      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
-      pending.set(id, { kind: "entry", resolve, reject, timer })
-      send({ id, op: "copy-entry", link, harness, nativeId, entry })
-    })
-
   const requestAck = (
     frame: (id: number) => DaemonRequestFrame
   ): Promise<void> =>
@@ -1041,7 +1028,6 @@ async function connectDaemonLink(
       receiveRecords: requestReceiveRecords,
       stageRecords: requestStageRecords,
       copyPage: requestCopyPage,
-      copyEntry: requestCopyEntry,
       onEvent: (listener) => {
         eventListeners.add(listener)
         return () => eventListeners.delete(listener)

@@ -9,6 +9,7 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { isCompactBatch, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
 import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { listedOwner, type ListedOwner } from "@mako/host/contracts/listed-conversations"
+import { OwnerUnavailableError } from "@mako/host/contracts/host-connection"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { z } from "zod"
 import { applyLiveBatch, hydrateLive, listLive, unloadLive } from "@/state/live-recovery"
@@ -25,6 +26,8 @@ import { stepHeard } from "./moves"
 import { accountListStore } from "./account-list"
 import type { WebSession } from "./threads"
 import { webHarnessDescriptors } from "./descriptors"
+import type { CopyAnswer } from "@mako/host/contracts/copy-history"
+import { WebCopies } from "./copies"
 
 /** What `mako:resolve-file-references` names first: the conversation whose transcript's words are being resolved. */
 const FileReferencesSourceSchema = z.object({ liveId: z.string().optional() })
@@ -40,6 +43,8 @@ const FILES_KEPT_MS = 30 * 60_000
  * one paints it at once and only catches up, within a bound a phone's page can hold. Hidden, it keeps only what's open.
  */
 const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
+/** A Mac found off by a call it couldn't take is read from its copy this long before it's asked again, as a Mac's window does. */
+const ASLEEP_MS = 15_000
 
 /** A move's step as its owner's stream carries it (`thread-move-step`, `thread-return-step`): read as far as its kind. */
 const MoveStepEventSchema = z.object({ type: z.enum(["thread-move-step", "thread-return-step"]), move: z.string(), step: z.object({ kind: z.string() }).loose() })
@@ -66,11 +71,18 @@ export class WebConversations {
   readonly #follows = new Map<string, Follow>()
   /** Follows waiting out a backoff before they follow again: a return cuts the wait short. */
   readonly #waits = new Set<() => void>()
+  /** The conversations of Macs that are off, read from their copies in the account. */
+  readonly #copies: WebCopies
+  /** Macs a call found off though the account's list doesn't say so yet, by device, until when they're read from their copies. */
+  readonly #asleep = new Map<string, number>()
+  readonly #waking = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(options: { gateway: Gateway; deviceId: string; row: (conversation: string) => ListedSession | undefined }) {
     this.#gateway = options.gateway
     this.#deviceId = options.deviceId
     this.#row = options.row
+    this.#copies = new WebCopies({ gateway: options.gateway, retold: (conversation) => this.#retold(conversation) })
+    this.#watchQuiet()
     const answers: ClientAnswers<undefined> = {
       "mako:open-url": (_page, url) => {
         const link = openableLink(url)
@@ -99,8 +111,7 @@ export class WebConversations {
       if (isClientCall(channel)) return answerClientCall(answers, channel, undefined, inputs.of(channel).parse(args))
       if (channel === "mako:harness-descriptors") return webHarnessDescriptors()
       const conversation = conversationCallId(channel, args) ?? this.#ownerAsked(channel, args)
-      if (conversation && channel === "mako:read-live-file") return this.#readable(conversation, await this.call(conversation, channel, args))
-      if (conversation) return this.call(conversation, channel, args)
+      if (conversation) return this.#answerFor(conversation, channel, args)
       // No owner to ask: the null the bridge declares, so links are drawn as they are, unchecked (`file-references.ts`).
       if (channel === "mako:resolve-file-references") return null
       console.warn(`[mako] ${channel} isn't offered in the browser`)
@@ -120,6 +131,102 @@ export class WebConversations {
       resolveFileUrl: (url) => url,
     })
     watchLiveResidency(RECENT_TRANSCRIPTS)
+  }
+
+  /**
+   * A call for one conversation: its owner's answer, or while its Mac is off, its copy's (`WebCopies`), as a Mac's
+   * window reads it. A Mac the account's list says is quiet isn't asked; one that refuses a call as off is read from
+   * its copy for `ASLEEP_MS`, then asked again.
+   */
+  async #answerFor(conversation: string, channel: string, args: unknown[]): Promise<Json | CopyAnswer | null | undefined> {
+    const row = this.#row(conversation)
+    const mac = row?.runsOn.kind === "device" ? row.runsOn.deviceId : undefined
+    if (row && mac && this.#isOff(mac)) return this.#fromCopy(row, channel, args)
+    try {
+      if (channel === "mako:read-live-file") return await this.#readable(conversation, await this.call(conversation, channel, args))
+      return await this.call(conversation, channel, args)
+    } catch (error) {
+      if (!(error instanceof OwnerUnavailableError) || !row || !mac) throw error
+      this.#asleep.set(mac, Date.now() + ASLEEP_MS)
+      CONSOLE_LOG.info("a Mac is off; its conversation is read from its copy", { conversation, mac, channel })
+      this.#watchForWaking(mac)
+      return this.#fromCopy(row, channel, args)
+    }
+  }
+
+  #isOff(mac: string): boolean {
+    return accountListStore.get().quiet.has(mac) || (this.#asleep.get(mac) ?? 0) > Date.now()
+  }
+
+  #fromCopy(row: ListedSession, channel: string, args: unknown[]): Promise<CopyAnswer | null> {
+    // Which files a transcript's words name is the Mac's to say: unchecked, as with no owner to ask.
+    if (channel === "mako:resolve-file-references") return Promise.resolve(null)
+    return this.#copies.call(row, channel, args)
+  }
+
+  /** The open conversations a Mac runs: the ones its going off or coming back reads again. */
+  #openOn(mac: string): string[] {
+    const { conversations } = acpStore.get()
+    return [...this.#follows.values()].flatMap((follow) => [...follow.conversations]).filter((conversation) => {
+      const row = this.#row(conversation)
+      return row?.runsOn.kind === "device" && row.runsOn.deviceId === mac && conversations[conversation]?.kind === "live"
+    })
+  }
+
+  /**
+   * Follows the account's word on which Macs are quiet: one that goes quiet has its open conversations read from their
+   * copies, so a message sent waits for it; one that's back has them read there again, live, the copy's view replaced
+   * in place by the Mac's own (`applyLiveSnapshot` takes a new epoch whole).
+   */
+  #watchQuiet(): void {
+    let before = new Set(accountListStore.get().quiet.keys())
+    accountListStore.subscribe(() => {
+      const now = new Set(accountListStore.get().quiet.keys())
+      const back = [...before].filter((mac) => !now.has(mac))
+      const off = [...now].filter((mac) => !before.has(mac))
+      before = now
+      for (const mac of back) this.#back(mac, "the account's list")
+      for (const mac of off) for (const conversation of this.#openOn(mac)) this.#sync(conversation, true)
+    })
+  }
+
+  #back(mac: string, heard: string): void {
+    this.#asleep.delete(mac)
+    clearTimeout(this.#waking.get(mac))
+    this.#waking.delete(mac)
+    const open = this.#openOn(mac)
+    CONSOLE_LOG.info("a Mac is back; its conversations are read there again", { mac, heard, open: open.length })
+    for (const conversation of open) {
+      this.#copies.released(conversation)
+      this.#sync(conversation, true)
+    }
+  }
+
+  /**
+   * A Mac a call found off though its list doesn't say it's quiet (Mako closed there, its connection just gone): asked
+   * every `ASLEEP_MS` with the smallest read there is while one of its conversations is open, and read live once it answers.
+   */
+  #watchForWaking(mac: string): void {
+    if (this.#waking.has(mac)) return
+    this.#waking.set(mac, setTimeout(async () => {
+      this.#waking.delete(mac)
+      const asked = this.#openOn(mac)[0]
+      if (!asked || accountListStore.get().quiet.has(mac)) return void this.#asleep.delete(mac)
+      try {
+        await this.call(asked, "mako:live-state", [asked])
+      } catch (error) {
+        if (!(error instanceof OwnerUnavailableError)) return
+        this.#asleep.set(mac, Date.now() + ASLEEP_MS)
+        this.#watchForWaking(mac)
+        return
+      }
+      this.#back(mac, "a call it answered")
+    }, ASLEEP_MS))
+  }
+
+  /** A conversation read from its copy changed in the account (a message waits, or one was taken back): read again if open. */
+  #retold(conversation: string): void {
+    if (acpStore.get().conversations[conversation]?.kind === "live" && [...this.#follows.values()].some((follow) => follow.conversations.has(conversation))) this.#sync(conversation, true)
   }
 
   /**

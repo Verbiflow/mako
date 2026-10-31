@@ -681,10 +681,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             const cloud = late.cloud
             return cloud ? catalog.copyPage(await cloud.deviceRecords(device), harness, nativeId, before, limit) : null
           },
-          entry: async (device, harness, nativeId, id) => {
-            const cloud = late.cloud
-            return cloud ? catalog.copyEntry(await cloud.deviceRecords(device), harness, nativeId, id) : null
-          },
         },
         archivedChanged: (account, archived) => {
           accountArchived = { account, archived }

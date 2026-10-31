@@ -2,6 +2,9 @@ import type { ComposerNotice } from "@/extend/notices"
 import { copyAge } from "@/lib/format"
 import { activeAcp, useAcp } from "@/state/acp"
 
+/** The composer's placeholder while what it sends waits in the account (another device's copy on screen, named above it). */
+export const WAITING_PLACEHOLDER = "Message — waits until it's back"
+
 /**
  * Above the composer, while the conversation on screen is another device's, read from the copy that device keeps in
  * the account because it's off: what this is, how old it is, and that a message sent now waits in the account and runs

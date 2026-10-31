@@ -143,8 +143,6 @@ export type DaemonRequestFrame =
   | { id: number; op: "stage-records"; link: RecordsLink; sessions: ReceivingSession[] }
   /** A page of the copy another device keeps of a Session, at its records in the account (`SessionCatalog.copyPage`). */
   | { id: number; op: "copy-page"; link: RecordsLink; harness: string; nativeId: string; before?: number; limit: number }
-  /** One entry of such a copy (`SessionCatalog.copyEntry`). */
-  | { id: number; op: "copy-entry"; link: RecordsLink; harness: string; nativeId: string; entry: string }
 
 export type DaemonResponseFrame =
   | {
@@ -449,10 +447,6 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       if (!parsed.success) return null
       const { before, ...rest } = parsed.data
       return before === undefined ? { id, op, ...rest } : { id, op, ...rest, before }
-    }
-    case "copy-entry": {
-      const parsed = z.object({ link: RecordsLinkSchema, harness: z.string().min(1), nativeId: z.string().min(1), entry: z.string().min(1) }).safeParse(record)
-      return parsed.success ? { id, op, ...parsed.data } : null
     }
     default:
       return null
