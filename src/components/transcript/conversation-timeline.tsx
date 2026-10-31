@@ -38,6 +38,7 @@ import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
+import { CompactPresentationContext } from "./compact-presentation"
 
 const NEAR_BOTTOM = 96
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
@@ -483,6 +484,8 @@ export function ConversationTimeline({
   const wake = useRef<() => void>(() => {})
   const [showJump, setShowJump] = useState(false)
   const transcriptEnd = useContext(TranscriptEndContext)
+  // A phone's width keeps no rail of turns: its gutter would take a tenth of the screen, and it reads back by hover.
+  const navigates = useContext(CompactPresentationContext)?.navigator !== false
   /** With `transcriptEnd` provided: room after the column that keeps a followed end from moving back (`pin`). */
   const steadyEnd = useRef<HTMLDivElement>(null)
   const highWater = useRef(0)
@@ -1371,7 +1374,7 @@ export function ConversationTimeline({
     ])
   }, [activeTurn, exchanges, jump])
 
-  const showNavigator = !isEmpty && exchanges.length >= 3
+  const showNavigator = navigates && !isEmpty && exchanges.length >= 3
   const renderExchange = (exchange: ExchangeData) => exchange.unloaded !== undefined ? (
     <ReleasedExchange key={keys.get(exchange.id) ?? exchange.id} id={exchange.id} label={exchange.unloaded}
       height={heights.current.get(`${readingSource}:${exchange.id}`) ?? 360} viewport={viewport.current}

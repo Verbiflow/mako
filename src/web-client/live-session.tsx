@@ -82,7 +82,7 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
   const target = useMemo(() => ({ conversation, ...(cloudThread && { cloudThread }) }), [conversation, cloudThread])
   // Under a finger: replies offer Copy and Branch; on a phone's width a run of steps is one line that opens them.
   const wide = useWide()
-  const compact = useMemo<CompactPresentation>(() => ({ reply: (reply) => <PhoneReply reply={reply} />, ...(!wide && { steps: (run) => <PhoneSteps key={run.id} run={run} /> }) }), [wide])
+  const compact = useMemo<CompactPresentation>(() => ({ reply: (reply) => <PhoneReply reply={reply} />, ...(!wide && { steps: (run) => <PhoneSteps key={run.id} run={run} />, navigator: false }) }), [wide])
   const live = useRef<HTMLDivElement>(null)
   const hold = useReplyHold(live)
   if (desk)

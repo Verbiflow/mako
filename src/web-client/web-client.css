@@ -822,9 +822,6 @@
   @apply size-1.5 shrink-0 rounded-full bg-ember;
   animation: web-breathe 1.6s ease-in-out infinite;
 }
-.web-capsule-queued {
-  @apply shrink-0;
-}
 .web-jump {
   @apply flex size-[34px] shrink-0 items-center justify-center rounded-full text-foreground;
   visibility: hidden;

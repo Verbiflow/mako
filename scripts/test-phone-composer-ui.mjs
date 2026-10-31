@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url"
  * - An answer's words can be selected; a long press beside them still offers Copy and Branch.
  * - "Switched to" lines come from the Session's record, so a reload draws the same ones.
  * - The queue's actions, the steps line and the edit's Cancel are 44 px targets.
+ * - The queue's count is said once, by the queue; a phone's transcript keeps no rail of turns, nor a gutter for one.
  *
  * Screenshots go to the printed directory, or to the directory given as the first argument; `--port` serves the page
  * on that port (default: any free one).
@@ -229,6 +230,10 @@ async function checkPhone() {
     const reach = await evaluate(`(() => { const line = document.querySelector('[data-steps-line]'); line.scrollIntoView({ block: 'center' }); const r = line.getBoundingClientRect(); const x = r.left + 8; return [r.top - 3, r.bottom + 3].every(y => line.contains(document.elementFromPoint(x, y))) })()`)
     assert.ok(reach, "the steps line takes a touch 44 px tall")
     await toEnd()
+    // The queue says what's queued once, in its own panel; the transcript has the screen's width, no rail of turns.
+    assert.equal(await evaluate("document.querySelector('.web-capsule')?.textContent.includes('queued') ?? false"), false, "the capsule doesn't repeat the queue's count")
+    assert.equal(await evaluate("Boolean(document.querySelector('[aria-label=\"Previous prompts\"]'))"), false, "a phone's width keeps no turn rail")
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('[aria-label=\"Conversation transcript\"]')).paddingInlineEnd"), "0px", "nor a gutter for one")
     await capture("composer-queued-iphone-dark.png")
     console.log("Targets: queued edit and remove, the steps line, 44 px")
 

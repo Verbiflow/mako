@@ -16,7 +16,6 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
-import { promptDelivery } from "@/state/prompt-delivery"
 import { shallowEqual } from "@/state/store"
 import { record, type AnsweredRecord } from "./answered"
 import { Composer, type EditingQueued, type Outgoing, type Steering } from "./composer"
@@ -447,8 +446,8 @@ function useOnline(): boolean {
 }
 
 /**
- * The capsule above the composer: one status (`dockStatus`), what's queued behind the turn, and the way back to the
- * newest turn sliding out beside it. It arrives in 180 ms and leaves in 120; its words come in 80 ms after it. What it
+ * The capsule above the composer: one status (`dockStatus`), and the way back to the newest turn sliding out beside it.
+ * What's queued behind the turn is the queue's own to say, in the dock just under it. It arrives in 180 ms and leaves in 120; its words come in 80 ms after it. What it
  * last said stays while it leaves, so it never empties before it goes.
  */
 function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnect }: { conversation: string; cloudThread: string | undefined; asking: boolean; away: boolean; jump: () => void; reconnect: () => void }) {
@@ -463,21 +462,19 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
       running: current.session.status === "running",
       since: current.projection?.exchanges.at(-1)?.prompt?.timestamp,
       pendingIds: pending.map((prompt) => prompt.id).join(" "),
-      queued: promptDelivery(current).queued.length,
     }
   }, shallowEqual)
   const waking = useWaking((state) => (cloudThread ? state.waking.has(cloudThread) : false))
   const pendingIds = live?.pendingIds
   const wakingMessage = useOutbox((state) => Boolean(pendingIds) && pendingIds!.split(" ").some((id) => state.sending.get(id) === "waking"))
   const status = dockStatus({ online, unconfirmed: live?.unconfirmed ?? false, canceling: live?.canceling ?? false, waking, wakingMessage, running: live?.running ?? false, since: live?.since, asking })
-  const queued = live?.queued ?? 0
   // Its app, while it runs or starts: a segment of its own that opens it (`preview.tsx`).
   const app = useAppStanding(conversation)
-  const shown = status !== undefined || queued > 0 || app !== undefined
+  const shown = status !== undefined || app !== undefined
   // What it last said, kept while it leaves.
-  const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${queued}:${app}`
-  const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; queued: number; app?: "running" | "starting" }>({ key, status, queued, app })
-  if (shown && kept.key !== key) keep({ key, status, queued, app })
+  const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${app}`
+  const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; app?: "running" | "starting" }>({ key, status, app })
+  if (shown && kept.key !== key) keep({ key, status, app })
   const retry = () => {
     reconnect()
     void retryUnconfirmed(conversation)
@@ -504,7 +501,6 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
             </span>
           )
         ) : null}
-        {kept.queued > 0 ? <span className="web-capsule-segment web-capsule-queued">{kept.queued} queued</span> : null}
         {kept.app ? (
           <button type="button" className="web-capsule-segment web-capsule-app" data-app={kept.app} onClick={() => askPreview(conversation)}>
             <span aria-hidden className="web-capsule-app-dot" />
