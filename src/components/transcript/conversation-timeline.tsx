@@ -5,7 +5,7 @@ import {
   TranscriptSourceContext,
   type TranscriptSource,
 } from "./source-context"
-import type { ReactNode, Ref, WheelEvent as ReactWheelEvent, PointerEvent as ReactPointerEvent } from "react"
+import type { ReactNode, Ref, WheelEvent as ReactWheelEvent, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react"
 import {
   useCallback,
   useContext,
@@ -272,7 +272,22 @@ function holdPrependedHeights(node: HTMLDivElement, exchangeId?: string) {
   }
 }
 
-function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor) {
+/**
+ * Whether the scroller moved toward earlier turns since `from`. Past the end
+ * counts as the end: iOS bounces a scroller back from beyond it, which is no
+ * move away from the newest turn.
+ */
+function leftEnd(node: HTMLDivElement, from: number): boolean {
+  const end = node.scrollHeight - node.clientHeight
+  return Math.min(node.scrollTop, end) < Math.min(from, end) - 0.5
+}
+
+/**
+ * Moves the scroller so the captured content is where it was, and says whether
+ * it had to. Content already within a pixel of its place is left alone: a
+ * shift under a pixel is the layout's rounding, not the content moving.
+ */
+function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor): boolean {
   const block = snapshot.block
   const anchor = snapshot.exchangeId
     ? node.querySelector(`[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`)
@@ -281,19 +296,18 @@ function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor) {
   // Its conversation path survives that replacement; the old DOM node doesn't.
   const element = block?.element.isConnected && node.contains(block.element) ? block.element
     : block?.preview ? anchor?.querySelectorAll(previewSelector(block.preview))[block.preview.index] : undefined
+  let shift: number
   if (block && element) {
-    node.scrollTop += element.getBoundingClientRect().top - node.getBoundingClientRect().top - block.offset
+    shift = element.getBoundingClientRect().top - node.getBoundingClientRect().top - block.offset
     block.element = element
-    return
-  }
-  if (anchor && snapshot.exchangeOffset !== undefined) {
-    const offset =
-      anchor.getBoundingClientRect().top - node.getBoundingClientRect().top
-    node.scrollTop += offset - snapshot.exchangeOffset
+  } else if (anchor && snapshot.exchangeOffset !== undefined) {
+    shift = anchor.getBoundingClientRect().top - node.getBoundingClientRect().top - snapshot.exchangeOffset
   } else {
-    node.scrollTop =
-      snapshot.scrollTop + (node.scrollHeight - snapshot.scrollHeight)
+    shift = snapshot.scrollTop + (node.scrollHeight - snapshot.scrollHeight) - node.scrollTop
   }
+  if (Math.abs(shift) < 1) return false
+  node.scrollTop += shift
+  return true
 }
 
 type HistoryEdgeState = "loading" | "more" | "start"
@@ -444,6 +458,21 @@ export function ConversationTimeline({
   // Pointer/key release ends input ownership, but scroll motion can continue.
   // Cleanup waits for the browser's scrollend rather than that earlier release.
   const scrollMotion = useRef(false)
+  /**
+   * A finger on the scroller. Its gesture isn't over while it's down, whatever
+   * `scrollend` says: a programmatic scroll ends with one too. iOS moves the
+   * scroller before the page hears of it, so a write while it's down puts the
+   * content back under the finger.
+   */
+  const touching = useRef(false)
+  /** The end is followed again as the finger lifts; set by the observer below. */
+  const followEnd = useRef<() => void>(() => {})
+  /**
+   * The virtualizer is reconciling toward a row (a jump, the end) and would
+   * keep writing toward it. The reader's own input replaces that target, and
+   * without one their input writes nothing.
+   */
+  const seeking = useRef(false)
   const lastScrollTop = useRef(0)
   /**
    * The offset the timeline last scrolled to itself. Any other scroll — the
@@ -571,6 +600,18 @@ export function ConversationTimeline({
       if (viewport.current) owned(viewport.current)
     },
   })
+  /** Sends the virtualizer toward a row or the end, which it keeps reconciling toward until `endSeek`. */
+  const seek = useCallback((target: number | "end") => {
+    seeking.current = true
+    if (target === "end") rows.scrollToEnd({ behavior: "auto" })
+    else rows.scrollToIndex(target, { align: "start", behavior: "auto" })
+  }, [rows])
+  /** Ends the virtualizer's reconciling toward a row, at the scroller's own offset. */
+  const endSeek = useCallback((node: HTMLDivElement) => {
+    if (!seeking.current) return
+    seeking.current = false
+    rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+  }, [rows])
   /** One owner preserves the captured content through every layout change. */
   const holdReader = useCallback(
     (node: HTMLDivElement) => {
@@ -584,20 +625,22 @@ export function ConversationTimeline({
         return
       // A resize can arrive before the scroll event for this frame. Preserve
       // the reader's unreported movement as well as their place in the media.
-      const movement = userScrolling.current || scrollMotion.current
+      const movement = userScrolling.current || scrollMotion.current || touching.current
         ? node.scrollTop - lastScrollTop.current : 0
       const moved = movement === 0 ? snapshot : { ...snapshot,
         exchangeOffset: snapshot.exchangeOffset === undefined ? undefined : snapshot.exchangeOffset - movement,
         block: snapshot.block ? { ...snapshot.block, offset: snapshot.block.offset - movement } : undefined }
-      preserveScrollAnchor(node, moved)
+      // Nothing above the reader changed: the scroller is theirs, and the
+      // snapshot stays measured from the last position they reported.
+      if (!preserveScrollAnchor(node, moved)) return
       if (restore.current === snapshot) restore.current = moved
       if (readingAnchor.current === snapshot) readingAnchor.current = moved
       // Replace the virtualizer's outstanding target so it cannot undo the
       // offset just restored inside the answer.
-      if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+      endSeek(node)
       owned(node)
     },
-    [owned, windowed, rows]
+    [owned, endSeek]
   )
   useLayoutEffect(() => {
     const before = named.current
@@ -634,7 +677,7 @@ export function ConversationTimeline({
       snapshot = readingAnchor.current
     if (!node || awaitingEarlier.current) return
     if (pinned.current) {
-      if (windowed) rows.scrollToEnd({ behavior: "auto" })
+      if (windowed) seek("end")
       else node.scrollTop = node.scrollHeight
       return
     }
@@ -643,12 +686,11 @@ export function ConversationTimeline({
       (exchange) => exchange.id === snapshot.exchangeId
     )
     if (index < 0) return
-    if (windowed)
-      rows.scrollToIndex(index, { align: "start", behavior: "auto" })
+    if (windowed) seek(index)
     else if (index < hidden)
       setTail((current) => ({ ...current, limit: exchanges.length - index }))
     restoringReader.current = snapshot
-  }, [windowed, rows, exchanges, hidden])
+  }, [windowed, seek, exchanges, hidden])
   const virtualRows = rows.getVirtualItems()
   const mountedKeys = windowed
     ? virtualRows.map((row) => row.key).join("\0")
@@ -672,11 +714,11 @@ export function ConversationTimeline({
       return
     preserveScrollAnchor(node, snapshot)
     // Measurement reconciliation must no longer own the old index target.
-    if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+    endSeek(node)
     owned(node)
     readingAnchor.current = snapshot
     restoringReader.current = null
-  }, [mountedKeys, shown.length, rows, windowed, owned])
+  }, [mountedKeys, shown.length, endSeek, owned])
 
   useEffect(() => {
     if (more) setEverMore(true)
@@ -696,7 +738,7 @@ export function ConversationTimeline({
       node.removeAttribute("data-reading-anchor")
       restoringReader.current = null
       pinned.current = true
-      if (windowed) rows.scrollToEnd({ behavior: "auto" })
+      if (windowed) seek("end")
       else
         node.scrollTo({
           top: node.scrollHeight,
@@ -708,7 +750,7 @@ export function ConversationTimeline({
       owned(node)
       setShowJump(false)
     },
-    [rows, windowed, owned]
+    [seek, windowed, owned]
   )
   useEffect(() => {
     const node = viewport.current
@@ -728,7 +770,8 @@ export function ConversationTimeline({
     const node = viewport.current
     if (!node) return
     topFade.current?.toggleAttribute("data-scrolled", node.scrollTop > 0.5)
-    const movingUp = node.scrollTop < lastScrollTop.current - 0.5
+    const movingUp = leftEnd(node, lastScrollTop.current)
+    const movingDown = node.scrollTop > lastScrollTop.current + 0.5
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
     const atBottom = distance < NEAR_BOTTOM
     // Layout/virtualizer adjustments are not reader intent. Keyboard input
@@ -737,9 +780,14 @@ export function ConversationTimeline({
     const ours =
       ownScrollTop.current !== null &&
       Math.abs(node.scrollTop - ownScrollTop.current) < 1
-    if (userScrolling.current && !ours) scrollMotion.current = true
+    if ((userScrolling.current || touching.current) && !ours) scrollMotion.current = true
     ownScrollTop.current = null
-    if ((userScrolling.current || scrollMotion.current) && !ours) pinned.current = !movingUp && atBottom
+    // Only the reader's movement decides: up leaves the end, down into it follows again. A scroll that ended
+    // short of the end after moving up stays where it was left.
+    if ((userScrolling.current || scrollMotion.current || touching.current) && !ours) {
+      if (movingUp) pinned.current = false
+      else if (movingDown && atBottom) pinned.current = true
+    }
     // A reader who keeps scrolling while a page is on its way moves the
     // position that page must be placed around.
     if (awaitingEarlier.current && restore.current && !pinned.current) {
@@ -767,8 +815,7 @@ export function ConversationTimeline({
 
   const onWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
-      if (windowed && viewport.current)
-        rows.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
+      if (viewport.current) endSeek(viewport.current)
       bookmarkRestore.current = undefined
       if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")
       pendingJump.current = null
@@ -796,8 +843,14 @@ export function ConversationTimeline({
       if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
-    [rows, windowed]
+    [endSeek]
   )
+
+  /** The last finger lifts: a glide may go on, and the end, if followed, is caught up with. */
+  const lifted = useCallback((event: ReactTouchEvent<HTMLDivElement>) => {
+    touching.current = event.touches.length > 0
+    if (!touching.current) followEnd.current()
+  }, [])
 
   const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     // Preview controls may change layout without scrolling. Keep the media
@@ -819,8 +872,7 @@ export function ConversationTimeline({
     }
     bookmarkRestore.current = undefined
     if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")
-    if (windowed && viewport.current)
-      rows.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
+    if (viewport.current) endSeek(viewport.current)
     pendingJump.current = null
     restoringReader.current = null
     // A selection or scrollbar press can precede any scroll event. Keep a
@@ -839,7 +891,7 @@ export function ConversationTimeline({
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
     reportReading.current()
-  }, [rows, windowed])
+  }, [endSeek])
 
   useEffect(() => {
     const node = viewport.current
@@ -995,6 +1047,10 @@ export function ConversationTimeline({
     let lastHeight = node.scrollHeight
     let shrinkFrame = 0
     const pin = () => {
+      // The reader moved toward earlier turns and its scroll event is still to come (iOS moves the scroller first):
+      // they're leaving the end, and following it now would take their move back.
+      if (pinned.current && (userScrolling.current || scrollMotion.current || touching.current) && leftEnd(node, lastScrollTop.current))
+        pinned.current = false
       const column = node.firstElementChild
       const spacer = steadyEnd.current
       if (spacer && column instanceof HTMLElement) {
@@ -1013,11 +1069,17 @@ export function ConversationTimeline({
       settleShrink()
       if (!pinned.current) {
         holdReader(node)
+        // The end grows away from a reader resting just short of it, with no scroll of theirs to show the way back.
+        const away = node.scrollHeight - node.scrollTop - node.clientHeight >= NEAR_BOTTOM
+        setShowJump((current) => current || away)
         return
       }
+      // Under a finger the end waits for it to lift, and is followed then.
+      if (touching.current) return
       node.scrollTop = node.scrollHeight
       owned(node)
     }
+    followEnd.current = pin
     // Safari leaves a scroller that just got shorter (a finished turn folding up) past its new end, blank under the last
     // message until the next touch, worst while it still glides. Stopping the scroll for a frame makes it take the end.
     const settleShrink = () => {
@@ -1115,11 +1177,11 @@ export function ConversationTimeline({
       const index = exchanges.findIndex(
         (exchange) => exchange.id === snapshot.exchangeId
       )
-      if (index >= 0) rows.scrollToIndex(index, { align: "start" })
+      if (index >= 0) seek(index)
       requestAnimationFrame(() => {
         if (restore.current !== snapshot || viewport.current !== node) return
         preserveScrollAnchor(node, snapshot)
-        rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+        endSeek(node)
         owned(node)
         restore.current = settled
       })
@@ -1131,7 +1193,7 @@ export function ConversationTimeline({
     owned(node)
     restore.current = settled
     endEarlier(true)
-  }, [loadingEarlier, shown, hasEarlier, exchanges, windowed, rows, endEarlier, owned])
+  }, [loadingEarlier, shown, hasEarlier, exchanges, windowed, seek, endSeek, endEarlier, owned])
 
   const requestEarlier = useCallback(() => {
     const node = viewport.current
@@ -1233,11 +1295,11 @@ export function ConversationTimeline({
     if (!node) return
     element.scrollIntoView({ behavior: "auto", block: "start" })
     // Measurement reconciliation must no longer own the old index target.
-    if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+    endSeek(node)
     readingAnchor.current = captureAnchor(node, [], false, element)
     node.setAttribute("data-reading-anchor", "")
     owned(node)
-  }, [owned, windowed, rows])
+  }, [owned, endSeek])
 
   const jump = useCallback(
     (id: string, restoring = false) => {
@@ -1258,7 +1320,7 @@ export function ConversationTimeline({
         // The virtualizer owns reconciliation while rows are measured. A
         // second jump must replace that target even if its row is mounted.
         pendingJump.current = id
-        rows.scrollToIndex(index, { align: "start", behavior: "auto" })
+        seek(index)
         return
       }
       if (index < hidden) {
@@ -1271,7 +1333,7 @@ export function ConversationTimeline({
       )
       if (element) land(element)
     },
-    [exchanges, hidden, windowed, rows, land]
+    [exchanges, hidden, windowed, seek, land]
   )
 
   useLayoutEffect(() => {
@@ -1326,7 +1388,7 @@ export function ConversationTimeline({
     const target = block ?? element
     node.scrollTop += target.getBoundingClientRect().top - node.getBoundingClientRect().top -
       (block && saved ? saved.offset : bookmark.offset)
-    if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+    endSeek(node)
     owned(node)
     readingAnchor.current = { ...captureAnchor(node, [], false), exchangeId: bookmark.turn,
       exchangeOffset: element.getBoundingClientRect().top - node.getBoundingClientRect().top,
@@ -1346,7 +1408,7 @@ export function ConversationTimeline({
       reportReading.current()
     }
     requestAnimationFrame(settle)
-  }, [exchanges, hidden, mountedKeys, windowed, rows, owned, holdReader])
+  }, [exchanges, hidden, mountedKeys, endSeek, owned, holdReader])
 
   useEffect(() => {
     const move = (offset: number) => {
@@ -1416,8 +1478,14 @@ export function ConversationTimeline({
             if (event.pointerType === "mouse") userScrolling.current = false
             reportReading.current()
           }}
+          onTouchStart={(event) => {
+            touching.current = event.touches.length > 0
+          }}
+          onTouchEnd={lifted}
+          onTouchCancel={lifted}
           onScroll={onScroll}
           onScrollEnd={() => {
+            if (touching.current) return
             if (userScrolling.current || scrollMotion.current) onScroll()
             userScrolling.current = false
             scrollMotion.current = false
@@ -1449,10 +1517,7 @@ export function ConversationTimeline({
                 scrollToEnd()
                 return
               }
-              if (windowed && viewport.current)
-                rows.scrollToOffset(viewport.current.scrollTop, {
-                  behavior: "auto",
-                })
+              if (viewport.current) endSeek(viewport.current)
               pendingJump.current = null
               bookmarkRestore.current = undefined
               if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")

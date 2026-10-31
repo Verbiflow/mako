@@ -1042,6 +1042,11 @@ Three rules hold this together, and each has a specific failure it prevents:
   at work stays, and the rest come back as the reader nears them. Preserve
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
+  Follow changes only as the reader moves: up leaves the end, down into it
+  follows again, and a scroll's end decides nothing. Under a finger the end
+  waits for it to lift, and a `scrollend` there (the browser sends one for the
+  page's own writes too) doesn't end the gesture;
+  `test-phone-scroll-ui.mjs` holds both by touch and by wheel.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
   `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
   the first token of a burst at once, then at most every 50 ms, up to 90 ms
