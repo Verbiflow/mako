@@ -930,6 +930,52 @@ test("an agent's `git checkout -b x && git pull` in a turn: the pulled files are
   })
 })
 
+test("another process pulls while a turn runs, and the watcher brings Git's files after its own: they are the new base, in no turn's record", async (t) => {
+  const world = await gitWorld(t)
+  const view: JournalView = { store: world.tracker.store, roots: () => world.tracker.rootStates().values(), author: (seq) => world.tracker.authorOf(seq) }
+  world.upstreamGit("checkout", "-q", "main")
+  writeFileSync(join(world.upstream, "a.ts"), lines(6, { 4: "line 4 upstream" }))
+  writeFileSync(join(world.upstream, "page.html"), "<!doctype html>\n<div id=\"root\"></div>\n")
+  writeFileSync(join(world.upstream, "u.ts"), "export const u = 1\nexport const v = 2\n")
+  world.upstreamGit("add", "-A")
+  world.upstreamGit("commit", "-q", "-m", "upstream work")
+  const from = world.entries().at(-1)?.seq ?? 0
+  world.mark("turn", "T1", TURN_SIX, "start")
+  world.clock.advance(100)
+  world.mark("call", "T1", "look", "start", TURN_SIX)
+  world.clock.advance(20)
+  // Not the turn's: someone else's `git pull` in the same checkout, while the turn's call runs.
+  const head = world.git("rev-parse", "HEAD")
+  world.git("pull", "-q", "--no-rebase", "origin", "main")
+  const pulled = world.git("diff", "--name-only", head, "HEAD").split("\n").sort()
+  assert.deepEqual(pulled, ["a.ts", "page.html", "u.ts"])
+  // A busy watcher: Git's own files are heard and HEAD is checked before the files Git wrote first.
+  world.gitHeard([], [".git/ORIG_HEAD", ".git/index", ".git/HEAD", ".git/logs/HEAD"])
+  await world.tracker.settled()
+  world.clock.advance(4_000)
+  world.gitHeard(pulled, [])
+  await world.tracker.settled()
+  world.clock.advance(20)
+  world.mark("call", "T1", "look", "end", TURN_SIX)
+  world.mark("turn", "T1", TURN_SIX, "end")
+  world.clock.advance(15_000)
+  world.tracker.sweep()
+  await world.tracker.settled()
+
+  assert.deepEqual(world.entries().filter((entry) => entry.seq > from).map((entry) => entry.path), [], "the pull journals nothing, however late its files are heard")
+  assert.equal(world.tracker.rootStates().get("git")?.files.size, 0, "every pulled file is clean against the new base")
+  const summary = turnChanges(view, "T1", TURN_SIX)
+  assert.deepEqual([summary.files, summary.own.files, summary.maybe.files], [[], 0, 0], "the turn's record names none of them, not even as maybe")
+  // A later edit of a pulled file is still a change, counted from the pulled content.
+  world.mark("turn", "T1", "t7", "start")
+  world.mark("call", "T1", "edit", "start", "t7")
+  world.clock.advance(20)
+  world.write("u.ts", "export const u = 1\nexport const v = 3\n")
+  await world.tracker.settled()
+  const edit = world.entries().at(-1)!
+  assert.deepEqual([edit.path, edit.kind, edit.lines], ["u.ts", "modify", { added: 1, removed: 1 }], "an edit after the pull is counted against what the pull wrote")
+})
+
 test("a hook-bounded call's turn: its summary keeps the call's write and leaves out the person's save just after it", async () => {
   const world = await liveWorld()
   try {

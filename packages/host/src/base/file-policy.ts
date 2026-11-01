@@ -1,4 +1,4 @@
-import { PAGE_HEIGHT_MESSAGE } from "../contracts/page-frame.js"
+import { PAGE_FIT_SCRIPT } from "../contracts/page-frame.js"
 
 /**
  * What a served file may do once a renderer loads it, by its type, as the
@@ -37,14 +37,6 @@ export const INERT_POLICY = "sandbox; default-src 'none'"
 
 
 /**
- * Reports the page's height to the frame showing it, so the frame fits the
- * page instead of scrolling inside the transcript. It measures the content,
- * not the viewport (a page whose root fills the viewport reports the
- * frame's own height and stays put), and posts only changes.
- */
-const FIT_SCRIPT = `<script>(()=>{if(window.parent===window)return;let last=-1;const measure=()=>{const root=document.documentElement,body=document.body;const content=body?Math.max(body.scrollHeight,body.getBoundingClientRect().bottom+parseFloat(getComputedStyle(body).marginBottom||"0")):0;return Math.ceil(Math.max(content,root.getBoundingClientRect().height))};const post=()=>{const height=measure();if(height===last)return;last=height;parent.postMessage({type:"${PAGE_HEIGHT_MESSAGE}",height},"*")};const observer=new ResizeObserver(post);observer.observe(document.documentElement);addEventListener("DOMContentLoaded",()=>{if(document.body)observer.observe(document.body);post()});addEventListener("load",post)})()</script>`
-
-/**
  * The page with its height reporter as the first thing it runs. Spliced in
  * by byte offset, never decoded, so a page in any ASCII-compatible encoding
  * keeps its bytes and its own charset declaration.
@@ -54,5 +46,5 @@ export function fitPage(page: Buffer): Buffer {
   const head = /<head(?:\s[^>]*)?>/i.exec(text)
   const doctype = /^\s*<!doctype[^>]*>/i.exec(text)
   const at = head ? head.index + head[0].length : doctype ? doctype[0].length : 0
-  return Buffer.concat([page.subarray(0, at), Buffer.from(FIT_SCRIPT), page.subarray(at)])
+  return Buffer.concat([page.subarray(0, at), Buffer.from(PAGE_FIT_SCRIPT), page.subarray(at)])
 }

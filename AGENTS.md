@@ -1215,9 +1215,22 @@ confirms paths in one call per turn (`mako:resolve-turn-media`,
 while its command ran, each kept file is copied by content hash so the
 turn keeps its own bytes after an overwrite or a `/tmp` cleanup, and the
 answer is stored by call and path, so a reopened conversation reads no
-disk. `show`'s result draws where it was called (a `shown` section, kept
-in view by a settled fold); the rest sits on the shelf under the answer
-(`MediaShelf`), less what the prose already previews. Every harness is told
+disk. The turn's record of changes (`LiveRequest.changes`) adds media no
+call names, such as a PNG a script drew (`changedMedia` in
+`src/lib/media-shelf.ts`), but only files the Thread changed for sure
+(`own`): a file only timing names (`maybe`) may be what a pull or another
+process wrote in the checkout while the turn ran, so it is never the
+turn's media. A page counts there only when the turn created it, since an
+`index.html` it edited is an app's entry. `show`'s result draws where it
+was called (a `shown` section, kept in view by a settled fold); the rest
+draws after the stretch of work holding the call that made it, and what
+only the record names ends the answer (`placeMadeMedia`), less what the
+prose already previews. An inline page (`InlinePage`) fits the height the
+page reports (`PAGE_FIT_SCRIPT` in `contracts/page-frame.ts`), between
+`PAGE_MIN_HEIGHT` and a cap. Until a page reports one, or when it is too
+big to be fitted, it holds 16:10 of the column. A page that loaded and
+drew nothing shows a quiet empty state at the minimum height, never a
+sliver. Every harness is told
 one line (`SHOW_MEDIA_LINE`): Claude in its appended system prompt, Codex
 as turn context, the others in Mako's note before the prompt
 (`makoInstructions` on the live driver says which). The decode pairs draw

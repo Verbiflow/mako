@@ -15,7 +15,7 @@ import dashboard from "./assets/media-shelf/dashboard.jpg?url"
 import settings from "./assets/media-shelf/settings.jpg?url"
 import flow from "./assets/media-shelf/sign-in-flow.mp4?url"
 import report from "./assets/media-shelf/report.html?raw"
-import { PAGE_HEIGHT_MESSAGE } from "@mako/host/contracts/page-frame"
+import { PAGE_FIT_SCRIPT } from "@mako/host/contracts/page-frame"
 import "../index.css"
 
 installMockBridge()
@@ -25,9 +25,12 @@ bindTheme()
 
 const project = "/Users/you/ledgerline"
 interface FixtureFile { url?: string; html?: string; mimeType: string; media?: "image" | "video"; width?: number; height?: number }
-// A page served by URL, as the host serves one: with the script that tells its frame how tall it is.
-const FIT = `<script>(()=>{if(window.parent===window)return;let last=-1;const measure=()=>{const root=document.documentElement,body=document.body;const content=body?Math.max(body.scrollHeight,body.getBoundingClientRect().bottom+parseFloat(getComputedStyle(body).marginBottom||"0")):0;return Math.ceil(Math.max(content,root.getBoundingClientRect().height))};const post=()=>{const height=measure();if(height===last)return;last=height;parent.postMessage({type:"${PAGE_HEIGHT_MESSAGE}",height},"*")};const observer=new ResizeObserver(post);observer.observe(document.documentElement);addEventListener("DOMContentLoaded",()=>{if(document.body)observer.observe(document.body);post()});addEventListener("load",post)})()</script>`
-const served = (html: string) => URL.createObjectURL(new Blob([html.replace("<head>", `<head>${FIT}`)], { type: "text/html" }))
+// A page served by URL, as the host serves one: with the script that tells its frame how tall it is (`fitPage`).
+const served = (html: string, fitted = true) => URL.createObjectURL(new Blob([fitted ? html.replace("<head>", `<head>${PAGE_FIT_SCRIPT}`) : html], { type: "text/html" }))
+// An app's entry page: an empty root and a script only its dev server serves.
+const entry = `<!doctype html><html lang="en"><head><meta charset="UTF-8"/><title>Continue on a Mac</title></head><body><div id="root"></div><script type="module" src="/src/dev/continue-mac-check.tsx"></script></body></html>`
+// A chart drawn in positioned layers: its body has no height of its own.
+const layered = `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;font-family:-apple-system,sans-serif}.plot{position:absolute;inset:16px 16px auto 16px;height:260px;border-radius:8px;background:linear-gradient(180deg,#eef4fb,#dbe8f6)}.plot b{position:absolute;left:16px;top:12px;font-size:14px;color:#1d2433}.bar{position:absolute;bottom:0;width:9%;background:#1964be;border-radius:4px 4px 0 0}</style></head><body><div class="plot"><b>Signups by week</b>${[38, 52, 47, 66, 71, 59, 84, 92].map((value, at) => `<span class="bar" style="left:${6 + at * 11.5}%;height:${value * 2}px"></span>`).join("")}</div></body></html>`
 // A long page: the release notes of a dozen versions.
 const notes = `<!doctype html><html><head><meta charset="utf-8"><title>Release notes</title><style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;background:#fff;color:#1d2433;padding:32px 40px}h1{font-size:22px;margin:0 0 20px}h2{font-size:15px;margin:22px 0 6px}li{font-size:14px;line-height:1.55;color:#3b4354}</style></head><body><h1>Ledgerline release notes</h1>${Array.from({ length: 12 }, (_, at) => `<h2>2.${11 - at}.0</h2><ul><li>Invoices remember the last currency you used.</li><li>Payouts list the bank's reference beside each transfer.</li><li>The dashboard's revenue chart loads a third faster.</li></ul>`).join("")}</body></html>`
 // A small chart a script drew: 320 by 160, smaller than any tile it could be given.
@@ -40,17 +43,23 @@ const files = new Map<string, FixtureFile>([
   ["sign-in-flow.mp4", { url: flow, mimeType: "video/mp4", media: "video", width: 1280, height: 768 }],
   ["report.html", { html: report, url: served(report), mimeType: "text/html" }],
   ["release-notes.html", { html: notes, url: served(notes), mimeType: "text/html" }],
+  ["index.html", { html: entry, url: served(entry), mimeType: "text/html" }],
+  ["signups.html", { html: layered, url: served(layered), mimeType: "text/html" }],
+  // Too large for the host to fit: served as it is, it never reports a height.
+  ["archive.html", { html: notes, url: served(notes, false), mimeType: "text/html" }],
 ])
+/** Kept by the host, then gone before it could be read. */
+const removed = new Set(["summary.html"])
 const fileOf = (path: string) => files.get(path.split("/").at(-1) ?? "")
 const bridge = getMako()
 bridge.readThreadFile = async (_thread, path) => {
   const file = fileOf(path)
-  if (!file) throw new Error(`No file at ${path}`)
+  if (!file) throw new Error(removed.has(path.split("/").at(-1) ?? "") ? "The file was removed since" : `No file at ${path}`)
   return { path, contents: file.html ?? "", size: file.html?.length ?? 80_000, binary: !file.html, truncated: false, mimeType: file.mimeType, ...file.media && { media: file.media }, ...file.url && { previewUrl: file.url }, ...file.width && { width: file.width, height: file.height } }
 }
 bridge.resolveFileUrl = (url) => url
 bridge.resolveTurnMedia = async (checks) => checks.map((check) => {
-  const file = fileOf(check.path)
+  const file: FixtureFile | undefined = fileOf(check.path) ?? (removed.has(check.path.split("/").at(-1) ?? "") ? { mimeType: "text/html" } : undefined)
   return file
     ? { kind: "kept" as const, media: { path: check.path, file: check.path, digest: "0".repeat(64), kind: file.media ?? "html", mimeType: file.mimeType, bytes: 80_000, ...file.width && { width: file.width, height: file.height } } }
     : { kind: "dropped" as const, reason: "No such file" }
@@ -94,6 +103,21 @@ const scenes = new Map<string, Entry[]>(Object.entries({
     shell("chart", "python3 scripts/tide_chart.py --out charts/tide-chart.svg", [`${project}/charts/tide-chart.svg`]),
     shell("shot-mixed", "npx playwright screenshot --viewport-size=1280,768 http://localhost:5173/ shots/dashboard.png", [`${project}/shots/dashboard.png`]),
     answer("The tide peaks twice a day this week, highest on Thursday. The dashboard is unchanged."),
+  ],
+  // Pages that measure, and pages that can't: an app's empty entry page, a chart in positioned layers, one too large to fit, and one gone before it could be read.
+  pages: [
+    prompt("Scaffold the continue-on-a-Mac fixture page."),
+    write("write-entry", `${project}/scripts/index.html`),
+    answer("The page mounts `src/dev/continue-mac-check.tsx`; open it through the dev server."),
+    { type: "user", id: "p-signups", text: "Chart signups by week.", at: at(30) },
+    write("write-signups", `${project}/reports/signups.html`),
+    { type: "text", id: "t-signups", text: "Signups climbed most weeks, with a dip in week six.", at: at(2), model: "claude-opus-5-5" },
+    { type: "user", id: "p-archive", text: "Put every release's notes on one page.", at: at(30) },
+    write("write-archive", `${project}/docs/archive.html`),
+    { type: "text", id: "t-archive", text: "All twelve releases, newest first.", at: at(2), model: "claude-opus-5-5" },
+    { type: "user", id: "p-summary", text: "And a one-page summary.", at: at(30) },
+    write("write-summary", `${project}/docs/summary.html`),
+    { type: "text", id: "t-summary", text: "Written; it covers the last three releases.", at: at(2), model: "claude-opus-5-5" },
   ],
   tall: [
     prompt("Write up the release notes as a page I can send around."),
