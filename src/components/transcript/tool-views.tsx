@@ -359,15 +359,17 @@ export function EditPreview({before, after}: {before: string; after: string}) {
 
 /**
  * A file as a row target: the name, then the folder it lives in, dimmer and
- * trimmed from the left so the nearest folders are the ones that stay.
+ * trimmed from the left so the nearest folders are the ones that stay. Inline
+ * words, so they stay on the row's one line and truncate with the rest of it
+ * (`ToolWords`); a box here would break that line in two, past the row.
  */
 export function FileTarget({ path, note }: { path: string; note?: string }) {
   const folder = shortFolder(path)
   return (
-    <span className="flex min-w-0 items-baseline gap-1.5 font-mono text-label">
-      <span className="min-w-0 truncate">{fileName(path)}</span>
-      {folder ? <span className="min-w-0 shrink-[3] truncate opacity-60">{folder}</span> : null}
-      {note ? <span className="shrink-0 font-sans">{note}</span> : null}
+    <span className="font-mono text-label">
+      {fileName(path)}
+      {folder ? <span className="opacity-60"> {folder}</span> : null}
+      {note ? <span className="font-sans"> {note}</span> : null}
     </span>
   )
 }

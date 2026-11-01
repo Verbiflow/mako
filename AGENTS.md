@@ -975,6 +975,15 @@ needs a line in that table: `npm run audit:tools` lists those in this machine's
 stores (names and keys only), `scripts/test-tool-identity.ts` pins samples, and
 the transcript fixture page's "Harness tools" tab renders them.
 
+A tool row is one line of fixed height (`ToolWords`), and a view's `summary`
+is inline words in it: a flex or block element there breaks the line in two,
+and the second line draws over the row below (`FileTarget` once did, on every
+file row). `scripts/test-tool-row-words.tsx` (in
+`test:transcript-events`) renders every harness sample's row, settled and
+running, and refuses a box among its words; `npm run test:tool-rows-ui` streams
+a Cursor turn's edits on the desk and in the phone's steps sheet, short and
+windowed, and holds every drawn row apart on every frame.
+
 What a call did to the machine is read once too, in
 `@mako/sessions/tool-effect-reading`: its `ToolEffect`s
 (`@mako/sessions/tool-effects`: files created, modified with a patch or an
