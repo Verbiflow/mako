@@ -133,6 +133,7 @@ export class LiveTransfers {
       resident.checkpointing ||
       resident.rewinding ||
       resident.opening ||
+      this.host.moves.ownerCheck(resident) !== undefined ||
       resident.snapshot.session.status === "running" ||
       resident.snapshot.requests.some(
         (request) => request.status === "dispatching"

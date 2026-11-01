@@ -9,6 +9,7 @@ import { autoContinueCandidate, savedContinuation } from "@mako/host/contracts/t
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
+import { agentActivity } from "../src/state/agent-activity"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
 import type { Entry } from "@mako/sessions/entries"
 
@@ -452,3 +453,14 @@ assert.equal(current().projection?.messages.length, 2)
 applyLiveSnapshot({ ...coveredHistory, revision: 3, baseCoveredBlocks: 1 })
 assert.equal(current().projection?.messages.length, 2)
 console.log("PASS: native coverage reaches renderer through snapshot and coverage-only batches")
+
+// Back from away, a message waits for this Mac to hear its account: it's the one being sent, and once that's a wait,
+// the activity says what it waits for rather than "Sending".
+{
+  const checking = { ...request, ownerCheck: { since: 1 } }
+  const delivery = promptDelivery({ session: { status: "ready" }, blocks: [], requests: [checking] })
+  assert.equal(delivery.starting?.ownerCheck?.since, 1, "the message being sent says it waits for the account")
+  assert.deepEqual(agentActivity({ blocks: [], waiting: false, connecting: false, preparing: true }), { kind: "connecting", label: "Sending" })
+  assert.deepEqual(agentActivity({ blocks: [], waiting: false, connecting: false, preparing: true, checkingOwner: true }), { kind: "connecting", label: "Checking with your account" })
+}
+console.log("PASS: a message waiting for this Mac to hear its account is the one being sent, and says so once it's a wait")

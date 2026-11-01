@@ -1,4 +1,4 @@
-import { describeFollow, describeList, describeOwner, type SyncReadings } from "@mako/host/contracts/sync-readings"
+import { describeFollow, describeList, describeOwner, describeOwnerChecks, type SyncReadings } from "@mako/host/contracts/sync-readings"
 import { describeSending, type SyncStatus } from "@mako/host/contracts/sync-status"
 import { Action } from "@/components/ui/kit"
 import { formatRelative } from "@/lib/format"
@@ -14,6 +14,8 @@ const SHOWN = 8
 export function SyncReadout({ readings, sending }: { readings: SyncReadings; sending?: SyncStatus | undefined }) {
   const follows = [...readings.follows].sort((left, right) => (right.lastHeardAt ?? 0) - (left.lastHeardAt ?? 0)).slice(0, SHOWN)
   const owner = describeOwner(readings.owner)
+  const checks = describeOwnerChecks(readings.list.ownerChecks)
+  const checked = readings.list.ownerChecks?.at(-1)
   return (
     <div data-sync-readout="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
       <div className="flex items-start gap-2 px-3 py-2">
@@ -30,6 +32,7 @@ export function SyncReadout({ readings, sending }: { readings: SyncReadings; sen
       <div className="divide-y divide-hairline border-t border-hairline">
         {sending ? <Line title="This Mac's Sessions" detail={describeSending(sending)} /> : null}
         <Line title="Account list" detail={describeList(readings.list)} />
+        {checks && checked ? <Line title="Checked with your account before running here" detail={checks} when={formatRelative(new Date(checked.at).toISOString())} /> : null}
         {owner ? <Line title="Watched from elsewhere" detail={owner} /> : null}
         {follows.length === 0 ? (
           <p className="px-3 py-2 text-label text-faint">Nothing from your other devices has been followed since Mako started.</p>

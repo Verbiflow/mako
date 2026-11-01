@@ -61,6 +61,7 @@ export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadS
 export { SYNC_WINDOW_MS, syncTier, windowStart } from "./sync-window.js"
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
+export { ownerHold } from "./owner-check.js"
 export { CloudReturns } from "./cloud-returns.js"
 export { CloudFollow } from "./cloud-follow.js"
 export { CloudWorktrees } from "./cloud-worktrees.js"
@@ -107,6 +108,8 @@ export interface ConversationsDeps {
   telemetry: HostTelemetry
   /** A new conversation was written and placed, before its harness starts (`Dependencies.opened`). */
   opened?(conversationId: string): void
+  /** Since when a conversation of this Mac's waits to hear its account before it runs a turn (`Dependencies.ownerCheck`). */
+  ownerCheck?: LiveDependencies["ownerCheck"]
   emit(event: HostEvent): void
   /** What each agent can call: Mako's tools and Local Control. */
   tools: NonNullable<LiveDependencies["tools"]>
@@ -159,6 +162,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     work: deps.work,
     turns: deps.telemetry.turns,
     opened: deps.opened,
+    ownerCheck: deps.ownerCheck,
     memory: memory ?? undefined,
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,

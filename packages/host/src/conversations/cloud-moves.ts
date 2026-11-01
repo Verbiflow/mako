@@ -330,6 +330,8 @@ export class CloudMoves {
   readonly #milestones = new Map<string, Record<Milestone, Reached>>()
   /** Continues this host joined and settled (moved, or kept here): heard of again, nothing is read. */
   readonly #joinedContinues = new Set<string>()
+  /** By continue this host is joining now, the Sessions the account said it carries: none of them runs here meanwhile. */
+  readonly #joining = new Map<string, Set<string>>()
 
   constructor(options: CloudMovesOptions) {
     this.#options = options
@@ -371,6 +373,20 @@ export class CloudMoves {
       clearTimeout(timer)
     }
     return needing().length
+  }
+
+  /** Whether this host joins a continue now (`joinContinue`): only then can `joining` hold a Session. */
+  joinsAny(): boolean {
+    return this.#joining.size > 0
+  }
+
+  /**
+   * Whether a continue this host joins now carries `session`: from the account's word until the join ends, nothing of
+   * it runs here, so a message typed as this Mac came back goes with the Thread rather than run before its release.
+   */
+  joining(session: string): boolean {
+    for (const sessions of this.#joining.values()) if (sessions.has(session)) return true
+    return false
   }
 
   /** Whether a move of `thread` runs in this host now: from its plan until it moved or stayed. */
@@ -427,11 +443,15 @@ export class CloudMoves {
    * away is finished here), this Mac releases the Thread at the generation the account released it at, and the
    * cloud's claim is confirmed (or its refusal takes the Thread back), as for any move. Once per continue; a Thread at
    * work here waits for its turn to end (its row changes then, which joins it again). A continue that failed changes
-   * nothing here.
+   * nothing here. While it's joined, nothing of its Sessions runs here (`joining`); a message typed here meanwhile
+   * goes to the cloud Thread once it's claimed.
    */
   joinContinue(session: string, listed: ListedContinue): void {
-    if (listed.phase === "failed" || this.#running.has(listed.op) || this.#joinedContinues.has(listed.op)) return
+    if (listed.phase === "failed" || this.#joinedContinues.has(listed.op)) return
+    this.#joining.get(listed.op)?.add(session)
+    if (this.#running.has(listed.op)) return
     const move = MoveIdSchema.parse(listed.op)
+    this.#joining.set(move, new Set([session]))
     this.#milestones.set(move, { released: deferred(), handed: deferred() })
     const work = this.#joined(session, move).then((outcome) => {
       if (outcome.kind === "moved" || outcome.kind === "kept-here") this.#joinedContinues.add(move)
@@ -508,6 +528,7 @@ export class CloudMoves {
   #ended(move: string): void {
     this.#running.delete(move)
     this.#leaving.delete(move)
+    this.#joining.delete(move)
     this.#milestones.delete(move)
     this.#handed.delete(move)
     this.#options.ended?.(move)
@@ -697,6 +718,8 @@ export class CloudMoves {
       // The cloud starts each conversation and carries each paused turn on; this Mac follows them there.
       for (const session of plan.sessions)
         await this.#options.cloud.adopt({ conversationId: session.conversationId, threadId: plan.cloudThread, harness: session.harness, repository: plan.repository })
+      // A continue was handed over by the account, before anything waited here: what waits now goes after it.
+      if (plan.continued) await named("The messages typed here couldn't be sent to the cloud", this.#sendWaiting(plan))
       plan.phase = "started"
       plan.timings.started = Date.now() - plan.began
       await this.#write(plan)
@@ -822,6 +845,23 @@ export class CloudMoves {
       hostLog("moves", "messages waiting here went with the Thread", { move: plan.move, conversation: conversationId, messages: ids.length })
     }
     hostLog("moves", "a move was handed to the cloud to carry through", { move: plan.move, cloudThread: plan.cloudThread, operations: operations.length, phase: state.phase })
+  }
+
+  /**
+   * A joined continue's messages waiting here: typed as this Mac came back, before it heard the account, and held
+   * since (`joining`). Each goes to the cloud Thread under its own ID, which runs it once however often it arrives, as
+   * a message the account handed over too; then it's marked here as gone with the Thread. One that can't be sent
+   * leaves the move claimed, and the next join or settle sends it.
+   */
+  async #sendWaiting(plan: Plan): Promise<void> {
+    for (const { conversationId } of plan.sessions) {
+      const waiting = this.#options.live.waitingPrompts(conversationId)
+      if (!waiting.length) continue
+      for (const prompt of waiting)
+        await this.#options.cloud.callThread(plan.cloudThread, "mako:live-prompt", [conversationId, prompt.id, prompt.text, await inlined(prompt.attachments), prompt.tuning], conversationId)
+      this.#options.live.carried(conversationId, waiting.map((prompt) => prompt.id), "cloud")
+      hostLog("continues", "messages typed here as this Mac came back went to the cloud with the Thread", { move: plan.move, cloudThread: plan.cloudThread, conversation: conversationId, requests: waiting.map((prompt) => prompt.id).join(",") })
+    }
   }
 
   /**

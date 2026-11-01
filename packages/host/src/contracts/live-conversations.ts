@@ -302,6 +302,12 @@ export interface LiveRequest {
    */
   accountSwitch?: { reason: "selection" | "credentials"; waitingFor: AccountSwitchWait }
   /**
+   * A queued request waiting, since `since` (epoch ms), for this Mac to hear its account after it was away: it runs
+   * here once the account says the Session is still this Mac's, or the wait runs out (`OwnerCheck`), and goes to the
+   * cloud under its own ID when it says the Session continued there. Gone once it's sent.
+   */
+  ownerCheck?: { since: number }
+  /**
    * The sign-out this request waits on. A `held` request is unsent and goes
    * when the user resumes; the turn the sign-out cut short keeps its own
    * outcome and is continued, or left for review, on Resume.

@@ -52,7 +52,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -684,6 +684,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
         continued: (session, listed) => late.cloudMoves?.joinContinue(session, listed),
+        ownerChecked: () => late.conversations?.live.moves.ownerChecked(),
         takeWaiting: async (message) => {
           const store = threads.store
           const live = late.conversations?.live
@@ -775,6 +776,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     streams,
     // A new conversation is on the account's list before its harness has started.
     opened: () => late.sessions?.showsChanged(),
+    // Back from away, a conversation begun before then runs nothing until the account says its Session is still this
+    // Mac's; one whose continue this Mac joins runs nothing until the join ends.
+    ownerCheck: ownerHold({ account: () => cloudConversations, moves: () => late.cloudMoves, session: (conversationId) => threads.store?.journalPlacement(conversationId)?.session }),
     // A cloud machine's harnesses run on the account's sign-ins: nobody is there to sign one in.
     unattended: config.machineAgentFd !== undefined,
     environment,
@@ -889,6 +893,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // However it ended, a throw included: no list says a move that nothing here runs.
     ended: (move) => {
       if (movesUnderWay.ended(move)) late.sessions?.showsChanged()
+      // A continue joined, or not: what its Sessions held goes on where they run now.
+      live.moves.ownerChecked()
     },
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
     ready: { take: (thread, folder, repository) => readinessOnce?.take(thread, folder, repository) ?? Promise.resolve(undefined) },

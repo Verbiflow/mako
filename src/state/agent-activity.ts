@@ -88,11 +88,11 @@ export function liveVerb(kind: ToolKind): string {
   return LIVE_VERBS[kind]
 }
 
-export function agentActivity({ blocks, waiting, connecting, starting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; /** What a start says while `connecting`. */ starting?: string; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
+export function agentActivity({ blocks, waiting, connecting, starting, makingWorktree = false, worktreeStep, preparing, checkingOwner = false, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; /** What a start says while `connecting`. */ starting?: string; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; /** The message being sent waits, and has a while, for this Mac to hear its account (`LiveRequest.ownerCheck`). */ checkingOwner?: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
   if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : (starting ?? "Starting") }
   if (switchingAccount) return { kind: "waiting", label: "Waiting to switch account" }
-  if (preparing) return { kind: "connecting", label: "Sending" }
+  if (preparing) return { kind: "connecting", label: checkingOwner ? "Checking with your account" : "Sending" }
   if (native) return nativeAgentActivity(native)
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
   const tool = blocks.findLast((block) => block.type === "tool" && block.status === "pending")

@@ -73,6 +73,24 @@ export class LiveDispatch {
     return true
   }
 
+  /** Its queued prompts say they wait for this Mac to hear its account (`LiveRequest.ownerCheck`), each once. */
+  private holdForOwner(resident: Resident): void {
+    const held = resident.snapshot.requests.filter((request) => request.status === "queued" && !request.ownerCheck)
+    if (!held.length) return
+    const since = Date.now()
+    const ids = new Set(held.map((request) => request.id))
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, requests: previous.requests.map((request) => (ids.has(request.id) ? { ...request, ownerCheck: { since } } : request)) }
+    try {
+      this.access.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      this.access.storageFailed(resident, { error })
+      return
+    }
+    hostLog("live", "a message waits for this Mac to hear its account before it runs here", { conversation: resident.snapshot.session.id, requests: [...ids].join(",") })
+  }
+
   drain(resident: Resident): void {
     const { dependencies } = this.access
     const { actions, checkpoints, transfers } = this.parts
@@ -93,6 +111,8 @@ export class LiveDispatch {
     if (actions.blocks(resident)) return
     // Queued work stays queued, not held: cancelling a move starts it again.
     if (!this.access.moves.executes(resident)) return
+    // Nor while this Mac checks with its account after it was away: its Session may have continued in the cloud.
+    if (this.access.moves.ownerCheck(resident) !== undefined) return this.holdForOwner(resident)
     if (
       resident.checkpointing ||
       resident.rewinding ||
@@ -154,6 +174,7 @@ export class LiveDispatch {
     const usageFrom = spentThrough ? spentThrough.usage : usageMark(resident.snapshot.session.usage)
     const current = {
       ...request,
+      ownerCheck: undefined,
       nativePrompt: undefined,
       nativeDelivery,
       usageFrom: usageFrom && (usageFrom.tokens || usageFrom.cost || usageFrom.unrecorded) ? usageFrom : undefined,

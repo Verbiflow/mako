@@ -338,6 +338,8 @@ export function installMockBridge() {
   const liveSnapshots = new Map<string, LiveSnapshot>()
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
+  /** Messages that already waited for this Mac to hear its account. */
+  const ownerChecked = new Set<string>()
   const emitRequests = (id: string, next: LiveSnapshot, updates: LiveUpdate[] = []) => {
     liveSnapshots.set(id, next)
     acpSessions.set(id, next.session)
@@ -2572,6 +2574,20 @@ export function installMockBridge() {
         emitRequests(id, { ...snapshot, revision: snapshot.revision + 1, requests: [...snapshot.requests, waiting] })
         return waiting
       }
+      // A message that says "as this Mac wakes" waits, as the host holds it,
+      // while this Mac checks with its account, then runs here.
+      if (/as this Mac wakes/i.test(text) && !ownerChecked.has(requestId)) {
+        ownerChecked.add(requestId)
+        const waiting: LiveRequest = { id: requestId, text, attachments, status: "queued", ownerCheck: { since: Date.now() } }
+        emitRequests(id, { ...snapshot, revision: snapshot.revision + 1, requests: [...snapshot.requests, waiting] })
+        setTimeout(() => {
+          const held = liveSnapshots.get(id)
+          if (!held) return
+          liveSnapshots.set(id, { ...held, requests: held.requests.filter((request) => request.id !== requestId) })
+          void window.mako!.livePrompt(id, requestId, text, attachments, tuning)
+        }, 6_000)
+        return waiting
+      }
       // A message that mentions signing out plays an account that signs out
       // partway through the turn, after the provider accepted it.
       if (/sign(?:s|ed)? out/i.test(text)) {
@@ -3162,7 +3178,18 @@ export function installMockBridge() {
     crashesDir: async () => "/tmp/mako/crashes",
     hostLogPath: async () => "",
     sessionReaderHistory: async () => ({ since: new Date().toISOString(), lost: 0, events: [], logPath: "" }),
-    syncReadings: async () => ({ at: Date.now(), follows: [], list: { gaps: [], changeMs: { samples: 0 } } }),
+    syncReadings: async () => ({
+      at: Date.now(),
+      follows: [],
+      list: {
+        gaps: [],
+        changeMs: { samples: 0 },
+        ownerChecks: [
+          { why: "wake", at: Date.now() - 3 * 3_600_000, outcome: "gave-up", ms: 10_000 },
+          { why: "wake", at: Date.now() - 4 * 60_000, outcome: "heard", ms: 1_420 },
+        ],
+      },
+    }),
     continueReadings: async () => mockContinues.readings(),
     providerResidency: async () => ({
       entries: [],

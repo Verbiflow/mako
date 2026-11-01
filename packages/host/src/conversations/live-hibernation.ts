@@ -400,6 +400,7 @@ export class LiveHibernation {
     const { dependencies } = this.access
     if (
       !this.access.moves.executes(resident) ||
+      this.access.moves.ownerCheck(resident) !== undefined ||
       resident.driver ||
       resident.snapshot.session.connection !== "hibernated" ||
       resident.snapshot.session.status === "closed"

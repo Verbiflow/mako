@@ -34,6 +34,11 @@ import { onMac, systemName, systemVersion } from "../base/platform.js"
 /** The Mako account this host is signed in to, for the services that act as it. */
 /** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
 export type AccountListGap = { gap: { after: number; seq: number; why: "skipped" | "lost" } }
+/**
+ * What the account's list is told: each change, `account-changed` when this Mac signs in, out or to another account
+ * (the list is another's then), a gap, and `linked` each time the account's link opens (`onAccountLinked`).
+ */
+export type AccountListNotice = AccountListHeard | "account-changed" | "linked" | AccountListGap
 
 export interface CloudAccount {
   /** A connection token while this Mac is signed in to Mako. */
@@ -139,11 +144,8 @@ export interface CloudAccount {
     put(repository: string, file: { path: string; data: Buffer; names: string[] }): Promise<CloudCarriedFile>
     remove(repository: string, path?: string): Promise<string[]>
   }
-  /**
-   * Hears each change to the account's list of Sessions, in the stream's order, as it comes, and `account-changed` when
-   * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
-   */
-  onThreadListings?(listener: (heard: AccountListHeard | "account-changed" | AccountListGap) => void): () => void
+  /** Hears what the account's list of Sessions is told (`AccountListNotice`), in the stream's order, as it comes; returns how to stop. */
+  onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
@@ -238,7 +240,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
-  const threadListeners = new Set<(heard: AccountListHeard | "account-changed" | AccountListGap) => void>()
+  const threadListeners = new Set<(heard: AccountListNotice) => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -286,6 +288,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       hostLog("cloud", "the account's stream skipped; its list is read again", gap)
       for (const listener of threadListeners) listener({ gap })
       accessChoices?.again()
+    },
+    onAccountLinked: () => {
+      for (const listener of threadListeners) listener("linked")
     },
     onRequest: request,
     sessions,

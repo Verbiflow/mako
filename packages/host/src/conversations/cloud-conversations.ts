@@ -31,6 +31,7 @@ import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
 import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
 import { AccountSessions, type AccountListHeard } from "@mako/protocol/account-sessions"
+import { OwnerCheck } from "./owner-check.js"
 import { CloudPreviews } from "./cloud-previews.js"
 import { conversationCallId } from "../contracts/conversation-calls.js"
 import type { ConversationRoutingResult } from "./shared-conversations.js"
@@ -243,6 +244,13 @@ export type CloudConversationsOptions = {
    */
   continued?(session: string, listed: ListedContinue): void
   /**
+   * This Mac heard its account after it was away, or gave up waiting (`OwnerCheck`): what its own Sessions held for
+   * it runs now, here or, for one the list said continued, where `continued` takes it.
+   */
+  ownerChecked?(): void
+  /** How long a check waits after it asks (`OWNER_CHECK_MS`), and at most (`OWNER_CHECK_MOST_MS`); a test's are short. */
+  ownerCheckMs?: { check: number; most: number }
+  /**
    * Whether this Mac's own harness stores keep this native session, in this folder: the one this Mac lists itself. A
    * second Mako on this Mac (another profile, a build being tried) reads the same stores and lists the same sessions
    * as its own, under Sessions of its own; listed here too, each would show twice.
@@ -419,9 +427,19 @@ export class CloudConversations {
   #takeAgain: ReturnType<typeof setTimeout> | undefined
   /** The windows' reads of copies, answered as every client answers them (`CopyHistory`). */
   readonly #copyHistory = new CopyHistory()
+  /** Whether this Mac heard its account since it was last away; it was, until it reads the list at its start. */
+  readonly #ownerCheck: OwnerCheck
+  /** The account has the cloud, as the last read found: only then can it continue a Session of this Mac's. */
+  #continuable = false
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
+    this.#ownerCheck = new OwnerCheck({
+      ended: () => options.ownerChecked?.(),
+      ...options.ownerCheckMs && { checkMs: options.ownerCheckMs.check, mostMs: options.ownerCheckMs.most },
+    })
+    this.#ownerCheck.away("start")
+    options.readings?.ownerChecksFrom(() => this.#ownerCheck.readings())
     this.#previews = new CloudPreviews({
       gateway: () => options.account()?.gateway(),
       token: async () => options.account()?.token(),
@@ -788,11 +806,21 @@ export class CloudConversations {
     this.#wokeAt = performance.now()
     this.#session?.session.wake()
     for (const resume of this.#pauses) resume()
-    if (!this.#list.known) void this.#readList()
+    this.#ownerCheck.away("wake")
+    void this.#readList()
+  }
+
+  /**
+   * Since when this Mac waits to hear its account before it runs a turn of a Session of its own begun before then
+   * (`OwnerCheck`); undefined when it needn't.
+   */
+  ownerCheck(): number | undefined {
+    return this.#ownerCheck.waiting()
   }
 
   dispose(): void {
     this.#closed = true
+    this.#ownerCheck.close()
     clearTimeout(this.#waking)
     clearTimeout(this.#takeAgain)
     clearTimeout(this.#nativeLook)
@@ -1637,17 +1665,25 @@ export class CloudConversations {
   /** Hears the account's list of Threads change, and reads it whole once. */
   #watchList(): void {
     const account = this.#options.account()
-    if (this.#closed || this.#unlisten || !account?.onThreadListings) return
+    if (this.#closed || this.#unlisten) return
+    if (!account?.onThreadListings) return this.#ownerCheck.none()
     this.#unlisten = account.onThreadListings((heard) => {
       if (heard === "account-changed") {
         this.#list.clear()
         this.#reconcile()
+        this.#ownerCheck.away("account")
         void this.#readList()
         return
+      }
+      // The link opened again: what the account said while it was down may be a continue of this Mac's.
+      if (heard === "linked") {
+        this.#ownerCheck.away("linked")
+        return void this.#readList()
       }
       // The stream skipped a number: the list is read whole again, replacing what's held in one step.
       if ("gap" in heard) {
         this.#options.readings?.listGap(heard.gap)
+        this.#ownerCheck.away("gap")
         return void this.#readList()
       }
       this.#options.readings?.listHeard(heard.seq)
@@ -1658,6 +1694,7 @@ export class CloudConversations {
         this.#reconcile(named)
         this.#takeWaiting()
         if (heard.event.type === "messages-waiting") this.#retoldWaiting(heard.event.session)
+        if (heard.event.type === "device-quiet" && heard.event.deviceId === this.#device) this.#ownerCheck.quiet(this.#heldQuiet())
       } else if (!this.#list.known) void this.#readList()
     })
     void this.#readList()
@@ -1685,27 +1722,44 @@ export class CloudConversations {
     return named
   }
 
-  /** The account's list, read whole: once at start, after a sign-in, and after a wake while it isn't known. */
+  /**
+   * The account's list, read whole: at start, after a wake, a sign-in, a gap, and each time the account's link opens.
+   * A read asked for while one is under way joins it, and it's read once more if an away ended after it began: only a
+   * read begun after that is the account's word on this Mac's own Sessions (`OwnerCheck`).
+   */
   #readList(): Promise<void> {
     this.#listing ??= (async () => {
-      const account = this.#options.account()
-      const accountId = account?.sessionListings ? await account.id() : undefined
-      if (this.#closed || !account?.sessionListings || !accountId) return
-      try {
-        this.#device = await account.deviceId()
-        const [listings, devices] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined)])
-        for (const device of devices?.devices ?? []) this.#deviceNames.set(device.id, device.name)
-        this.#accountId = accountId
-        if (this.#list.listed(listings)) this.#reconcile()
-        else this.#archivedNow()
-        this.#takeWaiting()
-      } catch (error) {
-        hostLog("cloud-conversations", "the account's Threads couldn't be listed; listed again when the account or the network changes", { error: error instanceof Error ? error.message : String(error) })
+      for (;;) {
+        const account = this.#options.account()
+        const accountId = account?.sessionListings ? await account.id() : undefined
+        if (this.#closed) return
+        if (!account?.sessionListings || !accountId) return this.#ownerCheck.none()
+        const generation = this.#ownerCheck.asking()
+        try {
+          this.#device = await account.deviceId()
+          const [listings, devices, blocked] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined), account.cloudBlocked?.()])
+          for (const device of devices?.devices ?? []) this.#deviceNames.set(device.id, device.name)
+          this.#accountId = accountId
+          this.#continuable = blocked === undefined
+          if (this.#list.listed(listings)) this.#reconcile()
+          else this.#archivedNow()
+          this.#takeWaiting()
+          this.#ownerCheck.read(generation, this.#heldQuiet())
+        } catch (error) {
+          hostLog("cloud-conversations", "the account's Threads couldn't be listed; listed again when the account or the network changes", { error: error instanceof Error ? error.message : String(error) })
+          return
+        }
+        if (!this.#ownerCheck.behind(generation)) return
       }
     })().finally(() => {
       this.#listing = undefined
     })
     return this.#listing
+  }
+
+  /** The list holds this Mac quiet in a way the account continues its Sessions from: a continue may begin any moment. */
+  #heldQuiet(): boolean {
+    return this.#continuable && this.#list.quiet().some((quiet) => quiet.deviceId === this.#device && quiet.continues === true)
   }
 
   /**
