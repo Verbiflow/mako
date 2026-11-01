@@ -26,6 +26,9 @@ const SPANS = {
     // The row says `moving` without a step once the Thread is in transit: as far as the hand-over.
     ["moving", { from: 0.68, to: 0.84, typicalMs: 15_000 }],
     ["resuming", { from: 0.84, to: 0.98, typicalMs: 20_000 }],
+    // A continue: the account makes the cloud Thread and copies the Session's records, then its machine clones and resumes.
+    ["making", { from: 0.04, to: 0.3, typicalMs: 6_000 }],
+    ["arriving", { from: 0.3, to: 0.98, typicalMs: 40_000 }],
   ]),
   device: new Map<string, Span>([
     ["asking", { from: 0, to: 0.04, typicalMs: 3_000 }],
@@ -98,6 +101,10 @@ export function stepWords(way: MoveWay, step: string, mac: string, handOff: bool
         return "Handing over"
       case "resuming":
         return handOff ? "Continuing in the cloud" : "Resuming in the cloud"
+      case "making":
+        return "Getting a cloud machine ready"
+      case "arriving":
+        return "Cloning its branch and resuming"
       case "unsettled":
         return "Waiting for the cloud's answer"
       default:

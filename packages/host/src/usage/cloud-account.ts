@@ -11,6 +11,7 @@ import { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
+import { ContinueStateSchema, type ContinueState } from "@mako/protocol/continues"
 import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
@@ -694,6 +695,15 @@ export class CloudAccounts {
     const wait = Math.min(waitMs, MOVE_ANSWER_WAIT_MS, REQUEST_MS - 3_000)
     const response = await this.#call("moves.answer", "GET", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}${wait > 0 ? `?wait=${wait}` : ""}`, undefined, false, [404])
     return response.status === 404 ? undefined : MoveAnswerSchema.parse(await response.json())
+  }
+
+  /** A continue of one of this Mac's Sessions the account carries (`CloudAccountMethods.continueState`). */
+  async continueState(session: string, op: string, options: { carryOn?: boolean } = {}): Promise<ContinueState | undefined> {
+    const path = `/v1/sessions/${encodeURIComponent(session)}/continue/${encodeURIComponent(op)}`
+    const response = options.carryOn
+      ? await this.#call("continues.carry-on", "POST", path, {}, false, [404])
+      : await this.#call("continues.state", "GET", path, undefined, false, [404])
+    return response.status === 404 ? undefined : ContinueStateSchema.parse(await response.json())
   }
 
   /**

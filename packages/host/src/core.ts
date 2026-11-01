@@ -20,6 +20,7 @@ import { readPower } from "./base/power.js"
 import { SessionIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
+import type { ContinueRepository } from "@mako/protocol/continues"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { HeapWatch, readHeap } from "./base/heap-watch.js"
@@ -172,6 +173,7 @@ interface LateParts {
   cloud?: CloudAccount
   cloudConversations?: CloudConversations
   cloudReturns?: CloudReturns
+  cloudMoves?: CloudMoves
   /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
   cloudFollow?: CloudFollow
   /** This host's Sessions on the account's list: told again when one is archived here. */
@@ -427,6 +429,21 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
   // listed, then followed (a branch switched anywhere arrives as a `checkout-heads` event, which reports again).
   const headsAsked = new Map<string, number>()
+  // Each Thread worktree's origin on GitHub and the branch it pushes to, as last read: what a cloud Thread continuing
+  // one of its Sessions while this Mac is off clones. Read again a minute on, so a branch pushed since is said.
+  const repositories = new Map<string, { at: number; repository: ContinueRepository | null }>()
+  const listedRepository = (folder: string) => {
+    const known = repositories.get(folder)
+    if (!known || Date.now() - known.at > HEAD_ASK_AGAIN_MS) {
+      repositories.set(folder, { at: Date.now(), repository: known?.repository ?? null })
+      void folderRepository(git, folder).catch(() => null).then((found) => {
+        const before = repositories.get(folder)?.repository
+        repositories.set(folder, { at: Date.now(), repository: found })
+        if (before?.url !== found?.url || before?.branch !== found?.branch) late.sessions?.changed()
+      })
+    }
+    return known?.repository ?? undefined
+  }
   const listedHead = (project: string) => {
     const known = workspaces.checkoutHeads.known(project)
     if (known !== undefined) return known
@@ -463,6 +480,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return found && project ? { project, branch: found.worktree.branch } : undefined
         },
         head: listedHead,
+        repository: listedRepository,
         background: (id) => {
           const held = live.held(id)
           return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
@@ -665,6 +683,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         keepsNative: (harness, nativeId, folder) => catalog.keepsNative(harness, nativeId, folder),
         // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
+        continued: (session, listed) => late.cloudMoves?.joinContinue(session, listed),
         takeWaiting: async (message) => {
           const store = threads.store
           const live = late.conversations?.live
@@ -876,6 +895,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     carried: async (folder, why) => void (await carriedFiles?.sync(folder, why)),
     harnesses: harnessCheck,
   })
+  late.cloudMoves = cloudMoves || undefined
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
   // The one owner of each cloud Thread's worktree here: the way back and the follow both write it through this.
   const cloudWorktrees = new CloudWorktrees()

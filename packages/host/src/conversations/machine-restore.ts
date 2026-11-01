@@ -25,7 +25,7 @@ export type MachineRestoreDeps = {
   continueTurn(conversationId: string, input: { requestId: string; reason: "machine-lost"; continues: string; actor: Actor }): void
 }
 
-export type Restored = { from: number; ms: number; conversations: number; continued: number; checkout: "applied" | "staged" | "arrived" | "none" }
+export type Restored = { from: number; ms: number; conversations: number; continued: number; checkout: "applied" | "staged" | "copy" | "arrived" | "none" }
 
 /** The save the Thread's object keeps, and the generation that took it. */
 export async function readSave(link: MachineSaveLink): Promise<{ save: MachineSave; generation: number } | undefined> {

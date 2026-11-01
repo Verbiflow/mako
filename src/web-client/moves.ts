@@ -30,6 +30,8 @@ export interface WebMove {
   handOff: boolean
   /** Asked from this browser. */
   ours: boolean
+  /** A continue in the cloud (`continue-actions.ts`): the account carries it for a Mac that's off, whose steps it says. */
+  continued?: true
   end?: MoveEnd
 }
 
@@ -150,7 +152,12 @@ export function followedWay(move: WebMove | undefined): MoveWay | undefined {
  * A Thread's move as the account's list says it, when this browser follows none of its own: from a Mac's row while it
  * goes up (`move`, from its first step), or in transit (`moving`) either way.
  */
-export function listedMove(thread: WebThread): Pick<WebMove, "way" | "step" | "stepAt"> | undefined {
+export function listedMove(thread: WebThread): Pick<WebMove, "way" | "step" | "stepAt" | "continued"> | undefined {
+  // A continue is the account's word, not its quiet device's: it goes on while the device can't be heard.
+  for (const session of thread.sessions) {
+    const continued = session.row.continued
+    if (continued && (continued.phase === "making" || continued.phase === "arriving")) return { way: "cloud", step: continued.phase, stepAt: Math.min(Date.parse(continued.at), Date.now()), continued: true }
+  }
   // A quiet device's word on a move is as old as its last report: nothing moves while it can't be heard.
   for (const session of thread.sessions) {
     if (session.quietSince) continue

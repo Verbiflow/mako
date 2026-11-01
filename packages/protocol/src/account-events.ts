@@ -42,9 +42,10 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sessions-unlisted"), sessions: z.array(z.uuid()).min(1).max(LISTED_PER_FRAME) }),
   /**
    * A device went quiet (`QuietDeviceSchema`: the cloud last heard from it at `since`), or, with `since` null, was heard
-   * from again: what the list shows of its rows changes, the rows themselves don't.
+   * from again: what the list shows of its rows changes, the rows themselves don't. `continues`: its Mako takes a
+   * Thread continued in the cloud back (`QuietDevice.continues`, link version 16 on).
    */
-  z.object({ type: z.literal("device-quiet"), deviceId: z.uuid(), since: z.iso.datetime().nullable() }),
+  z.object({ type: z.literal("device-quiet"), deviceId: z.uuid(), since: z.iso.datetime().nullable(), continues: z.literal(true).optional() }),
   /** A Session's messages waiting for its owner (`waiting.ts`), all of them as they stand now; none once each was taken or taken back. */
   z.object({ type: z.literal("messages-waiting"), session: z.uuid(), messages: z.array(WaitingMessageSchema).max(WAITING_PER_SESSION) }),
   /**

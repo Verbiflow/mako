@@ -7,7 +7,7 @@ import type { ListedSession } from "@mako/protocol/thread-listing"
 import { foldThreads, openingSession } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
-import { Gateway } from "../src/web-client/gateway"
+import { Gateway, GatewayError } from "../src/web-client/gateway"
 import { rowDetail } from "../src/web-client/rows"
 import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places } from "../src/web-client/places"
 import { ROW, rubberband, SETTLE, springPath } from "../src/web-client/motion"
@@ -40,6 +40,7 @@ import { quietLine } from "../src/lib/quiet-device"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
 import { endMove, followedWays, listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
 import { followAnswer } from "../src/web-client/move-actions"
+import { continueChoice, continueRefusalShown, startContinue } from "../src/web-client/continue-actions"
 import { appKey, appShownAs, appsStore, loopbackTarget, readApp, serversOf, withPath } from "../src/web-client/previews"
 import { cloudReach } from "../src/web-client/trouble-state"
 import { OwnerUnavailableError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
@@ -1019,6 +1020,64 @@ test("a move whose answer the network lost is not confirmed, asked again under t
   assert.deepEqual(movesStore.get().moves.get(thread)?.end, { kind: "failed", reason: "The cloud is full." })
   endMove(thread, "m4", { kind: "unconfirmed", reason: "x" })
   assert.equal(movesStore.get().moves.get(thread)?.end?.kind, "failed", "a lost answer after it changes nothing")
+  movesStore.set({ moves: new Map() })
+})
+
+test("Continue in the cloud: offered by every device's rule on a quiet Mac's idle row, pressed once under one op, followed to the account's end", async () => {
+  const conversation = "7c0a0000-0000-4000-8000-0000000c0c03"
+  const ready = row(1, { conversation, runsOn: { kind: "device", deviceId: STUDIO }, nativeId: "n-1", worktree: { branch: "webhooks" }, repository: { url: "https://github.com/ana/api", branch: "webhooks" } })
+  const fold = (rows: ListedSession[], quiet: Map<string, string>) => foldThreads({ rows, devices, quiet, waiting: new Map(), archived: [] }).threads[0]!
+  const quiet = new Map([[STUDIO, at(5)]])
+  const session = fold([ready], quiet).sessions[0]!
+  assert.deepEqual(continueChoice(session, [ready], quiet, new Set([STUDIO])), { offer: true, mac: { deviceId: STUDIO, name: "Studio" } })
+  const older = continueChoice(session, [ready], quiet, new Set())
+  assert.ok(!older.offer && older.why === "older-device" && continueRefusalShown(older.why), "a Mac that hasn't said it takes one back is said so")
+  const awake = continueChoice(fold([ready], new Map()).sessions[0]!, [ready], new Map(), new Set([STUDIO]))
+  assert.ok(!awake.offer && awake.why === "reachable" && !continueRefusalShown(awake.why), "a Mac that's on is asked to move it, and nothing is said")
+  const inProject = { ...ready, worktree: undefined }
+  const never = continueChoice(fold([inProject], quiet).sessions[0]!, [inProject], quiet, new Set([STUDIO]))
+  assert.ok(!never.offer && never.why === "no-worktree" && !continueRefusalShown(never.why), "a Thread that never can continue says nothing over its Mac's quiet line")
+  const working = { ...ready, state: "working" as const }
+  const busy = continueChoice(fold([working], quiet).sessions[0]!, [working], quiet, new Set([STUDIO]))
+  assert.ok(!busy.offer && busy.why === "working")
+  assert.equal(busy.text, "It was working when Studio went quiet. It can continue in the cloud once Studio says the turn ended.")
+
+  // The account's word on a continue under way stands for the quiet Mac's: the Thread moves, said as the account says.
+  const making = { ...ready, continued: { op: uuid(7), phase: "making" as const, from: STUDIO, by: uuid(8), cloudThread: "t-0123456789abcdef", at: at(6) } }
+  const listed = listedMove(fold([making], quiet))
+  assert.deepEqual([listed?.way, listed?.step, listed?.continued], ["cloud", "making", true])
+  assert.equal(listedMove(fold([{ ...making, continued: { ...making.continued, phase: "failed" as const } }], quiet)), undefined, "a failed one moves nothing")
+
+  // Pressed: one op, asked again under it until the account ends it, its steps said on the way.
+  const thread = fold([ready], quiet)
+  const mac = { deviceId: STUDIO, name: "Studio" }
+  const asked: string[] = []
+  const answers: Array<"arriving" | "continued" | TypeError> = ["arriving", new TypeError("Load failed"), "continued"]
+  const steps: Array<string | undefined> = []
+  const gateway = {
+    rest: async (method: string, path: string) => {
+      asked.push(`${method} ${path.replace(/[0-9a-f-]{36}(?=[/?]|$)/g, (id) => (id === ready.session ? "S" : "OP"))}`)
+      const held = movesStore.get().moves.get(thread.id)!
+      steps.push(held.end?.kind ?? held.step)
+      const phase = answers.shift()!
+      if (phase instanceof Error) throw phase
+      return { op: held.move!, thread: thread.id, from: STUDIO, by: uuid(8), cloudThread: "t-0123456789abcdef", folder: "/Users/ana/api", repository: { url: "https://github.com/ana/api", branch: "webhooks" }, sessions: [{ session: ready.session, conversation, harness: "claude", nativeId: "n-1", generation: 1, folder: "/Users/ana/api" }], phase, waiting: [], at: at(7), changedAt: at(7) }
+    },
+  }
+  movesStore.set({ moves: new Map() })
+  const waits: number[] = []
+  await startContinue({ gateway }, { thread, session, mac }, async (ms) => void waits.push(ms))
+  assert.deepEqual(asked, ["POST /v1/sessions/S/continue/OP", "GET /v1/sessions/S/continue/OP?wait=20000", "GET /v1/sessions/S/continue/OP?wait=20000"], "pressed once, then asked how it went under the same op")
+  assert.deepEqual(steps, ["asking", "arriving", "unconfirmed"], "its steps as the account says them; a lost answer not confirmed, never failed")
+  assert.equal(waits.length, 1, "asked again at once while it goes, and after a pause once the network lost an answer")
+  const done = movesStore.get().moves.get(thread.id)!
+  assert.deepEqual([done.continued, done.way, done.end?.kind], [true, "cloud", "done"])
+
+  // Refused: the account's words, its end at once.
+  movesStore.set({ moves: new Map() })
+  const refusing = { rest: async () => Promise.reject(new GatewayError(409, "This Session can't continue in the cloud: It's continuing in the cloud already.", "corr")) }
+  await startContinue({ gateway: refusing }, { thread, session, mac })
+  assert.deepEqual(movesStore.get().moves.get(thread.id)?.end, { kind: "failed", reason: "This Session can't continue in the cloud: It's continuing in the cloud already." })
   movesStore.set({ moves: new Map() })
 })
 

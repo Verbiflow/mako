@@ -90,7 +90,8 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
     cloudMovesStore.set((state) => ({ ...state, moving: Object.fromEntries(Object.entries(state.moving).filter(([id]) => id !== conversationId)) }))
     if (step.kind === "moved") {
       const carried = carriedSentence(step.carried)
-      if (step.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: ["Its turn goes on in a cloud machine, at the same folder, where it left off.", carried].filter(Boolean).join(" ") })
+      if (step.whileAway) toast.success("Continued in the cloud", { id: `move:${move}`, duration: step.whileAway.behind ? Infinity : undefined, description: whileAwaySentence(step.whileAway.behind) })
+      else if (step.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: ["Its turn goes on in a cloud machine, at the same folder, where it left off.", carried].filter(Boolean).join(" ") })
       else toast.success("Moved to the cloud", { id: `move:${move}`, description: ["It goes on in a cloud machine, at the same folder. Its worktree here follows each turn there.", carried].filter(Boolean).join(" ") })
       for (const id of step.conversations) {
         updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE } : conversation))
@@ -104,6 +105,12 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
     const ownBranch = step.kind === "own-branch" || state.moving[conversationId]?.ownBranch
     return { ...state, moving: { ...state.moving, [conversationId]: { move, step, ...handOff && { handOff: true }, ...ownBranch && { ownBranch: true } } } }
   })
+}
+
+/** A Thread another device continued in the cloud while this Mac was off, as this Mac says it once it let go. */
+export function whileAwaySentence(behind: boolean): string {
+  const base = "It went on in a cloud machine while this Mac was off, so this Mac let go of it. Its worktree here follows each turn there; bring it back any time."
+  return behind ? `${base} The last turns you read may not have reached the cloud before this Mac went quiet: they stay in this Mac's history.` : base
 }
 
 /** Why a path stayed behind, in a few words. */

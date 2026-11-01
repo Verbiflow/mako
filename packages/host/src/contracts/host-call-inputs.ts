@@ -833,15 +833,6 @@ const inputs = {
       z.object({
         move: z.string(),
         folder: z.string(),
-        checkpoint: z.object({
-          version: z.literal(1),
-          sha256: z.string(),
-          bytes: z.number(),
-          head: z.string(),
-          index: z.string(),
-          work: z.string(),
-          branch: z.string().optional(),
-        }),
         sessions: z.array(
           z.object({
             harness: z.string(),
@@ -864,6 +855,17 @@ const inputs = {
               .optional(),
           })
         ),
+        checkpoint: z
+          .object({
+            version: z.literal(1),
+            sha256: z.string(),
+            bytes: z.number(),
+            head: z.string(),
+            index: z.string(),
+            work: z.string(),
+            branch: z.string().optional(),
+          })
+          .optional(),
         handoff: z
           .object({
             move: z.string(),

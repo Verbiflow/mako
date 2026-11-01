@@ -8,14 +8,15 @@ import { z } from "zod"
 import type { Git } from "@mako/git"
 import { CORRELATION_HEADER, describeGatewayFailure } from "@mako/protocol/gateway-http"
 import type { ThreadFileHistory } from "@mako/protocol"
-import { MoveCarryRefSchema, MoveCheckpointSchema, type MoveCarry, type MoveCarryRef } from "@mako/protocol/moves"
+import { MoveCarryRefSchema, MoveCheckpointSchema, type MoveCarry, type MoveCarryRef, type MoveCheckpoint } from "@mako/protocol/moves"
 import { RecordSessionSchema } from "@mako/protocol/records"
 import type { InstalledReading } from "@mako/sessions/record-writers"
 import { RecordHoldingsSchema, describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { HandoffSchema, type Handoff } from "../contracts/thread-execution.js"
-import { applyMoveCheckpoint, openCarry, placeOutside, verifyMoveCheckpoint } from "../workspaces/index.js"
+import { applyMoveCheckpoint, captureMoveCheckpoint, openCarry, placeOutside, verifyMoveCheckpoint } from "../workspaces/index.js"
+import { sendCheckpoint } from "./machine-saves.js"
 
 /**
  * A Thread arriving on a cloud machine from a device, before anything runs: its checkout applied to the machine's
@@ -27,11 +28,16 @@ import { applyMoveCheckpoint, openCarry, placeOutside, verifyMoveCheckpoint } fr
  *
  * Asked again for the same move, it answers what it did without doing it again: a mark in the clone's Git folder
  * says the move arrived, so a repeat can never write the checkout over what an agent has done here since.
+ *
+ * With no checkpoint, the Thread continues from the clone as the machine made it (a Session the account continued in
+ * the cloud while its device was off, `@mako/protocol/continues`): the clone is taken as it stands, as the checkpoint
+ * the Thread starts from (`start`), sent beside the Thread's records, so the device it came from weighs its worktree
+ * against what the cloud began with, never against what it never had.
  */
 export const MoveArrivalInputSchema = z.object({
   move: z.uuid(),
   folder: z.string().min(1),
-  checkpoint: MoveCheckpointSchema,
+  checkpoint: MoveCheckpointSchema.optional(),
   /** `holdings`: what the device pushed of each session, which the machine holds at least before it writes any of it. */
   sessions: z.array(z.object({
     harness: z.string().min(1),
@@ -59,8 +65,13 @@ export type MoveArrivalInput = z.infer<typeof MoveArrivalInputSchema>
 export type MoveArrivalWire = z.input<typeof MoveArrivalInputSchema>
 
 export type MoveArrival = {
-  /** `applied` now, `staged` (applied ahead, proven unchanged), or `arrived` before (the move's mark was there). */
-  checkout: "applied" | "staged" | "arrived"
+  /**
+   * `applied` now, `staged` (applied ahead, proven unchanged), `copy` (none came: the clone as it stands), or `arrived`
+   * before (the move's mark was there).
+   */
+  checkout: "applied" | "staged" | "copy" | "arrived"
+  /** The checkout the Thread starts from here when none came with it: the clone, as the arrival took it. */
+  start?: MoveCheckpoint
   /** What the carry brought, when there was one: its other repositories, the outside files placed and those that couldn't be. */
   carried?: { repositories: number; outside: number; failed: string[]; history: boolean }
   sessions: Array<{ harness: string; nativeId: string; restored: "restored" | "present"; path: string; opened?: { ms: number } }>
@@ -209,7 +220,7 @@ async function pulledAhead(deps: Pick<MoveArrivalDeps, "ahead">, folder: string)
   deps.ahead?.delete(folder)
 }
 
-const ArrivedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.number() })
+const ArrivedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.number(), start: MoveCheckpointSchema.optional() })
 /** The checkout staged ahead of a move's hand-over, by its checkpoint's hash. */
 const StagedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.number() })
 
@@ -308,16 +319,16 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
       parts[part] = Math.round(performance.now() - at)
     }
   }
-  const { checkout, carried } = await applyArrivalCheckout(deps, input, link, timed)
+  const { checkout, carried, start } = await applyArrivalCheckout(deps, input, link, timed)
   const { sessions, received } = await openArrivedSessions(deps, input, link, timed)
   const ms = Math.round(performance.now() - began)
   hostLog("moves", "a Thread arrived from a device", {
-    move: input.move, folder: input.folder, checkout, sessions: sessions.length, ms, ...parts,
+    move: input.move, folder: input.folder, checkout, sessions: sessions.length, ms, ...parts, ...start && { start: start.sha256 },
     ...carried && { repositories: carried.repositories, outside: carried.outside, outsideFailed: carried.failed.length, history: carried.history },
     openMs: sessions.map((session) => session.opened?.ms ?? "none").join(","),
     received: received.map((each) => `${each.harness}: pulled ${describeSync(each.pulled)}; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
   })
-  return { checkout, sessions, ms, parts, ...carried && { carried } }
+  return { checkout, sessions, ms, parts, ...carried && { carried }, ...start && { start } }
 }
 
 /**
@@ -373,6 +384,19 @@ export async function openArrivedSessions(
 /** What an arrival's checkout takes of its deps: Git, its scratch, and for a carry, the journal and cloning. */
 export type ArrivalCheckoutDeps = Pick<MoveArrivalDeps, "git" | "scratch" | "carryHistory" | "clone">
 
+/** An arrival with nothing to lay over the clone: the clone as it stands, captured and sent beside the Thread's records. */
+async function startFromClone(deps: ArrivalCheckoutDeps, folder: string, link: RecordsLink): Promise<MoveCheckpoint> {
+  await mkdir(deps.scratch, { recursive: true })
+  const scratch = await mkdtemp(join(deps.scratch, "start-"))
+  try {
+    const { checkpoint, file } = await captureMoveCheckpoint(deps.git, folder, scratch)
+    await sendCheckpoint(link, checkpoint, file)
+    return checkpoint
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+}
+
 /**
  * An arrival's checkout: the checkpoint laid over the machine's clone once, then proven, unless it was staged ahead
  * unchanged; then its carry, if it has one (`arriveCarry`). A mark in the clone's Git folder says the move arrived, so
@@ -384,9 +408,18 @@ export async function applyArrivalCheckout(
   input: Pick<MoveArrivalInput, "move" | "folder" | "checkpoint" | "carry"> & { restoring?: true },
   link: RecordsLink,
   timed: <Value>(part: string, work: () => Promise<Value>) => Promise<Value> = (_part, work) => work()
-): Promise<{ checkout: MoveArrival["checkout"]; carried?: MoveArrival["carried"] }> {
+): Promise<{ checkout: MoveArrival["checkout"]; carried?: MoveArrival["carried"]; start?: MoveCheckpoint }> {
   const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
   const mark = join(gitDir, `mako-move-${input.move}.json`)
+  if (!input.checkpoint) {
+    if (input.carry) throw new Error("A carry comes with a checkout, and this arrival has none.")
+    const arrived = existsSync(mark) ? ArrivedMarkSchema.parse(JSON.parse(await readFile(mark, "utf8"))).start : undefined
+    if (arrived) return { checkout: "arrived", start: arrived }
+    const start = await timed("startCaptured", () => part("Its clone couldn't be taken as the Thread's start", () => startFromClone(deps, input.folder, link)))
+    await writeFile(mark, JSON.stringify(ArrivedMarkSchema.parse({ move: input.move, sha256: start.sha256, at: Date.now(), start })))
+    return { checkout: "copy", start }
+  }
+  const checkpoint = input.checkpoint
   let checkout: MoveArrival["checkout"] = "arrived"
   let carried: MoveArrival["carried"]
   if (!existsSync(mark)) {
@@ -394,22 +427,22 @@ export async function applyArrivalCheckout(
     const staged = existsSync(stagedMark) ? StagedMarkSchema.safeParse(JSON.parse(await readFile(stagedMark, "utf8"))).data : undefined
     // Staged ahead and unchanged since: the clone already reads as the checkout, which is proven, not assumed. Else
     // the newest is laid over what was staged (nothing has run here, so nothing of the machine's own is lost).
-    const unchanged = staged?.sha256 === input.checkpoint.sha256 && await timed("checkpointVerified", () => verifyMoveCheckpoint(deps.git, input.folder, input.checkpoint).then(() => true, () => false))
+    const unchanged = staged?.sha256 === checkpoint.sha256 && await timed("checkpointVerified", () => verifyMoveCheckpoint(deps.git, input.folder, checkpoint).then(() => true, () => false))
     if (!unchanged) {
       await mkdir(deps.scratch, { recursive: true })
       const scratch = await mkdtemp(join(deps.scratch, "move-"))
       try {
         const file = join(scratch, "checkpoint.bundle")
-        await timed("checkpointRead", () => readCheckpoint(link, input.checkpoint.sha256, file))
-        await timed("checkpointApplied", () => applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint, { replace: staged !== undefined }))
+        await timed("checkpointRead", () => readCheckpoint(link, checkpoint.sha256, file))
+        await timed("checkpointApplied", () => applyMoveCheckpoint(deps.git, input.folder, file, checkpoint, { replace: staged !== undefined }))
       } finally {
         await rm(scratch, { recursive: true, force: true })
       }
     }
     // The carry before the mark: a repeat that finds the mark has had all of it, and never lays it over the agent's work.
     const carry = input.carry
-    if (carry) carried = await timed("carry", () => part("What it carries couldn't be placed here", () => arriveCarry(deps, link, input, carry, gitDir)))
-    await writeFile(mark, JSON.stringify(ArrivedMarkSchema.parse({ move: input.move, sha256: input.checkpoint.sha256, at: Date.now() })))
+    if (carry) carried = await timed("carry", () => part("What it carries couldn't be placed here", () => arriveCarry(deps, link, { ...input, checkpoint }, carry, gitDir)))
+    await writeFile(mark, JSON.stringify(ArrivedMarkSchema.parse({ move: input.move, sha256: checkpoint.sha256, at: Date.now() })))
     await rm(stagedMark, { force: true })
     checkout = unchanged ? "staged" : "applied"
   }
@@ -426,7 +459,7 @@ export const ARRIVED_CARRY = "mako-carry.json"
  * save, which nothing got ready, clones one it lacks here first. An outside file this machine can't place is said,
  * never failing the move.
  */
-async function arriveCarry(deps: ArrivalCheckoutDeps, link: RecordsLink, input: Pick<MoveArrivalInput, "move" | "checkpoint"> & { restoring?: true }, ref: MoveCarryRef, gitDir: string): Promise<NonNullable<MoveArrival["carried"]>> {
+async function arriveCarry(deps: ArrivalCheckoutDeps, link: RecordsLink, input: Pick<MoveArrivalInput, "move"> & { checkpoint: MoveCheckpoint; restoring?: true }, ref: MoveCarryRef, gitDir: string): Promise<NonNullable<MoveArrival["carried"]>> {
   await mkdir(deps.scratch, { recursive: true })
   const scratch = await mkdtemp(join(deps.scratch, "carry-"))
   try {

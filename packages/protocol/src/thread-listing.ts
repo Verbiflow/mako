@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
-import { MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
+import { CONTINUE_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -139,6 +140,11 @@ export const ReportedSessionSchema = z
      * there: said only with `state: "idle"`, as the hollow ring its owner's rail draws (link version 14 on).
      */
     openElsewhere: z.literal(true).optional(),
+    /**
+     * Its folder's origin on GitHub and the branch of it its worktree pushes to, once its owner has read them: what a
+     * cloud Thread continuing it while its owner is off clones (`continues.ts`, link version 16 on).
+     */
+    repository: ContinueRepositorySchema.optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -158,6 +164,8 @@ export const ListedSessionSchema = ReportedSessionSchema.extend({
   runsOn: RunsOnSchema,
   /** When the cloud last heard of it. */
   listedAt: z.iso.datetime(),
+  /** Its Thread continuing in the cloud while its owner is off, as the account carries it (`continues.ts`); never reported. */
+  continued: ListedContinueSchema.optional(),
 }).strip()
 export type ListedSession = z.infer<typeof ListedSessionSchema>
 
@@ -168,8 +176,20 @@ export type ListedSession = z.infer<typeof ListedSessionSchema>
  * at work or waiting on a person, since nothing on a device that can't be reached runs or answers for anyone else. A
  * message to one waits in the account (`waiting.ts`).
  */
-export const QuietDeviceSchema = z.object({ deviceId: z.uuid(), since: z.iso.datetime() })
+export const QuietDeviceSchema = z.object({
+  deviceId: z.uuid(),
+  since: z.iso.datetime(),
+  /** Its Mako takes a Thread continued in the cloud meanwhile as moved when it's back (link version 16 on): its Sessions may continue. */
+  continues: z.literal(true).optional(),
+})
 export type QuietDevice = z.infer<typeof QuietDeviceSchema>
+
+/** A quiet device as the list says it, `continues` only when it takes a continue back. */
+export function quietDevice(deviceId: string, since: string, continues: boolean): QuietDevice {
+  const device: QuietDevice = { deviceId, since }
+  if (continues) device.continues = true
+  return device
+}
 
 /** At most this many rows in one frame or event, well under a message's megabyte. */
 export const LISTED_PER_FRAME = 200
@@ -231,16 +251,22 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 14, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 16, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= PROMPTED_VERSION) return [...rows]
+  if (version >= CONTINUE_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // Before version 16 a gateway knows no `repository` (nothing continues it while its owner is off).
+    delete older.repository
+    if (version >= PROMPTED_VERSION) {
+      kept.push(older)
+      continue
+    }
     // Before version 14 a gateway knows no `promptedAt` (a rail ranks the row by its start) and no `openElsewhere` (the
     // row reads idle); before 12, none of what a rail shows (the row's `state` still says it's at work); before 11, no
     // `move` (the row says `moving` once the Thread is in transit); before 10, no `waitingFor` (it reads `waitingOn`'s
@@ -316,6 +342,11 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.background === right.background &&
     left.promptedAt === right.promptedAt &&
     left.openElsewhere === right.openElsewhere &&
+    left.repository?.url === right.repository?.url &&
+    left.repository?.branch === right.repository?.branch &&
+    left.continued?.op === right.continued?.op &&
+    left.continued?.phase === right.continued?.phase &&
+    left.continued?.reason === right.continued?.reason &&
     sameRunsOn(left.runsOn, right.runsOn)
   )
 }

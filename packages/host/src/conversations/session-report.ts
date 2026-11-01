@@ -66,6 +66,11 @@ export type ReportSources = {
    * until then, and the source starts reading it, so a later report says it.
    */
   head?(project: string): CheckoutHead | null | undefined
+  /**
+   * A Thread worktree's origin on GitHub and the branch it pushes to, as far as this host has read them; undefined
+   * until then (or for one with neither), and the source starts reading them, so a later report says them.
+   */
+  repository?(folder: string): ReportedSession["repository"]
   /** How many things a conversation whose turn ended still waits on (`backgroundWork`); undefined while none. */
   background?(conversationId: string): number | undefined
   now(): number
@@ -194,14 +199,16 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
   const titles = sources.titles([...new Set([...conversations.map(({ placed }) => placed.thread), ...natives.map(({ thread }) => thread)])])
   // What the rail shows of a row besides its state: the project it's filed under and what that has checked out, the
   // worktree it works in, and the agents it ran in before.
-  const rail = (folder: string | undefined, worktrees: NativeRow["worktrees"], lineage: readonly string[], harness: string): Pick<ReportedSession, "project" | "worktree" | "lineage"> => {
-    const fields: Pick<ReportedSession, "project" | "worktree" | "lineage"> = {}
+  const rail = (folder: string | undefined, worktrees: NativeRow["worktrees"], lineage: readonly string[], harness: string): Pick<ReportedSession, "project" | "worktree" | "lineage" | "repository"> => {
+    const fields: Pick<ReportedSession, "project" | "worktree" | "lineage" | "repository"> = {}
     if (folder) {
       const made = sources.worktree?.(folder)
       const project = made?.project ?? projectFolder(worktrees, folder) ?? folder
       const head = sources.head?.(project)
       fields.project = head ? { folder: project, head: listedHead(head) } : { folder: project }
       if (made) fields.worktree = { branch: made.branch }
+      const repository = made && sources.repository?.(folder)
+      if (repository) fields.repository = repository
     }
     const earlier = earlierHarnesses(lineage, harness)
     if (earlier.length) fields.lineage = earlier
