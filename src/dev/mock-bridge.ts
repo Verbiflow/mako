@@ -4,6 +4,7 @@ import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
+import { TREE_BUDGET } from "@mako/host/contracts/agents"
 import { fixtureUsageSummary } from "./usage-fixture"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
@@ -3202,6 +3203,15 @@ export function installMockBridge() {
       warmLimit: 2,
       idleMs: 10 * 60_000,
       memory: { loaded: 0, unloaded: 0, bytes: 0, pinnedBytes: 0, budget: 128 * 1024 * 1024, loads: [], held: [] },
+    }),
+    agentsDiagnostics: async () => ({
+      children: 7,
+      running: 4,
+      followed: 1,
+      queued: 1,
+      notices: 2,
+      budget: TREE_BUDGET,
+      trees: [{ lead: "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f", running: 3, started: 5 }, { lead: "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", running: 1, started: 2 }],
     }),
     clearCrashes: async () => {},
     reportCrash: async () => {},

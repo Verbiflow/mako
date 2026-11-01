@@ -1,5 +1,6 @@
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import type { AgentsDiagnostics } from "@mako/host/contracts/agents"
 import type { SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { SyncReadings } from "@mako/host/contracts/sync-readings"
 import type { ContinueReading } from "@mako/host/contracts/cloud-continues"
@@ -26,6 +27,11 @@ export const diagnostics = {
 
   providerResidency(): Promise<ProviderResidencySnapshot> {
     return getMako().providerResidency()
+  },
+
+  /** The Threads other Threads started on this host, and each tree against its budgets. */
+  agents(): Promise<AgentsDiagnostics | null> {
+    return getMako().agentsDiagnostics()
   },
 
   /** How this Mac follows its other devices' work, and how long it takes to arrive. */

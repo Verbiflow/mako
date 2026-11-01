@@ -7,9 +7,16 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
 
 const SettingsFileSchema = z.object({ version: z.literal(1), continueAfterRestart: z.boolean() })
-const LeftFileSchema = z.object({ version: z.literal(1), turns: z.array(z.object({ conversationId: z.string(), requestId: z.string() })) })
+const LeftFileSchema = z.object({
+  version: z.literal(1),
+  turns: z.array(z.object({ conversationId: z.string(), requestId: z.string(), always: z.literal(true).optional() })),
+})
 
-/** A turn the host's exit cut short (`host-quit`), for the next host to continue. */
+/**
+ * A turn the host's exit cut short (`host-quit`), for the next host to
+ * continue. `always`: a child's, which its parent waits on, so it continues
+ * whatever the person chose for their own; `RESTART_CHAIN` still bounds it.
+ */
 export type LeftTurn = z.infer<typeof LeftFileSchema>["turns"][number]
 
 const DEFAULTS: ConversationSettings = { continueAfterRestart: false }
@@ -45,11 +52,13 @@ export class LiveRestarts {
     return this.#settings
   }
 
-  /** The host is stopping: the turns its exit cut short, kept for the next host while the person wants them continued. */
+  /** The host is stopping: the turns its exit cut short, kept for the next host while the person wants them continued, beside those an earlier close of this host's left. */
   leave(turns: readonly LeftTurn[]): void {
-    if (!this.#settings.continueAfterRestart || !turns.length) return
+    const kept = this.#settings.continueAfterRestart ? turns : turns.filter((turn) => turn.always)
+    if (!kept.length) return
     try {
-      write(this.#leftFile, JSON.stringify(LeftFileSchema.parse({ version: 1, turns })))
+      const earlier = this.#left().filter((turn) => !kept.some((cut) => cut.conversationId === turn.conversationId))
+      write(this.#leftFile, JSON.stringify(LeftFileSchema.parse({ version: 1, turns: [...earlier, ...kept] })))
     } catch (error) {
       hostWarn("live", "the turns Mako's exit cut short weren't kept for the next start; they wait for Continue turn", { error: errorMessage({ error }) })
     }
@@ -58,14 +67,19 @@ export class LiveRestarts {
   /** What the host before this one left, once: the list goes as it is read, and nothing is continued unless the person still wants it. */
   take(): LeftTurn[] {
     if (!existsSync(this.#leftFile)) return []
-    let turns: LeftTurn[] = []
+    const turns = this.#left()
+    rmSync(this.#leftFile, { force: true })
+    return this.#settings.continueAfterRestart ? turns : turns.filter((turn) => turn.always)
+  }
+
+  #left(): LeftTurn[] {
+    if (!existsSync(this.#leftFile)) return []
     try {
-      turns = LeftFileSchema.parse(JSON.parse(readFileSync(this.#leftFile, "utf8"))).turns
+      return LeftFileSchema.parse(JSON.parse(readFileSync(this.#leftFile, "utf8"))).turns
     } catch (error) {
       hostWarn("live", "the turns the last exit cut short couldn't be read; they wait for Continue turn", { error: errorMessage({ error }) })
+      return []
     }
-    rmSync(this.#leftFile, { force: true })
-    return this.#settings.continueAfterRestart ? turns : []
   }
 
   #read(): ConversationSettings {
