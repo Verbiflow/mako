@@ -112,7 +112,7 @@ export class LiveDispatch {
     // Queued work stays queued, not held: cancelling a move starts it again.
     if (!this.access.moves.executes(resident)) return
     // Nor while this Mac checks with its account after it was away: its Session may have continued in the cloud.
-    if (this.access.moves.ownerCheck(resident) !== undefined) return this.holdForOwner(resident)
+    if (this.access.moves.ownerCheck(resident, true) !== undefined) return this.holdForOwner(resident)
     if (
       resident.checkpointing ||
       resident.rewinding ||

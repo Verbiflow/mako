@@ -248,9 +248,10 @@ export interface Dependencies {
    * Since when this conversation, begun at `createdAt`, waits to hear the account before it runs a turn here: after
    * this Mac was away, the account may have continued or moved its Session meanwhile (`OwnerCheck`), or a continue
    * is being joined now (`CloudMoves.joining`). Undefined when it may run. Asked before every dispatch, so it must be
-   * cheap; once it's undefined again, `LiveMoves.ownerChecked` runs what waited.
+   * cheap; once it's undefined again, `LiveMoves.ownerChecked` runs what waited. `turn`: a turn would run now from a
+   * message no check held yet, which a link down on this Mac's side holds until the account is tried.
    */
-  ownerCheck?(conversationId: string, createdAt: number): number | undefined
+  ownerCheck?(conversationId: string, createdAt: number, turn: boolean): number | undefined
   /**
    * The per-user ledger of settings, access mode and live holds per native
    * session. Written from every flush that changes what a connected session

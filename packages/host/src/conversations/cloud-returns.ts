@@ -17,7 +17,7 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type Threa
 import type { CloudAccount } from "../usage/index.js"
 import type { ThreadFileHistory } from "@mako/protocol"
 import { applyMoveCheckpoint, captureMoveCheckpoint, mergeReturned, openCarry, planOutsideReturn, ProjectMissingError, returnOutside, unchangedSince, type OpenedCarry, type OutsideReturned } from "../workspaces/index.js"
-import { cloudRuntimeOf, MovePlanSchema, namedUuid } from "./cloud-moves.js"
+import { cloudRuntimeOf, MovePlanSchema, namedUuid, onBranchHere } from "./cloud-moves.js"
 import type { CloudWorktrees } from "./cloud-worktrees.js"
 
 /**
@@ -414,7 +414,7 @@ export class CloudReturns {
 
   /** The Thread's worktree made ready to take it, by what the move that took it there recorded (`ready`). */
   async #ready(thread: ThreadId, forward: z.infer<typeof MovePlanSchema>, project?: string): Promise<void> {
-    const branch = forward.checkpoint?.branch
+    const branch = forward.branch ?? forward.checkpoint?.branch
     await this.#options.ready({ thread, folder: forward.folder, repository: forward.repository.url, ...branch && { branch }, ...project !== undefined && { project } })
   }
 
@@ -696,11 +696,12 @@ export class CloudReturns {
             await this.#write(plan)
           }
           await lay(plan.folder)
-          await timed("checkpointApplied", () => applyMoveCheckpoint(this.#options.git, plan.folder, file, departure.checkpoint, { replace: true }))
+          const theirs = forward ? onBranchHere(departure.checkpoint, forward) : departure.checkpoint
+          await timed("checkpointApplied", () => applyMoveCheckpoint(this.#options.git, plan.folder, file, theirs, { replace: true }))
           // What the person changed in the worktree meanwhile is merged in, never written over; then the project's other
           // repositories the same way.
           const sent = (await this.#options.followed?.laid(plan.cloudThread, plan.folder)) ?? forward?.checkpoint
-          if (sent) landed.push(await timed("merged", () => this.#merge(plan, plan.folder, sent, kept, departure.checkpoint, scratch)))
+          if (sent) landed.push(await timed("merged", () => this.#merge(plan, plan.folder, sent, kept, theirs, scratch)))
           for (const { repository, file: bundle } of others) {
             await lay(repository.path)
             await timed("othersApplied", () => applyMoveCheckpoint(this.#options.git, repository.path, bundle, repository.checkpoint, { replace: true }))

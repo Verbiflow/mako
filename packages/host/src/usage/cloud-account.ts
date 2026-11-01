@@ -151,6 +151,16 @@ const BaseStandingSchema = z.union([
 const BaseStandingsSchema = z.object({ bases: z.array(z.object({ repository: CloudRepositorySchema, standing: BaseStandingSchema })) })
 /** What the account says of a Session's waiting messages after a change to one. */
 const WaitingAnswerSchema = z.object({ messages: z.array(WaitingMessageSchema) })
+/**
+ * The account's answers that refuse a claim on a waiting message: this Mac doesn't own its Session (403), it's on its
+ * way to the cloud (409), or the message isn't waiting any more (409, from accounts that say so; 404 from none yet).
+ */
+const WAITING_REFUSALS = [403, 404, 409]
+/**
+ * The account's answer to this Mac's claim on a message that waited for one of its Sessions: granted, it's this Mac's to
+ * run, once; refused, it never runs here.
+ */
+export type WaitingClaim = { granted: true } | { granted: false; status: number; why: string }
 const BrowserSessionsSchema = z.object({ sessions: z.array(CloudBrowserSessionSchema) })
 const EndedSchema = z.object({ ended: z.number().int().nonnegative() })
 /** What the cloud answers a Thread made or made again with; only whether its machine is ready is read. */
@@ -471,9 +481,14 @@ export class CloudAccounts {
     return WaitingAnswerSchema.parse(await answer.json()).messages
   }
 
-  /** Its owner took it, as a request of the Session under the same ID. */
-  async tookWaiting(session: string, id: string): Promise<void> {
-    await this.#call("messages.taken", "POST", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}/taken`, {})
+  /**
+   * This Mac claims a message that waited for one of its Sessions, to run it as a request of the Session under the same
+   * ID: the account's answer is the one claim on it (`WaitingClaim`). A refusal is the account's word; anything else
+   * (the network, the cloud failing) throws, and is asked again.
+   */
+  async claimWaiting(session: string, id: string): Promise<WaitingClaim> {
+    const answer = await this.#call("messages.taken", "POST", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}/taken`, {}, false, WAITING_REFUSALS)
+    return answer.ok ? { granted: true } : { granted: false, status: answer.status, why: await problemOf(answer, "The account refused it.") }
   }
 
   /**
@@ -930,6 +945,16 @@ export class CloudAccounts {
     this.#accountLink?.wake()
     this.#runtimeLink?.wake()
     for (const session of this.#sessions) session.wake()
+  }
+
+  /** Whether the account's link is open and heard from within a ping (`CloudLink.heard`). */
+  accountHeard(): boolean {
+    return this.#accountLink?.heard ?? false
+  }
+
+  /** The account's link tried now if it isn't heard (`CloudLink.reach`); false with no link to try, signed out. */
+  reachAccount(): Promise<boolean> {
+    return this.#accountLink?.reach() ?? Promise.resolve(false)
   }
 
   /**

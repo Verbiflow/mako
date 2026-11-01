@@ -447,6 +447,12 @@ test("a row whose last activity alone moved is said once it's moved a minute; wi
   reporter.sent([at(row(1), ACTIVITY_REPORT_MS)])
   const ended = reporter.reports(link, [at(row(1, "working"), ACTIVITY_REPORT_MS + 5_000)])
   assert.deepEqual(ended[0]?.listed.map((each) => [each.state, each.activityAt]), [["working", new Date(NOW + ACTIVITY_REPORT_MS + 5_000).toISOString()]], "with a state that moved, at once and with its activity")
+  reporter.sent([at(row(1, "working"), ACTIVITY_REPORT_MS + 5_000)])
+  // Its worktree's branch tracked since, the row idle: a continue clones what the row says, so it goes at once.
+  const tracked = { ...at(row(1, "working"), ACTIVITY_REPORT_MS + 5_000), repository: { url: "https://github.com/octocat/Hello-World", branch: "master" } }
+  assert.deepEqual(reporter.reports(link, [tracked])[0]?.listed.map((each) => each.repository), [tracked.repository], "a repository that moved: at once")
+  reporter.sent([tracked])
+  assert.deepEqual(reporter.reports(link, [tracked]), [], "said once")
 })
 
 test("a row says when the person last sent its Session a message, from whichever device; Mako's and an agent's turns aren't theirs; a new one is said at once", async () => {

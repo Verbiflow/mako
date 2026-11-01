@@ -20,7 +20,6 @@ import { readPower } from "./base/power.js"
 import { SessionIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
-import type { ContinueRepository } from "@mako/protocol/continues"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { HeapWatch, readHeap } from "./base/heap-watch.js"
@@ -52,7 +51,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -429,21 +428,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
   // listed, then followed (a branch switched anywhere arrives as a `checkout-heads` event, which reports again).
   const headsAsked = new Map<string, number>()
-  // Each Thread worktree's origin on GitHub and the branch it pushes to, as last read: what a cloud Thread continuing
-  // one of its Sessions while this Mac is off clones. Read again a minute on, so a branch pushed since is said.
-  const repositories = new Map<string, { at: number; repository: ContinueRepository | null }>()
-  const listedRepository = (folder: string) => {
-    const known = repositories.get(folder)
-    if (!known || Date.now() - known.at > HEAD_ASK_AGAIN_MS) {
-      repositories.set(folder, { at: Date.now(), repository: known?.repository ?? null })
-      void folderRepository(git, folder).catch(() => null).then((found) => {
-        const before = repositories.get(folder)?.repository
-        repositories.set(folder, { at: Date.now(), repository: found })
-        if (before?.url !== found?.url || before?.branch !== found?.branch) late.sessions?.changed()
-      })
-    }
-    return known?.repository ?? undefined
-  }
+  const repositories = new ListedRepositories({ read: (folder) => folderRepository(git, folder), changed: () => late.sessions?.changed(), againMs: HEAD_ASK_AGAIN_MS })
   const listedHead = (project: string) => {
     const known = workspaces.checkoutHeads.known(project)
     if (known !== undefined) return known
@@ -462,7 +447,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       if (!live || !store || !catalog.ready()) return undefined
       const activity = catalog.activity()
       const made = store.worktrees()
-      return ownedSessions({
+      return repositories.listing(() => ownedSessions({
         summaries: () => live.summaries(),
         native: () => (windowRows ??= catalog.recent(windowStart(Date.now()))),
         activity: (path) => activity[path],
@@ -480,13 +465,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return found && project ? { project, branch: found.worktree.branch } : undefined
         },
         head: listedHead,
-        repository: listedRepository,
+        repository: (folder) => repositories.of(folder),
         background: (id) => {
           const held = live.held(id)
           return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
         },
         now: Date.now,
-      })
+      }))
     },
     // What a list shows of one conversation, read as each of its batches comes, by the rule its row is made with: a
     // batch that moved it is reported at once. It reads only what memory holds.
@@ -685,7 +670,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
         continued: (session, listed) => late.cloudMoves?.joinContinue(session, listed),
         ownerChecked: () => late.conversations?.live.moves.ownerChecked(),
-        takeWaiting: async (message) => {
+        takeWaiting: async (message, claim) => {
           const store = threads.store
           const live = late.conversations?.live
           if (!store || !live || !catalog.ready()) return "later"
@@ -693,12 +678,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           if (!session.success) return "not-mine"
           const execution = store.execution(session.data)
           if (execution && execution.state !== "here") return "not-mine"
-          if (!live.summaries().some((summary) => summary.session.id === message.conversation)) {
-            // A session a terminal ran, which Mako here hasn't opened: opened as the conversation the list named.
-            const ref = (windowRows ??= catalog.recent(windowStart(Date.now()))).find((row) => row.sessionId === message.session)
-            if (!ref) return "not-mine"
-            await methods.invoke("mako:live-capture", [message.conversation, ref.path])
-          }
+          // A session a terminal ran, which Mako here hasn't opened: opened as the conversation the list named.
+          const opened = live.summaries().some((summary) => summary.session.id === message.conversation)
+          const ref = opened ? undefined : (windowRows ??= catalog.recent(windowStart(Date.now()))).find((row) => row.sessionId === message.session)
+          if (!opened && !ref) return "not-mine"
+          if (!(await claim())) return "refused"
+          if (ref) await methods.invoke("mako:live-capture", [message.conversation, ref.path])
           await methods.invoke("mako:live-prompt", [message.conversation, message.id, message.text, [], undefined])
           return "taken"
         },
@@ -1438,6 +1423,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       application.dispose()
       shell.closeSocket()
       wake.stop()
+      repositories.stop()
       sleepHandOff?.stop()
       cloudContinues?.close()
       late.cloud?.stop()

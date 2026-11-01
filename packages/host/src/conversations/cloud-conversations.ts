@@ -233,11 +233,13 @@ export type CloudConversationsOptions = {
   /** How long a device found off is read from its copy before it's asked again (`ASLEEP_MS`); a test's is short. */
   asleepMs?: number
   /**
-   * Takes a message that waited in the account for one of this Mac's own Sessions: admits it here, under its own ID,
-   * as a message the person sent (`mako:live-prompt`). `not-mine` when this Mac doesn't own the Session (it moved; its
-   * owner takes it), `later` when the host can't take one yet.
+   * Takes a message that waited in the account for one of this Mac's own Sessions: once the host could run it now, it
+   * claims it (`claim`, the account's word, by the message's ID), and only if that's granted admits it here, under its
+   * own ID, as a message the person sent (`mako:live-prompt`). `not-mine` when this Mac doesn't own the Session (it
+   * moved; its owner takes it), `later` when the host can't take one yet, `refused` when the account gave it to no one
+   * here: none of those runs it.
    */
-  takeWaiting?(message: WaitingMessage): Promise<"taken" | "not-mine" | "later">
+  takeWaiting?(message: WaitingMessage, claim: () => Promise<boolean>): Promise<"taken" | "not-mine" | "later" | "refused">
   /**
    * One of this Mac's Sessions that the account continued in the cloud while this Mac was off, still run here: this
    * Mac joins the continue as a move (`CloudMoves.joinContinue`), so it never runs here again until it's brought back.
@@ -424,6 +426,12 @@ export class CloudConversations {
   readonly #waitingChanges = new Map<string, number>()
   /** Waiting messages being taken here now, by ID: a list heard twice meanwhile takes each once. */
   readonly #taking = new Set<string>()
+  /**
+   * Waiting messages claimed here and not settled yet, by ID: the claim went unanswered (the network, the cloud
+   * failing), or was granted and the message didn't run. Tried again whatever the list says since, as a granted claim
+   * takes the message off it; the account grants the device that took it again, and it's admitted under the same ID.
+   */
+  readonly #unsettled = new Map<string, WaitingMessage>()
   #takeAgain: ReturnType<typeof setTimeout> | undefined
   /** The windows' reads of copies, answered as every client answers them (`CopyHistory`). */
   readonly #copyHistory = new CopyHistory()
@@ -631,36 +639,51 @@ export class CloudConversations {
   }
 
   /**
-   * Takes the messages waiting for this Mac's own Sessions: each admitted here under its own ID, which settles a
-   * message taken twice as one, then the account told it was taken. Heard on the account's list, read whole when this
-   * Mac comes back and changed on its stream while it's on. One this Mac no longer owns is its new owner's to take.
+   * Takes the messages waiting for this Mac's own Sessions, each claimed from the account before it runs here: the
+   * account's take is the one claim on a message (its Session's owner alone, while it waits, by its ID), so a list
+   * heard late or replayed, which may still hold a message the cloud took with a continue or the person took back,
+   * never runs it. Granted, it's admitted here under its own ID, which settles a message taken twice as one. Heard on
+   * the account's list, read whole when this Mac comes back and changed on its stream while it's on; what the list
+   * says of the Session only spares asking for one that's plainly another's.
    */
   #takeWaiting(): void {
-    const take = this.#options.takeWaiting
-    const account = this.#options.account()
-    if (!take || !account?.tookWaiting || !this.#device || this.#closed) return
+    if (!this.#options.takeWaiting || !this.#options.account()?.claimWaiting || !this.#device || this.#closed) return
     for (const [session, messages] of this.#list.allWaiting()) {
       const row = this.#list.sessions().get(session)
       if (row?.runsOn.kind !== "device" || row.runsOn.deviceId !== this.#device) continue
       // Continuing in the cloud: what waited goes there with it, and runs there once.
       if (row.continued && row.continued.phase !== "failed") continue
-      for (const message of messages) {
-        if (this.#taking.has(message.id)) continue
-        this.#taking.add(message.id)
-        void (async () => {
-          const outcome = await take(message)
-          if (outcome === "taken") {
-            await account.tookWaiting?.(message.session, message.id)
-            hostLog("cloud-conversations", "a message that waited for this Mac was taken", { session, requestId: message.id, from: message.from })
-          } else if (outcome === "later") this.#takeLater()
-        })()
-          .catch((error: Error) => {
-            hostWarn("cloud-conversations", "a message that waited for this Mac couldn't be taken yet", { session, requestId: message.id, error: error.message })
-            this.#takeLater()
-          })
-          .finally(() => this.#taking.delete(message.id))
-      }
+      for (const message of messages) this.#claimAndTake(message)
     }
+    for (const message of this.#unsettled.values()) this.#claimAndTake(message)
+  }
+
+  /** One waiting message claimed, then run here if the account granted it (`#takeWaiting`). Once at a time. */
+  #claimAndTake(message: WaitingMessage): void {
+    const take = this.#options.takeWaiting
+    const account = this.#options.account()
+    if (!take || !account?.claimWaiting || this.#taking.has(message.id)) return
+    this.#taking.add(message.id)
+    const fields = { session: message.session, requestId: message.id, from: message.from }
+    let granted = false
+    const claim = async () => {
+      this.#unsettled.set(message.id, message)
+      const claimed = await account.claimWaiting!(message.session, message.id)
+      if (!claimed.granted) hostLog("cloud-conversations", "the account refused this Mac a message that waited for it; it doesn't run here", { ...fields, status: claimed.status, why: claimed.why })
+      granted = claimed.granted
+      return granted
+    }
+    void take(message, claim)
+      .then((outcome) => {
+        if (outcome !== "later") this.#unsettled.delete(message.id)
+        if (outcome === "taken") hostLog("cloud-conversations", "a message that waited for this Mac was claimed and taken", fields)
+        else if (outcome === "later") this.#takeLater()
+      })
+      .catch((error: Error) => {
+        hostWarn("cloud-conversations", "a message that waited for this Mac couldn't be taken yet", { ...fields, granted, error: error.message })
+        this.#takeLater()
+      })
+      .finally(() => this.#taking.delete(message.id))
   }
 
   #takeLater(): void {
@@ -812,9 +835,22 @@ export class CloudConversations {
 
   /**
    * Since when this Mac waits to hear its account before it runs a turn of a Session of its own begun before then
-   * (`OwnerCheck`); undefined when it needn't.
+   * (`OwnerCheck`); undefined when it needn't. A turn about to run (`turn`) while the account's link is down begins a
+   * check, and the link is tried at once: a network that came back without this Mac sleeping ends no away it can see,
+   * and the link's backoff may not try again for half a minute, while the account may have continued the Session in
+   * the cloud meanwhile. The link opening is heard as any (`linked`); one that can't open gives the check up, as an
+   * offline Mac works on.
    */
-  ownerCheck(): number | undefined {
+  ownerCheck(turn = false): number | undefined {
+    const account = this.#options.account()
+    if (turn && this.#ownerCheck.waiting() === undefined && this.#list.known && account?.reachAccount && account.accountHeard?.() === false) {
+      this.#ownerCheck.away("unheard")
+      this.#ownerCheck.asking()
+      void account.reachAccount().then((reached) => {
+        hostLog("owner-check", reached ? "the account's link opened when tried for a turn" : "the account's link couldn't open when tried for a turn", { reached })
+        if (!reached) this.#ownerCheck.unreached()
+      })
+    }
     return this.#ownerCheck.waiting()
   }
 

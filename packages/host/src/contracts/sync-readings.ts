@@ -55,9 +55,10 @@ export type OwnerReading = { watched: number; compact: number; negotiated: boole
 
 /**
  * What ended a time this Mac couldn't hear its account: the host starting, a wake, the account's link opening again,
- * another account, a gap in the account's stream, or the account saying this Mac was quiet (`device-quiet`).
+ * another account, a gap in the account's stream, the account saying this Mac was quiet (`device-quiet`), or a turn
+ * about to run here while the account's link is down, which may have been down only on this Mac's side (`unheard`).
  */
-export type AwayEnd = "start" | "wake" | "linked" | "account" | "gap" | "quiet"
+export type AwayEnd = "start" | "wake" | "linked" | "account" | "gap" | "quiet" | "unheard"
 
 /** One check (`OwnerCheck`): what began it, when, and how long until it was heard or given up. */
 export type OwnerCheckReading = { why: AwayEnd; at: number; outcome: "heard" | "gave-up" | "waiting"; ms?: number }
@@ -268,6 +269,7 @@ const AWAY_TEXT = {
   account: "a sign-in",
   gap: "a gap in the account's list",
   quiet: "the account found this Mac quiet",
+  unheard: "a message while the account's link was down",
 } as const satisfies Record<AwayEnd, string>
 const duration = (ms: number) => (ms < 1_000 ? `${ms} ms` : `${(ms / 1_000).toFixed(1)} s`)
 

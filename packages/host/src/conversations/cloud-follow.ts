@@ -8,7 +8,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { applyMoveCheckpoint, captureMoveCheckpoint, unchangedSince } from "../workspaces/index.js"
-import { MovePlanSchema } from "./cloud-moves.js"
+import { MovePlanSchema, onBranchHere } from "./cloud-moves.js"
 import type { CloudWorktrees } from "./cloud-worktrees.js"
 
 /**
@@ -136,7 +136,7 @@ export class CloudFollow {
         if (!was || was.sha256 === checkpoint.sha256) continue
         const file = join(scratch, `${checkpoint.sha256}.bundle`)
         await this.#options.readCheckpoint(cloudThread, checkpoint.sha256, file)
-        due.push({ path, checkpoint, file })
+        due.push({ path, checkpoint: path === plan.folder ? onBranchHere(checkpoint, plan) : checkpoint, file })
       }
       if (!due.length) return "unchanged"
       return await worktrees.write(cloudThread, async () => {

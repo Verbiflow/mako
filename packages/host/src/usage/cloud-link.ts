@@ -87,6 +87,8 @@ export class CloudLink {
   #asking: Open | undefined
   #offlineTimer: NodeJS.Timeout | undefined
   #reconnectTimer: NodeJS.Timeout | undefined
+  /** Those waiting on `reach`: told whether the next connection opened. */
+  readonly #reaching: Array<(opened: boolean) => void> = []
 
   constructor(options: CloudLinkOptions) {
     this.#options = options
@@ -94,6 +96,28 @@ export class CloudLink {
 
   get state(): CloudLinkState {
     return this.#state
+  }
+
+  /** Whether the connection is open and was heard from within a ping: what the cloud sends on it arrives now. */
+  get heard(): boolean {
+    const open = this.#open
+    return open?.opened === true && Date.now() - open.lastHeard < WOKEN_QUIET_MS
+  }
+
+  /**
+   * Something waits on the cloud hearing this Mac now: a link that isn't heard (down, between backoff steps, or gone
+   * quiet) connects now, or the try under way is waited on, and this answers whether it opened. One heard answers at
+   * once; a stopped link, or one whose try failed, answers false.
+   */
+  reach(): Promise<boolean> {
+    if (!this.#running) return Promise.resolve(false)
+    if (this.heard) return Promise.resolve(true)
+    const reached = new Promise<boolean>((resolve) => this.#reaching.push(resolve))
+    if (!this.#open || this.#open.opened) {
+      this.#attempt = 0
+      this.#reconnect(0)
+    }
+    return reached
   }
 
   start(): void {
@@ -106,6 +130,7 @@ export class CloudLink {
     this.#running = false
     this.#clearTimers()
     this.#drop(1000)
+    this.#reached(false)
   }
 
   /** After sleep or a network change: reconnect now, rather than at the next backoff step. */
@@ -212,6 +237,7 @@ export class CloudLink {
         if (!this.#options.signedIn()) return
         this.#options.log?.(`cloud ${this.#options.name}: no token to connect with`, { error: error instanceof Error ? error.message : "unknown" })
         this.#down()
+        this.#reached(false)
         this.#reconnect()
       }
     )
@@ -225,6 +251,7 @@ export class CloudLink {
     this.#up()
     this.#keepAlive(open)
     open.detach = this.#options.attach(open.socket, (ending) => this.#ended(open, ending))
+    this.#reached(true)
   }
 
   /** What the protocol on the link learned before the close arrived, which a proxy can hold back. */
@@ -238,6 +265,7 @@ export class CloudLink {
     this.#open = undefined
     open.detach?.close()
     if (open.socket.readyState === WebSocket.OPEN || open.socket.readyState === WebSocket.CONNECTING) open.socket.close(1000)
+    if (!open.opened) this.#reached(false)
     if (!this.#running) return
     if (open.opened && Date.now() - open.openedAt >= STABLE_MS) this.#attempt = 0
     if (code === CLOSE_CODES.credentialRevoked) {
@@ -298,6 +326,10 @@ export class CloudLink {
       if (!this.#open?.opened) this.#set("offline")
     })
     if (!this.#everConnected) this.#set("connecting")
+  }
+
+  #reached(opened: boolean): void {
+    for (const tell of this.#reaching.splice(0)) tell(opened)
   }
 
   #set(state: CloudLinkState): void {

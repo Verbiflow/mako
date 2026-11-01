@@ -1,6 +1,6 @@
 import { probeOpenFiles, type OpenFilesResult } from "../open-files-probe.js"
 import { processIdentityMatches } from "../../base/process-liveness.js"
-import { open, readdir } from "node:fs/promises"
+import { open, readdir, realpath } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
@@ -8,6 +8,7 @@ import type {
   ProviderActivitySession,
   ProviderProcessProbe,
 } from "../../threads/index.js"
+import { openCodeRecordLocator } from "./resume-store.js"
 import type { OpenCodeServers } from "./servers.js"
 
 const registration = z.object({
@@ -127,17 +128,22 @@ async function serviceActivity(
 /**
  * What OpenCode is running on this Mac: each registered service's active
  * sessions, and those of the servers this host runs (`servers`), which
- * register nowhere. Any other `opencode` process can't be asked, so it leaves
- * the inventory incomplete for a session found running nowhere else.
+ * register nowhere. Any other `opencode` process can't be asked, so one that
+ * holds the session's database open leaves the inventory incomplete for a
+ * session found running nowhere else. OpenCode holds its database open while it
+ * runs, so one that doesn't (another home's) isn't running it.
  */
 export function openCodeProcessProbeFor(servers: OpenCodeServers, {
   stateRoot = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "opencode"),
   processes = (signal) => probeOpenFiles({ processNames: ["/^opencode$/", "/^opencode2$/"], signal, accept: () => false }),
+  holding = (database, signal) => probeOpenFiles({ processNames: [], sourcePath: database, signal, accept: (path) => path === database }),
 }: {
   /** Where OpenCode's services register. */
   stateRoot?: string
   /** The `opencode` processes running on this Mac. */
   processes?: (signal: AbortSignal) => Promise<OpenFilesResult>
+  /** The processes holding `database` open. */
+  holding?: (database: string, signal: AbortSignal) => Promise<OpenFilesResult>
 } = {}): ProviderProcessProbe {
   return {
     provider: "opencode",
@@ -185,8 +191,15 @@ export function openCodeProcessProbeFor(servers: OpenCodeServers, {
           // unless it is one of this host's own servers, which said above.
           const running = await processes(signal)
           if (running.kind === "unavailable") return running
-          if (running.pids.some(pid => !registered.has(pid)))
-            return { kind: "unavailable", reason: "incomplete" }
+          const unknown = running.pids.filter(pid => !registered.has(pid))
+          if (unknown.length) {
+            const database = openCodeRecordLocator(target.path)?.database
+            if (!database) return { kind: "unavailable", reason: "incomplete" }
+            const held = await holding(await realpath(database).catch(() => database), signal)
+            if (held.kind === "unavailable") return held
+            if (held.pids.some(pid => unknown.includes(pid)))
+              return { kind: "unavailable", reason: "incomplete" }
+          }
         }
         return { kind: "available", sessions }
       } catch {

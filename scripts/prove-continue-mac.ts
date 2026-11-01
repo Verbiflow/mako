@@ -1,12 +1,12 @@
 import "./lib/scratch-git.mjs"
 import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { request as httpsRequest } from "node:https"
 import { createRequire } from "node:module"
 import type { Duplex } from "node:stream"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
 import { createInterface } from "node:readline"
 import { connect as tlsConnect } from "node:tls"
 import { promisify, parseArgs } from "node:util"
@@ -28,18 +28,24 @@ import { scriptedModel } from "./scripted-model.ts"
  * Every turn asks for one word ("Reply with the single word X."), and the scripted model says it back: the words it
  * heard are the turns that ran on this Mac, and a turn that ran anywhere else never reaches it.
  *
+ * With `--opencode <version>`, that version of OpenCode is installed in the root and first on the host's `PATH`, else
+ * it runs the person's. Give it the version the cloud's machines run: a Session goes to the cloud only from a version
+ * no newer than theirs, and comes back only into theirs or a newer one, so with any other the Thread stays there.
+ *
  * With `--window`, the desktop runs too, as a packaged app's on its own profile (`PackagedApp`, a built checkout), so
  * `shot` can take its window; else the host alone, screenless. Either way its host opens no browser on this Mac: its
  * sign-in page is printed for the driver to open.
  *
  * Lines on stdin drive it; each answers with one line on stdout, JSON after its word:
- * - (at start) `SIGN IN <url>`, then once signed in with the cloud, `READY {dataRoot, project}`.
+ * - (at start) `SIGN IN <url>`, then once signed in with the cloud, `READY {dataRoot, project, opencode}`.
  * - `start <title> <word>`: a Thread on OpenCode in its own worktree of the project, its first turn that word, waited
- *   for. The worktree is on a branch of the repository's on GitHub (`--branch`, else its first besides the default),
- *   tracking it as a pushed branch does, so a cloud machine has it to clone. `STARTED {conversation, thread, folder, branch, upstream}`
+ *   for. The worktree is on a branch of its own, as Mako makes one, tracking the repository's default branch, which
+ *   the project folder has checked out and a cloud machine clones by that name; with `--branch`, on that branch of
+ *   the repository's on GitHub, by the same name. `STARTED {conversation, thread, folder, branch, upstream}`
  * - `say <conversation> <word>`: a turn sent as the composer sends one, not waited for. `SAID {request, at}`
- * - `read <conversation>`: the conversation as this Mac reads it now: each request's status and the words its text says,
- *   and where its folder is when it isn't here. `READ {elsewhere, requests, words}`
+ * - `read <conversation>`: the conversation as this Mac reads it now: each request's status, the words its history says
+ *   (its records' and the live blocks after them, as the window shows it), and where its folder is when it isn't here.
+ *   `READ {elsewhere, requests, words}`
  * - `continues`: each continue in the cloud this Mac pressed or heard of, as its Diagnostics show them. `CONTINUES [...]`
  * - `synced [ms]`: waits until the account can show each Session of the sync window and holds its records whole, so a
  *   continue can go on from them. `SYNCED {ms, up, …}`
@@ -47,10 +53,12 @@ import { scriptedModel } from "./scripted-model.ts"
  * - `offline`, `online`: the relay cut, or listening again on the same port. `OFFLINE {at}`, `ONLINE {at}`
  * - `return <conversation>`: the Thread brought back from the cloud, as Bring back does. `RETURNED {outcome, ms}`
  * - `shot <path> [title]`: the window's screenshot, the Thread named by its title selected first. `SHOT <path>`
- * - `quit` (or stdin's end): signs out, stops the host (and the window), removes the root unless `--keep`.
+ * - `quit` (or stdin's end): signs out, stops the host (and the window), removes the root unless `--keep`. The host's
+ *   log is kept beside it, as `<root>.host.log`.
  *
  *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-continue-mac.ts --root <empty folder> --cloud https://… \
- *     --relay-port <port> [--repository https://github.com/octocat/Hello-World] [--branch test] [--window] [--keep]
+ *     --relay-port <port> [--repository https://github.com/octocat/Hello-World] [--branch test] [--opencode 2.2.3]
+ *     [--window] [--keep]
  */
 const { values } = parseArgs({
   options: {
@@ -59,6 +67,7 @@ const { values } = parseArgs({
     "relay-port": { type: "string" },
     repository: { type: "string", default: "https://github.com/octocat/Hello-World" },
     branch: { type: "string" },
+    opencode: { type: "string" },
     window: { type: "boolean", default: false },
     keep: { type: "boolean", default: false },
   },
@@ -92,12 +101,19 @@ await writeFile(join(home, ".config", "opencode", "opencode.json"), JSON.stringi
 const project = join(home, "projects", new URL(values.repository).pathname.split("/").at(-1) ?? "project")
 await mkdir(join(home, "projects"), { recursive: true })
 await run("git", ["clone", "-q", values.repository, project], { env: { ...scratch.env } })
-// The branch a Thread works on: one of the repository's own on GitHub besides its default, which the project folder
-// has checked out, so the Thread's worktree can have it and Bring back can check it out again.
+// With `--branch`, a branch of the repository's own on GitHub besides its default, which the project folder has
+// checked out, so the Thread's worktree can have it by the same name.
 const defaultBranch = (await run("git", ["-C", project, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).stdout.trim()
 const remoteBranches = (await run("git", ["-C", project, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"])).stdout.split("\n").filter((name) => name.startsWith("origin/") && name !== "origin/HEAD" && name !== defaultBranch)
-const branchOnGitHub = values.branch ? `origin/${values.branch}` : remoteBranches[0]
-if (!branchOnGitHub || !remoteBranches.includes(branchOnGitHub)) throw new Error(`${values.repository} has no branch on GitHub besides ${defaultBranch} for the Thread to work on${values.branch ? ` named ${values.branch}` : ""}`)
+const branchOnGitHub = values.branch ? `origin/${values.branch}` : undefined
+if (branchOnGitHub && !remoteBranches.includes(branchOnGitHub)) throw new Error(`${values.repository} has no branch on GitHub besides ${defaultBranch} named ${values.branch}`)
+
+const opencodeBin = values.opencode ? join(root, "opencode", "bin") : undefined
+if (opencodeBin) {
+  await run("npm", ["install", "-g", "--prefix", join(root, "opencode"), "--allow-scripts=@opencode/cli", `@opencode/cli@${values.opencode}`], { env: { ...scratch.env } })
+  const installed = (await run(join(opencodeBin, "opencode"), ["--version"], { env: { ...scratch.env } })).stdout.trim()
+  if (/\d+\.\d+\.\d+\S*/.exec(installed)?.[0] !== values.opencode) throw new Error(`npm installed OpenCode ${installed}, not ${values.opencode}`)
+}
 
 // The Mac's network: an http relay on this Mac's loopback to the cloud's https, sockets and all, so `offline` can cut it.
 const carried = new Set<Duplex>()
@@ -143,7 +159,7 @@ await listen()
 
 // The host: screenless on its own, or the desktop's on a profile of its own, both on the scratch home through the relay.
 const cloudUrl = `http://127.0.0.1:${relayPort}`
-const hostEnv: NodeJS.ProcessEnv = { ...scratch.env, MAKO_CLOUD_URL: cloudUrl, MAKO_SCREENLESS: "1", OPENCODE_DISABLE_MODELS_FETCH: "1" }
+const hostEnv: NodeJS.ProcessEnv = { ...scratch.env, ...opencodeBin && { PATH: [opencodeBin, scratch.env["PATH"]].filter(Boolean).join(delimiter) }, MAKO_CLOUD_URL: cloudUrl, MAKO_SCREENLESS: "1", OPENCODE_DISABLE_MODELS_FETCH: "1" }
 assertScratchEnvironment(hostEnv, "the continue proof's host")
 // SAFETY: the electron package's main export is the path of its executable.
 const electron = createRequire(import.meta.url)("electron") as string
@@ -180,7 +196,7 @@ for (const deadline = Date.now() + 5 * 60_000; !(account.state.status === "signe
   await new Promise((resolve) => setTimeout(resolve, 500))
   account = AccountSchema.parse(await call("mako:cloud-account", []))
 }
-say("READY", JSON.stringify({ dataRoot, project }))
+say("READY", JSON.stringify({ dataRoot, project, opencode: values.opencode ?? null }))
 
 const SnapshotSchema = z.object({
   session: z.object({ cwd: z.string().nullish() }).loose(),
@@ -188,11 +204,16 @@ const SnapshotSchema = z.object({
   elsewhere: z.string().optional(),
   requests: z.array(z.object({ id: z.string(), status: z.string(), error: z.string().optional() }).loose()).default([]),
   blocks: z.array(z.object({ type: z.string(), text: z.string().optional() }).loose()).default([]),
+  base: z.object({ entries: z.array(z.object({ type: z.string(), text: z.string().optional() }).loose()) }).loose().nullish(),
 }).loose()
 const snapshot = async (id: string) => SnapshotSchema.parse(await call("mako:live-snapshot", [id]))
+const said = (entries: ReadonlyArray<{ type: string; text?: string }>) => entries.filter((entry) => entry.type === "text").map((entry) => entry.text?.trim() ?? "")
+// The window's history: the base, the session's whole history as its records hold it (a Thread back from the cloud
+// has the machine's turns there), then the live blocks it doesn't hold yet.
 const read = async (id: string) => {
   const shot = await snapshot(id)
-  const words = shot.blocks.filter((block) => block.type === "text").map((block) => block.text?.trim() ?? "")
+  const kept = said(shot.base?.entries ?? [])
+  const words = [...kept, ...said(shot.blocks).filter((word) => !kept.includes(word))]
   return { elsewhere: shot.elsewhere ?? null, threadId: shot.threadId ?? null, requests: shot.requests.map(({ id: request, status, error }) => ({ request, status, ...error && { error } })), words }
 }
 const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), inCloud: z.number() }).loose()).optional() }).loose()
@@ -210,6 +231,8 @@ const stop = async () => {
   await cut()
   await model.close()
   scratch.dispose()
+  // The host's log outlives the root it's in, for what the proof says of its run.
+  await copyFile(join(dataRoot, "logs", "host.log"), `${root}.host.log`).catch(() => undefined)
   if (!values.keep) await rm(root, { recursive: true, force: true })
   process.exit(0)
 }
@@ -222,7 +245,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     const title = rest.join(" ")
     const conversationId = randomUUID()
     const request = randomUUID()
-    await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, worktreeStart: { kind: "branch", branch: branchOnGitHub }, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+    await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, ...branchOnGitHub && { worktreeStart: { kind: "branch", branch: branchOnGitHub } }, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
     for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
       const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
       if (status && !["queued", "held", "dispatching"].includes(status)) break
@@ -230,6 +253,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     const shot = await snapshot(conversationId)
     const folder = shot.session.cwd ?? ""
+    if (!branchOnGitHub) await run("git", ["-C", folder, "branch", "--quiet", `--set-upstream-to=${defaultBranch}`])
     const upstream = (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).stdout.trim()
     say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder, branch: (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim(), upstream, ...await read(conversationId) }))
   } else if (command === "say") {
