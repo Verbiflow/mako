@@ -56,6 +56,20 @@ export const NativeAgentObservationSchema = z.object({
       path: z.string().min(1).max(4096).optional(),
     })
     .optional(),
+  /**
+   * A child: a Thread this conversation's Thread leads (`contracts/agents.ts`),
+   * drawn from its edge and its own Thread (`childEntry`), never from a
+   * harness's roster. `session` is its Session in the Thread store, and `path`
+   * where this device's catalog reads its transcript, which opens it.
+   */
+  child: z
+    .object({
+      thread: z.string().uuid(),
+      origin: z.enum(["started", "discovered", "linked", "attached"]),
+      session: z.string().uuid().optional(),
+      path: z.string().min(1).max(4096).optional(),
+    })
+    .optional(),
   state: NativeAgentStateSchema,
   usage: z
     .object({
@@ -142,6 +156,8 @@ export function observeNativeAgent(
 
 /** The binding a roster's background agents are filed under; no provider's binding has it. */
 export const BACKGROUND_AGENTS_BINDING = "mako:background-agents"
+/** The binding a roster's children are filed under (`childEntry`); no provider's binding has it. */
+export const CHILDREN_BINDING = "mako:children"
 
 /**
  * `roster` with its background agents replaced by `agents`, which their

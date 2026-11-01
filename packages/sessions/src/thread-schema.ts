@@ -139,6 +139,7 @@ export const ThreadRefSchema = z.object({
   threadId: z.string().optional(),
   sessionId: z.string().optional(),
   agentOf: z.object({ session: z.string(), agent: z.string() }).optional(),
+  parent: z.object({ thread: z.string(), session: z.string() }).optional(),
 })
 export const UnreadRecordSchema = z.object({
   kind: z.string(),
