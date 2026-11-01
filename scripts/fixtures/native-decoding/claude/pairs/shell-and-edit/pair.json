@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.314"
+    "version": "2.1.316"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/4ba59342-9323-40e5-afc0-0f0e52bb53ad.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/93339ba3-21e4-4eb1-a718-5acaf8f15bf2.jsonl",
       "known": []
     }
   ]

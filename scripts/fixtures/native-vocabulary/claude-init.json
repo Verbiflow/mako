@@ -1,7 +1,7 @@
 {
   "harness": "claude",
-  "version": "2.1.314",
-  "on": "2026-10-30",
+  "version": "2.1.316",
+  "on": "2026-10-31",
   "via": "the Agent SDK's claude -p --output-format stream-json, stopped at system/init",
   "tools": [
     "Bash",

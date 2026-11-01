@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.314"
+    "version": "2.1.316"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/4a3f7b6b-6bb3-4a75-889f-cca946327f61.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/6b065a46-ceb4-45a7-ac8d-86d2bb45180b.jsonl",
       "known": [
         {
           "side": "-",

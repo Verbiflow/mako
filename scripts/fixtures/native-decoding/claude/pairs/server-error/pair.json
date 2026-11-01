@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.314"
+    "version": "2.1.316"
   },
   "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/b60f25b7-7dd8-4f79-8ac2-94ec36393a9b.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/ef71c779-6d18-4811-b90e-9bb557a32c3c.jsonl",
       "known": []
     }
   ]
