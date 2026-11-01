@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AcpPanel } from "@/components/viewer/acp-panel"
+import { ShowAgentsContext } from "@/components/viewer/show-agents"
 import { Composer as DeskComposer } from "@/components/composer/composer"
 import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcript/transcript-end"
 import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/transcript-notes"
 import { CompactPresentationContext, type CompactPresentation } from "@/components/transcript/compact-presentation"
 import { activeLiveAcp, useAcp } from "@/state/acp"
+import { AgentsSheet } from "./agents"
 import { useWebClient } from "./client"
 import { sameSwitches, switchesOf, useAnswered } from "./answered"
 import { AnsweredLine, WebDock } from "./dock"
@@ -85,6 +87,8 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
   const compact = useMemo<CompactPresentation>(() => ({ reply: (reply) => <PhoneReply reply={reply} />, ...(!wide && { steps: (run) => <PhoneSteps key={run.id} run={run} />, navigator: false }) }), [wide])
   const live = useRef<HTMLDivElement>(null)
   const hold = useReplyHold(live)
+  const [agents, setAgents] = useState(false)
+  const showAgents = useCallback(() => setAgents(true), [])
   if (desk)
     return (
       <PromptNoteContext value={note}>
@@ -99,6 +103,7 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
       <ExchangeNoteContext value={exchangeNote}>
         <TranscriptEndContext value={end}>
           <CompactPresentationContext value={compact}>
+          <ShowAgentsContext value={showAgents}>
           <div ref={live} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
             {active ? <AcpPanel asks={false} /> : <div className="flex-1" />}
             <WebDock
@@ -111,7 +116,9 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
               reconnect={() => client.gateway.wake()}
             />
             <ReplySheet reply={hold.reply} onDismiss={hold.close} />
+            <AgentsSheet conversation={conversation} open={agents} onDismiss={() => setAgents(false)} />
           </div>
+          </ShowAgentsContext>
           </CompactPresentationContext>
         </TranscriptEndContext>
       </ExchangeNoteContext>

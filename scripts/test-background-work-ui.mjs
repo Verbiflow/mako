@@ -108,6 +108,12 @@ async function check() {
   const reconciled = await evaluate("window.makoBackgroundBench(true)")
   console.log(`Agents panel, 50 entries, one moving: ${baseline.perBatchMs} ms a batch replacing the roster, ${reconciled.perBatchMs} ms reconciled`)
   assert.ok(reconciled.perBatchMs * 3 < baseline.perBatchMs, "a progress batch re-renders one row, not the panel")
+  // Thirty-two background agents on six harnesses, one moving: the panel and the chat (its line, the composer's toggle) each redraw that row alone.
+  const agents = await evaluate("window.makoBackgroundBench(true, 32, 120, true)")
+  console.log(`Background agents, 32 entries, one moving: Agents panel ${agents.perBatchMs} ms a batch (${agents.commits} commits), chat ${agents.chatPerBatchMs} ms a batch (${agents.chatCommits} commits)`)
+  console.log(`BENCH ${JSON.stringify({ panel50: { replaced: baseline.perBatchMs, reconciled: reconciled.perBatchMs }, agents32: agents })}`)
+  assert.ok(agents.perBatchMs < 1.5, "a background agent's step costs the panel under 1.5 ms")
+  assert.ok(agents.chatPerBatchMs < 1.5, "and the chat under 1.5 ms")
   // A shared dev server's hot update re-runs the fixture's entry; that is the server's, not the page's.
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools|already been passed to createRoot/.test(message)), [])
   console.log("Background work UI: transcript line, Agents panel, status marks in dark and light, and progress cost passed")

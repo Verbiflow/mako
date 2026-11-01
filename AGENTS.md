@@ -216,9 +216,13 @@ its calls, its process probe) and its process; no output is parsed. Its
 end is written once (the exit status its `sh` wrapper writes, else what its
 Session last shows), so a run that ended while no host watched never shows
 running. It is a roster entry like any other (`work: "agent"`, `detached`,
-under `BACKGROUND_AGENTS_BINDING`), so every surface that draws the roster
-draws it. `npm run test:background-agents` covers it and
-`npm run bench:background-agents` holds the follow and the reads to budgets.
+under `BACKGROUND_AGENTS_BINDING`): the Agents panel (a sheet on a phone,
+`web-client/agents.tsx`) names its kind ("Background agent"), its harness's
+icon and its transcript, the line at the transcript's end lists it, and the
+composer's toggle wears the harnesses at work.
+`npm run test:background-agents` covers it and
+`npm run bench:background-agents` holds the follow, the reads and the
+panel to budgets.
 
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a

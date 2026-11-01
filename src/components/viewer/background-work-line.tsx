@@ -1,4 +1,4 @@
-import { memo } from "react"
+import { memo, useContext } from "react"
 import { HourglassIcon } from "lucide-react"
 import { acp, useAcp } from "@/state/acp"
 import { stage } from "@/state/stage"
@@ -6,6 +6,7 @@ import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import { Elapsed, WorkGlyph } from "@/components/inspector/agents-panel"
 import { Shimmer } from "@/components/ui/shimmer"
+import { ShowAgentsContext } from "./show-agents"
 import type { NativeAgent } from "@/lib/types"
 
 interface Waiting {
@@ -38,6 +39,7 @@ const SHOWN = 3
  */
 export function BackgroundWorkLine() {
   const scope = useConversationScope()
+  const showAgents = useContext(ShowAgentsContext)
   const work = useAcp((state): Waiting | null => {
     const live = scopedLiveAcp(state, scope)
     const found = live ? backgroundWork(live.session, live.nativeAgents) : null
@@ -58,7 +60,7 @@ export function BackgroundWorkLine() {
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
           <button
             type="button"
-            onClick={() => stage.open("agents")}
+            onClick={() => (showAgents ? showAgents() : stage.open("agents"))}
             className="pressable rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Show in Agents
