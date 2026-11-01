@@ -49,8 +49,8 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { BackgroundAgentRecordSchema, type BackgroundAgentRecord } from "../contracts/background-agents.js"
-import { hostWarn } from "../base/host-log.js"
+import { ReportSchema, ThreadParentSchema, type FollowedRun, type Report, type ThreadParent } from "../contracts/agents.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 
 /**
@@ -68,8 +68,12 @@ import { enableSharedWal } from "../base/sqlite-wal.js"
  *
  * Every write runs under `BEGIN IMMEDIATE`, so two hosts resolving the same
  * row serialize and the second reads the first one's answer.
+ *
+ * Format 2: migration 6 moved background agents into `thread_parents` and
+ * dropped their table, which a format-1 build would make again and write to,
+ * so such a build reads the store and changes nothing in it.
  */
-export const THREAD_STORE_SCHEMA = 1
+export const THREAD_STORE_SCHEMA = 2
 /**
  * The oldest format whose builds can still read a store this build writes
  * (`reads` in `store_meta`, `@mako/sessions/store-format`). It rises only
@@ -83,7 +87,7 @@ export const THREAD_STORE_READS = 1
  * break; an older host then reads the store and changes nothing in it, and
  * only one older than `THREAD_STORE_READS` leaves it.
  */
-export const THREAD_STORE_MIGRATION = 5
+export const THREAD_STORE_MIGRATION = 6
 
 /**
  * The store is synchronous on the host's main thread. Opening waits as long
@@ -208,15 +212,31 @@ export interface ThreadRecord {
   sessions: SessionId[]
 }
 
-/** The background agents a store knows (`ThreadStore.backgroundAgents`): all of them, a Session's, and the one a harness Session is. */
-export interface BackgroundAgents {
-  all: readonly BackgroundAgentRecord[]
-  of(session: string): readonly BackgroundAgentRecord[]
-  at(harness: string, nativeId: string): BackgroundAgentRecord | undefined
+/**
+ * The parent edges a store knows (`ThreadStore.edges`): every child Thread's, a parent's children, the edge a spawn's
+ * operation made, and the one whose followed run is a harness Session.
+ */
+export interface ThreadEdges {
+  all: readonly ThreadParent[]
+  of(child: string): ThreadParent | undefined
+  children(parent: string): readonly ThreadParent[]
+  byOp(op: string): ThreadParent | undefined
+  byRun(harness: string, nativeId: string): ThreadParent | undefined
+  /** The child Threads' harness Sessions, so a catalog row is known for a child's before it's placed. */
+  childNative(harness: string, nativeId: string): boolean
 }
 
-function backgroundAgentKey(harness: string, nativeId: string): string {
+function runKey(harness: string, nativeId: string): string {
   return `${harness}\n${nativeId}`
+}
+
+/** A spawn the tree's running budget holds until a running child ends (`ThreadStore.queuedSpawns`). */
+export interface QueuedSpawn {
+  op: string
+  /** The root of the tree whose budget it waits on. */
+  tree: string
+  record: string
+  at: number
 }
 
 /** A Thread's name and where it came from, as a list of many Threads reads it (`titlesOf`). */
@@ -509,18 +529,54 @@ INSERT OR IGNORE INTO app_environments (app, device_id, host, port, created_at, 
 DELETE FROM thread_environments;
 `
 /**
- * Migration 5: each conversation's background agents (`contracts/background-agents.ts`), the harness Sessions that
- * work for one of its Sessions and so are never a Thread of their own. The record is kept whole, as JSON a newer
- * build may add to; the columns beside it are what it's found by.
+ * Migration 5's table, from builds that kept a conversation's background agents beside its Session; migration 6
+ * moves its rows into `thread_parents` and drops it (`migrateBackgroundAgents`). Read only there.
  */
-const BACKGROUND_AGENT_TABLE = `
-CREATE TABLE IF NOT EXISTS background_agents (
-  id TEXT PRIMARY KEY, parent_session TEXT NOT NULL REFERENCES sessions(id), harness TEXT NOT NULL, native_id TEXT,
-  record TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER);
-CREATE UNIQUE INDEX IF NOT EXISTS background_agents_native ON background_agents(harness, native_id) WHERE native_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS background_agents_parent ON background_agents(parent_session, started_at);
+const LegacyBackgroundAgentSchema = z.object({
+  id: z.string(),
+  parent: z.string(),
+  harness: z.string(),
+  nativeId: z.string().optional(),
+  title: z.string(),
+  detail: z.string().optional(),
+  model: z.string().optional(),
+  origin: z.enum(["started", "discovered", "linked"]),
+  device: z.string().uuid(),
+  process: z.object({ pid: z.number().int().positive(), startedAt: z.number().optional() }).optional(),
+  runDir: z.string().optional(),
+  startedAt: z.number(),
+  ended: z.object({ at: z.number(), kind: z.enum(["done", "failed", "stopped", "unknown"]), detail: z.string().max(2000).optional(), toolUses: z.number().int().nonnegative().optional() }).optional(),
+})
+/**
+ * Migration 6: who leads whom (`contracts/agents.ts`). One edge per child Thread, kept whole as JSON a newer build may
+ * add to, with the columns it's found by; a child's reports, each written once by its id, with the request that
+ * carries it to its parent named before that request is sent and marked once it was, so a host that stopped between
+ * the two sends that same request again; and spawns the tree's running budget holds.
+ */
+const EDGE_TABLES = `
+CREATE TABLE IF NOT EXISTS thread_parents (
+  child_thread TEXT PRIMARY KEY REFERENCES threads(id), parent_thread TEXT NOT NULL REFERENCES threads(id),
+  name TEXT NOT NULL, op TEXT NOT NULL, run_harness TEXT, run_native_id TEXT,
+  record TEXT NOT NULL, created_at INTEGER NOT NULL, closed_at INTEGER);
+CREATE UNIQUE INDEX IF NOT EXISTS thread_parents_name ON thread_parents(parent_thread, name);
+CREATE UNIQUE INDEX IF NOT EXISTS thread_parents_op ON thread_parents(op);
+CREATE UNIQUE INDEX IF NOT EXISTS thread_parents_run ON thread_parents(run_harness, run_native_id) WHERE run_native_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS thread_reports (
+  id TEXT PRIMARY KEY, child_thread TEXT NOT NULL REFERENCES threads(id), record TEXT NOT NULL, at INTEGER NOT NULL,
+  wake_request TEXT, delivered_at INTEGER);
+CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, at);
+CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
+CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 `
-const BackgroundAgentRowSchema = z.object({ record: z.string() })
+const RecordRowSchema = z.object({ record: z.string() })
+const ReportRowSchema = z.object({ record: z.string(), wake_request: z.string().nullable() })
+
+/** A report its parent hasn't heard yet, and the request already named to carry it, if one was. */
+export interface WaitingReport {
+  report: Report
+  wake?: string
+}
+const QueuedSpawnRowSchema = z.object({ op: z.string(), tree: z.string(), record: z.string(), at: z.number() })
 const EnvironmentRowSchema = z.object({ app: z.string(), host: z.string(), port: z.number(), used_at: z.number() })
 class EnvironmentTaken extends Error {}
 function environmentValues(row: z.infer<typeof EnvironmentRowSchema>): ThreadEnvironmentValues {
@@ -599,7 +655,7 @@ export class ThreadStore {
   private readonly executionsSeen = new Map<string, SessionExecution | null>()
   private readonly titlesSeen = new Map<string, ThreadTitle | null>()
   private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
-  private agentsSeen: { revision: number; agents: BackgroundAgents } | undefined
+  private edgesSeen: { revision: number; edges: ThreadEdges } | undefined
   private changeSeq = 0
   private titleSeq = 0
   /** Threads whose name another host changed since `takeExternalTitles` last ran. */
@@ -637,7 +693,10 @@ export class ThreadStore {
       this.titleSeq = CountSchema.parse(this.db.prepare("SELECT coalesce(max(seq), 0) AS count FROM title_changes").get()).count
       this.localPrincipal = PrincipalIdSchema.parse(this.meta("principal"))
       this.self = ExecutionOwnerSchema.parse(JSON.parse(z.string().parse(this.meta("self"))))
-      if (!this.reader) this.db.exec(`PRAGMA busy_timeout=${WRITE_WAIT_MS}`)
+      if (!this.reader) {
+        this.db.exec(`PRAGMA busy_timeout=${WRITE_WAIT_MS}`)
+        this.write(() => this.migrateBackgroundAgents())
+      }
     } catch (error) {
       this.close()
       throw error
@@ -784,59 +843,277 @@ export class ThreadStore {
   }
 
   /**
-   * Every background agent this store knows (`contracts/background-agents.ts`), each under its parent Session as it is
-   * now (following merges), with the harness Sessions they are: read in one query, then answered from memory until any
+   * Every parent edge this store knows (`contracts/agents.ts`): read in one query, then answered from memory until any
    * commit (`revision`), so the catalog asks it of every row it serves.
    */
-  backgroundAgents(): BackgroundAgents {
+  edges(): ThreadEdges {
     this.syncVersion()
-    const held = this.agentsSeen
-    if (held && held.revision === this.revision && this.depth === 0) return held.agents
-    const all: BackgroundAgentRecord[] = []
-    const bySession = new Map<string, BackgroundAgentRecord[]>()
-    const byNative = new Map<string, BackgroundAgentRecord>()
-    for (const row of this.sql("SELECT record FROM background_agents ORDER BY started_at, id").all()) {
-      const parsed = BackgroundAgentRecordSchema.safeParse(JSON.parse(BackgroundAgentRowSchema.parse(row).record))
+    const held = this.edgesSeen
+    if (held && held.revision === this.revision && this.depth === 0) return held.edges
+    const all: ThreadParent[] = []
+    const byChild = new Map<string, ThreadParent>()
+    const byParent = new Map<string, ThreadParent[]>()
+    const byOp = new Map<string, ThreadParent>()
+    const byRun = new Map<string, ThreadParent>()
+    for (const row of this.sql("SELECT record FROM thread_parents ORDER BY created_at, child_thread").all()) {
+      const parsed = ThreadParentSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
       if (!parsed.success) continue
-      const record = { ...parsed.data, parent: this.canonical(parsed.data.parent) ?? parsed.data.parent }
-      all.push(record)
-      const siblings = bySession.get(record.parent)
-      if (siblings) siblings.push(record)
-      else bySession.set(record.parent, [record])
-      if (record.nativeId) byNative.set(backgroundAgentKey(record.harness, record.nativeId), record)
+      const edge = parsed.data
+      all.push(edge)
+      byChild.set(edge.child, edge)
+      byOp.set(edge.op, edge)
+      const siblings = byParent.get(edge.parent)
+      if (siblings) siblings.push(edge)
+      else byParent.set(edge.parent, [edge])
+      if (edge.run?.nativeId) byRun.set(runKey(edge.run.harness, edge.run.nativeId), edge)
     }
-    const agents: BackgroundAgents = {
+    const native = new Set<string>()
+    if (all.length)
+      for (const row of this.sql(`SELECT c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
+        WHERE c.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)
+        UNION SELECT s.harness, s.key AS native_id FROM sources s JOIN memberships m ON m.session_id = s.session_id
+        WHERE s.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)`).all(this.deviceId, this.deviceId)) {
+        const found = NativeRowSchema.parse(row)
+        native.add(runKey(found.harness, found.native_id))
+      }
+    const edges: ThreadEdges = {
       all,
-      of: (session) => bySession.get(session) ?? [],
-      at: (harness, nativeId) => byNative.get(backgroundAgentKey(harness, nativeId)),
+      of: (child) => byChild.get(child),
+      children: (parent) => byParent.get(parent) ?? [],
+      byOp: (op) => byOp.get(op),
+      byRun: (harness, nativeId) => byRun.get(runKey(harness, nativeId)),
+      childNative: (harness, nativeId) => native.has(runKey(harness, nativeId)) || byRun.has(runKey(harness, nativeId)),
     }
-    if (this.depth === 0) this.agentsSeen = { revision: this.revision, agents }
-    return agents
+    if (this.depth === 0) this.edgesSeen = { revision: this.revision, edges }
+    return edges
   }
 
   /**
-   * Keeps a background agent, or what changed of one already kept: its Session once known, its process, its end. The
-   * same harness Session linked twice is one agent, the first record's; a Session already another's agent stays its.
-   * Returns the record as kept.
+   * Keeps a child's edge, or what may change of one already kept: its followed run (its Session once known, its
+   * process, its end) and when the delegation closed. A child has one parent: an edge for a Thread that already has
+   * one keeps the first, and a spawn's operation names one edge. An end, and a close, are said once.
    */
-  keepBackgroundAgent(input: BackgroundAgentRecord): BackgroundAgentRecord {
-    const record = BackgroundAgentRecordSchema.parse(input)
+  keepEdge(input: ThreadParent): ThreadParent {
+    const edge = ThreadParentSchema.parse(input)
     return this.write(() => {
-      const kept = this.sql("SELECT record FROM background_agents WHERE id = ?").get(record.id)
-      const same = record.nativeId ? this.sql("SELECT record FROM background_agents WHERE harness = ? AND native_id = ? AND id <> ?").get(record.harness, record.nativeId, record.id) : undefined
-      if (same) return BackgroundAgentRecordSchema.parse(JSON.parse(BackgroundAgentRowSchema.parse(same).record))
-      if (!this.sql("SELECT id FROM sessions WHERE id = ?").get(record.parent)) throw new Error("A background agent's parent Session isn't in the Thread store")
-      const previous = kept ? BackgroundAgentRecordSchema.parse(JSON.parse(BackgroundAgentRowSchema.parse(kept).record)) : undefined
-      // An end is said once: a later reading never makes an ended run work again.
-      const next: BackgroundAgentRecord = previous?.ended ? { ...record, ended: previous.ended } : record
-      this.sql(`INSERT INTO background_agents (id, parent_session, harness, native_id, record, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (id) DO UPDATE SET native_id = excluded.native_id, record = excluded.record, ended_at = excluded.ended_at`)
-        .run(next.id, next.parent, next.harness, next.nativeId ?? null, JSON.stringify(next), next.startedAt, next.ended?.at ?? null)
+      const byOp = this.sql("SELECT record FROM thread_parents WHERE op = ?").get(edge.op)
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(edge.child)
+      const previous = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
+      if (byOp && !previous) return ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(byOp).record))
+      if (previous && (previous.parent !== edge.parent || previous.op !== edge.op)) return previous
+      if (!this.sql("SELECT id FROM threads WHERE id = ?").get(edge.parent) || !this.sql("SELECT id FROM threads WHERE id = ?").get(edge.child))
+        throw new Error("A parent edge names a Thread that isn't in the Thread store")
+      const run: FollowedRun | undefined = edge.run && previous?.run?.ended ? { ...edge.run, ended: previous.run.ended } : edge.run
+      const next: ThreadParent = previous
+        ? { ...previous, ...(run && { run }), ...((previous.closedAt ?? edge.closedAt) !== undefined && { closedAt: previous.closedAt ?? edge.closedAt }) }
+        : { ...edge, ...(run && { run }) }
+      this.sql(`INSERT INTO thread_parents (child_thread, parent_thread, name, op, run_harness, run_native_id, record, created_at, closed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (child_thread) DO UPDATE SET run_harness = excluded.run_harness, run_native_id = excluded.run_native_id,
+          record = excluded.record, closed_at = excluded.closed_at`)
+        .run(next.child, next.parent, next.name, next.op, next.run?.harness ?? null, next.run?.nativeId ?? null, JSON.stringify(next), next.createdAt, next.closedAt ?? null)
       return next
     })
   }
 
-  /** The conversations that are `session`, following merges: the ones a background agent of it reports to. */
+  /** The Threads `thread` descends from, its parent first: one chain, since each Thread has one parent. */
+  ancestors(thread: string): string[] {
+    const edges = this.edges()
+    const chain: string[] = []
+    for (let edge = edges.of(thread); edge && chain.length < 10_000 && !chain.includes(edge.parent); edge = edges.of(edge.parent)) chain.push(edge.parent)
+    return chain
+  }
+
+  /**
+   * Keeps a child's report, once by its id: a repeat answers the first (`deduped`), and the same id with other words
+   * is a conflict. A report from an owner older than one already heard from is refused (`stale`).
+   */
+  keepReport(input: Report): { report: Report; deduped: boolean } | { stale: true } {
+    const report = ReportSchema.parse(input)
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_reports WHERE id = ?").get(report.id)
+      if (kept) {
+        const first = ReportSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+        if (first.status !== report.status || first.summary !== report.summary || first.child !== report.child) throw new ThreadOperationConflictError(report.id)
+        return { report: first, deduped: true }
+      }
+      const newest = this.sql("SELECT record FROM thread_reports WHERE child_thread = ? ORDER BY at DESC LIMIT 1").get(report.child)
+      if (newest && ReportSchema.parse(JSON.parse(RecordRowSchema.parse(newest).record)).ownerGeneration > report.ownerGeneration) return { stale: true }
+      this.sql("INSERT INTO thread_reports (id, child_thread, record, at, delivered_at) VALUES (?, ?, ?, ?, ?)")
+        .run(report.id, report.child, JSON.stringify(report), report.at, null)
+      return { report, deduped: false }
+    })
+  }
+
+  /** A child's reports, oldest first; `after` leaves out those at or before it. */
+  reportsOf(child: string, after = 0): Report[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM thread_reports WHERE child_thread = ? AND at > ? ORDER BY at, id").all(child, after)
+      .flatMap((row) => {
+        const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+        return parsed.success ? [parsed.data] : []
+      })
+  }
+
+  /** The harness Sessions of the children of `session`'s Thread, oldest child first. */
+  childSessions(session: string): { harness: string; nativeId: string }[] {
+    const parent = this.sessionPlacement(SessionIdSchema.parse(session))?.thread
+    const children = parent ? this.edges().children(parent) : []
+    if (!children.length) return []
+    const native = this.sql(`SELECT c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
+      WHERE c.device_id = ? AND m.thread_id = ?
+      UNION SELECT s.harness, s.key AS native_id FROM sources s JOIN memberships m ON m.session_id = s.session_id
+      WHERE s.device_id = ? AND m.thread_id = ?`)
+    return children.flatMap((edge) => {
+      const claimed = native.all(this.deviceId, edge.child, this.deviceId, edge.child).map((row) => NativeRowSchema.parse(row)).map((row) => ({ harness: row.harness, nativeId: row.native_id }))
+      if (claimed.length) return claimed
+      return edge.run?.nativeId ? [{ harness: edge.run.harness, nativeId: edge.run.nativeId }] : []
+    })
+  }
+
+  /** Each child's newest report, by its Thread. */
+  latestReports(): Map<string, Report> {
+    this.syncVersion()
+    const latest = new Map<string, Report>()
+    for (const row of this.sql(`SELECT record FROM thread_reports r WHERE at = (SELECT max(at) FROM thread_reports WHERE child_thread = r.child_thread) ORDER BY at, id`).all()) {
+      const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      if (parsed.success) latest.set(parsed.data.child, parsed.data)
+    }
+    return latest
+  }
+
+  /** Reports no parent has heard yet, oldest first: the outbox a starting host sends again under their ids. */
+  undeliveredReports(): WaitingReport[] {
+    this.syncVersion()
+    return this.sql("SELECT record, wake_request FROM thread_reports WHERE delivered_at IS NULL ORDER BY at, id").all().flatMap((row) => {
+      const found = ReportRowSchema.parse(row)
+      const parsed = ReportSchema.safeParse(JSON.parse(found.record))
+      return parsed.success ? [{ report: parsed.data, ...(found.wake_request && { wake: found.wake_request }) }] : []
+    })
+  }
+
+  /** Names the request that will carry these reports, before it's sent; one already named keeps its own. */
+  assignWake(ids: readonly string[], request: string): void {
+    if (!ids.length) return
+    this.write(() => {
+      const assign = this.sql("UPDATE thread_reports SET wake_request = ? WHERE id = ? AND wake_request IS NULL AND delivered_at IS NULL")
+      for (const id of ids) assign.run(request, id)
+    })
+  }
+
+  /** The parent heard these reports, in the turn or step that carried them. */
+  markReportsDelivered(ids: readonly string[], at: number): void {
+    if (!ids.length) return
+    this.write(() => {
+      const mark = this.sql("UPDATE thread_reports SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL")
+      for (const id of ids) mark.run(at, id)
+    })
+  }
+
+  /** Spawns waiting on a tree's running budget, oldest first. */
+  queuedSpawns(): QueuedSpawn[] {
+    this.syncVersion()
+    return this.sql("SELECT op, tree, record, at FROM agent_spawns ORDER BY at, op").all().map((row) => QueuedSpawnRowSchema.parse(row))
+  }
+
+  /** Holds a spawn for its tree's budget; a repeat of one held keeps its place. */
+  queueSpawn(spawn: QueuedSpawn): void {
+    this.write(() => this.sql("INSERT OR IGNORE INTO agent_spawns (op, tree, record, at) VALUES (?, ?, ?, ?)").run(spawn.op, spawn.tree, spawn.record, spawn.at))
+  }
+
+  unqueueSpawn(op: string): void {
+    this.write(() => this.sql("DELETE FROM agent_spawns WHERE op = ?").run(op))
+  }
+
+  /**
+   * Migration 6 from migration 5: each background agent becomes its Session's Thread's edge under the Thread of the
+   * Session it worked for. Its Session is the one the catalog placed for its harness Session, placed here if it never
+   * was. An ended one's end becomes its last report, already heard, so no parent wakes for history; a stopped one
+   * closes its edge; one still running keeps being followed, by its pid and the exit file its run folder holds. One
+   * #286 never matched to a Session can't be shown as a Thread and goes. Then the table goes. Once the store knows its
+   * device, in one transaction keyed by each row's ID, so a second open finds nothing to move.
+   */
+  private migrateBackgroundAgents(): void {
+    if (!this.sql("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'background_agents'").get()) return
+    const counts = { edges: 0, ended: 0, running: 0, dropped: 0 }
+    const actor: Actor = { kind: "service", name: "migration" }
+    const now = this.now()
+    const taken = new Map<string, Set<string>>()
+    for (const row of this.sql("SELECT record FROM background_agents ORDER BY started_at, id").all()) {
+      const parsed = LegacyBackgroundAgentSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      const agent = parsed.success ? parsed.data : undefined
+      const parentSession = agent && this.canonical(agent.parent)
+      if (!agent?.nativeId || !parentSession) {
+        counts.dropped += 1
+        continue
+      }
+      let session = this.nativeSession(agent.harness, agent.nativeId)
+      if (!session) {
+        session = this.mintSingleton("imported", null, actor)
+        this.sql("INSERT OR IGNORE INTO sources (device_id, harness, key, session_id, first_seen_at) VALUES (?, ?, ?, ?, ?)").run(agent.device, agent.harness, agent.nativeId, session, now)
+      }
+      const child = this.placeSession(session).thread
+      const parent = this.placeSession(parentSession).thread
+      if (child === parent) {
+        counts.dropped += 1
+        continue
+      }
+      const names = taken.get(parent) ?? new Set(this.sql("SELECT name FROM thread_parents WHERE parent_thread = ?").all(parent).map((found) => z.object({ name: z.string() }).parse(found).name))
+      taken.set(parent, names)
+      const name = uniqueName(agent.title, names)
+      names.add(name)
+      const ended = agent.ended
+      const edge: ThreadParent = {
+        child,
+        parent,
+        parentSession: SessionIdSchema.parse(parentSession),
+        name,
+        role: "worker",
+        origin: agent.origin,
+        asked: { brief: { objective: agent.detail || agent.title || agent.harness }, harness: agent.harness, ...(agent.model && { model: agent.model }) },
+        op: `migrated:${agent.id}`,
+        startedBy: { kind: "agent", session: SessionIdSchema.parse(parentSession) },
+        createdAt: agent.startedAt,
+        ...(ended?.kind === "stopped" && { closedAt: ended.at }),
+        run: {
+          harness: agent.harness,
+          nativeId: agent.nativeId,
+          device: agent.device,
+          ...(agent.process && { process: agent.process }),
+          ...(agent.runDir && { runDir: agent.runDir }),
+          startedAt: agent.startedAt,
+          ...(ended && { ended }),
+        },
+      }
+      const inserted = this.sql(`INSERT OR IGNORE INTO thread_parents (child_thread, parent_thread, name, op, run_harness, run_native_id, record, created_at, closed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(child, parent, name, edge.op, agent.harness, agent.nativeId, JSON.stringify(ThreadParentSchema.parse(edge)), edge.createdAt, edge.closedAt ?? null)
+      if (!inserted.changes) {
+        counts.dropped += 1
+        continue
+      }
+      counts.edges += 1
+      if (!ended) {
+        counts.running += 1
+        continue
+      }
+      counts.ended += 1
+      if (ended.kind === "stopped") continue
+      const report: Report = {
+        id: `report:${child}:migrated`,
+        child,
+        status: ended.kind === "done" ? "done" : "failed",
+        summary: ended.detail ?? (ended.kind === "unknown" ? "It ended without saying how it went (unknown)." : ended.kind === "done" ? "It finished." : "It failed."),
+        implicit: true,
+        ownerGeneration: 1,
+        at: ended.at,
+      }
+      this.sql("INSERT OR IGNORE INTO thread_reports (id, child_thread, record, at, delivered_at) VALUES (?, ?, ?, ?, ?)").run(report.id, child, JSON.stringify(ReportSchema.parse(report)), report.at, now)
+    }
+    this.db.exec("DROP TABLE background_agents")
+    hostLog("agents", "migrated background agents", counts)
+  }
+
+  /** The conversations that are `session`, following merges. */
   conversationsOf(session: string): string[] {
     this.syncVersion()
     return this.journalsOf(this.canonical(session) ?? session)
@@ -2032,7 +2309,7 @@ export class ThreadStore {
     this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
     this.db.exec(PURPOSE_TABLE)
-    this.db.exec(BACKGROUND_AGENT_TABLE)
+    this.db.exec(EDGE_TABLES)
     // Delegate, retired, made forks with a task; their Sessions are forks.
     this.db.exec("UPDATE sessions SET origin = 'fork' WHERE origin = 'delegation'")
     const columns = new Set(this.db.prepare("PRAGMA table_info(threads)").all().map((row) => ColumnRowSchema.parse(row).name))
@@ -2297,7 +2574,7 @@ export class ThreadStore {
     this.executionsSeen.clear()
     this.titlesSeen.clear()
     this.groupsSeen = undefined
-    this.agentsSeen = undefined
+    this.edgesSeen = undefined
   }
 
   private remember(key: string, placed: ThreadPlacement): void {
@@ -2401,4 +2678,12 @@ function compatible(
   entry: { harness: string; nativeId?: string }
 ): boolean {
   return found.harness === entry.harness && (!found.native_id || !entry.nativeId || found.native_id === entry.nativeId)
+}
+
+/** A child's name among its parent's children: a few words of `title`, with a number when that's taken. */
+export function uniqueName(title: string, taken: ReadonlySet<string>): string {
+  const words = title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean).slice(0, 4).join("-") || "agent"
+  const base = words.slice(0, 60)
+  if (!taken.has(base)) return base
+  for (let index = 2; ; index += 1) if (!taken.has(`${base}-${index}`)) return `${base}-${index}`
 }

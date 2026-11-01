@@ -16,7 +16,7 @@ import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
 
 type LaunchAccess = Pick<LiveAccess,
-  "dependencies" | "admission" | "load" | "add" | "bindingOwners" | "startingSession" | "register" | "markPurpose" |
+  "dependencies" | "admission" | "load" | "add" | "bindingOwners" | "startingSession" | "register" | "markPurpose" | "markParent" |
   "actor" | "retainAttachments" | "moves" | "flush" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
 
 /** New conversations, from their journal's first write to their provider's first native session. */
@@ -209,6 +209,7 @@ export class LiveLaunches {
     this.access.add(resident)
     this.access.bindingOwners.set(id, id)
     this.access.register(snapshot, this.access.actor(actor))
+    if (options.parent && !options.resume) this.access.markParent(id, options.parent)
     if (purpose) this.access.markPurpose(id, purpose, options)
     dependencies.opened?.(id)
     this.launch(resident, driver, provider, cwd, options, modeId, tuning)

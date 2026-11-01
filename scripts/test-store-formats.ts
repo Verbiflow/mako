@@ -15,9 +15,9 @@ import { AccountHolds } from "@mako/host/harnesses/account-holds"
 import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
 import { followOtherHosts } from "@mako/host/threads/groups-follow"
-import { SESSION_MEMORY_SCHEMA, SessionHeldError, SessionMemory } from "@mako/host/threads/session-memory"
+import { SESSION_MEMORY_READS, SESSION_MEMORY_SCHEMA, SessionHeldError, SessionMemory } from "@mako/host/threads/session-memory"
 import { storeFormats } from "@mako/host/threads/store-formats"
-import { openThreadStore, THREAD_STORE_SCHEMA, ThreadStore, ThreadStoreVersionError, type JournalFacts, type SourceRef } from "@mako/host/threads/store"
+import { openThreadStore, THREAD_STORE_READS, THREAD_STORE_SCHEMA, ThreadStore, ThreadStoreVersionError, type JournalFacts, type SourceRef } from "@mako/host/threads/store"
 
 /**
  * The Thread store, the session ledger and the small files every Mako on
@@ -33,7 +33,8 @@ import { openThreadStore, THREAD_STORE_SCHEMA, ThreadStore, ThreadStoreVersionEr
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-store-formats-")))
 process.env.HOME = join(root, "home")
-const NEWER = { writableBy: THREAD_STORE_SCHEMA + 1, readableBy: THREAD_STORE_SCHEMA }
+const NEWER = { writableBy: THREAD_STORE_SCHEMA + 1, readableBy: THREAD_STORE_READS }
+const NEWER_LEDGER = { writableBy: SESSION_MEMORY_SCHEMA + 1, readableBy: SESSION_MEMORY_READS }
 const realPath = (path: string) => path
 let clock = 1_000
 const now = () => clock++
@@ -117,7 +118,7 @@ function threadStoreInANewerFormat(): void {
 
   const older = new ThreadStore(path, { now, realPath })
   assert.equal(older.writable, false, "this build only reads a newer Mako's store")
-  assert.deepEqual(older.standing(), { access: "read", build: THREAD_STORE_SCHEMA, format: { writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.161.2" } })
+  assert.deepEqual(older.standing(), { access: "read", build: THREAD_STORE_SCHEMA, format: { ...NEWER, writtenBy: "0.163.0", readableFrom: "0.161.2" } })
   assert.deepEqual(older.groups(), groups, "every Thread and its Sessions read as before")
   assert.deepEqual(older.titles(), titles, "and their names")
   assert.equal(older.sessionPlacement(tab.session)?.thread, started.thread, "a + tab's Session is where it was")
@@ -205,14 +206,14 @@ function sessionLedgerInANewerFormat(): void {
   current.hold("codex", "codex-held", "conversation-a")
   current.close()
 
-  const newer = new SessionMemory(path, { pid: process.pid, startedAt: 2, label: "Mako (dev)" }, { alive, format: NEWER, writer: "0.163.0" })
+  const newer = new SessionMemory(path, { pid: process.pid, startedAt: 2, label: "Mako (dev)" }, { alive, format: NEWER_LEDGER, writer: "0.163.0" })
   assert.equal(newer.standing().access, "write")
   newer.close()
   newerMigration(path, { table: "memory", name: "source", value: "observed" }, ["memory", "holds", "conversation_bindings", "conversation_journals", "runtime_hosts"])
   const before = dump(path)
 
   const older = new SessionMemory(path, { pid: process.pid, startedAt: 3, label: "an older Mako" }, { alive })
-  assert.deepEqual(older.standing(), { access: "read", build: SESSION_MEMORY_SCHEMA, format: { writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.161.2" } })
+  assert.deepEqual(older.standing(), { access: "read", build: SESSION_MEMORY_SCHEMA, format: { ...NEWER_LEDGER, writtenBy: "0.163.0", readableFrom: "0.161.2" } })
   assert.deepEqual(older.recall("codex", "codex-1"), { settings: { model: "gpt-5.3-codex" }, modeId: "access:auto", updatedAt: 100 }, "what a session ran under is read")
   const annotated = older.annotate({ harness: "codex", nativeId: "codex-1", path: "/sessions/codex-1.jsonl", title: "One", revision: "r" })
   assert.equal(annotated.accessMode, "access:auto", "and overlays the rail's rows")
@@ -230,7 +231,7 @@ function sessionLedgerInANewerFormat(): void {
   older.close()
   assert.equal(dump(path), before, "nothing in the ledger changed")
 
-  const back = new SessionMemory(path, { pid: process.pid, startedAt: 4, label: "Mako (dev)" }, { alive, format: NEWER })
+  const back = new SessionMemory(path, { pid: process.pid, startedAt: 4, label: "Mako (dev)" }, { alive, format: NEWER_LEDGER })
   assert.equal(back.recall("codex", "codex-1")?.modeId, "access:auto", "the newer build reads its ledger back")
   back.close()
   const raw = new DatabaseSync(path, { readOnly: true })
@@ -267,12 +268,12 @@ function diagnosticsReport(): void {
   const mako = join(root, "home", ".mako")
   const report = storeFormats({ threads, threadsPath, memory, memoryPath, records: join(mako, "records"), views: join(mako, "views"), archive: join(mako, "archive") })
   assert.deepEqual(report.stores.map((row) => [row.store, row.access]), [["threads", "read"], ["session-memory", "write"], ["records", "write"], ["unread", "write"], ["outputs", "write"], ["archive", "write"]])
-  assert.deepEqual(report.stores[0], { store: "threads", access: "read", build: 1, writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.163.0" })
+  assert.deepEqual(report.stores[0], { store: "threads", access: "read", build: THREAD_STORE_SCHEMA, ...NEWER, writtenBy: "0.163.0", readableFrom: "0.163.0" })
   threads.close()
   memory.close()
   raiseReads(threadsPath, 3, "0.170.0")
   const refused = storeFormats({ threads: null, threadsPath, memory: null, memoryPath, records: join(mako, "records"), views: join(mako, "views"), archive: join(mako, "archive") })
-  assert.deepEqual(refused.stores[0], { store: "threads", access: "refused", build: 1, writableBy: 3, readableBy: 3, writtenBy: "0.163.0", readableFrom: "0.170.0" }, "a store this host couldn't open is read from its file")
+  assert.deepEqual(refused.stores[0], { store: "threads", access: "refused", build: THREAD_STORE_SCHEMA, writableBy: 3, readableBy: 3, writtenBy: "0.163.0", readableFrom: "0.170.0" }, "a store this host couldn't open is read from its file")
   console.log("PASS: Diagnostics' report of every shared store")
 }
 

@@ -22,7 +22,7 @@ import { syncTier } from "./sync-window.js"
 import { needsYouWaiting, type Waiting } from "@mako/protocol/attention"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
-export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived" | "locked" | "heldBy" | "agentOf">
+export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived" | "locked" | "heldBy" | "parent">
 
 /** What the report reads of this host: its conversations, their work, the sessions its harnesses keep, and its Thread store. */
 export type ReportSources = {
@@ -48,6 +48,8 @@ export type ReportSources = {
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
+  /** Whether a Thread is a child's (`ThreadStore.edges`): it goes up inside its parent's Thread, never as a row. */
+  childThread?(thread: ThreadId): boolean
   /**
    * Who may execute each of these Sessions (`ThreadStore.executionsOf`), asked once a report for every row's Session,
    * so a report reads the store once however many rows it has, and not at all while nothing was committed.
@@ -184,13 +186,13 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     // is read off the listing, never by loading the journal: this is a pure function of what the host already holds.
     if (archivedByKeys(liveArchiveKeys(summary), hidden, undefined)) continue
     const placed = sources.placement(summary.session.id)
-    if (!placed) continue
+    if (!placed || sources.childThread?.(placed.thread)) continue
     conversations.push({ summary, placed })
   }
   const natives: { ref: NativeRow; session: SessionId; thread: ThreadId }[] = []
   for (const ref of sources.native()) {
     if (ref.archived || ref.copyOnly || ref.nativeArchived || !ref.updatedAt) continue
-    // A background agent's Session is listed under its conversation, as that conversation's roster, never as a row.
+    // A child's Session is listed inside its parent's Thread, as that Thread's roster, never as a row.
     if (!listedAsThread(ref)) continue
     const sessionId = SessionIdSchema.safeParse(ref.sessionId)
     const threadId = ThreadIdSchema.safeParse(ref.threadId)
