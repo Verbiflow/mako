@@ -113,11 +113,13 @@ export class LiveMoves {
 
   /**
    * Since when this journal, owned here, waits to hear the account before it runs anything (`Dependencies.ownerCheck`):
-   * a prompt, a provider switch or a wake waits, queued. Undefined when it may run.
+   * a prompt, a provider switch or a wake waits, queued. Undefined when it may run. `dispatching`: a turn would run now,
+   * which may begin a check when a queued message waited for none yet.
    */
-  ownerCheck(resident: Resident): number | undefined {
+  ownerCheck(resident: Resident, dispatching = false): number | undefined {
     const check = this.access.dependencies.ownerCheck
-    return check ? check(resident.snapshot.session.id, resident.snapshot.createdAt) : undefined
+    const turn = dispatching && resident.snapshot.requests.some((request) => request.status === "queued" && !request.ownerCheck)
+    return check ? check(resident.snapshot.session.id, resident.snapshot.createdAt, turn) : undefined
   }
 
   /** The account was heard, or not in time: each journal with work waiting goes on, wherever its Session runs now. */

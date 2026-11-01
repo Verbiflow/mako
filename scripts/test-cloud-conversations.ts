@@ -46,6 +46,7 @@ import { TURN_CHANGES_VERSION } from "@mako/host/contracts/turn-changes"
 import { followHostLog } from "@mako/host/base/host-log"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
+import type { WaitingClaim } from "@mako/host/usage/cloud-account"
 import type { AccountListHeard } from "@mako/protocol/account-sessions"
 import type { ListedSession, ListedState, SessionListings } from "@mako/protocol/thread-listing"
 import { z } from "zod"
@@ -1804,7 +1805,7 @@ test("a call made while a Thread comes back waits for the return, then goes wher
   assert.deepEqual(targets, [])
 })
 
-test("a message that waited in the account for this Mac's own Session is taken here once, under its own ID, and the account told; one for a Session this Mac no longer owns is left for its owner", async () => {
+test("a message that waited in the account for this Mac's own Session is claimed from the account, then taken here once, under its own ID; one for a Session this Mac no longer owns is left for its owner", async () => {
   const machine = await cloudMachine()
   const myDevice = await machine.account.deviceId()
   const mine = randomUUID()
@@ -1821,14 +1822,15 @@ test("a message that waited in the account for this Mac's own Session is taken h
   machine.account.devices = async () => ({ devices: [], current: myDevice! })
   machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
   const acked: string[] = []
-  machine.account.tookWaiting = async (_session, id) => void acked.push(id)
+  machine.account.claimWaiting = async (_session, id) => (acked.push(id), { granted: true })
   const taken: string[] = []
   let release: (() => void) | undefined
   const held = new Promise<void>((resolve) => (release = resolve))
   const options: CloudConversationsOptions = {
     account: () => machine.account, file: join(scratch, "taking", "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY,
-    takeWaiting: async (waiting) => {
+    takeWaiting: async (waiting, claim) => {
       if (waiting.session === moved) return "not-mine"
+      if (!(await claim())) return "refused"
       taken.push(waiting.id)
       await held
       return "taken"
@@ -1841,11 +1843,67 @@ test("a message that waited in the account for this Mac's own Session is taken h
   // Heard again while it's being taken (the stream said it too): taken once.
   tell?.({ seq: 2, event: { type: "messages-waiting", session: mine, messages: [first] } })
   release?.()
-  await until("the account told", () => acked.length === 1)
-  assert.deepEqual([taken, acked], [[first.id], [first.id]], "taken once, under its own ID, then said")
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual([acked, taken], [[first.id], [first.id]], "claimed once, then taken once under its own ID")
   assert.ok(!acked.includes(elsewhere.id), "a Session this Mac no longer owns: its owner takes it")
   tell?.({ seq: 3, event: { type: "messages-waiting", session: mine, messages: [] } })
   assert.equal(taken.length, 1)
+})
+
+test("a message on a list heard late, which went to the cloud with a continue, is refused to this Mac and never runs here; a claim the network lost is asked again, and runs once", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const session = randomUUID()
+  const row: ListedSession = {
+    session, thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation: "c-late", harness: "claude", title: "Retry the webhooks", state: "idle",
+    createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: myDevice! }, listedAt: "2026-10-24T20:00:01.000Z",
+  }
+  const message = (text: string): WaitingMessage => ({ id: randomUUID(), session, conversation: "c-late", text, from: "3d0f6c2a-8b1e-4f7a-9c5d-2e1b0a9f8d7c", at: "2026-10-25T09:00:00.000Z" })
+  const gone = message("Merge it once CI is green")
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
+  // This Mac comes back while the account's continue is under way: the first event it hears again still lists the
+  // message under this Mac's Session; the continue that took it to the cloud comes after.
+  let listed = false
+  machine.account.sessionListings = async () => ((listed = true), { sessions: [row], seq: 1, waiting: [] })
+  machine.account.devices = async () => ({ devices: [], current: myDevice! })
+  machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
+  const claims: string[] = []
+  let answer: (id: string) => Promise<WaitingClaim> = async () => ({ granted: false, status: 409, why: "That message isn't waiting any more" })
+  machine.account.claimWaiting = async (_session, id) => (claims.push(id), answer(id))
+  const ran: string[] = []
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(scratch, "taking-late", "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY,
+    takeWaiting: async (waiting, claim) => {
+      if (!(await claim())) return "refused"
+      ran.push(waiting.id)
+      return "taken"
+    },
+  })
+  after(() => router.dispose())
+  await router.start()
+  await until("listed", () => listed)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  tell?.({ seq: 2, event: { type: "messages-waiting", session, messages: [gone] } })
+  tell?.({ seq: 3, event: { type: "sessions-listed", sessions: [{ ...row, runsOn: { kind: "cloud", threadId: row.thread }, generation: 2 }] } })
+  tell?.({ seq: 4, event: { type: "messages-waiting", session, messages: [] } })
+  await until("claimed", () => claims.length === 1)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual([claims, ran], [[gone.id], []], "asked once, refused, and nothing ran here")
+
+  // Back on this Mac, a claim whose answer the network lost: asked again on the next change heard, granted, run once.
+  tell?.({ seq: 5, event: { type: "sessions-listed", sessions: [{ ...row, generation: 3 }] } })
+  const lost = message("Tag the release")
+  answer = async () => { throw new Error("fetch failed") }
+  tell?.({ seq: 6, event: { type: "messages-waiting", session, messages: [lost] } })
+  await until("claimed", () => claims.length === 2)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  answer = async () => ({ granted: true })
+  // The account took it off its list when it granted the lost claim: the list no longer says it waits.
+  tell?.({ seq: 7, event: { type: "messages-waiting", session, messages: [] } })
+  await until("run", () => ran.length === 1)
+  tell?.({ seq: 8, event: { type: "messages-waiting", session, messages: [] } })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual([claims, ran], [[gone.id, lost.id, lost.id], [lost.id]], "asked again until answered, and run once")
 })
 
 /** This Mac's store takes back a Thread that ran on the cloud runtime `runtime`, as a return's claim does (`CloudReturns`). */

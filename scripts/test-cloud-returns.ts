@@ -91,9 +91,10 @@ const REPOSITORY = "https://github.com/octocat/Hello-World"
 /**
  * `worktree`: the Thread works in a worktree of a project, as a person's Thread does (the project at `project`, the
  * worktree on `mako/fix`), and the machine's commit wasn't pushed, so its checkpoint carries it and nothing here asks
- * the remote for it. Otherwise the checkout is a clone of its own.
+ * the remote for it. Otherwise the checkout is a clone of its own. `branch`: the worktree's branch is named so, on the
+ * remote's `main`, and the machine stays on `main`, as a continue's machine clones the branch pushed by its remote's name.
  */
-function setup(name: string, options: { worktree?: boolean } = {}) {
+function setup(name: string, options: { worktree?: boolean; branch?: string } = {}) {
   const folder = join(root, name)
   const remote = join(folder, "remote.git")
   const project = join(folder, "Users", "ada", "project")
@@ -106,11 +107,13 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
   sh(main, "add", ".")
   sh(main, "commit", "--quiet", "-m", "base")
   sh(main, "push", "--quiet", "origin", "main")
-  if (options.worktree) sh(project, "worktree", "add", "--quiet", "-b", "mako/fix", checkout)
+  const branch = options.branch ?? "mako/fix"
+  if (options.worktree) sh(project, "worktree", "add", "--quiet", "-b", branch, checkout)
+  if (options.branch) sh(checkout, "branch", "--quiet", "--set-upstream-to=origin/main")
   writeFileSync(join(checkout, "a.txt"), "one, as it left this Mac\n")
   // The machine's clone went on: a commit of the agent's, pushed, and a file it left.
   sh(root, "clone", "--quiet", remote, machine)
-  if (options.worktree) sh(machine, "checkout", "--quiet", "-b", "mako/fix")
+  if (options.worktree && !options.branch) sh(machine, "checkout", "--quiet", "-b", branch)
   writeFileSync(join(machine, "a.txt"), "one, changed in the cloud\n")
   sh(machine, "commit", "--quiet", "-am", "in the cloud")
   if (!options.worktree) sh(machine, "push", "--quiet", "origin", "main")
@@ -127,7 +130,7 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
   threads.beginMove({ move: forwardMove, thread: placed.thread, target: { kind: "cloud", runtime }, actor: threads.person() })
   const handoff = threads.release({ operationId: randomUUID(), move: forwardMove, actor: threads.person() })
   threads.confirm({ operationId: randomUUID(), receipt: { move: forwardMove, owner: { kind: "cloud", runtime }, sessions: handoff.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) }, actor: threads.person() })
-  if (options.worktree) threads.attachWorktree({ path: checkout, thread: placed.thread, repoRoot: project, project, branch: "mako/fix", base: sh(project, "rev-parse", "HEAD") })
+  if (options.worktree) threads.attachWorktree({ path: checkout, thread: placed.thread, repoRoot: project, project, branch, base: sh(project, "rev-parse", "HEAD") })
   const plan: z.input<typeof MovePlanSchema> = {
     move: forwardMove, thread: placed.thread, asked: conversation, cloudThread, folder: checkout, repository: { url: REPOSITORY },
     sessions: [{ session: placed.session, conversationId: conversation, harness: "codex", nativeId: "n-1", path: "/codex/n-1.jsonl" }],
@@ -701,6 +704,26 @@ try {
     assert.ok(s.cloud.calls.some((call) => call.channel === "mako:move-stay"), "the machine, which packed, keeps it")
     assert.deepEqual([s.state()?.state, s.state()?.generation], ["elsewhere", 3])
     assert.deepEqual(readdirSync(join(s.folder, "returns")).filter((name) => !name.endsWith(".json")), [], "nothing left of the attempt beside its plan")
+  }
+
+  // A Thread continued in the cloud whose worktree here is on a branch named otherwise than the remote's (`proof-x`,
+  // tracking `main`, which the project's own folder has checked out): the machine cloned `main` and worked on it, and
+  // the way back lays its checkout on this Mac's branch, the project's folder untouched.
+  {
+    const s = setup("continued-branch", { worktree: true, branch: "proof-x" })
+    sh(s.checkout, "checkout", "--quiet", "--", "a.txt")
+    const start = join(s.folder, "start")
+    sh(root, "clone", "--quiet", s.remote, start)
+    const began = await captureMoveCheckpoint(git, start, mkdtempSync(join(s.folder, "start-")))
+    s.cloud.checkpoints.set(began.checkpoint.sha256, began.file)
+    assert.equal(began.checkpoint.branch, "main")
+    s.forward((plan) => ({ ...plan, repository: { url: REPOSITORY, branch: "main" }, checkpoint: began.checkpoint, continued: { by: s.device, at: "2026-11-01T12:00:00.000Z" }, branch: "proof-x" }))
+    const outcome = await s.returns.bringBack(s.conversation, move())
+    assert.deepEqual(outcome, { kind: "back" })
+    assert.equal(s.files()[0], "one, changed in the cloud\n", "the machine's checkout, over this Mac's")
+    assert.equal(sh(s.checkout, "symbolic-ref", "--short", "HEAD"), "proof-x", "on this Mac's own branch")
+    assert.equal(sh(s.checkout, "log", "-1", "--format=%s"), "in the cloud", "with the machine's commit on it")
+    assert.equal(sh(s.project, "symbolic-ref", "--short", "HEAD"), "main", "the project's folder still on its own")
   }
 
   // The project the worktree was made from is gone (deleted, or moved away): refused before the cloud is asked

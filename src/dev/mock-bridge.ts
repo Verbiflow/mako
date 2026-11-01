@@ -3187,6 +3187,7 @@ export function installMockBridge() {
         ownerChecks: [
           { why: "wake", at: Date.now() - 3 * 3_600_000, outcome: "gave-up", ms: 10_000 },
           { why: "wake", at: Date.now() - 4 * 60_000, outcome: "heard", ms: 1_420 },
+          { why: "unheard", at: Date.now() - 40_000, outcome: "heard", ms: 640 },
         ],
       },
     }),

@@ -38,6 +38,9 @@ import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts
  *    under its own ID, and nothing of it runs here.
  * 2. No list comes (the Mac is offline): the message runs here once the wait runs out, and not before.
  * 3. The list says the Session is still this Mac's: the message runs here as the list arrives, with no wait beyond it.
+ * 4. No wake, but the account's link down on this Mac's side as the person types (the network back between the link's
+ *    backoff tries): the link is tried at once, and the message goes where the list it reads says; offline, it runs
+ *    here as soon as the try fails.
  * And: a read begun before the account's link opened again isn't the account's word; a list that holds this Mac quiet
  * waits for the account to say it's reachable; Diagnostics says each check.
  */
@@ -158,6 +161,10 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
 
   let listing: () => Promise<SessionListings> = async () => ({ sessions: [row()], seq: 1 })
   let reads = 0
+  /** The account's link as this Mac's side has it: heard, or down until a try opens it (`reachAccount`). */
+  let heard = true
+  let reaching: () => Promise<boolean> = async () => true
+  let reaches = 0
   const listeners = new Set<(heard: AccountListNotice) => void>()
   const op = randomUUID()
   const cloudThread = await continueCloudThread(op)
@@ -177,6 +184,8 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
     cloudBlocked: async () => undefined,
     sessionListings: () => (reads++, listing()),
     devices: async () => ({ devices: [], current: mac }),
+    accountHeard: () => heard,
+    reachAccount: () => (reaches++, reaching()),
     onThreadListings: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -252,7 +261,12 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
   return {
     owner, fx, router, moves, threads, id, placed, generation, row, op, cloudThread, machine, adopted, ended, request, readings,
     reads: () => reads,
+    reaches: () => reaches,
     answer: (next: () => Promise<SessionListings>) => { listing = next },
+    link: (isHeard: boolean, reach?: () => Promise<boolean>) => {
+      heard = isHeard
+      if (reach) reaching = reach
+    },
     say: (heard: AccountListNotice) => { for (const listener of listeners) listener(heard) },
     listed: (op: string): NonNullable<ListedSession["continued"]> => ({ op, phase: "continued", from: mac, by: phone, cloudThread, at: iso }),
   }
@@ -392,6 +406,65 @@ scenario("a conversation begun after the wake never waits", async () => {
   await w.owner.start("codex", CWD, { conversationId: fresh, initialRequest: { id: first, text: "a new Thread", attachments: [] } })
   await until(() => w.owner.snapshot(fresh)?.requests.find((request) => request.id === first)?.status === "completed", "it runs at once")
   list.open({ sessions: [w.row()], seq: 2 })
+})
+
+// The network came back without a sleep, the account's link still between its backoff's tries: a message typed then
+// waits while the link is tried at once, and the list it then reads says the Session continued in the cloud meanwhile.
+scenario("a message typed while the account's link is down here waits while it's tried at once, and runs in the cloud when the list says the Session continued there", async () => {
+  const w = await world("unheard")
+  const reached = gate<boolean>()
+  const list = gate<SessionListings>()
+  w.link(false, () => reached.promise)
+  w.answer(() => list.promise)
+  const typed = randomUUID()
+  const starts = w.fx.starts
+  w.owner.submit(w.id, typed, "typed as the network came back", [])
+  await delay(50)
+  assert.equal(w.request(typed)?.status, "queued", "it waits for the account")
+  assert.ok(w.request(typed)?.ownerCheck, "and says what it waits for")
+  assert.equal(w.reaches(), 1, "the link is tried at once")
+  w.link(true)
+  reached.open(true)
+  w.say("linked")
+  list.open({ sessions: [w.row({ continued: w.listed(w.op) })], seq: 2 })
+  await until(() => w.ended.has(w.op), "the continue is joined")
+  const sent = w.machine.filter((call) => call.channel === "mako:live-prompt")
+  assert.equal(sent.length, 1, "the message went to the cloud Thread, once")
+  assert.deepEqual(sent[0]!.args.slice(0, 3), [w.id, typed, "typed as the network came back"], "under its own ID")
+  await delay(50)
+  assert.ok(!w.fx.prompts.some((prompt) => prompt.text === "typed as the network came back"), "nothing of it ran here")
+  assert.equal(w.fx.starts, starts, "nor did its harness start here")
+  assert.match(describeOwnerChecks(w.readings.readings().list.ownerChecks) ?? "", /^heard \d+ ms after a message while the account's link was down$/)
+})
+
+// Offline: the link tried at once can't open, so the message runs here then, not after the check's bound; and the next
+// one tries the link again, once.
+scenario("offline, a message typed while the account's link is down runs here as soon as the link can't open", async () => {
+  const w = await world("unreached", { check: 5_000, most: 10_000 })
+  w.link(false, async () => false)
+  const typed = randomUUID()
+  const sent = performance.now()
+  w.owner.submit(w.id, typed, "typed offline", [])
+  await until(() => w.request(typed)?.status === "completed", "it runs here")
+  const ran = w.fx.prompts.filter((prompt) => prompt.text === "typed offline")
+  assert.equal(ran.length, 1, "once")
+  assert.ok(ran[0]!.at - sent < 1_000, `as the link couldn't open, not after the check's bound (${Math.round(ran[0]!.at - sent)} ms)`)
+  assert.equal(w.reaches(), 1)
+  assert.match(describeOwnerChecks(w.readings.readings().list.ownerChecks) ?? "", /^not heard \d+ ms after a message while the account's link was down, so what waited ran here$/)
+  const next = randomUUID()
+  w.owner.submit(w.id, next, "typed offline again", [])
+  await until(() => w.request(next)?.status === "completed", "the next runs here too")
+  assert.equal(w.reaches(), 2, "having tried the link once more")
+})
+
+// The account's link heard: a message runs at once, and the link isn't tried.
+scenario("with the account's link heard, a message runs at once and nothing is tried", async () => {
+  const w = await world("heard")
+  const typed = randomUUID()
+  w.owner.submit(w.id, typed, "typed online", [])
+  await until(() => w.request(typed)?.status === "completed", "it runs here")
+  assert.equal(w.reaches(), 0)
+  assert.equal(w.request(typed)?.ownerCheck, undefined, "it never waited")
 })
 
 // Signed out: there's no account to hear, and nothing waits.

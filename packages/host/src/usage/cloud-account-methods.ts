@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
-import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
+import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
 import { isAccountListEvent, type AccountListHeard } from "@mako/protocol/account-sessions"
 import type { SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
@@ -128,8 +128,8 @@ export interface CloudAccount {
   editWaiting?(session: string, id: string, expectedText: string, text: string): Promise<WaitingMessage[]>
   /** A waiting message taken back before its owner took it. */
   unwaitMessage?(session: string, id: string): Promise<WaitingMessage[]>
-  /** Its owner took it: it's a request of the Session now, under the same ID. */
-  tookWaiting?(session: string, id: string): Promise<void>
+  /** This Mac's claim on a message that waited for one of its Sessions, before it runs it here (`CloudAccount.claimWaiting`). */
+  claimWaiting?(session: string, id: string): Promise<WaitingClaim>
   /** The account's devices, by ID and name, and which is this one. */
   devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
@@ -146,6 +146,10 @@ export interface CloudAccount {
   }
   /** Hears what the account's list of Sessions is told (`AccountListNotice`), in the stream's order, as it comes; returns how to stop. */
   onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
+  /** Whether the account's link is open and heard from within a ping: what the account says reaches this Mac now. */
+  accountHeard?(): boolean
+  /** The account's link tried now if it isn't heard, rather than at its next backoff step: whether it opened (`CloudLink.reach`). */
+  reachAccount?(): Promise<boolean>
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
@@ -374,7 +378,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     waitMessage: (session, id, input) => cloud.waitMessage(session, id, input),
     editWaiting: (session, id, expectedText, text) => cloud.editWaiting(session, id, expectedText, text),
     unwaitMessage: (session, id) => cloud.unwaitMessage(session, id),
-    tookWaiting: (session, id) => cloud.tookWaiting(session, id),
+    claimWaiting: (session, id) => cloud.claimWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
     liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
@@ -391,6 +395,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       return () => threadListeners.delete(listener)
     },
     leaving: (why) => cloud.leaving(why),
+    accountHeard: () => cloud.accountHeard(),
+    reachAccount: () => cloud.reachAccount(),
     wake: () => {
       cloud.wake()
       sync?.wake()

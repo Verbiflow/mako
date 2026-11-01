@@ -51,6 +51,7 @@ import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
 export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"

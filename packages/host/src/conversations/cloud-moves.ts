@@ -178,11 +178,28 @@ export const MovePlanSchema = z.object({
    * before this Mac's last turns (`behind`), which stay in its records here.
    */
   continued: z.object({ by: z.string(), at: z.string(), behind: z.boolean().default(false) }).optional(),
+  /**
+   * The branch this Mac's worktree was on when it joined a continue: the machine cloned the branch pushed, by the
+   * remote's name (`checkpoint`'s), which the worktree here may name otherwise (`onBranchHere`). Absent for a move this
+   * Mac sent its own checkout with, which names the branch.
+   */
+  branch: z.string().optional(),
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
 })
 const PlanSchema = MovePlanSchema
 type Plan = z.infer<typeof PlanSchema>
+
+/**
+ * A checkpoint of the machine's checkout, as this Mac lays it in the Thread's worktree: on this Mac's own branch while
+ * the machine stays on the branch it began on under the remote's name (`branch`), which another worktree here may
+ * have checked out (a project's folder on `main`); a branch the machine went onto is laid as it's named.
+ */
+export function onBranchHere(checkpoint: MoveCheckpoint, plan: Pick<Plan, "branch" | "checkpoint" | "repository">): MoveCheckpoint {
+  const began = plan.checkpoint?.branch ?? plan.repository.branch
+  if (!plan.branch || !checkpoint.branch || checkpoint.branch !== began || checkpoint.branch === plan.branch) return checkpoint
+  return { ...checkpoint, branch: plan.branch }
+}
 
 /** What a move needs of the host. */
 export type CloudMovesOptions = {
@@ -496,6 +513,8 @@ export class CloudMoves {
       hostWarn("continues", "a Thread continued in the cloud is at work here; it's given up once its turn ends", { move, thread, busy: busy.join("; ") })
       return { kind: "unsettled", reason: `It's at work here: ${busy.join("; ")}.` }
     }
+    const branch = await this.#options.git.run({ cwd: state.folder, args: ["symbolic-ref", "--short", "--quiet", "HEAD"], codes: [0, 1, 128] })
+      .then((read) => (read.code === 0 ? read.stdout.toString("utf8").trim() : undefined), () => undefined)
     const plan: Plan = {
       move, thread, asked: state.sessions[0]!.conversation, cloudThread: state.cloudThread, folder: state.folder,
       repository: CloudRepositorySchema.parse(state.repository), others: [], phase: "released", began: Date.now(), timings: {},
@@ -505,6 +524,7 @@ export class CloudMoves {
       }),
       continued: { by: state.by, at: state.at, behind: state.sessions.some((carried) => carried.freshness?.behind === true) },
       ...state.start && { checkpoint: state.start },
+      ...branch && { branch },
     }
     this.#leaving.set(move, thread)
     const actor = threads.person()

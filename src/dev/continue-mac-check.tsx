@@ -2,8 +2,10 @@
 import { createRoot } from "react-dom/client"
 import type { ListedContinueChoice } from "@mako/host/contracts/live-conversations"
 import type { ThreadContinueStep } from "@mako/host/contracts/cloud-threads"
+import type { SyncReadings } from "@mako/host/contracts/sync-readings"
 import { Composer } from "@/components/composer/composer"
 import { ContinueReadout } from "@/components/settings/continue-readout"
+import { SyncReadout } from "@/components/settings/sync-readout"
 import { ConfirmHost } from "@/components/ui/confirm-host"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -26,7 +28,8 @@ import "../index.css"
  * minutes ago, through the desk's production composer and notices on the mock bridge. `?theme=light`; `?scene=`
  * picks what it shows: `offer` (the default; pressing it opens the confirmation, and the mock carries it through),
  * `making`, `arriving`, `unconfirmed`, `failed`, `listed` (a continue pressed on another device, as the list says it),
- * `listed-failed`, `working` (a refusal a person can change), `older` (a Mac from before continues), `diagnostics`.
+ * `listed-failed`, `working` (a refusal a person can change), `older` (a Mac from before continues), `diagnostics`,
+ * `sync` (Diagnostics › Sync after a message waited while the account's link was down here).
  */
 
 const search = new URLSearchParams(location.search)
@@ -87,10 +90,26 @@ const readings = [
   { op: "7c0a0000-0000-4000-8000-0000000c0c06", session: "7c0a0000-0000-4000-8000-0000000d0d02", thread: "7c0a0000-0000-4000-8000-0000000d0d01", title: "Refund webhook signature check", cloudThread: "t-7c0a00000d0d04", phase: "failed" as const, reason: "No cloud machine was free. Try again in a minute.", here: false, heard: {}, at: new Date(now - 3_600_000).toISOString(), asks: [] },
 ]
 
+const sync: SyncReadings = {
+  at: now,
+  follows: [],
+  list: {
+    seq: 412, gaps: [], changeMs: { samples: 0 },
+    ownerChecks: [
+      { why: "wake", at: now - 3 * 3_600_000, outcome: "gave-up", ms: 10_000 },
+      { why: "unheard", at: now - 40_000, outcome: "heard", ms: 640 },
+    ],
+  },
+}
+
 createRoot(document.getElementById("root")!).render(
   scene === "diagnostics" ? (
     <div className="mx-auto max-w-[640px] p-8">
       <ContinueReadout readings={readings} />
+    </div>
+  ) : scene === "sync" ? (
+    <div className="mx-auto max-w-[640px] p-8">
+      <SyncReadout readings={sync} />
     </div>
   ) : (
     <TooltipProvider>

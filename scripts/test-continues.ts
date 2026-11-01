@@ -12,7 +12,7 @@ import { decodeOperation } from "@mako/protocol"
 import { cloudRuntimeOf as protocolRuntimeOf, continueCloudThread, continueHandOver, namedUuid as protocolUuid, type ContinueState } from "@mako/protocol/continues"
 import type { MoveAnswer } from "@mako/protocol/moves"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
-import { CloudMoves, MovePlanSchema, cloudRuntimeOf, namedUuid, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
+import { CloudMoves, MovePlanSchema, cloudRuntimeOf, namedUuid, onBranchHere, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { arriveMove, MoveArrivalInputSchema, type MoveArrivalDeps } from "@mako/host/conversations/move-arrival"
 import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import { HandoffSchema } from "@mako/host/contracts/thread-execution"
@@ -246,6 +246,13 @@ try {
     assert.equal(plan.phase, "started")
     assert.deepEqual(plan.checkpoint, start, "weighed against what the cloud began with, as a move is against what it sent")
     assert.equal(plan.continued?.behind, true, "and it remembers that the cloud began from before its last turns")
+    assert.equal(plan.branch, "webhooks", "and the branch its worktree here was on")
+    // The machine's checkout comes back on this Mac's branch while the machine stays on the branch it cloned; one it
+    // went onto is laid as it's named.
+    const named = { ...plan, branch: "proof-x" }
+    assert.equal(onBranchHere(start, named).branch, "proof-x")
+    assert.equal(onBranchHere({ ...start, branch: "spike" }, named).branch, "spike")
+    assert.equal(onBranchHere(start, plan).branch, "webhooks")
     assert.equal(plan.handoff?.sessions[0]?.generation, generation + 1, "the way back reads its own handoff")
     joined.moves.joinContinue(placed.session, listed)
     assert.ok(!joined.moves.leaving(placed.thread), "heard again, nothing more")

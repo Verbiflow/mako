@@ -55,6 +55,12 @@ const nextAttached = (count: number) =>
         }
       })
 
+async function until(check: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 2_000
+  while (!check() && Date.now() < deadline) await sleep(5)
+  assert.ok(check(), what)
+}
+
 /** The cloud says something on the newest connection, and the link has heard it. */
 const heard = async () => {
   const socket = attached.at(-1)!
@@ -95,7 +101,28 @@ try {
   assert.equal(served[1]!.pings, 1, "a link heard from since isn't asked")
   assert.equal(served.length, 2, "nor replaced")
 
-  console.log("Cloud link: a send into a link heard from recently asks it once it's silent long enough; unanswered, it's replaced")
+  // Reached while heard: answered at once, nothing replaced.
+  assert.equal(await link.reach(), true)
+  assert.equal(served.length, 2)
+
+  // Dropped, its next try a backoff step away: reached, it connects now and says so.
+  served[1]!.socket.terminate()
+  await until(() => !link.heard, "the drop is heard")
+  const askedAt = Date.now()
+  assert.equal(await link.reach(), true, "it opened")
+  assert.equal(served.length, 3)
+  assert.ok(Date.now() - askedAt < 500, `at once, not at the backoff's next step (${Date.now() - askedAt} ms)`)
+
+  // Offline: the try can't open, and says so.
+  server.close()
+  served[2]!.socket.terminate()
+  await until(() => !link.heard, "the drop is heard")
+  // The link's timers don't keep a process alive, and with the server closed nothing else does.
+  const held = setTimeout(() => assert.fail("the try never said"), 2_000)
+  assert.equal(await link.reach(), false, "it couldn't open")
+  clearTimeout(held)
+
+  console.log("Cloud link: a send into a link heard from recently asks it once it's silent long enough; unanswered, it's replaced; reached, a link that's down tries at once and says whether it opened")
 } finally {
   link.stop()
   for (const connection of served) connection.socket.terminate()

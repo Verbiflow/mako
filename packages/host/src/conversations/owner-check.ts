@@ -14,16 +14,17 @@ type Check = { why: AwayEnd; since: number; generation: number; askedAt?: number
 
 /**
  * Whether a conversation of this Mac's waits before it runs anything (`Dependencies.ownerCheck`): one begun before this
- * Mac was last back from away, until it hears its account (`CloudConversations.ownerCheck`); and one of a continue this
- * Mac joins now, until the join ends (`CloudMoves.joining`). Since when it waits; undefined when it may run.
+ * Mac was last back from away, until it hears its account (`CloudConversations.ownerCheck`), an away a turn about to
+ * run (`turn`) may begin; and one of a continue this Mac joins now, until the join ends (`CloudMoves.joining`). Since
+ * when it waits; undefined when it may run.
  */
 export function ownerHold(parts: {
-  account(): { ownerCheck(): number | undefined } | undefined
+  account(): { ownerCheck(turn: boolean): number | undefined } | undefined
   moves(): { joinsAny(): boolean; joining(session: string): boolean } | undefined
   session(conversationId: string): string | undefined
-}): (conversationId: string, createdAt: number) => number | undefined {
-  return (conversationId, createdAt) => {
-    const since = parts.account()?.ownerCheck()
+}): (conversationId: string, createdAt: number, turn: boolean) => number | undefined {
+  return (conversationId, createdAt, turn) => {
+    const since = parts.account()?.ownerCheck(turn)
     if (since !== undefined && createdAt < since) return since
     const moves = parts.moves()
     if (!moves?.joinsAny()) return undefined
@@ -112,6 +113,15 @@ export class OwnerCheck {
       return
     }
     this.#settle()
+  }
+
+  /**
+   * The account's link was tried at once for a check begun while it was down (`unheard`), and didn't open: this Mac is
+   * offline, not merely behind its link's backoff, so it works on now rather than wait out the bound.
+   */
+  unreached(): void {
+    const check = this.#check
+    if (check?.why === "unheard" && !check.read) this.#end("gave-up", "the account can't be reached")
   }
 
   /** There's no account to hear: signed out, or a build without the cloud. Nothing waits. */

@@ -328,10 +328,10 @@ export const ACTIVITY_REPORT_MS = 60_000
 
 /**
  * The row the link holds after `row` is reported over `sent`: `sent` still, when all that moved is the row's last
- * activity, less than `ACTIVITY_REPORT_MS` on.
+ * activity, less than `ACTIVITY_REPORT_MS` on. Its repository isn't shown, but a continue clones what it says.
  */
 function held(sent: ReportedSession | undefined, row: ReportedSession): ReportedSession {
-  if (!sent || !sameShown(sent, row)) return row
+  if (!sent || !sameShown(sent, row) || sent.repository?.url !== row.repository?.url || sent.repository?.branch !== row.repository?.branch) return row
   return Date.parse(row.activityAt) - Date.parse(sent.activityAt) < ACTIVITY_REPORT_MS ? sent : row
 }
 
