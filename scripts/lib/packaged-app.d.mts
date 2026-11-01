@@ -1,6 +1,9 @@
 import type { ChildProcess } from "node:child_process"
 import type { RuntimeInfo } from "@mako/host/contracts/runtime"
 
+/** What a page's expression comes back as, by value: JSON's values, or nothing. */
+export type EvaluatedValue = boolean | number | string | null | undefined | EvaluatedValue[] | { [key: string]: EvaluatedValue }
+
 export interface PackagedAppOptions {
   executable: string
   root: string
@@ -29,6 +32,8 @@ export class PackagedApp {
   environment(): NodeJS.ProcessEnv
   host(): Promise<RuntimeInfo | undefined>
   waitFor<T>(read: () => Promise<T> | T, predicate: (value: T) => boolean, label: string, timeout?: number): Promise<T>
+  /** An expression evaluated in the window's page, its value returned by value. */
+  evaluate(expression: string): Promise<EvaluatedValue>
   screenshot(path: string): Promise<string>
   start(): Promise<{ url: string; pid: number | undefined; hostPid: number }>
   stop(options?: { graceful?: boolean }): Promise<void>
