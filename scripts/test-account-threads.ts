@@ -16,7 +16,7 @@ import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSession
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import { SessionUploads, syncStatusOf, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
+import { SessionUploads, sessionTitles, syncStatusOf, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
 import { describeSending } from "@mako/host/contracts/sync-status"
 import { followHostLog } from "@mako/host/base/host-log"
 import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
@@ -779,7 +779,7 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
     { ...at(row(4, "waiting"), hoursAgo(24 * 40), 104), nativeId: "n-4" },
     // Thread 105: three days ago; Thread 106: twelve days ago, outside the week.
     { ...at(row(7), hoursAgo(72), 105), nativeId: "n-7" },
-    { ...at(row(8), hoursAgo(24 * 12), 106), nativeId: "n-8" },
+    { ...at(row(8), hoursAgo(24 * 12), 106), nativeId: "n-8", title: "Codex's own title", threadTitle: "Retry the webhooks" },
     at(row(5), hoursAgo(1), 107),
   ]
   const pathOf = (_harness: string, nativeId: string) => (nativeId === "n-3" ? undefined : `/rail/${nativeId}.jsonl`)
@@ -833,7 +833,7 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   assert.deepEqual(said.slice(3), ["copies Bearer b", "originals Bearer b"], "a renewed token, the links again")
   const status = uploads.status()
   assert.equal(status.state, "failing")
-  assert.deepEqual("failures" in status ? status.failures : [], [failure], "a failure is said with the gateway's correlation ID")
+  assert.deepEqual("failures" in status ? status.failures : [], [{ ...failure, title: "Retry the webhooks" }], "a failure is said with the gateway's correlation ID, and named by its Thread's title")
   // The catalog tries a refused push again, keeping when its failing began: logged once, and again once it fails anew.
   const logged: string[] = []
   const stopHearing = followHostLog((line) => line.scope === "sync" && line.level === "warn" && logged.push(String(line.fields?.["correlationId"])))
@@ -873,8 +873,10 @@ test("the Sessions not synced are one line each, its copy's or its records', the
   const tiers = { now: tierCount(2), day: tierCount(2), week: tierCount(1) }
   const copies = { ...activity([failing("a", NOW - 1_000, "unreachable"), failing("b", NOW - 9_000, "refused")]), retrying: 1 }
   const originals = { ...activity([failing("b", NOW - 5_000, "refused"), ...["c", "d", "e", "f", "g"].map((id, n) => failing(id, NOW - 100 * n, "unreachable"))]), retrying: 2 }
-  const status = syncStatusOf(scope, { paused: false, tiers, stale: 0, copies, originals }, undefined)
+  const titles = sessionTitles([{ ...row(1), nativeId: "b", title: "Its own title" }, { ...row(2), nativeId: "a", title: " " }])
+  const status = syncStatusOf(scope, { paused: false, tiers, stale: 0, copies, originals }, undefined, titles)
   assert.ok("failures" in status)
+  assert.deepEqual(status.failures.map((failure) => failure.title), ["Its own title", undefined, undefined, undefined, undefined], "named by its own title without a Thread's; a blank one names nothing")
   assert.equal(status.state, "failing")
   assert.deepEqual(status.failures.map((failure) => [failure.nativeId, failure.since, failure.kind]), [["b", NOW - 9_000, "refused"], ["a", NOW - 1_000, "unreachable"], ["g", NOW - 400, "unreachable"], ["f", NOW - 300, "unreachable"], ["e", NOW - 200, "unreachable"]], "b once, since its copy began failing; the longest failing first")
   assert.deepEqual([status.notSynced, status.retrying], [7, 3])

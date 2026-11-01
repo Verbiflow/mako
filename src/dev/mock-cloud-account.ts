@@ -1,4 +1,4 @@
-import type { SyncStatus, SyncTier } from "@mako/host/contracts/sync-status"
+import type { SyncFailureView, SyncStatus, SyncTier } from "@mako/host/contracts/sync-status"
 import { mockCloudTurnOn } from "./mock-cloud-turn-on"
 import type { CloudAccount, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
 
@@ -183,7 +183,7 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
 /**
  * This Mac's sync in each state Settings shows (`sync=`): catching up (the default), a little more each read, as a
  * first upload goes, the Thread at work and today's first; `synced`; `paused` on a low battery; `failing`, with the
- * cloud's words and correlation IDs; `starting`.
+ * cloud's words and correlation IDs, and `failing-one`, its first alone; `starting`.
  */
 function mockSyncStatus(state: string | null): () => SyncStatus {
   const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000
@@ -197,14 +197,15 @@ function mockSyncStatus(state: string | null): () => SyncStatus {
     return () => ({ state: "synced", sessions: 75, tiers: whole, sending: 0, stale: 0, lastSuccessAt: minutesAgo(0.2), failures: [], backfill: { sessions: 5_012, done: 5_012, startedAt: minutesAgo(40), endedAt: minutesAgo(12) } })
   if (state === "paused")
     return () => ({ state: "paused", sessions: 75, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 41, 12, 50)], sending: 0, stale: 2, lastSuccessAt: minutesAgo(3), failures: [] })
-  if (state === "failing")
+  if (state === "failing" || state === "failing-one")
     return () => ({
       state: "failing", sessions: 75, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 57, 50)], sending: 1, stale: 0, lastSuccessAt: minutesAgo(6),
-      // The longest failing first, as the sync daemon orders them; one more retrying, said only in Diagnostics.
-      failures: [
-        { at: minutesAgo(5), since: minutesAgo(40), harness: "claude", nativeId: "8d0c3a1e-2f4b-4c6d-9e8f-7a6b5c4d3e2f", kind: "refused", message: "The account refused one chunk of this Session (8fd50237a1c4, 40,960 bytes) and took the rest: The pack was refused: The chunk 8fd50237a1c4 isn't the chunk its hash names (PUT /chunks answered 400, correlation 0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d)", correlationId: "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d" },
+      // The longest failing first, as the sync daemon orders them; one more retrying, said only in Diagnostics. The
+      // first is named as the host lists it, a Session the rail doesn't show; the second has no title anywhere.
+      failures: ([
+        { at: minutesAgo(5), since: minutesAgo(40), harness: "claude", nativeId: "8d0c3a1e-2f4b-4c6d-9e8f-7a6b5c4d3e2f", title: "Fix the login race in the session store", kind: "refused", message: "The account refused one chunk of this Session (8fd50237a1c4, 40,960 bytes) and took the rest: The pack was refused: The chunk 8fd50237a1c4 isn't the chunk its hash names (PUT /chunks answered 400, correlation 0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d)", correlationId: "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d" },
         { at: minutesAgo(2), since: minutesAgo(12), harness: "codex", nativeId: "019a2b7c-5d1e-7f20-9a3b-4c5d6e7f8091", kind: "unreachable", message: "The archive's storage couldn't be read; try again (POST /sessions/with-chunks answered 503, 4 tries, correlation 6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8)", correlationId: "6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8" },
-      ],
+      ] satisfies SyncFailureView[]).slice(0, state === "failing-one" ? 1 : 2),
       retrying: 1,
     })
   let reads = 0

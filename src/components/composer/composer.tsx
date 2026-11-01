@@ -13,7 +13,7 @@ import {
   interruptSendingDraft,
 } from "@/state/send-recovery"
 import { PromptQueue } from "./prompt-queue"
-import { WAITING_PLACEHOLDER } from "./copy-notice"
+import { useReadingCopy, WAITING_PLACEHOLDER } from "./copy-notice"
 import { promptDelivery } from "@/state/prompt-delivery"
 import { savedMessageDraft, type RestoreSavedMessageEvent, type RestoreUnsentEvent } from "@/lib/saved-message-draft"
 import type { ProposedPlan } from "@mako/sessions/content"
@@ -1017,11 +1017,8 @@ export function Composer() {
 
   const busy = status.streaming || status.compacting
   const liveHarness = useAcp((state) => activeAcp(state)?.harness ?? null)
-  // Another device's conversation read from its copy while that device is off: where it waits to be sent.
-  const copyOn = useAcp((state) => {
-    const active = activeAcp(state)
-    return active?.kind === "live" && active.copy ? (active.elsewhere ?? "its computer") : null
-  })
+  // Another device's conversation read from its copy while that device is off: a message waits for it, words alone.
+  const copyOn = useReadingCopy()
   const steeringKind = useThreads((state) => {
     const steering = descriptorFor(state, liveHarness)?.capabilities.steering
     return steering?.state === "implemented" ? steering.lands : null
@@ -1071,6 +1068,8 @@ export function Composer() {
   const liveOwnsComposer = Boolean(
     liveHarness && (!routedPath || routedPath === liveThreadPath)
   )
+  // What waits for an off device is its words alone: nothing to attach, no harness, model, effort or access to choose.
+  const wordsOnly = liveOwnsComposer && copyOn !== null
   const viewingRunning = useThreads((state) => state.run?.status === "running")
   const turnRunning = composerTurnRunning({
     builtinRunning: status.streaming,
@@ -1324,20 +1323,22 @@ export function Composer() {
           </div>
 
           <div className="flex min-h-11 shrink-0 items-center gap-1 px-3 pb-3">
-            <ComposerAdditions
-              meta={meta}
-              disabled={!draftReady}
-              attachFiles={attach}
-              onAttach={() => filePicker.current?.click()}
-              onReference={(sigil) => {
-                // A sigil opens its menu only at a word boundary, so one put
-                // after a word gets a space before it.
-                const node = textarea.current
-                const before = node ? node.value.slice(0, node.selectionStart) : ""
-                const gap = before && !/\s$/.test(before) ? " " : ""
-                window.dispatchEvent(new CustomEvent("mako:insert", { detail: `${gap}${sigil}` }))
-              }}
-            />
+            {wordsOnly ? null : (
+              <ComposerAdditions
+                meta={meta}
+                disabled={!draftReady}
+                attachFiles={attach}
+                onAttach={() => filePicker.current?.click()}
+                onReference={(sigil) => {
+                  // A sigil opens its menu only at a word boundary, so one put
+                  // after a word gets a space before it.
+                  const node = textarea.current
+                  const before = node ? node.value.slice(0, node.selectionStart) : ""
+                  const gap = before && !/\s$/.test(before) ? " " : ""
+                  window.dispatchEvent(new CustomEvent("mako:insert", { detail: `${gap}${sigil}` }))
+                }}
+              />
+            )}
             {/*
              * The row gives way in a fixed order as the pane narrows, found
              * by measuring rather than by a width breakpoint: access drops
@@ -1351,7 +1352,7 @@ export function Composer() {
               ref={routingRow}
               className="composer-routing flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
             >
-              <ComposerRouting plan={plan} onPlanning={setPlanning} />
+              {wordsOnly ? null : <ComposerRouting plan={plan} onPlanning={setPlanning} />}
             </div>
 
             <div className="ml-2 flex shrink-0 items-center gap-1">
@@ -1361,7 +1362,7 @@ export function Composer() {
                 disabled={busy}
                 attachFiles={attach}
               />
-              {liveOwnsComposer ? <ContextMeter /> : null}
+              {liveOwnsComposer && !wordsOnly ? <ContextMeter /> : null}
               {draft.length > 0 || expanded ? <IconAction label={expanded ? "Collapse draft" : "Expand draft"} size="xs" side="top" onClick={() => { setExpanded((value) => !value); textarea.current?.focus({ preventScroll: true }) }}>
                 {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
               </IconAction> : null}

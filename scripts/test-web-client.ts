@@ -36,6 +36,7 @@ import { acpStore } from "../src/state/acp-state"
 import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
 import type { ToolCall } from "../src/extend/slots"
 import { diagnose, diagnosisText, lastSeen, type ReachInput } from "../src/web-client/diagnosis"
+import { quietLine } from "../src/lib/quiet-device"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
 import { endMove, followedWays, listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
 import { followAnswer } from "../src/web-client/move-actions"
@@ -803,6 +804,18 @@ test("what can't be reached is said at the first hop that failed, every hop befo
   assert.equal(harness?.detail, "Codex is not installed")
   assert.deepEqual(harness?.hops.map((hop) => hop.state), ["ok", "ok", "ok", "failed"])
   assert.equal(diagnose(reach({ machine: { state: "unknown" }, harness: { name: "Claude", state: "failed" } }))?.headline, "Claude in the cloud didn't start")
+})
+
+test("a Session read from an asleep Mac's copy is one line: the Mac, when it was seen, and the copy's age only when the copy misses something", () => {
+  const now = Date.parse("2026-10-30T12:00:00Z")
+  const minutes = (count: number) => now - count * 60_000
+  assert.deepEqual(quietLine({ name: "Studio", seenAt: minutes(120), copyAt: minutes(125), activityAt: minutes(130), now }), { title: "Studio is asleep or offline", description: "seen 2h ago" }, "the copy holds its last move: its age says nothing")
+  assert.deepEqual(quietLine({ name: "Studio", seenAt: minutes(5), copyAt: minutes(200), activityAt: minutes(30), now }), { title: "Studio is asleep or offline", description: "seen 5m ago · copy from 3h ago" }, "it moved after the copy: the copy's age says what's missing")
+  assert.deepEqual(quietLine({ name: "Studio", copyAt: minutes(4), now }), { title: "Studio is asleep or offline", description: "copy from 4m ago" }, "never seen going quiet: the copy's age says what's on screen")
+  assert.equal(quietLine({ name: "Studio", seenAt: now + 60_000, now }).description, "seen a moment ago", "a clock ahead of this one")
+  assert.equal(quietLine({ name: "Studio", seenAt: minutes(3 * 24 * 60), now }).description, "seen 3d ago")
+  assert.match(quietLine({ name: "Studio", seenAt: minutes(9 * 24 * 60), now }).description ?? "", /^seen on /)
+  assert.deepEqual(quietLine({ name: "Studio", now }), { title: "Studio is asleep or offline" })
 })
 
 test("what a call met is kept by the place it went to: refused as not connected is not reached, refused by the host itself is reached", () => {

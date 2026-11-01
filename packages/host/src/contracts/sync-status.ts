@@ -38,6 +38,8 @@ export const SyncFailureViewSchema = z.object({
   at: z.number(),
   harness: z.string(),
   nativeId: z.string(),
+  /** Its Thread's title, or its own, as this device lists it: absent from an older host and for a Session untitled. */
+  title: z.string().optional(),
   /** The account's words and the call it answered, for an operator: the person reads `kind`'s (`syncFailureWords`). */
   message: z.string(),
   correlationId: z.string().optional(),

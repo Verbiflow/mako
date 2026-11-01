@@ -173,7 +173,8 @@ async function checkWindow() {
   await show()
   let failure = await evaluate(`document.querySelector('[data-sync-failures]').innerText`)
   assert.match(failure, /2 Sessions aren't synced/)
-  assert.match(failure, /The account turned down part of it · since /)
+  assert.match(failure, /“Fix the login race in the session store” in Claude Code: The account turned down part of it · since /, "named by the title its host lists, though the rail doesn't show it")
+  assert.match(failure, /A Codex session: Mako can't reach the account/, "one with no title anywhere, by its harness")
   assert.match(failure, /Mako can't reach the account · since /)
   assert.match(failure, /less often each time/, "and what Mako does next")
   assert.doesNotMatch(failure, /correlation 0a9b8c7d/, "the account's words wait behind Details")
@@ -184,6 +185,20 @@ async function checkWindow() {
   assert.match(failure, /refused one chunk of this Session \(8fd50237a1c4, 40,960 bytes\)/, "Details: the account's own words")
   assert.match(failure, /0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d/, "and its correlation ID")
   await both("sync-failing-details", ["[data-sync-failures]"])
+
+  // One Session not synced: the rail and Settings name it.
+  await window.loadURL(`${base}?mock&cloud=signed-in&invited&sync=failing-one`)
+  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
+  await until(`document.querySelector('[data-sync-rail]') !== null`, "the rail's line for one")
+  const one = await evaluate(`document.querySelector('[data-sync-rail]').innerText`)
+  assert.match(one, /“Fix the login race in the session store”\s*isn't synced/)
+  assert.match(one, /Claude Code · The account turned down part of it · since /)
+  await both("sync-rail-one", ["[data-sync-rail]"])
+  await evaluate(`document.querySelector('[data-sync-rail]').click(), true`)
+  await until(`document.querySelector('[data-sync-failures]') !== null`, "the failure")
+  await show()
+  assert.match(await evaluate(`document.querySelector('[data-sync-failures]').innerText`), /“Fix the login race in the session store” in Claude Code isn't synced/)
+  await both("sync-failing-one", ["[data-sync-failures]"])
 
   // 5. No cloud on the account: no Sync at all.
   await openAccount("&cloud=signed-in")

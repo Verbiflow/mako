@@ -147,7 +147,7 @@ function Failures({ status }: { status: Running }) {
     <div role="alert" className="flex flex-col gap-2 rounded-lg bg-negative/8 px-3 py-2.5 ring-1 ring-negative/20 ring-inset" data-sync-failures>
       <div className="flex items-start justify-between gap-4">
         <p className="min-w-0 text-ui font-medium text-negative">
-          {notSynced === 1 ? `${name(first)} isn't synced` : `${count(notSynced, "Session")} aren't synced`}
+          {notSynced === 1 ? `${name(first).text} isn't synced` : `${count(notSynced, "Session")} aren't synced`}
         </p>
         <Action tone="outline" size="xs" className="shrink-0" onClick={() => copy(details)}>
           <CopyIcon />
@@ -159,7 +159,7 @@ function Failures({ status }: { status: Running }) {
         return (
           <div key={`${failure.harness}:${failure.nativeId}`} className="min-w-0" data-sync-failure={failure.nativeId}>
             <p className="text-label text-foreground">
-              {notSynced === 1 ? null : <span className="font-medium">{name(failure)}: </span>}
+              {notSynced === 1 ? null : <span className="font-medium">{name(failure).text}: </span>}
               {words.what} · since {sinceAt(failure.since ?? failure.at)}
             </p>
             <p className="text-label text-muted-foreground">{words.next}</p>
@@ -196,14 +196,17 @@ function detailLine(failure: SyncFailureView): string {
   return [new Date(failure.since ?? failure.at).toISOString(), new Date(failure.at).toISOString(), failure.kind ?? "-", failure.harness, failure.nativeId, failure.correlationId ?? "-", failure.message].join("\t")
 }
 
-/** A Session as the person knows it: its Thread's title where the rail lists it, else its harness's session. */
-function useSessionName(): (failure: { harness: string; nativeId: string }) => string {
+/**
+ * A Session as the person knows it: by its title, as the host lists it or else the rail, with the harness it runs in;
+ * one with neither is its harness's session.
+ */
+function useSessionName(): (failure: SyncFailureView) => { title?: string; harness: string; text: string } {
   const descriptors = useThreads((state) => state.descriptors)
   const threads = useThreads((state) => state.threads)
   return (failure) => {
-    const title = threads.find((thread) => thread.harness === failure.harness && thread.nativeId === failure.nativeId)?.title
+    const title = failure.title ?? threads.find((thread) => thread.harness === failure.harness && thread.nativeId === failure.nativeId)?.title
     const harness = descriptors.find((entry) => entry.provider === failure.harness)?.displayName ?? failure.harness
-    return title ? `“${title}”` : `A ${harness} session`
+    return title ? { title: `“${title}”`, harness, text: `“${title}” in ${harness}` } : { harness, text: `A ${harness} session` }
   }
 }
 
@@ -217,12 +220,15 @@ const RAIL_READ_EVERY_MS = 10_000
  */
 export function SyncRailLine() {
   const status = useSyncStatus((state) => state.status)
+  const name = useSessionName()
   useEffect(() => syncStatus.watch(RAIL_READ_EVERY_MS), [])
   if (!status || !("tiers" in status)) return null
   const [first] = status.failures
   if (!first) return null
   const notSynced = status.notSynced ?? status.failures.length
-  const reason = `${syncFailureWords(first.kind).what} · since ${sinceAt(first.since ?? first.at)}`
+  // One Session out is named by its title, the title the part that gives way to the rail's width; the harness leads its reason.
+  const one = notSynced === 1 ? name(first) : undefined
+  const reason = [one?.title ? one.harness : undefined, syncFailureWords(first.kind).what, `since ${sinceAt(first.since ?? first.at)}`].filter(Boolean).join(" · ")
   return (
     <button
       type="button"
@@ -231,7 +237,14 @@ export function SyncRailLine() {
       className="pressable flex w-full items-center gap-2.5 border-t border-hairline px-3 py-2.5 text-left hover:bg-fill-hover"
     >
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-label font-medium text-negative">{count(notSynced, "Session")} not synced</span>
+        {one?.title ? (
+          <span className="flex min-w-0 gap-1 text-label font-medium text-negative" title={`${one.text} isn't synced`}>
+            <span className="min-w-0 truncate">{one.title}</span>
+            <span className="shrink-0">isn't synced</span>
+          </span>
+        ) : (
+          <span className="truncate text-label font-medium text-negative">{count(notSynced, "Session")} not synced</span>
+        )}
         <span className="truncate text-label text-faint" title={reason}>{reason}</span>
       </span>
       <span className="shrink-0 text-label text-muted-foreground">Why</span>
