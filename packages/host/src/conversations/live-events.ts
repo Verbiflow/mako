@@ -2,7 +2,7 @@ import { carriedUsage } from "../harnesses/index.js"
 import type { LiveBatch, LiveDriverEvent, LiveRequest } from "../contracts/live-conversations.js"
 import { GoalObservationSchema } from "../contracts/live-goals.js"
 import type { NativeActivity, NativeActivityObservation } from "../contracts/native-activity.js"
-import { disconnectNativeAgents, NativeAgentObservationSchema, observeNativeAgent } from "../contracts/native-agents.js"
+import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, NativeAgentObservationSchema, observeNativeAgent, type TurnEnd } from "../contracts/native-agents.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { hostWarn } from "../base/host-log.js"
@@ -17,7 +17,7 @@ import { JournalWriteError } from "./live-journal.js"
 import { releaseExited } from "./live-launches.js"
 import type { LiveQuestions } from "./live-questions.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
-import { settleRequest, turnSpendAt, usageMark } from "./live-settlement.js"
+import { requestTurnEnd, sessionTurnEnd, settleRequest, turnSpendAt, usageMark } from "./live-settlement.js"
 import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
@@ -207,6 +207,10 @@ export class LiveEvents {
               : request
           ),
         }
+        if (previousStatus === "running" && !gone) {
+          const settled = finishedRequest && resident.snapshot.requests.find((request) => request.id === finishedRequest.id)
+          endWithTurn(resident, bindingId, connection?.driver ?? resident.driver, (settled && requestTurnEnd(settled)) || sessionTurnEnd(event.session))
+        }
         resident.stopping = undefined
         resident.stoppingFor = undefined
         resident.stoppingWork = undefined
@@ -323,6 +327,25 @@ export class LiveEvents {
       }
     }
   }
+}
+
+/**
+ * A turn ended on a harness that lets nothing outlive the turn that started
+ * it (`ends-with-turn`): what the roster still shows at work in that process
+ * ended with it, as the turn ended, whatever end the harness's messages missed.
+ */
+function endWithTurn(resident: Resident, bindingId: string, driver: Resident["driver"], end: TurnEnd): void {
+  if (driver?.backgroundStop.kind !== "ends-with-turn") return
+  const before = resident.snapshot.nativeAgents
+  const ended = before?.agents.filter((agent) => agent.bindingId === bindingId && isActiveNativeAgent(agent)).length ?? 0
+  if (!ended) return
+  resident.snapshot = {
+    ...resident.snapshot,
+    nativeAgents: endWithTurns(before, (agent) => agent.bindingId === bindingId && isActiveNativeAgent(agent) ? end : undefined, Date.now()),
+  }
+  hostWarn("live", "work the harness didn't end ended with its turn", {
+    conversation: resident.snapshot.session.id, harness: driver.provider, ended, turn: end.kind,
+  })
 }
 
 /** A binding's events, while it is still the one its conversation listens to; a later start of either fences them off. */

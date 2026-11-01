@@ -97,8 +97,8 @@ const claude = new ClaudeAgents()
   cursor.project({ ...task("c"), status: "completed", result: { status: "success", value: { isBackground: false } } })
   const gaveUp = "Agent turn stopped after repeated resume attempts made no progress"
   assert.deepEqual(cursor.end("error", gaveUp).map((agent) => [agent.nativeId, agent.state]), [
-    ["child-a", { kind: "failed", error: `Its run ended with an error: ${gaveUp}` }],
-    ["child-b", { kind: "failed", error: `Its run ended with an error: ${gaveUp}` }],
+    ["child-a", { kind: "failed", error: `Its turn ended with an error: ${gaveUp}` }],
+    ["child-b", { kind: "failed", error: `Its turn ended with an error: ${gaveUp}` }],
   ], "each child still working fails with its run; the one that returned stays completed")
   assert.equal(cursor.project(task("a")), undefined, "a late running bookend cannot revive a child its run ended")
   assert.equal(cursor.progress({ type: "subagent-call", task: "task-b", callId: "late", name: "shell", status: "running" }), undefined)

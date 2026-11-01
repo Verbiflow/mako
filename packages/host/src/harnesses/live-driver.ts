@@ -43,7 +43,9 @@ export const SHUTDOWN_GRACE_MS = 5_000
  * every harness. A harness either ends that work on Stop, with or without a
  * running turn, or never lets it outlive the turn that started it. A harness
  * that can do neither means Stop leaves background work running on all of
- * them instead.
+ * them instead. The host holds `ends-with-turn` to its word: when a turn
+ * ends, whatever its roster still shows at work in that process ends with
+ * it, and a journal read later heals the same (`endedTurnsOnRead`).
  */
 export type BackgroundStop =
   | { kind: "ends-on-stop"; how: string }

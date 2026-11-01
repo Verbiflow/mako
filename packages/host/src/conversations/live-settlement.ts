@@ -4,6 +4,7 @@ import { priceEstimate } from "../usage/index.js"
 import type { InterruptionReason, LiveRequest, LiveSnapshot, SpentThrough, UsageMark } from "../contracts/live-conversations.js"
 import { advancePromptDelivery } from "../contracts/prompt-delivery.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
+import type { TurnEnd } from "../contracts/native-agents.js"
 import type { StoppedFor } from "./live-runtime.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState, type LiveSessionUsage } from "../contracts/providers-acp.js"
 
@@ -46,6 +47,27 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
   const spend = measuredSpend(request.usageFrom, session)
   if (spend) settled.spend = spend
   return settled
+}
+
+/** How a request's turn ended, once it has: undefined while it may still run, or when how it ended isn't known. */
+export function requestTurnEnd(request: LiveRequest): TurnEnd | undefined {
+  switch (request.status) {
+    case "completed":
+      return { kind: "finished" }
+    case "interrupted":
+      return { kind: "stopped" }
+    case "failed":
+    case "held":
+      return { kind: "failed", error: request.error }
+    default:
+      return undefined
+  }
+}
+
+/** How the turn `session` just left `running` ended, for a turn no request of Mako's settled (the harness's own). */
+export function sessionTurnEnd(session: LiveSessionState): TurnEnd {
+  if (session.status === "failed") return { kind: "failed", error: session.error }
+  return /cancel|interrupt/i.test(session.lastStop ?? "") ? { kind: "stopped" } : { kind: "finished" }
 }
 
 /** What the meter read between `from` and `session`'s reading now, priced once, here: a later table never reprices it. */

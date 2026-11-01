@@ -186,7 +186,12 @@ kind comes from the `tool_use` that started it), Codex's the terminal list,
 Grok's its `background_tasks` list, Devin's its backgrounded exec calls and
 OpenCode's its shells. A driver that can stop one entry alone declares
 `stopNativeAgent` (`mako:live-stop-agent`); Stop ends all of it as each
-`backgroundStop` says. A roster entry's progress shares the frame's flush;
+`backgroundStop` says. On a harness whose `backgroundStop` is
+`ends-with-turn` (Cursor) the host ends what the roster still shows at work
+when its turn ends, as the turn ended (stopped, failed, or unknown for a
+turn that finished), and heals a journal a build before saved that way
+when it reads it (`endedTurnsOnRead`); `test-roster-turn-ends.ts` replays
+ten Cursor subagents over a stopped and a failed turn and a restart. A roster entry's progress shares the frame's flush;
 its start and end flush at once. `npm run test:background-work` replays
 Claude's captured messages and covers the state, the ranking and the
 conflation; Settings > Diagnostics lists each session's background work with
