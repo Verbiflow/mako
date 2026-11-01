@@ -8,6 +8,7 @@ import { togglePref, usePrefs } from "@/state/prefs"
 import { copyAge, formatBytes, formatRelative, formatTime } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import type { AgentsDiagnostics } from "@mako/host/contracts/agents"
 import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
@@ -36,6 +37,7 @@ export function DiagnosticsSection() {
   const [reader, setReader] = useState<SessionReaderHistory | null>(null)
   const [residency, setResidency] =
     useState<ProviderResidencySnapshot | null>(null)
+  const [agents, setAgents] = useState<AgentsDiagnostics | null>(null)
   const [openId, setOpenId] = useState<string>()
   const [unread, setUnread] = useState<UnreadReport | null>(null)
   const [sync, setSync] = useState<SyncReadings | null>(null)
@@ -54,6 +56,7 @@ export function DiagnosticsSection() {
       .providerResidency()
       .then(setResidency)
       .catch(() => setResidency(null))
+    void diagnostics.agents().then(setAgents).catch(() => setAgents(null))
     void diagnostics.unreadRecords().then(setUnread).catch(() => setUnread(null))
     void diagnostics.syncReadings().then(setSync).catch(() => setSync(null))
     void diagnostics.continueReadings().then(setContinues).catch(() => setContinues([]))
@@ -170,6 +173,8 @@ export function DiagnosticsSection() {
       <ContinueReadout readings={continues} />
 
       <UnreadRecords report={unread} />
+
+      {agents?.children ? <ChildrenReadout agents={agents} /> : null}
 
       {residency ? (
         <div className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
@@ -346,6 +351,25 @@ function BackgroundWorkReadout({ work }: { work: NonNullable<ProviderResidencySn
           {entry.source ? <span className="min-w-0 truncate font-mono">{entry.source}</span> : null}
         </span>
       ))}
+    </div>
+  )
+}
+
+/** The Threads other Threads started here, and the trees nearest their budgets. */
+function ChildrenReadout({ agents }: { agents: AgentsDiagnostics }) {
+  const fullest = [...agents.trees].sort((a, b) => b.running - a.running || b.started - a.started).slice(0, 5)
+  return (
+    <div data-agents-diagnostics="" className="mt-2 rounded-lg bg-surface px-3 py-2 ring-1 ring-hairline">
+      <p className="text-ui">Children</p>
+      <p className="text-label text-faint">
+        {agents.children} Threads other Threads started · {agents.running} running
+        {agents.followed ? ` (${agents.followed} in a process Mako didn't start)` : ""} · {agents.queued} queued ·{" "}
+        {agents.notices} reports not yet delivered
+      </p>
+      <p className="mt-1 text-label leading-relaxed text-faint">
+        Each tree runs at most {agents.budget.running} at once and starts at most {agents.budget.started}.{" "}
+        {fullest.map((tree) => `${tree.running} running, ${tree.started} started`).join(" · ")}
+      </p>
     </div>
   )
 }

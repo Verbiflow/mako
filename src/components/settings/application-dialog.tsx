@@ -19,6 +19,30 @@ import { useHandOff } from "@/state/handoff"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 
+/** A lead whose children are at work, as one row. */
+type LeadRow = NonNullable<LifecycleWork["lead"]> & { children: number }
+
+interface WorkByLead {
+  own: LifecycleWork[]
+  leads: LeadRow[]
+}
+
+/** Children at work, one row per lead: what the person decides is the lead's, and the children's cut turns continue on their own. */
+function byLead(work: readonly LifecycleWork[]): WorkByLead {
+  const own: LifecycleWork[] = []
+  const leads = new Map<string, LeadRow>()
+  for (const item of work) {
+    if (!item.lead) {
+      own.push(item)
+      continue
+    }
+    const lead = leads.get(item.lead.id) ?? { ...item.lead, children: 0 }
+    lead.children += 1
+    leads.set(lead.id, lead)
+  }
+  return { own, leads: [...leads.values()] }
+}
+
 /** A Thread's handoff as its row says it, step by step. */
 function stepLabel(step: ThreadMoveStep): string | undefined {
   switch (step.kind) {
@@ -74,6 +98,7 @@ export function ApplicationDialog() {
   const quitting = action === "quit"
   const installing = action === "install"
   const work = lifecycle?.work ?? []
+  const rows = byLead(work)
   const byConversation = new Map((candidates ?? []).map((candidate) => [candidate.conversationId, candidate]))
   const results = new Map((running?.results ?? []).map((result) => [result.conversationId, result]))
   // The cloud is on and at least one Thread at work can go: the sheet offers to hand them over.
@@ -166,7 +191,20 @@ export function ApplicationDialog() {
               <span>{work.length} active</span>
             </div>
             <ul className="max-h-48 overflow-y-auto overscroll-contain px-3">
-              {work.slice(0, 100).map((item) => {
+              {rows.leads.map((lead) => (
+                <li key={`lead:${lead.id}`} data-lead-children={lead.children} className="contain-turn flex items-center gap-3 border-b border-hairline py-3 last:border-0">
+                  <span className="mx-1 size-1.5 shrink-0 rounded-full bg-foreground/45" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-ui" title={lead.title}>
+                      {lead.title}: {lead.children} {lead.children === 1 ? "child" : "children"} working
+                    </p>
+                    <p className="mt-0.5 truncate text-label text-faint">
+                      {lead.children === 1 ? "It continues" : "They continue"} {quitting ? "when Mako opens again" : installing ? "after the update" : "after the restart"}, from the step they were on
+                    </p>
+                  </div>
+                </li>
+              ))}
+              {rows.own.slice(0, 100).map((item) => {
                 const candidate = byConversation.get(item.id)
                 const handing = running ? handOffState(item, candidate, moving[item.id]?.step, results.get(item.id)) : undefined
                 const refusal = quitting && candidate?.refusal
@@ -210,9 +248,9 @@ export function ApplicationDialog() {
                   </li>
                 )
               })}
-              {work.length > 100 && (
+              {rows.own.length > 100 && (
                 <li className="py-2 text-label text-faint">
-                  And {work.length - 100} more active operations. This choice
+                  And {rows.own.length - 100} more active operations. This choice
                   applies to all of them.
                 </li>
               )}
@@ -226,7 +264,7 @@ export function ApplicationDialog() {
               ? canHandOff
                 ? "Agents kept running here need this computer to stay on. Handed to the cloud, they go on while it's off; bring a Thread back from its Cloud chip."
                 : "Agents kept running will need Mako's host and this computer to stay on. Reopen Mako to pick up where you left off."
-              : "Installation closes all Mako windows and replaces the agent host. Conversations are kept; stopped work is not automatically resumed."}
+              : `Installation closes all Mako windows and replaces the agent host. Conversations are kept; stopped work is not automatically resumed${rows.leads.length ? ", except children's turns, which continue" : ""}.`}
           </p>
         </div>
         {error && (

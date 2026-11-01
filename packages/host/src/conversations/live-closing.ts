@@ -49,6 +49,7 @@ export class LiveClosing {
   }
 
   async closeForExit(ids = this.parts.records.ids()): Promise<void> {
+    const left: LeftTurn[] = []
     const results = await Promise.allSettled(ids.map(async (id) => {
       const resident = this.access.resident(id)
       if (
@@ -63,14 +64,51 @@ export class LiveClosing {
       )
         return
       resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => request.status === "queued" ? { ...request, status: "held" } : request) }
+      // A child's turn its lead waits on goes on in the next host, as a quit leaves it; the person's own stop where they are.
+      const cut = this.isChild(resident) ? this.cutForNextHost(resident) : undefined
+      if (cut) left.push(cut)
       this.access.flush(resident)
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([this.close(id), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("A provider did not finish closing. Mako stayed open; wait for it to settle before trying again.")), 30_000) })])
       } finally { clearTimeout(timer) }
     }))
+    this.parts.restarts.leave(left)
     const failure = results.find((result) => result.status === "rejected")
     if (failure?.status === "rejected") throw failure.reason
+  }
+
+  /**
+   * A turn still running now is cut short by this host, on purpose. The
+   * journal says so, with the moment, so the next host does not read it as a
+   * crash and the transcript can offer to continue the turn; what's returned
+   * is the turn to leave for that host. An idle conversation is left as it
+   * is, so stopping writes nothing for it. The background work it had sent off
+   * ends with the harness's process, and the request names it, as the
+   * continuation will tell the agent.
+   */
+  private cutForNextHost(resident: Resident): LeftTurn | undefined {
+    const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
+    if (!running) return undefined
+    const stopped = stoppedWork(resident.snapshot, true)
+    resident.snapshot = {
+      ...resident.snapshot,
+      requests: interruptRequests(
+        resident.snapshot.requests,
+        "host-quit",
+        "Mako closed while this turn was running"
+      ).map((request) => request.id === running.id && request.interruption && stopped.length ? { ...request, interruption: { ...request.interruption, stopped } } : request),
+    }
+    recordCutOff(resident, running.id, this.access.dependencies.root)
+    if (autoContinueCandidate(resident.snapshot.requests, true)?.id !== running.id) return undefined
+    return { conversationId: resident.snapshot.session.id, requestId: running.id, ...(this.isChild(resident) && { always: true as const }) }
+  }
+
+  /** Whether a conversation's Thread is a child's (`ThreadStore.edges`). */
+  private isChild(resident: Resident): boolean {
+    const threads = this.access.dependencies.threads
+    const placed = threads?.journalPlacement(resident.snapshot.session.id)
+    return placed ? threads?.edges().of(placed.thread) !== undefined : false
   }
 
   private async closeResident(
@@ -319,27 +357,8 @@ export class LiveClosing {
       // A continuation this host was about to send goes with it; the next
       // host offers the button instead of promising a send it cannot make.
       this.access.declineAutoContinue(resident)
-      // A turn still running now is cut short by this host, on purpose. The
-      // journal says so, with the moment, so the next host does not read it
-      // as a crash and the transcript can offer to continue the turn. An idle
-      // conversation is left as it is, so stopping writes nothing for it.
-      // The background work it had sent off ends with the harness's process, and the request names it, as the
-      // continuation will tell the agent.
-      const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
-      if (running) {
-        const stopped = stoppedWork(resident.snapshot, true)
-        resident.snapshot = {
-          ...resident.snapshot,
-          requests: interruptRequests(
-            resident.snapshot.requests,
-            "host-quit",
-            "Mako closed while this turn was running"
-          ).map((request) => request.id === running.id && request.interruption && stopped.length ? { ...request, interruption: { ...request.interruption, stopped } } : request),
-        }
-        recordCutOff(resident, running.id, dependencies.root)
-        if (autoContinueCandidate(resident.snapshot.requests, true)?.id === running.id)
-          left.push({ conversationId: resident.snapshot.session.id, requestId: running.id })
-      }
+      const cut = this.cutForNextHost(resident)
+      if (cut) left.push(cut)
       // One conversation Mako can't save doesn't keep the others from saving how this host left them.
       try {
         this.access.flush(resident)
