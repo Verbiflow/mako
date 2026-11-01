@@ -12,6 +12,8 @@ import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contra
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
 import { SyncReadout } from "@/components/settings/sync-readout"
+import { ContinueReadout } from "@/components/settings/continue-readout"
+import type { ContinueReading } from "@mako/host/contracts/cloud-continues"
 import { syncStatus, useSyncStatus } from "@/state/sync-status"
 import type { SyncReadings } from "@mako/host/contracts/sync-readings"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
@@ -37,6 +39,7 @@ export function DiagnosticsSection() {
   const [openId, setOpenId] = useState<string>()
   const [unread, setUnread] = useState<UnreadReport | null>(null)
   const [sync, setSync] = useState<SyncReadings | null>(null)
+  const [continues, setContinues] = useState<ContinueReading[]>([])
   const stores = useStoreFormats((state) => state.stores)
   // The sync daemon's status, as the rail and Settings › Account read it.
   const sending = useSyncStatus((state) => state.status)
@@ -53,6 +56,7 @@ export function DiagnosticsSection() {
       .catch(() => setResidency(null))
     void diagnostics.unreadRecords().then(setUnread).catch(() => setUnread(null))
     void diagnostics.syncReadings().then(setSync).catch(() => setSync(null))
+    void diagnostics.continueReadings().then(setContinues).catch(() => setContinues([]))
     // Asked again here, so a store another Mako changed since the window opened is said.
     void loadStoreFormats().catch(() => undefined)
   }, [])
@@ -162,6 +166,8 @@ export function DiagnosticsSection() {
       {reader ? <SessionReaderRow history={reader} /> : null}
 
       {sync ? <SyncReadout readings={sync} sending={sending} /> : null}
+
+      <ContinueReadout readings={continues} />
 
       <UnreadRecords report={unread} />
 

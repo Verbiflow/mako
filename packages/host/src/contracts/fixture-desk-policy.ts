@@ -20,6 +20,8 @@ const fixtureReads = [
   "mako:sync-status",
   /** Answers from memory: a fixture desk follows nothing. */
   "mako:sync-readings",
+  /** Answers from memory: a fixture desk presses no continue. */
+  "mako:continue-readings",
   /** Answers from memory: a fixture desk turns no cloud on. */
   "mako:cloud-turn-on",
   "mako:lifecycle-state",

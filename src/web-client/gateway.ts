@@ -126,19 +126,19 @@ export class Gateway {
   /**
    * One request to the account's API, as this browser's device: JSON in and out, a refusal thrown as the gateway's own
    * sentence with its correlation ID. A token refused as run out is renewed and the request asked once more. The answer
-   * is JSON not yet read as anything: each caller parses it with the schema of the route it asked.
+   * is JSON not yet read as anything: each caller parses it with the schema of the route it asked. `correlationId`: the
+   * one to send it under, for a caller that keeps it (a continue's Diagnostics); else a fresh one.
    */
-  rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Body): Promise<JsonValue | undefined> {
-    return this.#rest(method, path, body, { network: false, renewed: false })
+  rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Body, options: { correlationId?: string } = {}): Promise<JsonValue | undefined> {
+    return this.#rest(method, path, body, { network: false, renewed: false }, options.correlationId ?? crypto.randomUUID())
   }
 
   /**
    * One try of a request. Its two second chances are separate: a read the network failed is asked once more, and a
    * token refused as run out is renewed once, whichever came first.
    */
-  async #rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body: Body | undefined, tried: { network: boolean; renewed: boolean }): Promise<JsonValue | undefined> {
+  async #rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body: Body | undefined, tried: { network: boolean; renewed: boolean }, correlationId: string): Promise<JsonValue | undefined> {
     const { token } = await this.connection()
-    const correlationId = crypto.randomUUID()
     const headers = new Headers({ authorization: `Bearer ${token}`, [CORRELATION_HEADER]: correlationId })
     const init: RequestInit = { method, headers }
     if (body !== undefined) {
@@ -153,7 +153,7 @@ export class Gateway {
       // while idle often meets a connection the radio dropped); a change never is, since it may have landed.
       if (method === "GET" && !tried.network) {
         await new Promise((resolve) => setTimeout(resolve, READ_RETRY_MS))
-        return this.#rest(method, path, body, { ...tried, network: true })
+        return this.#rest(method, path, body, { ...tried, network: true }, correlationId)
       }
       unanswered(CLOUD, { outcome: "network", correlationId, message: error instanceof Error ? error.message : String(error) })
       throw error
@@ -163,7 +163,7 @@ export class Gateway {
     else answered(CLOUD)
     if (response.status === 401 && !tried.renewed) {
       this.#current = undefined
-      return this.#rest(method, path, body, { ...tried, renewed: true })
+      return this.#rest(method, path, body, { ...tried, renewed: true }, correlationId)
     }
     if (!response.ok) throw await refusal(response, correlationId)
     if (response.status === 204) return undefined

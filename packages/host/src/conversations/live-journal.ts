@@ -410,10 +410,10 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
 /**
  * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves; `wakeAt` is
  * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`,
- * `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `movedAt`, `rail` and `copy` are a cloud
+ * `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `cloudContinue`, `movedAt`, `rail` and `copy` are a cloud
  * router's word on a conversation it relays or reads from the account's copy, never a journal's.
  */
-type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
+type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by

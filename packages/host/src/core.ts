@@ -52,7 +52,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -952,6 +952,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     worktrees: cloudWorktrees,
     stopped: (cloudThread, state) => emit({ type: "thread-follow-stopped", conversations: cloudConversations.threadConversations(cloudThread).map((each) => each.conversationId), folders: state.edited?.folders ?? [], at: state.edited?.at ?? Date.now() }),
   })
+  // Another device's Thread, read here from its copy while that device is off, continued in the cloud from this Mac.
+  const cloudContinues = cloudConversations && new CloudContinues({
+    account: () => late.cloud,
+    listed: (conversationId) => cloudConversations.listedRow(conversationId),
+    rows: () => cloudConversations.listedRows(),
+    waiting: (session) => cloudConversations.listedWaiting(session),
+    step: (conversationId, op, step) => emit({ type: "thread-continue-step", conversationId, op, step }),
+  })
   // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
   const cloudArchives = cloudConversations && new CloudArchives({
     folder: join(environment.dataRoot, "cloud", "archives"),
@@ -1304,6 +1312,19 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         const away = await cloudReturns?.harnessesAway(conversationId)
         return { handled: true, value: encodeRuntimeValue(away ? await harnessCheck.check(away.map((harness) => ({ harness }))) : await cloudMoves.harnessCheck(conversationId)) }
       }
+      if (cloudContinues) {
+        if (channel === "mako:thread-continue-offer") {
+          // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-continue-offer`'s schema before routing it.
+          const [conversationId] = args as [string]
+          return { handled: true, value: encodeRuntimeValue(await cloudContinues.offer(conversationId)) }
+        }
+        if (channel === "mako:thread-continue") {
+          // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-continue`'s schema before routing it.
+          const [conversationId, op] = args as [string, string]
+          return { handled: true, value: encodeRuntimeValue(await cloudContinues.press(conversationId, op)) }
+        }
+        if (channel === "mako:continue-readings") return { handled: true, value: encodeRuntimeValue(cloudContinues.readings()) }
+      }
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
         const [conversationId, move, handOff] = args as [string, string, ThreadHandOff | undefined]
@@ -1412,6 +1433,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       shell.closeSocket()
       wake.stop()
       sleepHandOff?.stop()
+      cloudContinues?.close()
       late.cloud?.stop()
       shell.terminals.current()?.dispose()
       plugins?.close()

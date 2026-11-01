@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, CloudIcon, LaptopIcon, MoonIcon, RotateCwIcon } from "lucide-react"
+import { continuedWords, continueLostDetail, continueStepDetail, continueStepWords, continueTitle } from "@mako/host/contracts/cloud-continues"
 import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
@@ -54,17 +55,8 @@ function stepDetail(move: ShownMove, here: string): string {
 
 /** What each step of a continue means, while its Mac is off and the account carries it. */
 function continueDetail(move: ShownMove, here: string): string {
-  const mac = move.mac.name
-  if (move.end?.kind === "unconfirmed") return `${here} lost the answer on the way (${move.end.reason}). Your account carries it on all the same, and ${here.toLowerCase()} asks how it went until it hears.`
-  switch (move.step) {
-    case "asking":
-    case "making":
-      return `${mac} is off, so your account carries it: a cloud Thread made at the same folder, with its sessions as ${mac} last sent them.`
-    case "arriving":
-      return `A cloud machine clones its branch as pushed and picks up its sessions where they left off. A message that waited for ${mac} runs there, once.`
-    default:
-      return ""
-  }
+  if (move.end?.kind === "unconfirmed") return continueLostDetail(here, move.end.reason)
+  return move.step === "asking" || move.step === "making" || move.step === "arriving" ? continueStepDetail(move.step, move.mac.name) : ""
 }
 
 /** How often a move's bar creeps on while it waits: written straight to the bar and its percent, never re-rendered. */
@@ -165,7 +157,7 @@ export function MoveStrip({ thread, move, onRetry }: { thread: string; move: Sho
   const up = move.way === "cloud"
   const Arrow = up ? ArrowUpIcon : ArrowDownIcon
   const title = move.continued
-    ? end?.kind === "failed" ? "Couldn't continue in the cloud" : done ? "Continued in the cloud" : "Continuing in the cloud"
+    ? continueTitle(end?.kind === "failed" ? "failed" : done ? "continued" : undefined)
     : end?.kind === "failed"
     ? up ? "Couldn't move to the cloud" : "It stayed in the cloud"
     : end?.kind === "unsettled" ? "Waiting for the cloud's answer"
@@ -173,8 +165,8 @@ export function MoveStrip({ thread, move, onRetry }: { thread: string; move: Sho
     : up ? "Moving to the cloud" : `Bringing it back to ${move.mac.name}`
   const words = unconfirmed
     ? `Not confirmed · asking ${move.continued ? "your account" : move.mac.name} again`
-    : done ? (move.continued ? `It goes on in a cloud machine; ${move.mac.name} lets it go.` : up ? "It goes on in a cloud machine, at the same folder." : `It goes on on ${move.mac.name}.`)
-    : move.continued && move.step === "asking" ? "Asking your account…" : stepWords(move.way, move.step, move.mac.name, move.handOff)
+    : done ? (move.continued ? continuedWords(move.mac.name) : up ? "It goes on in a cloud machine, at the same folder." : `It goes on on ${move.mac.name}.`)
+    : move.continued && move.step === "asking" ? continueStepWords("asking") : stepWords(move.way, move.step, move.mac.name, move.handOff)
   const detail = problem || done ? "" : stepDetail(move, here)
   return (
     <section className="web-move" data-move={move.way} data-move-step={end ? end.kind : move.step} aria-label={title}>

@@ -119,6 +119,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     elsewhere: existing?.elsewhere,
     // Read from its copy, its device is still off; a snapshot from the device itself says it's back.
     quietSince: snapshot.copy ? existing?.quietSince : undefined,
+    cloudContinue: snapshot.copy ? existing?.cloudContinue : undefined,
     // The Thread's name and when it last moved are the account's list's word, which a snapshot read from its owner
     // doesn't repeat: kept from the listing, so the rail row doesn't fall back to the Session's title once it's opened.
     threadTitle: snapshot.threadTitle ?? existing?.threadTitle,
@@ -603,6 +604,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         waitingOn: summary.waitingOn,
         threadTitle: summary.threadTitle,
         quietSince: summary.quietSince,
+        cloudContinue: summary.cloudContinue,
         movedAt: summary.movedAt ?? previous.movedAt,
         rail: summary.rail,
         promptedAt: laterPrompt(summary.promptedAt, previous.promptedAt),
@@ -643,6 +645,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       waitingOn: summary.waitingOn,
       threadTitle: summary.threadTitle,
       quietSince: summary.quietSince,
+      cloudContinue: summary.cloudContinue,
       movedAt: summary.movedAt,
       rail: summary.rail,
       promptedAt: summary.promptedAt,

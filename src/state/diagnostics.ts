@@ -2,6 +2,7 @@ import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
 import type { SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { SyncReadings } from "@mako/host/contracts/sync-readings"
+import type { ContinueReading } from "@mako/host/contracts/cloud-continues"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { getMako } from "@/lib/bridge"
 
@@ -30,6 +31,11 @@ export const diagnostics = {
   /** How this Mac follows its other devices' work, and how long it takes to arrive. */
   syncReadings(): Promise<SyncReadings> {
     return getMako().syncReadings()
+  },
+
+  /** Each Continue in the cloud this Mac pressed or its account's list says, the latest first. */
+  continueReadings(): Promise<ContinueReading[]> {
+    return getMako().continueReadings()
   },
 
   /** Records Mako couldn't read, saved and live, by harness version. */

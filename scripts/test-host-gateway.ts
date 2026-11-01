@@ -339,6 +339,8 @@ function sample(schema: z.core.$ZodType, mode: "full" | "minimal", slot = false)
   if (schema instanceof z.ZodOptional) return mode === "minimal" && slot ? undefined : sample(schema.unwrap(), mode)
   // A string the schema takes: a call's absolute path refuses "text" (`mako:choose-file-reference`).
   if (schema instanceof z.ZodString) return STRING_SAMPLES.find((text) => schema.safeParse(text).success) ?? "text"
+  // An op the caller makes, as `mako:thread-continue` takes one.
+  if (schema instanceof z.ZodUUID) return "3f6c2a1e-8b4d-4c7a-9e21-5d0b7f9a6c13"
   if (schema instanceof z.ZodNumber) return NUMBER_SAMPLES.find((value) => schema.safeParse(value).success) ?? 7
   if (schema instanceof z.ZodBoolean) return mode === "full"
   if (schema instanceof z.ZodNull) return null

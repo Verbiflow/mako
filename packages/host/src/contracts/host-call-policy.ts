@@ -128,6 +128,10 @@ const reads = [
   "mako:sync-status",
   /** How this device's sync goes, from memory. */
   "mako:sync-readings",
+  /** The continues in the cloud this Mac pressed or its list says, from memory. */
+  "mako:continue-readings",
+  /** Asks the account what a continue would take now; asked twice, it's asked twice. */
+  "mako:thread-continue-offer",
   /** Turning the cloud on, read from what owns each step; keeps only when each was first seen done. */
   "mako:cloud-turn-on",
   /** Asks the cloud again what the account has: a repeat asks the same. */
@@ -223,6 +227,8 @@ const replays = [
   "mako:cloud-turn-on-retry-bases",
   /** A move is settled by its id: a repeat joins the move running, or answers how it went. */
   "mako:thread-move",
+  /** A continue is settled by its op ID, here and in the account: a repeat joins the press running, or carries it on there. */
+  "mako:thread-continue",
   /** A return is settled by its id: a repeat joins the return running, or answers how it went. */
   "mako:thread-return",
   /** Whether a machine has its folder for a move only reads. */

@@ -80,6 +80,8 @@ export const ContinueStateSchema = z
      * is weighed against, as a move's own checkpoint is, so what the device has that the clone hadn't is never written over.
      */
     start: MoveCheckpointSchema.optional(),
+    /** The cloud Thread's machine, once it has one: what its logs and its provider name it by. Said by newer accounts. */
+    machine: z.string().min(1).max(200).optional(),
     at: z.iso.datetime(),
     changedAt: z.iso.datetime(),
   })

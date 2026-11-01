@@ -72,7 +72,8 @@ import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
+import type { ContinueReading } from "./cloud-continues.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -450,6 +451,13 @@ export function createMakoBridge(transport: BridgeTransport) {
      * events. `options.project`: the folder its project is in now, when the one its worktree was made from moved.
      */
     threadReturn: (conversationId: string, move: string, options?: ThreadReturnOptions) => invokeTrustedHost<ThreadReturnOutcome>("mako:thread-return", conversationId, move, options),
+    /** What the account says Continue in the cloud would take for another device's Thread that's off, before the press. */
+    threadContinueOffer: (conversationId: string) => invokeTrustedHost<ThreadContinueOffer>("mako:thread-continue-offer", conversationId),
+    /**
+     * Continues another device's Thread in the cloud while that device is off, under `op`, a fresh UUID; asked again
+     * with the same op it joins that continue. Its steps arrive as `thread-continue-step` events.
+     */
+    threadContinue: (conversationId: string, op: string) => invokeTrustedHost<ThreadContinueOutcome>("mako:thread-continue", conversationId, op),
     /** The account has the cloud: this Mac's recent project folders, newest first, offered once for project bases. */
     cloudOfferProjects: (folders: string[]) => invokeTrustedHost<CloudProjectsOffer>("mako:cloud-offer-projects", folders),
 
@@ -464,6 +472,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     /* How this device's Sessions stand in the account: what's there, what's catching up, and what failed. */
     syncStatus: () => invokeTrustedHost<SyncStatus>("mako:sync-status"),
     syncReadings: () => invokeTrustedHost<SyncReadings>("mako:sync-readings"),
+    /** Each continue in the cloud this Mac pressed or its list says, latest first, for Diagnostics. */
+    continueReadings: () => invokeTrustedHost<ContinueReading[]>("mako:continue-readings"),
     cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),
     cloudTurnOnCheck: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-check"),
     cloudTurnOnRetryBases: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-retry-bases"),

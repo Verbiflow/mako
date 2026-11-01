@@ -707,6 +707,15 @@ export class CloudAccounts {
   }
 
   /**
+   * One ask of the account's continue routes for a press made here (`carryContinue`), sent under the correlation ID the
+   * press keeps: its status and its JSON, a refusal's included, which the press reads.
+   */
+  async askContinue(route: "continues.offer" | "continues.press" | "continues.follow", method: "GET" | "POST", path: string, correlationId: string): Promise<{ status: number; body: unknown }> {
+    const response = await this.#call(route, method, path, method === "POST" ? {} : undefined, false, "any", correlationId)
+    return { status: response.status, body: await response.json().catch(() => undefined) }
+  }
+
+  /**
    * A move handed to the cloud to carry through, once this Mac sent what only it has and released the Thread
    * (`MoveHandOverRequest`): how it stands there. Posted again, the first stands.
    */
@@ -1149,8 +1158,11 @@ export class CloudAccounts {
     return refreshed.connection.token
   }
 
-  /** A call as this Mac; a status in `answers` is an answer to read, not a refusal. */
-  async #call(route: CloudRoute, method: CloudRequest["method"], path: string, body?: JsonValue | FileBody, retried = false, answers: number[] = []): Promise<CloudResponse> {
+  /**
+   * A call as this Mac; a status in `answers` (any, for `"any"`) is an answer to read, not a refusal. `correlationId`:
+   * the one a caller keeps, else a fresh one.
+   */
+  async #call(route: CloudRoute, method: CloudRequest["method"], path: string, body?: JsonValue | FileBody, retried = false, answers: readonly number[] | "any" = [], correlationId?: string): Promise<CloudResponse> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })
@@ -1171,19 +1183,18 @@ export class CloudAccounts {
       init.headers["content-type"] = "application/json"
       init.body = JSON.stringify(body)
     }
-    const response = await this.#fetch(route, new URL(path, this.#require()), init)
+    const response = await this.#fetch(route, new URL(path, this.#require()), init, correlationId)
     // The token can lapse between being handed out and arriving; one fresh one settles it.
     if (response.status === 401 && !retried) {
       if (this.#token?.token === token) this.#token = undefined
-      return this.#call(route, method, path, body, true, answers)
+      return this.#call(route, method, path, body, true, answers, correlationId)
     }
-    if (!response.ok && !answers.includes(response.status)) throw new CloudAccountError(await problemOf(response, "The Mako cloud refused that."))
+    if (!response.ok && answers !== "any" && !answers.includes(response.status)) throw new CloudAccountError(await problemOf(response, "The Mako cloud refused that."))
     return response
   }
 
   /** Every call to the cloud: sent under a fresh correlation ID, and reported when it ends. */
-  async #fetch(route: CloudRoute, url: URL, init: CloudRequest): Promise<CloudResponse> {
-    const correlationId = randomUUID()
+  async #fetch(route: CloudRoute, url: URL, init: CloudRequest, correlationId: string = randomUUID()): Promise<CloudResponse> {
     const started = performance.now()
     const report = (outcome: DiagnosticEvents["cloud.request"]["outcome"], status: number | undefined, how: { error?: string; reached: string }) => {
       const ms = Math.round(performance.now() - started)

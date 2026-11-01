@@ -1,4 +1,5 @@
 import type { MoveSent } from "@mako/host/contracts/cloud-threads"
+import { continueStepWords } from "@mako/host/contracts/cloud-continues"
 
 /**
  * How far a move between a Mac and the cloud is, as a bar that only moves forward. Each step of the owner's has a span
@@ -102,9 +103,8 @@ export function stepWords(way: MoveWay, step: string, mac: string, handOff: bool
       case "resuming":
         return handOff ? "Continuing in the cloud" : "Resuming in the cloud"
       case "making":
-        return "Getting a cloud machine ready"
       case "arriving":
-        return "Cloning its branch and resuming"
+        return continueStepWords(step)
       case "unsettled":
         return "Waiting for the cloud's answer"
       default:

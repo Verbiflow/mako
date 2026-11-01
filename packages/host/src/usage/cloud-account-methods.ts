@@ -89,6 +89,8 @@ export interface CloudAccount {
    * carried on from wherever it stands (`continue: true`, repeated harmlessly) or only read; undefined for none.
    */
   continueState?(session: string, op: string, options?: { carryOn?: boolean }): Promise<ContinueState | undefined>
+  /** One ask of the account's continue routes for a press made here, under the correlation ID it keeps (`CloudAccounts.askContinue`). */
+  askContinue?(route: "continues.offer" | "continues.press" | "continues.follow", method: "GET" | "POST", path: string, correlationId: string): Promise<{ status: number; body: unknown }>
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them. */
   threadRecords(threadId: string): Promise<RecordsLink>
   /** Where a device's session records are kept in the account (`CloudAccounts.deviceRecords`): this Mac's own, or another's to read. */
@@ -351,6 +353,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
     moveAnswer: (threadId, move, waitMs) => cloud.moveAnswer(threadId, move, waitMs),
     continueState: (session, op, options) => cloud.continueState(session, op, options),
+    askContinue: (route, method, path, correlationId) => cloud.askContinue(route, method, path, correlationId),
     threadRecords: (threadId) => cloud.threadRecords(threadId),
     deviceRecords: (deviceId) => cloud.deviceRecords(deviceId),
     deviceOriginals: (deviceId) => cloud.deviceOriginals(deviceId),

@@ -13,6 +13,7 @@ import type {
   ConversationControl,
 } from "./conversation-control.js"
 import type { ThreadPage } from "@mako/sessions"
+import type { ContinueRefusal, ListedContinue } from "@mako/protocol/continues"
 import type { ThreadPurposeKind } from "./thread-purposes.js"
 import type { WorktreeStart } from "./thread-worktrees.js"
 import type {
@@ -393,6 +394,12 @@ export interface LiveSummary {
    */
   quietSince?: number
   /**
+   * For a conversation listed from a quiet device: whether its Thread may continue in the cloud now, by every device's
+   * one rule (`continueRefusal`; no `refusal` when it may), and the continue of it the account carries, if any
+   * (`ListedSession.continued`). The press is the host's (`mako:thread-continue`).
+   */
+  cloudContinue?: ListedContinueChoice
+  /**
    * Read from the account's copy, its device being off: when that device wrote it. Nothing in it runs or answers until
    * the device is back; a window says so and how old it is.
    */
@@ -430,6 +437,9 @@ export interface LiveSummary {
  * version 14 on).
  */
 export type ListedRail = Pick<ReportedSession, "project" | "worktree" | "lineage" | "background" | "openElsewhere">
+
+/** Whether a quiet device's Thread may continue in the cloud now (no `refusal` when it may), and the continue the account carries of it. */
+export type ListedContinueChoice = { refusal?: ContinueRefusal; continued?: ListedContinue }
 
 /** A native session, as the catalog reads it. */
 export interface BaseSource {

@@ -7,7 +7,7 @@ import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
 import { attentionFact } from "@mako/protocol/attention"
-import { CLOUD_FOLDER_WHERE, listedOwner, listedPromptedAt, listedSummary } from "../contracts/listed-conversations.js"
+import { CLOUD_FOLDER_WHERE, listedContinueChoice, listedOwner, listedPromptedAt, listedSummary } from "../contracts/listed-conversations.js"
 import { laterPrompt, promptedAfter } from "../contracts/worked-at.js"
 import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
 import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
@@ -1219,6 +1219,22 @@ export class CloudConversations {
       })
   }
 
+  /** The account's row for a conversation, as its list says it now: another device's, which a continue is pressed for. */
+  listedRow(conversationId: string): ListedSession | undefined {
+    for (const row of this.#list.sessions().values()) if (row.conversation === conversationId) return row
+    return undefined
+  }
+
+  /** Every Session the account lists now. */
+  listedRows(): Iterable<ListedSession> {
+    return this.#list.sessions().values()
+  }
+
+  /** How many messages wait in the account for a Session, as its list says. */
+  listedWaiting(session: string): number {
+    return this.#list.waiting(session).length
+  }
+
   /** An adopted conversation's start on its machine, as the machine answered it: what windows list from now on. */
   started(conversationId: string, value: EncodedValue): LiveSummary {
     const entry = this.#entries.get(conversationId)
@@ -1751,6 +1767,8 @@ export class CloudConversations {
       if (left <= 0) this.#following.get(entry.threadId)?.close()
     }
     const listed: LiveSummary[] = []
+    const everyRow = [...this.#list.sessions().values()]
+    const quiet = this.#list.quiet()
     for (const [id, { row, threadId, runtime, where, quietSince, archived }] of wanted) {
       const known = this.#entries.get(id)
       if (known && !known.listed) {
@@ -1765,6 +1783,7 @@ export class CloudConversations {
         continue
       }
       const summary = listedSummary(row, where, quietSince)
+      if (quietSince !== undefined) summary.cloudContinue = listedContinueChoice(row, everyRow, quiet)
       // What its change says, by the rule the account's notices use: only of a row heard here before (the first
       // listing is where things stand, which a window marks without announcing), never of an archive's rows (listed
       // at rest, not finished) nor of a quiet device's (nothing there runs).
@@ -1774,7 +1793,7 @@ export class CloudConversations {
       if (known && this.#following.has(known.threadId)) {
         // A window follows it: its batches say the rest, but nothing comes from a device gone quiet, nor says it's back.
         const held = known.summary
-        if (held?.quietSince !== summary.quietSince) {
+        if (held?.quietSince !== summary.quietSince || JSON.stringify(held?.cloudContinue) !== JSON.stringify(summary.cloudContinue)) {
           known.summary = summary
           listed.push(summary)
           continue

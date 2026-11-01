@@ -1,3 +1,4 @@
+import type { ContinueOffer } from "@mako/protocol/continues"
 import type { MoveLeft } from "@mako/protocol/moves"
 import type { OutdatedRestore } from "./restore-plan.js"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -137,6 +138,26 @@ export type HandOffSettings = {
  * the main checkout whose harness forked onto its own branch).
  */
 export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string; conversation?: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
+
+/**
+ * Continue in the cloud pressed on this Mac for another device's Thread while that device is off
+ * (`mako:thread-continue`), as its windows show it: `asking` before the account's first word, then its phases
+ * (`making`, `arriving`), then `continued` or `failed` with the account's reason. `unconfirmed`: an answer was lost on
+ * the way, and the account is asked again under the same op, which carries it on all the same.
+ */
+export type ThreadContinueStep =
+  | { kind: "asking" }
+  | { kind: "making" }
+  | { kind: "arriving" }
+  | { kind: "unconfirmed"; reason: string }
+  | { kind: "continued"; cloudThread: string }
+  | { kind: "failed"; reason: string }
+
+/** What `mako:thread-continue` came to: the account's last word, or `stopped` when this host stopped following it. */
+export type ThreadContinueOutcome = { kind: "continued"; cloudThread: string } | { kind: "failed"; reason: string } | { kind: "stopped" }
+
+/** What a continue would take, as the account says it before the press (`mako:thread-continue-offer`), and the messages that wait for it. */
+export type ThreadContinueOffer = { offer: ContinueOffer; waiting: number }
 
 /**
  * A way back refused before the cloud let go, because the Thread's worktree here has no project to come back into:

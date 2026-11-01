@@ -157,6 +157,7 @@ const inputs = {
   "mako:computer-driver-update": () => z.tuple([]),
   "mako:computer-permissions": () => z.tuple([]),
   "mako:computer-permissions-request": () => z.tuple([]),
+  "mako:continue-readings": () => z.tuple([]),
   "mako:control-preview": () =>
     z.tuple([
       z.string(),
@@ -1525,6 +1526,8 @@ const inputs = {
     ]),
   "mako:thread-continuation-plan": () => z.tuple([z.string()]),
   "mako:thread-continuation-resolve": () => z.tuple([z.string()]),
+  "mako:thread-continue": () => z.tuple([z.string(), z.string()]),
+  "mako:thread-continue-offer": () => z.tuple([z.string()]),
   "mako:thread-controls": () =>
     z.tuple([
       z.union([
@@ -1803,6 +1806,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:computer-driver-update", "control"],
   ["mako:computer-permissions", "control"],
   ["mako:computer-permissions-request", "control"],
+  ["mako:continue-readings", "conversations"],
   ["mako:control-preview", "control"],
   ["mako:control-preview-source", "control"],
   ["mako:control-preview-viewers", "control"],
@@ -2028,6 +2032,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-contexts", "threads"],
   ["mako:thread-continuation-plan", "conversations"],
   ["mako:thread-continuation-resolve", "conversations"],
+  ["mako:thread-continue", "conversations"],
+  ["mako:thread-continue-offer", "conversations"],
   ["mako:thread-controls", "threads"],
   ["mako:thread-create-session", "threads"],
   ["mako:thread-entry", "threads"],
