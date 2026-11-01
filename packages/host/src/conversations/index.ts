@@ -39,7 +39,8 @@ import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
+import type { ContinueReading } from "../contracts/cloud-continues.js"
 import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInputSchema, readyForMove, stageMove, type MoveArrivalDeps, type MoveArrivalWire, type MoveReadyInput, type MoveStageInput } from "./move-arrival.js"
 import { departMove, followMove, MoveDepartureInputSchema, MoveFollowInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveFollowInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
@@ -51,6 +52,7 @@ import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
+export { CloudContinues } from "./cloud-continues.js"
 export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
 export { conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
@@ -555,6 +557,13 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   /** Where no person's Mac moves Threads to the cloud, nothing is weighed; on a Mac, `HarnessCheck` answers first. */
   const weighNothing: (conversationId: string) => ThreadHarnessCheck = () => ({ kind: "unknown", reason: "This Mako doesn't move Threads to the cloud." })
   methods.handle("mako:thread-harness-check", weighNothing)
+  /** Where no person's Mac continues another device's Threads in the cloud; on a Mac, `CloudContinues` answers first. */
+  const continueNowhere: (conversationId: string, op: string) => ThreadContinueOutcome = () => ({ kind: "failed", reason: "This Mako doesn't continue Threads in the cloud." })
+  methods.handle("mako:thread-continue", continueNowhere)
+  const offerNoContinue: (conversationId: string) => ThreadContinueOffer = () => ({ offer: { offer: false, why: "no-cloud", detail: "This Mako doesn't continue Threads in the cloud." }, waiting: 0 })
+  methods.handle("mako:thread-continue-offer", offerNoContinue)
+  const noContinues: () => ContinueReading[] = () => []
+  methods.handle("mako:continue-readings", noContinues)
   /** Handing agents at work to the cloud: on a person's Mac `CloudHandOffs` answers first; elsewhere there's nothing to hand. */
   const nothingToHand: () => HandOffCandidate[] = () => []
   methods.handle("mako:handoff-candidates", nothingToHand)

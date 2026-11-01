@@ -40,7 +40,8 @@ import { quietLine } from "../src/lib/quiet-device"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
 import { endMove, followedWays, listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
 import { followAnswer } from "../src/web-client/move-actions"
-import { continueChoice, continueRefusalShown, startContinue } from "../src/web-client/continue-actions"
+import { continueChoice, startContinue, webContinues } from "../src/web-client/continue-actions"
+import { continueRefusalShown } from "@mako/host/contracts/cloud-continues"
 import { appKey, appShownAs, appsStore, loopbackTarget, readApp, serversOf, withPath } from "../src/web-client/previews"
 import { cloudReach } from "../src/web-client/trouble-state"
 import { OwnerUnavailableError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
@@ -1072,6 +1073,16 @@ test("Continue in the cloud: offered by every device's rule on a quiet Mac's idl
   assert.equal(waits.length, 1, "asked again at once while it goes, and after a pause once the network lost an answer")
   const done = movesStore.get().moves.get(thread.id)!
   assert.deepEqual([done.continued, done.way, done.end?.kind], [true, "cloud", "done"])
+
+  // A press whose answer was lost is pressed again under its op: read, it would find nothing of a press that never landed.
+  movesStore.set({ moves: new Map() })
+  asked.length = 0
+  answers.push(new TypeError("Load failed"), "arriving", "continued")
+  await startContinue({ gateway }, { thread, session, mac }, async (ms) => void waits.push(ms))
+  assert.deepEqual(asked, ["POST /v1/sessions/S/continue/OP", "POST /v1/sessions/S/continue/OP", "GET /v1/sessions/S/continue/OP?wait=20000"], "pressed again, then followed")
+  assert.equal(movesStore.get().moves.get(thread.id)?.end?.kind, "done")
+  const [reading] = webContinues.readings()
+  assert.deepEqual([reading?.phase, reading?.here, reading?.asks.map((each) => each.outcome)], ["continued", true, ["lost", "arriving", "continued"]], "Diagnostics read it ask by ask")
 
   // Refused: the account's words, its end at once.
   movesStore.set({ moves: new Map() })

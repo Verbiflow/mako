@@ -1,7 +1,9 @@
 import { sessionStream } from "@mako/protocol"
-import type { ListedSession, ListedState } from "@mako/protocol/thread-listing"
+import type { ListedSession, ListedState, QuietDevice } from "@mako/protocol/thread-listing"
 import type { ListedRail } from "./live-conversations.js"
 import { rowWaitingFor } from "@mako/protocol/attention"
+import { continueRefusal } from "@mako/protocol/continues"
+import type { ListedContinueChoice } from "./live-conversations.js"
 import type { LiveSummary } from "./live-conversations.js"
 
 /**
@@ -60,6 +62,15 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
   if (row.openElsewhere && row.state === "idle" && !quiet) rail.openElsewhere = true
   if (Object.keys(rail).length) summary.rail = rail
   return summary
+}
+
+/**
+ * What a quiet device's row says of Continue in the cloud, by every client's one rule: whether its Thread may continue
+ * now, given the account's whole list (`rows`) and its quiet devices, and the continue the account carries of it.
+ */
+export function listedContinueChoice(row: ListedSession, rows: readonly ListedSession[], quiet: readonly QuietDevice[]): ListedContinueChoice {
+  const refusal = continueRefusal(row, rows, quiet)
+  return { ...refusal && { refusal }, ...row.continued && { continued: row.continued } }
 }
 
 /** When the person last sent a listed Session a message, as its owner says it (`ReportedSession.promptedAt`), in epoch ms. */

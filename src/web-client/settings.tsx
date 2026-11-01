@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { continueReadings, describeContinue } from "@mako/host/contracts/cloud-continues"
 import { describeFollow, describeList } from "@mako/host/contracts/sync-readings"
+import { webContinues } from "./continue-actions"
 import { webSync } from "./sync-readings"
 import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
@@ -384,13 +386,15 @@ function Diagnostics() {
   lines.push(["Sync", describeList(sync.list)])
   for (const follow of [...sync.follows].sort((left, right) => (right.lastHeardAt ?? 0) - (left.lastHeardAt ?? 0)).slice(0, 3))
     lines.push([follow.label ?? "Live", describeFollow(follow)])
+  // Each continue in the cloud this browser pressed or the list says, latest first, as a move's steps would read.
+  for (const reading of continueReadings(webContinues.readings(), list.rows).slice(0, 3)) lines.push([reading.title ? `Continue · ${reading.title}` : "Continue", describeContinue(reading)])
   if (client.options.build) lines.push(["Build", client.options.build])
   const text = lines.map(([label, value]) => `${label}: ${value}`).join("\n")
   return (
     <Group title="Diagnostics">
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-4 py-3 font-mono text-label">
-        {lines.map(([label, value]) => (
-          <div key={label} className="contents">
+        {lines.map(([label, value], index) => (
+          <div key={`${index}-${label}`} className="contents">
             <dt className="text-faint">{label}</dt>
             <dd className="min-w-0 wrap-anywhere text-muted-foreground">{value}</dd>
           </div>

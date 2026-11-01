@@ -5,6 +5,7 @@ import type { LiveProjection } from "@/state/live-projection"
 import type { Entry } from "@mako/sessions/entries"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
+import type { ListedContinueChoice } from "@mako/host/contracts/live-conversations"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
 import type { ReleasedTurn } from "@/state/transcript-residency"
 import type {
@@ -49,6 +50,8 @@ interface AcpConversationBase {
   threadTitle?: string
   /** Listed from a device the account hasn't heard from since then: none of it at work, and the rail says when it was last seen. */
   quietSince?: number
+  /** `LiveSummary.cloudContinue`: whether a quiet device's Thread may continue in the cloud from here, and the continue the account carries of it. */
+  cloudContinue?: ListedContinueChoice
   /** `LiveSummary.movedAt`: when a conversation listed from another device last moved, as the account's list says. */
   movedAt?: number
   /** `LiveSummary.rail`: what its owner's rail shows of a conversation listed from another device. */

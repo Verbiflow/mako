@@ -6,7 +6,8 @@ import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-cont
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import { fixtureUsageSummary } from "./usage-fixture"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import { ContinueRecorder } from "@mako/host/contracts/cloud-continues"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
@@ -145,6 +146,24 @@ const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.sea
 /** Where the fixture's project moved to, as the person chooses it in the folder chooser. */
 const MOCK_MOVED_PROJECT = "/Users/you/Code/billing-api"
 const MOCK_RETURN_WORKTREE = "/Users/you/.mako/worktrees/billing-api-3f2a91c0/retry-billing-webhooks"
+
+/** The fixture's Continue in the cloud: another Mac's Thread, read here from its copy while that Mac is off. */
+export const MOCK_CONTINUE_DEVICE = "5f0d0000-0000-4000-8000-00000000d0d0"
+const MOCK_CONTINUE_BY = "5f0d0000-0000-4000-8000-00000000d0d1"
+export const MOCK_CONTINUE_THREAD = "7c0a0000-0000-4000-8000-0000000c0c01"
+export const MOCK_CONTINUE_SESSION = "7c0a0000-0000-4000-8000-0000000c0c02"
+export const MOCK_CONTINUE_CONVERSATION = "7c0a0000-0000-4000-8000-0000000c0c03"
+const MOCK_CONTINUE_CLOUD_THREAD = "7c0a0000-0000-4000-8000-0000000c0c04"
+const MOCK_CONTINUE_OFFER = () => ({
+  offer: true as const,
+  thread: MOCK_CONTINUE_THREAD,
+  from: MOCK_CONTINUE_DEVICE,
+  since: new Date(Date.now() - 25 * 60_000).toISOString(),
+  folder: "/Users/ada/src/payments",
+  repository: { url: "https://github.com/ada/payments", branch: "mako/retry-backoff" },
+  sessions: [{ session: MOCK_CONTINUE_SESSION, harness: "codex", title: "Retry failed charges with backoff", freshness: { originalsAt: new Date(Date.now() - 26 * 60_000).toISOString(), behind: new URLSearchParams(globalThis.location?.search).get("continue") === "behind" } }],
+})
+const mockContinues = new ContinueRecorder()
 /**
  * `?harnesses=`: this Mac's harnesses against a cloud on Codex 0.164.0, OpenCode 2.1.4, Devin 3000.11.205 and Grok
  * 1.0.70, as production met them. `behind`: Codex here is older, and Mako updates it; `several`: Codex and OpenCode
@@ -2869,6 +2888,39 @@ export function installMockBridge() {
       }
       return { kind: "moved" as const, cloudThread: "t-0123456789abcdef" }
     },
+    /** A fixture's offer: a Thread on a pushed branch, its one session sent a minute before its device went quiet. */
+    threadContinueOffer: async (): Promise<ThreadContinueOffer> => ({ offer: MOCK_CONTINUE_OFFER(), waiting: 1 }),
+    /**
+     * A fixture's continue: the account's phases a moment apart, as a real one takes them. `?continue=failed`: the
+     * machine couldn't clone the branch; `?continue=lost`: an answer lost on the way, then asked again.
+     */
+    threadContinue: async (conversationId: string, op: string): Promise<ThreadContinueOutcome> => {
+      const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+      const scene = new URLSearchParams(globalThis.location?.search).get("continue")
+      const step = (next: ThreadContinueStep) => emit({ type: "thread-continue-step", conversationId, op, step: next })
+      const heard = (phase: "making" | "arriving" | "continued" | "failed", reason?: string) => mockContinues.heard(op, { at: Date.now(), method: phase === "making" ? "POST" : "GET", correlationId: crypto.randomUUID(), ms: 140, asked: { kind: "state", state: { op, thread: MOCK_CONTINUE_THREAD, threadTitle: "Retry failed charges with backoff", from: MOCK_CONTINUE_DEVICE, by: MOCK_CONTINUE_BY, cloudThread: MOCK_CONTINUE_CLOUD_THREAD, folder: "/Users/ada/src/payments", repository: { url: "https://github.com/ada/payments", branch: "mako/retry-backoff" }, sessions: [{ session: MOCK_CONTINUE_SESSION, conversation: MOCK_CONTINUE_CONVERSATION, harness: "codex", nativeId: "019a0000-0000-7000-8000-00000000c0de", generation: 3, folder: "/Users/ada/src/payments" }], waiting: [], phase, ...phase !== "making" && { machine: "mako-machine-7f3a" }, ...reason && { reason }, at: new Date().toISOString(), changedAt: new Date().toISOString() } } })
+      mockContinues.pressed(op, MOCK_CONTINUE_SESSION, { thread: MOCK_CONTINUE_THREAD, title: "Retry failed charges with backoff" })
+      await pause(500)
+      heard("making")
+      step({ kind: "making" })
+      await pause(1_400)
+      if (scene === "lost") {
+        step({ kind: "unconfirmed", reason: "The network connection was lost." })
+        await pause(2_000)
+      }
+      heard("arriving")
+      step({ kind: "arriving" })
+      await pause(1_800)
+      if (scene === "failed") {
+        const reason = "The cloud machine couldn't clone mako/retry-backoff: the branch isn't on GitHub any more."
+        heard("failed", reason)
+        step({ kind: "failed", reason })
+        return { kind: "failed", reason }
+      }
+      heard("continued")
+      step({ kind: "continued", cloudThread: MOCK_CONTINUE_CLOUD_THREAD })
+      return { kind: "continued", cloudThread: MOCK_CONTINUE_CLOUD_THREAD }
+    },
     /** What this Mac's harnesses mean against the fixture cloud's, by the `?harnesses=` scene. */
     threadHarnessCheck: async (): Promise<ThreadHarnessCheck> => mockHarnessCheck(),
     /** A fixture has no agents at work unless a review page says so (`application-review`). */
@@ -3111,6 +3163,7 @@ export function installMockBridge() {
     hostLogPath: async () => "",
     sessionReaderHistory: async () => ({ since: new Date().toISOString(), lost: 0, events: [], logPath: "" }),
     syncReadings: async () => ({ at: Date.now(), follows: [], list: { gaps: [], changeMs: { samples: 0 } } }),
+    continueReadings: async () => mockContinues.readings(),
     providerResidency: async () => ({
       entries: [],
       active: 0,

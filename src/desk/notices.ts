@@ -6,6 +6,7 @@ import { useRuntimeVersionNotice } from "@/components/composer/runtime-version-n
 import { useRestoreVersionNotice } from "@/components/composer/restore-version-notice"
 import { useLedgerNotice } from "@/components/composer/ledger-notice"
 import { useCopyNotice } from "@/components/composer/copy-notice"
+import { useContinueNotice } from "@/components/composer/continue-notice"
 import { useThreadMoveNotice } from "@/components/composer/thread-move-notice"
 import { useMachineNotice } from "@/components/composer/machine-notice"
 import { useSignInRecoveryNotice } from "@/components/composer/sign-in-recovery"
@@ -30,6 +31,7 @@ export function installComposerNotices(): Array<() => void> {
     registerNotice("restore-version", useRestoreVersionNotice, -9),
     registerNotice("newer-ledger", useLedgerNotice, -8),
     registerNotice("device-copy", useCopyNotice),
+    registerNotice("cloud-continue", useContinueNotice, -1),
     registerNotice("provider-connection", useProviderConnectionNotice, -7),
     registerNotice("sign-in-recovery", useSignInRecoveryNotice, -6),
     registerNotice("message-failure", useFailureNotice, -5),

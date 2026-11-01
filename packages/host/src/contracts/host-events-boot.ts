@@ -12,7 +12,7 @@ import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
-import type { CloudStartStep, ThreadMoveStep, ThreadReturnStep } from "./cloud-threads.js"
+import type { CloudStartStep, ThreadContinueStep, ThreadMoveStep, ThreadReturnStep } from "./cloud-threads.js"
 import type {
   ControlActivity,
   BrowserControlStatus,
@@ -87,6 +87,8 @@ export type HostEventBody =
   | { type: "cloud-start-step"; conversationId: string; step: CloudStartStep; project: string }
   /** A Thread's move to the cloud (`mako:thread-move`), step by step, for the conversation it was asked from. */
   | { type: "thread-move-step"; conversationId: string; move: string; step: ThreadMoveStep }
+  /** Continue in the cloud pressed here for another device's Thread (`mako:thread-continue`), step by step, for the conversation it was pressed from. */
+  | { type: "thread-continue-step"; conversationId: string; op: string; step: ThreadContinueStep }
   /**
    * A Thread running in the cloud whose worktree here stopped following it: the person changed it here (`folders`), so
    * nothing more is laid over it, and the way back merges both. Said for each of its conversations here.

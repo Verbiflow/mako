@@ -4,7 +4,8 @@ import type { ContinueOffer } from "@mako/protocol/continues"
 import { copyAge } from "@/lib/format"
 import { useAccountList } from "./account-list"
 import { useWebClient, type WebClient } from "./client"
-import { askContinueOffer, continueRefusalShown, startContinue, useContinueChoice } from "./continue-actions"
+import { continueRefusalShown, continueWords } from "@mako/host/contracts/cloud-continues"
+import { askContinueOffer, startContinue, useContinueChoice } from "./continue-actions"
 import { lastSeen } from "./diagnosis"
 import type { MoveMac } from "./move-actions"
 import { useMoves } from "./moves"
@@ -85,7 +86,7 @@ export function ContinueSheet({ open, thread, session, mac, onDismiss, onContinu
       <div className="web-move-ask" data-continue-ask={ready ? "ready" : refused ? "refused" : "asking"}>
         <p className="web-sheet-title px-0">Continue in the cloud?</p>
         <p className="text-ui text-muted-foreground">
-          {mac.name} is asleep or offline{quietSince ? ` (seen ${lastSeen(quietSince, now)})` : ""}. Your account carries this Thread to a cloud machine, at the same folder, and it goes on there.
+          {continueWords.carried(mac.name, quietSince ? lastSeen(quietSince, now) : undefined)}
         </p>
         <ul className="web-continue-facts">
           <li>
@@ -99,18 +100,18 @@ export function ContinueSheet({ open, thread, session, mac, onDismiss, onContinu
           {waiting ? (
             <li>
               <MessageSquareIcon className="size-4" />
-              <span>{waiting === 1 ? "The message waiting for it runs there, once." : `The ${waiting} messages waiting for it run there, once, in order.`}</span>
+              <span>{continueWords.waiting(waiting)}</span>
             </li>
           ) : null}
           <li>
             <LaptopIcon className="size-4" />
-            <span>When {mac.name} is back, it lets the Thread go. Bring it back any time.</span>
+            <span>{continueWords.letsGo(mac.name)}</span>
           </li>
         </ul>
         {behind ? (
           <p className="web-continue-behind" data-continue-behind>
             <AlertTriangleIcon className="size-4 shrink-0" />
-            <span>The last turns you read may not have reached your account before {mac.name} went quiet. The cloud goes on from what it sent; anything after stays in {mac.name}'s history.</span>
+            <span>{continueWords.behind(mac.name)}</span>
           </p>
         ) : null}
         {refused ? <p className="mt-3 text-label text-caution" data-continue-refused>{refused}</p> : null}
