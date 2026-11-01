@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -9,14 +10,16 @@ import type { Entry } from "@mako/sessions/entries"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { markedProcesses, processesHolding, processFolders } from "@mako/host/base/marked-processes"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { BackgroundAgents, tailReadEvery, type BackgroundAgentsDeps } from "@mako/host/conversations/background-agents"
+import { tailReadEvery, TAIL_READS_PER_SECOND } from "@mako/host/conversations/agent-runs"
+import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { ThreadStore } from "@mako/host/threads/store"
+import { noConversations } from "./lib/agents-world.ts"
 
 /*
- * What following background agents costs the host (`npm run bench:background-agents`): N = 1, 8 and 32 runs, each a
- * real process the liveness job checks and a Session that writes a step every WRITE_MS, as a busy agent's does.
- * Each N runs twice, the Sessions writing alike: once with nothing following them (before: a run started with nohup,
- * which Mako never shows) and once with `BackgroundAgents` following them. What the second costs over the first is the
+ * What following children costs the host (`npm run bench:agents-follow`): N = 1, 8 and 32 runs a Thread's shell
+ * started, each a real process the liveness job checks and a Session that writes a step every WRITE_MS, as a busy
+ * agent's does. Each N runs twice, the Sessions writing alike: once with nothing following them (before: a run started
+ * with nohup, which Mako never shows) and once linked as children and followed by `Agents`. What the second costs over the first is the
  * follow's: CPU, retained heap, event-loop delay, and how long a step takes to reach the conversation's roster. Then
  * what finding a new Session's process costs, on this machine's real process table. Each budget fails the run.
  */
@@ -33,10 +36,12 @@ const BUDGET = {
   loopMaxMs: 25,
   /** A step reaches the roster within a read interval (`tailReadEvery`) and a bit. */
   latencyP95Ms: (agents: number) => tailReadEvery(agents) + 150,
+  /** Tail reads across the host, whatever the number of runs (`TAIL_READS_PER_SECOND`), and a read of slack for the clock. */
+  readsPerSecond: TAIL_READS_PER_SECOND + 1,
   discoveryP95Ms: 250,
 }
 
-const root = mkdtempSync(join(tmpdir(), "mako-bench-background-agents-"))
+const root = mkdtempSync(join(tmpdir(), "mako-bench-agents-follow-"))
 
 function percentile(values: number[], p: number): number {
   const sorted = [...values].sort((left, right) => left - right)
@@ -59,11 +64,11 @@ interface Run {
 async function run(count: number, follow: boolean): Promise<Run> {
   const threads = new ThreadStore(join(root, `${count}-${follow}-${randomUUID()}.sqlite`))
   const conversation = randomUUID()
-  threads.registerJournal({ conversationId: conversation, createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
+  const lead = threads.registerJournal({ conversationId: conversation, createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
   const sessions = new Map<string, { ref: ThreadRef; entries: Entry[] }>()
   const subscribers = new Set<(event: HostEvent) => void>()
   let reads = 0
-  const catalog: BackgroundAgentsDeps["catalog"] = {
+  const catalog: AgentsDeps["catalog"] = {
     nativePath: (identity) => [...sessions.values()].find((session) => session.ref.nativeId === identity.nativeId)?.ref.path,
     ref: (path) => sessions.get(path)?.ref,
     async page(path, before, limit = 50) {
@@ -84,49 +89,46 @@ async function run(count: number, follow: boolean): Promise<Run> {
   /** Each Session's steps not yet on the roster, oldest first: a step counts as shown once it or a later one is. */
   const pending = new Map<string, { step: number; at: number }[]>()
   const latencies: number[] = []
-  let agents: BackgroundAgents | undefined
+  let agents: Agents | undefined
   const jobs = new HostJobs()
-  let nextSession = ""
-  const deps: BackgroundAgentsDeps = {
-    store: () => threads,
-    catalog,
-    jobs,
-    root: join(root, "runs"),
-    prepare: async () => ({ executable: "/bin/sh", args: ["-c", "sleep 120"], env: { ...process.env }, session: nextSession, dropped: [] }),
-    runs: () => true,
-    conversationOwns: () => false,
-    changed: () => {
-      const now = performance.now()
-      for (const agent of agents?.roster(conversation) ?? []) {
-        const shown = Number(/step-(\d+)/.exec(agent.state.kind === "working" ? agent.state.activity ?? "" : "")?.[1])
-        const waiting = agent.detached?.session ? pending.get(agent.detached.session) : undefined
-        if (!Number.isFinite(shown) || !waiting) continue
-        while (waiting.length && waiting[0]!.step <= shown) latencies.push(now - waiting.shift()!.at)
-      }
-    },
+  const shown = () => {
+    const now = performance.now()
+    for (const agent of agents?.roster(conversation) ?? []) {
+      const step = Number(/step-(\d+)/.exec(agent.state.kind === "working" ? agent.state.activity ?? "" : "")?.[1])
+      const waiting = agent.child?.nativeId ? pending.get(agent.child.nativeId) : undefined
+      if (!Number.isFinite(step) || !waiting) continue
+      while (waiting.length && waiting[0]!.step <= step) latencies.push(now - waiting.shift()!.at)
+    }
   }
+  const live = noConversations(shown)
   const pids: number[] = []
   const natives: string[] = []
-  if (follow) {
-    agents = new BackgroundAgents(deps)
-    for (let index = 0; index < count; index++) {
-      nextSession = randomUUID()
-      const record = await agents.start(conversation, { harness: "claude", prompt: `Agent ${index}`, cwd: root })
-      natives.push(record.nativeId!)
-      pids.push(record.process!.pid)
-    }
-  } else {
-    for (let index = 0; index < count; index++) natives.push(randomUUID())
-  }
-  for (const nativeId of natives) {
-    const ref: ThreadRef = { harness: "claude", nativeId, path: `/bench/${nativeId}.jsonl`, startedAt: new Date().toISOString() }
+  for (let index = 0; index < count; index++) {
+    const nativeId = randomUUID()
+    natives.push(nativeId)
+    const ref: ThreadRef = { harness: "claude", nativeId, path: `/bench/${nativeId}.jsonl`, cwd: root, startedAt: new Date().toISOString() }
     sessions.set(ref.path, { ref, entries: [] })
+  }
+  if (follow) {
+    agents = new Agents({
+      store: () => threads, catalog, jobs, live,
+      startLive: () => Promise.reject(new Error("The bench starts no conversation")),
+      harnesses: () => ["claude"], runs: () => false, harnessLabel: () => "Claude",
+    })
+    for (const nativeId of natives) {
+      const run = spawn("/bin/sh", ["-c", "sleep 120"], { detached: true, stdio: "ignore" })
+      pids.push(run.pid!)
+      const linked = await agents.link({ kind: "agent", session: lead.session }, { harness: "claude", session: nativeId, pid: run.pid! })
+      assert.ok(!("refused" in linked), JSON.stringify(linked))
+    }
   }
   await new Promise((resolve) => setTimeout(resolve, 300))
   gc()
   const heapBefore = process.memoryUsage().heapUsed
   const loop = monitorEventLoopDelay({ resolution: 5 })
   loop.enable()
+  // What linking read is the follow's start, not its rate.
+  reads = 0
   const cpuBefore = process.cpuUsage()
   let step = 0
   const writer = setInterval(() => {
@@ -211,6 +213,7 @@ try {
     follows[`follow${count}`] = line
     console.log(`follow ${count}: ${JSON.stringify(line)}`)
     assert.ok(after.latencies.length > 0, "steps reached the roster")
+    assert.ok(line.tailReadsPerSecond <= BUDGET.readsPerSecond, `the follow reads ${line.tailReadsPerSecond} tails a second, over ${BUDGET.readsPerSecond}`)
     if (count === 32) assert.ok(cpuPercent <= BUDGET.cpuPercent, `following 32 agents costs ${cpuPercent.toFixed(2)}% of a core, over ${BUDGET.cpuPercent}%`)
     assert.ok(after.loopMaxMs - before.loopMaxMs <= BUDGET.loopMaxMs, `the follow holds the event loop ${(after.loopMaxMs - before.loopMaxMs).toFixed(1)} ms longer`)
     assert.ok(p95 <= BUDGET.latencyP95Ms(count), `a step takes ${Math.round(p95)} ms to reach the roster at p95, over ${BUDGET.latencyP95Ms(count)}`)

@@ -43,23 +43,10 @@ export const NativeAgentObservationSchema = z.object({
   /** Which native messages the entry was read from, for the diagnostics readout. */
   source: z.string().max(256).optional(),
   /**
-   * A background agent: a harness's own run that works for the conversation
-   * and outlives its turns and its provider's process (`background-agents.ts`).
-   * `session` is its harness's ID for its own Session once known, and `path`
-   * where this Mac's catalog reads it, which opens its transcript.
-   */
-  detached: z
-    .object({
-      id: z.string().min(1).max(64),
-      origin: z.enum(["started", "discovered", "linked"]),
-      session: z.string().min(1).max(512).optional(),
-      path: z.string().min(1).max(4096).optional(),
-    })
-    .optional(),
-  /**
    * A child: a Thread this conversation's Thread leads (`contracts/agents.ts`),
    * drawn from its edge and its own Thread (`childEntry`), never from a
-   * harness's roster. `session` is its Session in the Thread store; `nativeId` its
+   * harness's roster. It outlives the conversation's turns and its provider's
+   * process. `session` is its Session in the Thread store; `nativeId` its
    * harness's ID for it and `path` where this device's catalog reads it, which
    * open its transcript.
    */
@@ -92,13 +79,13 @@ export function isBusyNativeAgent(agent: NativeAgentObservation): boolean {
   return isActiveNativeAgent(agent) && !agent.ambient
 }
 /**
- * Work the session's provider holds: its process ending ends it. A
- * background agent is Mako's own process, which outlives the provider's.
+ * Work the session's provider holds: its process ending ends it. A child is
+ * a Thread of its own, which outlives the provider's process.
  */
 export function isProviderWork(agent: NativeAgentObservation): boolean {
-  return !agent.detached
+  return !agent.child
 }
-/** Busy work that keeps the provider's process: what it holds, never a background agent. */
+/** Busy work that keeps the provider's process: what it holds, never a child. */
 export function isBusyProviderWork(agent: NativeAgentObservation): boolean {
   return isBusyNativeAgent(agent) && isProviderWork(agent)
 }
@@ -156,21 +143,33 @@ export function observeNativeAgent(
   return { agents, limited }
 }
 
-/** The binding a roster's background agents are filed under; no provider's binding has it. */
-export const BACKGROUND_AGENTS_BINDING = "mako:background-agents"
 /** The binding a roster's children are filed under (`childEntry`); no provider's binding has it. */
 export const CHILDREN_BINDING = "mako:children"
 
 /**
- * `roster` with its background agents replaced by `agents`, which their
- * owner (`BackgroundAgents`) hands over whole and keeps the identity of
- * while unchanged: the roster itself when none changed.
+ * `roster` with its children replaced by `agents`, which their engine
+ * (`Agents`) hands over whole and keeps the identity of while unchanged: the
+ * roster itself when none changed.
  */
-export function withBackgroundAgents(roster: NativeAgentRoster | undefined, agents: readonly NativeAgent[]): NativeAgentRoster | undefined {
+export function withChildren(roster: NativeAgentRoster | undefined, agents: readonly NativeAgent[]): NativeAgentRoster | undefined {
   const held = roster?.agents.filter((agent) => !isProviderWork(agent)) ?? []
   if (held.length === agents.length && held.every((agent, index) => agent === agents[index])) return roster
   const provider = roster?.agents.filter(isProviderWork) ?? []
   return { agents: [...provider.slice(-(NATIVE_AGENT_LIMIT - agents.length)), ...agents], limited: roster?.limited ?? false }
+}
+
+/** What a journal keeps of a roster: its provider's work. Children are their engine's to say, never saved. */
+export function providerRoster(roster: NativeAgentRoster | undefined): NativeAgentRoster | undefined {
+  if (!roster?.agents.some((agent) => !isProviderWork(agent))) return roster
+  return { ...roster, agents: roster.agents.filter(isProviderWork) }
+}
+
+/** Whether two rosters hold the same provider work, entry for entry: children alone changed between them. */
+export function sameProviderWork(previous: NativeAgentRoster | undefined, next: NativeAgentRoster | undefined): boolean {
+  if (!previous || !next) return previous === next
+  const before = previous.agents.filter(isProviderWork)
+  const after = next.agents.filter(isProviderWork)
+  return previous.limited === next.limited && before.length === after.length && before.every((agent, index) => agent === after[index])
 }
 
 /** How the turn that started an entry ended, for an entry that ends with its turn. */

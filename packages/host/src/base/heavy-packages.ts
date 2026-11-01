@@ -19,6 +19,10 @@ const own = {
       import("@mako/control-runtime/mcp"),
     ]).then(([{ McpServer }, { StreamableHTTPServerTransport }, { createControlMcpServer }]) =>
       ({ McpServer, StreamableHTTPServerTransport, createControlMcpServer }))),
+  /** MCP's server SDK on stdio, for `mako mcp`. */
+  mcpStdio: lazyPackage("@modelcontextprotocol/sdk stdio server (mako mcp)", () =>
+    Promise.all([import("@modelcontextprotocol/sdk/server/mcp.js"), import("@modelcontextprotocol/sdk/server/stdio.js")])
+      .then(([{ McpServer }, { StdioServerTransport }]) => ({ McpServer, StdioServerTransport }))),
   /** The keychain from this process, a native addon: see keychain.ts. */
   keyring: lazyPackage("@napi-rs/keyring", () => import("@napi-rs/keyring")),
   yaml: lazyPackage<typeof import("yaml")>("yaml", () => import("yaml")),
