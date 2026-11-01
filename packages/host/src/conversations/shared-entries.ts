@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util"
 import type { ThreadPage } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import { isPaged, pagedEqual } from "./paged-entries.js"
-import type { Steps } from "../base/slices.js"
+import type { Steps } from "@mako/sessions/slices"
 
 /** How long `sharedEntries` compares before it lets other work run. */
 const COMPARE_SLICE_MS = 8

@@ -29,6 +29,7 @@ import { proposedPlanBlock, type ProposedPlan } from "../content.js"
 
 import { readdir, readFile, stat, rm } from "node:fs/promises"
 import { homedir } from "node:os"
+import { isDeepStrictEqual } from "node:util"
 import {
   newestCursorSdkAgentId,
   cursorSdkAgentIdForDirectory,
@@ -92,6 +93,7 @@ import {
   type SessionUpdate,
 } from "./types.js"
 import { EntrySink } from "../entry-sink.js"
+import { inSlices, type Steps } from "../slices.js"
 import { recordFile } from "../record-files.js"
 import type { Entry } from "../entries.js"
 import { cursorFork } from "./cursor-fork.js"
@@ -212,11 +214,6 @@ interface FoldedHashes {
   unread: UnreadRecord[] | undefined
 }
 
-/**
- * The unread records of a fold that went on from `earlier`'s. Appended
- * messages add to its counts; messages folded again were counted in both,
- * so each kind keeps the larger count, never fewer than it found.
- */
 function sharesIds(kept: readonly Entry[], length: number, folded: readonly Entry[]): boolean {
   const ids = new Set<string>()
   for (let index = 0; index < length; index++) {
@@ -226,6 +223,11 @@ function sharesIds(kept: readonly Entry[], length: number, folded: readonly Entr
   return folded.some((entry) => entry.id !== undefined && ids.has(entry.id))
 }
 
+/**
+ * The unread records of a fold that went on from `earlier`'s. Appended
+ * messages add to its counts; messages folded again were counted in both,
+ * so each kind keeps the larger count, never fewer than it found.
+ */
 function laterUnread(earlier: UnreadRecord[] | undefined, later: UnreadRecord[] | undefined, refolded: boolean): UnreadRecord[] | undefined {
   if (!earlier || !later) return earlier ?? later
   const records = new Map(earlier.map((record) => [`${record.reason}\0${record.kind}`, { ...record }]))
@@ -235,6 +237,20 @@ function laterUnread(earlier: UnreadRecord[] | undefined, later: UnreadRecord[] 
     else known.count = refolded ? Math.max(known.count, record.count) : known.count + record.count
   }
   return [...records.values()]
+}
+
+/**
+ * Where `folded` first differs from `kept`, at `from` or past it: a fold again
+ * from an exchange's start replaces only what moved, not the whole exchange,
+ * which in a headless agent's store is the whole conversation.
+ */
+function* firstChange(kept: readonly Entry[], folded: readonly Entry[], from: number): Steps<number> {
+  let at = from
+  while (at < kept.length && at < folded.length && isDeepStrictEqual(kept[at], folded[at])) {
+    at++
+    yield
+  }
+  return at
 }
 
 
@@ -1052,10 +1068,8 @@ export class CursorProvider implements SessionProvider {
           offset = file.bytes
           if (!input) return unchanged()
           if (fold && fold.rootId === input.rootId && fold.stopKey === stopKey(input.stops) && sameSpans(fold.spans, spanKeys(input.spans))) return unchanged()
-          const next = fold
-            ? this.foldFrom(database, fold, input)
-            : this.foldStore(database, input)
-          const from = fold ? next.replaceFrom : 0
+          const next = await inSlices(fold ? this.foldFrom(database, fold, input) : this.foldStore(database, input))
+          const from = fold ? await inSlices(firstChange(fold.entries, next.fold.entries, next.replaceFrom)) : 0
           fold = next.fold
           this.lastFold = { ...next.fold, path }
           const update: SessionUpdate = {
@@ -1091,7 +1105,7 @@ export class CursorProvider implements SessionProvider {
       const held = this.lastFold
       const fold = held && held.path === path && held.rootId === input.rootId && held.stopKey === stopKey(input.stops) && sameSpans(held.spans, spanKeys(input.spans))
         ? held
-        : this.foldStore(database, input).fold
+        : (await inSlices(this.foldStore(database, input))).fold
       this.lastFold = { ...fold, path }
       const thread: Thread = { ref, entries: fold.entries }
       if (fold.unread) thread.unread = fold.unread
@@ -1132,16 +1146,16 @@ export class CursorProvider implements SessionProvider {
       if (index < 0 || !start) return null
       // A message steered into a replayed run is drawn by that run's replay, so the window starts at the run's prompt.
       for (const [prompt, span] of input.spans) if (prompt < start && start < span.end) start = prompt
-      return this.foldHashes(database, input, start).entries
+      return (await inSlices(this.foldHashes(database, input, start))).entries
     } finally {
       database.close()
     }
   }
 
   /** Translate the whole hash list into entries. */
-  private foldStore(database: DatabaseSync, input: FoldInput): FoldStep {
+  private *foldStore(database: DatabaseSync, input: FoldInput): Steps<FoldStep> {
     const { rootId, hashes, stops } = input
-    const folded = this.foldHashes(database, input, 0)
+    const folded = yield* this.foldHashes(database, input, 0)
     return {
       fold: {
         rootId,
@@ -1164,14 +1178,14 @@ export class CursorProvider implements SessionProvider {
    * folded again take an id the kept ones hold, which a whole fold would
    * have told apart (`#2`).
    */
-  private foldFrom(
+  private *foldFrom(
     database: DatabaseSync,
     previous: StoreFold,
     input: FoldInput
-  ): FoldStep {
+  ): Steps<FoldStep> {
     const { rootId, hashes, stops } = input
     // A stop recorded after its messages lands inside entries already kept.
-    if (previous.stopKey !== stopKey(stops)) return this.foldStore(database, input)
+    if (previous.stopKey !== stopKey(stops)) return yield* this.foldStore(database, input)
     const spans = spanKeys(input.spans)
     let shared = 0
     while (
@@ -1189,7 +1203,7 @@ export class CursorProvider implements SessionProvider {
       // own, nothing before it can merge with it and the previous entries
       // stand; a tool result or assistant chunk first belongs to the last
       // exchange and takes the path below.
-      const appended = this.foldHashes(database, input, shared)
+      const appended = yield* this.foldHashes(database, input, shared)
       if (appended.exchanges[0]?.hash === shared && !sharesIds(previous.entries, previous.entries.length, appended.entries))
         return {
           fold: {
@@ -1215,8 +1229,8 @@ export class CursorProvider implements SessionProvider {
       if (candidate.hash > shared) break
       exchange = candidate
     }
-    const tail = this.foldHashes(database, input, exchange.hash)
-    if (sharesIds(previous.entries, exchange.entry, tail.entries)) return this.foldStore(database, input)
+    const tail = yield* this.foldHashes(database, input, exchange.hash)
+    if (sharesIds(previous.entries, exchange.entry, tail.entries)) return yield* this.foldStore(database, input)
     const kept = previous.exchanges.filter((item) => item.hash < exchange.hash)
     return {
       fold: {
@@ -1239,16 +1253,16 @@ export class CursorProvider implements SessionProvider {
   }
 
   /**
-   * Fold `hashes[start..]` into entries with one prepared statement. Each
-   * exchange starts at a user message; tool results pair with calls inside
-   * the same exchange, so a fold that starts at an exchange boundary sees
-   * exactly what a whole fold would.
+   * Fold `hashes[start..]` into entries with one prepared statement, a step
+   * per message. Each exchange starts at a user message; tool results pair
+   * with calls inside the same exchange, so a fold that starts at an
+   * exchange boundary sees exactly what a whole fold would.
    */
-  private foldHashes(
+  private *foldHashes(
     database: DatabaseSync,
     input: FoldInput,
     start: number
-  ): FoldedHashes {
+  ): Steps<FoldedHashes> {
     const { hashes, compactions, stops } = input
     const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
     const sink = new EntrySink()
@@ -1328,6 +1342,7 @@ export class CursorProvider implements SessionProvider {
     }
 
     for (let index = start; index < hashes.length; index++) {
+      yield
       stop(index)
       compacted = compact(index) ?? compacted
       const hash = hashes[index]

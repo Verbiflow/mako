@@ -20,7 +20,7 @@ import { ForkPointSchema } from "../contracts/conversation-control.js"
 import type { Entry } from "@mako/sessions/entries"
 import { retainMismatches } from "../base/stream-mismatches.js"
 import { pagedOf, readBack } from "./paged-entries.js"
-import { inSlices, type Steps } from "../base/slices.js"
+import { inSlices, type Steps } from "@mako/sessions/slices"
 
 /**
  * Waits before reading an unread base again after an error: the catalog

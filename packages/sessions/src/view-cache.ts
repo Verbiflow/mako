@@ -9,6 +9,7 @@ import { z } from "zod"
 import { EntrySchema, type Entry, type EntryOf } from "./entries.js"
 import type { UnreadIndex } from "./unread-index.js"
 import type { ZstdFrames } from "./zstd-frames.js"
+import { inSlices, type Steps } from "./slices.js"
 import { entryChars, trimToolOutput, VIEWER_PAGE, type Thread, type ThreadPageOptions, type ThreadTail } from "./format.js"
 import type { ResumePoint } from "./jsonl.js"
 import { ResumePointSchema, ThreadRefSchema, UnreadRecordSchema } from "./thread-schema.js"
@@ -349,7 +350,7 @@ function storedBody(value: SQLOutputValue | undefined): Uint8Array {
 }
 
 /** Writes `entries` into `db`, one row each, from `seq`: the whole form, and the brief one when a page would trim it. Returns the characters they hold. */
-function insertEntries(db: DatabaseSync, entries: readonly Entry[], seq: number): number {
+function* insertEntries(db: DatabaseSync, entries: readonly Entry[], seq: number): Steps<number> {
   const insert = db.prepare("INSERT INTO entries (seq, id, type, chars, brief_chars, body, brief) VALUES (?, ?, ?, ?, ?, ?, ?)")
   const seen = new Set<string>()
   let chars = 0
@@ -362,6 +363,7 @@ function insertEntries(db: DatabaseSync, entries: readonly Entry[], seq: number)
     const id = entry.id !== undefined && !seen.has(entry.id) ? entry.id : null
     if (id !== null) seen.add(id)
     insert.run(seq++, id, entry.type, size, shown === entry ? size : entryChars(shown), encodeBody(entry), shown === entry ? null : encodeBody(shown))
+    yield
   }
   return chars
 }
@@ -406,12 +408,12 @@ function readMeta(db: DatabaseSync): ViewMeta | null {
   }
 }
 
-/** Builds a view of `thread` in an empty database. */
-function build(db: DatabaseSync, meta: Omit<ViewMeta, "total" | "chars">, thread: Thread): ViewMeta {
+/** Builds a view of `thread` in an empty database, which nothing reads until it's built. */
+function* build(db: DatabaseSync, meta: Omit<ViewMeta, "total" | "chars">, thread: Thread): Steps<ViewMeta> {
   db.exec(SCHEMA)
   db.exec("BEGIN")
   try {
-    const chars = insertEntries(db, thread.entries, 0)
+    const chars = yield* insertEntries(db, thread.entries, 0)
     const full: ViewMeta = { ...meta, total: thread.entries.length, chars }
     db.prepare("INSERT INTO meta (key, value) VALUES ('view', ?)").run(JSON.stringify(full))
     db.exec("COMMIT")
@@ -422,13 +424,13 @@ function build(db: DatabaseSync, meta: Omit<ViewMeta, "total" | "chars">, thread
   }
 }
 
-/** Replaces `db`'s entries from `from` on with `tail`'s, and its meta with `meta`. */
-function extend(db: DatabaseSync, meta: Omit<ViewMeta, "total" | "chars">, kept: ViewMeta, from: number, tail: ThreadTail): ViewMeta {
+/** Replaces `db`'s entries from `from` on with `tail`'s, and its meta with `meta`, in a copy nothing reads until it's written. */
+function* extend(db: DatabaseSync, meta: Omit<ViewMeta, "total" | "chars">, kept: ViewMeta, from: number, tail: ThreadTail): Steps<ViewMeta> {
   db.exec("BEGIN")
   try {
     const dropped = Number(db.prepare("SELECT COALESCE(SUM(chars), 0) AS chars FROM entries WHERE seq >= ?").get(from)?.["chars"] ?? 0)
     db.prepare("DELETE FROM entries WHERE seq >= ?").run(from)
-    const chars = insertEntries(db, tail.entries, from)
+    const chars = yield* insertEntries(db, tail.entries, from)
     const full: ViewMeta = { ...meta, total: from + tail.entries.length, chars: kept.chars - dropped + chars }
     db.prepare("UPDATE meta SET value = ? WHERE key = 'view'").run(JSON.stringify(full))
     db.exec("COMMIT")
@@ -659,18 +661,19 @@ export class ViewCache {
   private async writeNow(meta: Omit<ViewMeta, "total" | "chars">, thread: Thread): Promise<void> {
     this.noteUnread(meta, thread.entries)
     if (!this.folder || newerViewFile(this.file(meta.path))) {
-      this.forget(meta.path)
       const chars = thread.entries.reduce((sum, entry) => sum + entryChars(entry), 0)
       if (chars <= WHOLE_VIEW_CHARS) {
+        this.forget(meta.path)
         this.memory.set(meta.path, { view: new WholeView({ ...meta, total: thread.entries.length, chars }, thread), bytes: chars * 2 })
       } else {
         const db = new DatabaseSync(":memory:")
-        build(db, meta, thread)
+        await inSlices(build(db, meta, thread))
         const built = readMeta(db)
         if (!built) {
           db.close()
           throw new Error(`a view of ${meta.path} doesn't read back`)
         }
+        this.forget(meta.path)
         this.memory.set(meta.path, { view: new View(built, db), bytes: memoryBytes(db) })
       }
       let total = [...this.memory.values()].reduce((sum, held) => sum + held.bytes, 0)
@@ -688,7 +691,7 @@ export class ViewCache {
       const db = new DatabaseSync(temporary)
       try {
         db.exec("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF")
-        build(db, meta, thread)
+        await inSlices(build(db, meta, thread))
       } finally {
         db.close()
       }
@@ -711,7 +714,7 @@ export class ViewCache {
       const db = new DatabaseSync(temporary)
       try {
         db.exec("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF")
-        extend(db, meta, kept, from, tail)
+        await inSlices(extend(db, meta, kept, from, tail))
       } finally {
         db.close()
       }

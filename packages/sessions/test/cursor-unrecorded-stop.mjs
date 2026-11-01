@@ -112,8 +112,8 @@ try {
   index.prepare("UPDATE runs SET status = 'CANCELLED', cancelled_at = '2026-09-25T00:00:04.000Z' WHERE run_id = 'run-2'").run()
   index.prepare("UPDATE agents SET status = 'IDLE' WHERE agent_id = ?").run(id)
   const stopped = await follower.next()
-  assert.equal(stopped.replaceFrom, 0)
-  const early = stopped.entries.slice(2)
+  assert.equal(stopped.replaceFrom, 2, "the stop replaces from the first entry it changed")
+  const early = [...running.entries.slice(0, stopped.replaceFrom), ...stopped.entries].slice(2)
   assert.equal(early[0].type, "user")
   assert.equal(early[0].text, "second, stopped early", "the prompt reads like any other, without Mako's control note")
   assert.deepEqual(early.slice(1, 4).map((entry) => entry.type === "tool" ? `tool:${entry.name}:${entry.status === "canceled" ? "canceled" : "open"}` : `${entry.type}:${entry.text}`),
