@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { isActiveNativeAgent, type NativeAgentObservation } from "../../../contracts/native-agents.js"
+import { endedWithTurn, isActiveNativeAgent, type NativeAgentObservation } from "../../../contracts/native-agents.js"
 import { toolTitle, type CursorSdkDelta, type CursorSdkMessage, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 
 type SubagentCall = Extract<CursorSdkDelta, { type: "subagent-call" }>
@@ -54,9 +54,7 @@ export class CursorAgents {
    * them, so none outlives the turn whatever bookend it missed.
    */
   end(outcome: CursorTurnOutcome, error?: string): NativeAgentObservation[] {
-    const state: NativeAgentObservation["state"] = outcome === "cancelled" ? { kind: "canceled" }
-      : outcome === "error" ? { kind: "failed", error: `Its run ended with an error${error ? `: ${error.slice(0, 8000)}` : "."}` }
-      : { kind: "unknown", reason: "Its run ended without saying how it finished." }
+    const state = endedWithTurn(outcome === "cancelled" ? { kind: "stopped" } : outcome === "error" ? { kind: "failed", error } : { kind: "finished" })
     const ended: NativeAgentObservation[] = []
     for (const [nativeId, agent] of this.agents) {
       if (!isActiveNativeAgent(agent)) continue

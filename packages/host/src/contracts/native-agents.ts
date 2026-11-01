@@ -115,6 +115,47 @@ export function observeNativeAgent(
   return { agents, limited }
 }
 
+/** How the turn that started an entry ended, for an entry that ends with its turn. */
+export type TurnEnd = { kind: "finished" } | { kind: "stopped" } | { kind: "failed"; error?: string }
+
+/**
+ * What an entry still at work when its turn ended ended as, on a provider
+ * that lets nothing outlive the turn that started it (`ends-with-turn`): a
+ * stopped turn stopped it, a failed one failed it; a turn that finished
+ * without its end said nothing of how it went.
+ */
+export function endedWithTurn(end: TurnEnd): NativeAgentObservation["state"] {
+  if (end.kind === "stopped") return { kind: "canceled" }
+  if (end.kind === "failed") return { kind: "failed", error: `Its turn ended with an error${end.error ? `: ${end.error.slice(0, 8000)}` : "."}` }
+  return { kind: "unknown", reason: "Its turn ended without saying how it finished." }
+}
+
+/**
+ * Ends what `ends` names as ended with its turn: each entry it returns a
+ * turn end for, at `at`, the moment the turn ended. Without `at` (a turn
+ * that ended before this host read it) the entry ends when it was last
+ * heard of, so its elapsed time stops there. The roster itself when nothing
+ * changed.
+ */
+export function endWithTurns(
+  roster: NativeAgentRoster | undefined,
+  ends: (agent: NativeAgent) => TurnEnd | undefined,
+  at?: number
+): NativeAgentRoster | undefined {
+  if (!roster) return roster
+  let changed = false
+  const agents = roster.agents.map((agent): NativeAgent => {
+    const end = ends(agent)
+    if (!end) return agent
+    changed = true
+    const state = endedWithTurn(end)
+    return at === undefined
+      ? { ...agent, stoppable: false, settledAt: agent.settledAt ?? agent.observedAt, state }
+      : { ...agent, stoppable: false, observedAt: at, settledAt: at, state }
+  })
+  return changed ? { ...roster, agents } : roster
+}
+
 /** Losing observation is not evidence that provider-owned work completed. */
 export function disconnectNativeAgents(
   roster: NativeAgentRoster | undefined,

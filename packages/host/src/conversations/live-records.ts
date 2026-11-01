@@ -4,7 +4,7 @@ import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
-import { disconnectNativeAgents, isBusyNativeAgent } from "../contracts/native-agents.js"
+import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
 import { ContentWeights, residencyPlan, type ResidencyPlan } from "../contracts/residency.js"
 import { SessionIdSchema } from "../contracts/thread-identity.js"
@@ -17,7 +17,7 @@ import { clearAutoContinue } from "./live-auto-continue.js"
 import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
-import { interruptRequests } from "./live-settlement.js"
+import { interruptRequests, requestTurnEnd } from "./live-settlement.js"
 import { isPaged, pagedWeight } from "./paged-entries.js"
 
 /**
@@ -290,7 +290,7 @@ export class LiveRecords {
       hostLog("residency", "conversation reloaded", { conversation: id, ms: Math.round(performance.now() - started), blocks: previous.blocks.length, by })
       return this.reload(journal, previous, unloaded, by)
     }
-    const snapshot = afterRestart(previous, this.dependencies.root)
+    const snapshot = afterRestart(previous, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn")
     journal.commit(snapshot, previous)
     const resident = residentOf(snapshot, journal, { usedAt: this.dependencies.now?.() ?? Date.now(), loadedBy: by })
     this.residents.set(id, resident)
@@ -568,11 +568,38 @@ export class LiveRecords {
 }
 
 /**
+ * The roster as a journal's last host should have left it: on a harness
+ * that lets nothing outlive the turn that started it (`endsWithTurn`), an
+ * entry whose turn had ended ended with that turn, though a build before
+ * this one saved it at work, or as lost when its process went. It takes its
+ * turn's outcome. One whose turn still ran when that host stopped is left
+ * to the disconnect, which can't say how it ended.
+ */
+export function endedTurnsOnRead(previous: Pick<LiveSnapshot, "session" | "requests" | "nativeAgents">, endsWithTurn: (provider: string) => boolean): LiveSnapshot["nativeAgents"] {
+  const requests = new Map(previous.requests.map((request) => [request.id, request]))
+  const idle = previous.session.status !== "running" && previous.session.status !== "starting"
+  return endWithTurns(previous.nativeAgents, (agent) => {
+    const active = isActiveNativeAgent(agent)
+    if ((!active && agent.state.kind !== "unknown") || !endsWithTurn(agent.provider)) return undefined
+    const request = agent.requestId === undefined ? undefined : requests.get(agent.requestId)
+    const end = request && requestTurnEnd(request)
+    // Lost, and its turn finished: "unknown" says as much as the turn can.
+    if (end) return active || end.kind !== "finished" ? end : undefined
+    return active && idle ? { kind: "finished" } : undefined
+  })
+}
+
+/**
  * A journal no host is writing, as this host takes it on: whatever was in
  * flight when the last one ended is settled, and nothing it was doing goes
  * on by itself.
  */
-function afterRestart(previous: LiveSnapshot, root: string): LiveSnapshot {
+function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provider: string) => boolean): LiveSnapshot {
+  const healed = endedTurnsOnRead(previous, endsWithTurn)
+  if (healed !== previous.nativeAgents) {
+    const ended = healed?.agents.filter((agent, index) => agent !== previous.nativeAgents?.agents[index]).length ?? 0
+    hostLog("residency", "roster entries a build before saved at work or lost ended with their turns", { conversation: previous.session.id, harness: previous.session.harness, ended })
+  }
   const strandedTransfers = new Set(
     previous.control?.transfers
       .filter(
@@ -590,7 +617,7 @@ function afterRestart(previous: LiveSnapshot, root: string): LiveSnapshot {
     "The host restarted before the provider switch was activated. Submit a new switch to retry."
   const snapshot: LiveSnapshot = {
     ...previous,
-    nativeAgents: disconnectNativeAgents(previous.nativeAgents),
+    nativeAgents: disconnectNativeAgents(healed),
     goal: previous.goal?.status === "active"
       ? { ...previous.goal, status: "paused", pending: undefined, note: "Paused when Mako restarted." }
       : previous.goal && { ...previous.goal, pending: undefined },
