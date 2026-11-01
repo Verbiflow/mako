@@ -23,8 +23,9 @@ import { harnessLabel, resumes, type HarnessProfiles, type Harnesses } from "../
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
-import { NativeRuns, prepareNativeCommand } from "./native-runs.js"
-import { BackgroundAgents } from "./background-agents.js"
+import { NativeRuns } from "./native-runs.js"
+import { declareAgentMethods } from "./agent-tools.js"
+import { Agents } from "./agents.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
@@ -75,16 +76,16 @@ export { openMachineTracker, type MachineTracker } from "./machine-tracker.js"
 export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
-export { BackgroundAgents } from "./background-agents.js"
-export { registerBackgroundAgentTools } from "./background-agent-tools.js"
+export { Agents } from "./agents.js"
+export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
   live: LiveConversations
   /** Headless native runs, one writer per native session. */
   runs: NativeRuns
-  /** The harness runs that work for a conversation past its turn; none where the Thread store didn't open. */
-  agents?: BackgroundAgents
+  /** The Threads each Thread leads, and the runs they follow; none where the Thread store didn't open. */
+  agents?: Agents
   native: NativeRequests
   continuation: ContinuationPlanner<unknown>
   /** Replies with their history as pages, for clients that page it. */
@@ -143,6 +144,8 @@ export interface ConversationsDeps {
   /** A cloud machine's host: nobody is at it to sign a harness in. */
   unattended?: boolean
   jobs: HostJobs
+  /** Calls this host's own methods, as a client would: a child starts through `mako:live-start`. */
+  invoke: HostMethods["invoke"]
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -164,9 +167,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     label: (harness) => harnessLabel(host, harness),
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
-  let agents: BackgroundAgents | undefined
+  let agents: Agents | undefined
   const live = new LiveConversations({
-    backgroundAgents: () => agents,
+    agents: () => agents,
     unattended: deps.unattended,
     foreground: deps.foreground,
     work: deps.work,
@@ -190,7 +193,10 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     harnessLabel: (harness) => harnessLabel(host, harness),
     resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
-    settled: deps.settled,
+    settled: (id) => {
+      deps.settled(id)
+      agents?.moved(id)
+    },
     turnLedger: deps.turnLedger,
     turnReview: deps.turnReview,
     git: deps.git,
@@ -256,18 +262,21 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     // for a store that records none, the way a live session's report is kept.
     prepared: (ref, settings) => memory?.remember(ref.harness, ref.nativeId, { settings }),
   })
-  if (threads.store) agents = new BackgroundAgents({
-    store: () => threads.store ?? undefined,
-    catalog,
-    jobs: deps.jobs,
-    root: join(dataRoot, "background-agents"),
-    prepare: async (harness, prompt, cwd, model) =>
-      prepareNativeCommand(host, harness, prompt, (await harnesses.profiles.resolveNativeLaunch(harness, cwd, model ? { model } : undefined)) ?? {}),
-    runs: (harness) => host.nativeRunners.get(harness) !== undefined,
-    conversationOwns: (ref) => live.connectedSession(ref.harness, ref.nativeId) !== null ||
-      (ref.sessionId !== undefined && (threads.store?.conversationsOf(ref.sessionId).length ?? 0) > 0),
-    changed: (conversation, progressOnly) => live.backgroundAgentsChanged(conversation, progressOnly),
-  })
+  if (threads.store) {
+    agents = new Agents({
+      store: () => threads.store ?? undefined,
+      catalog,
+      jobs: deps.jobs,
+      live,
+      startLive: async (harness, cwd, options) => {
+        await deps.invoke("mako:live-start", [harness, cwd, options])
+      },
+      harnesses: () => host.liveDrivers.list().map((driver) => driver.provider),
+      runs: (harness) => host.nativeRunners.get(harness) !== undefined,
+      harnessLabel: (harness) => harnessLabel(host, harness),
+    })
+    agents.resume()
+  }
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
     read: (path) => catalog.readRef(path),
     running: (path) => runs.state(path)?.status === "running",
@@ -373,6 +382,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     if (!movers.worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
     return movers.worktreeMoves
   }
+  declareAgentMethods(methods, () => conversations.agents)
   methods.handle("mako:thread-continuation-resolve", (path: string) => continuation.resolve(path))
   methods.handle("mako:conversation-settings", () => live.conversationSettings())
   methods.handle("mako:conversation-settings-set", (settings: ConversationSettings) => live.setConversationSettings(settings))
@@ -658,4 +668,5 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     if (token) await lifecycle.stop({ kind: "native", path, token })
   })
   methods.handle("mako:provider-residency", () => live.residency())
+  methods.handle("mako:agents-diagnostics", () => conversations.agents?.diagnostics() ?? null)
 }

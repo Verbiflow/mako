@@ -75,11 +75,6 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
       return command({ agentId: id, create: false, prompt, importFrom: importFrom(id, options?.nativePath) }, options, env)
     },
     fresh: (prompt, options, env) => command({ agentId: randomUUID(), create: true, prompt }, options, env),
-    /** `fresh`'s run under the agent ID Mako picks, which is its Session's. */
-    async background(prompt, options, env) {
-      const session = randomUUID()
-      return { ...await command({ agentId: session, create: true, prompt }, options, env), session }
-    },
     describe({ args }, catalog) {
       let raw: unknown
       try {

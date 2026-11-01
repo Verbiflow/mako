@@ -447,12 +447,12 @@ function isQueuedContinuation(request: LiveRequest): boolean {
 }
 
 /** What the agent said at the end of the request's turn, and whether the turn did anything at all. */
-interface TurnReply {
+export interface TurnReply {
   text: string
   worked: boolean
 }
 
-function turnReply(resident: Resident, requestId: string): TurnReply {
+export function turnReply(resident: Resident, requestId: string): TurnReply {
   const blocks = reduceLiveUpdates(resident.snapshot.blocks, resident.updates)
   const start = lastIndex(blocks, (block) => block.type === "user" && block.requestId === requestId && !block.steeringFor)
   if (start < 0) return { text: "", worked: true }

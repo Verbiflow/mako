@@ -2,7 +2,7 @@ import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
 import { NativePromptReferenceSchema } from "../contracts/native-prompt-identity.js"
-import { NativeAgentRosterSchema } from "../contracts/native-agents.js"
+import { NativeAgentRosterSchema, providerRoster, sameProviderWork } from "../contracts/native-agents.js"
 import { ConversationGoalSchema } from "../contracts/live-goals.js"
 import { ReviewTargetSchema } from "../contracts/live-reviews.js"
 import {
@@ -426,7 +426,7 @@ function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
     session: previous.session !== next.session,
     control: previous.control !== next.control,
     permissions: previous.permissions !== next.permissions,
-    nativeAgents: previous.nativeAgents !== next.nativeAgents,
+    nativeAgents: previous.nativeAgents !== next.nativeAgents && !sameProviderWork(previous.nativeAgents, next.nativeAgents),
     goal: previous.goal !== next.goal,
     baseSource: previous.baseSource !== next.baseSource,
     baseCoveredBlocks: previous.baseCoveredBlocks !== next.baseCoveredBlocks,
@@ -839,7 +839,7 @@ export class LiveJournal {
       if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
+          .run(JSON.stringify({ ...metadata, session, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.

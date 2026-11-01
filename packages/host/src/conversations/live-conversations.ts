@@ -34,11 +34,11 @@ import {
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
 import { latestPendingQuestion, retireQuestionsForInput } from "../contracts/live-questions.js"
-import { isActiveNativeAgent, isBusyProviderWork, withBackgroundAgents } from "../contracts/native-agents.js"
+import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
-import type { Actor } from "../contracts/thread-identity.js"
+import { ActorSchema, type Actor } from "../contracts/thread-identity.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
@@ -61,7 +61,7 @@ import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch } from "./live-dispatch.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
-import { LiveGoals } from "./live-goals.js"
+import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
 import { LiveSideQuestions } from "./live-side-questions.js"
 import { LiveHibernation } from "./live-hibernation.js"
 import { JournalWriteError, LiveRequestSchema } from "./live-journal.js"
@@ -161,8 +161,8 @@ export class LiveConversations {
       loaded: (resident) => {
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
-        // The journal's copy of its background agents is as they were saved; their owner says how they are now.
-        this.takeBackgroundAgents(resident)
+        // A journal keeps no children: their engine says how they are now.
+        this.takeChildren(resident)
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
       paged: (id) => this.dependencies.historyPaged?.(id),
@@ -210,6 +210,7 @@ export class LiveConversations {
       actor: (explicit) => this.threads.actor(explicit),
       register: (snapshot, actor) => this.threads.register(snapshot, actor),
       markPurpose: (conversationId, purpose, options) => this.threads.markPurpose(conversationId, purpose, options),
+      markParent: (conversationId, parent) => this.threads.markParent(conversationId, parent),
       startingSession: (session) => this.threads.startingSession(session),
       sameSession: (conversationId, ref) => this.threads.sameSession(conversationId, ref, () => {
         const snapshot = this.records.load(conversationId)?.snapshot
@@ -255,6 +256,7 @@ export class LiveConversations {
       scheduleAutoContinue: (resident, settled) => this.autoContinue.schedule(resident, settled),
       declineAutoContinue: (resident) => this.autoContinue.decline(resident),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
+      turnSettled: (resident, settled) => this.dependencies.agents?.()?.settled(resident.snapshot.session.id, settled),
       goalObserved: (resident, goal) => this.goals.observe(resident, goal),
       goalSpent: (resident) => this.goals.spent(resident),
     }
@@ -339,10 +341,24 @@ export class LiveConversations {
   }
 
   lifecycleWork(): LifecycleWork[] {
-    const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => residentWork(resident) ?? [])
+    const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => {
+      const item = residentWork(resident)
+      const lead = item && this.leadOf(item.id)
+      return item ? (lead ? { ...item, lead } : item) : []
+    })
     for (const id of this.launches.startingIds()) if (!work.some((item) => item.id === id)) work.push(startingWork(id))
     for (const path of this.sources.capturing()) work.push({ id: `capture:${path}`, token: path, title: "Saving a conversation", provider: "", cwd: path, status: "finishing", stoppable: false })
     return work
+  }
+
+  /** The conversation leading a child's, as the lifecycle names it; undefined for a conversation that isn't a child's. */
+  private leadOf(id: string): LifecycleWork["lead"] {
+    const threads = this.dependencies.threads
+    const placed = threads?.journalPlacement(id)
+    const edge = placed && threads?.edges().of(placed.thread)
+    if (!edge) return undefined
+    const lead = threads?.conversationsOf(edge.parentSession).at(-1)
+    return lead ? { id: lead, title: this.records.get(lead)?.snapshot.session.title || "Untitled conversation" } : undefined
   }
 
   /** One conversation's work, as `lifecycleWork` lists it; undefined while it has none. Reads only memory. */
@@ -388,6 +404,19 @@ export class LiveConversations {
   /** What memory holds of the conversation now; `undefined` for one only on disk, which this never reads in. */
   held(id: string): LiveSnapshot | undefined {
     return this.records.get(id)?.snapshot
+  }
+
+  /** Whether a message to its running turn lands at the agent's next step (`steer` with `step`), not at the turn's end. */
+  steersAtStep(id: string): boolean {
+    const steering = this.records.get(id)?.driver?.steering
+    return steering?.kind === "supported" && steering.lands === "step"
+  }
+
+  /** What the agent said at the end of a request's turn, and how the request ended; undefined for one not in memory. */
+  turnReply(id: string, requestId: string): (TurnReply & { request?: LiveRequest }) | undefined {
+    const resident = this.records.get(id)
+    if (!resident) return undefined
+    return { ...turnReply(resident, requestId), request: resident.snapshot.requests.find((request) => request.id === requestId) }
   }
 
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
@@ -481,9 +510,11 @@ export class LiveConversations {
     return this.sources.capture(id, path)
   }
 
-  async start(provider: string, cwd: string, options: LiveStartOptions, actor?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
+  async start(provider: string, cwd: string, options: LiveStartOptions, by?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
     if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", ...options.goal })
     if (options.review !== undefined) ReviewTargetSchema.parse(options.review)
+    // A child's brief is its lead's words, not the person's.
+    const actor = by ?? (options.parent && !options.resume ? ActorSchema.parse(options.parent.startedBy) : undefined)
     const state = await this.launches.start(provider, cwd, options, actor, purpose)
     if (options.initialRequest) this.firstMessage(options, actor)
     if (options.goal !== undefined) this.goals.begin(options.conversationId, options.goal, { actor: this.threads.actor(actor), tuning: options.tuning })
@@ -1192,8 +1223,8 @@ export class LiveConversations {
    */
   async stopNativeAgent(id: string, nativeId: string): Promise<boolean> {
     const resident = this.records.require(id)
-    const detached = resident.snapshot.nativeAgents?.agents.find((candidate) => candidate.nativeId === nativeId && candidate.detached)?.detached
-    if (detached) return (await this.dependencies.backgroundAgents?.()?.stop(id, detached.id)) ?? false
+    const child = resident.snapshot.nativeAgents?.agents.find((candidate) => candidate.nativeId === nativeId && candidate.child)?.child
+    if (child) return (await this.dependencies.agents?.()?.stopChild(id, child.thread)) ?? false
     const binding = conversationControl(resident).activeBindingId
     const agent = resident.snapshot.nativeAgents?.agents.find((candidate) =>
       candidate.nativeId === nativeId && candidate.bindingId === binding && candidate.stoppable && isActiveNativeAgent(candidate))
@@ -1205,23 +1236,23 @@ export class LiveConversations {
   }
 
   /**
-   * The conversation's background agents moved: a loaded conversation's
-   * roster takes them from their owner, which keeps each entry's identity
-   * while it's unchanged. A start or an end goes out at once, progress with
-   * the frame; one not loaded reads them when it is (`loaded`).
+   * The conversation's children moved: a loaded conversation's roster takes
+   * them from their engine, which keeps each entry's identity while it's
+   * unchanged. A start or an end goes out at once, progress with the frame;
+   * one not loaded reads them when it is (`loaded`).
    */
-  backgroundAgentsChanged(id: string, progressOnly = false): void {
+  childrenChanged(id: string, progressOnly = false): void {
     const resident = this.records.get(id)
-    if (!resident || this.records.isReleased(resident) || !this.takeBackgroundAgents(resident)) return
+    if (!resident || this.records.isReleased(resident) || !this.takeChildren(resident)) return
     if (progressOnly) this.schedule(resident)
     else this.keep(resident)
   }
 
-  /** Whether the roster took a change of its background agents. */
-  private takeBackgroundAgents(resident: Resident): boolean {
-    const agents = this.dependencies.backgroundAgents?.()?.roster(resident.snapshot.session.id)
+  /** Whether the roster took a change of its children. */
+  private takeChildren(resident: Resident): boolean {
+    const agents = this.dependencies.agents?.()?.roster(resident.snapshot.session.id)
     if (!agents) return false
-    const nativeAgents = withBackgroundAgents(resident.snapshot.nativeAgents, agents)
+    const nativeAgents = withChildren(resident.snapshot.nativeAgents, agents)
     if (nativeAgents === resident.snapshot.nativeAgents) return false
     resident.snapshot = { ...resident.snapshot, nativeAgents }
     return true

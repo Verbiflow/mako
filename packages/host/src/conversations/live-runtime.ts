@@ -161,6 +161,16 @@ export interface Resident {
   steps?: TurnSteps
 }
 
+
+/** What a conversation's children are to its turns and its roster (`Agents`). */
+export interface ConversationChildren {
+  /** The conversation's children as roster entries, the same array until one of them changes. */
+  roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
+  stopChild(conversation: string, child: string): Promise<boolean>
+  /** One of the conversation's requests settled. */
+  settled(conversation: string, request: string): void
+}
 export interface Dependencies {
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */
   unattended?: boolean
@@ -179,8 +189,8 @@ export interface Dependencies {
   ): ConversationTools | undefined | Promise<ConversationTools | undefined>
   /** The Thread's values for an agent process about to start; never blocks the start when they can't be had. */
   threadEnvironment?(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined>
-  /** The background agents each conversation started, which their owner runs and follows (`BackgroundAgents`). */
-  backgroundAgents?(): Pick<import("./background-agents.js").BackgroundAgents, "roster" | "stop"> | undefined
+  /** The Threads each conversation's Thread leads (`Agents`). */
+  agents?(): ConversationChildren | undefined
   /**
    * The lines of Mako's note sent ahead of each prompt: Local Control and the
    * values the conversation's process started with. The note wraps them with
@@ -341,6 +351,7 @@ export interface LiveAccess {
   actor(explicit?: Actor): Actor | undefined
   register(snapshot: LiveSnapshot, actor: Actor | undefined): void
   markPurpose(conversationId: string, purpose: StartPurpose, options: LiveStartOptions): void
+  markParent(conversationId: string, parent: import("../contracts/agents.js").ChildStart): void
   startingSession(session: string): string
   /** Whether an existing journal is the same Session as the row being opened; see `LiveThreads.sameSession`. */
   sameSession(conversationId: string, ref: SourceRef): boolean
@@ -409,6 +420,8 @@ export interface LiveAccess {
   declineAutoContinue(resident: Resident): void
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */
   goalSettled(resident: Resident, settled: string): void
+  /** A turn ended: a child's end is its parent's to hear, and a parent's end delivers what waited for it. */
+  turnSettled(resident: Resident, settled: string): void
   goalObserved(resident: Resident, goal: GoalObservation | null): void
   /** The running turn's usage changed; a goal whose tokens Mako counts follows it. */
   goalSpent(resident: Resident): void

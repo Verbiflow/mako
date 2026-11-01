@@ -21,6 +21,7 @@
     "@mako/host": "0.1.0",
     "@mako/protocol": "0.1.0",
     "@mako/sessions": "0.1.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.4.3"
   }
 }

@@ -25,7 +25,7 @@ export interface ThreadEnvironmentValues {
 export interface ThreadEnvironment extends Omit<ThreadEnvironmentValues, "usedAt"> {
   /** The agent's own Thread; every Thread in the app's folder shares its values. Absent for an app a person runs from the desk. */
   thread?: ThreadId
-  /** The conversation's Session, which an agent CLI its shell runs is found by (`BackgroundAgents`). */
+  /** The conversation's Session, which an agent CLI its shell runs is found by (`AgentRuns`). */
   session?: string
   /** `THREAD_PORT_COUNT` ports from `port`. */
   ports: number
