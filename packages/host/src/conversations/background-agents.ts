@@ -522,7 +522,8 @@ export class BackgroundAgents {
       }
       if (!found) return
       startedAt ??= await processStartedAt(found.pid, this.abort.signal).catch(() => undefined)
-      if (!this.deps.store()?.conversationsOf(found.value).length) return
+      // A conversation's own harness carries the marker too, and may bind its new Session while the processes were read.
+      if (this.stopped || this.deps.conversationOwns(ref) || !this.deps.store()?.conversationsOf(found.value).length) return
       await this.adopt(found.value, ref, "discovered", { pid: found.pid, ...(startedAt !== undefined && { startedAt }) })
     }).catch((error) => {
       if (!this.stopped) hostWarn("agents", "a new session's process could not be read", { harness: ref.harness, error: errorMessage({ error }) })

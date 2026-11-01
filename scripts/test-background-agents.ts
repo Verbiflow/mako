@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
@@ -244,6 +245,40 @@ async function followsRuns(): Promise<void> {
   }
 }
 
+async function discoveryYields(): Promise<void> {
+  const threads = store("discovers")
+  const { session } = parentSession(threads)
+  const fake = fakeCatalog()
+  const jobs = new HostJobs()
+  const folder = realpathSync(root)
+  const bound = randomUUID()
+  let asked = 0
+  const agents = new BackgroundAgents({
+    store: () => threads,
+    catalog: fake.catalog,
+    jobs,
+    root: join(root, "discovers"),
+    prepare: () => Promise.reject(new Error("This test starts no run")),
+    runs: () => true,
+    // Its conversation binds this one while the processes are read: unbound when first asked, bound after.
+    conversationOwns: (ref) => ref.nativeId === bound && asked++ > 0,
+    changed: () => {},
+  })
+  // A harness CLI as a conversation's shell starts it: macOS's ps shows no environment of its own system binaries.
+  const shell = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], { cwd: folder, env: { ...process.env, MAKO_SESSION_ID: session }, stdio: "ignore" })
+  try {
+    const helper = randomUUID()
+    for (const nativeId of [bound, helper]) fake.write({ harness: "claude", nativeId, path: `/claude/${nativeId}.jsonl`, cwd: folder, startedAt: new Date().toISOString() }, [])
+    await until(() => threads.backgroundAgents().at("claude", helper) !== undefined, "a Session the conversation's shell started taken in")
+    assert.equal(threads.backgroundAgents().at("claude", bound), undefined, "a Session its own conversation bound while the processes were read stays that conversation's")
+  } finally {
+    shell.kill()
+    agents.dispose()
+    jobs.stop()
+    threads.close()
+  }
+}
+
 async function restartHeals(): Promise<void> {
   const threads = store("heals")
   const { conversation, session } = parentSession(threads)
@@ -279,6 +314,7 @@ try {
   stepWording()
   await followsRuns()
   await restartHeals()
+  await discoveryYields()
   console.log("background agents: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })
