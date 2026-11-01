@@ -59,14 +59,16 @@ export const NativeAgentObservationSchema = z.object({
   /**
    * A child: a Thread this conversation's Thread leads (`contracts/agents.ts`),
    * drawn from its edge and its own Thread (`childEntry`), never from a
-   * harness's roster. `session` is its Session in the Thread store, and `path`
-   * where this device's catalog reads its transcript, which opens it.
+   * harness's roster. `session` is its Session in the Thread store; `nativeId` its
+   * harness's ID for it and `path` where this device's catalog reads it, which
+   * open its transcript.
    */
   child: z
     .object({
       thread: z.string().uuid(),
       origin: z.enum(["started", "discovered", "linked", "attached"]),
       session: z.string().uuid().optional(),
+      nativeId: z.string().min(1).max(512).optional(),
       path: z.string().min(1).max(4096).optional(),
     })
     .optional(),

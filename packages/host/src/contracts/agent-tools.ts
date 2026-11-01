@@ -37,11 +37,13 @@ export interface AgentsStartInput extends DoorFilled {
   clientKey: string
 }
 export interface AgentsStarted {
-  child: string
+  /** Its Thread; absent while it's queued, when its name addresses it. */
+  child?: string
   name: string
   /** The child's conversation on this host, which `mako watch` and the window open. */
   conversation?: string
-  state: "queued" | "starting" | "working"
+  /** How it stands as this answer is given: a repeat of a spawn whose child has since ended says so. */
+  state: ChildState["kind"]
   /** What it waits for, when queued. */
   why?: string
   tree: { running: number; started: number; of: { running: number; started: number } }
@@ -145,9 +147,18 @@ export interface AgentToolDefinition {
   channel: `mako:agents-${AgentVerb}`
   replay: HostCallReplay
   /** Inputs the door fills in; the MCP schema leaves them out. */
-  filled: readonly string[]
+  filled: readonly (keyof AgentToolFilled)[]
   mcp: AgentToolProjection
 }
+
+/** What a door knows of its caller and fills in for it. */
+export interface AgentToolFilled {
+  /** The folder the caller works in: a start's, unless it names one. */
+  cwd?: string
+}
+
+/** The environment variable naming the Session whose agent started a process (`applyThreadEnvironment`): discovery's key, and a command's caller. */
+export const SESSION_VARIABLE = "MAKO_SESSION_ID"
 
 /** What every spawn's answer tells its caller to do next. */
 export const AFTER_START = "Its report wakes you. End your turn or keep working; don't wait or poll."

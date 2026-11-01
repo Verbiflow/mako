@@ -31,6 +31,7 @@ export type ChildRole = z.infer<typeof ChildRoleSchema>
  */
 export const PlaceSchema = z.union([z.literal("here"), z.literal("cloud"), z.templateLiteral(["device:", z.string().min(1).max(120)])])
 export type Place = z.infer<typeof PlaceSchema>
+const PLACE_TEXT = /^(here|cloud|device:.{1,120})$/s
 
 /** What a child is asked to do, readable two levels down: the parent's intent, and how it knows it's done. */
 export const BriefSchema = z.object({
@@ -54,7 +55,8 @@ export const ChildSpecSchema = z.object({
   reasoning: z.string().min(1).max(64).optional(),
   /** At most the parent's tier (`childAccess`); absent means the parent's. */
   access: z.enum(ACCESS_TIER_NAMES).optional(),
-  place: PlaceSchema.optional(),
+  /** A `Place`, kept as the text it was asked as: a start's options carry it through the host call's generated schema. */
+  place: z.string().regex(PLACE_TEXT).optional(),
   workspace: z.object({ branch: z.string().min(1).max(256).optional(), base: z.string().min(1).max(256).optional() }).optional(),
 })
 export type ChildSpec = z.infer<typeof ChildSpecSchema>
@@ -112,6 +114,13 @@ export const ThreadParentSchema = z.object({
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
 
+/**
+ * What a start that makes a child says of its edge (`LiveStartOptions.parent`): all of it but the Thread the start makes.
+ * It crosses the host call unbranded; the start parses it.
+ */
+export const ChildStartSchema = ThreadParentSchema.omit({ child: true, createdAt: true, closedAt: true, run: true })
+export type ChildStart = z.input<typeof ChildStartSchema>
+
 /** A typed report from a child: explicit (`agents_report`), or implicit when its turn or run ended without one. */
 export const ReportStatusSchema = z.enum(["progress", "done", "blocked", "needs-input", "failed"])
 export type ReportStatus = z.infer<typeof ReportStatusSchema>
@@ -161,8 +170,9 @@ export type ChildState =
  */
 export interface ChildThread {
   source: "live" | "followed"
-  /** Its Session, and where this device's catalog reads its transcript. */
+  /** Its Session, its harness's ID for it, and where this device's catalog reads its transcript. */
   session?: SessionId
+  nativeId?: string
   path?: string
   title?: string
   harness?: string
@@ -245,7 +255,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.path && { path: thread.path }) },
+    child: { thread: edge.child, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -298,6 +308,18 @@ export interface TreeBudget {
   started: number
 }
 export const TREE_BUDGET: TreeBudget = { running: 20, started: 100 }
+
+/** The host's children for Diagnostics: how many, how many run (and of those, how many a process Mako didn't start runs), and each tree against its budgets. */
+export interface AgentsDiagnostics {
+  children: number
+  running: number
+  followed: number
+  queued: number
+  /** Reports a parent hasn't been woken with yet. */
+  notices: number
+  budget: TreeBudget
+  trees: { lead: string; running: number; started: number }[]
+}
 
 /** Who calls an orchestration operation: the door stamps it, and through the socket it's a label, not a grant. */
 export type AgentCaller = { kind: "agent"; session: string } | { kind: "person" }
