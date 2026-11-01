@@ -1,7 +1,8 @@
-import { lazy, Suspense, useState, type ReactNode, type RefObject } from "react"
+import { lazy, Suspense, useState, type CSSProperties, type ReactNode, type RefObject } from "react"
 import { ArrowUpRightIcon, CodeIcon, ExpandIcon } from "lucide-react"
+import { PAGE_MIN_HEIGHT } from "@mako/host/contracts/page-frame"
 import { Skeleton } from "@/components/ui/skeleton"
-import { HtmlFrame } from "@/components/viewer/html-frame"
+import { HtmlFrame, type PageReport } from "@/components/viewer/html-frame"
 import type { FileContents } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { MediaUnavailable } from "./media-preview"
@@ -12,26 +13,33 @@ const RichFilePreview = lazy(() => import("@/components/viewer/rich-file-preview
 const PAGE_CAP = 560
 /** The tallest a page grows when shown whole: a page that grows with its frame stops here. */
 const PAGE_WHOLE_MAX = 12_000
+/** A page's place before it reports a height, and when it can't (one too large to be fitted): a picture's default shape, never past the cap. */
+const PAGE_UNMEASURED: CSSProperties = { aspectRatio: "16 / 10", maxHeight: PAGE_CAP }
 
 /**
- * The heights pages last reported, by path: a page drawn again (scrolled
- * back into view, its conversation reopened) holds its place from the
- * first frame instead of growing into it.
+ * What pages last reported, by path: a page drawn again (scrolled back into
+ * view, its conversation reopened) holds its place from the first frame
+ * instead of growing into it.
  */
-const heights = new Map<string, number>()
-const HEIGHTS_KEPT = 500
+const reports = new Map<string, PageReport>()
+const REPORTS_KEPT = 500
 
-function remember(path: string, height: number) {
-  heights.delete(path)
-  heights.set(path, height)
-  if (heights.size > HEIGHTS_KEPT) heights.delete(heights.keys().next().value!)
+function remember(path: string, report: PageReport) {
+  reports.delete(path)
+  reports.set(path, report)
+  if (reports.size > REPORTS_KEPT) reports.delete(reports.keys().next().value!)
 }
 
 /**
  * A page the agent made, drawn as the page: no card and no tabs, a hairline
- * round it, as tall as its content up to `PAGE_CAP`, where it fades and
- * offers the rest. Its name and what can be done with it (its source, full
- * screen, a tab of its own) wait on hover, like a picture's.
+ * round it, as tall as its content between `PAGE_MIN_HEIGHT` and
+ * `PAGE_CAP`, where it fades and offers the rest. Until it reports a
+ * height, and when it never does, it holds a picture's default shape. A
+ * page that loaded and draws nothing (an app's `index.html`, whose script
+ * runs only in its app) says so in a quiet box of the minimum height, the
+ * page still under it in case it draws later. Its name and what can be done
+ * with it (its source, full screen, a tab of its own) wait on hover, like a
+ * picture's.
  */
 export function InlinePage({ hostRef, path, name, file, error, openPath, onExpand, onOpen, onRetry }: {
   hostRef: RefObject<HTMLDivElement | null>
@@ -47,7 +55,7 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
   onOpen(): void
   onRetry(): void
 }) {
-  const [reported, setReported] = useState(() => heights.get(path))
+  const [report, setReport] = useState(() => reports.get(path))
   const [whole, setWhole] = useState(false)
   const [source, setSource] = useState(false)
   if (error)
@@ -56,14 +64,16 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
         <MediaUnavailable name={name} reason={error} onRetry={onRetry} />
       </div>
     )
-  const long = reported !== undefined && reported > PAGE_CAP
-  const height = whole && reported !== undefined ? Math.min(reported, PAGE_WHOLE_MAX) : Math.min(reported ?? PAGE_CAP, PAGE_CAP)
-  const heard = (next: number) => {
+  const empty = report !== undefined && !report.drawn && report.settled
+  const content = report?.drawn ? Math.max(report.height, PAGE_MIN_HEIGHT) : undefined
+  const long = content !== undefined && content > PAGE_CAP
+  const size: CSSProperties = empty ? { height: PAGE_MIN_HEIGHT } : content === undefined ? PAGE_UNMEASURED : { height: Math.min(content, whole ? PAGE_WHOLE_MAX : PAGE_CAP) }
+  const heard = (next: PageReport) => {
     remember(path, next)
-    setReported(next)
+    setReport(next)
   }
   return (
-    <div ref={hostRef} data-inline-file-preview={path} data-inline-page className="group/page not-prose relative my-3 w-full">
+    <div ref={hostRef} data-inline-file-preview={path} data-inline-page={empty ? "empty" : content === undefined ? "unmeasured" : "measured"} className="group/page not-prose relative my-3 w-full">
       {source && file ? (
         <div className="media-surface overflow-hidden border border-hairline bg-surface">
           <Suspense fallback={<Skeleton className="block h-40 w-full" />}>
@@ -71,15 +81,23 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
           </Suspense>
         </div>
       ) : (
-        <div data-page-frame className={cn("media-surface overflow-hidden border border-hairline", long && !whole && "page-fade")} style={{ height }}>
+        <div data-page-frame className={cn("media-surface relative overflow-hidden border border-hairline", long && !whole && "page-fade")} style={size}>
           {file?.previewUrl ? (
-            <HtmlFrame url={file.previewUrl} name={name} max={PAGE_WHOLE_MAX} initial={reported ?? PAGE_CAP} onHeight={heard} />
+            <HtmlFrame url={file.previewUrl} name={name} fill onReport={heard} />
           ) : (
             <Skeleton className="block size-full rounded-none" />
           )}
+          {empty ? (
+            <div data-page-empty className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-shell px-6 text-center">
+              <span className="max-w-full truncate text-ui text-muted-foreground">{name} shows nothing on its own</span>
+              <span className="max-w-full truncate text-label text-faint">It may need the app or server it was made for.</span>
+            </div>
+          ) : null}
         </div>
       )}
-      <span className="media-control pointer-events-none absolute top-2 left-2 max-w-[calc(100%-8rem)] truncate rounded-md px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/page:opacity-100">{name}</span>
+      {empty && !source ? null : (
+        <span className="media-control pointer-events-none absolute top-2 left-2 max-w-[calc(100%-8rem)] truncate rounded-md px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/page:opacity-100">{name}</span>
+      )}
       {file ? (
         <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity duration-150 group-hover/page:opacity-100 focus-within:opacity-100">
           {file.contents ? (

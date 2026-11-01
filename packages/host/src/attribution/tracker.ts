@@ -732,6 +732,20 @@ export class LaptopTracker implements AttributionTracker {
     return { path, kind: "file", stat: found, bytes, ref: contentRef(bytes), text: isText(bytes) && !secretPath(path) }
   }
 
+  /**
+   * Whether the disk holds exactly `bytes` at `path` (nothing, for null):
+   * its stat when it does, null for a file that's gone as it should be,
+   * undefined when it holds anything else or is too large to compare.
+   */
+  private async holding(state: RootState, path: string, bytes: Uint8Array | null): Promise<TrackerFileStat | null | undefined> {
+    const absolute = join(state.root.path, path)
+    const stat = await this.ports.fs.stat(absolute)
+    if (!bytes) return stat ? undefined : null
+    if (stat?.kind !== "file" || stat.size !== bytes.byteLength || stat.size > READ_LIMIT) return undefined
+    const disk = await this.ports.fs.read(absolute)
+    return disk && contentRef(disk) === contentRef(bytes) ? stat : undefined
+  }
+
   /** The file's content before this change, as the journal knows it. */
   private async previous(state: RootState, path: string): Promise<{ ref: ContentRef | null; bytes?: Uint8Array }> {
     const file = state.files.get(path)
@@ -1104,7 +1118,11 @@ export class LaptopTracker implements AttributionTracker {
    * the new commit's content. A file with changes keeps its uncommitted
    * lines and records who wrote each line the commit took; a clean file the
    * move left behind (a soft reset) now differs from its base by lines no
-   * entry wrote. Returns what the move changed, by path: the new commit's
+   * entry wrote. A file the disk already holds at the commit's content,
+   * though the journal knew it otherwise, is Git's write whose events
+   * haven't come yet (a busy watcher can deliver them seconds after Git's
+   * own): it is the new base now, so however late they come they journal
+   * nothing. Returns what the move changed, by path: the new commit's
    * content, null where it has none.
    */
   private async checkHead(state: RootState): Promise<Map<string, ContentRef | null> | undefined> {
@@ -1115,13 +1133,19 @@ export class LaptopTracker implements AttributionTracker {
     const previous = root.head
     const started = this.now()
     const moved = await repo.changed(previous, head)
+    const touched = new Set(moved)
     const paths = new Set([...moved, ...state.files.keys()])
     const committed = new Map<string, Uint8Array | null>()
     const earlier = new Map<string, Uint8Array | null>()
+    const written = new Map<string, TrackerFileStat | null>()
     await mapLimit([...paths], PARALLEL, async (path) => {
-      committed.set(path, await repo.read(head, path))
+      const bytes = await repo.read(head, path)
+      committed.set(path, bytes)
       const row = state.stats.get(path)
       if (!state.files.has(path) && row && !row.ref && previous) earlier.set(path, await repo.read(previous, path))
+      if (!touched.has(path)) return
+      const disk = await this.holding(state, path, bytes)
+      if (disk !== undefined) written.set(path, disk)
     })
     const at = this.now()
     const keep = (path: string, bytes: Uint8Array | null | undefined): ContentRef | null => {
@@ -1140,12 +1164,32 @@ export class LaptopTracker implements AttributionTracker {
         this.store.saveFile(next)
       }
     }
+    let landed = 0
     this.store.transaction(() => {
       for (const path of paths) {
         const bytes = committed.get(path) ?? null
         const ref = keep(path, bytes)
         const file = state.files.get(path)
         const row = state.stats.get(path)
+        const disk = written.get(path)
+        const based = earlier.get(path)
+        const was = file ? file.current : row ? row.ref ?? (based ? contentRef(based) : null) : null
+        if (disk !== undefined && was !== ref) {
+          // What the flush held behind this check would take as the new base, taken now.
+          if (disk) {
+            state.stats.set(path, this.row(disk, null))
+            this.store.saveStat(root.id, path, state.stats.get(path)!)
+          } else if (row) {
+            state.stats.delete(path)
+            this.store.deleteStat(root.id, path)
+          }
+          if (file) {
+            state.files.delete(path)
+            this.store.deleteFile(root.id, path)
+          }
+          landed++
+          continue
+        }
         if (!file) {
           if (!row) continue
           // A clean file's content is the commit it was clean against; pin it before the base moves.
@@ -1186,7 +1230,7 @@ export class LaptopTracker implements AttributionTracker {
     })
     state.headSeq = this.seq
     for (const path of paths) state.tracked.add(path)
-    this.log("base moved", { root: root.path, from: previous ?? "none", to: head, files: paths.size, ms: this.now() - started })
+    this.log("base moved", { root: root.path, from: previous ?? "none", to: head, files: paths.size, landed, ms: this.now() - started })
     return new Map(moved.map((path) => {
       const bytes = committed.get(path)
       return [path, bytes ? contentRef(bytes) : null]

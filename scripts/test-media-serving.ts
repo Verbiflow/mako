@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, symlink, ut
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
-import { PAGE_HEIGHT_MESSAGE } from "@mako/host/contracts/page-frame"
+import { PAGE_FIT_SCRIPT, PAGE_HEIGHT_MESSAGE } from "@mako/host/contracts/page-frame"
 import { filePolicyHeaders, fitPage, INERT_POLICY, PAGE_POLICY, SVG_POLICY } from "@mako/host/base/file-policy"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { FILE_PREVIEW_TTL_MS, fileIdentity, filePreviewUrl, verifyFilePreview } from "@mako/host/workspaces/file-previews"
@@ -148,6 +148,7 @@ try {
   assert.ok(fitted.includes(Buffer.from([0x63, 0x61, 0x66, 0xe9])), "the page's own bytes stay")
   assert.ok(fitted.toString("latin1").startsWith("<!DOCTYPE html><html><HEAD lang=fr><script>"))
   assert.ok(fitted.toString("latin1").includes(PAGE_HEIGHT_MESSAGE))
+  assert.ok(fitted.toString("latin1").includes(PAGE_FIT_SCRIPT), "the script the transcript's previews are checked against, whether the page drew anything included")
   assert.ok(fitPage(Buffer.from("<!doctype html><p>bare")).toString().startsWith("<!doctype html><script>"))
   assert.ok(fitPage(Buffer.from("<p>fragment")).toString().startsWith("<script>"))
   const served = await fileResponse(await localFile(join(site, "index.html")), join(site, "index.html"), new Request("http://local/page", { headers: { range: "bytes=0-9" } }), { cacheable: true })

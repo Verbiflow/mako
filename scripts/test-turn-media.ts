@@ -309,12 +309,17 @@ const record: TurnChanges = {
     { path: "/repo/tide.png", root: "r", relative: "tide.png", kind: "create", own: null, before: null, after: `sha256:${"b".repeat(64)}`, entries: { first: 2, last: 2 } },
     { path: "/repo/old.png", root: "r", relative: "old.png", kind: "delete", before: `sha256:${"c".repeat(64)}`, after: null, entries: { first: 3, last: 3 } },
     { path: "/repo/notes.md", root: "r", relative: "notes.md", kind: "modify", own: { added: 1, removed: 0 }, before: `sha256:${"d".repeat(64)}`, after: `sha256:${"e".repeat(64)}`, entries: { first: 4, last: 4 } },
+    // What a pull or another process wrote while the turn ran: only timing names it.
+    { path: "/repo/scripts/check.html", root: "r", relative: "scripts/check.html", kind: "create", maybe: { added: 12, removed: 0 }, before: null, after: `sha256:${"f".repeat(64)}`, entries: { first: 5, last: 5 } },
+    { path: "/repo/docs/shot.png", root: "r", relative: "docs/shot.png", kind: "create", maybe: null, before: null, after: `sha256:${"1".repeat(64)}`, entries: { first: 6, last: 6 } },
+    // A source page the turn edited: the app's entry, not a page of its own.
+    { path: "/repo/index.html", root: "r", relative: "index.html", kind: "modify", own: { added: 1, removed: 1 }, before: `sha256:${"2".repeat(64)}`, after: `sha256:${"3".repeat(64)}`, entries: { first: 7, last: 7 } },
   ],
-  more: 0, journal: "j", through: 4, at: 5_000,
+  more: 0, journal: "j", through: 7, at: 5_000,
 }
 assert.deepEqual(changedMedia(record, "p1").map((candidate) => [candidate.path, candidate.digest, candidate.callId]), [
   ["/repo/report.html", "a".repeat(64), "turn:p1"], ["/repo/tide.png", "b".repeat(64), "turn:p1"],
-], "media it left, not what it removed and never text")
+], "media it left for sure, not what it removed, never text, nothing only timing names and no source page it edited")
 assert.deepEqual(changedMedia({ version: TURN_CHANGES_VERSION, state: "pending" }, "p1"), [], "nothing while the count is on its way")
 assert.deepEqual(shelfMedia(exchange, record).map((candidate) => [candidate.path, candidate.digest]), [["/repo/report.html", "a".repeat(64)], ["/repo/tide.png", "b".repeat(64)]],
   "the shelf adds what the record names, with the bytes it names, once each")

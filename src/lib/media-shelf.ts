@@ -42,8 +42,13 @@ const DIGEST = /^sha256:([a-f0-9]{64})$/
  * The media files the turn's record of changes (`LiveRequest.changes`) says
  * it left: whatever wrote them, a script, a browser's screenshot or a
  * command line that names them only through `$PWD` included, which its
- * calls' records can't all say. Each carries the content the turn left, so
- * the host keeps those bytes and nothing the file held since.
+ * calls' records can't all say. Only files the Thread changed for sure
+ * (`own`): one only timing names (`maybe`) may be anyone's, such as what
+ * a pull or another process wrote in the checkout while the turn ran. A
+ * page counts only when the turn made it: one it changed in a checkout is
+ * a source file (an app's `index.html`), which draws nothing without the
+ * app around it. Each carries the content the turn left, so the host keeps
+ * those bytes and nothing the file held since.
  */
 export function changedMedia(changes: RequestChanges | undefined, requestId: string): MediaCandidate[] {
   const counted = countedChanges(changes)
@@ -51,7 +56,7 @@ export function changedMedia(changes: RequestChanges | undefined, requestId: str
   return counted.files.flatMap((file): MediaCandidate[] => {
     const kind = mediaKind(file.path)
     const digest = file.after ? DIGEST.exec(file.after)?.[1] : undefined
-    if (!kind || !digest || file.kind === "delete") return []
+    if (!kind || !digest || file.own === undefined || file.kind === "delete" || (kind === "html" && file.kind !== "create")) return []
     return [{ key: file.path, kind, evidence: "wrote", callId: `turn:${requestId}`, path: file.path, digest, endedAt: counted.at }]
   })
 }
