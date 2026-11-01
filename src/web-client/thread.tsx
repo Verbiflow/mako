@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
@@ -31,6 +31,8 @@ import { useBranchOpening } from "./replies"
 import { checkReach, useSessionDiagnosis } from "./thread-trouble"
 import { DiagnosisCard } from "./trouble"
 import { useTryAgain } from "./trouble-state"
+import { QuietStrip } from "./quiet-strip"
+import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
 
@@ -90,7 +92,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
         onBack={wide ? undefined : onBack}
         title={thread.title}
         subtitle={syncing ?? subtitle(thread, session)}
-        place={session.row.runsOn.kind === "cloud" ? "cloud" : "device"}
+        place={session.row.runsOn.kind === "cloud" ? "cloud" : session.quietSince ? "quiet" : "device"}
         headingRef={heading}
         actions={thread.archived ? undefined : <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />}
       />
@@ -164,17 +166,34 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
   )
 }
 
-/** What can't be reached for a Session, in a strip above its transcript (its Mac off, and since when): the headline, Details a tap away. */
+/**
+ * What can't be reached for a Session, above its transcript. Its Mac asleep or offline with the copy it keeps on screen:
+ * one quiet line (`QuietStrip`), there from when the copy is drawn until the Mac is back and the Session live. Anything
+ * else that failed: the headline in a strip, Details a tap away.
+ */
 function ThreadTrouble({ session }: { session: WebSession }) {
   const client = useWebClient()
   const diagnosis = useSessionDiagnosis(session)
   const mac = session.owner.kind === "device" ? session.owner.deviceId : undefined
   const { checking, tryAgain } = useTryAgain(() => checkReach(client, mac))
-  // Said once it has lasted a moment: a reconnect that's over at once never shows.
-  const shown = useDelayedStatus(diagnosis ? diagnosis.headline : null, session.row.conversation)
-  if (!diagnosis || !shown) return null
+  const conversation = session.row.conversation
+  const copyAt = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return live?.key === conversation ? live.copy?.at : undefined
+  })
+  // Its copy on screen and its Mac not heard: quiet as the list says, or refused a call before the list says so.
+  const macOff = copyAt !== undefined && (session.quietSince !== undefined || diagnosis?.at === "mac")
+  // Each said once it has lasted a moment: a reconnect that's over at once, or a list kept from the last visit that the
+  // account's own answer corrects, never shows.
+  const quiet = useDelayedStatus(macOff ? (session.quietSince ?? UNHEARD) : null, conversation)
+  const shown = useDelayedStatus(diagnosis ? diagnosis.headline : null, conversation)
+  if (quiet && copyAt !== undefined) return <QuietStrip session={session} seenAt={quiet === UNHEARD ? undefined : quiet} copyAt={copyAt} />
+  if (!diagnosis || !shown || session.quietSince) return null
   return <DiagnosisCard diagnosis={diagnosis} checking={checking} onTryAgain={tryAgain} compact className="web-trouble-strip" />
 }
+
+/** A Mac not heard that the list doesn't call quiet yet: when it was last seen isn't known. */
+const UNHEARD = "unheard"
 
 /**
  * The servers a live Session's app runs, a card each, while it runs: tap one to open it here. Where there's room for
@@ -196,8 +215,9 @@ function ServerCards({ session }: { session: WebSession }) {
   )
 }
 
-function ThreadBar({ onBack, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; title: string; subtitle: string | undefined; place?: "cloud" | "device"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
-  const Place = place === "cloud" ? CloudIcon : LaptopIcon
+function ThreadBar({ onBack, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; title: string; subtitle: string | undefined; place?: "cloud" | "device" | "quiet"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
+  // Where it runs, as the desk's strip and the list's rows draw it: a Mac asleep or offline under the moon.
+  const Place = place === "cloud" ? CloudIcon : place === "quiet" ? MoonIcon : LaptopIcon
   return (
     <header className="web-bar web-bar-thread flex shrink-0 items-center gap-1 px-1.5">
       {onBack ? (
@@ -241,10 +261,16 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   const inCloud = session.owner.kind === "cloud"
   const hasMac = [...devices.values()].some((device) => device.kind === "desktop")
   const archive = () => void archiveAndSay(client, thread, setBusy, onArchived)
+  // At work as the open Session says it, at once, or as the list does: the list hears of a turn just sent only at its owner's next report.
+  const liveWorking = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return live?.key === session.row.conversation && live.session.status === "running"
+  })
+  const working = liveWorking || session.row.state === "working"
   const move = (mac: MoveMac) => {
     const way = asking
     setAsking(undefined)
-    if (way) void startMove(client, { thread, conversation: session.row.conversation, way, mac, handOff: session.row.state === "working" })
+    if (way) void startMove(client, { thread, conversation: session.row.conversation, way, mac, handOff: working })
   }
   if (busy)
     return (
@@ -304,7 +330,7 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
           </MenuItem>
         </MenuContent>
       </Menu>
-      <MoveSheet open={asking !== undefined} way={asking ?? "cloud"} working={session.row.state === "working"} from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined} onDismiss={() => setAsking(undefined)} onMove={move} />
+      <MoveSheet open={asking !== undefined} way={asking ?? "cloud"} working={working} from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined} onDismiss={() => setAsking(undefined)} onMove={move} />
     </>
   )
 }

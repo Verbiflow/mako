@@ -126,10 +126,10 @@ export class SessionUploads {
       this.#links = linksKey
       if (first) hostLog("sync", "this device's Sessions go to the account", { sessions: scope.sessions.length, paused: String(scope.paused) })
     }
-    await this.#read(scope)
+    await this.#read(scope, rows)
   }
 
-  async #read(scope: SyncScope): Promise<void> {
+  async #read(scope: SyncScope, rows: readonly ReportedSession[]): Promise<void> {
     const [catalog, backfill] = await Promise.all([
       this.#sources.status().catch((error: Error) => {
         hostWarn("sync", "the catalog's sync status couldn't be read", { error: error.message })
@@ -139,7 +139,7 @@ export class SessionUploads {
     ])
     for (const [form, status] of [["copies", catalog?.copies], ["originals", catalog?.originals]] as const)
       for (const failure of status?.failures ?? []) this.#logFailure(form, failure)
-    this.#said(syncStatusOf(scope, catalog, backfill))
+    this.#said(syncStatusOf(scope, catalog, backfill, sessionTitles(rows)))
   }
 
   #said(status: SyncStatus): void {
@@ -167,11 +167,22 @@ export class SessionUploads {
   }
 }
 
+/** What a person calls each listed Session, by its harness and native ID: its Thread's title, else its own. */
+export function sessionTitles(rows: readonly ReportedSession[]): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>()
+  for (const row of rows) {
+    const title = (row.threadTitle ?? row.title)?.trim()
+    if (row.nativeId && title) titles.set(`${row.harness}\n${row.nativeId}`, title)
+  }
+  return titles
+}
+
 /**
  * The status the window shows, from the catalog's two forms: a Session is in the cloud once both are whole there, its
  * copy current and its records pushed through their last capture. Counted by tier; Threads by the Sessions' Threads.
+ * A Session not synced is named by `titles` (`sessionTitles`), where it has one.
  */
-export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null, backfill: Backfill | undefined): SyncStatus {
+export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null, backfill: Backfill | undefined, titles: ReadonlyMap<string, string> = new Map()): SyncStatus {
   if (!catalog?.copies && !catalog?.originals) return { state: "starting", sessions: scope.sessions.length }
   const tiers = SYNC_TIERS.map((tier) => ({ tier, ...catalog.tiers[tier] }))
   // One line a Session, its copy's or its records' (whichever began failing first), the longest failing first.
@@ -190,7 +201,10 @@ export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null
     tiers,
     sending: [...(catalog.copies?.sending ?? []), ...(catalog.originals?.sending ?? [])].length,
     stale: catalog.stale,
-    failures: failures.map(({ at, harness, nativeId, message, correlationId, kind, since }) => ({ at, harness, nativeId, message, ...correlationId && { correlationId }, ...kind && { kind }, ...since !== undefined && { since } })),
+    failures: failures.map(({ at, harness, nativeId, message, correlationId, kind, since }) => {
+      const title = titles.get(`${harness}\n${nativeId}`)
+      return { at, harness, nativeId, ...title && { title }, message, ...correlationId && { correlationId }, ...kind && { kind }, ...since !== undefined && { since } }
+    }),
     ...notSynced.length > failures.length && { notSynced: notSynced.length },
     ...retrying > 0 && { retrying },
     ...lastSuccessAt > 0 && { lastSuccessAt },

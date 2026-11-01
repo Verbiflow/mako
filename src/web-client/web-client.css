@@ -1370,6 +1370,54 @@
   .web-trouble-list {
     @apply mx-3 mt-2 mb-1;
   }
+  /*
+   * A Session read from its Mac's copy while the Mac is asleep: one quiet line under the bar, the Mac's name the part
+   * that gives way when the line is short of room, never what's said of it.
+   */
+  .web-quiet-strip {
+    @apply flex min-h-9 w-full shrink-0 items-center gap-2 border-b border-hairline px-4 text-left text-label text-muted-foreground;
+  }
+  .web-app[data-form="desk"] .web-quiet-strip {
+    @apply min-h-8 px-3;
+  }
+  @media (hover: hover) {
+    .web-quiet-strip:hover {
+      @apply bg-fill-hover;
+    }
+  }
+  /* One line: since when goes whole, onto a second line that isn't shown, when it doesn't fit; then the name gives way. */
+  .web-quiet-strip-line {
+    @apply flex min-w-0 flex-1 flex-wrap overflow-hidden;
+    height: 1lh;
+  }
+  .web-quiet-strip-what {
+    @apply flex min-w-0 max-w-full;
+  }
+  .web-quiet-strip-name {
+    @apply min-w-12 truncate text-foreground/80;
+  }
+  .web-quiet-strip-since {
+    @apply shrink-0 whitespace-pre text-faint;
+  }
+  .web-quiet-details {
+    @apply pb-[calc(env(safe-area-inset-bottom)+16px)];
+  }
+  .web-sheet:is([data-form="pop"], [data-form="dialog"]) .web-quiet-details {
+    @apply pb-2;
+  }
+  /* The diagnosis drawn in a sheet: the sheet is its surface. */
+  .web-trouble-bare {
+    @apply rounded-none bg-transparent px-5 pt-1 pb-0 ring-0;
+  }
+  .web-sheet[data-form="pop"] .web-trouble-bare {
+    @apply px-2 pt-2;
+  }
+  .web-quiet-waits {
+    @apply mx-5 mt-4 border-t border-hairline pt-3.5 text-label text-muted-foreground;
+  }
+  .web-sheet[data-form="pop"] .web-quiet-waits {
+    @apply mx-2;
+  }
 
   /* A Mac to connect: three steps that tick themselves as the Mac signs in and connects. */
   .web-connect {

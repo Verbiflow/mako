@@ -174,8 +174,8 @@ async function checkWindow() {
     await evaluate(`import('/src/state/live-recovery.ts').then(({ applyLiveSnapshot }) => (applyLiveSnapshot(${JSON.stringify(copySnapshot)}), true))`)
     await until(`Boolean(document.querySelector('[data-copy-notice]'))`, "the copy's notice above the composer")
     const notice = await evaluate(`document.querySelector('[data-copy-notice]').innerText`)
-    assert.match(notice, /Studio is off/, "where it runs, and that it's off")
-    assert.match(notice, /reading its copy from 4 minutes ago/, "what's on screen, and how old")
+    assert.match(notice, /Studio is asleep or offline/, "where it runs, and that it's off, in the words a browser says it")
+    assert.match(notice, /copy from 4m ago/, "never heard going quiet: what's on screen, and how old")
     // The notice is one line; the rest is a click away.
     await click("[data-copy-notice] [aria-label='More about this']")
     const more = `[...document.querySelectorAll('[data-radix-popper-content-wrapper]')].map(node => node.innerText).join(' ')`
@@ -185,9 +185,11 @@ async function checkWindow() {
     await until(`!${more}.includes('A message you send')`, "the detail closed")
     await until(`document.body.innerText.includes('Waiting on CI.')`, "the copy's history on screen")
     assert.equal(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Message — waits until it's back", "the composer says a message waits")
+    // What waits is its words alone, as a phone's composer has it: nothing to attach, no harness, model, access or meter.
+    assert.deepEqual(await evaluate(`[Boolean(document.querySelector("[aria-label='Add to message']")), document.querySelector('.composer-routing')?.childElementCount]`), [false, 0], "the composer offers only what applies to a copy")
     // Its panels ask nothing of the Studio: each says it's off, once, instead of waiting on it.
     await until(`Boolean(document.querySelector('[data-device-off]'))`, "the panel saying the Studio is off")
-    assert.match(await evaluate(`document.querySelector('[data-device-off]').innerText`), /Studio is off[\s\S]*once Studio is back/)
+    assert.match(await evaluate(`document.querySelector('[data-device-off]').innerText`), /Studio is asleep or offline[\s\S]*once Studio is back/)
     // The pointer off the rail, so no row's tip covers the pictures.
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 40 })
     await settle()
@@ -207,6 +209,7 @@ async function checkWindow() {
     await evaluate(`import('/src/state/live-recovery.ts').then(({ applyLiveSnapshot }) => (applyLiveSnapshot(${JSON.stringify({ ...copySnapshot, copy: undefined, epoch: "studio-live", revision: 1 })}), true))`)
     await until(`!document.querySelector('[data-copy-notice]') && !document.querySelector('[data-device-off]')`, "the copy's notice and panel gone")
     assert.notEqual(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Message — waits until it's back")
+    await until(`Boolean(document.querySelector("[aria-label='Add to message']")) && document.querySelector('.composer-routing')?.childElementCount > 0`, "the composer's choices back")
     await settle()
     await capture("studio-back-window")
 

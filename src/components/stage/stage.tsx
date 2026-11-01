@@ -25,7 +25,8 @@ import {
   fitsBeside,
 } from "@/components/stage/stage-width"
 import { cn } from "@/lib/utils"
-import { ArrowLeftIcon, PowerOffIcon } from "lucide-react"
+import { ArrowLeftIcon, MoonIcon } from "lucide-react"
+import { QUIET_WORDS } from "@/lib/quiet-device"
 import { Blank } from "@/components/ui/kit"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import type { TabStage } from "@/state/stage"
@@ -356,7 +357,7 @@ const CompanionBody = memo(function CompanionBody({
   if (off)
     return (
       <div data-device-off className="h-full">
-        <Blank icon={<PowerOffIcon />} title={`${off} is off`} body={`Its changes, files and agents show here once ${off} is back. The conversation reads from the copy it keeps in your account.`} />
+        <Blank icon={<MoonIcon />} title={`${off} ${QUIET_WORDS}`} body={`Its changes, files and agents show here once ${off} is back. The conversation reads from the copy it keeps in your account.`} />
       </div>
     )
   return <Render />
