@@ -120,7 +120,7 @@ export interface ToolViewProps {
 }
 
 export interface ToolView {
-  /** One-line summary shown on the collapsed row. */
+  /** One-line summary shown on the collapsed row: inline content, which the row truncates as one line. */
   summary?: (call: ToolCall) => ReactNode
   /** Body shown when the row is expanded. Falls back to raw output. */
   body?: ComponentType<ToolViewProps>
