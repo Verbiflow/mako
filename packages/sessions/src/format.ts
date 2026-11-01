@@ -204,6 +204,13 @@ export interface ThreadRef {
    */
   threadId?: string
   sessionId?: string
+  /**
+   * A background agent's Session: one a conversation's agent started to work
+   * for it (`contracts/background-agents.ts` in the host), so it is never a
+   * row of its own and shows under that conversation. Its parent's Session
+   * and Mako's ID for the agent; overlaid by the host from the Thread store.
+   */
+  agentOf?: { session: string; agent: string }
 }
 
 /** The key two refs share when they present the same conversation. */

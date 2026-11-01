@@ -15,7 +15,7 @@ const USER_HZ = 100
  * start in ticks, truncated to seconds), which spares the host a child
  * process on each launch and liveness check.
  */
-async function processStartedAt(
+export async function processStartedAt(
   pid: number,
   signal: AbortSignal
 ): Promise<number> {

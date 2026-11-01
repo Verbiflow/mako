@@ -33,7 +33,7 @@ import {
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
 import { latestPendingQuestion, retireQuestionsForInput } from "../contracts/live-questions.js"
-import { isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
+import { isActiveNativeAgent, isBusyProviderWork, withBackgroundAgents } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
@@ -91,7 +91,7 @@ function residentWork(resident: Resident): LifecycleWork | undefined {
   const { snapshot } = resident
   const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
   const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
-  const native = snapshot.nativeAgents?.agents.filter(isBusyNativeAgent) ?? []
+  const native = snapshot.nativeAgents?.agents.filter(isBusyProviderWork) ?? []
   const background = Boolean(snapshot.session.backgroundTasks)
   if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return undefined
   const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
@@ -160,6 +160,8 @@ export class LiveConversations {
       loaded: (resident) => {
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
+        // The journal's copy of its background agents is as they were saved; their owner says how they are now.
+        this.takeBackgroundAgents(resident)
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
       paged: (id) => this.dependencies.historyPaged?.(id),
@@ -1187,6 +1189,8 @@ export class LiveConversations {
    */
   async stopNativeAgent(id: string, nativeId: string): Promise<boolean> {
     const resident = this.records.require(id)
+    const detached = resident.snapshot.nativeAgents?.agents.find((candidate) => candidate.nativeId === nativeId && candidate.detached)?.detached
+    if (detached) return (await this.dependencies.backgroundAgents?.()?.stop(id, detached.id)) ?? false
     const binding = conversationControl(resident).activeBindingId
     const agent = resident.snapshot.nativeAgents?.agents.find((candidate) =>
       candidate.nativeId === nativeId && candidate.bindingId === binding && candidate.stoppable && isActiveNativeAgent(candidate))
@@ -1194,6 +1198,29 @@ export class LiveConversations {
     if (!agent || !stop) return false
     hostLog("live", "stop one task", { conversation: id, provider: agent.provider, work: agent.work ?? "agent" })
     await stop(binding, nativeId)
+    return true
+  }
+
+  /**
+   * The conversation's background agents moved: a loaded conversation's
+   * roster takes them from their owner, which keeps each entry's identity
+   * while it's unchanged. A start or an end goes out at once, progress with
+   * the frame; one not loaded reads them when it is (`loaded`).
+   */
+  backgroundAgentsChanged(id: string, progressOnly = false): void {
+    const resident = this.records.get(id)
+    if (!resident || this.records.isReleased(resident) || !this.takeBackgroundAgents(resident)) return
+    if (progressOnly) this.schedule(resident)
+    else this.keep(resident)
+  }
+
+  /** Whether the roster took a change of its background agents. */
+  private takeBackgroundAgents(resident: Resident): boolean {
+    const agents = this.dependencies.backgroundAgents?.()?.roster(resident.snapshot.session.id)
+    if (!agents) return false
+    const nativeAgents = withBackgroundAgents(resident.snapshot.nativeAgents, agents)
+    if (nativeAgents === resident.snapshot.nativeAgents) return false
+    resident.snapshot = { ...resident.snapshot, nativeAgents }
     return true
   }
 

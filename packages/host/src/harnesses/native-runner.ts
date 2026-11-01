@@ -36,6 +36,11 @@ export interface NativeCommand {
   env?: Record<string, string>
 }
 
+/** A background agent's command, and the ID its Session will have, when the command names it. */
+export interface BackgroundCommand extends NativeCommand {
+  session?: string
+}
+
 /**
  * What `prepare` settled before a command is built: the options the command
  * carries, the option ids it cannot carry, and the ids whose selected value
@@ -82,6 +87,14 @@ export interface NativeRunner extends ProviderCapability {
     env?: NodeJS.ProcessEnv
   ): NativeCommand | Promise<NativeCommand>
   fresh(prompt: string, options: NativeRunOptions, env?: NodeJS.ProcessEnv): NativeCommand | Promise<NativeCommand>
+  /**
+   * A fresh run for a background agent (`BackgroundAgents`): `fresh`'s
+   * command, under the session ID it returns, so its Session is known before
+   * its harness writes it. Absent: a background agent runs on `fresh`, and
+   * is matched to the Session its harness writes by its folder, start and
+   * prompt.
+   */
+  background?(prompt: string, options: NativeRunOptions, env?: NodeJS.ProcessEnv): BackgroundCommand | Promise<BackgroundCommand>
   /**
    * The settings a built command states, read back from its arguments
    * against the provider's catalog, whose model ids and option vocabulary

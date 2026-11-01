@@ -2,7 +2,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
 import { goalWorking } from "../contracts/live-goals.js"
-import { disconnectNativeAgents, isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
+import { disconnectNativeAgents, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory, ProviderResidencyEntry, ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
@@ -56,7 +56,7 @@ export class LiveHibernation {
               ? "disconnected"
               : session.status === "running" ||
                   session.backgroundTasks ||
-                  resident.snapshot.nativeAgents?.agents.some(isBusyNativeAgent) ||
+                  resident.snapshot.nativeAgents?.agents.some(isBusyProviderWork) ||
                   goalWorking(resident.snapshot.goal) ||
                   resident.opening ||
                   resident.transferring ||
@@ -190,7 +190,7 @@ export class LiveHibernation {
             (request.status === "queued" && !this.access.moves.holdsQueued(resident) &&
               !(recoverAccount && (!request.nativeDelivery || request.nativeDelivery.evidence.kind === "not-accepted")))
         ) &&
-        !native.some(isBusyNativeAgent)
+        !native.some(isBusyProviderWork)
     )
   }
 

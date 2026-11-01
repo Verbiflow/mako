@@ -29,7 +29,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { type AccountLaunch, type AccountHold, type ProviderHost, dropUncarried, type NativeCommand, type NativeRunOptions, type NativeRunner } from "../harnesses/index.js"
+import { type AccountLaunch, type AccountHold, type BackgroundCommand, type ProviderHost, dropUncarried, type NativeCommand, type NativeRunOptions, type NativeRunner } from "../harnesses/index.js"
 import { resumable, type ResumeVerdict } from "../contracts/conversation-control.js"
 import { reconnectRefusal } from "./live-transfers.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -94,6 +94,51 @@ export function preparedSettings(options: NativeRunOptions): SessionSettings {
   if (options.model) settings.model = options.model
   if (options.options && Object.keys(options.options).length) settings.options = options.options
   return settings
+}
+
+/** A headless command ready to spawn, on the account it runs on, and what of its settings it couldn't carry. */
+export interface PreparedNativeCommand {
+  executable: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  /** The Session's ID, when the command names it (`NativeRunner.background`). */
+  session?: string
+  dropped: string[]
+  /** The account's hold, when it has one, which the caller releases once the process is under way. */
+  hold?: AccountHold
+}
+
+/**
+ * Builds a fresh run's command as a native reply's is built (`NativeRuns.launch`): on the selected account, with
+ * the credentials its runner resolves, the settings its command line carries, and its executable resolved. A
+ * background agent's command (`NativeRunner.background`) when the runner has one.
+ */
+export async function prepareNativeCommand(
+  host: Pick<ProviderHost, "nativeRunners" | "accounts">,
+  harness: string,
+  prompt: string,
+  options: NativeRunOptions
+): Promise<PreparedNativeCommand> {
+  const runner = host.nativeRunners.get(harness)
+  if (!runner) throw new Error(`A ${harness} agent cannot be started from here`)
+  const launch = await host.accounts.launch(harness, process.env, { holder: { kind: "run" } })
+  try {
+    const resolved = runner.launchCredentials.kind === "resolved" ? await runner.launchCredentials.resolve(launch.env) : undefined
+    let env: NodeJS.ProcessEnv = { ...(resolved?.env ?? launch.env) }
+    const prepared = runner.prepare ? await runner.prepare(options, env) : dropUncarried(options, runner.carries)
+    const built: BackgroundCommand = runner.background ? await runner.background(prompt, prepared.options, env) : await runner.fresh(prompt, prepared.options, env)
+    if (built.env) env = { ...env, ...built.env }
+    const executable = resolveExecutable(built.command, env)
+    if (!executable) throw new Error(`${harness} is not installed`)
+    await host.accounts.assertLaunch(harness, launch)
+    const command: PreparedNativeCommand = { executable, args: built.args, env: environmentForExecutable(executable, env), dropped: prepared.dropped }
+    if (launch.hold) command.hold = launch.hold
+    if (built.session) command.session = built.session
+    return command
+  } catch (error) {
+    launch.hold?.release()
+    throw error
+  }
 }
 
 /** This host's headless runs, one writer per native session, each reporting as `thread-run` events. */

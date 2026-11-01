@@ -1,6 +1,6 @@
 import type { ContextTransfer, ConversationControl } from "../contracts/conversation-control.js"
 import { pendingQuestion } from "../contracts/live-questions.js"
-import { isBusyNativeAgent } from "../contracts/native-agents.js"
+import { isBusyNativeAgent, isProviderWork } from "../contracts/native-agents.js"
 import {
   executionRefusal,
   type ClaimReceipt,
@@ -319,7 +319,9 @@ export class LiveMoves {
       return "is waiting for an answer"
     if (resident.autoContinue) return "is about to continue a dropped turn"
     if (snapshot.session.backgroundTasks) return "has background tasks running"
-    if ((snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)) return "has subagents running"
+    const busy = (snapshot.nativeAgents?.agents ?? []).filter(isBusyNativeAgent)
+    if (busy.some(isProviderWork)) return "has subagents running"
+    if (busy.length) return "has background agents running on this device"
     if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident)) {
       // A session opens again from its record: one that never finished a turn (its first failed) has none yet.
       const binding = snapshot.control?.bindings.find((each) => each.id === snapshot.control?.activeBindingId)

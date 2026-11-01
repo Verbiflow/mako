@@ -179,6 +179,8 @@ export interface Dependencies {
   ): ConversationTools | undefined | Promise<ConversationTools | undefined>
   /** The Thread's values for an agent process about to start; never blocks the start when they can't be had. */
   threadEnvironment?(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined>
+  /** The background agents each conversation started, which their owner runs and follows (`BackgroundAgents`). */
+  backgroundAgents?(): Pick<import("./background-agents.js").BackgroundAgents, "roster" | "stop"> | undefined
   /**
    * The lines of Mako's note sent ahead of each prompt: Local Control and the
    * values the conversation's process started with. The note wraps them with

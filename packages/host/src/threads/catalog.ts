@@ -66,7 +66,7 @@ import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import type { Lineage } from "./lineage.js"
 import { sessionMemoryPath, type SessionMemory } from "./session-memory.js"
-import type { ThreadStore } from "./store.js"
+import type { BackgroundAgents, ThreadStore } from "./store.js"
 import type { Actor, ThreadId } from "../contracts/thread-identity.js"
 import {
   resolveAnchor,
@@ -391,6 +391,8 @@ export interface ThreadCatalog {
    * refreshed ref is announced so the composer reads it back at once.
    */
   rememberMode(path: string, modeId: string): ThreadRef | null
+  /** Sends the row at `path` again as it now reads, once the store says something new of it (a background agent's link). */
+  announce(path: string): void
   /** Every event the catalog sends, for a service that follows it. */
   subscribe(subscriber: (event: HostEvent) => void): () => void
 }
@@ -462,27 +464,45 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
   }
 
-  function annotated(ref: ThreadRef): ThreadRef {
+  function annotated(ref: ThreadRef, agents: BackgroundAgents | undefined): ThreadRef {
     const known = sessionMemory ? sessionMemory.annotate(ref) : ref
     // A title a harness took from the first prompt carries Mako's context
     // markers; every surface reads the person's words instead.
     const title = contextFreeTitle(known.title)
     const titled = title === known.title ? known : withTitle(known, title)
-    return withWorktrees(withWorkspacePresence(lineage.annotate(titled)))
+    return withAgentOf(withWorktrees(withWorkspacePresence(lineage.annotate(titled))), agents)
+  }
+
+  /** The store's background agents, read once for a batch of rows; none while the store can't be read. */
+  function backgroundAgents(): BackgroundAgents | undefined {
+    try {
+      return threadStore?.backgroundAgents()
+    } catch {
+      return undefined
+    }
+  }
+
+  /** The background agent a session is, which shows under its conversation and never as a row (`listedAsThread`). */
+  function withAgentOf(ref: ThreadRef, agents: BackgroundAgents | undefined): ThreadRef {
+    const agent = agents?.at(ref.harness, ref.nativeId)
+    return agent ? { ...ref, agentOf: { session: agent.parent, agent: agent.id } } : ref
   }
 
   function annotate(ref: ThreadRef): ThreadRef {
-    return withThreadPlacements([annotated(ref)])[0] ?? ref
+    return withThreadPlacements([annotated(ref, backgroundAgents())])[0] ?? ref
   }
 
   function annotateAll(refs: readonly ThreadRef[]): ThreadRef[] {
-    return withThreadPlacements(refs.map(annotated))
+    const agents = backgroundAgents()
+    return withThreadPlacements(refs.map((ref) => annotated(ref, agents)))
+  }
+
+  function catalogued(path: string): ThreadRef | undefined {
+    return daemon ? mirror.get(path) : catalog?.list().find((candidate) => candidate.path === path)
   }
 
   function rememberThreadMode(path: string, modeId: string): ThreadRef | null {
-    const ref = daemon
-      ? mirror.get(path)
-      : catalog?.list().find((candidate) => candidate.path === path)
+    const ref = catalogued(path)
     if (!ref) return null
     sessionMemory?.remember(ref.harness, ref.nativeId, { modeId })
     const refreshed = annotate(ref)
@@ -1279,7 +1299,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   function railThreads(
     filter: { cwd?: string; harness?: string } = {}
   ): ThreadRef[] {
-    const refs = catalogRefs(filter)
+    const agents = backgroundAgents()
+    const refs = agents?.all.length ? catalogRefs(filter).filter((ref) => !agents.at(ref.harness, ref.nativeId)) : catalogRefs(filter)
     const listed = annotateAll(threadList(refs))
     if (!threadStore || refs.length <= listed.length) return listed
     const missing = unlistedThreadSessions(listed, threadStore.groups())
@@ -1752,6 +1773,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     unfollow: unfollowThread,
     transcriptArtifact: transcriptArtifactFor,
     rememberMode: rememberThreadMode,
+    announce(path) {
+      const ref = catalogued(path)
+      if (ref) emit({ type: "thread-ref", ref: annotate(ref) })
+    },
     subscribe: subscribeThreadEvents,
   }
 }
