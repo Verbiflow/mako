@@ -467,17 +467,28 @@ function publishBackground() {
  * otherwise each batch replaces the roster outright, the baseline.
  */
 const agentsProfile = { commits: 0, ms: 0 }
-async function backgroundBench(reconciled: boolean, entries = 50, batches = 120) {
+const chatProfile = { commits: 0, ms: 0 }
+const BENCH_HARNESSES = ["claude", "cursor", "codex", "grok", "opencode", "devin"]
+/** `detached`: every entry a background agent (`backgroundAgentEntry`'s shape) on one of six harnesses, as `agent_start`'s are. */
+async function backgroundBench(reconciled: boolean, entries = 50, batches = 120, detached = false) {
   const now = Date.now()
-  const agents = Array.from({ length: entries }, (_, index) => ({
-    bindingId: id, provider: "claude", nativeId: `task-${index}`, title: `Background task ${index}`, work: index % 3 ? "command" as const : "agent" as const,
-    background: true, stoppable: true, startedAt: now - index * 1_000, observedAt: now, state: { kind: "working" as const, activity: "Starting" },
-  }))
+  const agents = Array.from({ length: entries }, (_, index) => detached
+    ? {
+        bindingId: "mako:background-agents", provider: BENCH_HARNESSES[index % BENCH_HARNESSES.length]!, nativeId: `mako-agent:bench-${index}`, title: `Background agent ${index}`, work: "agent" as const,
+        background: true, stoppable: true, startedAt: now - index * 1_000, observedAt: now, state: { kind: "working" as const, activity: "Starting" },
+        detached: { id: `bench-${index}`, origin: "started" as const, session: `bench-${index}`, path: `/bench/${index}.jsonl` },
+      }
+    : {
+        bindingId: id, provider: "claude", nativeId: `task-${index}`, title: `Background task ${index}`, work: index % 3 ? "command" as const : "agent" as const,
+        background: true, stoppable: true, startedAt: now - index * 1_000, observedAt: now, state: { kind: "working" as const, activity: "Starting" },
+      })
   let roster: NonNullable<LiveSnapshot["nativeAgents"]> = { limited: false, agents }
   applyLiveSnapshot({ ...snapshot, revision: (acpStore.get().conversations[id]?.revision ?? 0) + 1, session: { ...snapshot.session, status: "ready", backgroundTasks: entries }, nativeAgents: roster })
   await new Promise((resolve) => setTimeout(resolve, 200))
   agentsProfile.commits = 0
   agentsProfile.ms = 0
+  chatProfile.commits = 0
+  chatProfile.ms = 0
   for (let batch = 0; batch < batches; batch++) {
     roster = { ...roster, agents: roster.agents.map((agent, index) => index === 7 ? { ...agent, observedAt: now + batch + 1, state: { kind: "working" as const, activity: `Step ${batch}` }, usage: { toolUses: batch } } : agent) }
     const wire = NativeAgentRosterSchema.parse(JSON.parse(JSON.stringify(roster)))
@@ -486,7 +497,10 @@ async function backgroundBench(reconciled: boolean, entries = 50, batches = 120)
     else updateLive(id, (conversation) => ({ ...conversation, nativeAgents: wire }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
   }
-  return { reconciled, entries, batches, commits: agentsProfile.commits, renderMs: Math.round(agentsProfile.ms * 10) / 10, perBatchMs: Math.round(agentsProfile.ms / batches * 100) / 100 }
+  return {
+    reconciled, entries, batches, detached, commits: agentsProfile.commits, renderMs: Math.round(agentsProfile.ms * 10) / 10, perBatchMs: Math.round(agentsProfile.ms / batches * 100) / 100,
+    chatCommits: chatProfile.commits, chatPerBatchMs: Math.round(chatProfile.ms / batches * 100) / 100,
+  }
 }
 Object.assign(window, { makoBackgroundBench: backgroundBench })
 const statusMarks: { label: string; status: ThreadStatus }[] = [
@@ -616,8 +630,10 @@ export function Fixture() {
           >
             <main className="flex min-w-0 flex-1 flex-col">
               <HostConnectionNotice />
-              <AcpPanel />
-              <Composer />
+              <Profiler id="chat" onRender={(_, __, actual) => { chatProfile.commits += 1; chatProfile.ms += actual }}>
+                <AcpPanel />
+                <Composer />
+              </Profiler>
             </main>
             <aside
               className={`min-h-0 shrink-0 border-l border-hairline ${narrow ? "w-80" : "w-96"}`}

@@ -2,9 +2,10 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useMemo, useState } from "react"
 import { ChevronDownIcon, EyeIcon, GitBranchIcon, HourglassIcon, SquareIcon, WorkflowIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import type { AcpState, LiveAcpConversation } from "@/state/acp-state"
 import { stage } from "@/state/stage"
 import { shallowEqual } from "@/state/store"
-import { useThreads } from "@/state/threads"
+import { threads, useThreads } from "@/state/threads"
 import { descriptorFor } from "@/state/descriptors"
 import { capabilityText } from "@mako/host/contracts/harness-capabilities"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
@@ -32,12 +33,29 @@ const labels = {
 } satisfies Record<NativeAgent["state"]["kind"], string>
 
 const kinds = {
-  agent: "Agent",
+  agent: "Subagent",
   workflow: "Workflow",
-  command: "Command",
+  command: "Background command",
   monitor: "Monitor",
   task: "Task",
 } satisfies Record<NativeWork, string>
+
+/**
+ * What an entry is, in the one vocabulary every harness's entries share: a
+ * subagent its provider runs inside the turn, a background command or
+ * monitor, or a background agent, a harness's own run working for the
+ * conversation past its turn (`detached`).
+ */
+function workKind(agent: NativeAgent): string {
+  return agent.detached ? "Background agent" : kinds[agent.work ?? "agent"]
+}
+
+/** A background agent's Session, which opens read-only like any session's transcript. */
+function openTranscript(agent: NativeAgent): void {
+  const detached = agent.detached
+  if (!detached?.path || !detached.session) return
+  void threads.view({ harness: agent.provider, nativeId: detached.session, path: detached.path, title: agent.title }, "native")
+}
 
 function activity(agent: NativeAgent): string | undefined {
   switch (agent.state.kind) {
@@ -102,22 +120,31 @@ function ordered(agents: readonly NativeAgent[]): NativeAgent[] {
 export function AgentsPanel() {
   const focus = useWorkspaceFocus()
   const key = useAcp((state) => (focus.identity === `live:${state.activeKey}` ? state.activeKey : undefined))
-  const roster = useAcp((state) => (key ? activeLiveAcp(state)?.nativeAgents : undefined))
-  const provider = useAcp((state) => (key ? activeLiveAcp(state)?.harness : undefined))
+  return <ConversationAgents key={focus.identity} conversation={key ?? undefined} />
+}
+
+function liveConversation(state: AcpState, conversation: string | undefined): LiveAcpConversation | undefined {
+  const found = conversation ? state.conversations[conversation] : undefined
+  return found?.kind === "live" ? found : undefined
+}
+
+/** One conversation's roster as the desk's Agents panel and a phone's Agents sheet both draw it. */
+export function ConversationAgents({ conversation, transcripts = true }: { conversation?: string; transcripts?: boolean }) {
+  const roster = useAcp((state) => liveConversation(state, conversation)?.nativeAgents)
+  const provider = useAcp((state) => liveConversation(state, conversation)?.harness)
   const background = useAcp((state) => {
-    const live = key ? activeLiveAcp(state) : undefined
+    const live = liveConversation(state, conversation)
     const work = live ? backgroundWork(live.session, live.nativeAgents) : null
     return { waiting: work ? backgroundWorkText(work) : undefined, unnamed: work?.unnamed ?? 0, stopping: live?.canceling ?? false }
   }, shallowEqual)
-  return (
-    <AgentRoster key={focus.identity} conversation={key ?? undefined} roster={roster} provider={provider} {...background} />
-  )
+  return <AgentRoster conversation={conversation} roster={roster} provider={provider} transcripts={transcripts} {...background} />
 }
 
 function AgentRoster({
   conversation,
   roster,
   provider,
+  transcripts,
   waiting,
   unnamed,
   stopping,
@@ -125,6 +152,8 @@ function AgentRoster({
   conversation?: string
   roster?: NativeAgentRoster
   provider?: string
+  /** Whether a background agent's row opens its transcript, which only the desk can show. */
+  transcripts: boolean
   /** What the session waits on between turns, in words; absent while a turn runs or nothing does. */
   waiting?: string
   /** Work the provider counts without naming it. */
@@ -144,7 +173,7 @@ function AgentRoster({
           !provider
             ? "Open a live conversation to follow the agents and background work it starts."
             : !capability || capability.state === "implemented"
-              ? "Subagents, background commands and monitors the provider starts appear here with their progress and results."
+              ? "Subagents, background commands and agents, and monitors this conversation starts appear here with their progress and results."
               : `${harnessLabel(provider)} does not report its agents to Mako. ${capabilityText(capability)}`
         }
       />
@@ -174,14 +203,14 @@ function AgentRoster({
           </button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
+      <div data-sheet-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
         {unnamed > 0 ? (
           <p className="px-2.5 py-2 text-label text-faint">
             {unnamed === 1 ? "1 more task runs" : `${unnamed} more tasks run`} that {provider ? harnessLabel(provider) : "the provider"} counts without naming.
           </p>
         ) : null}
         {agents.slice(0, visible).map((agent) => (
-          <AgentRow key={`${agent.bindingId}:${agent.nativeId}`} agent={agent} conversation={conversation} />
+          <AgentRow key={`${agent.bindingId}:${agent.nativeId}`} agent={agent} conversation={conversation} transcript={transcripts} />
         ))}
         {agents.length > visible ? (
           <button
@@ -210,15 +239,16 @@ const marks = {
 } satisfies Record<NativeAgent["state"]["kind"], ActivityState>
 
 /** One entry. Rows are memoized on the entry's identity, which `reconcileRoster` keeps while it is unchanged. */
-export const AgentRow = memo(function AgentRow({ agent, conversation }: { agent: NativeAgent; conversation?: string }) {
+export const AgentRow = memo(function AgentRow({ agent, conversation, transcript = true }: { agent: NativeAgent; conversation?: string; transcript?: boolean }) {
   useHarnessIdentity()
   const [expanded, setExpanded] = useState(false)
   const [stopping, setStopping] = useState(false)
   const active = isActiveNativeAgent(agent)
   const work = agent.work ?? "agent"
   const said = activity(agent)
+  const kind = workKind(agent)
   const facts = [
-    kinds[work],
+    kind,
     harnessLabel(agent.provider),
     agent.model,
     agent.role,
@@ -241,7 +271,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation }: { agent:
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex h-5 min-w-0 items-center gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-ui font-medium text-foreground", work === "command" && !agent.title && "font-mono")}>
-              {agent.title || agent.detail || kinds[work]}
+              {agent.title || agent.detail || kind}
             </span>
             <span className={cn("flex shrink-0 items-center gap-1.5 text-label", agent.state.kind === "failed" ? "text-negative" : "text-faint")}>
               {active ? <Shimmer text={labels[agent.state.kind]} /> : labels[agent.state.kind]}
@@ -276,10 +306,20 @@ export const AgentRow = memo(function AgentRow({ agent, conversation }: { agent:
           </span>
         </span>
       </button>
+      {transcript && agent.detached?.path && agent.detached.session ? (
+        <button
+          type="button"
+          data-open-transcript
+          onClick={() => openTranscript(agent)}
+          className="pressable mb-1.5 ml-[2.375rem] rounded-md px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        >
+          Open transcript
+        </button>
+      ) : null}
       {active && agent.stoppable && conversation ? (
         <button
           type="button"
-          aria-label={`Stop ${agent.title || kinds[work]}`}
+          aria-label={`Stop ${agent.title || kind}`}
           title="Stop this one; the rest keeps running"
           disabled={stopping}
           onClick={() => {
@@ -301,26 +341,43 @@ export const AgentRow = memo(function AgentRow({ agent, conversation }: { agent:
  * turn has ended and that work is what the session waits on.
  */
 export function AgentsToggle() {
+  useHarnessIdentity()
   const reading = useAcp((state) => {
     const live = activeLiveAcp(state)
     const agents = live?.nativeAgents?.agents ?? []
+    const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient)
     return {
       total: agents.length,
-      running: agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient).length,
+      running: running.length,
+      // The harnesses at work, as one string so a step elsewhere in the roster re-renders nothing.
+      harnesses: [...new Set(running.filter((agent) => (agent.work ?? "agent") === "agent").map((agent) => agent.provider))].slice(0, SHOWN_MARKS).join(" "),
       waiting: Boolean(live && backgroundWork(live.session, live.nativeAgents)),
     }
   }, shallowEqual)
   if (!reading.total) return null
   const label = reading.running ? `${reading.running} running` : `${reading.total} finished`
+  const marks = reading.harnesses ? reading.harnesses.split(" ") : []
   return (
     <button
       type="button"
+      data-agents-toggle
       onClick={() => stage.toggle("agents")}
       title={reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
       className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
     >
-      {reading.waiting ? <HourglassIcon className="size-3" /> : <GitBranchIcon className="size-3" />}
+      {marks.length ? (
+        <span className="flex items-center -space-x-1">
+          {marks.map((harness) => (
+            <span key={harness} className="flex size-4 items-center justify-center rounded-full bg-surface ring-1 ring-surface">
+              <HarnessIcon harness={harness} className="size-3" />
+            </span>
+          ))}
+        </span>
+      ) : reading.waiting ? <HourglassIcon className="size-3" /> : <GitBranchIcon className="size-3" />}
       {label}
     </button>
   )
 }
+
+/** Harness marks the toggle shows at most, overlapped. */
+const SHOWN_MARKS = 3

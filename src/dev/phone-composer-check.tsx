@@ -17,6 +17,7 @@ import { applyTheme } from "@/web-client/theme"
 import type { WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
+import { namedRoster } from "./mock-busy-thread"
 import "../web-client/style.css"
 
 /**
@@ -92,6 +93,8 @@ const harness = search.get("harness") === "grok" ? "grok" : "codex"
 const scene = SCENES[harness]
 const modeBefore = scene.quiet
 const modeAfter = search.get("mode") === "before" ? scene.quiet : scene.raised
+/** `?agents=states` or `?agents=32`: the Session waits on the desk's busy roster, for the phone's footer and Agents sheet. */
+const agents = search.get("agents")
 
 /** What each message went with, as the host was asked to send it: the check's proof that a choice rides the next one. */
 const sent: { text: string; tuning: SessionSettings | undefined }[] = []
@@ -173,6 +176,7 @@ function snapshot(status: "ready" | "running", extra: LiveRequest[] = []): LiveS
       ...(status === "running" ? [{ type: "user" as const, text: "Now check the webhook retries too", requestId: "44444444-4444-4444-8444-444444444444" }] : []),
     ],
     control: { activeBindingId: conversation, bindings: [], merges: [], transfers: [], actions: [] },
+    ...(agents && { nativeAgents: { agents: namedRoster(conversation, agents), limited: false } }),
   }
 }
 
