@@ -240,6 +240,7 @@
     "test:appshot-live": "node --import tsx scripts/test-appshot-live.mjs",
     "test:background-work": "tsx scripts/test-background-work.ts",
     "test:background-agents": "tsx scripts/test-background-agents.ts",
+    "test:agents-migrate": "tsx scripts/test-agents-migrate.ts",
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
     "test:animations-ui": "node scripts/test-animations-ui.mjs",
     "test:tool-rows-ui": "node scripts/test-tool-rows-ui.mjs",

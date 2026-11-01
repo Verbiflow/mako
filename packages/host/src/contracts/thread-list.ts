@@ -3,14 +3,14 @@ import type { ThreadRef } from "@mako/sessions"
 /** Rows the window's rail holds. Nobody scrolls ten years of history. */
 export const THREAD_LIST_CAP = 600
 
-type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived" | "updatedAt" | "threadId" | "agentOf">
+type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived" | "updatedAt" | "threadId" | "parent">
 
 /**
- * Whether a session is a row of its own: a background agent's (`agentOf`)
- * shows under the conversation it works for, never as a Thread.
+ * Whether a session is a row of its own: a child's (`parent`) shows inside
+ * its parent's Thread, never as a Thread.
  */
-export function listedAsThread(ref: Pick<ThreadRef, "agentOf">): boolean {
-  return ref.agentOf === undefined
+export function listedAsThread(ref: Pick<ThreadRef, "parent">): boolean {
+  return ref.parent === undefined
 }
 
 /**
@@ -27,8 +27,8 @@ export function listedSession(ref: Pick<ThreadRef, "harness" | "nativeId" | "ide
  * answers a reload with it and the window applies it after every push, so a
  * reload never shows a different set of rows than the pushes built. A row
  * past the cap stays when a row within it shares its Thread: the cap counts
- * history, and a Thread is shown whole. A background agent's session is no
- * row (`listedAsThread`).
+ * history, and a Thread is shown whole. A child's session is no row
+ * (`listedAsThread`).
  */
 export function threadList<Ref extends ListedRef>(list: readonly Ref[]): Ref[] {
   const byIdentity = new Map<string, Ref>()

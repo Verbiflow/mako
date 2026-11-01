@@ -27,8 +27,8 @@ export type UploadSources = {
   /** Where the catalog reads a native session, by its harness and ID; undefined for one it doesn't list. */
   path(harness: string, nativeId: string): string | undefined
   /**
-   * The background agents of a Session, by their harness Sessions (`ThreadStore.backgroundAgents`): no row of their
-   * own, they go up with it, so another device reads each under it as this one shows it.
+   * The children of a Session's Thread, by their harness Sessions (`ThreadStore.childSessions`): no row of their own,
+   * they go up with it, so another device reads each under it as this one shows it.
    */
   agents?(session: string): readonly { harness: string; nativeId?: string }[]
   /** Where this device's copies and originals go in the account, while it's signed in with the cloud; else why not. */

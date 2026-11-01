@@ -30,6 +30,7 @@ export type { ThreadCatalog, ThreadFileHomes } from "./catalog.js"
 export type { ThreadLifecycle, LiveThreads, NativeQueue } from "./lifecycle.js"
 export { SessionMemory, SessionHeldError, type ConversationEndpoint, type ConversationRoute, type SessionFacts } from "./session-memory.js"
 export type { JournalFacts, MoveBegan, SourceRef, ThreadStore } from "./store.js"
+export { uniqueName } from "./store.js"
 export { discardChatFolder, ensureChatsRoot, newChatFolder, standsForNoProject } from "./chat-folders.js"
 export { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 export type {

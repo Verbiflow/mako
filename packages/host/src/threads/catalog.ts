@@ -66,7 +66,7 @@ import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import type { Lineage } from "./lineage.js"
 import { sessionMemoryPath, type SessionMemory } from "./session-memory.js"
-import type { BackgroundAgents, ThreadStore } from "./store.js"
+import type { ThreadEdges, ThreadStore } from "./store.js"
 import type { Actor, ThreadId } from "../contracts/thread-identity.js"
 import {
   resolveAnchor,
@@ -94,7 +94,7 @@ import {
 import type { ExternalThreadActivity, HostEvent } from "../contracts/host-events-boot.js"
 import type { FileContents, FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { ThreadFileContext } from "../contracts/conversation-session.js"
-import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
+import { listedAsThread, THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
 
 const TEMPORARY_ROOTS = [
   tmpdir(),
@@ -464,37 +464,39 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
   }
 
-  function annotated(ref: ThreadRef, agents: BackgroundAgents | undefined): ThreadRef {
+  function annotated(ref: ThreadRef): ThreadRef {
     const known = sessionMemory ? sessionMemory.annotate(ref) : ref
     // A title a harness took from the first prompt carries Mako's context
     // markers; every surface reads the person's words instead.
     const title = contextFreeTitle(known.title)
     const titled = title === known.title ? known : withTitle(known, title)
-    return withAgentOf(withWorktrees(withWorkspacePresence(lineage.annotate(titled))), agents)
+    return withWorktrees(withWorkspacePresence(lineage.annotate(titled)))
   }
 
-  /** The store's background agents, read once for a batch of rows; none while the store can't be read. */
-  function backgroundAgents(): BackgroundAgents | undefined {
+  /** The store's parent edges, read once for a batch of rows; none while the store can't be read. */
+  function threadEdges(): ThreadEdges | undefined {
     try {
-      return threadStore?.backgroundAgents()
+      return threadStore?.edges()
     } catch {
       return undefined
     }
   }
 
-  /** The background agent a session is, which shows under its conversation and never as a row (`listedAsThread`). */
-  function withAgentOf(ref: ThreadRef, agents: BackgroundAgents | undefined): ThreadRef {
-    const agent = agents?.at(ref.harness, ref.nativeId)
-    return agent ? { ...ref, agentOf: { session: agent.parent, agent: agent.id } } : ref
+  /** A child's row names its parent's Thread, so it shows inside it and never as a row (`listedAsThread`). */
+  function withParent(ref: ThreadRef, edges: ThreadEdges | undefined): ThreadRef {
+    const edge = ref.threadId ? edges?.of(ref.threadId) : undefined
+    return edge ? { ...ref, parent: { thread: edge.parent, session: edge.parentSession } } : ref
   }
 
   function annotate(ref: ThreadRef): ThreadRef {
-    return withThreadPlacements([annotated(ref, backgroundAgents())])[0] ?? ref
+    const placed = withThreadPlacements([annotated(ref)])[0] ?? ref
+    return withParent(placed, threadEdges())
   }
 
   function annotateAll(refs: readonly ThreadRef[]): ThreadRef[] {
-    const agents = backgroundAgents()
-    return withThreadPlacements(refs.map((ref) => annotated(ref, agents)))
+    const edges = threadEdges()
+    const placed = withThreadPlacements(refs.map(annotated))
+    return edges?.all.length ? placed.map((ref) => withParent(ref, edges)) : placed
   }
 
   function catalogued(path: string): ThreadRef | undefined {
@@ -1299,9 +1301,9 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   function railThreads(
     filter: { cwd?: string; harness?: string } = {}
   ): ThreadRef[] {
-    const agents = backgroundAgents()
-    const refs = agents?.all.length ? catalogRefs(filter).filter((ref) => !agents.at(ref.harness, ref.nativeId)) : catalogRefs(filter)
-    const listed = annotateAll(threadList(refs))
+    const edges = threadEdges()
+    const refs = edges?.all.length ? catalogRefs(filter).filter((ref) => !edges.childNative(ref.harness, ref.nativeId)) : catalogRefs(filter)
+    const listed = annotateAll(threadList(refs)).filter(listedAsThread)
     if (!threadStore || refs.length <= listed.length) return listed
     const missing = unlistedThreadSessions(listed, threadStore.groups())
     if (!missing.size) return listed
