@@ -42,6 +42,20 @@ export const NativeAgentObservationSchema = z.object({
   output: note.optional(),
   /** Which native messages the entry was read from, for the diagnostics readout. */
   source: z.string().max(256).optional(),
+  /**
+   * A background agent: a harness's own run that works for the conversation
+   * and outlives its turns and its provider's process (`background-agents.ts`).
+   * `session` is its harness's ID for its own Session once known, and `path`
+   * where this Mac's catalog reads it, which opens its transcript.
+   */
+  detached: z
+    .object({
+      id: z.string().min(1).max(64),
+      origin: z.enum(["started", "discovered", "linked"]),
+      session: z.string().min(1).max(512).optional(),
+      path: z.string().min(1).max(4096).optional(),
+    })
+    .optional(),
   state: NativeAgentStateSchema,
   usage: z
     .object({
@@ -60,6 +74,17 @@ export function isActiveNativeAgent(agent: NativeAgentObservation): boolean {
 /** Active work that keeps a session busy: an ambient watcher never does. */
 export function isBusyNativeAgent(agent: NativeAgentObservation): boolean {
   return isActiveNativeAgent(agent) && !agent.ambient
+}
+/**
+ * Work the session's provider holds: its process ending ends it. A
+ * background agent is Mako's own process, which outlives the provider's.
+ */
+export function isProviderWork(agent: NativeAgentObservation): boolean {
+  return !agent.detached
+}
+/** Busy work that keeps the provider's process: what it holds, never a background agent. */
+export function isBusyProviderWork(agent: NativeAgentObservation): boolean {
+  return isBusyNativeAgent(agent) && isProviderWork(agent)
 }
 export const NativeAgentSchema = NativeAgentObservationSchema.extend({
   bindingId: z.string(),
@@ -115,6 +140,21 @@ export function observeNativeAgent(
   return { agents, limited }
 }
 
+/** The binding a roster's background agents are filed under; no provider's binding has it. */
+export const BACKGROUND_AGENTS_BINDING = "mako:background-agents"
+
+/**
+ * `roster` with its background agents replaced by `agents`, which their
+ * owner (`BackgroundAgents`) hands over whole and keeps the identity of
+ * while unchanged: the roster itself when none changed.
+ */
+export function withBackgroundAgents(roster: NativeAgentRoster | undefined, agents: readonly NativeAgent[]): NativeAgentRoster | undefined {
+  const held = roster?.agents.filter((agent) => !isProviderWork(agent)) ?? []
+  if (held.length === agents.length && held.every((agent, index) => agent === agents[index])) return roster
+  const provider = roster?.agents.filter(isProviderWork) ?? []
+  return { agents: [...provider.slice(-(NATIVE_AGENT_LIMIT - agents.length)), ...agents], limited: roster?.limited ?? false }
+}
+
 /** How the turn that started an entry ended, for an entry that ends with its turn. */
 export type TurnEnd = { kind: "finished" } | { kind: "stopped" } | { kind: "failed"; error?: string }
 
@@ -145,7 +185,7 @@ export function endWithTurns(
   if (!roster) return roster
   let changed = false
   const agents = roster.agents.map((agent): NativeAgent => {
-    const end = ends(agent)
+    const end = isProviderWork(agent) ? ends(agent) : undefined
     if (!end) return agent
     changed = true
     const state = endedWithTurn(end)
@@ -166,6 +206,7 @@ export function disconnectNativeAgents(
   const agents = roster.agents.map((agent): NativeAgent => {
     if (
       (bindingId && agent.bindingId !== bindingId) ||
+      !isProviderWork(agent) ||
       !["working", "waiting"].includes(agent.state.kind)
     )
       return agent

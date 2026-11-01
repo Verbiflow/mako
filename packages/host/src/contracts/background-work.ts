@@ -1,5 +1,5 @@
 import type { LiveSessionState } from "./providers-acp.js"
-import { isBusyNativeAgent, type NativeAgent, type NativeAgentRoster, type NativeWork } from "./native-agents.js"
+import { isBusyNativeAgent, isProviderWork, type NativeAgent, type NativeAgentRoster, type NativeWork } from "./native-agents.js"
 
 /**
  * What a session still runs after its turn ended: the work the provider
@@ -33,14 +33,15 @@ export function activeWork(roster: NativeAgentRoster | undefined): NativeAgent[]
 /**
  * The work a session waits on between turns, or null when there is none
  * or a turn is running (a running turn is "working", whatever else runs).
- * A closed or disconnected session waits on nothing: its process, and the
- * work it held, is gone.
+ * A closed, disconnected or hibernated session's provider holds nothing:
+ * its process, and the work it held, is gone. Its background agents are
+ * Mako's own processes, which go on.
  */
 export function backgroundWork(session: WorkSession | undefined, roster: NativeAgentRoster | undefined): BackgroundWork | null {
-  if (!session || session.status === "running" || session.status === "starting" || session.status === "closed") return null
-  if (session.connection === "disconnected" || session.connection === "hibernated") return null
-  const named = activeWork(roster)
-  const count = Math.max(session.backgroundTasks ?? 0, named.length)
+  if (!session || session.status === "running" || session.status === "starting") return null
+  const held = session.status !== "closed" && session.connection !== "disconnected" && session.connection !== "hibernated"
+  const named = held ? activeWork(roster) : activeWork(roster).filter((agent) => !isProviderWork(agent))
+  const count = Math.max(held ? session.backgroundTasks ?? 0 : 0, named.length)
   if (!count) return null
   return { count, named, unnamed: count - named.length }
 }

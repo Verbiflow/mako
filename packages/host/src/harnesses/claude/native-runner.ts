@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import {
   CLI_OWNED_CREDENTIALS,
   argumentAfter,
   commandTuning,
   dropUncarried,
+  type BackgroundCommand,
   type NativeCommand,
   type NativeRunner,
 } from "../native-runner.js"
@@ -22,6 +24,24 @@ function agentTeamsEnv(options: Parameters<NativeRunner["resume"]>[2]): Record<s
 function withEnv(command: NativeCommand, env: Record<string, string> | undefined): NativeCommand {
   if (env) command.env = env
   return command
+}
+
+function freshCommand(prompt: string, options: Parameters<NativeRunner["fresh"]>[1]): NativeCommand {
+  const tuning = commandTuning(options)
+  return withEnv(
+    {
+      command: claudeRuntime()?.executable ?? "claude",
+      args: [
+        "-p",
+        prompt,
+        "--dangerously-skip-permissions",
+        ...(tuning.model ? ["--model", tuning.model] : []),
+        ...(tuning.effort ? ["--effort", tuning.effort] : []),
+        ...(tuning.fast !== undefined ? ["--settings", JSON.stringify({ fastMode: tuning.fast })] : []),
+      ],
+    },
+    agentTeamsEnv(options)
+  )
 }
 
 export const claudeNativeRunner: NativeRunner = {
@@ -51,22 +71,12 @@ export const claudeNativeRunner: NativeRunner = {
       agentTeamsEnv(options)
     )
   },
-  fresh(prompt, options) {
-    const tuning = commandTuning(options)
-    return withEnv(
-      {
-        command: claudeRuntime()?.executable ?? "claude",
-        args: [
-          "-p",
-          prompt,
-          "--dangerously-skip-permissions",
-          ...(tuning.model ? ["--model", tuning.model] : []),
-          ...(tuning.effort ? ["--effort", tuning.effort] : []),
-          ...(tuning.fast !== undefined ? ["--settings", JSON.stringify({ fastMode: tuning.fast })] : []),
-        ],
-      },
-      agentTeamsEnv(options)
-    )
+  fresh: freshCommand,
+  /** `fresh`'s run under a session ID Mako names, so its Session is known before Claude Code writes it. */
+  background(prompt, options): BackgroundCommand {
+    const session = randomUUID()
+    const command = freshCommand(prompt, options)
+    return { ...command, args: [...command.args, "--session-id", session], session }
   },
   describe({ args, env }) {
     const options: Record<string, string | boolean> = {}

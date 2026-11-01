@@ -21,7 +21,7 @@ import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "
 import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"
 import type { Recipe, RecipeAccounts, RecipeWhere } from "./thread-recipe.js"
 
-const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
+const VARIABLES = ["MAKO_SESSION_ID", "MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
 const RECIPE_NAMES = "MAKO_THREAD_VALUES"
 /** A Thread unused this long gives its ports to a new one when every block is held. */
@@ -41,6 +41,7 @@ export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: Thr
   for (const name of VARIABLES) delete env[name]
   if (!environment) return
   if (environment.thread) env.MAKO_THREAD_ID = environment.thread
+  if (environment.session) env.MAKO_SESSION_ID = environment.session
   env.MAKO_THREAD_HOST = environment.host
   env.MAKO_THREAD_PORT = String(environment.port)
   env.MAKO_THREAD_PORTS = String(environment.ports)

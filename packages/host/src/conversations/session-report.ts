@@ -3,6 +3,7 @@ import type { ThreadRef } from "@mako/sessions"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { CheckoutHead } from "../contracts/checkout-heads.js"
 import { projectFolder } from "../contracts/worktree-paths.js"
+import { listedAsThread } from "../contracts/thread-list.js"
 import { nativeStartedAt } from "../contracts/worked-at.js"
 import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
 import type { LiveSummary } from "../contracts/live-conversations.js"
@@ -21,7 +22,7 @@ import { syncTier } from "./sync-window.js"
 import { needsYouWaiting, type Waiting } from "@mako/protocol/attention"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
-export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived" | "locked" | "heldBy">
+export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived" | "locked" | "heldBy" | "agentOf">
 
 /** What the report reads of this host: its conversations, their work, the sessions its harnesses keep, and its Thread store. */
 export type ReportSources = {
@@ -189,6 +190,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
   const natives: { ref: NativeRow; session: SessionId; thread: ThreadId }[] = []
   for (const ref of sources.native()) {
     if (ref.archived || ref.copyOnly || ref.nativeArchived || !ref.updatedAt) continue
+    // A background agent's Session is listed under its conversation, as that conversation's roster, never as a row.
+    if (!listedAsThread(ref)) continue
     const sessionId = SessionIdSchema.safeParse(ref.sessionId)
     const threadId = ThreadIdSchema.safeParse(ref.threadId)
     if (!sessionId.success || !threadId.success) continue

@@ -1,7 +1,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
-import { threadList } from "@mako/host/contracts/thread-list"
+import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { toast } from "sonner"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {
@@ -74,7 +74,24 @@ export {
 }
 export type { ThreadStatus }
 
+/** The Sessions that are a conversation's background agents: shown under it, never a Thread of their own, so nothing of theirs notifies. */
+const helpers = new Set<string>()
+
+function noteHelpers(list: readonly ThreadRef[]): void {
+  for (const ref of list) {
+    if (listedAsThread(ref)) helpers.delete(ref.path)
+    else helpers.add(ref.path)
+  }
+}
+
 export function applyThreadRef(ref: ThreadRef) {
+  noteHelpers([ref])
+  if (helpers.has(ref.path)) {
+    clearObserved(ref.path)
+    if (threadsStore.get().threads.some((entry) => entry.path === ref.path)) applyThreadRemoved(ref.path)
+    followViewedRef(ref)
+    return
+  }
   const current = threadsStore.get().threads
   const at = current.findIndex((entry) => entry.path === ref.path)
   const previous = at === -1 ? undefined : current[at]
@@ -98,9 +115,12 @@ export function applyThreadRef(ref: ThreadRef) {
     (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")
   )
   applyThreads(next, threadsStore.get().loaded)
+  followViewedRef(ref)
+}
+
+/** A Session still opening, or whose last read failed, is described by its newest row too: the composer reads where it works from this ref. */
+function followViewedRef(ref: ThreadRef): void {
   const { viewing, opening } = threadsStore.get()
-  // A Session still opening, or whose last read failed, is described by its
-  // newest row too: the composer reads where it works from this ref.
   if (opening?.ref.path === ref.path) threadsStore.set({ opening: { ...opening, ref } })
   if (viewing?.ref.path === ref.path) {
     const updated = { ...viewing, ref }
@@ -122,7 +142,7 @@ function noteExternalOutcome(
   activity: ExternalThreadActivity | null
 ): void {
   const provider = activity?.provider ?? previous?.provider
-  if (!provider) return
+  if (!provider || helpers.has(path)) return
   const subject = threadSubject(path, provider)
   if (activity?.status === "needs-input") {
     if (previous?.status !== "needs-input")
@@ -182,6 +202,7 @@ export function applyThreadRemoved(path: string) {
 export function applyThreads(list: ThreadRef[], loaded = true) {
   const { threads: previous, loaded: wasLoaded } = threadsStore.get()
   const initialHydration = loaded && !wasLoaded
+  noteHelpers(list)
   const unique = threadList(list)
   threadsStore.set({ threads: unique, loaded })
   followThreadMoves(previous, unique)

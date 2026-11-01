@@ -60,6 +60,26 @@ export function spawnProviderProcess(
 }
 
 /**
+ * Starts a background agent's process (`BackgroundAgents`): one meant to
+ * outlive this host, so it isn't recorded for reaping and holds no pipe to
+ * it. Its output goes to the files open as `stdout` and `stderr`, which a
+ * later host reads on, and it leads its own process group, which its Stop
+ * ends.
+ */
+export function spawnDetachedProvider(
+  command: string,
+  args: readonly string[],
+  options: ProviderSpawnOptions & { stdout: number; stderr: number }
+): ChildProcess {
+  const { stdout, stderr, ...rest } = options
+  if (rest.cwd !== undefined && !workingDirectoryExists(rest.cwd))
+    throw new MissingWorkingDirectoryError(rest.cwd)
+  const child = spawn(command, args, { ...rest, detached: !onWindows(), stdio: ["ignore", stdout, stderr] })
+  child.unref()
+  return child
+}
+
+/**
  * A provider's own children outlive it when it dies: the native binary under
  * an npm wrapper, a tool's shell, an MCP server. Nothing reads them any more,
  * and one still writing the session keeps Mako from reopening it. They share

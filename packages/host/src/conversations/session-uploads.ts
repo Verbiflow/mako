@@ -26,6 +26,11 @@ export type UploadSources = {
   rows(): readonly ReportedSession[] | undefined
   /** Where the catalog reads a native session, by its harness and ID; undefined for one it doesn't list. */
   path(harness: string, nativeId: string): string | undefined
+  /**
+   * The background agents of a Session, by their harness Sessions (`ThreadStore.backgroundAgents`): no row of their
+   * own, they go up with it, so another device reads each under it as this one shows it.
+   */
+  agents?(session: string): readonly { harness: string; nativeId?: string }[]
   /** Where this device's copies and originals go in the account, while it's signed in with the cloud; else why not. */
   links(): Promise<UploadLinks>
   power(): Promise<PowerReading>
@@ -47,7 +52,13 @@ export type UploadSources = {
  * and where the catalog reads it, with its tier; and whether catching up waits, on a low battery or in Low Power Mode.
  * A Session with no native session yet, or one the catalog doesn't list, waits until it has.
  */
-export function uploadScope(rows: readonly ReportedSession[], power: PowerReading, pathOf: (harness: string, nativeId: string) => string | undefined, now: number): SyncScope {
+export function uploadScope(
+  rows: readonly ReportedSession[],
+  power: PowerReading,
+  pathOf: (harness: string, nativeId: string) => string | undefined,
+  now: number,
+  agentsOf: (session: string) => readonly { harness: string; nativeId?: string }[] = () => []
+): SyncScope {
   const threads = threadActivity(rows)
   const seen = new Set<string>()
   const sessions: SyncScope["sessions"] = []
@@ -59,6 +70,13 @@ export function uploadScope(rows: readonly ReportedSession[], power: PowerReadin
     if (!path || !tier || seen.has(key)) continue
     seen.add(key)
     sessions.push({ harness: row.harness, nativeId: row.nativeId, path, thread: row.thread, busy: busyRow(row), tier })
+    for (const agent of agentsOf(row.session)) {
+      const at = agent.nativeId && pathOf(agent.harness, agent.nativeId)
+      const own = agent.nativeId && `${agent.harness}\n${agent.nativeId}`
+      if (!at || !own || seen.has(own)) continue
+      seen.add(own)
+      sessions.push({ harness: agent.harness, nativeId: agent.nativeId!, path: at, thread: row.thread, busy: busyRow(row), tier })
+    }
   }
   const paused = power.lowPower || (power.onBattery && (power.percent ?? 100) < UPLOAD_BATTERY_FLOOR)
   return { sessions, paused }
@@ -110,7 +128,7 @@ export class SessionUploads {
     }
     const rows = this.#sources.rows()
     if (!rows) return
-    const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now())
+    const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), (session) => this.#sources.agents?.(session) ?? [])
     const scopeKey = JSON.stringify(scope)
     if (scopeKey !== this.#scopeKey) {
       await this.#sources.scope(scope)

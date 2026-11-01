@@ -49,6 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
+import { BackgroundAgentRecordSchema, type BackgroundAgentRecord } from "../contracts/background-agents.js"
 import { hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 
@@ -82,7 +83,7 @@ export const THREAD_STORE_READS = 1
  * break; an older host then reads the store and changes nothing in it, and
  * only one older than `THREAD_STORE_READS` leaves it.
  */
-export const THREAD_STORE_MIGRATION = 4
+export const THREAD_STORE_MIGRATION = 5
 
 /**
  * The store is synchronous on the host's main thread. Opening waits as long
@@ -205,6 +206,17 @@ export interface ThreadRecord {
   titleSource?: "user" | "frozen" | "auto"
   revision: number
   sessions: SessionId[]
+}
+
+/** The background agents a store knows (`ThreadStore.backgroundAgents`): all of them, a Session's, and the one a harness Session is. */
+export interface BackgroundAgents {
+  all: readonly BackgroundAgentRecord[]
+  of(session: string): readonly BackgroundAgentRecord[]
+  at(harness: string, nativeId: string): BackgroundAgentRecord | undefined
+}
+
+function backgroundAgentKey(harness: string, nativeId: string): string {
+  return `${harness}\n${nativeId}`
 }
 
 /** A Thread's name and where it came from, as a list of many Threads reads it (`titlesOf`). */
@@ -496,6 +508,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS app_environments_port ON app_environments(devi
 INSERT OR IGNORE INTO app_environments (app, device_id, host, port, created_at, used_at) SELECT thread_id, device_id, host, port, created_at, used_at FROM thread_environments;
 DELETE FROM thread_environments;
 `
+/**
+ * Migration 5: each conversation's background agents (`contracts/background-agents.ts`), the harness Sessions that
+ * work for one of its Sessions and so are never a Thread of their own. The record is kept whole, as JSON a newer
+ * build may add to; the columns beside it are what it's found by.
+ */
+const BACKGROUND_AGENT_TABLE = `
+CREATE TABLE IF NOT EXISTS background_agents (
+  id TEXT PRIMARY KEY, parent_session TEXT NOT NULL REFERENCES sessions(id), harness TEXT NOT NULL, native_id TEXT,
+  record TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER);
+CREATE UNIQUE INDEX IF NOT EXISTS background_agents_native ON background_agents(harness, native_id) WHERE native_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS background_agents_parent ON background_agents(parent_session, started_at);
+`
+const BackgroundAgentRowSchema = z.object({ record: z.string() })
 const EnvironmentRowSchema = z.object({ app: z.string(), host: z.string(), port: z.number(), used_at: z.number() })
 class EnvironmentTaken extends Error {}
 function environmentValues(row: z.infer<typeof EnvironmentRowSchema>): ThreadEnvironmentValues {
@@ -574,6 +599,7 @@ export class ThreadStore {
   private readonly executionsSeen = new Map<string, SessionExecution | null>()
   private readonly titlesSeen = new Map<string, ThreadTitle | null>()
   private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
+  private agentsSeen: { revision: number; agents: BackgroundAgents } | undefined
   private changeSeq = 0
   private titleSeq = 0
   /** Threads whose name another host changed since `takeExternalTitles` last ran. */
@@ -755,6 +781,65 @@ export class ThreadStore {
     const groups = found.sort((left, right) => left.first - right.first || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).map(({ group }) => group)
     if (this.depth === 0) this.groupsSeen = { revision: this.revision, groups }
     return groups
+  }
+
+  /**
+   * Every background agent this store knows (`contracts/background-agents.ts`), each under its parent Session as it is
+   * now (following merges), with the harness Sessions they are: read in one query, then answered from memory until any
+   * commit (`revision`), so the catalog asks it of every row it serves.
+   */
+  backgroundAgents(): BackgroundAgents {
+    this.syncVersion()
+    const held = this.agentsSeen
+    if (held && held.revision === this.revision && this.depth === 0) return held.agents
+    const all: BackgroundAgentRecord[] = []
+    const bySession = new Map<string, BackgroundAgentRecord[]>()
+    const byNative = new Map<string, BackgroundAgentRecord>()
+    for (const row of this.sql("SELECT record FROM background_agents ORDER BY started_at, id").all()) {
+      const parsed = BackgroundAgentRecordSchema.safeParse(JSON.parse(BackgroundAgentRowSchema.parse(row).record))
+      if (!parsed.success) continue
+      const record = { ...parsed.data, parent: this.canonical(parsed.data.parent) ?? parsed.data.parent }
+      all.push(record)
+      const siblings = bySession.get(record.parent)
+      if (siblings) siblings.push(record)
+      else bySession.set(record.parent, [record])
+      if (record.nativeId) byNative.set(backgroundAgentKey(record.harness, record.nativeId), record)
+    }
+    const agents: BackgroundAgents = {
+      all,
+      of: (session) => bySession.get(session) ?? [],
+      at: (harness, nativeId) => byNative.get(backgroundAgentKey(harness, nativeId)),
+    }
+    if (this.depth === 0) this.agentsSeen = { revision: this.revision, agents }
+    return agents
+  }
+
+  /**
+   * Keeps a background agent, or what changed of one already kept: its Session once known, its process, its end. The
+   * same harness Session linked twice is one agent, the first record's; a Session already another's agent stays its.
+   * Returns the record as kept.
+   */
+  keepBackgroundAgent(input: BackgroundAgentRecord): BackgroundAgentRecord {
+    const record = BackgroundAgentRecordSchema.parse(input)
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM background_agents WHERE id = ?").get(record.id)
+      const same = record.nativeId ? this.sql("SELECT record FROM background_agents WHERE harness = ? AND native_id = ? AND id <> ?").get(record.harness, record.nativeId, record.id) : undefined
+      if (same) return BackgroundAgentRecordSchema.parse(JSON.parse(BackgroundAgentRowSchema.parse(same).record))
+      if (!this.sql("SELECT id FROM sessions WHERE id = ?").get(record.parent)) throw new Error("A background agent's parent Session isn't in the Thread store")
+      const previous = kept ? BackgroundAgentRecordSchema.parse(JSON.parse(BackgroundAgentRowSchema.parse(kept).record)) : undefined
+      // An end is said once: a later reading never makes an ended run work again.
+      const next: BackgroundAgentRecord = previous?.ended ? { ...record, ended: previous.ended } : record
+      this.sql(`INSERT INTO background_agents (id, parent_session, harness, native_id, record, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET native_id = excluded.native_id, record = excluded.record, ended_at = excluded.ended_at`)
+        .run(next.id, next.parent, next.harness, next.nativeId ?? null, JSON.stringify(next), next.startedAt, next.ended?.at ?? null)
+      return next
+    })
+  }
+
+  /** The conversations that are `session`, following merges: the ones a background agent of it reports to. */
+  conversationsOf(session: string): string[] {
+    this.syncVersion()
+    return this.journalsOf(this.canonical(session) ?? session)
   }
 
   /** One Thread's group, following merges; undefined while it has one Session. */
@@ -1947,6 +2032,7 @@ export class ThreadStore {
     this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
     this.db.exec(PURPOSE_TABLE)
+    this.db.exec(BACKGROUND_AGENT_TABLE)
     // Delegate, retired, made forks with a task; their Sessions are forks.
     this.db.exec("UPDATE sessions SET origin = 'fork' WHERE origin = 'delegation'")
     const columns = new Set(this.db.prepare("PRAGMA table_info(threads)").all().map((row) => ColumnRowSchema.parse(row).name))
@@ -2211,6 +2297,7 @@ export class ThreadStore {
     this.executionsSeen.clear()
     this.titlesSeen.clear()
     this.groupsSeen = undefined
+    this.agentsSeen = undefined
   }
 
   private remember(key: string, placed: ThreadPlacement): void {

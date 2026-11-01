@@ -23,7 +23,9 @@ import { harnessLabel, resumes, type HarnessProfiles, type Harnesses } from "../
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
-import { NativeRuns } from "./native-runs.js"
+import { NativeRuns, prepareNativeCommand } from "./native-runs.js"
+import { BackgroundAgents } from "./background-agents.js"
+import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
@@ -73,12 +75,16 @@ export { openMachineTracker, type MachineTracker } from "./machine-tracker.js"
 export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
+export { BackgroundAgents } from "./background-agents.js"
+export { registerBackgroundAgentTools } from "./background-agent-tools.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
   live: LiveConversations
   /** Headless native runs, one writer per native session. */
   runs: NativeRuns
+  /** The harness runs that work for a conversation past its turn; none where the Thread store didn't open. */
+  agents?: BackgroundAgents
   native: NativeRequests
   continuation: ContinuationPlanner<unknown>
   /** Replies with their history as pages, for clients that page it. */
@@ -136,6 +142,7 @@ export interface ConversationsDeps {
   streams?: string
   /** A cloud machine's host: nobody is at it to sign a harness in. */
   unattended?: boolean
+  jobs: HostJobs
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -157,7 +164,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     label: (harness) => harnessLabel(host, harness),
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
+  let agents: BackgroundAgents | undefined
   const live = new LiveConversations({
+    backgroundAgents: () => agents,
     unattended: deps.unattended,
     foreground: deps.foreground,
     work: deps.work,
@@ -190,10 +199,16 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     root: join(dataRoot, "conversations"),
     tools: deps.tools,
     threadEnvironment: (conversationId, title, cwd) =>
-      workspaces.environments?.forLaunch(conversationId, title, cwd).catch((error) => {
-        hostWarn("threads", "a Thread's values could not be assigned; its agent starts without them", { conversation: conversationId, error: error instanceof Error ? error.message : String(error) })
-        return undefined
-      }) ?? Promise.resolve(undefined),
+      workspaces.environments?.forLaunch(conversationId, title, cwd).then(
+        (values) => {
+          const session = threads.store?.journalPlacement(conversationId)?.session
+          return values && session ? { ...values, session } : values
+        },
+        (error) => {
+          hostWarn("threads", "a Thread's values could not be assigned; its agent starts without them", { conversation: conversationId, error: error instanceof Error ? error.message : String(error) })
+          return undefined
+        }
+      ) ?? Promise.resolve(undefined),
     controlInstructions: deps.controlInstructions,
     revokeTools: deps.revokeTools,
     suspendTools: deps.suspendTools,
@@ -241,6 +256,18 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     // for a store that records none, the way a live session's report is kept.
     prepared: (ref, settings) => memory?.remember(ref.harness, ref.nativeId, { settings }),
   })
+  if (threads.store) agents = new BackgroundAgents({
+    store: () => threads.store ?? undefined,
+    catalog,
+    jobs: deps.jobs,
+    root: join(dataRoot, "background-agents"),
+    prepare: async (harness, prompt, cwd, model) =>
+      prepareNativeCommand(host, harness, prompt, (await harnesses.profiles.resolveNativeLaunch(harness, cwd, model ? { model } : undefined)) ?? {}),
+    runs: (harness) => host.nativeRunners.get(harness) !== undefined,
+    conversationOwns: (ref) => live.connectedSession(ref.harness, ref.nativeId) !== null ||
+      (ref.sessionId !== undefined && (threads.store?.conversationsOf(ref.sessionId).length ?? 0) > 0),
+    changed: (conversation, progressOnly) => live.backgroundAgentsChanged(conversation, progressOnly),
+  })
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
     read: (path) => catalog.readRef(path),
     running: (path) => runs.state(path)?.status === "running",
@@ -277,6 +304,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   return {
     live,
     runs,
+    ...(agents && { agents }),
     native,
     continuation,
     history,
@@ -300,6 +328,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     },
     async stop() {
       shared?.dispose()
+      agents?.dispose()
       await live.stop()
       for (const driver of host.liveDrivers.list()) driver.stop?.()
       native.stop()
