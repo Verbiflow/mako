@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.2.3"
+    "version": "2.2.5"
   },
   "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e731ce34affe7hCP9OzeoKz6hX",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e6e0d30ddffeiFHh5nZJd1NTCo",
       "known": []
     }
   ]

@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.2.3"
+    "version": "2.2.5"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e731b7322ffen3Jmlnz9HxSzSO",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e6e0bc332ffeZ7O8JdSaRtYFhz",
       "known": [
         {
           "side": "+",

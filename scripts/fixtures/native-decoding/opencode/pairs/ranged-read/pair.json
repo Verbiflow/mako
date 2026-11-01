@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.2.3"
+    "version": "2.2.5"
   },
   "about": "Read only lines 10 to 20 of log.md with your file read tool, once, and tell me the last line you were shown. Don't run commands. A read of lines 10 to 20 of a long file, so a harness's own cut can be told from one the model asked for.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e731ce75cffeaKr4KvbbS9LEbn",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e6e0d366fffeI83qloccg7VGfO",
       "known": []
     }
   ]

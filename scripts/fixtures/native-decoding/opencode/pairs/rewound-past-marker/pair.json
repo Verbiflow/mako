@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.2.3"
+    "version": "2.2.5"
   },
   "about": "Say hello. / Say hello again. / /rewind / Without running anything, say done. Two turns failing with a server error, each leaving a marker both sides cite, a rewind to before the second, then a turn that replaces it: the first marker stays, citing the same record, and the second goes.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e731b4b13ffeeB2kcuekuCNS0Y",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e6e0b96acffehIdnhjIwZZyz0e",
       "known": [
         {
           "side": "-",
