@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { createReadStream, existsSync, mkdirSync } from "node:fs"
 import { mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises"
+import { setTimeout as delay } from "node:timers/promises"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { DatabaseSync as DatabaseSyncConstructor, type DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
@@ -22,6 +23,7 @@ import { IntentOwner } from "./record-intents.js"
 import { EVIDENCE_RULES, givenVersion, mergeWriters, outdatedOf, restoreGate, STREAM_RUNTIME_SCAN, writersOf, type InstalledReading, type OutdatedRuntime, type RecordWriter, type RecordWriterRule, type SessionWriters, SessionWritersSchema, type WriterEvidence, type WriterScan, type WriterSource } from "./record-writers.js"
 import type { RecordRef } from "./entries.js"
 import { namesBuild } from "./runtime-version.js"
+import { SqliteBusy } from "./providers/sqlite-busy.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
@@ -112,6 +114,13 @@ const FILES_AT_ONCE = 8
 const ROWS_READ_AT_ONCE = 16
 /** The most of those rows' bytes a plan keeps for its write, which reads the rest again. */
 const ROW_BYTES_KEPT = 64 * 1024 * 1024
+/**
+ * How long a write waits for another process to release the store's write lock: a backfill pass's capture keeps it
+ * until its next commit, and a repack while it drops chunks.
+ */
+const STORE_WRITE_WAIT_MS = 60_000
+/** The longest a write sleeps between tries for a write lock another connection holds. */
+const STORE_WRITE_RETRY_MS = 20
 /** How long a restore waits for a running harness to release its database's write lock. */
 const WRITE_BUSY_TIMEOUT_MS = 30_000
 /** How far back from an append cursor a capture checks that nothing before it was rewritten. */
@@ -120,8 +129,11 @@ const TAIL_BYTES = 64 * 1024
 const SLOW_CAPTURE_MS = 50
 /** A long capture lets waiting work go first at its next slice; with none waiting, it commits what it took about this often. */
 const SLICE_MS = 2_000
-/** A read of a harness's database ends once it has held a snapshot this long, or read this many bytes of rows; those are stored with the read ended. */
-const READ_MS = 100
+/**
+ * A read of a harness's database ends once it has held a snapshot this long, or read this many bytes of rows; those are
+ * stored with the read ended. A read holds the loop too, so this stays inside a turn's budget.
+ */
+const READ_MS = 25
 const READ_BYTES = 8 * 1024 * 1024
 /** Rows a capture asks for in one statement, by position. */
 const FETCH_ROWS = 128
@@ -706,6 +718,27 @@ class Turns {
 }
 
 /**
+ * Begins a write transaction (`BEGIN IMMEDIATE`) on `db`, waiting up to `waitMs` for another connection's write lock.
+ * SQLite would wait for it on this thread, holding the loop, so each try waits for nothing and the loop turns between
+ * tries; the connection's own busy timeout is `waitMs` again after.
+ */
+async function beginWriting(db: DatabaseSync, waitMs: number): Promise<void> {
+  const since = Date.now()
+  for (let wait = 1; ; wait = Math.min(wait * 2, STORE_WRITE_RETRY_MS)) {
+    db.exec("PRAGMA busy_timeout = 0")
+    try {
+      db.exec("BEGIN IMMEDIATE")
+      return
+    } catch (error) {
+      if (!SqliteBusy.safeParse(error).success || Date.now() - since >= waitMs) throw error
+    } finally {
+      db.exec(`PRAGMA busy_timeout = ${waitMs}`)
+    }
+    await delay(wait)
+  }
+}
+
+/**
  * A harness's database, read in short transactions, each on a connection
  * of its own: a long read would keep the harness from checkpointing its
  * write-ahead log, and a writer that appeared since the last read is then
@@ -906,7 +939,7 @@ export class RecordStore {
     this.owner = new IntentOwner(folder)
     mkdirSync(folder, { recursive: true })
     const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
-    this.db = new DatabaseSync(join(folder, "records.sqlite"), { timeout: 60_000 })
+    this.db = new DatabaseSync(join(folder, "records.sqlite"), { timeout: STORE_WRITE_WAIT_MS })
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL")
     declareStoreFormat(this.db, SCHEMA_VERSION)
     try {
@@ -1075,7 +1108,7 @@ export class RecordStore {
     return this.serially(async () => {
       const session = this.sessionId(harness, nativeId, false)
       if (session === null) return false
-      return Number(this.prepared("UPDATE marks SET fingerprint = ? WHERE session = ? AND name = ? AND fingerprint = ?").run(to, session, HELD_STAMP, from).changes) > 0
+      return await this.written(() => Number(this.prepared("UPDATE marks SET fingerprint = ? WHERE session = ? AND name = ? AND fingerprint = ?").run(to, session, HELD_STAMP, from).changes) > 0)
     })
   }
 
@@ -1108,7 +1141,7 @@ export class RecordStore {
     return this.serially(async () => {
       const session = this.sessionId(harness, nativeId, false)
       if (session === null) return false
-      this.db.exec("BEGIN IMMEDIATE")
+      await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
         this.prepared("INSERT INTO session_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO UPDATE SET session = excluded.session").run(path, session)
         this.setMark(session, LISTING, listing)
@@ -1190,7 +1223,7 @@ export class RecordStore {
       if (session === null) return { units: 0, versions: 0 }
       // Each of the session's units that no other session names, found by the unit index, not by listing every other session's units.
       const own = "SELECT su.unit FROM session_units su WHERE su.session = ?1 AND NOT EXISTS (SELECT 1 FROM session_units o WHERE o.unit = su.unit AND o.session != ?1)"
-      this.db.exec("BEGIN IMMEDIATE")
+      await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
         // What the dropped versions named is a candidate for the repack to drop, once it finds no other version names it.
         const orphan = this.prepared("INSERT OR IGNORE INTO orphans (hash) VALUES (?)")
@@ -1235,7 +1268,7 @@ export class RecordStore {
     return this.serially(async () => {
       const session = this.sessionId(harness, nativeId, false)
       if (session === null || (!paths.length && !options.linked)) return 0
-      this.db.exec("BEGIN IMMEDIATE")
+      await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
         let added = 0
         for (const path of paths) added += Number(this.prepared("INSERT INTO child_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO NOTHING").run(path, session).changes)
@@ -1361,7 +1394,7 @@ export class RecordStore {
         stamps.push({ unit: version.unit, seq: version.seq, versions: stated })
       }
       if (!stamps.length) return found
-      this.db.exec("BEGIN IMMEDIATE")
+      await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
         const stamp = this.prepared("UPDATE versions SET writer = ?, writer_source = 'record' WHERE unit = ? AND seq = ? AND writer IS NULL")
         for (const each of stamps) stamp.run(each.versions.join(" "), each.unit, each.seq)
@@ -1610,9 +1643,22 @@ export class RecordStore {
   // The store's write transaction
 
   private async begin(): Promise<void> {
-    this.db.exec("BEGIN IMMEDIATE")
+    await beginWriting(this.db, STORE_WRITE_WAIT_MS)
     this.sliceAt = Date.now()
     await this.packs.begin()
+  }
+
+  /** `work`'s writes in a transaction of their own. */
+  private async written<T>(work: () => T): Promise<T> {
+    await beginWriting(this.db, STORE_WRITE_WAIT_MS)
+    try {
+      const result = work()
+      this.db.exec("COMMIT")
+      return result
+    } catch (error) {
+      this.rollback()
+      throw error
+    }
   }
 
   /** Ends the write transaction under way, if any, without its changes: the index's, and the pack entries waiting for it. */
@@ -1762,7 +1808,7 @@ export class RecordStore {
     return this.serially(async () => {
       const session = this.sessionId(harness, nativeId, false)
       if (session === null) return
-      this.db.exec("BEGIN IMMEDIATE")
+      await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
         if ("holdings" in held) {
           this.prepared("DELETE FROM remote_session_units WHERE remote = ? AND session = ?").run(remote, session)
@@ -1805,7 +1851,7 @@ export class RecordStore {
     return this.serially(async () => {
       const session = this.sessionId(harness, nativeId, false)
       if (session === null) return
-      this.prepared("INSERT INTO remote_pushed (remote, session, capture, at) VALUES (?, ?, ?, ?) ON CONFLICT (remote, session) DO UPDATE SET capture = max(capture, excluded.capture), at = excluded.at").run(remote, session, capture, at)
+      await this.written(() => this.prepared("INSERT INTO remote_pushed (remote, session, capture, at) VALUES (?, ?, ?, ?) ON CONFLICT (remote, session) DO UPDATE SET capture = max(capture, excluded.capture), at = excluded.at").run(remote, session, capture, at))
     })
   }
 
@@ -1824,7 +1870,7 @@ export class RecordStore {
     this.writable()
     return this.serially(async () => {
       const session = this.sessionId(harness, nativeId, false)
-      if (session !== null) this.prepared("DELETE FROM remote_pushed WHERE remote = ? AND session = ?").run(remote, session)
+      if (session !== null) await this.written(() => this.prepared("DELETE FROM remote_pushed WHERE remote = ? AND session = ?").run(remote, session))
     })
   }
 
@@ -1971,7 +2017,7 @@ export class RecordStore {
       return imported
     } catch (error) {
       if (!this.closed) this.rollback()
-      this.endIntent(intent.id)
+      await this.endIntent(intent.id)
       throw error
     }
   }
@@ -2037,7 +2083,7 @@ export class RecordStore {
     } catch (error) {
       // Slices already committed stay: each is true of the records as they were read.
       if (!this.closed) this.rollback()
-      this.endIntent(intent.id)
+      await this.endIntent(intent.id)
       throw error
     }
   }
@@ -2047,14 +2093,11 @@ export class RecordStore {
    * to drop (`record-orphans.ts`). Still in its turn, right after the
    * rollback, so no other capture's intent can have taken a rolled-back id.
    */
-  private endIntent(id: number | null): void {
+  private async endIntent(id: number | null): Promise<void> {
     if (id === null || this.closed) return
     try {
-      this.db.exec("BEGIN IMMEDIATE")
-      this.prepared("UPDATE intents SET ended = ? WHERE id = ? AND owner = ? AND ended IS NULL").run(Date.now(), id, this.owner.id)
-      this.db.exec("COMMIT")
+      await this.written(() => this.prepared("UPDATE intents SET ended = ? WHERE id = ? AND owner = ? AND ended IS NULL").run(Date.now(), id, this.owner.id))
     } catch (error) {
-      this.rollback()
       // Left open, it ends with this store's lock, when the store closes or the process does.
       console.warn("A failed capture's intent could not be marked ended", this.folder, error instanceof Error ? error.message : error)
     }
@@ -2240,7 +2283,7 @@ export class RecordStore {
     const store = async () => {
       source.end()
       pageBytes = 0
-      // A page read in 100 ms can take seconds to store: waiting work goes between its rows.
+      // A page read in `READ_MS` can take seconds to store: waiting work goes between its rows.
       for (const row of page.splice(0)) {
         await this.captureRow(harness, session, row, known.get(row.key), report)
         await this.slice(report)
@@ -3073,9 +3116,8 @@ export class RecordStore {
     const target = places.place(plan.forkName)
     await mkdir(dirname(target), { recursive: true })
     const db = this.writer.openForWriting(target)
-    db.exec(`PRAGMA busy_timeout = ${WRITE_BUSY_TIMEOUT_MS}`)
     db.exec("PRAGMA foreign_keys = OFF")
-    db.exec("BEGIN IMMEDIATE")
+    await beginWriting(db, WRITE_BUSY_TIMEOUT_MS)
     try {
       if (plan.schema) applySchema(db, SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8"))))
       const aliases = new Map<string, string | null>()
@@ -3483,11 +3525,10 @@ export class RecordStore {
     const target = places.place(name)
     await mkdir(dirname(target), { recursive: true })
     const db = this.writer.openForWriting(target)
-    // The harness may be running and writing the same database; its write lock is waited for, then held for the whole restore.
-    db.exec(`PRAGMA busy_timeout = ${WRITE_BUSY_TIMEOUT_MS}`)
     // Rows arrive table by table, children before parents, and replacing a parent row must not cascade into rows already restored.
     db.exec("PRAGMA foreign_keys = OFF")
-    db.exec("BEGIN IMMEDIATE")
+    // The harness may be running and writing the same database; its write lock is waited for, then held for the whole restore.
+    await beginWriting(db, WRITE_BUSY_TIMEOUT_MS)
     try {
       if (plan.schema) applySchema(db, SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8"))))
       // One statement per table and set of columns, however many rows use it.

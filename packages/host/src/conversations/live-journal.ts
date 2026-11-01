@@ -42,7 +42,7 @@ import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import { sharedBase } from "./shared-entries.js"
 import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
-import { atOnce, inSlices, type Steps } from "../base/slices.js"
+import { atOnce, inSlices, type Steps } from "@mako/sessions/slices"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),

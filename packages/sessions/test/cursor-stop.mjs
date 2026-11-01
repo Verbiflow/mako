@@ -64,7 +64,9 @@ try {
   // The cancel is recorded after its messages were written.
   index.prepare("UPDATE runs SET status = 'CANCELLED', cancelled_at = '2026-09-25T00:00:05.000Z' WHERE run_id = 'run-2'").run()
   const stopped = await follower.next()
-  assert.equal(stopped.replaceFrom, 0, "a stop landing inside kept entries refolds the whole conversation")
+  const held = [...running.entries.slice(0, stopped.replaceFrom), ...stopped.entries]
+  assert.deepEqual(held, (await new CursorProvider(nativeStores, home).read(path)).entries, "a stop landing inside kept entries refolds the whole conversation")
+  assert.ok(stopped.replaceFrom > 0, "and replaces from the first entry it changed")
   const marker = { type: "event", id: "run-2:cancelled", at: Date.parse("2026-09-25T00:00:05.000Z"), label: "Interrupted", source: { harness: "cursor", record: "run-2:cancelled" },
     record: { file: "../../index.db", rows: [{ table: "runs", key: { run_id: "run-2" } }] } }
   assert.deepEqual(stopped.entries.at(-1), marker)

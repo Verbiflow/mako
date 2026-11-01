@@ -803,6 +803,7 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   const tiers = { now: tierCount(2), day: tierCount(2), week: tierCount(1) }
   const failure = { at: NOW, harness: "codex", nativeId: "n-8", message: "The gateway answered 500 (PUT /chunks answered 500, correlation c-9)", correlationId: "c-9" }
   let catalog: CatalogSyncStatus | null = null
+  let statusRead: Error | undefined
   const uploads = new SessionUploads({
     rows: () => listedRows,
     path: pathOf,
@@ -811,7 +812,10 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
     scope: async (scope: SyncScope) => void said.push(`scope ${scope.sessions.map((each) => each.nativeId).join(",")}${scope.paused ? " waiting" : ""}`),
     copies: async (given) => void said.push(given ? `copies ${given.authorization}` : "stop copies"),
     originals: async (given) => void said.push(given ? `originals ${given.authorization}` : "stop originals"),
-    status: async () => catalog,
+    status: async () => {
+      if (statusRead) throw statusRead
+      return catalog
+    },
     backfill: async () => undefined,
     now: () => now,
   })
@@ -834,6 +838,11 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   const status = uploads.status()
   assert.equal(status.state, "failing")
   assert.deepEqual("failures" in status ? status.failures : [], [{ ...failure, title: "Retry the webhooks" }], "a failure is said with the gateway's correlation ID, and named by its Thread's title")
+  // The catalog's process too busy to answer in time: the status it last answered stands.
+  statusRead = new Error("The sync daemon didn't answer sync-status within 3000ms")
+  await uploads.tick()
+  assert.deepEqual(uploads.status(), status, "a status read that failed shows and hides nothing")
+  statusRead = undefined
   // The catalog tries a refused push again, keeping when its failing began: logged once, and again once it fails anew.
   const logged: string[] = []
   const stopHearing = followHostLog((line) => line.scope === "sync" && line.level === "warn" && logged.push(String(line.fields?.["correlationId"])))

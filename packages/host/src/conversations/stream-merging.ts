@@ -3,7 +3,7 @@ import { streamDifferences } from "@mako/sessions/harnesses"
 import type { ThreadPage } from "@mako/sessions"
 import type { LiveRequest } from "../contracts/live-conversations.js"
 import { mergeStreamSteps, recordSpanSteps, type StreamMerge } from "@mako/sessions/stream-merge"
-import { atOnce, type Steps } from "../base/slices.js"
+import { atOnce, type Steps } from "@mako/sessions/slices"
 
 export interface MergedBase {
   base: ThreadPage

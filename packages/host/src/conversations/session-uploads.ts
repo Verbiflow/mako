@@ -79,6 +79,8 @@ export class SessionUploads {
   #power: { reading: PowerReading; at: number } | undefined
   #status: SyncStatus = { state: "off", reason: "signed-out" }
   #statusText = JSON.stringify(this.#status)
+  /** The catalog's status as it last answered: a read that fails, as one the catalog's process is too busy to answer in time, shows and hides nothing. */
+  #catalog: CatalogSyncStatus | null = null
   /**
    * Failures already logged, by when they began and what: the catalog keeps each Session's newest until it's pushed,
    * and one tried again keeps when it began (`since`), so it's logged once rather than at every try.
@@ -133,10 +135,11 @@ export class SessionUploads {
     const [catalog, backfill] = await Promise.all([
       this.#sources.status().catch((error: Error) => {
         hostWarn("sync", "the catalog's sync status couldn't be read", { error: error.message })
-        return null
+        return this.#catalog
       }),
       this.#sources.backfill().catch(() => undefined),
     ])
+    this.#catalog = catalog
     for (const [form, status] of [["copies", catalog?.copies], ["originals", catalog?.originals]] as const)
       for (const failure of status?.failures ?? []) this.#logFailure(form, failure)
     this.#said(syncStatusOf(scope, catalog, backfill, sessionTitles(rows)))

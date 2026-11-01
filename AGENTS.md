@@ -822,8 +822,8 @@ window reads it back whole, its turn ends and a new host reopens it, and
 fails on a host that keeps it whole, or on any of those (or the sweep's
 measure of a copy) holding the event loop past 50ms. A pass over a whole
 history (a merge, a journal's read, that measure) is written once as `Steps`
-(`packages/host/src/base/slices.ts`) and run `inSlices` wherever the host
-can wait; a turn starts once the history's rows are written ahead
+(`@mako/sessions/slices`) and run `inSlices` wherever the host, or the sync
+daemon, can wait; a turn starts once the history's rows are written ahead
 (`LiveJournal.writtenAhead`), so its first commit writes none of them. `MAKO_PAGING_CHECK=1` pages every field
 of every entry as soon as a commit writes it, the turn running included; run
 the live, transcript and conversation-control suites with it after changing
@@ -4033,6 +4033,26 @@ ms=… during=…`, `loop-watch.ts`) with the work under way by name (`copy`,
 `test/reading-copies.mjs` and `test/loop-watch.mjs` cover these, and `npm run
 bench:sync-pipeline` measures write-to-account latency on the real daemon
 (`--daemon <daemon-main.js>` for another build's).
+
+The hold is the loop's, not only the work the log names: a log names what is
+under way, and a page or a push waiting its turn is named beside what held
+it. Nothing the size of a Session runs on that loop in one stretch. A write to
+the record store takes its lock with SQLite's own wait off and lets the loop
+turn between tries (`beginWriting`): the backfill's process keeps the lock
+until its capture's next commit (`SLICE_MS`, 2 s), and SQLite waited for it on
+the loop, so six of the seven holds of a second or more the daemon logged on
+2026-11-01 fell inside a backfill pass. A capture's read of a harness's database ends
+within `READ_MS` (25 ms). A Cursor chat's fold, a view's write, and a fold's
+comparison with what its listeners hold run as `Steps` `inSlices`, and a
+follow replaces from the first entry that changed, not from the start of its
+exchange: a headless agent's chat is one exchange, so each step it wrote sent
+the whole conversation again. `test/loop-holds.mjs` times each on a 25MB
+Cursor chat against a 50 ms budget. `npm run bench:syncd-loop` runs the real
+daemon on a large chat as it goes on (`--store <store.db>` for a copy of a
+real one, `--writer-holds-ms` to play a backfill pass's lock), with a window
+reading it and the host asking its status, and fails when a ping waited past
+50 ms or a status read failed. A status read that fails changes nothing the
+rail shows: `SessionUploads` keeps the status the daemon last answered.
 
 A Session is never out of the account without saying so. A pack the account
 refuses is sent again in sixteen smaller ones, and so on down to the chunks it

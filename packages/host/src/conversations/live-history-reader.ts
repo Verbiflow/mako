@@ -6,7 +6,7 @@ import { HISTORY_VIEW_EXPIRED, type LiveHistoryAddress, type LiveHistoryRead, ty
 import { HistoryRecords, HistoryVersions, historyCapture, historyPage, historyRange, isPartial, type HistoryValue } from "../contracts/history-pages.js"
 import { nativeHistoryRevision } from "./native-history.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
-import { inSlices } from "../base/slices.js"
+import { inSlices } from "@mako/sessions/slices"
 import { ContentWeights } from "../contracts/residency.js"
 import type { Entry } from "@mako/sessions/entries"
 import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"

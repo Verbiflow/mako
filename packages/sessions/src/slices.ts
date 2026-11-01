@@ -1,10 +1,11 @@
 /**
- * Work over a whole history (a merge, a journal read) written once as `Steps`:
- * it stops (`yield`) every few hundred items, and its caller either runs it to
- * the end at once (`atOnce`) or a slice at a time between other work
- * (`inSlices`). A conversation of 150MB read or merged in one stretch held the
- * host's loop for 0.3 to 1.2 seconds, and a window that hears nothing that long
- * decides its host is gone.
+ * Work over a whole history (a merge, a journal read, a fold of a harness's
+ * store) written once as `Steps`: it stops (`yield`) every few items, and its
+ * caller either runs it to the end at once (`atOnce`) or a slice at a time
+ * between other work (`inSlices`). A conversation of 150MB read or merged in
+ * one stretch held the host's loop for 0.3 to 1.2 seconds, and a window that
+ * hears nothing that long decides its host is gone; the sync daemon's loop
+ * answers the host's reads the same way.
  */
 export type Steps<Result> = Generator<void, Result, void>
 
