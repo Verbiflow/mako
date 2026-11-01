@@ -22,6 +22,8 @@ export interface MoveAccess {
   dependencies: Dependencies
   /** A journal this host has in memory; moves never load one. */
   resident(id: string): Resident | undefined
+  /** Every journal this host has in memory. */
+  residents(): Iterable<Resident>
   control(resident: Resident): ConversationControl
   pending(resident: Resident): ContextTransfer | undefined
   canHibernate(resident: Resident): boolean
@@ -109,9 +111,27 @@ export class LiveMoves {
     return !execution || execution.state === "here"
   }
 
-  /** Queued prompts wait for the move and do not keep a provider warm. */
+  /**
+   * Since when this journal, owned here, waits to hear the account before it runs anything (`Dependencies.ownerCheck`):
+   * a prompt, a provider switch or a wake waits, queued. Undefined when it may run.
+   */
+  ownerCheck(resident: Resident): number | undefined {
+    const check = this.access.dependencies.ownerCheck
+    return check ? check(resident.snapshot.session.id, resident.snapshot.createdAt) : undefined
+  }
+
+  /** The account was heard, or not in time: each journal with work waiting goes on, wherever its Session runs now. */
+  ownerChecked(): void {
+    for (const resident of this.access.residents())
+      if (this.access.pending(resident) || resident.snapshot.requests.some((request) => request.status === "queued")) this.access.resume(resident)
+  }
+
+  /**
+   * Queued prompts wait for the move, or for the account's word (`ownerCheck`), and do not keep a provider warm: a
+   * continue joined meanwhile releases it with them waiting.
+   */
   holdsQueued(resident: Resident): boolean {
-    return this.execution(resident.snapshot)?.state === "leaving"
+    return this.execution(resident.snapshot)?.state === "leaving" || this.ownerCheck(resident) !== undefined
   }
 
   /** The generation a dispatched prompt records. */

@@ -806,6 +806,16 @@ test("a number the account's stream skipped, or one it says was lost, is said as
   assert.deepEqual(gaps[1], { after: 3, seq: 4, why: "lost" })
 })
 
+test("each time the account's stream opens, and again once a dropped one is back, what reads the account's list is told", async () => {
+  const cloud = await fakeCloud()
+  let linked = 0
+  await signedIn(cloud, { secretName: "cloud/account-linked", onAccountLinked: () => linked++ })
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "followed the account's stream")
+  await waitFor(() => linked === 1, "told as it opens")
+  cloud.dropAll()
+  await waitFor(() => linked === 2, "told again once it's back")
+})
+
 test("account events are told as they're heard, in order, while the keychain is still writing the last one heard, and it's kept with the newest", async () => {
   const cloud = await fakeCloud()
   const secretName = "cloud/account-events-held"

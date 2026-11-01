@@ -307,6 +307,13 @@ function AcpActivity({
     return current?.kind === "starting" ? current.worktreeStep : undefined
   })
   const makingWorktree = useLasting(making, MAKING_WORKTREE_SHOWN_AFTER_MS)
+  // The message being sent waits for this Mac to hear its account after it was away (`LiveRequest.ownerCheck`).
+  const checkingFor = useAcp((state) => {
+    const live = scopedLiveAcp(state, scope)
+    const next = live ? promptDelivery(live).starting : null
+    return next?.ownerCheck ? next.id : undefined
+  })
+  const checkingOwner = useLasting(checkingFor, OWNER_CHECK_SHOWN_AFTER_MS)
   const conversationKey = useAcp((state) => scopedAcp(state, scope)?.key)
   const slowWorktree = useLasting(making, SLOW_WORKTREE_MS)
   const labels = useHarnessLabels()
@@ -322,7 +329,7 @@ function AcpActivity({
     // status; do not repeat it in the transcript.
     if (approval || live?.permission?.implementsPlan) return { kind: "idle" as const, label: "" }
     const switchingAccount = Boolean(live?.requests?.some((request) => request.status === "queued" && request.accountSwitch))
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, starting: startingAs, makingWorktree, worktreeStep, preparing, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, starting: startingAs, makingWorktree, worktreeStep, preparing, checkingOwner, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   const waiting = running && activity.kind === "connecting"
   // The wait ended (it started, or the send went): the next one is timed afresh.
@@ -408,6 +415,8 @@ function NativeClock({ since, retryAt }: { since: number; retryAt?: number }) {
 const MAKING_WORKTREE_SHOWN_AFTER_MS = 400
 /** A start still making its worktree after this offers to go ahead in the project folder. */
 const SLOW_WORKTREE_MS = 2_000
+/** The account's word after a wake usually comes in a second or so; a message waiting longer says what it waits for. */
+const OWNER_CHECK_SHOWN_AFTER_MS = 600
 
 /** Time since `activityAt`, read again when it moves and every few seconds while it is set. */
 function useQuietFor(activityAt: number | undefined): number {

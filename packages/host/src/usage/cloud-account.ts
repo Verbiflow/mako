@@ -266,6 +266,11 @@ export type CloudAccountOptions = {
    * the account reads it whole again rather than hold a list that may be wrong.
    */
   onAccountGap?: (gap: { after: number; seq: number; why: "skipped" | "lost" }) => void
+  /**
+   * The account's link opened, at a start or again after it dropped: what the account said meanwhile follows on its
+   * stream, with nothing to say when that's all of it, so what must know the list as it stands reads it whole.
+   */
+  onAccountLinked?: () => void
 }
 
 export class CloudAccountError extends Error {
@@ -1279,8 +1284,10 @@ export class CloudAccounts {
       if (socket.readyState === WebSocket.OPEN) socket.send(encodeClientFrame({ type: "renew", token }))
     })
     const following = this.#stored
-    if (following && socket.readyState === WebSocket.OPEN)
+    if (following && socket.readyState === WebSocket.OPEN) {
       socket.send(encodeClientFrame({ type: "subscribe", stream: accountStream(following.account.id), after: this.#seen ?? 0 }))
+      this.#options.onAccountLinked?.()
+    }
     socket.addEventListener("message", (event) => {
       const text = TextSchema.safeParse(event.data)
       if (!text.success) return

@@ -168,6 +168,7 @@ export class LiveConversations {
     this.moves = new LiveMoves({
       dependencies,
       resident: (id) => this.records.get(id),
+      residents: () => this.records.values(),
       control: conversationControl,
       pending: (resident) => this.transfers.pending(resident),
       canHibernate: (resident) => this.hibernation.canHibernate(resident),

@@ -39,6 +39,8 @@ export type SyncReadings = {
     /** From its owner's change to its arrival here, for each row that said when it changed (`changedAt`). */
     changeMs: Spread
     prompted?: PromptedReading
+    /** The latest few times this Mac checked with its account, after it was away, before running a turn of its own. */
+    ownerChecks?: OwnerCheckReading[]
   }
   /** What this device sends of its own conversations that others watch; absent where it runs none (a phone). */
   owner?: OwnerReading
@@ -50,6 +52,15 @@ export type SyncReadings = {
  * whole, as a watcher reads only form 1. And what went again after a reconnect.
  */
 export type OwnerReading = { watched: number; compact: number; negotiated: boolean; resent: number; notices: number }
+
+/**
+ * What ended a time this Mac couldn't hear its account: the host starting, a wake, the account's link opening again,
+ * another account, a gap in the account's stream, or the account saying this Mac was quiet (`device-quiet`).
+ */
+export type AwayEnd = "start" | "wake" | "linked" | "account" | "gap" | "quiet"
+
+/** One check (`OwnerCheck`): what began it, when, and how long until it was heard or given up. */
+export type OwnerCheckReading = { why: AwayEnd; at: number; outcome: "heard" | "gave-up" | "waiting"; ms?: number }
 
 const KEPT_SAMPLES = 200
 const KEPT_RECONNECTS = 8
@@ -137,6 +148,7 @@ export class SyncRecorder {
   readonly #changes: number[] = []
   #owner: (() => OwnerReading) | undefined
   #rows: (() => Iterable<{ promptedAt?: string }>) | undefined
+  #ownerChecks: (() => OwnerCheckReading[]) | undefined
 
   constructor(now: () => number = Date.now) {
     this.#now = now
@@ -182,11 +194,22 @@ export class SyncRecorder {
     this.#owner = read
   }
 
+  /** Where this Mac's checks with its account after it was away are read from. */
+  ownerChecksFrom(read: () => OwnerCheckReading[]): void {
+    this.#ownerChecks = read
+  }
+
   readings(): SyncReadings {
     return {
       at: this.#now(),
       follows: [...this.#follows.values()].map((follow) => follow.reading()),
-      list: { ...(this.#seq !== undefined && { seq: this.#seq }), gaps: [...this.#gaps], changeMs: spread(this.#changes), ...(this.#rows && { prompted: prompted(this.#rows()) }) },
+      list: {
+        ...(this.#seq !== undefined && { seq: this.#seq }),
+        gaps: [...this.#gaps],
+        changeMs: spread(this.#changes),
+        ...(this.#rows && { prompted: prompted(this.#rows()) }),
+        ...(this.#ownerChecks && { ownerChecks: this.#ownerChecks() }),
+      },
       ...(this.#owner && { owner: this.#owner() }),
     }
   }
@@ -235,6 +258,31 @@ export function describeList(list: SyncReadings["list"]): string {
     spreadText("changes arrive", list.changeMs),
     list.gaps.length ? `read whole again after ${plural(list.gaps.length, "gap")}` : undefined,
     list.prompted?.sessions ? `${list.prompted.said} of ${plural(list.prompted.sessions, "Session")} say when you last wrote to them; the rest rank by their start` : undefined,
+  ].filter(Boolean).join(" · ")
+}
+
+const AWAY_TEXT = {
+  start: "Mako started",
+  wake: "this Mac woke",
+  linked: "its link came back",
+  account: "a sign-in",
+  gap: "a gap in the account's list",
+  quiet: "the account found this Mac quiet",
+} as const satisfies Record<AwayEnd, string>
+const duration = (ms: number) => (ms < 1_000 ? `${ms} ms` : `${(ms / 1_000).toFixed(1)} s`)
+
+/**
+ * This Mac's checks with its account before it runs a turn of its own after it was away, in a line: the latest, and
+ * how many of the rest it gave up on; undefined before any.
+ */
+export function describeOwnerChecks(checks: SyncReadings["list"]["ownerChecks"]): string | undefined {
+  const latest = checks?.at(-1)
+  if (!checks || !latest) return undefined
+  const after = AWAY_TEXT[latest.why]
+  const gaveUp = checks.slice(0, -1).filter((check) => check.outcome === "gave-up").length
+  return [
+    latest.outcome === "waiting" ? `checking since ${after}` : latest.outcome === "heard" ? `heard ${duration(latest.ms ?? 0)} after ${after}` : `not heard ${duration(latest.ms ?? 0)} after ${after}, so what waited ran here`,
+    gaveUp ? `not heard in time ${times(gaveUp)} before` : undefined,
   ].filter(Boolean).join(" · ")
 }
 
