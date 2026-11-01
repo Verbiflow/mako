@@ -34,13 +34,15 @@ import { scriptedModel } from "./scripted-model.ts"
  *
  * Lines on stdin drive it; each answers with one line on stdout, JSON after its word:
  * - (at start) `SIGN IN <url>`, then once signed in with the cloud, `READY {dataRoot, project}`.
- * - `start <title> <word>`: a Thread in its own worktree of the project, on OpenCode, its first turn that word, waited
- *   for; its worktree's branch then tracks the repository's default branch, which a cloud machine can clone.
- *   `STARTED {conversation, thread, folder, branch}`
+ * - `start <title> <word>`: a Thread on OpenCode in its own worktree of the project, its first turn that word, waited
+ *   for. The worktree is on a branch of the repository's on GitHub (`--branch`, else its first besides the default),
+ *   tracking it as a pushed branch does, so a cloud machine has it to clone. `STARTED {conversation, thread, folder, branch, upstream}`
  * - `say <conversation> <word>`: a turn sent as the composer sends one, not waited for. `SAID {request, at}`
- * - `read <conversation>`: the conversation as this Mac reads it now: where it runs, each request's status and the
- *   words its text says. `READ {elsewhere, requests, words}`
- * - `synced [ms]`: waits for the sync window's copies and records to be up. `SYNCED {…}`
+ * - `read <conversation>`: the conversation as this Mac reads it now: each request's status and the words its text says,
+ *   and where its folder is when it isn't here. `READ {elsewhere, requests, words}`
+ * - `continues`: each continue in the cloud this Mac pressed or heard of, as its Diagnostics show them. `CONTINUES [...]`
+ * - `synced [ms]`: waits until the account can show each Session of the sync window and holds its records whole, so a
+ *   continue can go on from them. `SYNCED {ms, up, …}`
  * - `heard`: every word the scripted model was asked for, in order: the turns that ran here. `HEARD [...]`
  * - `offline`, `online`: the relay cut, or listening again on the same port. `OFFLINE {at}`, `ONLINE {at}`
  * - `return <conversation>`: the Thread brought back from the cloud, as Bring back does. `RETURNED {outcome, ms}`
@@ -48,7 +50,7 @@ import { scriptedModel } from "./scripted-model.ts"
  * - `quit` (or stdin's end): signs out, stops the host (and the window), removes the root unless `--keep`.
  *
  *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-continue-mac.ts --root <empty folder> --cloud https://… \
- *     --relay-port <port> [--repository https://github.com/octocat/Hello-World] [--window] [--keep]
+ *     --relay-port <port> [--repository https://github.com/octocat/Hello-World] [--branch test] [--window] [--keep]
  */
 const { values } = parseArgs({
   options: {
@@ -56,6 +58,7 @@ const { values } = parseArgs({
     cloud: { type: "string" },
     "relay-port": { type: "string" },
     repository: { type: "string", default: "https://github.com/octocat/Hello-World" },
+    branch: { type: "string" },
     window: { type: "boolean", default: false },
     keep: { type: "boolean", default: false },
   },
@@ -89,7 +92,12 @@ await writeFile(join(home, ".config", "opencode", "opencode.json"), JSON.stringi
 const project = join(home, "projects", new URL(values.repository).pathname.split("/").at(-1) ?? "project")
 await mkdir(join(home, "projects"), { recursive: true })
 await run("git", ["clone", "-q", values.repository, project], { env: { ...scratch.env } })
+// The branch a Thread works on: one of the repository's own on GitHub besides its default, which the project folder
+// has checked out, so the Thread's worktree can have it and Bring back can check it out again.
 const defaultBranch = (await run("git", ["-C", project, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).stdout.trim()
+const remoteBranches = (await run("git", ["-C", project, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"])).stdout.split("\n").filter((name) => name.startsWith("origin/") && name !== "origin/HEAD" && name !== defaultBranch)
+const branchOnGitHub = values.branch ? `origin/${values.branch}` : remoteBranches[0]
+if (!branchOnGitHub || !remoteBranches.includes(branchOnGitHub)) throw new Error(`${values.repository} has no branch on GitHub besides ${defaultBranch} for the Thread to work on${values.branch ? ` named ${values.branch}` : ""}`)
 
 // The Mac's network: an http relay on this Mac's loopback to the cloud's https, sockets and all, so `offline` can cut it.
 const carried = new Set<Duplex>()
@@ -187,7 +195,7 @@ const read = async (id: string) => {
   const words = shot.blocks.filter((block) => block.type === "text").map((block) => block.text?.trim() ?? "")
   return { elsewhere: shot.elsewhere ?? null, threadId: shot.threadId ?? null, requests: shot.requests.map(({ id: request, status, error }) => ({ request, status, ...error && { error } })), words }
 }
-const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), readable: z.number() }).loose()).optional() }).loose()
+const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), inCloud: z.number() }).loose()).optional() }).loose()
 
 const stop = async () => {
   if (!relay.listening) await listen()
@@ -214,7 +222,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     const title = rest.join(" ")
     const conversationId = randomUUID()
     const request = randomUUID()
-    await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+    await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, worktreeStart: { kind: "branch", branch: branchOnGitHub }, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
     for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
       const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
       if (status && !["queued", "held", "dispatching"].includes(status)) break
@@ -222,9 +230,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     const shot = await snapshot(conversationId)
     const folder = shot.session.cwd ?? ""
-    const branch = (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim()
-    await run("git", ["-C", folder, "branch", `--set-upstream-to=${defaultBranch}`])
-    say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder, branch, upstream: defaultBranch, ...await read(conversationId) }))
+    const upstream = (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).stdout.trim()
+    say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder, branch: (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim(), upstream, ...await read(conversationId) }))
   } else if (command === "say") {
     const [conversation, word] = rest
     if (!conversation || !word) {
@@ -239,14 +246,17 @@ for await (const line of createInterface({ input: process.stdin })) {
   else if (command === "synced") {
     const began = Date.now()
     let sync = SyncSchema.parse(await call("mako:sync-status", []))
+    let up = false
     for (const limit = Number(rest[0]) || 2 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
       sync = SyncSchema.parse(await call("mako:sync-status", []))
       const tiers = sync.tiers ?? []
-      const up = tiers.length > 0 && tiers.every((tier) => tier.readable >= tier.sessions) && !sync.stale && !sync.sending
+      // Each Session the account can show and holds whole: a continue goes on from its records.
+      up = tiers.some((tier) => tier.sessions > 0) && tiers.every((tier) => tier.inCloud >= tier.sessions) && !sync.stale && !sync.sending
       if (up || Date.now() - began > limit) break
     }
-    say("SYNCED", JSON.stringify({ ms: Date.now() - began, ...sync }))
+    say("SYNCED", JSON.stringify({ ms: Date.now() - began, up, ...sync }))
   } else if (command === "heard") say("HEARD", JSON.stringify(heard))
+  else if (command === "continues") say("CONTINUES", JSON.stringify(await call("mako:continue-readings", [])))
   else if (command === "offline") {
     await cut()
     say("OFFLINE", JSON.stringify({ at: Date.now() }))
