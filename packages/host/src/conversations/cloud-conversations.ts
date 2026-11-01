@@ -19,6 +19,7 @@ import { OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/ho
 import { ForkInputSchema } from "../contracts/conversation-control.js"
 import { sessionAfter, type CompactLiveBatch, type HeardLiveBatch, type LiveRequest, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import type { WaitingMessage } from "@mako/protocol/waiting"
+import type { ListedContinue } from "@mako/protocol/continues"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, readEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
 import type { SessionExecution } from "../contracts/thread-execution.js"
@@ -236,6 +237,11 @@ export type CloudConversationsOptions = {
    * owner takes it), `later` when the host can't take one yet.
    */
   takeWaiting?(message: WaitingMessage): Promise<"taken" | "not-mine" | "later">
+  /**
+   * One of this Mac's Sessions that the account continued in the cloud while this Mac was off, still run here: this
+   * Mac joins the continue as a move (`CloudMoves.joinContinue`), so it never runs here again until it's brought back.
+   */
+  continued?(session: string, listed: ListedContinue): void
   /**
    * Whether this Mac's own harness stores keep this native session, in this folder: the one this Mac lists itself. A
    * second Mako on this Mac (another profile, a build being tried) reads the same stores and lists the same sessions
@@ -618,6 +624,8 @@ export class CloudConversations {
     for (const [session, messages] of this.#list.allWaiting()) {
       const row = this.#list.sessions().get(session)
       if (row?.runsOn.kind !== "device" || row.runsOn.deviceId !== this.#device) continue
+      // Continuing in the cloud: what waited goes there with it, and runs there once.
+      if (row.continued && row.continued.phase !== "failed") continue
       for (const message of messages) {
         if (this.#taking.has(message.id)) continue
         this.#taking.add(message.id)
@@ -1708,6 +1716,8 @@ export class CloudConversations {
     const rows = [...this.#list.sessions().values()].filter((row) => picked(row.conversation))
     const executions = this.#executions(rows)
     for (const row of rows) {
+      const continued = row.continued
+      if (continued && continued.from === this.#device && continued.phase !== "failed" && executions.get(row.session)?.state === "here") this.#options.continued?.(row.session, continued)
       if (!this.#listable(row, executions)) continue
       if (row.runsOn.kind === "device") {
         if (row.runsOn.deviceId === this.#device) continue

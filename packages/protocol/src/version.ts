@@ -27,10 +27,13 @@ export const PROTOCOL_VERSION = 1
  * form an update is in (`form`). 14 lets a `sessions` row say when the person last sent its Session a message, from any
  * device (`promptedAt`), which every rail orders its projects by, and that another app has a session Mako hasn't opened
  * open (`openElsewhere`). 15 adds SSH to a cloud Thread's machine (`ssh.ts`): `ssh-open` and `ssh-opened`, binary
- * messages from the gateway, and the runtime's `media-ack` for what it took of them. Every envelope stays at
+ * messages from the gateway, and the runtime's `media-ack` for what it took of them. 16 lets a `sessions` row say its
+ * folder's origin on GitHub and the branch it pushes to (`repository`), which a Session continued in the cloud while
+ * its owner is off clones (`continues.ts`), and says a runtime that agreed it takes such a continue back as a move when
+ * it returns. Every envelope stays at
  * `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 15
+export const LINK_VERSION = 16
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -87,6 +90,13 @@ export const PROMPTED_VERSION = 14
 
 /** The first link version a gateway may send `ssh-open` and binary messages on; a runtime that agreed less is never asked. */
 export const SSH_VERSION = 15
+
+/**
+ * The first link version whose `sessions` rows may say their `repository`, and whose runtime takes a Thread the account
+ * continued in the cloud while it was off as moved when it's back (`continues.ts`): a device on a link that agreed less
+ * isn't offered for a continue, and its gateway refuses the field.
+ */
+export const CONTINUE_VERSION = 16
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

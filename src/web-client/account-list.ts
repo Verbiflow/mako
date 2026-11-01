@@ -1,6 +1,6 @@
 import { AccountEventSchema, accountStream } from "@mako/protocol/account-events"
 import { AccountSessions, isAccountListEvent } from "@mako/protocol/account-sessions"
-import { SessionListingsSchema, type ArchivedThread, type ListedSession, type SessionListings } from "@mako/protocol/thread-listing"
+import { quietDevice, SessionListingsSchema, type ArchivedThread, type ListedSession, type SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { followAgainInMs, type Subscription } from "@mako/protocol"
 import { errorMessage, type FailureBoundary } from "@mako/host/contracts/error-message"
@@ -42,6 +42,8 @@ export interface AccountListState {
   rows: readonly ListedSession[]
   waiting: ReadonlyMap<string, readonly WaitingMessage[]>
   quiet: ReadonlyMap<string, string>
+  /** The quiet devices whose Mako takes a Thread continued in the cloud back (`QuietDevice.continues`). */
+  continues: ReadonlySet<string>
   archived: readonly ArchivedThread[]
   devices: ReadonlyMap<string, WebDevice>
   /** The account stream's number the rows stand at. */
@@ -57,6 +59,7 @@ export const accountListStore = createStore<AccountListState>({
   rows: [],
   waiting: new Map(),
   quiet: new Map(),
+  continues: new Set(),
   archived: [],
   devices: new Map(),
 })
@@ -264,6 +267,7 @@ export class AccountList {
       rows: [...this.#list.sessions().values()],
       waiting,
       quiet,
+      continues: new Set(this.#list.quiet().flatMap((device) => (device.continues ? [device.deviceId] : []))),
       archived: [...this.#list.archived().values()].sort((left, right) => Date.parse(right.archivedAt) - Date.parse(left.archivedAt)),
       asOf: Date.now(),
     }
@@ -290,7 +294,7 @@ export class AccountList {
     if (this.#forgotten || (state.phase !== "live" && state.phase !== "reconnecting")) return
     const cached: Cached = {
       at: state.asOf ?? Date.now(),
-      listings: { sessions: [...state.rows], seq: state.seq ?? 0, waiting: [...state.waiting.values()].flat(), quiet: [...state.quiet].map(([deviceId, since]) => ({ deviceId, since })), archived: [...state.archived] },
+      listings: { sessions: [...state.rows], seq: state.seq ?? 0, waiting: [...state.waiting.values()].flat(), quiet: [...state.quiet].map(([deviceId, since]) => quietDevice(deviceId, since, state.continues.has(deviceId))), archived: [...state.archived] },
       devices: [...state.devices.values()],
     }
     try {
@@ -319,6 +323,7 @@ export class AccountList {
       rows: [...list.sessions().values()],
       waiting: new Map(list.allWaiting()),
       quiet,
+      continues: new Set(list.quiet().flatMap((device) => (device.continues ? [device.deviceId] : []))),
       archived: cached.listings.archived ?? [],
       devices: new Map(cached.devices.map((device) => [device.id, device])),
       asOf: cached.at,

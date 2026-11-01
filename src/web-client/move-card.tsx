@@ -7,17 +7,19 @@ import { lastSeen } from "./diagnosis"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords, type MoveBar, type MoveWay } from "./move-progress"
 import { dismissMove, listedMove, settledEnd, useMoves, type WebMove } from "./moves"
 import { askAgain, startMove, type MoveMac } from "./move-actions"
+import { startContinue } from "./continue-actions"
 import { useForm } from "./route"
 import { Sheet } from "./sheet"
 import type { WebSession, WebThread } from "./threads"
 import { hereOf, useNow } from "./trouble-state"
 
 /** A move as its strip draws it: one this browser follows, or the list's word on one, naming its Mac when it can. */
-export type ShownMove = Pick<WebMove, "way" | "step" | "stepAt" | "sent" | "move" | "handOff" | "end" | "ours"> & { mac: { name: string } }
+export type ShownMove = Pick<WebMove, "way" | "step" | "stepAt" | "sent" | "move" | "handOff" | "end" | "ours" | "continued"> & { mac: { name: string } }
 
 /** What each step means for the Thread: the desk's words (`thread-move-notice.tsx`), naming the Mac and this end. */
 function stepDetail(move: ShownMove, here: string): string {
   const mac = move.mac.name
+  if (move.continued) return continueDetail(move, here)
   if (move.end?.kind === "unconfirmed") return `${here} lost the answer on the way (${move.end.reason}). The move goes on on ${mac} all the same, and ${here.toLowerCase()} asks it how it went until it hears.`
   if (move.way === "cloud")
     switch (move.step) {
@@ -45,6 +47,21 @@ function stepDetail(move: ShownMove, here: string): string {
     case "bringing":
     case "moving":
       return `The cloud let go of it. Its worktree and sessions are arriving on ${mac}; nothing runs it until they have.`
+    default:
+      return ""
+  }
+}
+
+/** What each step of a continue means, while its Mac is off and the account carries it. */
+function continueDetail(move: ShownMove, here: string): string {
+  const mac = move.mac.name
+  if (move.end?.kind === "unconfirmed") return `${here} lost the answer on the way (${move.end.reason}). Your account carries it on all the same, and ${here.toLowerCase()} asks how it went until it hears.`
+  switch (move.step) {
+    case "asking":
+    case "making":
+      return `${mac} is off, so your account carries it: a cloud Thread made at the same folder, with its sessions as ${mac} last sent them.`
+    case "arriving":
+      return `A cloud machine clones its branch as pushed and picks up its sessions where they left off. A message that waited for ${mac} runs there, once.`
     default:
       return ""
   }
@@ -102,9 +119,10 @@ export function ThreadMove({ thread, session }: { thread: WebThread; session: We
   const followed = useMoves((state) => state.moves.get(thread.id))
   const listed = followed ? undefined : listedMove(thread)
   const mac = followed?.mac ?? macOf(session, devices)
-  const move: ShownMove | undefined = followed ?? (listed && { ...listed, handOff: session.row.state === "working", mac: mac ?? { name: "your Mac" }, ours: false })
+  const move: ShownMove | undefined = followed ?? (listed && { ...listed, handOff: !listed.continued && session.row.state === "working", mac: mac ?? { name: "your Mac" }, ours: false })
   const deviceId = session.owner.kind === "device" ? session.owner.deviceId : undefined
-  const watched = move && !settledEnd(move.end) && move.way === "cloud" && deviceId ? (followed?.conversation ?? session.row.conversation) : undefined
+  // A continue's Mac is off: the account says its steps, and there's nothing to follow on the Mac.
+  const watched = move && !move.continued && !settledEnd(move.end) && move.way === "cloud" && deviceId ? (followed?.conversation ?? session.row.conversation) : undefined
   useEffect(() => {
     if (!watched || !deviceId) return
     let stop: (() => void) | undefined
@@ -120,9 +138,11 @@ export function ThreadMove({ thread, session }: { thread: WebThread; session: We
   if (!move) return null
   const end = followed?.end
   const retry =
-    end?.kind === "failed" && followed
+    end?.kind === "failed" && followed?.continued
+      ? () => void startContinue(client, { thread, session, mac: followed.mac })
+      : end?.kind === "failed" && followed
       ? () => void startMove(client, { thread, conversation: session.row.conversation, way: followed.way, mac: followed.mac, handOff: session.row.state === "working" })
-      : end?.kind === "unconfirmed" && followed?.move
+      : end?.kind === "unconfirmed" && followed?.move && !followed.continued
         ? () => askAgain(followed.move!)
         : undefined
   return <MoveStrip thread={thread.id} move={move} onRetry={retry} />
@@ -144,12 +164,17 @@ export function MoveStrip({ thread, move, onRetry }: { thread: string; move: Sho
   const { fill, percent, track } = useBar(move, end !== undefined, done)
   const up = move.way === "cloud"
   const Arrow = up ? ArrowUpIcon : ArrowDownIcon
-  const title = end?.kind === "failed"
+  const title = move.continued
+    ? end?.kind === "failed" ? "Couldn't continue in the cloud" : done ? "Continued in the cloud" : "Continuing in the cloud"
+    : end?.kind === "failed"
     ? up ? "Couldn't move to the cloud" : "It stayed in the cloud"
     : end?.kind === "unsettled" ? "Waiting for the cloud's answer"
     : done ? (up ? "Moved to the cloud" : `Back on ${move.mac.name}`)
     : up ? "Moving to the cloud" : `Bringing it back to ${move.mac.name}`
-  const words = unconfirmed ? `Not confirmed · asking ${move.mac.name} again` : done ? (up ? "It goes on in a cloud machine, at the same folder." : `It goes on on ${move.mac.name}.`) : stepWords(move.way, move.step, move.mac.name, move.handOff)
+  const words = unconfirmed
+    ? `Not confirmed · asking ${move.continued ? "your account" : move.mac.name} again`
+    : done ? (move.continued ? `It goes on in a cloud machine; ${move.mac.name} lets it go.` : up ? "It goes on in a cloud machine, at the same folder." : `It goes on on ${move.mac.name}.`)
+    : move.continued && move.step === "asking" ? "Asking your account…" : stepWords(move.way, move.step, move.mac.name, move.handOff)
   const detail = problem || done ? "" : stepDetail(move, here)
   return (
     <section className="web-move" data-move={move.way} data-move-step={end ? end.kind : move.step} aria-label={title}>

@@ -10,6 +10,7 @@ import type { SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
 import type { AccessChoices as AccountAccessChoices, AccessChoicesAnswer } from "@mako/protocol/access-choices"
 import type { SessionPublishing } from "./machine-runtime.js"
+import type { ContinueState } from "@mako/protocol/continues"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
@@ -83,6 +84,11 @@ export interface CloudAccount {
   refuseMove(threadId: string, move: string, reason: string): Promise<MoveAnswer>
   /** What the cloud answered a move; undefined while it hasn't, after holding the ask open up to `waitMs`. */
   moveAnswer(threadId: string, move: string, waitMs?: number): Promise<MoveAnswer | undefined>
+  /**
+   * A continue of one of this Mac's Sessions the account carries while this Mac was off (`@mako/protocol/continues`),
+   * carried on from wherever it stands (`continue: true`, repeated harmlessly) or only read; undefined for none.
+   */
+  continueState?(session: string, op: string, options?: { carryOn?: boolean }): Promise<ContinueState | undefined>
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them. */
   threadRecords(threadId: string): Promise<RecordsLink>
   /** Where a device's session records are kept in the account (`CloudAccounts.deviceRecords`): this Mac's own, or another's to read. */
@@ -344,6 +350,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
     moveAnswer: (threadId, move, waitMs) => cloud.moveAnswer(threadId, move, waitMs),
+    continueState: (session, op, options) => cloud.continueState(session, op, options),
     threadRecords: (threadId) => cloud.threadRecords(threadId),
     deviceRecords: (deviceId) => cloud.deviceRecords(deviceId),
     deviceOriginals: (deviceId) => cloud.deviceOriginals(deviceId),

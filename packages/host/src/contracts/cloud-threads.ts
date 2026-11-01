@@ -81,12 +81,19 @@ export type ThreadMoveStep =
   | { kind: "packing"; sent?: MoveSent }
   | { kind: "pausing" }
   | { kind: "handing-over" }
-  | { kind: "resuming" }
+  | { kind: "resuming"; whileAway?: MoveWhileAway }
   /** Every conversation of the Thread that moved, each the cloud's now under its own id; `continued`: a turn the handoff paused goes on there. */
-  | { kind: "moved"; conversations: string[]; continued?: boolean; carried?: MoveCarried }
+  | { kind: "moved"; conversations: string[]; continued?: boolean; carried?: MoveCarried; whileAway?: MoveWhileAway }
   /** `continued`: a turn the handoff had paused goes on here. */
   | { kind: "kept-here"; reason: string; continued?: boolean }
   | { kind: "unsettled"; reason: string }
+
+/**
+ * A move another device made while this Mac was off (Continue in the cloud), which this Mac joined when it was back.
+ * `behind`: the account's copy of what the person read took something after this Mac's originals last did, so the
+ * newest turns may not be in what the cloud continued from; they stay here.
+ */
+export type MoveWhileAway = { behind: boolean }
 
 /** How much of a move's checkout has gone to the cloud: `bytes` of `of`, which grows as each repository's is packed. */
 export type MoveSent = { bytes: number; of: number }

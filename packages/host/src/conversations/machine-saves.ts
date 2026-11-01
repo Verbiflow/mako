@@ -317,7 +317,7 @@ export class MachineSaves {
 }
 
 /** The checkpoint sent beside the Thread's records, unless the account has it already. */
-async function sendCheckpoint(records: RecordsLink, checkpoint: MoveCheckpoint, file: string): Promise<void> {
+export async function sendCheckpoint(records: RecordsLink, checkpoint: MoveCheckpoint, file: string): Promise<void> {
   const url = `${records.base}/checkpoints/${checkpoint.sha256}`
   const kept = await fetchWith(url, { method: "HEAD", headers: { authorization: records.authorization }, signal: AbortSignal.timeout(30_000) })
   if (kept.ok) return

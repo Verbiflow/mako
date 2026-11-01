@@ -1,5 +1,5 @@
 import type { AccountEvent } from "./account-events.js"
-import type { ArchivedThread, ListedSession, SessionListings } from "./thread-listing.js"
+import { quietDevice, type ArchivedThread, type ListedSession, type QuietDevice, type SessionListings } from "./thread-listing.js"
 import type { WaitingMessage } from "./waiting.js"
 
 /** The account's events about its Threads, as against its devices: what the list of them follows. */
@@ -23,8 +23,8 @@ export class AccountSessions {
   readonly #sessions = new Map<string, ListedSession>()
   /** Each Session's messages waiting for its owner, as the list and the stream said them last. */
   readonly #waiting = new Map<string, WaitingMessage[]>()
-  /** Each quiet device, by ID: when the cloud last heard from it (`QuietDevice`). */
-  readonly #quiet = new Map<string, string>()
+  /** Each quiet device, by ID: when the cloud last heard from it, and whether it takes a continue back (`QuietDevice`). */
+  readonly #quiet = new Map<string, QuietDevice>()
   /** The account's archived cloud Threads, by cloud Thread: its own objects' word, never a device's. */
   readonly #archived = new Map<string, ArchivedThread>()
   /** The stream's number the list stands at; undefined until it's been read. */
@@ -53,7 +53,12 @@ export class AccountSessions {
 
   /** When the cloud last heard from a quiet device; undefined for one it hears. */
   quietSince(deviceId: string): string | undefined {
-    return this.#quiet.get(deviceId)
+    return this.#quiet.get(deviceId)?.since
+  }
+
+  /** Every quiet device, as the cloud says it. */
+  quiet(): readonly QuietDevice[] {
+    return [...this.#quiet.values()]
   }
 
   /** Every Session with messages waiting, and them. */
@@ -74,7 +79,7 @@ export class AccountSessions {
     this.#waiting.clear()
     for (const message of listings.waiting ?? []) this.#waiting.set(message.session, [...(this.#waiting.get(message.session) ?? []), message])
     this.#quiet.clear()
-    for (const { deviceId, since } of listings.quiet ?? []) this.#quiet.set(deviceId, since)
+    for (const device of listings.quiet ?? []) this.#quiet.set(device.deviceId, device)
     this.#archived.clear()
     for (const archived of listings.archived ?? []) this.#archived.set(archived.thread, archived)
     this.#seq = listings.seq
@@ -116,8 +121,9 @@ export class AccountSessions {
     }
     if (event.type === "device-quiet") {
       if (event.since === null) return this.#quiet.delete(event.deviceId)
-      const changed = this.#quiet.get(event.deviceId) !== event.since
-      this.#quiet.set(event.deviceId, event.since)
+      const held = this.#quiet.get(event.deviceId)
+      const changed = held?.since !== event.since || held.continues !== event.continues
+      this.#quiet.set(event.deviceId, quietDevice(event.deviceId, event.since, event.continues === true))
       return changed
     }
     if (event.type === "thread-archived") {
@@ -132,7 +138,7 @@ export class AccountSessions {
 
   #snapshot(): string {
     const waiting = [...this.#waiting].sort(([left], [right]) => (left < right ? -1 : 1))
-    const quiet = [...this.#quiet].sort(([left], [right]) => (left < right ? -1 : 1))
+    const quiet = [...this.#quiet.values()].sort((left, right) => (left.deviceId < right.deviceId ? -1 : 1))
     const archived = [...this.#archived.keys()].sort()
     return JSON.stringify([[...this.#sessions.values()].sort((left, right) => (left.session < right.session ? -1 : 1)), waiting, quiet, archived])
   }

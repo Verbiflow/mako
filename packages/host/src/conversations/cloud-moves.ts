@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
 import { encodeOperation, type ThreadFileHistory } from "@mako/protocol"
+import type { ContinueState, ListedContinue } from "@mako/protocol/continues"
 import { MOVE_ANSWER_WAIT_MS, MoveCarryRefSchema, MoveCarrySchema, MoveCheckpointSchema, type MoveAnswer, type MoveCarryRepository, type MoveCheckpoint, type MoveLeft } from "@mako/protocol/moves"
 import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
@@ -44,6 +45,10 @@ import { MoveNotQuietError } from "./live-moves.js"
  * the cloud claimed first, the move goes on. An answer lost on the way is asked for again by the move's id, and
  * never guessed: until it's known, the Thread runs nowhere (`unsettled`). Each move's plan is written before each
  * step (`<data root>/cloud/moves/<move>.json`), so a host that stops mid-move settles it when it starts again.
+ *
+ * A Thread the account continued in the cloud while this Mac was off (`@mako/protocol/continues`) is one more move,
+ * that this Mac joins when it's back (`joinContinue`): it releases the Thread at the generation the account's handoff
+ * named, so nothing runs it here, then takes the cloud's answer as for any move it handed over.
  */
 
 /** A UUID fixed by a name: version 8 (named by its maker), variant 10, from the name's SHA-256. */
@@ -168,6 +173,11 @@ export const MovePlanSchema = z.object({
     paused: z.array(z.object({ conversationId: z.string(), requestId: z.string(), stopped: z.array(z.string()).default([]) })).default([]),
   }).optional(),
   reason: z.string().optional(),
+  /**
+   * A continue this Mac joined (`joinContinue`): the device it was pressed on, and whether the cloud continued from
+   * before this Mac's last turns (`behind`), which stay in its records here.
+   */
+  continued: z.object({ by: z.string(), at: z.string(), behind: z.boolean().default(false) }).optional(),
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
 })
@@ -318,6 +328,8 @@ export class CloudMoves {
    * Mac let go of the Thread; `handed`, once the cloud carries it through, so this Mac is no longer needed for it.
    */
   readonly #milestones = new Map<string, Record<Milestone, Reached>>()
+  /** Continues this host joined and settled (moved, or kept here): heard of again, nothing is read. */
+  readonly #joinedContinues = new Set<string>()
 
   constructor(options: CloudMovesOptions) {
     this.#options = options
@@ -407,6 +419,89 @@ export class CloudMoves {
       this.#running.set(plan.move, work)
       await work.catch((error: Error) => hostWarn("moves", "a move a stopped host left couldn't be settled yet", { move: plan.move, error: error.message }))
     }
+  }
+
+  /**
+   * A continue of this Mac's Thread that the account carried while this Mac was off (`listed`, as its Session's row
+   * says it), joined as a move this Mac handed over: the account is asked to carry it on (a press whose client went
+   * away is finished here), this Mac releases the Thread at the generation the account released it at, and the
+   * cloud's claim is confirmed (or its refusal takes the Thread back), as for any move. Once per continue; a Thread at
+   * work here waits for its turn to end (its row changes then, which joins it again). A continue that failed changes
+   * nothing here.
+   */
+  joinContinue(session: string, listed: ListedContinue): void {
+    if (listed.phase === "failed" || this.#running.has(listed.op) || this.#joinedContinues.has(listed.op)) return
+    const move = MoveIdSchema.parse(listed.op)
+    this.#milestones.set(move, { released: deferred(), handed: deferred() })
+    const work = this.#joined(session, move).then((outcome) => {
+      if (outcome.kind === "moved" || outcome.kind === "kept-here") this.#joinedContinues.add(move)
+      return outcome
+    }, (error: Error): ThreadMoveOutcome => {
+      hostWarn("continues", "a continue in the cloud couldn't be joined here yet", { move, session, cloudThread: listed.cloudThread, error: errorMessage({ error }) })
+      return { kind: "unsettled", reason: errorMessage({ error }) }
+    }).finally(() => this.#ended(move))
+    this.#running.set(move, work)
+  }
+
+  async #joined(session: string, move: MoveId): Promise<ThreadMoveOutcome> {
+    const known = await this.#read(move).catch(() => undefined)
+    if (known) {
+      this.#leaving.set(move, known.thread)
+      return known.phase === "started" ? { kind: "moved", cloudThread: known.cloudThread } : known.phase === "kept-here" ? { kind: "kept-here", reason: known.reason ?? "It stayed here." } : this.#resume(known)
+    }
+    const threads = this.#options.threads()
+    if (!threads) throw new Error("The Thread store isn't open.")
+    const id = SessionIdSchema.parse(session)
+    const execution = threads.execution(id)
+    if (execution && execution.state !== "here") return { kind: "unsettled", reason: "It isn't this Mac's to give up." }
+    // Carried on first: a continue whose press went away before its hand-over goes on from here.
+    const state = await this.#account().continueState?.(session, move, { carryOn: true })
+    if (!state) throw new Error("The account has no record of this continue.")
+    if (state.phase === "failed") {
+      hostLog("continues", "a continue in the cloud failed while this Mac was off; the Thread stays here", { move, session, reason: state.reason ?? "" })
+      return { kind: "kept-here", reason: state.reason ?? "It didn't continue in the cloud." }
+    }
+    const thread = ThreadIdSchema.parse(state.thread)
+    const mine = threads.threadSessions(thread)
+    // The account released each at its listed generation plus one: this Mac's store must stand there too, or the
+    // cloud's claim would never match its release.
+    for (const carried of state.sessions) {
+      const here = threads.execution(SessionIdSchema.parse(carried.session))
+      if (here && here.generation !== carried.generation) throw new Error(`Its Session ${carried.session} is at generation ${here.generation} here, and the continue released it from ${carried.generation}.`)
+    }
+    if (mine.length !== state.sessions.length || mine.some((each) => !state.sessions.some((carried) => carried.session === each.session)))
+      throw new Error("Its Sessions here aren't the ones the account continued.")
+    const busy = await this.#options.moves.settledBlockers(thread, 0)
+    if (busy.length) {
+      hostWarn("continues", "a Thread continued in the cloud is at work here; it's given up once its turn ends", { move, thread, busy: busy.join("; ") })
+      return { kind: "unsettled", reason: `It's at work here: ${busy.join("; ")}.` }
+    }
+    const plan: Plan = {
+      move, thread, asked: state.sessions[0]!.conversation, cloudThread: state.cloudThread, folder: state.folder,
+      repository: CloudRepositorySchema.parse(state.repository), others: [], phase: "released", began: Date.now(), timings: {},
+      sessions: state.sessions.map((carried) => {
+        const snapshot = this.#options.snapshot(carried.conversation)
+        return { session: carried.session, conversationId: carried.conversation, harness: carried.harness, nativeId: carried.nativeId, path: snapshot?.session.nativePath ?? "", ...carried.folder !== state.folder && { cwd: carried.folder }, ...carried.holdings && { holdings: carried.holdings } }
+      }),
+      continued: { by: state.by, at: state.at, behind: state.sessions.some((carried) => carried.freshness?.behind === true) },
+      ...state.start && { checkpoint: state.start },
+    }
+    this.#leaving.set(move, thread)
+    const actor = threads.person()
+    this.#options.moves.begin({ move, thread, target: { kind: "cloud", runtime: cloudRuntimeOf(plan.cloudThread) }, actor })
+    try {
+      plan.handoff = await this.#options.moves.release({ operationId: stepOperation(move, "release"), move, actor })
+    } catch (error) {
+      if (threads.moveStatus(move)?.phase === "leaving") this.#options.moves.cancel({ operationId: stepOperation(move, "cancel"), move, actor })
+      throw error
+    }
+    plan.phase = "handed"
+    await this.#write(plan)
+    hostLog("continues", "a Thread continued in the cloud while this Mac was off was given up here", {
+      move, thread, cloudThread: plan.cloudThread, phase: state.phase, by: state.by, sessions: plan.sessions.length, behind: plan.continued?.behind ?? false,
+    })
+    this.#reach(plan, "released")
+    return this.#resume(plan, state)
   }
 
   /** A move stopped running here: nothing of it is held, and whoever lists it hears so, however it ended. */
@@ -530,7 +625,7 @@ export class CloudMoves {
   }
 
   /** Carries a move on from wherever its plan stands. */
-  async #resume(plan: Plan): Promise<ThreadMoveOutcome> {
+  async #resume(plan: Plan, continued?: ContinueState): Promise<ThreadMoveOutcome> {
     const step = (next: ThreadMoveStep) => this.#options.step(plan.asked, plan.move, next)
     if (plan.phase === "preparing") {
       step({ kind: "packing" })
@@ -578,7 +673,7 @@ export class CloudMoves {
     }
     if (plan.phase === "handed" && !answer) {
       this.#reach(plan, "handed")
-      step({ kind: "resuming" })
+      step({ kind: "resuming", ...plan.continued && { whileAway: { behind: plan.continued.behind } } })
       answer = await this.#awaitAnswer(plan)
       if (!answer) {
         const reason = "The cloud carries this Thread through, and this Mac hasn't heard how it went yet. It asks again; the Thread runs nowhere until it hears."
@@ -589,6 +684,11 @@ export class CloudMoves {
     if (answer) {
       if (answer.kind === "refused") return this.#keep(plan, answer.reason, true)
       this.#confirm(plan, answer)
+      // A continue's start, the checkout the cloud began from, is known once its machine arrived.
+      if (plan.continued && !plan.checkpoint) {
+        const state = continued?.start ? continued : await this.#account().continueState?.(plan.sessions[0]!.session, plan.move).catch(() => undefined)
+        if (state?.start) plan.checkpoint = state.start
+      }
       plan.phase = "claimed"
       plan.timings.claimed = Date.now() - plan.began
       await this.#write(plan)
@@ -603,7 +703,7 @@ export class CloudMoves {
       hostLog("moves", "a Thread moved to the cloud", { move: plan.move, cloudThread: plan.cloudThread, sessions: plan.sessions.length, ...plan.timings })
     }
     const carried = carriedOf(plan)
-    step({ kind: "moved", conversations: plan.sessions.map((session) => session.conversationId), ...plan.handingOff?.paused.length && { continued: true }, ...carried && { carried } })
+    step({ kind: "moved", conversations: plan.sessions.map((session) => session.conversationId), ...plan.handingOff?.paused.length && { continued: true }, ...carried && { carried }, ...plan.continued && { whileAway: { behind: plan.continued.behind } } })
     return { kind: "moved", cloudThread: plan.cloudThread, ...plan.from && { conversation: plan.asked } }
   }
 

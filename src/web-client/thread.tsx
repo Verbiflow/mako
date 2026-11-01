@@ -14,6 +14,8 @@ import { Composer } from "./composer"
 import { threadDraftKey } from "./drafts"
 import { webHarnessLabel } from "./labels"
 import { MoveSheet, ThreadMove } from "./move-card"
+import { ContinueOffer, ContinueSheet } from "./continue-cloud"
+import { startContinue, useContinueChoice } from "./continue-actions"
 import { startMove, type MoveMac } from "./move-actions"
 import type { MoveWay } from "./move-progress"
 import { listedMove, useMoves } from "./moves"
@@ -126,10 +128,17 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
   const client = useWebClient()
   // Only whether one goes: the strip follows its steps itself, so its progress re-renders nothing under it.
   const moving = useMoves((state) => state.moves.has(thread.id)) || listedMove(thread) !== undefined
+  // Carried on by the account while its Mac is off: that the Mac can't be reached is no longer the news.
+  const continuing = useMoves((state) => {
+    const followed = state.moves.get(thread.id)
+    return followed?.continued === true && followed.end?.kind !== "failed"
+  }) || listedMove(thread)?.continued === true
   const owner = ownerOf(session)
   const live = !thread.archived && !session.quietSince && !moving
   const noCopy = useCopyMissing((state) => (session.quietSince ? state.missing.get(session.row.conversation) : undefined))
   useThreadApp(client, session.row.conversation, owner, session.row.folder, live)
+  // Its Mac off, what would carry the Thread on: said after why it can't be reached, as the remedy to it.
+  const offered = session.quietSince && !moving && cloudOn(client.account.entitlements) ? <ContinueOffer thread={thread} session={session} /> : null
   // A link to the app's own address (`localhost:5173/login`) opens the app here, through its owner, not this phone's own.
   const openLinks = (event: React.MouseEvent) => {
     const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null
@@ -146,11 +155,13 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
       ) : (
         <div className="flex min-h-0 flex-1 flex-col" onClickCapture={openLinks}>
           {moving ? <ThreadMove thread={thread} session={session} /> : null}
+          {noCopy || continuing ? null : <ThreadTrouble session={session} />}
+          {/* One place whether or not a copy is held, so the copy's answer doesn't close its sheet. */}
+          {offered}
           {noCopy ? (
             <QuietSession key={session.row.session} session={session} />
           ) : (
             <>
-              <ThreadTrouble session={session} />
               {moving || session.quietSince ? null : <ServerCards session={session} />}
               <MoveDividersContext value>
                 <Suspense fallback={<TranscriptLoading />}>
@@ -257,6 +268,9 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   const moving = useMoves((state) => state.moves.has(thread.id)) || listedMove(thread) !== undefined
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [asking, setAsking] = useState<MoveWay | undefined>(undefined)
+  const [continuing, setContinuing] = useState(false)
+  const choice = useContinueChoice(session.quietSince ? session : undefined)
+  const offered = choice?.offer && cloudOn(client.account.entitlements) && !moving ? choice : undefined
   const onMac = session.owner.kind === "device" && !session.quietSince ? session.owner : undefined
   const inCloud = session.owner.kind === "cloud"
   const hasMac = [...devices.values()].some((device) => device.kind === "desktop")
@@ -318,6 +332,12 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
               Move to the cloud
             </MenuItem>
           ) : null}
+          {offered ? (
+            <MenuItem onSelect={() => setContinuing(true)} className={item}>
+              <CloudIcon className={glyph} />
+              Continue in the cloud
+            </MenuItem>
+          ) : null}
           {inCloud && hasMac && !moving ? (
             <MenuItem onSelect={() => setAsking("device")} className={item}>
               <ArrowDownIcon className={glyph} />
@@ -331,6 +351,19 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
         </MenuContent>
       </Menu>
       <MoveSheet open={asking !== undefined} way={asking ?? "cloud"} working={working} from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined} onDismiss={() => setAsking(undefined)} onMove={move} />
+      {offered ? (
+        <ContinueSheet
+          open={continuing}
+          thread={thread}
+          session={session}
+          mac={offered.mac}
+          onDismiss={() => setContinuing(false)}
+          onContinue={(client) => {
+            setContinuing(false)
+            void startContinue(client, { thread, session, mac: offered.mac })
+          }}
+        />
+      ) : null}
     </>
   )
 }

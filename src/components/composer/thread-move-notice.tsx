@@ -9,7 +9,7 @@ import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, dismissFollowStopped, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
+import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, dismissFollowStopped, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -97,6 +97,15 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     const handOff = moving.handOff === true
     const steps: ReadonlyArray<{ kind: string; words: string }> = handOff ? HANDOFF_STEPS : moving.ownBranch ? OWN_BRANCH_STEPS : STEPS
     const at = steps.findIndex((each) => each.kind === moving.step.kind)
+    if (moving.step.kind === "resuming" && moving.step.whileAway)
+      return {
+        id: "thread-move",
+        tone: "progress",
+        title: "Continued in the cloud",
+        description: "While this Mac was off",
+        detail: <p>{whileAwaySentence(moving.step.whileAway.behind)}</p>,
+        data: { "data-thread-move": "resuming", "data-thread-while-away": true },
+      }
     return {
       id: "thread-move",
       tone: unsettled ? "caution" : "progress",

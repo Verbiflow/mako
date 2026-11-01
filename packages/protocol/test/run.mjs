@@ -14,7 +14,9 @@ import { AccountEventSchema } from "../dist/account-events.js"
 import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
-import { ArchivedThreadSchema, ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
+import { CONTINUE_VERSION } from "../dist/version.js"
+import { ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
+import { ArchivedThreadSchema, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
   CLOSE_CODES,
@@ -109,7 +111,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 15)
+    assert.equal(SUPPORTED_VERSIONS.max, 16)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -2230,5 +2232,82 @@ describe("what tells the person a Session needs them, the same on every surface"
     assert.throws(() => AccessChoicesAnswerSchema.parse({ choices: Object.fromEntries(Array.from({ length: 33 }, (_, n) => [`h${n}`, { mode: "x" }])), revision: 1 }))
     const event = { type: "access-chosen", choices: kept, revision: 3 }
     assert.deepEqual(AccountEventSchema.parse(event), event)
+  })
+})
+
+describe("a Session continued in the cloud while its device is off", () => {
+  const mac = "9c1f4a2e-5b6d-4e8f-a1b2-c3d4e5f60718"
+  const phone = "4d2e6f80-1a3b-4c5d-8e9f-0a1b2c3d4e5f"
+  const thread = "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40"
+  const row = {
+    session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", thread, conversation: "5a0e2c4d-6b8f-4a1c-9d3e-7f5b1a2c4e60", harness: "codex", state: "idle",
+    folder: "/Users/ana/api/.worktrees/webhooks", createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:05:00.000Z", generation: 3,
+    nativeId: "019a2b3c", worktree: { branch: "webhooks" }, repository: { url: "https://github.com/ana/api", branch: "webhooks" },
+    runsOn: { kind: "device", deviceId: mac }, listedAt: "2026-10-24T20:05:01.000Z",
+  }
+  const quiet = [{ deviceId: mac, since: "2026-10-24T20:06:00.000Z", continues: true }]
+
+  test("a row says its repository from link 16, and the account's continue beside it; an older link and an older reader go without", () => {
+    assert.equal(CONTINUE_VERSION, 16)
+    assert.equal(LINK_VERSION, CONTINUE_VERSION)
+    const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
+    assert.deepEqual(ReportedSessionSchema.parse(reported), reported)
+    assert.deepEqual(rowsForLink([reported], CONTINUE_VERSION), [reported])
+    assert.equal(rowsForLink([reported], CONTINUE_VERSION - 1)[0].repository, undefined, "a gateway before 16 refuses it, so it goes without")
+    assert.equal(rowsForLink([reported], CONTINUE_VERSION - 1)[0].nativeId, "019a2b3c", "and keeps what 15 knows")
+    assert.throws(() => ReportedSessionSchema.parse({ ...reported, continued: { phase: "making" } }), "no owner reports a continue: the account says it")
+    const continued = { ...row, continued: { op: "11111111-2222-4333-8444-555555555555", phase: "arriving", from: mac, by: phone, cloudThread: "t-0123456789abcdef", at: "2026-10-24T20:10:00.000Z" } }
+    assert.deepEqual(ListedSessionSchema.parse(continued), continued)
+    assert.ok(!sameListed(row, continued), "a continue's step is a change every list shows")
+    assert.ok(!sameListed(continued, { ...continued, continued: { ...continued.continued, phase: "continued" } }))
+    assert.deepEqual(QuietDeviceSchema.parse(quiet[0]), quiet[0])
+    assert.deepEqual(QuietDeviceSchema.parse({ deviceId: mac, since: quiet[0].since }), { deviceId: mac, since: quiet[0].since }, "a gateway before 16 says nothing of it")
+  })
+
+  test("the offer: only a quiet device's Thread, every row of it ready, in its own pushed worktree, from a Mako that takes it back", () => {
+    assert.equal(continueRefusal(row, [row], quiet), undefined)
+    assert.equal(continueRefusal({ ...row, state: "failed" }, [{ ...row, state: "failed" }], quiet), undefined, "a failed turn continues too")
+    assert.equal(continueRefusal(row, [row], []), "reachable")
+    assert.equal(continueRefusal({ ...row, state: "working" }, [{ ...row, state: "working" }], quiet), "working")
+    const tab = { ...row, session: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918", state: "waiting" }
+    assert.equal(continueRefusal(row, [row, tab], quiet), "waiting", "every row of its Thread is weighed")
+    assert.equal(continueRefusal(row, [row, { ...tab, state: "idle", runsOn: { kind: "cloud", threadId: "t-1" } }], quiet), "moving")
+    assert.equal(continueRefusal({ ...row, worktree: undefined }, [{ ...row, worktree: undefined }], quiet), "no-worktree")
+    assert.equal(continueRefusal({ ...row, repository: { url: row.repository.url } }, [{ ...row, repository: { url: row.repository.url } }], quiet), "no-repository", "a branch the origin hasn't got can't be cloned")
+    assert.equal(continueRefusal({ ...row, capture: { path: "/x.jsonl" } }, [{ ...row, capture: { path: "/x.jsonl" } }], quiet), "not-mako")
+    assert.equal(continueRefusal(row, [row], [{ deviceId: mac, since: quiet[0].since }]), "older-device")
+    const going = { ...row, continued: { op: "11111111-2222-4333-8444-555555555555", phase: "making", from: mac, by: phone, cloudThread: "t-1", at: "2026-10-24T20:10:00.000Z" } }
+    assert.equal(continueRefusal(going, [going], quiet), "continuing")
+    assert.equal(continueRefusal({ ...going, continued: { ...going.continued, phase: "failed" } }, [{ ...going, continued: { ...going.continued, phase: "failed" } }], quiet), undefined, "a failed one may be pressed again")
+    assert.equal(continueRefusal({ ...row, runsOn: { kind: "cloud", threadId: "t-1" } }, [], quiet), "cloud")
+    assert.match(continueRefusalText("working", "Ana's MacBook"), /Ana's MacBook says the turn ended/)
+    assert.equal(ContinueOfferSchema.parse({ offer: false, why: "working", detail: "x" }).why, "working")
+  })
+
+  test("the hand-over is the device's own move, composed by the account: one Thread, IDs of the op, the arrival first", async () => {
+    const op = "11111111-2222-4333-8444-555555555555"
+    const cloudThread = await continueCloudThread(op)
+    assert.match(cloudThread, /^t-[0-9a-f]{16}$/)
+    assert.equal(cloudThread, await continueCloudThread(op), "a press repeated makes the one Thread")
+    assert.match(await continueUuid("x"), /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    const state = ContinueStateSchema.parse({
+      op, thread, from: mac, by: phone, cloudThread, folder: row.folder, repository: row.repository, phase: "making", waiting: [],
+      sessions: [{ session: row.session, conversation: row.conversation, harness: "codex", nativeId: "019a2b3c", generation: 3, folder: row.folder, holdings: { rollout: 41 } }],
+      at: "2026-10-24T20:10:00.000Z", changedAt: "2026-10-24T20:10:00.000Z",
+    })
+    const waiting = [{ id: "22222222-3333-4444-8555-666666666666", conversation: row.conversation, text: "and the retries" }]
+    const actor = { kind: "client", client: "phone", deviceId: phone }
+    const request = await continueHandOver(state, { account: "33333333-4444-4555-8666-777777777777", actor, waiting, releasedAt: 1_000 })
+    assert.deepEqual(request.claim.sessions, [{ id: row.session, generation: 4 }], "released at one more; the machine claims at one more again")
+    assert.equal(request.claim.handoff.target.runtime, await cloudRuntimeOf(cloudThread))
+    const operations = request.operations.map((text) => decodeOperation(text))
+    assert.deepEqual(operations.map((each) => each.op), ["host.move-arrive", "host.live-start", "host.live-prompt"])
+    assert.ok(operations.every((each) => each.target.threadId === cloudThread && each.actor.deviceId === phone && each.repeatable))
+    const arrival = operations[0].input.decode().args[0].value
+    assert.equal(arrival.checkpoint, undefined, "it continues from the machine's clone of the branch")
+    assert.deepEqual(arrival.sessions[0], { harness: "codex", nativeId: "019a2b3c", holdings: { rollout: 41 }, open: { conversationId: row.conversation } })
+    assert.deepEqual(operations[2].input.decode().args.map((arg) => arg.kind), ["value", "value", "value", "value", "absent"])
+    const again = await continueHandOver(state, { account: "33333333-4444-4555-8666-777777777777", actor, waiting, releasedAt: 1_000 })
+    assert.deepEqual(again.operations.map((text) => decodeOperation(text).id), operations.map((each) => each.id), "the same IDs each time")
   })
 })
