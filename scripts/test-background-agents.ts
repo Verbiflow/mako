@@ -8,7 +8,8 @@ import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { HostJobs } from "@mako/host/base/host-jobs"
-import { childEntry, childState, type ThreadParent } from "@mako/host/contracts/agents"
+import { accessModeId } from "@mako/host/contracts/access"
+import { childEntry, childMode, childState, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -19,6 +20,9 @@ import { lastStep } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
+import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
+import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
+import { openCodeModes } from "@mako/host/harnesses/opencode/access"
 import { ThreadStore } from "@mako/host/threads/store"
 import { AgentsWorld, noConversations, type Script } from "./lib/agents-world.ts"
 
@@ -249,6 +253,38 @@ async function refusals(): Promise<void> {
   }
 }
 
+/** A child starts in its own harness's mode for its tier, and a lead whose harness names its modes its own way has the tier its mode carries. */
+async function harnessLadders(): Promise<void> {
+  assert.deepEqual(childMode(openCodeModes, "auto"), { id: accessModeId("edits"), tier: "edits" }, "a tier the harness lacks takes its nearest one below")
+  assert.deepEqual(childMode(CLAUDE_MODES, "deny"), { id: "dontAsk", tier: "deny" })
+  assert.equal(childMode(CURSOR_SDK_MODES, "edits"), undefined)
+  assert.deepEqual(childMode(undefined, "ask"), { id: accessModeId("ask"), tier: "ask" })
+  const w = new AgentsWorld({
+    root: join(root, "ladders"),
+    script: (turn) => turn.text.includes("child:") ? "done" : "ok",
+    ladders: { claude: CLAUDE_MODES, cursor: CURSOR_SDK_MODES },
+  })
+  try {
+    const lead = await w.lead("claude", "full")
+    await waitFor(() => w.live.session(lead.conversation)?.currentMode === "bypassPermissions", "the lead to open in Bypass permissions")
+    const brief = { objective: "Look" }
+    const cursor = await w.agents.start(lead.caller, { brief, harness: "cursor", name: "fin", clientKey: "c", cwd: w.root })
+    const claude = await w.agents.start(lead.caller, { brief, harness: "claude", access: "edits", name: "ed", clientKey: "e", cwd: w.root })
+    assert.ok(!("refused" in cursor) && !("refused" in claude), JSON.stringify([cursor, claude]))
+    await w.settle()
+    assert.equal(w.live.session(cursor.conversation!)?.currentMode, "full-access", "a Cursor child under a lead on full runs in Cursor's one mode")
+    assert.equal(w.live.session(claude.conversation!)?.currentMode, "acceptEdits")
+    assert.ok(w.prompts.some((prompt) => prompt.conversation === cursor.conversation), "the Cursor child was sent its brief")
+    const asks = await w.lead("claude", "ask")
+    await waitFor(() => w.live.session(asks.conversation)?.currentMode === "default", "the second lead to open in Ask for approval")
+    const above = await w.agents.start(asks.caller, { brief, harness: "cursor", clientKey: "a", cwd: w.root })
+    assert.ok("refused" in above && above.refused === "access", "a lead on ask can't start a child on a harness that runs only on full")
+    assert.match(above.why, /Cursor runs on full, each above ask/)
+  } finally {
+    await w.close()
+  }
+}
+
 async function stopAllUnqueues(): Promise<void> {
   const w = world("unqueues", (turn) => turn.text.includes("child:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok", { running: 1, started: 10 })
   try {
@@ -321,6 +357,7 @@ async function followsShellRuns(): Promise<void> {
     harnesses: () => ["claude"],
     runs: () => true,
     harnessLabel: () => "Claude",
+    modes: () => undefined,
   })
   const shell = spawn("/bin/sh", ["-c", "sleep 30"], { cwd: folder, env: { ...process.env, MAKO_SESSION_ID: lead.session }, stdio: "ignore" })
   try {
@@ -360,6 +397,7 @@ try {
   await startsAndWakes()
   await explicitReports()
   await refusals()
+  await harnessLadders()
   await stopAllUnqueues()
   await followsShellRuns()
   console.log("agents engine: ok")

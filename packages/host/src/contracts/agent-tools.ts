@@ -350,7 +350,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent.",
         model: "A model the harness lists; its default when absent.",
         reasoning: "A reasoning level the model takes.",
-        access: "plan, chat, ask, edits, auto, full or deny: at most this Thread's own; this Thread's when absent.",
+        access: "plan, chat, ask, edits, auto, full or deny: at most this Thread's own; this Thread's when absent. A harness without that level runs the child on its nearest one below, and one whose every level is above it is refused.",
         place: "Only when the person said where: here, device:<name> or cloud. Absent: where this Thread runs.",
         workspace: "Its own worktree: on branch if it exists, else a new branch from base. Absent: this Thread's folder, for reading or one writer.",
         title: "A few words the person sees for it.",

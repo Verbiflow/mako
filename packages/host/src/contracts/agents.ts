@@ -1,6 +1,7 @@
 import { z } from "zod"
-import { ACCESS_TIER_NAMES, type AccessTier } from "./access.js"
+import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { CHILDREN_BINDING, type ChildStateReading, type NativeAgent } from "./native-agents.js"
+import type { LiveSessionMode } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 
 export { CHILDREN_BINDING }
@@ -337,6 +338,25 @@ export function childAccess(parent: AccessTier, asked: AccessTier | undefined): 
   if (parent === "deny") return wanted === "deny" || wanted === "plan" || wanted === "chat" ? wanted : undefined
   if (wanted === "deny") return wanted
   return ACCESS_LADDER.indexOf(wanted) <= ACCESS_LADDER.indexOf(parent) ? wanted : undefined
+}
+
+/**
+ * The mode a child starts in on a harness whose live driver declares `ladder`, for `tier`: the harness's own mode at
+ * that tier (Claude's `bypassPermissions` for `full`, Cursor's `full-access`), else its most permissive one below
+ * it, and `deny` only as `deny`. Undefined when every mode it offers is above `tier`, as Cursor's one mode is above
+ * anything but `full`. A harness that declares no ladder takes Mako's own id for the tier.
+ */
+export function childMode(ladder: readonly LiveSessionMode[] | undefined, tier: AccessTier): { id: string; tier: AccessTier } | undefined {
+  if (!ladder) return { id: accessModeId(tier), tier }
+  const exact = ladder.find((mode) => mode.access === tier)
+  if (exact) return { id: exact.id, tier }
+  if (tier === "deny") return undefined
+  let best: { id: string; tier: AccessTier } | undefined
+  for (const mode of ladder) {
+    const at = mode.access ? ACCESS_LADDER.indexOf(mode.access) : -1
+    if (at >= 0 && at < ACCESS_LADDER.indexOf(tier) && (!best || at > ACCESS_LADDER.indexOf(best.tier))) best = { id: mode.id, tier: mode.access! }
+  }
+  return best
 }
 
 /** The tree's budgets, held by its authority: the lead's host in 8.1. No depth: cycles are refused instead. */

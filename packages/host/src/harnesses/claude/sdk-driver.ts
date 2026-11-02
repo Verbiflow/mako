@@ -62,7 +62,7 @@ import { claudeSessionCheckpoint } from "./session-checkpoint.js"
 import { claudeProcessProbe } from "./process-probe.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
-const CLAUDE_MODES: LiveSessionMode[] = [
+export const CLAUDE_MODES: LiveSessionMode[] = [
   { id: "default", name: "Ask for approval", access: "ask", enforcement: "provider" },
   { id: "acceptEdits", name: "Accept edits", access: "edits", enforcement: "provider" },
   { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },

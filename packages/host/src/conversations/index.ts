@@ -278,6 +278,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       harnesses: () => host.liveDrivers.list().map((driver) => driver.provider),
       runs: (harness) => host.nativeRunners.get(harness) !== undefined,
       harnessLabel: (harness) => harnessLabel(host, harness),
+      modes: (harness) => host.liveDrivers.get(harness)?.modes,
     })
     agents.resume()
   }
