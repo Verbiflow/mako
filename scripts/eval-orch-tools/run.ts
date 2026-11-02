@@ -199,8 +199,16 @@ try {
       ...harnesses.includes("cursor") && { cursor: signIns.cursor },
       ...harnesses.includes("devin") && { devin: signIns.devin },
     }, { trusted: [join(root, "project")] })
+    // A run stopped from outside still takes the sign-ins it copied with it.
+    const abandon = () => {
+      scratch.dispose()
+      process.exit(1)
+    }
+    process.once("SIGTERM", abandon).once("SIGINT", abandon)
     for (const name of Object.keys(process.env)) if (!(name in scratch.env)) delete process.env[name]
     Object.assign(process.env, scratch.env)
+    // Devin's launch links the person's config folder, and fails where there is none.
+    await mkdir(join(scratch.home, ".config"), { recursive: true })
     const project = join(root, "project")
     await mkdir(join(project, ".git"), { recursive: true })
     await mkdir(join(project, "src"), { recursive: true })
@@ -234,10 +242,12 @@ try {
         // A native child's words can't be set up from a prompt: those cases run in the replay.
         for (const orchCase of cases.filter((each) => runsOn(each, harness) && each.setup.role !== "native-subagent")) for (const routing of routings) {
           const result: CaseResult = { id: orchCase.id, area: orchCase.area, kind: orchCase.kind, harness, model, routing, passes: [], failures: [], seconds: 0, tokens: { input: 0, output: 0 } }
+          const began = Date.now()
           try {
             Object.assign(result, await sampled(() => liveSample({ harness, driver, stub, orchCase, routing, env, project, ...option("--model") && { model: option("--model") } }), orchCase))
           } catch (error) {
             result.error = error instanceof Error ? error.message : String(error)
+            result.seconds = Math.round((Date.now() - began) / 1000)
           }
           results.push(result)
           await record(result)
