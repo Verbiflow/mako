@@ -4,6 +4,7 @@ import { textOf } from "@/lib/format"
 import { causeWords, eventLabel } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
 import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
+import { routedAnswer, routedCall, type Routed, type RoutedAnswer } from "@mako/host/contracts/children"
 
 /**
  * An exchange is one question and everything the agent did to answer it.
@@ -82,6 +83,12 @@ export type ResponseSection =
    * and `message` (no blocks of its own) is the reply it came in.
    */
   | { kind: "shown"; id: string; message: ChatMessage; media: MediaCandidate[] }
+  /**
+   * Where a lead sent a message (`agents_send`), drawn where the call
+   * returned, as `shown` is: the call's row stays in the work. `landed` is
+   * where its answer says it went, when the result kept it.
+   */
+  | { kind: "routed"; id: string; message: ChatMessage; routed: Routed; landed?: RoutedAnswer }
 
 /**
  * An answer's sections as the exchange draws them: its own, and what the
@@ -223,6 +230,7 @@ export function responseSections(
     }
 
     let attachmentProse: ChatMessage | undefined
+    const routes = new Map<string, Routed>()
     for (const block of message.blocks) {
       if (block.type === "attachment" && attachmentProse) {
         attachmentProse.blocks.push(block)
@@ -243,6 +251,15 @@ export function responseSections(
         sections.push({ kind: "prose", id: prose.id, message: prose, previewedFiles })
       } else {
         workBlocks.push(block)
+        const routed = block.type === "toolCall" ? routedCall(block) : undefined
+        if (routed && block.type === "toolCall" && block.id) routes.set(block.id, routed)
+        const route = block.type === "toolResult" && block.id && !block.isError && !block.isCanceled && !block.streaming ? routes.get(block.id) : undefined
+        if (route && block.type === "toolResult" && !block.text.startsWith("refused:")) {
+          flushMessageWork()
+          flushWork()
+          const landed = routedAnswer(block.text)
+          sections.push({ kind: "routed", id: `routed-${block.id}`, message: splitMessage(message, []), routed: route, ...(landed && { landed }) })
+        }
         const shown = block.type === "toolResult" ? block.media?.filter((media) => media.evidence === "shown") : undefined
         if (shown?.length && block.type === "toolResult") {
           flushMessageWork()

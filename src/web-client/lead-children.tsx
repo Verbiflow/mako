@@ -2,19 +2,25 @@ import { use, useState } from "react"
 import { childGroup, childStateOf, threadsWord } from "@mako/host/contracts/children"
 import { ChildStatusMark } from "@/components/stage/child-tabs"
 import { LeadMark } from "@/components/ui/lead-mark"
-import { useThreadChildren } from "@/state/lead-children"
+import { useAcp } from "@/state/acp"
+import { useThreadChildren, useThreadRollup } from "@/state/lead-children"
 import { AgentsSheet } from "./agents"
 import { ChildOfLeadContext, OpenChildContext } from "./child-of-lead"
 import { WebHarnessIcon } from "./harness-icon"
 
-/** Over a child's composer on the phone: what's said there, its lead hears too. */
-export function ChildOfLeadNote() {
+/**
+ * Over the phone's composer in a lead's Thread: who a message goes to. In the lead's own view, the lead, which passes
+ * it on; in one of its Threads, that Thread directly, its lead told of it.
+ */
+export function ChildOfLeadNote({ conversation }: { conversation: string }) {
   const lead = use(ChildOfLeadContext)
-  if (!lead) return null
+  const thread = useAcp((state) => state.conversations[conversation]?.threadId)
+  const leads = useThreadRollup(lead ? undefined : thread).total > 0
+  if (!lead && !leads) return null
   return (
-    <div data-child-note className="mx-auto flex w-full max-w-content items-center gap-1.5 px-4 pt-2 text-label text-faint">
+    <div data-child-note={lead ? "child" : "lead"} className="mx-auto flex w-full max-w-content items-center gap-1.5 px-4 pt-2 text-label text-faint">
       <LeadMark className="size-3" />
-      {lead} hears what you say here
+      {lead ? <>Straight to this Thread · {lead} sees what you said</> : <>To the lead · it passes it on to the right Thread</>}
     </div>
   )
 }

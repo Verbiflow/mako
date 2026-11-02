@@ -3,9 +3,9 @@ import type { AgentsStarted } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { NATIVE_CHILD_INSTRUCTIONS, routeNativeSpawn, type RoutedThread } from "@mako/host/contracts/native-routing"
 import { ClaudeAgentInput, claudeSpawn } from "@mako/host/harnesses/claude/routing"
-import { ToolArgs, type OrchCase, type Sample } from "./cases.ts"
+import { frontDoorText, ToolArgs, type OrchCase, type Sample } from "./cases.ts"
 import { bareName, isShell, shellCommand } from "./names.ts"
-import { stubAnswer, type StubMako } from "./stub-mako.ts"
+import { startedAlready, stubAnswer, type StubMako } from "./stub-mako.ts"
 import { readTemplate } from "./templates.ts"
 
 /**
@@ -41,12 +41,13 @@ function turns(orchCase: OrchCase): { role: "user" | "assistant"; text: string }
   }))
   const world = orchCase.setup.world ? `\n\n<world>${JSON.stringify(orchCase.setup.world)}</world>` : ""
   const child = orchCase.setup.role === "native-subagent" ? "You are a subagent your parent agent started for this task.\n\n" : ""
-  return [...prior, { role: "user", text: `${child}${orchCase.prompt}${world}` }]
+  const note = frontDoorText(orchCase)
+  return [...prior, { role: "user", text: `${note ? `${note}\n\n` : ""}${child}${orchCase.prompt}${world}` }]
 }
 
 /** What a call gets back: the stub's answer, a native spawn's routed deny or a finished subagent, the shell's mock. */
 function answerer(harness: ReplayHarness, orchCase: OrchCase, routing: Routing) {
-  const started: AgentsStarted[] = []
+  const started: AgentsStarted[] = startedAlready((orchCase.setup.children ?? []).map((child) => child.name))
   const thread: RoutedThread = { role: role(orchCase) }
   return (tool: string, raw: string, args: ToolArgs): string => {
     if (tool.startsWith("agents_")) return JSON.stringify(stubAnswer(tool, args, started))

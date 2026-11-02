@@ -26,6 +26,7 @@ import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
+import type { AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
@@ -673,5 +674,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   })
   methods.handle("mako:provider-residency", () => live.residency())
   methods.handle("mako:agents-diagnostics", () => conversations.agents?.diagnostics() ?? null)
+  /** The person moving a message their lead passed on to another of its Threads (`Agents.redirect`). */
+  methods.handle("mako:agents-redirect", (conversation: string, input: AgentsRedirectInput) =>
+    conversations.agents?.redirect(conversation, input) ?? { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." })
   methods.handle("mako:native-routing", () => conversations.nativeRouting())
 }

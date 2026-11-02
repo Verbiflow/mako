@@ -279,6 +279,7 @@ export class LiveDispatch {
           controlNote([
             ...(dependencies.controlInstructions?.(active, resident.snapshot.session.id) ?? []),
             ...(told ? [told.account] : []),
+            ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), request.text),
         ].filter(Boolean).join("\n\n")

@@ -7,6 +7,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { MoveDividersContext } from "@/components/transcript/transcript-notes"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { WebHarnessIcon } from "./harness-icon"
 import { copyAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -99,6 +100,9 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   const owner = ownerOf(session)
   const addingTo: AddingTo | undefined = session.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner, where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
   const opened = child ? childSession(session, child.agent) : undefined
+  const openChild = (agent: NativeAgent) => {
+    if (agent.child?.conversation) setChild({ lead: thread.id, agent })
+  }
   if (child && opened)
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-surface" data-thread-screen={thread.id} data-child-of={thread.id}>
@@ -126,13 +130,11 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
         actions={thread.archived ? undefined : <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />}
       />
       {thread.sessions.length > 1 ? <SessionSwitcher thread={thread} current={session} wide={wide} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
-      <OpenChildContext
-        value={(agent) => {
-          if (agent.child?.conversation) setChild({ lead: thread.id, agent })
-        }}
-      >
-        <PhoneChildChips thread={thread.id} conversation={session.row.conversation} />
-        <ThreadBody thread={thread} session={session} openedBy={sessionId === undefined ? "screen" : "person"} onSession={onSession} />
+      <OpenChildContext value={openChild}>
+        <RoutedOpenContext value={openChild}>
+          <PhoneChildChips thread={thread.id} conversation={session.row.conversation} />
+          <ThreadBody thread={thread} session={session} openedBy={sessionId === undefined ? "screen" : "person"} onSession={onSession} />
+        </RoutedOpenContext>
       </OpenChildContext>
       {addingTo ? (
         <StartSheet

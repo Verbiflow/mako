@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { AFTER_START, AGENT_TOOLS, type AgentsListResult, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
+import { AFTER_START, AGENT_TOOLS, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
@@ -29,6 +29,12 @@ const toolOf = (channel: AgentToolDefinition["channel"]) => AGENT_TOOLS.find((to
 
 /** What the stub answers a call, given the children it started for the same conversation. */
 const Named = z.object({ name: z.string().optional() }).catch({})
+const Sent = z.object({ to: z.string().optional() }).catch({})
+
+/** A lead's Threads a case starts with, as the stub lists them. */
+export function startedAlready(names: readonly string[]): AgentsStarted[] {
+  return names.map((name, index) => ({ child: randomUUID(), name, state: "working", tree: { running: index + 1, started: index + 1, of: { running: 8, started: 32 } }, next: AFTER_START }))
+}
 
 export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[]): AgentAnswer {
   const tree = { running: started.length, started: started.length, of: { running: 8, started: 32 } }
@@ -44,6 +50,11 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
       tree,
     }
     return { ...listed }
+  }
+  if (tool === "agents_send") {
+    const to = Sent.parse(args).to ?? "child"
+    const sent: AgentsSent = { child: randomUUID(), name: to.replace(/^child:/, ""), request: randomUUID(), delivery: "turn" }
+    return { ...sent }
   }
   if (tool === "agents_wait") {
     const waited: AgentsWaitResult = { reports: [], cursor: 0, timedOut: true }

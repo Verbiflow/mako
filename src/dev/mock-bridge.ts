@@ -3273,7 +3273,9 @@ export function installMockBridge() {
       notices: 2,
       budget: TREE_BUDGET,
       trees: [{ lead: "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f", running: 3, started: 5 }, { lead: "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", running: 1, started: 2 }],
+      routes: { forwarded: 9, sent: 2, redirected: 1 },
     }),
+    agentsRedirect: async (_conversation: string, input: { to: string }) => ({ to: input.to, withdrawn: true, delivery: "turn" as const }),
     nativeRouting: async () => [
       { harness: "claude", state: "control", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`.", verified: { version: "2.1.314", how: "test:native-routing-live" }, installed: "2.1.314" },
       { harness: "codex", state: "control", via: "`agents.enabled = false` in the config `thread/start`, `thread/resume` and `thread/fork` carry.", verified: { version: "0.166.0", how: "test:native-routing-live" }, installed: "0.166.0" },

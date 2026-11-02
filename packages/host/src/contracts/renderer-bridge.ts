@@ -90,7 +90,7 @@ import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSna
 import type { CrashReport } from "./crash-report.js"
 import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./transcript-document.js"
 import type { ProviderResidencySnapshot } from "./provider-residency.js"
-import type { AgentsDiagnostics } from "./agents.js"
+import type { AgentRefused, AgentsDiagnostics, AgentsRedirected, AgentsRedirectInput } from "./agents.js"
 import type { NativeRoutingReading } from "./native-routing.js"
 import type { SessionReaderHistory } from "./session-reader.js"
 import type { AccountHarness, AccountLogin, AccountLoginResult, AccountProvider, AccountRemovalOutcome, AccountRemovalPlan, AccountUsage, AccountCatalog, ResetCreditOutcome } from "./accounts.js"
@@ -932,6 +932,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** The host's children and each tree's budgets; null without the Thread store. */
     agentsDiagnostics: () =>
       invokeTrustedHost<AgentsDiagnostics | null>("mako:agents-diagnostics"),
+    /** Moves a message a lead passed on to one of its Threads to another of them, as the person's own. */
+    agentsRedirect: (conversation: string, input: AgentsRedirectInput) =>
+      invokeTrustedHost<AgentsRedirected | AgentRefused>("mako:agents-redirect", conversation, input),
     /** Where each harness stands on a lead's native spawns: its control, unverified on this version, or words alone. */
     nativeRouting: () =>
       invokeTrustedHost<NativeRoutingReading[]>("mako:native-routing"),

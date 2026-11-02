@@ -78,16 +78,16 @@ async function check() {
     evaluate(
       "document.fonts.ready.then(() => Promise.all(document.getAnimations().filter((each) => each.effect?.getTiming().iterations !== Infinity).map((each) => each.finished.catch(() => undefined)))).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
     )
-  const capture = async (name) => {
+  const capture = async (name, prefix = "orch-build-ui-") => {
     await settle()
-    await writeFile(join(shots, `orch-build-ui-${name}.png`), (await page.capturePage()).toPNG())
+    await writeFile(join(shots, `${prefix}${name}.png`), (await page.capturePage()).toPNG())
   }
   const theme = (light) => evaluate(`document.documentElement.classList.toggle('light', ${light}); document.documentElement.style.colorScheme = '${light ? "light" : "dark"}'; true`)
-  const both = async (name) => {
+  const both = async (name, prefix) => {
     await theme(false)
-    await capture(`${name}-dark`)
+    await capture(`${name}-dark`, prefix)
     await theme(true)
-    await capture(`${name}-light`)
+    await capture(`${name}-light`, prefix)
     await theme(false)
   }
   const click = (selector) => evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true })()`)
@@ -145,6 +145,26 @@ async function check() {
   assert.equal(await evaluate("document.querySelector('[data-agents-toggle]')?.innerText.trim()"), "5 working · 2 need you")
   await both("strip")
 
+  // The front door: the composer says a message goes to the lead; where the lead sent one stands as a line in its
+  // turn, the Thread by name, and the person can send it elsewhere.
+  await until("Boolean(document.querySelector('[data-routed]'))", "the lead's routing line")
+  const door = await evaluate(`(() => ({
+    note: document.querySelector('[data-child-note=lead]')?.innerText,
+    line: document.querySelector('[data-routed]').innerText.replace(/\\s+/g, ' '),
+    elsewhere: Boolean(document.querySelector('[data-routed-elsewhere]')),
+  }))()`)
+  console.log("FRONT DOOR", JSON.stringify(door))
+  assert.equal(door.note, "To the lead · it passes it on to the right Thread")
+  assert.match(door.line, /^Passed your message to Sheet motion on iPad at its next step/)
+  assert.equal(door.elsewhere, true)
+  await evaluate("document.querySelector('[data-routed]').scrollIntoView({ block: 'center' }); true")
+  await both("lead", "orch-front-door-")
+  await click("[data-routed-elsewhere]")
+  await until("[...document.querySelectorAll('[data-slot=popover-content]')].some((node) => node.innerText.startsWith('Move your message to'))", "Send elsewhere's list")
+  await both("elsewhere", "orch-front-door-")
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true")
+  await until("![...document.querySelectorAll('[data-slot=popover-content]')].some((node) => node.innerText.startsWith('Move your message to'))", "the list closing")
+
   // The count opens the Agents panel: the lead's Threads by group, above what its harness runs in the turn.
   await click("[data-lead-count]")
   await until("Boolean(document.querySelector('[data-lead-children]'))", "the panel's children section")
@@ -182,12 +202,19 @@ async function check() {
   assert.match(child.brief, /^From Mobile lead · Brief/)
   assert.doesNotMatch(child.brief, /agents_report|You're child:/, "the brief's lines for the child alone stay out of the card")
   assert.equal(child.first, true, "the brief is the first card")
-  assert.equal(child.note, "Mobile lead hears what you say here")
+  assert.equal(child.note, "Straight to Sheet motion on iPad · Mobile lead sees what you said")
   assert.equal(child.selected, "true")
   assert.equal(child.sessionSelected, false, "no Session of the lead is selected while its child is shown")
   assert.equal(child.approval, true)
   assert.equal(child.lit, "Sheet motion on iPad", "the panel keeps the lead's Threads, the open one lit")
   await both("child")
+  // The message the lead passed on reads as the person's own, with what the lead added under it.
+  const passed = await evaluate(`(() => { const card = document.querySelector('[data-agent-words="Passed on"]'); if (!card) return null; card.scrollIntoView({ block: 'center' }); return card.innerText.replace(/\\s+/g, ' ') })()`)
+  console.log("PASSED ON", JSON.stringify(passed))
+  assert.match(passed ?? "", /^Your message, passed on by Mobile lead/)
+  assert.match(passed ?? "", /The sheet still jumps when the keyboard opens in split view\./)
+  assert.match(passed ?? "", /Mobile lead added It shows on the 11-inch iPad/)
+  await both("child", "orch-front-door-")
 
   // Back returns to the lead; the lead's own tab does too.
   await click("[data-child-breadcrumb] button")
@@ -246,6 +273,13 @@ async function check() {
   assert.match(chips[0], /Sheet motion|Push wording/)
   await until("Boolean(document.querySelector('[data-send-action=stop]'))", "the lead's transcript and dock on the phone")
   await both("phone-lead")
+  await until("Boolean(document.querySelector('[data-routed]'))", "the routing line on the phone")
+  const phoneDoor = await evaluate(`(() => ({ note: document.querySelector('[data-child-note=lead]')?.innerText, line: document.querySelector('[data-routed]').innerText.replace(/\\s+/g, ' ') }))()`)
+  console.log("PHONE FRONT DOOR", JSON.stringify(phoneDoor))
+  assert.equal(phoneDoor.note, "To the lead · it passes it on to the right Thread")
+  assert.match(phoneDoor.line, /^Passed your message to Sheet motion on iPad/)
+  await evaluate("document.querySelector('[data-routed]').scrollIntoView({ block: 'center' }); true")
+  await both("phone-lead", "orch-front-door-")
   // The count opens the Agents sheet on the lead's Threads; a row there opens that Thread, the sheet put away.
   assert.equal(await evaluate("document.querySelector('[data-child-chips] [data-lead-count]')?.dataset.leadCount"), "12")
   await click("[data-child-chips] [data-lead-count]")
@@ -262,7 +296,7 @@ async function check() {
   console.log("PHONE CHILD", JSON.stringify(phoneChild))
   assert.equal(phoneChild.back, "Mobile lead")
   assert.match(phoneChild.brief, /^From Mobile lead · Brief/)
-  assert.equal(phoneChild.note, "Mobile lead hears what you say here")
+  assert.equal(phoneChild.note, "Straight to this Thread · Mobile lead sees what you said")
   await both("phone-child")
   await click("[data-back-to-lead]")
   await until("Boolean(document.querySelector('[data-child-chips]')) && !document.querySelector('[data-child-of]')", "the lead after the phone's back")

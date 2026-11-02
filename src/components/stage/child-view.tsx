@@ -6,7 +6,7 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import { LeadMark } from "@/components/ui/lead-mark"
 import { acp, acpStore, useAcp } from "@/state/acp"
 import { followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
-import { backToLead, childConversation, leadConversation, threadChildren, useLeadView, type ChildInLead } from "@/state/lead-children"
+import { backToLead, childConversation, leadConversation, threadChildren, useLeadView, useThreadRollup, type ChildInLead } from "@/state/lead-children"
 import { useOnScreen } from "@/state/thread-sessions"
 
 /** The child open in place on screen, with its entry in its lead's roster: nothing while anything else is shown. */
@@ -71,14 +71,20 @@ function capitalized(words: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
-/** Under a child's composer: what's said to it, its lead hears too. */
+/**
+ * Over the composer in a lead's Thread: who a message goes to. On the lead,
+ * the lead, which passes it on; in one of its Threads open in place, that
+ * Thread directly, its lead told of it in its next note.
+ */
 export function ChildComposerNote() {
   const shown = useChildInLead()
-  if (!shown) return null
+  const here = useOnScreen().thread
+  const leads = useThreadRollup(shown ? undefined : here).total > 0
+  if (!shown && !leads) return null
   return (
-    <div data-child-note className="flex items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
+    <div data-child-note={shown ? "child" : "lead"} className="flex items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
       <LeadMark className="size-3" />
-      {shown.open.leadTitle} hears what you say here
+      {shown ? <>Straight to {shown.agent?.title ?? "this Thread"} · {shown.open.leadTitle} sees what you said</> : <>To the lead · it passes it on to the right Thread</>}
     </div>
   )
 }

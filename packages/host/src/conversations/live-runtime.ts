@@ -180,6 +180,8 @@ export interface ConversationChildren {
   settled(conversation: string, request: string): void
   /** Whether the conversation's Thread leads: it has children or queued spawns, or was started as a lead. */
   leads(conversation: string): boolean
+  /** What a lead hears before a message the person sends it: its Threads as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
 }
 export interface Dependencies {
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

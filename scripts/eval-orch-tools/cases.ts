@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
+import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import { controlNote } from "@mako/host/control/launch"
 
 /**
  * The cases of `eval:orch-tools`, in T3 Code's MCP tool-use schema rewritten
@@ -20,15 +22,30 @@ const PriorTurn = z.object({
   toolCalls: z.array(z.object({ tool: z.string(), input: z.json(), result: z.json() })).optional(),
 })
 
-export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child"] as const
+export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door"] as const
 
-/** The budget each area counts toward, per harness and model: route ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%. */
+/** The budget each area counts toward, per harness and model: route ≥ 90%, front door ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%. */
 export const BUDGET = {
   route: { areas: ["route", "headless-shell", "place"], floor: 0.9 },
+  "front door": { areas: ["front-door"], floor: 0.9 },
   "don't spawn": { areas: ["dont-spawn", "native-child"], floor: 0.95 },
   "no polling": { areas: ["no-polling"], floor: 0.95 },
   "stay native": { areas: ["stay-native"], floor: 0.85 },
 } as const satisfies Record<string, { areas: readonly (typeof AREAS)[number][]; floor: number }>
+
+/** One of a lead's Threads, in minutes ago rather than clock times, so a case reads the same on any day. */
+const EvalChild = z.object({
+  name: z.string(),
+  harness: z.string(),
+  state: z.enum(["working", "idle", "blocked", "done", "failed", "stopped"]),
+  /** Its phase while it works, its question while it waits, its reason once ended. */
+  line: z.string().optional(),
+  topic: z.string(),
+  branch: z.string().optional(),
+  report: z.object({ status: z.enum(["progress", "blocked", "done", "failed"]), line: z.string(), minutesAgo: z.number() }).optional(),
+  direct: z.object({ line: z.string(), minutesAgo: z.number() }).optional(),
+})
+type EvalChild = z.infer<typeof EvalChild>
 
 export const OrchCase = z.object({
   id: z.string(),
@@ -48,6 +65,8 @@ export const OrchCase = z.object({
     world: z.record(z.string(), z.json()).optional(),
     /** Regexes on a shell command, answered with `output` instead of the default. */
     shellMocks: z.array(z.object({ match: z.string(), output: z.string() })).optional(),
+    /** A lead's Threads as they stand: the front-door note the host sends ahead of the person's message (`frontDoorNote`). */
+    children: z.array(EvalChild).optional(),
   }),
   prompt: z.string(),
   expect: z.object({
@@ -85,6 +104,28 @@ export function loadCases(file = CASES_FILE): OrchCase[] {
     ids.add(id)
   }
   return cases
+}
+
+const NOW = Date.UTC(2026, 10, 1, 18)
+const minutesAgo = (minutes: number) => NOW - minutes * 60_000
+
+function frontDoorChild(child: EvalChild): FrontDoorChild {
+  const state: FrontDoorChild["state"] =
+    child.state === "working" ? { kind: "working", ...(child.line && { phase: child.line }) }
+      : child.state === "idle" ? { kind: "idle" }
+        : child.state === "blocked" ? { kind: "blocked", on: "person", question: child.line ?? "It asks a question." }
+          : { kind: "ended", outcome: child.state, ...(child.line && { reason: child.line }) }
+  return {
+    name: child.name, harness: child.harness, state, topic: child.topic,
+    ...(child.branch && { branch: child.branch }),
+    ...(child.report && { report: { status: child.report.status, line: child.report.line, at: minutesAgo(child.report.minutesAgo) } }),
+    ...(child.direct && { direct: { line: child.direct.line, at: minutesAgo(child.direct.minutesAgo) } }),
+  }
+}
+
+/** What a case's agent reads ahead of the person's message: the note a lead with these Threads hears, as the host writes it. */
+export function frontDoorText(orchCase: OrchCase): string | undefined {
+  return orchCase.setup.children?.length ? controlNote(frontDoorNote(orchCase.setup.children.map(frontDoorChild), NOW)) : undefined
 }
 
 /** Whether a case runs on `harness`. */

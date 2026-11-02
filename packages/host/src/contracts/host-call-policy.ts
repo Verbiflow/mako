@@ -221,11 +221,14 @@ const replays = [
   "mako:live-capture",
   /** `NativeRequests.submit`: the request id; content is fingerprinted. */
   "mako:native-submit",
-  /** A spawn, a link and a report are settled by the caller's key; stopping a stopped child stops nothing. */
+  /** A spawn, a link, a report and a message are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
   "mako:agents-link",
   "mako:agents-report",
+  "mako:agents-send",
   "mako:agents-stop",
+  /** The moved message's id names the one it becomes; a message already moved is withdrawn once. */
+  "mako:agents-redirect",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
   /** Stopping a background task that has already ended stops nothing. */

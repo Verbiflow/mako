@@ -158,15 +158,15 @@ export class AgentsWorld {
     }))
   }
 
-  /** Every turn has ended and no wake is pending, for `quietMs` in a row. */
-  async settle(quietMs = 2_600, timeoutMs = 20_000): Promise<void> {
+  /** Every turn has ended and, unless `wakes` is "ignore", no wake is pending, for `quietMs` in a row. */
+  async settle(quietMs = 2_600, timeoutMs = 20_000, wakes: "wait" | "ignore" = "wait"): Promise<void> {
     const deadline = Date.now() + timeoutMs
     let quietSince = Date.now()
     let seen = this.prompts.length
     while (Date.now() - quietSince < quietMs) {
       if (Date.now() > deadline) throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes`)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      const busy = this.running.size > 0 || this.agents.wakes.pending() > 0 || this.live.lifecycleWork().length > 0
+      const busy = this.running.size > 0 || (wakes === "wait" && this.agents.wakes.pending() > 0) || this.live.lifecycleWork().length > 0
       if (busy || this.prompts.length !== seen) {
         seen = this.prompts.length
         quietSince = Date.now()

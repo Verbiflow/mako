@@ -1,4 +1,6 @@
+import { z } from "zod"
 import { ROLE_WORD, type ChildState } from "./agents.js"
+import type { Block } from "./conversation-session.js"
 import { isProviderWork, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
 
 /** The header every delivery an agent wrote starts with: the model reads it as an agent's words, never the person's. */
@@ -7,7 +9,19 @@ export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }
 
+/**
+ * The header of the person's own message a lead passed on to a child
+ * (`agents_send` with `forward`): the child reads them as the person's words,
+ * which reached it through its lead, and the lead's words (if any) after them.
+ */
+export function passedOn(name: string): string {
+  return `[mako · the person's words, passed on by ${name} (agent)]`
+}
+/** Between the person's words a lead passed on and what it added. */
+export const PASSED_ON_NOTE = `[mako · what your ${ROLE_WORD} adds]`
+
 const AGENT_HEADER = /^\[mako · from (.+?)(?: \(agent\))?, not the person\]\n?/
+const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(agent\)\]\n?/
 
 /** A brief's lines for its child alone, who it is and how it reports: the person's card of the brief leaves them out. */
 export function briefIntro(name: string): string {
@@ -23,7 +37,19 @@ export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, ca
  * words after it, less a brief's lines for its child alone. Undefined for the
  * person's own words.
  */
-export function agentWords(text: string): { from: string; body: string } | undefined {
+/** Words an agent wrote into a Thread, read from their header: who wrote them, and for the person's own message a lead passed on, what it added. */
+export interface AgentWords {
+  from: string
+  body: string
+  passedOn?: { added?: string }
+}
+
+export function agentWords(text: string): AgentWords | undefined {
+  const passed = PASSED_ON_HEADER.exec(text)
+  if (passed) {
+    const [said, added] = text.slice(passed[0].length).split(`\n\n${PASSED_ON_NOTE}\n`)
+    return { from: passed[1]!, body: said!.trim(), passedOn: { ...(added?.trim() && { added: added.trim() }) } }
+  }
   const header = AGENT_HEADER.exec(text)
   if (!header) return undefined
   const body = text
@@ -34,6 +60,48 @@ export function agentWords(text: string): { from: string; body: string } | undef
     .trim()
   return { from: header[1]!, body }
 }
+
+type ToolCallBlock = Extract<Block, { type: "toolCall" }>
+
+/** A lead's `agents_send` as its transcript keeps the call: to whom, and whether it passed on the person's message. */
+export interface Routed {
+  to: string
+  forward: boolean
+  text?: string
+}
+
+/**
+ * A call on Mako's `mako` server that routed a message to a child, read from
+ * the call itself (its server, its tool and its arguments, as every harness's
+ * decoder names them), so a live turn and a saved one draw the same line.
+ */
+export function routedCall(block: ToolCallBlock): Routed | undefined {
+  if (block.tool?.kind !== "mcp" || block.tool.server !== "mako" || block.tool.tool !== "agents_send") return undefined
+  const call = RoutedCallSchema.safeParse(block.arguments)
+  if (!call.success) return undefined
+  const { to, forward, text } = call.data
+  return { to: to.startsWith("child:") ? to.slice("child:".length) : to, forward: forward === true, ...(text?.trim() && { text: text.trim() }) }
+}
+const RoutedArgsSchema = z.looseObject({ to: z.string().min(1), forward: z.boolean().optional(), text: z.string().optional() })
+
+/** An object's JSON, as a harness keeps a call's arguments and Mako writes its answers. */
+const JsonObjectText = z.string().transform((text, context) => {
+  try {
+    if (text.trimStart().startsWith("{")) return JSON.parse(text)
+  } catch {
+    // Read as no object below.
+  }
+  context.addIssue({ code: "custom", message: "not an object's JSON" })
+  return z.NEVER
+})
+const RoutedCallSchema = z.union([RoutedArgsSchema, JsonObjectText.pipe(RoutedArgsSchema)])
+
+/** Where an `agents_send` landed, read from its result's text: undefined for a refusal, or a result a harness kept only in part. */
+export function routedAnswer(text: string): RoutedAnswer | undefined {
+  return JsonObjectText.pipe(RoutedAnswerSchema).safeParse(text).data
+}
+const RoutedAnswerSchema = z.object({ child: z.string(), request: z.string(), delivery: z.enum(["turn", "steer", "queued"]) })
+export type RoutedAnswer = z.infer<typeof RoutedAnswerSchema>
 
 /** What the person is shown a child as: the one reading `rollup`, the strip, the panel and the phone group it by. */
 export type ChildGroup = "needs" | "working" | "queued" | "failed" | "done"
