@@ -77,6 +77,8 @@ export class AgentsWorld {
   /** Every answer to an approval a driver was sent: its conversation, its harness's request, and the answer. */
   readonly answers: { conversation: string; request: string; response: LivePermissionResponse; at: number }[] = []
   readonly events: HostEvent[] = []
+  /** When each of `events` was emitted, by its place. */
+  readonly eventAt: number[] = []
   private asking = new Map<string, { observationId: string; answered: (response: LivePermissionResponse) => void }>()
   store!: ThreadStore
   live!: LiveConversations
@@ -102,7 +104,10 @@ export class AgentsWorld {
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
       history: async () => null,
-      emit: (event) => this.events.push(event),
+      emit: (event) => {
+        this.events.push(event)
+        this.eventAt.push(Date.now())
+      },
       threads: this.store,
       agents: () => this.agents,
       settled: (id) => this.agents?.moved(id),

@@ -17,7 +17,7 @@ export const conversationCalls: ReadonlySet<string> = new Set([
   "mako:live-rewind-preview", "mako:live-rewind", "mako:live-turn-changes", "mako:live-turn-diff", "mako:live-turn-hunks", "mako:live-turn-writers", "mako:live-turn-undo-preview", "mako:live-turn-undo", "mako:live-action", "mako:live-steer-queued",
   "mako:live-action-acknowledge", "mako:live-fork", "mako:live-transfer",
   // An Apex's host holds its Fins: the person's messages to them go there.
-  "mako:agents-redirect", "mako:agents-direct",
+  "mako:agents-redirect", "mako:agents-direct", "mako:agents-respond",
 ])
 
 /** The conversation a call is aimed at, when it's one that goes to the host running it. */

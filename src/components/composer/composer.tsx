@@ -100,6 +100,7 @@ import { currentOnScreen, startInThread } from "@/state/thread-sessions"
 import { useTabDrag } from "@/state/tab-drag"
 import { readGoalLine } from "@/state/goals"
 import { goalRoute, sendGoalLine } from "@/state/goal-commands"
+import { FinAsks } from "@/components/composer/fin-asks"
 import { GoalBar } from "@/components/composer/goal-bar"
 import { SidePanel } from "@/components/composer/side-panel"
 import { ReviewPicker } from "@/components/composer/review-picker"
@@ -1209,6 +1210,7 @@ export function Composer() {
     <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline bg-surface", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
       <div className="flex min-h-0 w-full flex-col">
         <GoalBar />
+        <FinAsks />
         <SidePanel />
         <ReviewPicker cwd={cwd} />
         <PromptQueue />

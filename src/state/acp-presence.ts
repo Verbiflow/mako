@@ -3,6 +3,7 @@ import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { backgroundWork } from "@mako/host/contracts/background-work"
+import { finAskLine } from "@/state/fin-asks"
 import { workedAt } from "@mako/host/contracts/worked-at"
 
 export interface AcpPresence {
@@ -89,6 +90,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
           (conversation.permission && conversation.session.status !== "failed") ||
           // Waiting on a person on the device it runs on: they're needed here too.
           Boolean(conversation.waitingOn) ||
+          // One of its Fins asking them, as an ask of its own would.
+          (conversation.session.status !== "failed" && finAskLine(conversation) !== undefined) ||
           (conversation.session.status !== "running" && signInPause(conversation.requests ?? []))
             ? "needs-permission"
             : conversation.session.status === "failed" && autoContinuePending(conversation.requests)

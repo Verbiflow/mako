@@ -1,0 +1,86 @@
+import { useEffect, useState } from "react"
+import { CheckIcon, XIcon } from "lucide-react"
+import { FIN_WORD } from "@mako/host/contracts/agents"
+import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
+import { WebHarnessIcon } from "./harness-icon"
+import { noteAnswered } from "./install"
+
+/**
+ * In an Apex's dock, where its own ask would be: what one of its Fins asks the person. Its options are rows a thumb's
+ * size, the one it recommends filled; words typed in the composer answer it too, so a word from the phone is enough.
+ * The answer is the person's own, and reaches the Fin as its next step.
+ */
+export function FinAskCard({ apex, ask, more, answerTyped }: { apex: string; ask: PersonAsk; more: number; answerTyped: (answer: ((text: string) => boolean) | null) => void }) {
+  const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
+  const send = (answer: FinAnswer) => {
+    if (sent) return
+    setSent(answer)
+    noteAnswered()
+    void answerFin(apex, ask, answer).then((answered) => {
+      if (!answered) setSent(undefined)
+    })
+  }
+  const approval = ask.ask.kind === "approval"
+  useEffect(() => {
+    if (approval) return
+    answerTyped((text) => {
+      if (sent) return false
+      send({ answer: text })
+      return true
+    })
+    return () => answerTyped(null)
+  })
+  const options = ask.ask.options ?? []
+  return (
+    <div className="web-ask" data-ask="fin" data-fin-ask={ask.ask.kind} data-fin={ask.fin}>
+      <div className="web-ask-body" aria-busy={sent ? true : undefined} data-busy={sent ? true : undefined}>
+        <p className="web-ask-asker flex items-center gap-1.5">
+          <WebHarnessIcon harness={ask.harness} className="size-3.5 shrink-0" />
+          <span className="min-w-0 truncate">{`${ask.title} asks`}</span>
+          {more ? <span className="shrink-0 text-faint">· {more === 1 ? `1 more ${FIN_WORD} asks` : `${more} more ${FIN_WORD}s ask`}</span> : null}
+        </p>
+        <p className="web-ask-title">
+          <span className="min-w-0 break-words">{ask.question}</span>
+        </p>
+        {ask.ask.action ? (
+          <div className="web-ask-scroll">
+            <p className="web-ask-hint">{ask.ask.action}</p>
+          </div>
+        ) : null}
+        <div className="web-ask-options" role="group" aria-label="Answers">
+          {approval ? (
+            <>
+              <button type="button" data-fin-answer="allow" data-primary disabled={Boolean(sent)} data-chosen={sent?.allow === true || undefined} onClick={() => send({ allow: true })} className="web-ask-option">
+                <CheckIcon className="size-4 shrink-0" />
+                Allow once
+              </button>
+              <button type="button" data-fin-answer="refuse" data-refuse disabled={Boolean(sent)} data-chosen={sent?.allow === false || undefined} onClick={() => send({ allow: false })} className="web-ask-option">
+                <XIcon className="size-4 shrink-0" />
+                Refuse
+              </button>
+            </>
+          ) : (
+            options.map((option, index) => (
+              <button
+                key={`${index}:${option.label}`}
+                type="button"
+                data-fin-answer={index}
+                data-primary={index === ask.ask.recommended || undefined}
+                data-chosen={sent?.option === index || undefined}
+                disabled={Boolean(sent)}
+                onClick={() => send({ option: index })}
+                className="web-ask-option web-ask-choice"
+              >
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block">{option.label}</span>
+                  {option.detail ? <span className="block text-label opacity-70">{option.detail}</span> : null}
+                </span>
+                {index === ask.ask.recommended ? <span className="shrink-0 text-label opacity-70">Recommended</span> : null}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

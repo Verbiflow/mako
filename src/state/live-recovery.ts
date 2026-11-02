@@ -5,7 +5,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
 import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import { noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
+import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
@@ -397,6 +397,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     notifyCompletion(current.requests, requests)
     if (changesSession(batch) || batch.permissions || requests)
       syncThreadStatus(next, current.session.status, current.threadPath)
+    if (batch.nativeAgents) noteFinAsks(next)
     return
   }
   if (
@@ -507,6 +508,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     (changesSession(batch) || batch.permissions || changedRequests)
   )
     syncThreadStatus(next, current.session.status, current.threadPath)
+  if (next?.kind === "live" && batch.nativeAgents) noteFinAsks(next)
 }
 
 function notifyCompletion(

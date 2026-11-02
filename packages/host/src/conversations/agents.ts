@@ -24,6 +24,7 @@ import {
   type AgentsDirectInput,
   type AgentsRedirected,
   type AgentsRedirectInput,
+  type AgentsRespondInput,
   type Brief,
   type ChildStart,
   type FinDelivery,
@@ -71,7 +72,7 @@ import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
-import { SessionIdSchema, ThreadIdSchema, type Actor } from "../contracts/thread-identity.js"
+import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { AgentWakes, digest, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
@@ -182,7 +183,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly routes = { forwarded: 0, sent: 0, redirected: 0, direct: 0 }
   /** What each `agents_answer` key did, so a retry answers the same. */
   private readonly answers = new Map<string, AgentsAnswered>()
-  private readonly answerCounts = { apex: 0, passed: 0, refused: 0 }
+  private readonly answerCounts = { apex: 0, passed: 0, refused: 0, person: 0 }
   private latest = new Map<string, Report>()
   private seen: unknown
   private draining = false
@@ -570,7 +571,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const op = `answer:${apex.session}:${input.clientKey}`
     const kept = this.answers.get(op)
     if (kept) return { ...kept, deduped: true }
-    const answered = await this.answerOnce(apex, edge, op, input)
+    const answered = await this.answerOnce({ kind: "apex", apex }, edge, op, input)
     const ms = Math.round(performance.now() - began)
     if ("refused" in answered) {
       if (answered.refused === "access") this.answerCounts.refused += 1
@@ -583,7 +584,67 @@ export class Agents implements AgentOperations, ConversationChildren {
     return answered
   }
 
-  private async answerOnce(apex: Apex, edge: ThreadParent, op: string, input: AgentsAnswerInput): Promise<AgentsAnswered | AgentRefused> {
+  /**
+   * The person answering one of an Apex's Fins from the Apex's Thread, on any
+   * device: theirs to answer whatever the Apex's access, as its own Thread's
+   * ask would be, and as their own words.
+   */
+  async respond(conversation: string, input: AgentsRespondInput): Promise<AgentsAnswerResult> {
+    const began = performance.now()
+    const placed = this.store()?.journalPlacement(conversation)
+    if (!placed) return { refused: "unavailable", why: "That conversation isn't a Thread here." }
+    const edge = this.resolve({ session: placed.session, thread: placed.thread, conversation }, input.fin, true)
+    if (!edge) return unknownFin(input.fin)
+    const op = `respond:${input.request}`
+    const kept = this.answers.get(op)
+    if (kept) return { ...kept, deduped: true }
+    const state = this.stateOf(edge)
+    const ask = state.kind === "blocked" ? state.ask : undefined
+    const picked = input.option === undefined ? undefined : ask?.options?.[input.option]?.label
+    const answered: AgentsAnswerResult = !ask || ask.id !== input.ask
+      ? { refused: "conflict", why: `${edge.name} no longer waits on that: it was answered.` }
+      : input.option !== undefined && !picked
+        ? { refused: "conflict", why: `That isn't one of ${edge.name}'s options.` }
+        : await this.answerOnce({ kind: "person" }, edge, op, { ...((picked ?? input.answer) && { answer: picked ?? input.answer }), ...(input.allow !== undefined && { allow: input.allow }) })
+    const ms = Math.round(performance.now() - began)
+    if ("refused" in answered) {
+      hostLog("agents", "respond refused", { op, child: edge.child, refused: answered.refused, ms })
+      return answered
+    }
+    this.answers.set(op, answered)
+    this.answerCounts.person += 1
+    hostLog("agents", "respond", { op, child: edge.child, answered: answered.answered, ...(answered.delivery && { delivery: answered.delivery }), ms })
+    return answered
+  }
+
+  /**
+   * What the person's row for `conversation` waits on of its Fins: the first
+   * ask anywhere under its Thread that is theirs, and how many more wait
+   * behind it. Only the Session they last wrote in says it.
+   */
+  personAsk(conversation: string): { fin: ThreadId; name: string; line: string; ask: FinAsk; more: number } | undefined {
+    const store = this.store()
+    const placed = store?.journalPlacement(conversation)
+    if (!store || !placed || !store.edges().children(placed.thread).length) return undefined
+    if (this.frontOf(placed.thread, placed.session) !== conversation) return undefined
+    const asks: { edge: ThreadParent; question: string; ask: FinAsk }[] = []
+    const look = (thread: string, depth: number) => {
+      for (const edge of store.edges().children(thread)) {
+        const state = this.stateOf(edge)
+        if (state.kind === "blocked" && state.on !== "lead" && state.ask) asks.push({ edge, question: state.question, ask: state.ask })
+        if (depth < 64) look(edge.child, depth + 1)
+      }
+    }
+    look(placed.thread, 0)
+    const first = asks[0]
+    if (!first) return undefined
+    // A harness's own ask in its words; the reason it's the person's is the Agents panel's to say.
+    const finConversation = first.ask.kind === "report" ? undefined : this.conversationOf(first.edge.child)
+    const line = (finConversation && this.deps.live.waitingOn(finConversation)?.line) || first.question
+    return { fin: first.edge.child, name: first.edge.name, line, ask: first.ask, more: asks.length - 1 }
+  }
+
+  private async answerOnce(by: Answerer, edge: ThreadParent, op: string, input: Pick<AgentsAnswerInput, "answer" | "allow" | "person">): Promise<AgentsAnswered | AgentRefused> {
     const state = this.stateOf(edge)
     if (state.kind !== "blocked" || !state.ask)
       return { refused: "conflict", why: `${edge.name} isn't waiting on a question or an approval: agents_send gives it a message.` }
@@ -597,10 +658,13 @@ export class Agents implements AgentOperations, ConversationChildren {
       const words = input.answer?.trim()
       if (!words) return { refused: "conflict", why: "Its question needs an answer: one of its options by its label, or your own words." }
       const picked = ask.options?.find((option) => sameWords(option.label, words))
-      const sent = await this.deliver(edge, namedUuid(op), `${fromAgent(YOUR_APEX)}\n${answerText(state.question, picked?.label ?? words)}`, [], { kind: "agent", session: SessionIdSchema.parse(apex.session) })
+      const answer = answerText(state.question, picked?.label ?? words)
+      const sent = by.kind === "apex"
+        ? await this.deliver(edge, namedUuid(op), `${fromAgent(YOUR_APEX)}\n${answer}`, [], { kind: "agent", session: SessionIdSchema.parse(by.apex.session) })
+        : await this.deliver(edge, namedUuid(op), answer, [], undefined)
       return "refused" in sent ? sent : done("report", sent.delivery)
     }
-    const tier = this.tierOf(apex)
+    const tier = by.kind === "apex" ? this.tierOf(by.apex) : "full"
     if (ask.kind === "approval" && tier !== "full")
       return { refused: "access", why: `${edge.name}'s approval is the person's: this Thread is on ${tier}, and only an ${APEX_WORD} on full access answers its ${FIN_WORD}s' approvals. Leave it to them with person: true.` }
     const conversation = this.conversationOf(edge.child)
@@ -1495,6 +1559,9 @@ function waitedReport(report: Report): WaitedReport {
 }
 
 /** The report that leaves an ask to the person, one per ask. */
+/** Who answers a Fin's ask: its Apex, within its access, or the person, whose ask it is. */
+type Answerer = { kind: "apex"; apex: Apex } | { kind: "person" }
+
 function passedId(child: string, ask: string): string {
   return `report:${child}:person:${namedUuid(ask)}`
 }
@@ -1518,7 +1585,7 @@ function nativeAsk(pending: PendingAsk): FinAsk {
  * label, else its allow-once or refuse-once by `allow`), or the one open
  * question's answer, an option's value when it names one.
  */
-function permissionAnswer(pending: PendingAsk, input: AgentsAnswerInput): LivePermissionResponse | AgentRefused {
+function permissionAnswer(pending: PendingAsk, input: Pick<AgentsAnswerInput, "answer" | "allow">): LivePermissionResponse | AgentRefused {
   const words = input.answer?.trim()
   if (pending.kind === "approval") {
     const named = words ? pending.options.find((option) => sameWords(option.name, words)) : undefined

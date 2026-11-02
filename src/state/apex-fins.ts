@@ -2,8 +2,10 @@ import { childGroup, childStateOf, rollup, rosterChildren, sameRollup, type Roll
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
+import { useMemo } from "react"
 import { toast } from "sonner"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import { acp, acpStore, useAcp, type AcpState } from "@/state/acp"
 import type { AcpConversation } from "@/state/acp-state"
 import { createHook, createStore } from "@/state/store"
@@ -60,6 +62,12 @@ export function useThreadRollup(thread: string | undefined): Rollup {
 
 export function useThreadChildren(thread: string | undefined): readonly NativeAgent[] {
   return useAcp((state) => threadChildren(state, thread))
+}
+
+/** What a Thread's Fins ask the person (`personAsks`), the same array while its roster is unchanged. */
+export function useThreadAsks(thread: string | undefined): readonly PersonAsk[] {
+  const children = useThreadChildren(thread)
+  return useMemo(() => personAsks(children), [children])
 }
 
 const stoppableOf = new WeakMap<readonly NativeAgent[], readonly NativeAgent[]>()

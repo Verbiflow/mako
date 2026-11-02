@@ -26,7 +26,7 @@ import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
-import type { AgentRefused, AgentsDirectInput, AgentsRedirectInput } from "../contracts/agents.js"
+import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
@@ -60,7 +60,7 @@ export { ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
 export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
-export { conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ReportSources, type SessionLink } from "./session-report.js"
+export { conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
 export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadScope, type UploadSources } from "./session-uploads.js"
@@ -683,5 +683,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   /** The person writing to one of an Apex's Fins from the Apex's conversation, with no Apex turn (`Agents.direct`). */
   methods.handle("mako:agents-direct", (conversation: string, input: AgentsDirectInput) =>
     conversations.agents?.direct(conversation, input) ?? FINS_UNAVAILABLE)
+  /** The person answering what one of an Apex's Fins asks them, from the Apex's Thread on any device (`Agents.respond`). */
+  methods.handle("mako:agents-respond", (conversation: string, input: AgentsRespondInput) =>
+    conversations.agents?.respond(conversation, input) ?? FINS_UNAVAILABLE)
   methods.handle("mako:native-routing", () => conversations.nativeRouting())
 }

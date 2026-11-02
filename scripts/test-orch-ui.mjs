@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url"
 // with no turn of the Apex's; the phone's list, chips, Fin, Reply and stop. Screenshots of each, dark and light, land
 // in the evidence folder (or `MAKO_ORCH_UI_SHOTS`). Pass a dev server's URL to use it
 // (`node scripts/test-orch-ui.mjs http://127.0.0.1:20026/`); with none it serves its own. `--bench` measures the
-// strip, badge and panel under churn, and a rail of 50 Apexes.
+// strip, badge and panel under churn, a rail of 50 Apexes, and a Fin's ask from its batch to its card.
 if (process.versions.electron) {
   void check().catch(async (error) => {
     console.error(error)
@@ -391,6 +391,70 @@ async function check() {
   assert.ok(phonePopover.height <= 120)
   await both("phone-stop")
 
+  // What the Fins ask the person stands over the Apex's composer on the desk, each answered there in a click as the
+  // person's own answer, under a request ID; the rail marks the Apex with the first; an answered ask leaves.
+  window.setContentSize(1440, 900)
+  await window.loadURL(`${base}?mock&app=apex`)
+  await until("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length === 2", "the Fins' asks over the Apex's composer")
+  const deskAsks = await evaluate(`(() => ({
+    rows: [...document.querySelectorAll('[data-fin-asks] [data-fin-ask]')].map((row) => ({ kind: row.dataset.finAsk, fin: row.dataset.fin, text: row.innerText.replace(/\\s+/g, ' '), recommended: row.querySelector('[data-recommended]')?.innerText.replace(/\\s+/g, ' ') })),
+    marks: [...document.querySelectorAll('.thread-jump-scope [role=img][aria-label]')].map((mark) => mark.getAttribute('aria-label')),
+  }))()`)
+  console.log("DESK ASKS", JSON.stringify(deskAsks))
+  const finName = (fin) => evaluate(`window.apexScene.children().find((agent) => agent.child?.thread === ${JSON.stringify(fin)})?.child?.name`)
+  const report = deskAsks.rows.find((row) => row.kind === "report")
+  assert.equal(await finName(report?.fin), "push-wording")
+  assert.match(report.text, /^Quiet-hours push wording Needs your answer Which tone for the quiet-hours notice\? Plain or friendly\? Pick the tone the phone ships with\. Plain · recommended Friendly/)
+  assert.equal(report.recommended, "Plain · recommended")
+  const approval = deskAsks.rows.find((row) => row.kind === "approval")
+  assert.equal(await finName(approval?.fin), "sheet-motion")
+  assert.match(approval.text, /Needs approval Approve: npm ci Allow once Refuse$/)
+  assert.ok(deskAsks.marks.includes("Quiet-hours push wording: Which tone for the quiet-hours notice? Plain or friendly?") || deskAsks.marks.includes("Sheet motion on iPad: Approve: npm ci"), "the rail marks the Apex with its Fin's ask")
+  await both("desk-asks", "orch-gaps-")
+  await click('[data-fin-ask=report] [data-fin-answer="0"]')
+  await until("window.apexScene.responds().length === 1", "the person's answer reaching the Apex's host")
+  const deskAnswer = await evaluate("window.apexScene.responds()[0]")
+  assert.deepEqual({ fin: deskAnswer.fin, ask: deskAnswer.ask, option: deskAnswer.option }, { fin: report.fin, ask: "report:push-wording:tone", option: 0 })
+  assert.equal(deskAnswer.conversation, "1ead1ead-2000-4000-8000-000000001ead", "to the Apex's conversation")
+  assert.match(deskAnswer.request, /^[0-9a-f-]{36}$/)
+  await until("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length === 1", "the answered ask leaving the desk")
+  await both("desk-asks-answered", "orch-gaps-")
+
+  // On the phone, in the Apex's dock: its Fins' asks one at a time, a tap or a word answering each.
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await click("[data-thread]")
+  await until("Boolean(document.querySelector('.web-dock [data-ask=fin]'))", "a Fin's ask in the Apex's dock")
+  const phoneAsk = await evaluate(`(() => { const card = document.querySelector('.web-dock [data-ask=fin]'); return { kind: card.dataset.finAsk, fin: card.dataset.fin, text: card.innerText.replace(/\\s+/g, ' '), placeholder: document.querySelector('.web-dock textarea')?.placeholder } })()`)
+  console.log("PHONE ASK", JSON.stringify(phoneAsk))
+  assert.match(phoneAsk.text, /1 more Fin asks/)
+  await both("phone-ask", "orch-gaps-")
+  const tapped = phoneAsk.kind === "approval" ? '[data-fin-answer="allow"]' : '[data-fin-answer="0"]'
+  await click(`.web-dock [data-ask=fin] ${tapped}`)
+  await until("window.apexScene.responds().length === 1", "the phone's tap reaching the Apex's host")
+  assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, phoneAsk.fin)
+  await until(`document.querySelector('.web-dock [data-ask=fin]')?.dataset.fin !== ${JSON.stringify(phoneAsk.fin)}`, "the next Fin's ask after the tap")
+  const next = await evaluate(`(() => { const card = document.querySelector('.web-dock [data-ask=fin]'); return card && { kind: card.dataset.finAsk, fin: card.dataset.fin, placeholder: document.querySelector('.web-dock textarea')?.placeholder } })()`)
+  console.log("PHONE NEXT ASK", JSON.stringify(next))
+  if (next?.kind === "report") {
+    assert.equal(next.placeholder, "Tap an answer above, or type your own")
+    await both("phone-ask-words", "orch-gaps-")
+    const turns = await evaluate("window.apexScene.asked()")
+    await evaluate("document.querySelector('.web-dock textarea').focus(); true")
+    await type("Friendly")
+    await until("document.querySelector('.web-dock [data-send-action=send]')?.getAttribute('aria-label') === 'Send answer'", "the send button answering the Fin")
+    await click(".web-dock [data-send-action=send]")
+    await until("window.apexScene.responds().length === 2", "the phone's typed answer reaching the Apex's host")
+    const typedAnswer = await evaluate("window.apexScene.responds()[1]")
+    assert.deepEqual({ fin: await finName(typedAnswer.fin), answer: typedAnswer.answer }, { fin: "push-wording", answer: "Friendly" })
+    assert.equal(await evaluate("window.apexScene.asked()"), turns, "a typed answer is no turn of the Apex's")
+  } else if (next) {
+    await click(`.web-dock [data-ask=fin] [data-fin-answer="allow"]`)
+    await until("window.apexScene.responds().length === 2", "the second tap reaching the Apex's host")
+  }
+  await until("!document.querySelector('.web-dock [data-ask=fin]')", "no Fin's ask left in the dock")
+  await both("phone-ask-answered", "orch-gaps-")
+
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Orchestration UI: passed")
   app.exit(0)
@@ -460,6 +524,37 @@ const FRAME_WATCH = `(() => {
   window.__frames = () => { on = false; observer.disconnect(); return watch }
   return true
 })()`
+
+/** One Fin waiting on its Apex, made the person's with a new ask each time, until its card is there; then back, until it's gone. */
+const FIN_ASK_DRAWN = `(async () => {
+  const base = window.apexScene.children()
+  const index = base.findIndex((agent) => agent.child?.state.kind === "blocked" && agent.child.state.on === "lead")
+  const fin = base[index].child
+  const there = (present) => new Promise((done) => {
+    const check = () => (Boolean(document.querySelector('[data-fin-asks] [data-fin="' + fin.thread + '"]')) === present ? done() : requestAnimationFrame(check))
+    check()
+  })
+  const drawn = []
+  const cleared = []
+  for (let i = 0; i < 30; i += 1) {
+    const asking = { ...base[index], child: { ...fin, state: { ...fin.state, on: "person", ask: { kind: "report", id: "bench-" + i, options: [{ label: "Drop it" }, { label: "Retry once" }], recommended: 1 } } } }
+    let began = performance.now()
+    window.apexScene.setChildren(base.map((each, at) => (at === index ? asking : each)))
+    await there(true)
+    drawn.push(performance.now() - began)
+    began = performance.now()
+    window.apexScene.setChildren(base)
+    await there(false)
+    cleared.push(performance.now() - began)
+  }
+  return { drawn, cleared }
+})()`
+
+function spread(values) {
+  const sorted = values.toSorted((left, right) => left - right)
+  const round = (value) => Math.round(value * 10) / 10
+  return { p50: round(sorted[Math.floor(sorted.length * 0.5)]), p95: round(sorted[Math.floor(sorted.length * 0.95)]), max: round(sorted.at(-1)) }
+}
 
 function frameNumbers({ gaps, longest }) {
   const sorted = gaps.toSorted((left, right) => left - right)
@@ -559,7 +654,21 @@ async function bench(BrowserWindow, base, root) {
   const counted = await rail(true)
   say("rail, frames")
   const watched = await rail(false)
+
+  // A Fin's ask that's the person's arriving in the Apex's batch, to its card over the composer drawn; then answered
+  // elsewhere, to the card gone. Thirty times, on the Apex at rest.
+  say("a Fin's ask, drawn")
+  const asked = await (async () => {
+    const { window, evaluate, until } = await open("", false)
+    await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row")
+    await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+    await until("Boolean(document.querySelector('[data-fin-asks]'))", "the Fins' asks over the Apex's composer")
+    const timed = await evaluate(FIN_ASK_DRAWN)
+    window.destroy()
+    return timed
+  })()
   return {
+    finAsk: { samples: asked.drawn.length, drawnMs: spread(asked.drawn), clearedMs: spread(asked.cleared) },
     churn,
     rail: {
       bootCommits: counted.boot.commits,

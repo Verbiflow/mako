@@ -1,6 +1,7 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { FinOfApexNote } from "./apex-fins"
-import { sendDirect, useAddressee } from "@/state/apex-fins"
+import { FinAskCard } from "./fin-ask"
+import { sendDirect, useAddressee, useThreadAsks } from "@/state/apex-fins"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -90,6 +91,10 @@ export interface SendElsewhere {
 
 export function WebDock({ conversation, harness, target, draftKey, away, jump, reconnect, elsewhere, sendsTo }: DockProps) {
   const ask = useAsk()
+  // Its own ask goes first; one of its Fins' waits behind it.
+  const finAsks = useThreadAsks(useAcp((state) => state.conversations[conversation]?.threadId))
+  const fin = ask ? undefined : finAsks[0]
+  const typedFin = fin !== undefined && fin.ask.kind !== "approval"
   const running = useAcp((state) => {
     const live = activeLiveAcp(state)
     return live?.session.status === "running" || live?.session.status === "starting"
@@ -106,7 +111,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   const addressee = useAddressee((state) => state.to[conversation])
   const send = async (text: string, attachments: PromptAttachment[], id: string): Promise<boolean> => {
     // A question waiting: the words are its answer, not a message.
-    if (ask?.kind === "question" && attachments.length === 0 && typed.current?.(text)) return true
+    if ((ask?.kind === "question" || typedFin) && attachments.length === 0 && typed.current?.(text)) return true
     // Written to one of an Apex's Fins: it goes there straight, under the message's ID, so a retry delivers it once.
     if (addressee) return Boolean(await sendDirect(conversation, addressee, id, text, attachments))
     // Comments on a turn's lines waiting in this Session's draft go with it, as its context, marked with its ID
@@ -131,12 +136,13 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   const waits = useReadingCopy() !== null
   // Where the line over the field names the Session, the placeholder doesn't say its harness again.
   const whom = sendsTo ? "" : ` ${harness}`
-  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : addressee ? `Message ${addressee.title} straight` : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer${whom}` : `Queue a message${sendsTo ? "" : ` for ${harness}`}`) : `Message${whom}`
+  const placeholder = ask?.kind === "question" || typedFin ? "Tap an answer above, or type your own" : addressee ? `Message ${addressee.title} straight` : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer${whom}` : `Queue a message${sendsTo ? "" : ` for ${harness}`}`) : `Message${whom}`
   return (
-    <div className="web-dock shrink-0" data-asking={ask ? ask.kind : undefined}>
+    <div className="web-dock shrink-0" data-asking={ask ? ask.kind : fin ? "fin" : undefined}>
       <div aria-hidden className="web-dock-fade" />
-      <StatusCapsule conversation={conversation} cloudThread={target.cloudThread} asking={Boolean(ask)} away={away} jump={jump} reconnect={reconnect} />
+      <StatusCapsule conversation={conversation} cloudThread={target.cloudThread} asking={Boolean(ask ?? fin)} away={away} jump={jump} reconnect={reconnect} />
       {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
+      {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
       {unsent.length ? (
         <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-3 pb-1">
           {unsent.map((message) => (
@@ -170,10 +176,10 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         onWrite={target.cloudThread ? () => void wakeThread(target.cloudThread!, conversation) : undefined}
         onUnsent={(message: Outgoing) => keepUnsent({ ...message, conversation })}
         // A question is answered in words: nothing to attach, and the hint gets the room.
-        attach={ask?.kind !== "question" && !waits}
-        // A question waiting: typed words are its answer, which a send takes; nothing steers past it.
-        steering={ask?.kind === "question" || addressee ? undefined : steering}
-        answering={ask?.kind === "question"}
+        attach={ask?.kind !== "question" && !typedFin && !waits}
+        // A question waiting, its own or a Fin's: typed words are its answer, which a send takes; nothing steers past it.
+        steering={ask?.kind === "question" || typedFin || addressee ? undefined : steering}
+        answering={ask?.kind === "question" || typedFin}
         straight={Boolean(addressee)}
         editing={editing.current}
         waiting={switching ? "Switching access…" : undefined}

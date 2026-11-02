@@ -21,6 +21,8 @@ import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { asks, requestWaiting, type Waiting } from "@mako/host/contracts/notifications"
 import { bareCommand } from "@mako/sessions/tool-identity"
+import { rosterChildren } from "@mako/host/contracts/children"
+import { personAsks } from "@/state/fin-asks"
 
 export function updateLive(
   id: string,
@@ -109,7 +111,8 @@ function noteLiveOutcome(
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
   const asked = askedPermissions.get(conversation.key)
   if (permission) {
-    if (asked !== permission.id) {
+    // A Fin's ask is said on its Apex once it's the person's (`noteFinAsks`): one its Apex answers is never theirs.
+    if (asked !== permission.id && !conversation.parent) {
       askedPermissions.set(conversation.key, permission.id)
       const waiting = permissionWaiting(permission)
       noteOutcome({
@@ -192,6 +195,30 @@ export function noteListedOutcome(
     marker: attention.key,
     detail: asks(attention.kind) ? conversation.waitingOn : undefined,
   })
+}
+
+/** Each Apex's Fins' asks said to the person so far, by Fin and ask. */
+const announcedFinAsks = new Map<string, ReadonlySet<string>>()
+
+/**
+ * What an Apex's Fins ask the person, said on the Apex as its own ask would
+ * be: once per ask, the Fin's name before its line, and taken back from the
+ * attention centre once each is answered, on this device or another.
+ */
+export function noteFinAsks(conversation: LiveAcpConversation, quiet = false): void {
+  const asks = personAsks(rosterChildren(conversation.nativeAgents))
+  const before = announcedFinAsks.get(conversation.key)
+  const now = new Set(asks.map((ask) => `${ask.fin}:${ask.ask.id}`))
+  if (!before && !now.size) return
+  if (before && [...before].some((id) => !now.has(id)))
+    for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id, "asks")
+  for (const ask of asks) {
+    const id = `${ask.fin}:${ask.ask.id}`
+    if (before?.has(id)) continue
+    noteOutcome({ kind: ask.ask.kind === "approval" ? "approval" : "question", subject: liveSubject(conversation), marker: `fin:${id}`, detail: `${ask.title}: ${ask.question}`, quiet })
+  }
+  if (now.size) announcedFinAsks.set(conversation.key, now)
+  else announcedFinAsks.delete(conversation.key)
 }
 
 export function syncThreadStatus(
