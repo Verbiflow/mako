@@ -67,6 +67,7 @@ export function createAcpLiveDriver(
     backgroundStop: source.backgroundStop,
     approvalAnswerDigest: source.approvalAnswerDigest,
     nativeAgents: source.agents.kind === "observed" ? { kind: "observed", via: source.agents.via } : source.agents,
+    nativeRouting: source.nativeRouting,
     questions: source.questions,
     fork: fork.kind === "native" ? { kind: fork.kind, point: fork.point, via: fork.via } : fork,
     contextBreakdown: { kind: "unavailable", reason: "ACP's `usage_update` carries the context used and its size, nothing itemized." },

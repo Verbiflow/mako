@@ -40,6 +40,7 @@ import type { JournalReclaims } from "./journal-reclaim.js"
 import type { LiveMoves } from "./live-moves.js"
 import type { NativeSourceIdentity, SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
+import type { RoutedThread } from "../contracts/native-routing.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { WorkspaceSnapshots } from "../workspaces/index.js"
@@ -162,6 +163,13 @@ export interface Resident {
 }
 
 
+/** A launch's native routing (`ProviderStartOptions.nativeRouting`): only a Thread given Mako's tools has `agents_start` to route to. */
+export function launchRouting(dependencies: Pick<Dependencies, "agents">, session: string, tools: ConversationTools | undefined): (() => RoutedThread) | undefined {
+  const agents = dependencies.agents
+  if (!tools || !agents) return undefined
+  return () => ({ role: agents()?.leads(session) ? "lead" : "thread" })
+}
+
 /** What a conversation's children are to its turns and its roster (`Agents`). */
 export interface ConversationChildren {
   /** The conversation's children as roster entries, the same array until one of them changes. */
@@ -170,6 +178,8 @@ export interface ConversationChildren {
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
   settled(conversation: string, request: string): void
+  /** Whether the conversation's Thread leads: it has children or queued spawns, or was started as a lead. */
+  leads(conversation: string): boolean
 }
 export interface Dependencies {
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

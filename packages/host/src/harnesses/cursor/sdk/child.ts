@@ -81,6 +81,8 @@ interface OpenAgent {
   model: CursorSdkModelSelection | undefined
   mcpServers: Record<string, McpServerConfig> | undefined
   name: string | undefined
+  /** `OpenParams.noTask`; the SDK keeps no tool exclusion on the agent, so every create and resume passes it. */
+  noTask: boolean
   /** Exact origin revision admitted by this child, checked again before send. */
   sourceImport?: { path: string; nativeId: string; revision: string }
   /** How this agent's host opens Cursor's stores (`OpenParams.strictStores`). */
@@ -243,6 +245,7 @@ function handleOptions(open: Omit<OpenAgent, "handle">): Partial<AgentOptions> {
     // approve (`modes.ts`). A planning turn asks for `plan` on its send.
     mode: "agent",
     mcpServers: open.mcpServers,
+    ...open.noTask && { disallowedTools: ["task"] },
     local: {
       cwd: open.cwd,
       store: open.store,
@@ -434,6 +437,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     model: params.model,
     mcpServers: mcpConfig(params.mcpServers),
     name: params.name,
+    noTask: params.noTask === true,
     stores,
     reported: {},
   }

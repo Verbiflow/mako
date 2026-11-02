@@ -25,7 +25,9 @@ import { OpenCodeMessageIds } from "@mako/host/harnesses/opencode/live-driver"
 import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
 import { openCodeCatalogChange } from "@mako/host/harnesses/opencode/decoder"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
-import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
+import { configureOpenCodePermissions, configureOpenCodeRouting } from "@mako/host/harnesses/opencode/permissions"
+import { codexRoutingConfig } from "@mako/host/harnesses/codex/routing"
+import type { RoutedThread } from "@mako/host/contracts/native-routing"
 import {
   compareVersions, definedTools, definitionsPath, diffDefinitions, NativeDefinitions, storedDefinitions,
   NATIVE_TOOLS_DIR, type Configuration, type DefinedTools, type Parameter, type Wire,
@@ -68,6 +70,12 @@ const servers = new OpenCodeServers()
  * the definitions its model sees. Devin's model request is protobuf to the
  * Windsurf API, whose URL it takes from `WINDSURF_API_SERVER_URL`; a stand-in
  * answers its account calls empty and reads the tools out of the request.
+ *
+ * Each harness whose spawning a lead switches off at launch is also recorded
+ * as one, a configuration named `lead`, through the same adapter Mako
+ * launches it with (`ProviderLiveDriver.nativeRouting`): its spawn tool
+ * should be gone. Claude decides each spawn as it's called, so its tools
+ * don't change.
  */
 
 const run = promisify(execFile)
@@ -198,6 +206,9 @@ const sandboxed = <T>(harness: string, work: (sandbox: Sandbox) => Promise<T>) =
 
 const emptyMcp = (cwd: string) => async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] })
 const trace = (provider: string) => new ProviderLaunchTrace({ provider, conversation: "native-tools" })
+const LEAD: RoutedThread = { role: "lead" }
+/** A configuration's name, as a lead's when it is one. */
+const named = (name: string, lead: boolean) => lead ? `${name}, lead` : name
 
 /** A peer that refuses every request the child makes and hears its notifications. */
 const refusingPeer = (child: ChildProcessWithoutNullStreams, jsonrpc: boolean, notified: (message: RpcMessage) => void) =>
@@ -316,7 +327,7 @@ async function codexDefinitions(): Promise<Captures> {
     return listed.models.filter((model) => model.visibility === "list").map((model) => model.slug)
   })
   const configurations: Configuration[] = []
-  for (const model of models) for (const plan of [false, true]) {
+  for (const model of models) for (const { plan, lead } of [{ plan: false, lead: false }, { plan: true, lead: false }, { plan: false, lead: true }]) {
     configurations.push(await sandboxed("codex", async (sandbox) => {
       const endpoint = await modelEndpoint()
       const env = await seal(sandbox, endpoint.url)
@@ -328,7 +339,7 @@ async function codexDefinitions(): Promise<Captures> {
         // Mako's own initialize: Codex 0.164.0 refuses a turn's collaborationMode from a client without experimentalApi.
         await peer.call("initialize", { clientInfo: { name: "mako-native-tools", version: "0" }, capabilities: CODEX_CLIENT_CAPABILITIES })
         peer.notify("initialized")
-        const thread = z.object({ thread: z.object({ id: z.string() }) }).parse(await peer.call("thread/start", { cwd: sandbox.project, model, config: codexInteractiveConfig() }))
+        const thread = z.object({ thread: z.object({ id: z.string() }) }).parse(await peer.call("thread/start", { cwd: sandbox.project, model, config: { ...codexInteractiveConfig(), ...codexRoutingConfig("native-tools", lead ? () => LEAD : undefined) } }))
         const turn = peer.call("turn/start", {
           threadId: thread.thread.id,
           input: [{ type: "text", text: "hi", text_elements: [] }],
@@ -336,7 +347,7 @@ async function codexDefinitions(): Promise<Captures> {
         })
         void turn.catch(() => {})
         const { tools } = await captured("Codex", endpoint, Promise.race([replied, new Promise((resolve) => child.once("exit", resolve))]))
-        return { name: plan ? `${model}, plan` : model, tools: definedTools("responses", tools, sandbox.scrub) }
+        return { name: named(plan ? `${model}, plan` : model, lead), tools: definedTools("responses", tools, sandbox.scrub) }
       } finally {
         peer.close()
         await stop(child)
@@ -344,7 +355,7 @@ async function codexDefinitions(): Promise<Captures> {
       }
     }))
   }
-  return { version, source: "the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan", configurations }
+  return { version, source: "the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan, and as a lead (codexRoutingConfig)", configurations }
 }
 
 const JsonFields = z.record(z.string(), z.json())
@@ -388,7 +399,7 @@ async function grokDefinitions(): Promise<Captures> {
   const version = /\d+(?:\.\d+)+/.exec((await run(executable, ["--version"])).stdout)?.[0]
   if (!version) throw new Error("Grok reported no version")
   const configurations: Configuration[] = []
-  for (const mode of driver.modes ?? []) {
+  for (const mode of driver.modes ?? []) for (const lead of [false, true]) {
     const access = grokAcpSource.access?.launch?.find((level) => mode.id === `access:${level}`) ?? grokAcpSource.access?.default
     const native = Object.entries(grokAcpSource.access?.native ?? {}).find(([id]) => id === mode.id)?.[1]
     configurations.push(await sandboxed("grok", async (sandbox) => {
@@ -402,17 +413,17 @@ async function grokDefinitions(): Promise<Captures> {
         GROK_XAI_API_BASE_URL: `${endpoint.url}/v1`, GROK_CLI_CHAT_PROXY_BASE_URL: `${endpoint.url}/v1`, GROK_MODELS_BASE_URL: `${endpoint.url}/v1`,
       }
       try {
-        const launch = await grokAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access })
+        const launch = await grokAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access, nativeSpawnsOff: lead })
         if (!launch) throw new Error("Grok's ACP source declined to launch")
         launch.configureEnvironment?.(env)
         const tools = await acpCapture({ harness: "Grok", source: grokAcpSource, command: launch.command, args: launch.args, env, cwd: sandbox.project, mode: native, endpoint })
-        return { name: mode.id, tools: definedTools("chat", tools, sandbox.scrub) }
+        return { name: named(mode.id, lead), tools: definedTools("chat", tools, sandbox.scrub) }
       } finally {
         await endpoint.close()
       }
     }))
   }
-  return { version, source: "the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode", configurations }
+  return { version, source: "the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff)", configurations }
 }
 
 /**
@@ -473,7 +484,7 @@ async function devinDefinitions(): Promise<Captures> {
   if (!version) throw new Error("Devin reported no version")
   const configurations: Configuration[] = []
   const withheld: string[] = []
-  for (const mode of driver.modes ?? []) {
+  for (const mode of driver.modes ?? []) for (const lead of [false, true]) {
     const configuration = await sandboxed("devin", async (sandbox): Promise<Configuration | undefined> => {
       const endpoint = await windsurfEndpoint()
       // The sandbox's data home holds no credentials.toml, so Devin signs in with this key, to the stand-in only.
@@ -482,14 +493,21 @@ async function devinDefinitions(): Promise<Captures> {
         WINDSURF_API_SERVER_URL: endpoint.url, DEVIN_API_URL: endpoint.url, WINDSURF_WEBSITE_URL: endpoint.url, DEVIN_WEBAPP_URL: endpoint.url,
       }
       try {
-        const launch = await devinAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: devinAcpSource.access?.default })
+        const launch = await devinAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: devinAcpSource.access?.default, nativeSpawnsOff: lead })
         if (!launch) throw new Error("Devin's ACP source declined to launch")
         launch.configureEnvironment(env)
-        const tools = await acpCapture({ harness: "Devin", source: devinAcpSource, command: launch.command, args: launch.args, env, cwd: sandbox.project, mode: mode.id, endpoint })
-        return { name: mode.id, tools: definedTools("chat", tools, sandbox.scrub) }
+        // As Mako launches it: the launch's own config folder, where a lead's config switches subagents off.
+        await mkdir(join(sandbox.home, ".config"), { recursive: true })
+        const disposeConfig = await launch.prepareMcp?.([], env)
+        try {
+          const tools = await acpCapture({ harness: "Devin", source: devinAcpSource, command: launch.command, args: launch.args, env, cwd: sandbox.project, mode: mode.id, endpoint })
+          return { name: named(mode.id, lead), tools: definedTools("chat", tools, sandbox.scrub) }
+        } finally {
+          await disposeConfig?.()
+        }
       } catch (error) {
         if (!String(error).includes(`Mode '${mode.id}' is not available`)) throw error
-        withheld.push(mode.id)
+        if (!lead) withheld.push(mode.id)
         return undefined
       } finally {
         await endpoint.close()
@@ -498,7 +516,7 @@ async function devinDefinitions(): Promise<Captures> {
     if (configuration) configurations.push(configuration)
   }
   const unoffered = withheld.length ? `; not ${withheld.join(", ")}, which Devin offers only to an account whose settings allow it` : ""
-  return { version, source: `the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode${unoffered}`, configurations }
+  return { version, source: `the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff)${unoffered}`, configurations }
 }
 
 type OpenCodeApi = Awaited<ReturnType<typeof startOpenCodeApi>>
@@ -539,7 +557,7 @@ async function openCodeDefinitions(): Promise<Captures> {
       const agent = openCodeAgentForMode(mode.id, openCodeLaunchAccess(mode.id))
       if (!agents.has(agent)) agents.set(agent, mode.id)
     }
-    for (const [agent, mode] of agents) {
+    for (const [agent, mode] of agents) for (const lead of [false, true]) {
       configurations.push(await sandboxed("opencode", async (sandbox) => {
         const endpoint = await modelEndpoint()
         const env: NodeJS.ProcessEnv = {
@@ -547,6 +565,7 @@ async function openCodeDefinitions(): Promise<Captures> {
           OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { [providerID]: { options: { baseURL: `${endpoint.url}/v1`, apiKey: CAPTURE_KEY } } } }),
         }
         configureOpenCodePermissions(env, openCodeLaunchAccess(mode))
+        configureOpenCodeRouting(env, "native-tools", lead ? () => LEAD : undefined)
         const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: trace("opencode") })
         try {
           version = api.info.version
@@ -559,7 +578,7 @@ async function openCodeDefinitions(): Promise<Captures> {
           const prompt = api.client.session.prompt({ sessionID: session.id, id: messageIds.next(), text: "hi" })
           void prompt.catch(() => {})
           const { tools } = await captured("OpenCode", endpoint, api.exited)
-          return { name: `${providerID}, ${agent}`, tools: definedTools(wire, tools, sandbox.scrub) }
+          return { name: named(`${providerID}, ${agent}`, lead), tools: definedTools(wire, tools, sandbox.scrub) }
         } finally {
           await api.close()
           await endpoint.close()
@@ -568,7 +587,7 @@ async function openCodeDefinitions(): Promise<Captures> {
     }
   }
   if (!version) throw new Error("OpenCode reported no version")
-  return { version, source: "the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model", configurations }
+  return { version, source: "the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model, and as a lead (configureOpenCodeRouting)", configurations }
 }
 
 /** Zod 3 keeps an object schema's fields under this name. */

@@ -166,6 +166,7 @@ const reads = [
   "mako:host-log-path",
   "mako:provider-residency",
   "mako:agents-diagnostics",
+  "mako:native-routing",
   "mako:daemon-status",
   "mako:session-reader-history",
   "mako:daemon-login",

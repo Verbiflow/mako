@@ -47,6 +47,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
       history: (binding) => questions.read(binding),
     },
     nativeAgents: { kind: "observed", via: "`spawn_agent` calls and the agent threads they start." },
+    nativeRouting: { kind: "at-launch", via: "`agents.enabled = false` in the config `thread/start`, `thread/resume` and `thread/fork` carry, which removes `spawn_agent` and the other multi-agent tools whatever the model declares.", verified: { version: "0.166.0", how: "harness:native-tools records every model as a lead without them (2026-11-01); test:native-routing-live: a lead, and that lead resumed in a new app-server, offered no `spawn_agent`, an ordinary Thread's child ran and was observed" } },
     contextBreakdown: { kind: "unavailable", reason: "The app-server reports token totals and the context window, not what fills it." },
     modeSwitching: { kind: "native", via: "Each mode is an approval policy and sandbox, sent with each turn." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop terminates exact native terminal IDs before interruption and checks again after settlement, including child threads. Stopped turn IDs retain a bounded guard for commands reported after interruption; failed native termination disconnects instead of claiming cleanup. Checked on Codex 0.159.3: foreground child exit and same-session follow-up. Closing ends terminals and subagents before the app-server exits." },

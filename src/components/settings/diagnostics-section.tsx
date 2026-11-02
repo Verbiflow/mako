@@ -9,6 +9,8 @@ import { copyAge, formatBytes, formatRelative, formatTime } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
 import type { AgentsDiagnostics } from "@mako/host/contracts/agents"
+import type { NativeRoutingReading } from "@mako/host/contracts/native-routing"
+import { harnessLabel } from "@/lib/harness-label"
 import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
@@ -38,6 +40,7 @@ export function DiagnosticsSection() {
   const [residency, setResidency] =
     useState<ProviderResidencySnapshot | null>(null)
   const [agents, setAgents] = useState<AgentsDiagnostics | null>(null)
+  const [routing, setRouting] = useState<NativeRoutingReading[]>([])
   const [openId, setOpenId] = useState<string>()
   const [unread, setUnread] = useState<UnreadReport | null>(null)
   const [sync, setSync] = useState<SyncReadings | null>(null)
@@ -57,6 +60,7 @@ export function DiagnosticsSection() {
       .then(setResidency)
       .catch(() => setResidency(null))
     void diagnostics.agents().then(setAgents).catch(() => setAgents(null))
+    void diagnostics.nativeRouting().then(setRouting).catch(() => setRouting([]))
     void diagnostics.unreadRecords().then(setUnread).catch(() => setUnread(null))
     void diagnostics.syncReadings().then(setSync).catch(() => setSync(null))
     void diagnostics.continueReadings().then(setContinues).catch(() => setContinues([]))
@@ -175,6 +179,8 @@ export function DiagnosticsSection() {
       <UnreadRecords report={unread} />
 
       {agents?.children ? <ChildrenReadout agents={agents} /> : null}
+
+      {routing.length ? <NativeRoutingReadout readings={routing} /> : null}
 
       {residency ? (
         <div className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
@@ -370,6 +376,43 @@ function ChildrenReadout({ agents }: { agents: AgentsDiagnostics }) {
         Each tree runs at most {agents.budget.running} at once and starts at most {agents.budget.started}.{" "}
         {fullest.map((tree) => `${tree.running} running, ${tree.started} started`).join(" · ")}
       </p>
+    </div>
+  )
+}
+
+/** What a reading says of its harness in a lead. */
+function routingState(reading: NativeRoutingReading): string {
+  if (reading.state === "words") return "Mako's instructions alone"
+  const checked = reading.verified?.version ?? ""
+  if (reading.state === "control") return `Off in a lead, checked on ${checked}`
+  return reading.installed ? `Unverified: checked on ${checked}, this Mac runs ${reading.installed}` : `Unverified: checked on ${checked}, this Mac's version isn't read yet`
+}
+
+/**
+ * Each harness's own subagents in a lead: switched off by a control seen
+ * working on the version installed, unverified on another, or left to the
+ * instructions.
+ */
+function NativeRoutingReadout({ readings }: { readings: NativeRoutingReading[] }) {
+  return (
+    <div data-native-routing="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+      <div className="px-3 py-2">
+        <p className="text-ui">Native subagents</p>
+        <p className="text-label text-faint">A Thread that leads others starts its agents through Mako.</p>
+      </div>
+      <div className="border-t border-hairline">
+        {readings.map((reading) => (
+          <div key={reading.harness} className="flex items-baseline gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0">
+            <span className="min-w-0 flex-1 truncate text-label" title={reading.via}>
+              {harnessLabel(reading.harness)}
+              <span className="text-faint"> · {routingState(reading)}</span>
+            </span>
+            <span className={`shrink-0 text-label ${reading.state === "unverified" ? "text-caution" : "text-faint"}`}>
+              {reading.state === "control" ? "control" : reading.state === "unverified" ? "unverified" : "words"}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

@@ -33,7 +33,7 @@ import { openCodeBinaryTarget } from "./updates.js"
 import { openCodeProcessProbeFor } from "./process-probe.js"
 import type { OpenCodeServers } from "./servers.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
-import { configureOpenCodePermissions } from "./permissions.js"
+import { configureOpenCodePermissions, configureOpenCodeRouting } from "./permissions.js"
 import {
   OPENCODE_DEFAULT_MODE,
   openCodeAgentForMode,
@@ -725,6 +725,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     },
     approvalAnswerDigest: openCodeApprovalDigest,
     nativeAgents: { kind: "observed", via: "`subagent` task calls and the child sessions they start." },
+    nativeRouting: { kind: "at-launch", via: "A deny on the `subagent` permission, last in the Build and Plan agents' rules in `OPENCODE_CONFIG_CONTENT`, which removes the tool.", verified: { version: "2.2.3", how: "harness:native-tools records Build and Plan as a lead without `subagent`, where a deny on `task` left it (2026-11-01); test:native-routing-live: a lead offered none, an ordinary Thread's child ran and was observed" } },
     questions: { kind: "request", via: "The `question` tool's form, answered with `form.reply`." },
     contextBreakdown: { kind: "unavailable", reason: "OpenCode reports token totals per message, not what fills the context." },
     modeSwitching: { kind: "native", via: "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`." },
@@ -810,6 +811,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       delete env.CLAUDE_CODE_ENTRYPOINT
       const launchAccess = openCodeLaunchAccess(options.modeId, options.launchModeId)
       configureOpenCodePermissions(env, launchAccess)
+      configureOpenCodeRouting(env, options.conversationId, options.nativeRouting)
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env, versions))
