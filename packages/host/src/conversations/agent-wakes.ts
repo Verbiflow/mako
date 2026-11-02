@@ -6,6 +6,10 @@ import { namedUuid } from "./cloud-moves.js"
 
 /** An idle parent waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
+/** A result the parent waited for goes after this: the parent asked for it, so only what settles with it joins it. */
+export const RESULT_COALESCE_MS = 250
+/** The most of a waited-for result its wake carries; `agents_read` gives the rest. */
+const RESULT_CHARS = 8_000
 /** Wakes a lead takes in a minute; notices past them wait for the next wake. */
 export const WAKES_PER_MINUTE = 6
 const MINUTE_MS = 60_000
@@ -26,6 +30,8 @@ export interface Notice {
   from: string
   /** The request already named to carry it, by a host that stopped before it was sent (`ThreadStore.assignWake`). */
   wake?: string
+  /** The result of a `wait` start whose window ended first: it starts the parent's next turn, in full, and is never steered into a running one. */
+  settledOnly?: true
 }
 
 /** What a parent's conversation can take now. */
@@ -36,8 +42,8 @@ export interface AgentWakesDeps {
   ready(conversation: string): ParentReady
   /** Starts a turn with the digest, under `request`: a request taken once already is taken again as the same one. */
   wake(conversation: string, request: string, text: string, actor: Extract<Actor, { kind: "agent" }>): void
-  /** Joins the digest to the running turn at its next step; false when the turn took no message. */
-  steer(conversation: string, id: string, text: string): boolean
+  /** Joins the digest to the running turn at its next step, resolving whether the harness took it; false when no turn could take one. */
+  steer(conversation: string, id: string, text: string): Promise<boolean> | false
   /** The request named before it's sent, and the reports marked heard once it was (`ThreadStore`). */
   assign(reports: readonly string[], request: string): void
   delivered(reports: readonly string[], at: number): void
@@ -53,6 +59,8 @@ interface Waiting {
   timer?: NodeJS.Timeout
   /** Waits for the parent's turn to end (`settled`). */
   forTurnEnd?: true
+  /** A steer this turn didn't take: the rest go at its end, as a turn of their own. */
+  unsteerable?: true
 }
 
 /**
@@ -61,14 +69,18 @@ interface Waiting {
  * An idle parent waits `WAKE_COALESCE_MS` after a burst's first notice and
  * then starts ONE turn with the digest; a parent busy on a harness whose
  * steer lands at a step gets them at its next step; one whose steer would
- * interrupt (Cursor) gets them as a message queued for its turn's end. Wakes
- * past `WAKES_PER_MINUTE` for a lead wait, decisions first. Nothing polls:
- * a timer runs only while notices wait.
+ * interrupt (Cursor) gets them as a message queued for its turn's end. A
+ * result the parent waited for (`settledOnly`) is never steered: it goes
+ * once the parent is idle, after `RESULT_COALESCE_MS`, first and in full.
+ * Wakes past `WAKES_PER_MINUTE` for a lead wait, decisions first. Nothing
+ * polls: a timer runs only while notices wait.
  */
 export class AgentWakes {
   private readonly deps: AgentWakesDeps
   private readonly waiting = new Map<string, Waiting>()
   private readonly heard = new Set<string>()
+  /** Notices a steer carries until the harness answers it: heard if it took them, else waiting again. */
+  private readonly steering = new Set<string>()
   private readonly wakes = new Map<string, number[]>()
   private stopped = false
 
@@ -78,27 +90,48 @@ export class AgentWakes {
 
   /** A notice for `conversation`, the parent's, under lead `lead`; one already heard or waiting changes nothing. */
   notice(conversation: string, lead: string, notice: Notice): void {
-    if (this.stopped || this.heard.has(notice.id)) return
+    if (this.stopped || this.heard.has(notice.id) || this.steering.has(notice.id)) return
     const held = this.waiting.get(conversation)
     if (held?.notices.some((waiting) => waiting.id === notice.id)) return
     const waiting = held ?? { lead, notices: [] }
     waiting.notices.push(notice)
     this.waiting.set(conversation, waiting)
-    hostLog("agents", "notice", { notice: notice.id, report: notice.report.id, status: notice.report.status, conversation })
-    if (!waiting.timer && !waiting.forTurnEnd) this.after(conversation, waiting, WAKE_COALESCE_MS)
+    hostLog("agents", "notice", { notice: notice.id, report: notice.report.id, status: notice.report.status, conversation, ...(notice.settledOnly && { settledOnly: true }) })
+    if (waiting.forTurnEnd) return
+    if (notice.settledOnly && waiting.timer) {
+      clearTimeout(waiting.timer)
+      waiting.timer = undefined
+    }
+    if (!waiting.timer) this.after(conversation, waiting, notice.settledOnly ? RESULT_COALESCE_MS : WAKE_COALESCE_MS)
   }
 
-  /** The parent's turn ended: what waited for it goes now, as a wake once it's idle. */
+  /** The parent's turn ended: what waited for it, and the results it waited for, go now, as a wake once it's idle. */
   settled(conversation: string): void {
     const waiting = this.waiting.get(conversation)
-    if (!waiting?.forTurnEnd) return
+    if (!waiting) return
+    waiting.unsteerable = undefined
+    if (waiting.timer || (!waiting.forTurnEnd && !waiting.notices.some((notice) => notice.settledOnly))) return
     waiting.forTurnEnd = undefined
-    if (!waiting.timer) this.after(conversation, waiting, WAKE_COALESCE_MS)
+    this.after(conversation, waiting, coalesceMs(waiting.notices))
+  }
+
+  /** Takes back a notice its parent heard another way (a `wait` start that answers its result); false when none waits. */
+  withdraw(conversation: string, id: string): boolean {
+    const waiting = this.waiting.get(conversation)
+    const before = waiting?.notices.length ?? 0
+    if (!waiting || !before) return false
+    waiting.notices = waiting.notices.filter((notice) => notice.id !== id)
+    this.heard.add(id)
+    if (!waiting.notices.length) {
+      clearTimeout(waiting.timer)
+      this.waiting.delete(conversation)
+    }
+    return waiting.notices.length < before
   }
 
   /** How many notices wait, across every parent: Diagnostics shows it. */
   pending(): number {
-    let count = 0
+    let count = this.steering.size
     for (const waiting of this.waiting.values()) count += waiting.notices.length
     return count
   }
@@ -130,17 +163,26 @@ export class AgentWakes {
       this.waiting.delete(conversation)
       return
     }
-    if (ready === "queue") {
+    if (ready === "queue" || (ready === "steer" && waiting.unsteerable)) {
       waiting.forTurnEnd = true
       return
     }
-    const batch = nextBatch(waiting.notices)
+    const steerable = waiting.notices.filter((notice) => !notice.settledOnly)
+    // Results alone wait for the turn's end (`settled`), while what can be steered still is.
+    if (ready === "steer" && !steerable.length) return
+    const batch = nextBatch(ready === "steer" ? steerable : waiting.notices)
     const ids = batch.map((notice) => notice.report.id)
     const request = batch[0]!.wake ?? namedUuid(`wake:${conversation}:${ids.join("\n")}`)
     const text = digest(batch, this.deps.counts(conversation))
     if (ready === "steer") {
-      if (this.deps.steer(conversation, namedUuid(`steer:${request}`), text)) return this.sent(conversation, waiting, batch, request, "steer")
-      waiting.forTurnEnd = true
+      const steer = this.deps.steer(conversation, namedUuid(`steer:${request}`), text)
+      if (!steer) {
+        waiting.forTurnEnd = true
+        return
+      }
+      waiting.notices = waiting.notices.filter((notice) => !batch.includes(notice))
+      for (const notice of batch) this.steering.add(notice.id)
+      void steer.then((took) => this.steered(conversation, waiting.lead, batch, request, took))
       return
     }
     const now = this.now()
@@ -158,12 +200,26 @@ export class AgentWakes {
     this.sent(conversation, waiting, batch, request, "turn")
   }
 
+  /** The harness answered a steer: what it took is heard; what it didn't goes as the parent's next turn, never dropped. */
+  private steered(conversation: string, lead: string, batch: readonly Notice[], request: string, took: boolean): void {
+    for (const notice of batch) this.steering.delete(notice.id)
+    if (this.stopped) return
+    const waiting = this.waiting.get(conversation) ?? { lead, notices: [] }
+    this.waiting.set(conversation, waiting)
+    if (took) return this.sent(conversation, waiting, batch, request, "steer")
+    hostLog("agents", "steer not taken; its notices go as the next turn", { conversation, request, notices: batch.length })
+    waiting.notices = [...batch, ...waiting.notices]
+    waiting.unsteerable = true
+    if (!waiting.timer && !waiting.forTurnEnd) this.after(conversation, waiting, WAKE_COALESCE_MS)
+  }
+
   private sent(conversation: string, waiting: Waiting, batch: readonly Notice[], request: string, how: "turn" | "steer"): void {
     const ids = batch.map((notice) => notice.report.id)
     this.deps.delivered(ids, this.now())
     for (const notice of batch) this.heard.add(notice.id)
     waiting.notices = waiting.notices.filter((notice) => !batch.includes(notice))
-    hostLog("agents", "wake", { conversation, request, how, coalesced: batch.length, waiting: waiting.notices.length })
+    const results = batch.filter((notice) => notice.settledOnly).length
+    hostLog("agents", "wake", { conversation, request, how, coalesced: batch.length, ...(results && { results }), waiting: waiting.notices.length })
     if (!waiting.notices.length) {
       this.waiting.delete(conversation)
       return
@@ -186,11 +242,21 @@ function nextBatch(notices: readonly Notice[]): Notice[] {
 
 const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
 
-/** The digest in its fixed shape: decisions first, then what finished, then how the rest stand. */
+/** The digest in its fixed shape: the results waited for, in full; then decisions; then what finished; then how the rest stand. */
 export function digest(notices: readonly Notice[], counts: string): string {
-  const decisions = notices.filter((notice) => DECIDES.has(notice.report.status))
-  const finished = notices.filter((notice) => notice.report.status === "done" || notice.report.status === "failed")
+  const results = notices.filter((notice) => notice.settledOnly)
+  const decisions = notices.filter((notice) => !notice.settledOnly && DECIDES.has(notice.report.status))
+  const finished = notices.filter((notice) => !notice.settledOnly && (notice.report.status === "done" || notice.report.status === "failed"))
   const lines = [FROM_AGENTS]
+  if (results.length) {
+    lines.push(results.length === 1 ? "The result you waited for:" : `The ${results.length} results you waited for:`)
+    for (const { label, report } of results) {
+      const summary = report.summary.trim() || (report.status === "done" ? "It finished." : "It failed.")
+      const text = summary.length > RESULT_CHARS ? `${summary.slice(0, RESULT_CHARS)}… (agents_read gives the rest)` : summary
+      lines.push(`  • ${label} ${report.status}:`, ...text.split("\n").map((line) => `    ${line}`))
+      for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
+    }
+  }
   if (decisions.length) {
     lines.push(`${decisions.length} ${decisions.length === 1 ? "needs" : "need"} a decision:`)
     for (const { label, report } of decisions)
@@ -204,6 +270,13 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
   }
   lines.push(counts)
-  lines.push("agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
+  lines.push(results.length && !decisions.length && !finished.length
+    ? "Go on with it: reply to the person, start more work, or end your turn."
+    : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return lines.join("\n")
+}
+
+/** The window before a delivery: short once a result the parent waited for is among what waits. */
+function coalesceMs(notices: readonly Notice[]): number {
+  return notices.some((notice) => notice.settledOnly) ? RESULT_COALESCE_MS : WAKE_COALESCE_MS
 }

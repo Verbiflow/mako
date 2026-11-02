@@ -222,16 +222,28 @@ A report (`agents_report`, else one implicit report at a turn's end) sends
 its lead a notice; an idle lead waits `WAKE_COALESCE_MS` and takes ONE turn
 with the digest, a busy one gets it at its next step where its harness
 steers there and at its turn's end where it doesn't, at most
-`WAKES_PER_MINUTE` a lead (`agent-wakes.ts`): the lead never polls. A
-child's turn an exit or an update cut short always continues in the next
+`WAKES_PER_MINUTE` a lead (`agent-wakes.ts`): the lead never polls. A steer
+the harness doesn't take goes as the lead's next turn, never dropped. Each
+start sets its `mode` and `wake` (on the edge's `asked`), and `reportRoute`
+is where its reports go: `background` returns at once, `wait` holds the call
+at most `WAIT_LIMIT_MS` (half the 60 s Cursor's MCP client and the MCP
+default give a tool call) for the result or a question, then answers
+`pending`; a timeout never stops the child, and the result it waited for
+starts the lead's next turn, never steered (`settledOnly`, after
+`RESULT_COALESCE_MS`), in full. `wake: decisions` (the default) wakes the lead
+for results and questions, `finish` for results only, `never` for none
+unless it waited; a question its lead doesn't hear is the person's, never
+dropped. A child's turn an exit or an update cut short always continues in the next
 host (`LeftTurn.always`), and its messages the exit paused go on. Children
 are roster entries (`childEntry` under `CHILDREN_BINDING`, `withChildren`)
 built from the store, never saved in a journal. `npm run
 test:background-agents` covers the engine, `test:agents-doors` the three
 doors, `test:agents-migrate` migration 6 from #286's `background_agents`,
-`test:orch-update` an update mid-tree, and `bench:agents-follow`,
-`bench:orch-wake`, `bench:orch-spawn` and `bench:orch-host` hold the
-follow, the wakes, a spawn's receipt and the host's loop to budgets.
+`test:orch-update` an update mid-tree, `test:agents-wake` every mode and wake
+setting, and `bench:agents-follow`, `bench:orch-wake`,
+`bench:orch-wake-latency`, `bench:orch-spawn` and `bench:orch-host` hold the
+follow, the wakes, a report's way to its lead, a spawn's receipt and the
+host's loop to budgets.
 
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a
