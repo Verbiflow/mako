@@ -8,6 +8,7 @@ import { ACCESS_TIER_NAMES, accessModeId, accessTierOfModeId, type AccessTier } 
 import {
   childAccess,
   childEntry,
+  childMode,
   childState,
   PlaceSchema,
   reportPhase,
@@ -60,7 +61,7 @@ import { agentWords, BRIEF_CLOSE, briefIntro, PASSED_ON_NOTE, passedOn } from ".
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import type { NativeAgent } from "../contracts/native-agents.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
-import type { PromptAttachment } from "../contracts/providers-acp.js"
+import type { LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type RunEnd } from "./agent-runs.js"
@@ -91,6 +92,8 @@ export interface AgentsDeps {
   /** Whether `harness` has a CLI a Thread's shell can run, so a Session of it can be one started there. */
   runs(harness: string): boolean
   harnessLabel(harness: string): string
+  /** The modes `harness`'s live driver declares, each with its access tier; undefined for one that declares none. */
+  modes(harness: string): readonly LiveSessionMode[] | undefined
   budget?: TreeBudget
   now?(): number
 }
@@ -360,8 +363,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!harness || !this.deps.harnesses().includes(harness))
       return this.refuse(op, "unknown-harness", `No harness named ${harness ?? "(none)"} runs here: ${this.deps.harnesses().join(", ")}.`)
     const own = this.tierOf(lead)
-    const tier = childAccess(own, input.access)
-    if (!tier) return this.refuse(op, "access", `A child runs at most at its ${ROLE_WORD}'s access: this Thread is on ${own}, so ${input.access} is refused.`)
+    const allowed = childAccess(own, input.access)
+    if (!allowed) return this.refuse(op, "access", `A child runs at most at its ${ROLE_WORD}'s access: this Thread is on ${own}, so ${input.access} is refused.`)
+    const mode = childMode(this.deps.modes(harness), allowed)
+    if (!mode) {
+      const offers = (this.deps.modes(harness) ?? []).flatMap((offered) => offered.access ? [offered.access] : []).join(", ")
+      return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offers}, each above ${allowed}, the most this child may have. Start it on another harness.`)
+    }
+    const tier = mode.tier
     const tree = this.rootOf(lead.thread)
     const counts = this.treeCounts(tree)
     // A queued spawn is one the tree has started: once the budget would refuse it, it never waits.
@@ -608,7 +617,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       conversationId,
       initialRequest: { id: namedUuid(`${op}\nbrief`), text: briefText(input.brief, name), attachments: [] },
       title: input.title ?? name,
-      modeId: accessModeId(tier),
+      modeId: childMode(this.deps.modes(harness), tier)?.id ?? accessModeId(tier),
       ...((input.model || input.reasoning) && { tuning: { ...(input.model && { model: input.model }), ...(input.reasoning && { options: { effort: input.reasoning } }) } }),
       ...(workspace && {
         worktree: true,
@@ -1082,7 +1091,8 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   private tierOfConversation(conversation: string): AccessTier | undefined {
     const session = this.deps.live.session(conversation)
-    return accessTierOfModeId(session?.launchMode ?? session?.currentMode ?? "") ?? undefined
+    const mode = session?.launchMode ?? session?.currentMode ?? ""
+    return session?.modes.find((offered) => offered.id === mode)?.access ?? accessTierOfModeId(mode) ?? undefined
   }
 
   private harnessOf(edge: ThreadParent): string {

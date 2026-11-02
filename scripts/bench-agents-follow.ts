@@ -113,7 +113,7 @@ async function run(count: number, follow: boolean): Promise<Run> {
     agents = new Agents({
       store: () => threads, catalog, jobs, live,
       startLive: () => Promise.reject(new Error("The bench starts no conversation")),
-      harnesses: () => ["claude"], runs: () => false, harnessLabel: () => "Claude",
+      harnesses: () => ["claude"], runs: () => false, harnessLabel: () => "Claude", modes: () => undefined,
     })
     for (const nativeId of natives) {
       const run = spawn("/bin/sh", ["-c", "sleep 120"], { detached: true, stdio: "ignore" })

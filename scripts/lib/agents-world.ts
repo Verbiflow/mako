@@ -7,7 +7,7 @@ import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contract
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
@@ -44,6 +44,8 @@ export interface WorldOptions {
   launching?: (conversation: string) => Promise<void> | void
   /** Every steer is refused, as a harness whose turn moved on refuses one. */
   refuseSteers?: true
+  /** A harness's own modes, as its real driver declares them, in place of Mako's tier ids. */
+  ladders?: Partial<Record<string, readonly LiveSessionMode[]>>
 }
 
 /**
@@ -102,6 +104,7 @@ export class AgentsWorld {
       harnesses: () => HARNESSES,
       runs: () => false,
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
+      modes: (harness) => drivers.get(harness)?.modes,
       ...(this.options.budget && { budget: this.options.budget }),
     }
     this.agents = new Agents(deps)
@@ -128,7 +131,8 @@ export class AgentsWorld {
   /** A top-level conversation on `harness` at `access`: a lead once it starts a child. */
   async lead(harness: string, access: AccessTier = "auto"): Promise<{ conversation: string; caller: AgentCaller }> {
     const conversation = randomUUID()
-    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} lead`, modeId: accessModeId(access) })
+    const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
+    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} lead`, modeId })
     return { conversation, caller: this.caller(conversation) }
   }
 
@@ -175,12 +179,14 @@ export class AgentsWorld {
   }
 
   private driver(harness: string): ProviderLiveDriver {
+    const modes = this.options.ladders?.[harness] ?? MODES
     const state = (id: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
       id, nativeId: `native-${id}`, nativePath: join(this.root, "native", id), harness, cwd: this.root,
-      status: "ready", connection: "connected", modes: MODES, currentMode: null, configOptions: [], ...patch,
+      status: "ready", connection: "connected", modes: [...modes], currentMode: null, configOptions: [], ...patch,
     })
     return {
       ...noCapabilities,
+      modes,
       approvalEvidence: { kind: "submission-only", reason: "Scripted model" },
       launchEnvironment: { kind: "unavailable", reason: "Scripted model" },
       nativeIdentity: { kind: "unavailable", reason: "Scripted model" },
