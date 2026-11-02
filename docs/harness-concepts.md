@@ -139,7 +139,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | Codex | 0.166.0 | 2026-11-02 | 25 (12 called from a script) | 27 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan, and as a lead (codexRoutingConfig) |
 | Cursor | 1.2.0 | 2026-10-28 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
 | OpenCode | 2.2.3 | 2026-11-02 | 14 | 8 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model, and as a lead (configureOpenCodeRouting) |
-| Grok | 1.0.70 | 2026-11-02 | 26 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
+| Grok | 1.0.70 | 2026-11-02 | 27 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
 | Devin | 3000.11.234 | 2026-11-02 | 24 | 8 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff); not smart, which Devin offers only to an account whose settings allow it |
 
 ## Plan, questions and subagents

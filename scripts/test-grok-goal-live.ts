@@ -84,8 +84,18 @@ interface ToolCall {
   arguments: JsonObject
 }
 
+/** What a session leaves to undo, last first. */
+type Cleanup = () => void | Promise<void>
+/** The stand-in's worker for a round: the tool it calls, given the tools offered and who spoke last. */
+type RoundWorker = (tools: ReadonlySet<string>, lastRole: string | undefined) => ToolCall | undefined
+/** How many rounds the stand-in has played, and the worker playing the next. */
+interface Rounds {
+  rounds: number
+  worker?: RoundWorker
+}
+
 /** Grok in a sealed HOME against the stand-in, as Mako launches it for an ordinary Thread or an Apex. */
-async function grokSession(root: string, after: (() => unknown)[], apex: boolean) {
+async function grokSession(root: string, after: Cleanup[], apex: boolean) {
   const home = join(root, "home")
   const project = join(root, "project")
   mkdirSync(join(home, ".grok"), { recursive: true })
@@ -94,7 +104,7 @@ async function grokSession(root: string, after: (() => unknown)[], apex: boolean
 
   const evaluator: Evaluator = { queue: [], afterwards: "complete" }
   const offered = new Set<string>()
-  const state = { rounds: 0, worker: undefined as undefined | ((tools: ReadonlySet<string>, lastRole: string | undefined) => ToolCall | undefined) }
+  const state: Rounds = { rounds: 0 }
   const models = createServer(async (request, res) => {
     if (request.method !== "POST") {
       res.writeHead(200, { "content-type": "application/json" })
@@ -135,7 +145,9 @@ async function grokSession(root: string, after: (() => unknown)[], apex: boolean
     res.end(JSON.stringify({ id: "double", object: "chat.completion", created: 0, model: "double", usage, choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }] }))
   })
   await new Promise<void>((listening) => models.listen(0, "127.0.0.1", listening))
-  after.push(() => models.close())
+  after.push(() => {
+    models.close()
+  })
   const port = z.object({ port: z.number() }).parse(models.address()).port
   writeFileSync(join(home, ".grok", "config.toml"), `[models]\ndefault = "double"\n\n[model.double]\nmodel = "double"\nbase_url = "http://127.0.0.1:${port}/v1"\nname = "Double"\napi_key = "double-key"\napi_backend = "chat_completions"\ncontext_window = 128000\n`)
   const env: NodeJS.ProcessEnv = {
@@ -146,7 +158,7 @@ async function grokSession(root: string, after: (() => unknown)[], apex: boolean
   assert.ok(launch)
   launch.configureEnvironment?.(env)
   const child = spawn(launch.command, launch.args, { cwd: project, env, stdio: ["pipe", "pipe", "ignore"] })
-  const exited = new Promise((done) => child.once("exit", done))
+  const exited = new Promise<void>((done) => child.once("exit", () => done()))
   after.push(() => {
     child.kill("SIGTERM")
     return exited
@@ -266,7 +278,7 @@ else {
   for (const [name, run, apex] of [["ordinary", ordinary, false], ["apex", asApex, true]] as const) {
     if (only && only !== name) continue
     const root = realpathSync(mkdtempSync(join(tmpdir(), "grok-goal-live-")))
-    const after: (() => unknown)[] = []
+    const after: Cleanup[] = []
     try {
       const said = await run(await grokSession(root, after, apex))
       console.log(`Grok goal${apex ? " as an Apex" : ""}: ${said}, each read through Mako's decoder`)
