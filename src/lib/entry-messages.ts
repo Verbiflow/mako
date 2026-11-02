@@ -145,7 +145,7 @@ class EntryDrawing {
           this.marker(entry, at, { label: entry.reason, ...entry.detail !== undefined && { detail: entry.detail }, ...entry.cause && { cause: entry.cause }, ...entry.body && { body: entry.body }, ...entry.tone && { tone: entry.tone }, ...entry.source && { source: entry.source } }, true)
           break
         case "event":
-          this.marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit, nearLimit: entry.nearLimit, retries: entry.retries }, false)
+          this.marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit, nearLimit: entry.nearLimit, retries: entry.retries, direct: entry.direct }, false)
           break
         case "unread":
           this.marker(entry, at, unreadNote(entry), false)
@@ -245,6 +245,7 @@ class EntryDrawing {
     }
     if (opensTurn) message.opensTurn = true
     if (opensTurn && entry.at !== undefined) message.timestamp = entry.at
+    if (note.direct) message.timestamp = note.direct.at
     this.drew(message, entry, at)
     this.messages.push(message)
     this.starts.push(at)

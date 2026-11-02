@@ -1,7 +1,7 @@
 import { use, useCallback } from "react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { ConversationAgents } from "@/components/inspector/agents-panel"
-import { OpenChildContext } from "./child-of-lead"
+import { OpenChildContext } from "./fin-of-apex"
 import { Sheet } from "./sheet"
 
 /**
@@ -9,7 +9,7 @@ import { Sheet } from "./sheet"
  * agents, each with its harness's mark, state, last step and counts), at half the screen and pulled up to all of it.
  */
 export function AgentsSheet({ conversation, open, onDismiss }: { conversation: string; open: boolean; onDismiss: () => void }) {
-  // A lead's child opens over its lead on the phone, the sheet put away.
+  // An Apex's Fin opens over its Apex on the phone, the sheet put away.
   const openChild = use(OpenChildContext)
   const opened = useCallback(
     (agent: NativeAgent) => {

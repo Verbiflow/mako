@@ -107,6 +107,25 @@ export const RetriesSchema = z.object({
 })
 export type Retries = z.infer<typeof RetriesSchema>
 
+/**
+ * The person's message an Apex's conversation sent straight to one of its
+ * Fins, which the Apex took no turn for: the Fin by name and Thread, the
+ * composer's id for the message, the request the Fin's conversation holds it
+ * as, how it reached the Fin and when the person sent it. The event's `body`
+ * is the person's words. Mako writes it into the Apex's conversation; no
+ * harness's record holds it.
+ */
+export const DirectRouteSchema = z.object({
+  to: z.string().min(1).max(512),
+  fin: z.string().uuid(),
+  request: z.string().min(1).max(512),
+  received: z.string().min(1).max(512),
+  delivery: z.enum(["turn", "steer", "queued"]),
+  /** Epoch milliseconds. */
+  at: z.number().int().nonnegative(),
+})
+export type DirectRoute = z.infer<typeof DirectRouteSchema>
+
 export interface TranscriptEvent {
   /** Native identity, when the source provides one. Never a generated replay ID. */
   source?: z.infer<typeof NativeEventSourceSchema>
@@ -138,6 +157,8 @@ export interface TranscriptEvent {
   nearLimit?: UsageLimit
   /** The marker sums up a provider's retries (`retriesEvent`). */
   retries?: Retries
+  /** The person wrote to a Fin from its Apex's conversation (`DirectRoute`). */
+  direct?: DirectRoute
 }
 
 /** `marker` as the report of a usage limit, with what the harness said of it. */

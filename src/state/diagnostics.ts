@@ -35,7 +35,7 @@ export const diagnostics = {
     return getMako().agentsDiagnostics()
   },
 
-  /** Where each harness stands on a lead's native spawns. */
+  /** Where each harness stands on an Apex's native spawns. */
   nativeRouting(): Promise<NativeRoutingReading[]> {
     return getMako().nativeRouting()
   },

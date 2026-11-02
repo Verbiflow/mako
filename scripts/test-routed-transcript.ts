@@ -7,7 +7,7 @@ import { stillDrawn, turnFolds } from "../src/lib/turn-fold.ts"
 import type { Block, ChatMessage } from "../src/lib/types.ts"
 
 /**
- * A lead's `agents_send` in its transcript (`npm run test:orch-front-door`):
+ * An Apex's `agents_send` in its transcript (`npm run test:orch-front-door`):
  * one routing line where the call returned, read from the call and its
  * answer, the same for a live turn and a saved one on every harness's name
  * for Mako's tool, from blocks and from the entries a harness records; never

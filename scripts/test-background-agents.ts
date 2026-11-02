@@ -30,10 +30,10 @@ import { AgentsWorld, noConversations, type Script } from "./lib/agents-world.ts
 /**
  * The children engine (`npm run test:background-agents`): a child's state and
  * entry, the edge and reports in the store, and `Agents` on a host whose six
- * harnesses are scripted models: a spawn's receipt, its brief as the lead's
- * words, the access ceiling, places, budgets, keys, a report waking its lead
+ * harnesses are scripted models: a spawn's receipt, its brief as the Apex's
+ * words, the access ceiling, places, budgets, keys, a report waking its Apex
  * once, stops, waits, and a run a Thread's shell started followed to its end,
- * found by its process, while a lead's own session never is one.
+ * found by its process, while an Apex's own session never is one.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-agents-"))
 const NOW = 1_800_000_000_000
@@ -73,7 +73,7 @@ function statesAndEntries(): void {
   const entry = childEntry(started, { source: "live", working: true, step: "Shell npm test", nativeId: "n", path: "/claude/n.jsonl", harness: "claude" }, {})
   assert.equal(entry.bindingId, CHILDREN_BINDING)
   assert.equal(entry.work, "agent", "a child is an agent entry, with no kind of its own")
-  assert.deepEqual(entry.child, { thread: started.child, origin: "started", nativeId: "n", path: "/claude/n.jsonl", state: { kind: "working", step: "Shell npm test" } }, "its transcript opens from its Session's path; it carries its state as `childState` reads it")
+  assert.deepEqual(entry.child, { thread: started.child, name: started.name, origin: "started", nativeId: "n", path: "/claude/n.jsonl", state: { kind: "working", step: "Shell npm test" } }, "its transcript opens from its Session's path; it carries its state as `childState` reads it")
   assert.equal(childEntry(started, { source: "live", working: true, conversation: "c-1" }, {}).child?.conversation, "c-1", "a live child names its conversation, which opens it live")
   assert.deepEqual(entry.state, { kind: "working", activity: "Shell npm test" })
   assert.equal(childEntry(started, { source: "live" }, { latest: report(started.child, "done", "Fixed it.") }).state.kind, "completed")
@@ -93,7 +93,7 @@ function rosterAndLists(): void {
   const childRef: ThreadRef = { harness: "claude", nativeId: "h", path: "/h.jsonl", parent: { thread: randomUUID(), session: randomUUID() } }
   const own: ThreadRef = { harness: "claude", nativeId: "o", path: "/o.jsonl" }
   assert.equal(listedAsThread(childRef), false)
-  assert.deepEqual(threadList([childRef, own]).map((ref) => ref.path), ["/o.jsonl"], "a child sits under its lead, not in the rail")
+  assert.deepEqual(threadList([childRef, own]).map((ref) => ref.path), ["/o.jsonl"], "a child sits under its Apex, not in the rail")
 }
 
 function uploadsFollowParents(): void {
@@ -108,9 +108,9 @@ function uploadsFollowParents(): void {
 function storeKeeps(): void {
   const path = join(root, "keeps.sqlite")
   const threads = new ThreadStore(path, { now: () => Date.now() })
-  const lead = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
+  const apex = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
   const placed = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "claude", bindings: [] }, { kind: "service", name: "workspace" })
-  const first = edge({ child: placed.thread, parent: lead.thread, parentSession: lead.session })
+  const first = edge({ child: placed.thread, parent: apex.thread, parentSession: apex.session })
   assert.equal(threads.keepEdge(first).op, first.op)
   assert.equal(threads.keepEdge({ ...first, op: "start:other", parent: ThreadIdSchema.parse(randomUUID()) }).op, first.op, "one parent per child: the first edge stands")
   const run = { harness: "claude", nativeId: "n", device: threads.deviceId, startedAt: 1 }
@@ -123,7 +123,7 @@ function storeKeeps(): void {
   const again = threads.keepReport(told)
   assert.ok("report" in again && again.deduped, "a report's key makes a repeat the same report")
   assert.throws(() => threads.keepReport({ ...told, summary: "Something else." }), /conflict|different/i, "one key never names two reports")
-  assert.deepEqual(threads.ancestors(first.child), [lead.thread])
+  assert.deepEqual(threads.ancestors(first.child), [apex.thread])
   threads.close()
   const reopened = new ThreadStore(path, { now: () => Date.now() })
   assert.equal(reopened.edges().of(first.child)?.op, first.op, "edges are kept across hosts")
@@ -131,7 +131,7 @@ function storeKeeps(): void {
   reopened.close()
 }
 
-/** Each child does `does` with its brief; a lead's turns start what the test asks and end. */
+/** Each child does `does` with its brief; an Apex's turns start what the test asks and end. */
 function world(name: string, does: Script, budget?: { running: number; started: number }) {
   return new AgentsWorld({ root: join(root, name), script: does, ...(budget && { budget }) })
 }
@@ -139,49 +139,49 @@ function world(name: string, does: Script, budget?: { running: number; started: 
 async function startsAndWakes(): Promise<void> {
   let childTurns = 0
   const w = world("wakes", (turn) => {
-    if (turn.text.includes("child:")) {
+    if (turn.text.includes("You're fin:")) {
       childTurns += 1
       return `Done: ${turn.harness} reviewed its part. The rest is in its transcript.`
     }
     return "Started them."
   })
   try {
-    const lead = await w.lead("codex")
+    const apex = await w.apex("codex")
     const brief = { objective: "Review one part of the sidebar." }
     const answers: AgentsStarted[] = []
     for (const harness of ["claude", "cursor", "grok"]) {
-      const answer = await w.agents.start(lead.caller, { brief, harness, name: `review-${harness}`, clientKey: `k-${harness}`, cwd: w.root })
+      const answer = await w.agents.start(apex.caller, { brief, harness, name: `review-${harness}`, clientKey: `k-${harness}`, cwd: w.root })
       assert.ok(!("refused" in answer), JSON.stringify(answer))
       answers.push(answer)
     }
-    assert.equal(answers[0]!.next, AFTER_START, "the receipt tells the lead to end its turn, not wait")
-    const again = await w.agents.start(lead.caller, { brief, harness: "claude", name: "review-claude", clientKey: "k-claude", cwd: w.root })
+    assert.equal(answers[0]!.next, AFTER_START, "the receipt tells the Apex to end its turn, not wait")
+    const again = await w.agents.start(apex.caller, { brief, harness: "claude", name: "review-claude", clientKey: "k-claude", cwd: w.root })
     assert.ok(!("refused" in again) && again.deduped && again.child === answers[0]!.child, "the same key answers the same child")
     const childConversation = answers[0]!.conversation!
     const first = w.live.snapshot(childConversation)?.requests[0]
-    assert.ok(first?.text.startsWith("[mako · from your lead (agent), not the person]"), "a child's brief says it's an agent's words")
-    assert.equal(first?.actor?.kind, "agent", "and is the lead's request, not the person's")
+    assert.ok(first?.text.startsWith("[mako · from your Apex (agent), not the person]"), "a child's brief says it's an agent's words")
+    assert.equal(first?.actor?.kind, "agent", "and is the Apex's request, not the person's")
     await w.settle()
     assert.equal(childTurns, 3)
-    const wakes = w.prompts.filter((prompt) => prompt.conversation === lead.conversation)
-    assert.equal(wakes.length, 1, "three reports in one burst wake an idle lead once")
+    const wakes = w.prompts.filter((prompt) => prompt.conversation === apex.conversation)
+    assert.equal(wakes.length, 1, "three reports in one burst wake an idle apex once")
     assert.ok(wakes[0]!.text.startsWith(FROM_AGENTS))
     assert.match(wakes[0]!.text, /3 finished:/)
     assert.match(wakes[0]!.text, /0 working, 3 ended\./)
-    const wake = w.live.snapshot(lead.conversation)!.requests.at(-1)!
+    const wake = w.live.snapshot(apex.conversation)!.requests.at(-1)!
     assert.equal(wake.actor?.kind, "agent", "a wake is an agent's request")
-    const listed = await w.agents.list(lead.caller, {})
+    const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed)
     assert.deepEqual(listed.children.map((strip) => strip.state.kind), ["ended", "ended", "ended"])
     assert.equal(listed.tree.started, 3)
-    const read = await w.agents.read(lead.caller, { child: "review-cursor" })
+    const read = await w.agents.read(apex.caller, { child: "review-cursor" })
     assert.ok("text" in read && /cursor reviewed its part/.test(read.text))
-    const waited = await w.agents.wait(lead.caller, { timeoutMs: 50 })
+    const waited = await w.agents.wait(apex.caller, { timeoutMs: 50 })
     assert.ok("reports" in waited && waited.reports.length === 3 && !waited.timedOut, "a wait answers the reports already in")
-    const after = await w.agents.wait(lead.caller, { timeoutMs: 50, after: waited.cursor })
+    const after = await w.agents.wait(apex.caller, { timeoutMs: 50, after: waited.cursor })
     assert.ok("reports" in after && after.timedOut && !after.reports.length)
-    assert.equal(w.agents.roster(lead.conversation).length, 3, "the lead's roster has its three children")
-    assert.equal(w.live.snapshot(lead.conversation)?.nativeAgents?.agents.filter((agent) => agent.child).length, 3, "and its snapshot serves them")
+    assert.equal(w.agents.roster(apex.conversation).length, 3, "the Apex's roster has its three children")
+    assert.equal(w.live.snapshot(apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child).length, 3, "and its snapshot serves them")
   } finally {
     await w.close()
   }
@@ -189,73 +189,73 @@ async function startsAndWakes(): Promise<void> {
 
 async function explicitReports(): Promise<void> {
   const w = world("explicit", async (turn) => {
-    if (!turn.text.includes("child:")) return "ok"
+    if (!turn.text.includes("You're fin:")) return "ok"
     const told = await turn.world.agents.report(turn.caller, { status: "blocked", summary: "Two schemas disagree.", question: "Keep the gateway's or the host's?", clientKey: "q1" })
     assert.ok(!("refused" in told), JSON.stringify(told))
-    return "I asked my lead."
+    return "I asked my apex."
   })
   try {
-    const lead = await w.lead("claude")
-    const started = await w.agents.start(lead.caller, { brief: { objective: "Reconcile the schemas" }, harness: "devin", clientKey: "a", cwd: w.root })
+    const apex = await w.apex("claude")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Reconcile the schemas" }, harness: "devin", clientKey: "a", cwd: w.root })
     assert.ok(!("refused" in started))
     await w.settle()
     const reports = w.store.reportsOf(started.child!, 0)
     assert.equal(reports.length, 1, "a turn that reported gives no implicit report too")
-    const wake = w.prompts.filter((prompt) => prompt.conversation === lead.conversation)
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation)
     assert.equal(wake.length, 1)
     assert.match(wake[0]!.text, /1 needs a decision:\n {2}• "[^"]+" \(Devin\) is blocked: Keep the gateway's or the host's\?/)
-    const listed = await w.agents.list(lead.caller, {})
+    const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed && listed.children[0]!.state.kind === "blocked")
-    const own = await w.agents.report(lead.caller, { status: "done", summary: "x", clientKey: "z" })
-    assert.ok("refused" in own && own.refused === "no-parent", "a Thread nobody started has no lead to report to")
+    const own = await w.agents.report(apex.caller, { status: "done", summary: "x", clientKey: "z" })
+    assert.ok("refused" in own && own.refused === "no-parent", "a Thread nobody started has no apex to report to")
   } finally {
     await w.close()
   }
 }
 
 async function refusals(): Promise<void> {
-  const w = world("refusals", (turn) => turn.text.includes("child:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok", { running: 2, started: 3 })
+  const w = world("refusals", (turn) => turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok", { running: 2, started: 3 })
   try {
-    const lead = await w.lead("opencode")
+    const apex = await w.apex("opencode")
     const brief = { objective: "Hold" }
-    const place = await w.agents.start(lead.caller, { brief, place: "cloud", clientKey: "p", cwd: w.root })
+    const place = await w.agents.start(apex.caller, { brief, place: "cloud", clientKey: "p", cwd: w.root })
     assert.ok("refused" in place && place.refused === "place-unavailable", "8.1 starts children here only")
-    const device = await w.agents.start(lead.caller, { brief, place: "device:Studio", clientKey: "d", cwd: w.root })
+    const device = await w.agents.start(apex.caller, { brief, place: "device:Studio", clientKey: "d", cwd: w.root })
     assert.ok("refused" in device && device.refused === "place-unavailable")
-    const harness = await w.agents.start(lead.caller, { brief, harness: "nope", clientKey: "h", cwd: w.root })
+    const harness = await w.agents.start(apex.caller, { brief, harness: "nope", clientKey: "h", cwd: w.root })
     assert.ok("refused" in harness && harness.refused === "unknown-harness")
     const person = await w.agents.start({ kind: "person" }, { brief, clientKey: "x", cwd: w.root })
     assert.ok("refused" in person && person.refused === "no-parent")
-    const one = await w.agents.start(lead.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
-    const two = await w.agents.start(lead.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
+    const one = await w.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
+    const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in one) && !("refused" in two))
-    const three = await w.agents.start(lead.caller, { brief, name: "three", clientKey: "3", cwd: w.root })
+    const three = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3", cwd: w.root })
     assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past the running budget a spawn queues")
     assert.match(three.why ?? "", /runs 2 of its 2 at once/)
-    assert.equal(w.agents.roster(lead.conversation).length, 3, "a queued spawn shows, saying why")
-    const four = await w.agents.start(lead.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
+    assert.equal(w.agents.roster(apex.conversation).length, 3, "a queued spawn shows, saying why")
+    const four = await w.agents.start(apex.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
     assert.ok("refused" in four && four.refused === "budget", "past the started budget a spawn is refused, with the count, a queued one counted")
     assert.match(four.why, /started 2 of its 3 Threads and 1 more wait to/)
-    const stopped = await w.agents.stop(lead.caller, { child: "one" })
+    const stopped = await w.agents.stop(apex.caller, { child: "one" })
     assert.deepEqual("stopped" in stopped && stopped.stopped, ["one"])
-    await waitFor(() => w.store.edges().children(w.store.journalPlacement(lead.conversation)!.thread).length === 3, "the queued spawn to start when one ended")
+    await waitFor(() => w.store.edges().children(w.store.journalPlacement(apex.conversation)!.thread).length === 3, "the queued spawn to start when one ended")
     assert.equal(w.store.queuedSpawns().length, 0)
-    const five = await w.agents.start(lead.caller, { brief, name: "five", clientKey: "5", cwd: w.root })
+    const five = await w.agents.start(apex.caller, { brief, name: "five", clientKey: "5", cwd: w.root })
     assert.ok("refused" in five && five.refused === "budget")
     assert.match(five.why, /started 3 of its 3/)
     const childCaller = w.caller(two.conversation!)
     const wider = await w.agents.start(childCaller, { brief, access: "full", clientKey: "w", cwd: w.root })
-    assert.ok("refused" in wider && wider.refused === "access", "a child runs at most at its lead's access")
+    assert.ok("refused" in wider && wider.refused === "access", "a child runs at most at its Apex's access")
     const six = await w.agents.start(childCaller, { brief, name: "six", clientKey: "6", cwd: w.root })
-    assert.ok("refused" in six && six.refused === "budget", "a sub-lead's spawn spends its tree's budget")
-    const all = await w.agents.stop(lead.caller, { child: "all" })
+    assert.ok("refused" in six && six.refused === "budget", "a sub-Apex's spawn spends its tree's budget")
+    const all = await w.agents.stop(apex.caller, { child: "all" })
     assert.deepEqual("stopped" in all && [...all.stopped].sort(), ["three", "two"], "stopping all stops what still runs")
   } finally {
     await w.close()
   }
 }
 
-/** A child starts in its own harness's mode for its tier, and a lead whose harness names its modes its own way has the tier its mode carries. */
+/** A child starts in its own harness's mode for its tier, and an Apex whose harness names its modes its own way has the tier its mode carries. */
 async function harnessLadders(): Promise<void> {
   assert.deepEqual(childMode(openCodeModes, "auto"), { id: accessModeId("edits"), tier: "edits" }, "a tier the harness lacks takes its nearest one below")
   assert.deepEqual(childMode(CLAUDE_MODES, "deny"), { id: "dontAsk", tier: "deny" })
@@ -263,24 +263,24 @@ async function harnessLadders(): Promise<void> {
   assert.deepEqual(childMode(undefined, "ask"), { id: accessModeId("ask"), tier: "ask" })
   const w = new AgentsWorld({
     root: join(root, "ladders"),
-    script: (turn) => turn.text.includes("child:") ? "done" : "ok",
+    script: (turn) => turn.text.includes("You're fin:") ? "done" : "ok",
     ladders: { claude: CLAUDE_MODES, cursor: CURSOR_SDK_MODES },
   })
   try {
-    const lead = await w.lead("claude", "full")
-    await waitFor(() => w.live.session(lead.conversation)?.currentMode === "bypassPermissions", "the lead to open in Bypass permissions")
+    const apex = await w.apex("claude", "full")
+    await waitFor(() => w.live.session(apex.conversation)?.currentMode === "bypassPermissions", "the Apex to open in Bypass permissions")
     const brief = { objective: "Look" }
-    const cursor = await w.agents.start(lead.caller, { brief, harness: "cursor", name: "fin", clientKey: "c", cwd: w.root })
-    const claude = await w.agents.start(lead.caller, { brief, harness: "claude", access: "edits", name: "ed", clientKey: "e", cwd: w.root })
+    const cursor = await w.agents.start(apex.caller, { brief, harness: "cursor", name: "fin", clientKey: "c", cwd: w.root })
+    const claude = await w.agents.start(apex.caller, { brief, harness: "claude", access: "edits", name: "ed", clientKey: "e", cwd: w.root })
     assert.ok(!("refused" in cursor) && !("refused" in claude), JSON.stringify([cursor, claude]))
     await w.settle()
-    assert.equal(w.live.session(cursor.conversation!)?.currentMode, "full-access", "a Cursor child under a lead on full runs in Cursor's one mode")
+    assert.equal(w.live.session(cursor.conversation!)?.currentMode, "full-access", "a Cursor child under an Apex on full runs in Cursor's one mode")
     assert.equal(w.live.session(claude.conversation!)?.currentMode, "acceptEdits")
     assert.ok(w.prompts.some((prompt) => prompt.conversation === cursor.conversation), "the Cursor child was sent its brief")
-    const asks = await w.lead("claude", "ask")
-    await waitFor(() => w.live.session(asks.conversation)?.currentMode === "default", "the second lead to open in Ask for approval")
+    const asks = await w.apex("claude", "ask")
+    await waitFor(() => w.live.session(asks.conversation)?.currentMode === "default", "the second apex to open in Ask for approval")
     const above = await w.agents.start(asks.caller, { brief, harness: "cursor", clientKey: "a", cwd: w.root })
-    assert.ok("refused" in above && above.refused === "access", "a lead on ask can't start a child on a harness that runs only on full")
+    assert.ok("refused" in above && above.refused === "access", "an Apex on ask can't start a child on a harness that runs only on full")
     assert.match(above.why, /Cursor runs on full, each above ask/)
   } finally {
     await w.close()
@@ -288,16 +288,16 @@ async function harnessLadders(): Promise<void> {
 }
 
 async function stopAllUnqueues(): Promise<void> {
-  const w = world("unqueues", (turn) => turn.text.includes("child:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok", { running: 1, started: 10 })
+  const w = world("unqueues", (turn) => turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok", { running: 1, started: 10 })
   try {
-    const lead = await w.lead("grok")
+    const apex = await w.apex("grok")
     const brief = { objective: "Hold" }
-    await w.agents.start(lead.caller, { brief, name: "runs", clientKey: "1", cwd: w.root })
-    const waits = await w.agents.start(lead.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
+    await w.agents.start(apex.caller, { brief, name: "runs", clientKey: "1", cwd: w.root })
+    const waits = await w.agents.start(apex.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in waits) && waits.state === "queued")
-    const again = await w.agents.start(lead.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
+    const again = await w.agents.start(apex.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in again) && again.deduped && again.state === "queued", "a repeated queued spawn is the same spawn")
-    const all = await w.agents.stop(lead.caller, { child: "all" })
+    const all = await w.agents.stop(apex.caller, { child: "all" })
     assert.deepEqual("stopped" in all && [...all.stopped].sort(), ["runs", "waits"], "stopping all also drops what's queued")
     assert.equal(w.store.queuedSpawns().length, 0)
   } finally {
@@ -345,7 +345,7 @@ function fakeCatalog() {
 /** A harness CLI a Thread's shell started: found by `MAKO_SESSION_ID`, followed by its Session and process, ended once with its last reply as its report. */
 async function followsShellRuns(): Promise<void> {
   const threads = new ThreadStore(join(root, "follows.sqlite"), { now: () => Date.now() })
-  const lead = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
+  const apex = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
   const fake = fakeCatalog()
   const jobs = new HostJobs()
   const folder = realpathSync(root)
@@ -361,13 +361,13 @@ async function followsShellRuns(): Promise<void> {
     harnessLabel: () => "Claude",
     modes: () => undefined,
   })
-  const shell = spawn("/bin/sh", ["-c", "sleep 30"], { cwd: folder, env: { ...process.env, MAKO_SESSION_ID: lead.session }, stdio: "ignore" })
+  const shell = spawn("/bin/sh", ["-c", "sleep 30"], { cwd: folder, env: { ...process.env, MAKO_SESSION_ID: apex.session }, stdio: "ignore" })
   try {
     const nativeId = randomUUID()
     fake.write({ harness: "claude", nativeId, path: `/claude/${nativeId}.jsonl`, cwd: folder, startedAt: new Date().toISOString() }, [
       { type: "tool", id: "1", name: "Bash", input: JSON.stringify({ command: "npm test" }), status: "completed" },
     ])
-    const linked = await agents.link({ kind: "agent", session: lead.session }, { harness: "claude", session: nativeId, pid: shell.pid! })
+    const linked = await agents.link({ kind: "agent", session: apex.session }, { harness: "claude", session: nativeId, pid: shell.pid! })
     assert.ok(!("refused" in linked), JSON.stringify(linked))
     assert.equal(linked.origin, "linked")
     const child = ThreadIdSchema.parse(linked.child)
@@ -392,14 +392,14 @@ async function followsShellRuns(): Promise<void> {
 }
 
 /**
- * A lead's own harness carries `MAKO_SESSION_ID` and writes its new session before its driver names it: that
- * session is the lead's, never a run its shell started, or each of its turns would end as a report that wakes it.
+ * An Apex's own harness carries `MAKO_SESSION_ID` and writes its new session before its driver names it: that
+ * session is the Apex's, never a run its shell started, or each of its turns would end as a report that wakes it.
  * A session its shell starts once it runs is one.
  */
 async function ownSessionIsNoChild(): Promise<void> {
   const folder = join(root, "own-session")
   const fake = fakeCatalog()
-  /** The lead's harness, started in its folder with its Session in its environment. */
+  /** The Apex's harness, started in its folder with its Session in its environment. */
   const marked: MarkedProcess[] = []
   const at = () => new Date().toISOString()
   const w: AgentsWorld = new AgentsWorld({
@@ -414,16 +414,16 @@ async function ownSessionIsNoChild(): Promise<void> {
     },
     async starting(conversation, harness) {
       const session = w.store.journalPlacement(conversation)?.session
-      assert.ok(session, "a lead has its Session before its harness starts")
+      assert.ok(session, "an Apex has its Session before its harness starts")
       marked.push({ pid: process.pid, value: session })
       fake.write({ harness, nativeId: `native-${conversation}`, path: `/opencode/native-${conversation}`, cwd: folder, startedAt: at() }, [])
       await w.agents.runs.discovered()
     },
   })
   try {
-    const lead = await w.lead("opencode")
-    await waitFor(() => w.live.session(lead.conversation)?.nativeId !== undefined, "the lead's harness to name its session")
-    assert.equal(w.store.edges().byRun("opencode", `native-${lead.conversation}`), undefined, "a lead's own session isn't its child")
+    const apex = await w.apex("opencode")
+    await waitFor(() => w.live.session(apex.conversation)?.nativeId !== undefined, "the Apex's harness to name its session")
+    assert.equal(w.store.edges().byRun("opencode", `native-${apex.conversation}`), undefined, "an Apex's own session isn't its child")
     const nativeId = randomUUID()
     fake.write({ harness: "opencode", nativeId, path: `/opencode/${nativeId}`, cwd: folder, startedAt: at() }, [])
     await w.agents.runs.discovered()

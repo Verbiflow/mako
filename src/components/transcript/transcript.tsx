@@ -4,7 +4,7 @@ import { ConversationTimeline } from "@/components/transcript/conversation-timel
 import { Launcher } from "@/components/transcript/launcher"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { Slot } from "@/extend/slot"
-import { toExchanges } from "@/lib/exchanges"
+import { toExchanges, turnExchange } from "@/lib/exchanges"
 import { foldTools } from "@/lib/tools"
 import { useChatFolders } from "@/state/chat-folders"
 import { useSession } from "@/state/session"
@@ -44,7 +44,7 @@ function SessionTranscript({ sessionId }: { sessionId: string | undefined }) {
         <ConversationTimeline
           identity={sessionId ?? "none"}
           exchanges={exchanges}
-          streamingId={stream ? exchanges.at(-1)?.id : undefined}
+          streamingId={stream ? turnExchange(exchanges)?.id : undefined}
           empty={null}
         />
       )}

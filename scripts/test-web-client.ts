@@ -584,6 +584,9 @@ test("one send button: Send idle, Stop when empty at work, Steer or Queue by the
   // Words under an open question answer it: Send, whatever the turn is doing.
   assert.deepEqual(at({ running: true, canSteer: true, answering: true }), { kind: "send", label: "Send answer" })
   assert.equal(at({ running: true, hasContent: false, answering: true }).kind, "stop")
+  // Words to one of an Apex's Fins go to it straight: Send, never into the Apex's turn.
+  assert.deepEqual(at({ running: true, canSteer: true, straight: true }), { kind: "send", label: "Send" })
+  assert.equal(at({ running: true, hasContent: false, straight: true }).kind, "stop")
   assert.equal(sendChoiceDetail("queue", "step"), "Runs after this turn")
   assert.notEqual(sendChoiceDetail("steer", "interrupt"), sendChoiceDetail("steer", "step"))
 })

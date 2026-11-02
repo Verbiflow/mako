@@ -1,22 +1,22 @@
 import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
-import { childEntry, ROLE_WORD, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
-import { BRIEF_CLOSE, briefIntro, fromAgent, PASSED_ON_NOTE, passedOn, rollup, rosterChildren } from "@mako/host/contracts/children"
+import { childEntry, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
+import { BRIEF_CLOSE, briefIntro, fromAgent, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "@/lib/types"
 
 /*
- * A lead and its Threads for the desk's and the phone's fixtures (`?mock&app=lead`): "Mobile lead", a Claude Thread
- * whose turn runs while twelve children stand in every state, two of them on the person, one asking its lead, two
- * queued. Each started child has its own live conversation, listed with its edge (`parent`) as the host lists it, so
+ * An Apex and its Fins for the desk's and the phone's fixtures (`?mock&app=apex`): "Mobile polish", a Claude Thread
+ * whose turn runs while twelve Fins stand in every state, two of them on the person, one asking its Apex, two
+ * queued. Each started Fin has its own live conversation, listed with its edge (`parent`) as the host lists it, so
  * the rail's filter is what keeps it out of the list; one waits on an approval.
  */
 
-export const LEAD_THREAD = "1ead1ead-0000-4000-8000-000000001ead"
-export const LEAD_SESSION = "1ead1ead-1000-4000-8000-000000001ead"
-export const LEAD_CONVERSATION = "1ead1ead-2000-4000-8000-000000001ead"
-export const LEAD_TITLE = "Mobile lead"
-export const LEAD_CWD = "/Users/you/mako"
+export const APEX_THREAD = "1ead1ead-0000-4000-8000-000000001ead"
+export const APEX_SESSION = "1ead1ead-1000-4000-8000-000000001ead"
+export const APEX_CONVERSATION = "1ead1ead-2000-4000-8000-000000001ead"
+export const APEX_TITLE = "Mobile polish"
+export const APEX_CWD = "/Users/you/mako"
 const STARTED = Date.now() - 52 * 60_000
 
 interface ChildFixture {
@@ -31,7 +31,7 @@ interface ChildFixture {
   said?: string
 }
 
-/** The twelve, as the prototype has them: 2 need you, 5 working (one asking its lead), 2 queued, 3 done. */
+/** The twelve, as the prototype has them: 2 need you, 5 working (one asking its Apex), 2 queued, 3 done. */
 const CHILDREN: ChildFixture[] = [
   { name: "push-wording", title: "Quiet-hours push wording", harness: "codex", model: "gpt-5.6-sol", state: { kind: "blocked", on: "person", question: "Which tone for the quiet-hours notice? Plain or friendly?" }, minutes: 14, toolUses: 22, objective: "Write the quiet-hours notice the phone shows when pushes are held, in both tones, and ask which one ships." },
   { name: "sheet-motion", title: "Sheet motion on iPad", harness: "cursor", model: "composer-2.5", state: { kind: "blocked", on: "approval", question: "Run npm ci with network access" }, minutes: 22, toolUses: 41, objective: "Make the sheet's open and close motion match the iPad's split view, on the composer branch. Done when the sheet case passes on an iPad in both themes. Report with what you changed and the shots.", said: "The sheet animates from its own height, so in split view it starts off screen. I'll measure the container instead, then run the iPad case." },
@@ -57,12 +57,12 @@ function childConversation(index: number): string {
   return `1ead1ead-5000-4000-8000-${String(index + 1).padStart(12, "0")}`
 }
 
-/** Whether the child has started: a queued one has no conversation yet. */
+/** Whether the Fin has started: a queued one has no conversation yet. */
 function started(fixture: ChildFixture): boolean {
   return fixture.state.kind !== "queued"
 }
 
-/** What a child's Thread shows and its journal holds, for `childState` to read a state back from. */
+/** What a Fin's Thread shows and its journal holds, for `childState` to read a state back from. */
 interface ChildShowing {
   thread: Partial<ChildThread>
   journal: ChildJournal
@@ -88,23 +88,23 @@ function shown(state: ChildState, child: string, at: number): ChildShowing {
   }
 }
 
-/** One child's roster entry, made by `childEntry` from its edge and what its Thread shows, as the host makes it. */
-export function leadChild(index: number, state: ChildState = CHILDREN[index]!.state): NativeAgent {
+/** One Fin's roster entry, made by `childEntry` from its edge and what its Thread shows, as the host makes it. */
+export function apexFin(index: number, state: ChildState = CHILDREN[index]!.state): NativeAgent {
   const fixture = CHILDREN[index]!
   const now = Date.now()
   const createdAt = now - fixture.minutes * 60_000
   const child = childThread(index)
-  const lead = SessionIdSchema.parse(LEAD_SESSION)
+  const apex = SessionIdSchema.parse(APEX_SESSION)
   const edge: ThreadParent = {
     child: ThreadIdSchema.parse(child),
-    parent: ThreadIdSchema.parse(LEAD_THREAD),
-    parentSession: lead,
+    parent: ThreadIdSchema.parse(APEX_THREAD),
+    parentSession: apex,
     name: fixture.name,
     role: "worker",
     origin: "started",
     asked: { brief: { objective: fixture.objective }, harness: fixture.harness, model: fixture.model },
-    op: `start:${LEAD_SESSION}:${fixture.name}`,
-    startedBy: { kind: "agent", session: lead },
+    op: `start:${APEX_SESSION}:${fixture.name}`,
+    startedBy: { kind: "agent", session: apex },
     createdAt,
   }
   const { thread, journal } = shown(state, child, now - 60_000)
@@ -118,21 +118,18 @@ export function leadChild(index: number, state: ChildState = CHILDREN[index]!.st
       startedAt: createdAt,
       updatedAt: now,
       ...(fixture.toolUses && { toolUses: fixture.toolUses }),
-      ...(started(fixture) && { session: SessionIdSchema.parse(childSession(index)), conversation: childConversation(index), nativeId: `lead-child-${index}`, path: `/mock/lead-child-${index}.jsonl` }),
+      ...(started(fixture) && { session: SessionIdSchema.parse(childSession(index)), conversation: childConversation(index), nativeId: `apex-fin-${index}`, path: `/mock/apex-fin-${index}.jsonl` }),
       ...thread,
     },
     journal
   )
 }
 
-export function leadChildren(): NativeAgent[] {
-  return CHILDREN.map((_, index) => leadChild(index))
+export function apexFins(): NativeAgent[] {
+  return CHILDREN.map((_, index) => apexFin(index))
 }
 
-/** How many children the scene has, for the bench's churn. */
-export const LEAD_CHILD_COUNT = CHILDREN.length
-
-/** The states a churned child steps through, one a tick, as a real one moves. */
+/** The states a churned Fin steps through, one a tick, as a real one moves. */
 export const CHURN: ChildState[] = [
   { kind: "working", step: "Read src/web-client/thread.tsx" },
   { kind: "working", step: "Shell npm run test:phone" },
@@ -143,43 +140,43 @@ export const CHURN: ChildState[] = [
   { kind: "queued", reason: "tree-running", ahead: 0 },
 ]
 
-/** A child of `count` for the bench: the twelve repeated, each its own Thread. */
+/** A Fin of `count` for the bench: the twelve repeated, each its own Thread. */
 export function benchChild(index: number, state: ChildState): NativeAgent {
-  const base = leadChild(index % CHILDREN.length, state)
+  const base = apexFin(index % CHILDREN.length, state)
   const thread = `1ead1ead-6000-4000-8000-${String(index + 1).padStart(12, "0")}`
   return { ...base, nativeId: `mako-child:${thread}`, title: `${base.title} ${index + 1}`, child: { ...base.child!, thread } }
 }
 
-/** The bench's rail: `count` leads over ten folders, each with `children` Threads not yet started, in every state. */
-interface BenchLeads {
+/** The bench's rail: `count` Apexes over ten folders, each with `children` Fins not yet started, in every state. */
+interface BenchApexes {
   snapshots: LiveSnapshot[]
   summaries: LiveSummary[]
   refs: ThreadRef[]
 }
 
-export function benchLeads(count: number, children: number): BenchLeads {
+export function benchApexes(count: number, children: number): BenchApexes {
   const snapshots: LiveSnapshot[] = []
   const summaries: LiveSummary[] = []
   const refs: ThreadRef[] = []
   const at = new Date().toISOString()
-  for (let lead = 0; lead < count; lead++) {
-    const id = (group: string) => `1ead1ead-${group}-4000-8000-${String(lead + 1).padStart(12, "0")}`
+  for (let apex = 0; apex < count; apex++) {
+    const id = (group: string) => `1ead1ead-${group}-4000-8000-${String(apex + 1).padStart(12, "0")}`
     const thread = id("9000")
     const session = id("a000")
     const conversation = id("b000")
-    const cwd = `/Users/you/bench-${lead % 10}`
-    const title = `Lead ${lead + 1}`
+    const cwd = `/Users/you/bench-${apex % 10}`
+    const title = `Apex ${apex + 1}`
     const agents = Array.from({ length: children }, (_, index): NativeAgent => {
-      const base = leadChild(index % CHILDREN.length, CHURN[(lead + index) % CHURN.length]!)
-      const child = `1ead1ead-c000-4000-8${lead.toString(16).padStart(3, "0")}-${String(index + 1).padStart(12, "0")}`
-      refs.push({ harness: base.provider, nativeId: `bench-child-${lead}-${index}`, path: `/mock/bench-child-${lead}-${index}.jsonl`, cwd, title: `${base.title} ${index + 1}`, updatedAt: at, threadId: child, parent: { thread, session } })
+      const base = apexFin(index % CHILDREN.length, CHURN[(apex + index) % CHURN.length]!)
+      const child = `1ead1ead-c000-4000-8${apex.toString(16).padStart(3, "0")}-${String(index + 1).padStart(12, "0")}`
+      refs.push({ harness: base.provider, nativeId: `bench-child-${apex}-${index}`, path: `/mock/bench-child-${apex}-${index}.jsonl`, cwd, title: `${base.title} ${index + 1}`, updatedAt: at, threadId: child, parent: { thread, session } })
       return { ...base, nativeId: `mako-child:${child}`, title: `${base.title} ${index + 1}`, child: { thread: child, origin: "started", state: base.child!.state } }
     })
     const snapshot: LiveSnapshot = {
-      session: { id: conversation, harness: "claude", nativeId: `bench-lead-${lead}`, cwd, title, connection: "connected", status: lead % 3 === 0 ? "running" : "ready", modes: [], currentMode: "default", configOptions: [] },
+      session: { id: conversation, harness: "claude", nativeId: `bench-apex-${apex}`, cwd, title, connection: "connected", status: apex % 3 === 0 ? "running" : "ready", modes: [], currentMode: "default", configOptions: [] },
       revision: 1,
       createdAt: STARTED,
-      threadPath: `/mock/bench-lead-${lead}.jsonl`,
+      threadPath: `/mock/bench-apex-${apex}.jsonl`,
       threadId: thread,
       sessionId: session,
       base: null,
@@ -192,23 +189,32 @@ export function benchLeads(count: number, children: number): BenchLeads {
     snapshots.push(snapshot)
     const rolled = rollup(rosterChildren(snapshot.nativeAgents))
     summaries.push({ session: snapshot.session, revision: 1, createdAt: STARTED, threadPath: snapshot.threadPath, threadId: thread, sessionId: session, children: rolled })
-    refs.push({ harness: "claude", nativeId: `bench-lead-${lead}`, path: snapshot.threadPath!, cwd, title, updatedAt: new Date(Date.now() - lead * 60_000).toISOString(), threadId: thread, sessionId: session, bytes: 4_000 })
+    refs.push({ harness: "claude", nativeId: `bench-apex-${apex}`, path: snapshot.threadPath!, cwd, title, updatedAt: new Date(Date.now() - apex * 60_000).toISOString(), threadId: thread, sessionId: session, bytes: 4_000 })
   }
   return { snapshots, summaries, refs }
 }
 
 function brief(fixture: ChildFixture): string {
-  return [fromAgent(`your ${ROLE_WORD}`), briefIntro(fixture.name), "", fixture.objective, "", BRIEF_CLOSE].join("\n")
+  return [fromAgent(YOUR_APEX), briefIntro(fixture.name), "", fixture.objective, "", BRIEF_CLOSE].join("\n")
 }
 
-/** What the person wrote to the lead that its Sheet motion Thread was for, and the lead passed on. */
+/** What the person wrote to the Apex that its Sheet motion Fin was for, and the Apex passed on. */
 export const ROUTED_WORDS = "The sheet still jumps when the keyboard opens in split view."
 const ROUTED_AT = Date.now() - 4 * 60_000
 const ROUTED_REQUEST = "1ead1ead-8100-4000-8000-000000000002"
+const DIRECT_REQUEST = "1ead1ead-8200-4000-8000-000000000001"
+const DIRECT_RECEIVED = "1ead1ead-8300-4000-8000-000000000001"
 const SHEET_MOTION = 1
+/** What the person wrote from the Apex straight to Dictation: no turn of the Apex's ran for it. */
+export const DIRECT_WORDS = "Keep the keyboard's own mic as the fallback, and say nothing when it takes over."
+const DIRECT_AT = Date.now() - 2 * 60_000
+const DICTATION = 3
 
-/** The lead's own conversation: the person's first ask, a message it passed on to Sheet motion, its turn running, its roster the twelve. */
-export function leadSnapshot(): LiveSnapshot {
+/**
+ * The Apex's own conversation: the person's first ask, a message it passed on to Sheet motion, one the person wrote
+ * straight to Dictation, its turn running, its roster the twelve.
+ */
+export function apexSnapshot(): LiveSnapshot {
   const first = { id: "1ead1ead-7000-4000-8000-000000000001", createdAt: STARTED, text: "Split the phone polish list into Threads and see them through. Ask me only for what you can't decide.", attachments: [], status: "completed" as const }
   const routed = { id: "1ead1ead-7000-4000-8000-000000000002", createdAt: ROUTED_AT, text: ROUTED_WORDS, attachments: [], status: "completed" as const }
   const request = { id: "1ead1ead-7000-4000-8000-000000000003", createdAt: Date.now() - 60_000, text: "How are the queued ones doing?", attachments: [], status: "dispatching" as const }
@@ -216,11 +222,11 @@ export function leadSnapshot(): LiveSnapshot {
   const landed = { child: childThread(SHEET_MOTION), name: "sheet-motion", request: ROUTED_REQUEST, delivery: "steer" }
   return {
     session: {
-      id: LEAD_CONVERSATION,
+      id: APEX_CONVERSATION,
       harness: "claude",
-      nativeId: "lead-native",
-      cwd: LEAD_CWD,
-      title: LEAD_TITLE,
+      nativeId: "apex-native",
+      cwd: APEX_CWD,
+      title: APEX_TITLE,
       connection: "connected",
       status: "running",
       modes: [
@@ -232,29 +238,30 @@ export function leadSnapshot(): LiveSnapshot {
     },
     revision: 1,
     createdAt: STARTED,
-    threadPath: "/mock/lead.jsonl",
-    threadId: LEAD_THREAD,
-    sessionId: LEAD_SESSION,
+    threadPath: "/mock/apex.jsonl",
+    threadId: APEX_THREAD,
+    sessionId: APEX_SESSION,
     base: null,
     permissions: [],
     requests: [first, routed, request],
     blocks: [
       { type: "user", text: first.text, requestId: first.id },
       { type: "text", text: "Twelve pieces, each its own Thread. I'll start them as the tree allows and read their reports as they come." },
-      { type: "tool", id: "lead-start", toolKind: "other", title: "agents_start ×12", input: "{}", output: "started 10, queued 2", status: "completed" },
+      { type: "tool", id: "apex-start", toolKind: "other", title: "agents_start ×12", input: "{}", output: "started 10, queued 2", status: "completed" },
       { type: "user", text: routed.text, requestId: routed.id },
-      { type: "tool", id: "lead-send", name: "mcp__mako__agents_send", toolKind: "other", title: "mako: agents send", input: JSON.stringify(sent), output: JSON.stringify(landed, null, 2), status: "completed" },
+      { type: "tool", id: "apex-send", name: "mcp__mako__agents_send", toolKind: "other", title: "mako: agents send", input: JSON.stringify(sent), output: JSON.stringify(landed, null, 2), status: "completed" },
       { type: "text", text: "That's Sheet motion's: it's measuring the container in split view now, so it takes this at its next step." },
+      { type: "event", label: `You wrote to ${CHILDREN[DICTATION]!.name} directly`, body: DIRECT_WORDS, direct: { to: CHILDREN[DICTATION]!.name, fin: childThread(DICTATION), request: DIRECT_REQUEST, received: DIRECT_RECEIVED, delivery: "steer", at: DIRECT_AT } },
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],
-    control: { activeBindingId: LEAD_CONVERSATION, bindings: [], merges: [], transfers: [], actions: [] },
-    nativeAgents: { agents: leadChildren(), limited: false },
+    control: { activeBindingId: APEX_CONVERSATION, bindings: [], merges: [], transfers: [], actions: [] },
+    nativeAgents: { agents: apexFins(), limited: false },
   }
 }
 
-/** A started child's own conversation: its brief from the lead, its work, and for one an approval waiting. */
-export function leadChildSnapshot(index: number): LiveSnapshot {
+/** A started Fin's own conversation: its brief from the Apex, its work, and for one an approval waiting. */
+export function finSnapshot(index: number): LiveSnapshot {
   const fixture = CHILDREN[index]!
   const createdAt = Date.now() - fixture.minutes * 60_000
   const request = { id: `1ead1ead-8000-4000-8000-${String(index + 1).padStart(12, "0")}`, createdAt, text: brief(fixture), attachments: [], status: fixture.state.kind === "working" || fixture.state.kind === "blocked" ? ("dispatching" as const) : ("completed" as const) }
@@ -263,8 +270,8 @@ export function leadChildSnapshot(index: number): LiveSnapshot {
     session: {
       id: childConversation(index),
       harness: fixture.harness,
-      nativeId: `lead-child-${index}`,
-      cwd: `${LEAD_CWD}/.mako/worktrees/${fixture.name}`,
+      nativeId: `apex-fin-${index}`,
+      cwd: `${APEX_CWD}/.mako/worktrees/${fixture.name}`,
       title: fixture.title,
       connection: "connected",
       status: request.status === "dispatching" ? "running" : "ready",
@@ -274,51 +281,57 @@ export function leadChildSnapshot(index: number): LiveSnapshot {
     },
     revision: 1,
     createdAt,
-    threadPath: `/mock/lead-child-${index}.jsonl`,
+    threadPath: `/mock/apex-fin-${index}.jsonl`,
     threadId: childThread(index),
     sessionId: childSession(index),
-    parent: { thread: LEAD_THREAD, session: LEAD_SESSION },
+    parent: { thread: APEX_THREAD, session: APEX_SESSION },
     base: null,
     permissions: waits
-      ? [{ id: `lead-approval-${index}`, sessionId: childConversation(index), title: "npm ci", kind: "execute", options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "always", name: "Allow for this Thread", kind: "allow_always" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] }]
+      ? [{ id: `apex-approval-${index}`, sessionId: childConversation(index), title: "npm ci", kind: "execute", options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "always", name: "Allow for this Thread", kind: "allow_always" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] }]
       : [],
     requests: [request],
     blocks: [
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: fixture.said ?? `Starting on it: ${fixture.objective.charAt(0).toLowerCase()}${fixture.objective.slice(1)}` },
-      { type: "tool", id: `lead-child-read-${index}`, toolKind: "read", title: "Read src/web-client/sheet.tsx", input: "{\"path\":\"src/web-client/sheet.tsx\"}", output: "export function Sheet() {}", status: "completed" },
+      { type: "tool", id: `apex-fin-read-${index}`, toolKind: "read", title: "Read src/web-client/sheet.tsx", input: "{\"path\":\"src/web-client/sheet.tsx\"}", output: "export function Sheet() {}", status: "completed" },
       ...(index === SHEET_MOTION
         ? [
-          { type: "user" as const, text: `${passedOn(`your ${ROLE_WORD}`)}\n${ROUTED_WORDS}\n\n${PASSED_ON_NOTE}\nIt shows on the 11-inch iPad in landscape, after your last change.`, steeringFor: request.id, at: ROUTED_AT },
+          { type: "user" as const, text: `${passedOn(YOUR_APEX)}\n${ROUTED_WORDS}\n\n${PASSED_ON_NOTE}\nIt shows on the 11-inch iPad in landscape, after your last change.`, steeringFor: request.id, at: ROUTED_AT },
           { type: "text" as const, text: "The keyboard's inset moves the container too, so I'll measure after the inset settles, then rerun the iPad case." },
         ]
         : []),
-      ...(waits ? [{ type: "tool" as const, id: `lead-child-ci-${index}`, toolKind: "execute" as const, title: "npm ci", input: "{\"command\":\"npm ci\"}", status: "pending" as const }] : []),
+      ...(index === DICTATION
+        ? [
+          { type: "user" as const, text: DIRECT_WORDS, steeringFor: request.id, requestId: DIRECT_RECEIVED, at: DIRECT_AT },
+          { type: "text" as const, text: "Understood: the keyboard's mic takes over quietly when the recognizer isn't there." },
+        ]
+        : []),
+      ...(waits ? [{ type: "tool" as const, id: `apex-fin-ci-${index}`, toolKind: "execute" as const, title: "npm ci", input: "{\"command\":\"npm ci\"}", status: "pending" as const }] : []),
       ...(fixture.state.kind === "ended" && fixture.state.reason ? [{ type: "text" as const, text: fixture.state.reason }] : []),
     ],
     control: { activeBindingId: childConversation(index), bindings: [], merges: [], transfers: [], actions: [] },
   }
 }
 
-/** Every conversation of the scene, the lead's last: the one a window opens on. */
-export function leadSnapshots(): LiveSnapshot[] {
-  return [...CHILDREN.flatMap((fixture, index) => (started(fixture) ? [leadChildSnapshot(index)] : [])), leadSnapshot()]
+/** Every conversation of the scene, the Apex's last: the one a window opens on. */
+export function apexSnapshots(): LiveSnapshot[] {
+  return [...CHILDREN.flatMap((fixture, index) => (started(fixture) ? [finSnapshot(index)] : [])), apexSnapshot()]
 }
 
-/** As the desktop's host lists them at boot: each child with its edge, as `placement` gives it. */
-export function leadSummaries(): LiveSummary[] {
-  return leadSnapshots().map(({ session, revision, createdAt, threadPath, threadId, sessionId, parent, nativeAgents }) => {
+/** As the desktop's host lists them at boot: each Fin with its edge, as `placement` gives it. */
+export function apexSummaries(): LiveSummary[] {
+  return apexSnapshots().map(({ session, revision, createdAt, threadPath, threadId, sessionId, parent, nativeAgents }) => {
     const children = rollup(rosterChildren(nativeAgents))
     return { session, revision, createdAt, threadPath, threadId, sessionId, ...(parent && { parent }), ...(children.total && { children }) }
   })
 }
 
-/** The catalog's rows: the lead's, and each started child's under it (`parent`), which the rail never lists. */
-export function leadRefs(): ThreadRef[] {
-  const lead: ThreadRef = { harness: "claude", nativeId: "lead-native", path: "/mock/lead.jsonl", cwd: LEAD_CWD, title: LEAD_TITLE, updatedAt: new Date().toISOString(), startedAt: new Date(STARTED).toISOString(), threadId: LEAD_THREAD, sessionId: LEAD_SESSION, bytes: 20_000 }
+/** The catalog's rows: the Apex's, and each started Fin's under it (`parent`), which the rail never lists. */
+export function apexRefs(): ThreadRef[] {
+  const apex: ThreadRef = { harness: "claude", nativeId: "apex-native", path: "/mock/apex.jsonl", cwd: APEX_CWD, title: APEX_TITLE, updatedAt: new Date().toISOString(), startedAt: new Date(STARTED).toISOString(), threadId: APEX_THREAD, sessionId: APEX_SESSION, bytes: 20_000 }
   const children = CHILDREN.flatMap((fixture, index): ThreadRef[] =>
     started(fixture)
-      ? [{ harness: fixture.harness, nativeId: `lead-child-${index}`, path: `/mock/lead-child-${index}.jsonl`, cwd: `${LEAD_CWD}/.mako/worktrees/${fixture.name}`, title: fixture.title, updatedAt: new Date().toISOString(), threadId: childThread(index), sessionId: childSession(index), parent: { thread: LEAD_THREAD, session: LEAD_SESSION } }]
+      ? [{ harness: fixture.harness, nativeId: `apex-fin-${index}`, path: `/mock/apex-fin-${index}.jsonl`, cwd: `${APEX_CWD}/.mako/worktrees/${fixture.name}`, title: fixture.title, updatedAt: new Date().toISOString(), threadId: childThread(index), sessionId: childSession(index), parent: { thread: APEX_THREAD, session: APEX_SESSION } }]
       : [])
-  return [lead, ...children]
+  return [apex, ...children]
 }

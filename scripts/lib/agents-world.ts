@@ -16,7 +16,7 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 
-/** The six harnesses, as a lead or a child runs on them here: each a scripted driver, two of them steering at the next step as Claude's and OpenCode's do. */
+/** The six harnesses, as an Apex or a child runs on them here: each a scripted driver, two of them steering at the next step as Claude's and OpenCode's do. */
 export const HARNESSES = ["claude", "codex", "cursor", "grok", "opencode", "devin"] as const
 const STEERS_AT_STEP = new Set<string>(["claude", "opencode"])
 /** Every access tier, as a harness that offers Mako's modes lists them. */
@@ -136,11 +136,11 @@ export class AgentsWorld {
     this.open()
   }
 
-  /** A top-level conversation on `harness` at `access`: a lead once it starts a child. */
-  async lead(harness: string, access: AccessTier = "auto"): Promise<{ conversation: string; caller: AgentCaller }> {
+  /** A top-level conversation on `harness` at `access`: an Apex once it starts a child. */
+  async apex(harness: string, access: AccessTier = "auto"): Promise<{ conversation: string; caller: AgentCaller }> {
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
-    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} lead`, modeId })
+    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId })
     return { conversation, caller: this.caller(conversation) }
   }
 
@@ -255,7 +255,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, snapshot: () => null, editQueued: none, transfer: none, submit: none,
     act: async () => none(), cancel: async () => {}, waitingOn: () => undefined, steersAtStep: () => false,
-    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown,
+    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
 }
 

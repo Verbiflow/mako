@@ -1,5 +1,6 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
-import { ChildOfLeadNote } from "./lead-children"
+import { FinOfApexNote } from "./apex-fins"
+import { sendDirect, useAddressee } from "@/state/apex-fins"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -102,9 +103,12 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   // Said once: after "Send here", the next message goes too, before the list hears of the first.
   const [sure, setSure] = useState(false)
   const asksFirst = elsewhere && !sure ? elsewhere : undefined
+  const addressee = useAddressee((state) => state.to[conversation])
   const send = async (text: string, attachments: PromptAttachment[], id: string): Promise<boolean> => {
     // A question waiting: the words are its answer, not a message.
     if (ask?.kind === "question" && attachments.length === 0 && typed.current?.(text)) return true
+    // Written to one of an Apex's Fins: it goes there straight, under the message's ID, so a retry delivers it once.
+    if (addressee) return Boolean(await sendDirect(conversation, addressee, id, text, attachments))
     // Comments on a turn's lines waiting in this Session's draft go with it, as its context, marked with its ID
     // while it goes, so a reload never sends them twice (`review-notes.ts`).
     return sendWithReviewNotes(conversation, id, text, (message) => sendMessage(target, id, message, attachments))
@@ -127,7 +131,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   const waits = useReadingCopy() !== null
   // Where the line over the field names the Session, the placeholder doesn't say its harness again.
   const whom = sendsTo ? "" : ` ${harness}`
-  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer${whom}` : `Queue a message${sendsTo ? "" : ` for ${harness}`}`) : `Message${whom}`
+  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : addressee ? `Message ${addressee.title} straight` : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer${whom}` : `Queue a message${sendsTo ? "" : ` for ${harness}`}`) : `Message${whom}`
   return (
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : undefined}>
       <div aria-hidden className="web-dock-fade" />
@@ -153,7 +157,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         <PromptQueue onEdit={editing.begin} />
       </div>
       <ReviewTray conversation={conversation} />
-      <ChildOfLeadNote conversation={conversation} />
+      <FinOfApexNote conversation={conversation} />
       <Composer
         key={draftKey}
         draftKey={draftKey}
@@ -168,8 +172,9 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         // A question is answered in words: nothing to attach, and the hint gets the room.
         attach={ask?.kind !== "question" && !waits}
         // A question waiting: typed words are its answer, which a send takes; nothing steers past it.
-        steering={ask?.kind === "question" ? undefined : steering}
+        steering={ask?.kind === "question" || addressee ? undefined : steering}
         answering={ask?.kind === "question"}
+        straight={Boolean(addressee)}
         editing={editing.current}
         waiting={switching ? "Switching access…" : undefined}
         tools={harnessId && !waits ? <ThreadChips conversation={conversation} harness={harnessId} /> : undefined}

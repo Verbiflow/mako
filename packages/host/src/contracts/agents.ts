@@ -1,17 +1,28 @@
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { CHILDREN_BINDING, type ChildStateReading, type NativeAgent } from "./native-agents.js"
-import type { LiveSessionMode } from "./providers-acp.js"
+import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 
 export { CHILDREN_BINDING }
 
 /**
- * The word every person-facing string and every agent's instructions use for
- * a Thread that leads others, until the person names the role. Identifiers
- * keep `lead` whatever it reads as.
+ * What every person-facing string and every agent's instructions call a
+ * Thread that others work for, and a Thread that works for another: an Apex
+ * and its Fins. The two together have no word of their own. Identifiers say
+ * `apex`; the edge's data keeps the `lead` every build reads (`ChildRole`, a
+ * question's `on`), and the tree's records keep `parent` and `child`.
  */
-export const ROLE_WORD = "lead"
+export const APEX_WORD = "Apex"
+export const FIN_WORD = "Fin"
+
+/** "1 Fin", "3 Fins". */
+export function finsWord(count: number): string {
+  return `${count} ${FIN_WORD}${count === 1 ? "" : "s"}`
+}
+
+/** How the transcripts of builds before the names called an Apex (`from your lead`): they still read as its words. */
+export const LEGACY_APEX_WORD = "lead"
 
 /**
  * How a child came to be one: `started` through a door (`agents_start`),
@@ -22,9 +33,11 @@ export const ROLE_WORD = "lead"
 export const ChildOriginSchema = z.enum(["started", "discovered", "linked", "attached"])
 export type ChildOrigin = z.infer<typeof ChildOriginSchema>
 
-/** What a child is to its parent; `lead` makes it a sub-lead, which digests its own children. */
+/** What a Fin is to its Apex; `lead` makes it an Apex of its own, which digests its own Fins. */
 export const ChildRoleSchema = z.enum(["worker", "reviewer", "verifier", "researcher", "lead"])
 export type ChildRole = z.infer<typeof ChildRoleSchema>
+/** The role of a Fin that is an Apex of its own, as stored edges, rosters and the tools' `role` keep the word. */
+export const APEX_ROLE = "lead" satisfies ChildRole
 
 /**
  * Where a child runs: this Mac (`here`), another of the person's devices by
@@ -75,17 +88,17 @@ export const ChildSpecSchema = z.object({
 export type ChildSpec = z.infer<typeof ChildSpecSchema>
 
 /**
- * Where a child's report goes (6.6): a notice that wakes its parent (`lead`),
- * a question the person answers in the child's Thread (`person`), or nowhere
- * but the child's strip and `agents_read` (`none`). Progress never wakes. A
- * `wait` spawn's result always reaches its parent, settled-only: as the
- * parent's next turn, never steered into the turn that's running.
+ * Where a Fin's report goes (6.6): a notice that wakes its Apex (`apex`), a
+ * question the person answers in the Fin's Thread (`person`), or nowhere but
+ * the Fin's strip and `agents_read` (`none`). Progress never wakes. A `wait`
+ * spawn's result always reaches its Apex, settled-only: as the Apex's next
+ * turn, never steered into the turn that's running.
  */
-export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: ReportStatus): "lead" | "person" | "none" {
+export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: ReportStatus): "apex" | "person" | "none" {
   if (status === "progress") return "none"
   const wake = asked.wake ?? "decisions"
-  if (status === "blocked" || status === "needs-input") return wake === "decisions" ? "lead" : "person"
-  return wake !== "never" || asked.mode === "wait" ? "lead" : "none"
+  if (status === "blocked" || status === "needs-input") return wake === "decisions" ? "apex" : "person"
+  return wake !== "never" || asked.mode === "wait" ? "apex" : "none"
 }
 
 /**
@@ -243,7 +256,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
   if (thread.working) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
-    return { kind: "blocked", question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.", on: reportRoute(edge.asked, latest.status) === "lead" ? "lead" : "person" }
+    return { kind: "blocked", question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.", on: reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person" }
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
   if (latest?.status === "done") return { kind: "ended", outcome: "done" }
@@ -279,7 +292,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -359,7 +372,7 @@ export function childMode(ladder: readonly LiveSessionMode[] | undefined, tier: 
   return best
 }
 
-/** The tree's budgets, held by its authority: the lead's host in 8.1. No depth: cycles are refused instead. */
+/** The tree's budgets, held by its authority: the top Apex's host in 8.1. No depth: cycles are refused instead. */
 export interface TreeBudget {
   /** Threads running at once across the tree. */
   running: number
@@ -368,35 +381,63 @@ export interface TreeBudget {
 }
 export const TREE_BUDGET: TreeBudget = { running: 20, started: 100 }
 
-/** The host's children for Diagnostics: how many, how many run (and of those, how many a process Mako didn't start runs), and each tree against its budgets. */
+/** The host's Fins for Diagnostics: how many, how many run (and of those, how many a process Mako didn't start runs), and each tree against its budgets. */
 export interface AgentsDiagnostics {
-  children: number
+  fins: number
   running: number
   followed: number
   queued: number
-  /** Reports a parent hasn't been woken with yet. */
+  /** Reports an Apex hasn't been woken with yet. */
   notices: number
   budget: TreeBudget
-  trees: { lead: string; running: number; started: number }[]
-  /** Messages leads routed since this host started: the person's passed on, their own sent, and the person's moved to another child. */
-  routes: { forwarded: number; sent: number; redirected: number }
+  trees: { apex: string; running: number; started: number }[]
+  /**
+   * The person's messages and the Apexes' since this host started: the person's an Apex passed on, an Apex's own,
+   * the person's moved to another Fin, and the person's sent straight to a Fin with no Apex turn.
+   */
+  routes: { forwarded: number; sent: number; redirected: number; direct: number }
 }
 
-/** The person moving a message their lead passed on (`agents_send`) from the child it reached to the one it was for. */
+/** How a message reached a Fin: as its next turn, a step of its running one, or queued behind it. */
+export type FinDelivery = "turn" | "steer" | "queued"
+
+/** The person moving a message their Apex passed on (`agents_send`) from the Fin it reached to the one it was for. */
 export interface AgentsRedirectInput {
-  /** The child it reached, by name or Thread. */
+  /** The Fin it reached, by name or Thread. */
   from: string
-  /** Its request in that child's conversation. */
+  /** Its request in that Fin's conversation. */
   request: string
-  /** The child it was for. */
+  /** The Fin it was for. */
   to: string
 }
 
 export interface AgentsRedirected {
   to: string
-  /** Whether it left the first child before that child began on it. */
+  /** Whether it left the first Fin before that Fin began on it. */
   withdrawn: boolean
-  delivery: "turn" | "steer" | "queued"
+  delivery: FinDelivery
+}
+
+/**
+ * The person writing to one of an Apex's Fins from the Apex's own composer
+ * (`@` a Fin, or Reply on a routing line): the message goes to the Fin as
+ * the person's own, through the host, and the Apex takes no turn. It's
+ * settled by `request`, the composer's id for the message: a repeat answers
+ * the first delivery and sends nothing again.
+ */
+export interface AgentsDirectInput {
+  /** The Fin, by name or Thread. */
+  to: string
+  request: string
+  text: string
+  attachments?: PromptAttachment[]
+}
+
+export interface AgentsDirected {
+  /** The Fin's name and Thread. */
+  to: string
+  fin: string
+  delivery: FinDelivery
 }
 
 /** Who calls an orchestration operation: the door stamps it, and through the socket it's a label, not a grant. */

@@ -9,10 +9,10 @@ import { AFTER_START } from "./agent-tools.js"
  * before (`NativeAgentRoster`).
  */
 
-/** What routing reads of a Thread: whether it leads others. */
+/** What routing reads of a Thread: whether it's an Apex. */
 export interface RoutedThread {
-  /** `lead`: it has children, or it's a child started to lead its own; `thread`: any other. */
-  role: "lead" | "thread"
+  /** `apex`: it has Fins, or it's a Fin started to be an Apex of its own; `thread`: any other. */
+  role: "apex" | "thread"
 }
 
 /**
@@ -36,13 +36,13 @@ export interface NativeSpawn {
 export type NativeRoute = { kind: "allow" } | { kind: "deny"; message: string }
 
 /**
- * A lead's delegation is Mako's, so the person can open, steer and see it:
+ * An Apex's delegation is Mako's, so the person can open, steer and see it:
  * every native spawn is denied but an explorer that reads and ends in the
  * turn. Elsewhere native spawns keep their speed, but for a second worktree,
  * a remote run or a team of peers, which are Mako's work on any Thread.
  */
 export function routeNativeSpawn(thread: RoutedThread, spawn: NativeSpawn): NativeRoute {
-  const makos = spawn.isolated === true || spawn.teammate === true || (thread.role === "lead" && spawn.inTurnExplore !== true)
+  const makos = spawn.isolated === true || spawn.teammate === true || (thread.role === "apex" && spawn.inTurnExplore !== true)
   return makos ? { kind: "deny", message: routedMessage(spawn.start) } : { kind: "allow" }
 }
 
@@ -59,14 +59,14 @@ export function routedMessage(start: string): string {
   return `This Thread routes background, parallel and writing work through Mako so the person can open and steer it. Call \`agents_start\` (${start}) with this brief instead. It returns at once. ${AFTER_START}`
 }
 
-/** Told to every native subagent where its harness lets Mako add to what the child starts with. */
+/** Told to every native subagent where its harness lets Mako add to what the subagent starts with. */
 export const NATIVE_CHILD_INSTRUCTIONS = "You're a native subagent of a Mako Thread. Do the task and return. Don't start background agents or agent CLIs. If the task needs parallel or durable work, say so in your result, and your parent will start it with `agents_start`."
 
 /**
- * How a harness's driver keeps a lead's native spawns with Mako, declared
+ * How a harness's driver keeps an Apex's native spawns with Mako, declared
  * once. `per-call`: its harness asks before each spawn, so the Thread's role
  * is read then. `at-launch`: a switch the process or session takes when it
- * starts, so a Thread that becomes a lead mid-session has it from its next
+ * starts, so a Thread that becomes an Apex mid-session has it from its next
  * launch. `words`: no switch was seen to work, so the instructions carry the
  * rule and the roster shows what runs. `verified` names the version it was
  * seen to work on, as the harness's launch reads it, and how.

@@ -65,7 +65,7 @@ interface AcpConversationBase {
   sessionId?: string
   /** `LiveSummary.parent`: the Thread this one is a child of, which shows it; never a row of its own. */
   parent?: LiveSnapshot["parent"]
-  /** `LiveSummary.children`: a lead's children counted, until its roster arrives. */
+  /** `LiveSummary.children`: an Apex's Fins counted, until its roster arrives. */
   children?: LiveSnapshot["children"]
   control?: LiveSnapshot["control"]
   requests?: LiveSnapshot["requests"]

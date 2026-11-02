@@ -26,7 +26,7 @@ import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
-import type { AgentsRedirectInput } from "../contracts/agents.js"
+import type { AgentRefused, AgentsDirectInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
@@ -96,7 +96,7 @@ export interface Conversations {
   route(channel: string, args: unknown[]): Promise<ConversationRoutingResult>
   /** A harness's id as people read it, as the registry labels it. */
   harnessLabel(harness: string): string
-  /** Where each harness stands on a lead's native spawns, for Diagnostics. */
+  /** Where each harness stands on an Apex's native spawns, for Diagnostics. */
   nativeRouting(): Promise<NativeRoutingReading[]>
   /**
    * What a reply to the session at `path` will do, for a session its
@@ -377,6 +377,8 @@ export interface ConversationMethodsDeps {
   /** On a cloud machine: what a Thread going back to its device needs (`mako:move-depart`). */
   departure?: MoveDepartureDeps
 }
+
+const FINS_UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Fins need the Thread store, which didn't open on this host." }
 
 /** Starting, continuing, steering and moving conversations, live or headless. */
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
@@ -675,8 +677,11 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   })
   methods.handle("mako:provider-residency", () => live.residency())
   methods.handle("mako:agents-diagnostics", () => conversations.agents?.diagnostics() ?? null)
-  /** The person moving a message their lead passed on to another of its Threads (`Agents.redirect`). */
+  /** The person moving a message their Apex passed on to another of its Fins (`Agents.redirect`). */
   methods.handle("mako:agents-redirect", (conversation: string, input: AgentsRedirectInput) =>
-    conversations.agents?.redirect(conversation, input) ?? { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." })
+    conversations.agents?.redirect(conversation, input) ?? FINS_UNAVAILABLE)
+  /** The person writing to one of an Apex's Fins from the Apex's conversation, with no Apex turn (`Agents.direct`). */
+  methods.handle("mako:agents-direct", (conversation: string, input: AgentsDirectInput) =>
+    conversations.agents?.direct(conversation, input) ?? FINS_UNAVAILABLE)
   methods.handle("mako:native-routing", () => conversations.nativeRouting())
 }

@@ -1,7 +1,9 @@
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { ChildComposerNote } from "@/components/stage/child-view"
-import { useLeadStop } from "@/components/composer/stop-lead"
+import { useApexStop } from "@/components/composer/stop-apex"
+import { address, addresseeOf, addresseeStore, pickedFin, sendDirect, threadChildren, unaddress, useAddressee, type Addressee } from "@/state/apex-fins"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
+import { APEX_WORD } from "@mako/host/contracts/agents"
 import { gitConflictAttachment } from "@/state/git-conflicts"
 import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
 import { pullRequestAttachment } from "@/state/github"
@@ -605,8 +607,15 @@ export function Composer() {
   }, [addAttachments])
 
   const submitDraft = useCallback(
-    /** `deliver` takes the message instead of the routing below; false keeps the draft. */
-    async (mode?: "steer" | "followUp", deliver?: (message: string) => Promise<boolean>) => {
+    /**
+     * `deliver` takes the message instead of the routing below; false keeps the draft. `addressee`
+     * sends it from the Apex's conversation straight to that Fin, which was handed nothing yet.
+     */
+    async (mode?: "steer" | "followUp", deliver?: (message: string, files: PromptAttachment[]) => Promise<boolean>, addressee?: { conversation: string; to: Addressee }) => {
+      if (addressee) {
+        const request = crypto.randomUUID()
+        deliver = async (message, files) => Boolean(await sendDirect(addressee.conversation, addressee.to, request, message, files))
+      }
       if (hostConnectionStore.get().kind === "disconnected") {
         toast.error(
           "Reconnect the Mako host before sending. Your draft is saved.",
@@ -707,7 +716,9 @@ export function Composer() {
       // nothing.
       const continuesViewing =
         viewingRef && (!liveSession || viewingOwnsComposer)
-      const skillKey = continuesViewing
+      const skillKey = addressee
+        ? null
+        : continuesViewing
         ? harness === viewingRef.harness &&
           !viewingRef.copyOnly &&
           !viewingRef.resumeUnavailable
@@ -759,7 +770,7 @@ export function Composer() {
       let ok: boolean
       try {
         if (deliver) {
-          ok = await deliver(full)
+          ok = await deliver(full, acpAttachments)
         } else if (continuesViewing) {
           // A session its harness deleted resumes natively when Mako keeps
           // its records: the host restores them first. Only Mako's copy has
@@ -859,6 +870,12 @@ export function Composer() {
     if (preparingSends.current.has(draftKey)) return
     preparingSends.current.add(draftKey)
     try {
+      const conversation = activeLiveAcp(acpStore.get())?.key
+      const to = conversation ? addresseeStore.get().to[conversation] : undefined
+      if (conversation && to) {
+        await submitDraft(mode, undefined, { conversation, to })
+        return
+      }
       // A reply to a plan the harness is waiting on asks for changes. A
       // harness that takes words with its refusal gets them there, the way
       // its own terminal sends them; otherwise the plan is turned down first,
@@ -897,6 +914,20 @@ export function Composer() {
   const pick = useCallback(
     (value: string, context?: ContextInput) => {
       if (!mention) return
+      // A Fin from `@` is who the message goes to, not words in it.
+      const fin = pickedFin(value)
+      if (fin) {
+        const state = acpStore.get()
+        const conversation = activeLiveAcp(state)
+        const agent = conversation ? threadChildren(state, conversation.threadId).find((entry) => entry.child?.thread === fin) : undefined
+        const addressee = agent && addresseeOf(agent)
+        const next = replaceMention(draft, mention, "")
+        update(next.text.trim() ? next.text : "")
+        setMention(null)
+        if (conversation && addressee) address(conversation.key, addressee)
+        focusComposerSoon(textarea, next.text.trim() ? next.caret : 0, viewRef)
+        return
+      }
       // A row that names a record (a pull request from `#`) becomes its chip.
       if (context) {
         const anchor = attachments.addRecord(context)
@@ -956,6 +987,15 @@ export function Composer() {
     )
       return
     const node = textarea.current
+    // Like a chip at the start of the draft, the Fin it's addressed to goes with a Backspace there.
+    if (event.key === "Backspace" && node && node.selectionStart === 0 && node.selectionEnd === 0) {
+      const conversation = activeLiveAcp(acpStore.get())?.key
+      if (conversation && addresseeStore.get().to[conversation]) {
+        event.preventDefault()
+        unaddress(conversation)
+        return
+      }
+    }
     if (node && (event.key === "Backspace" || event.key === "Delete")) {
       const start = node.selectionStart
       const end = node.selectionEnd
@@ -1035,7 +1075,7 @@ export function Composer() {
   const busy = status.streaming || status.compacting
   const liveHarness = useAcp((state) => activeAcp(state)?.harness ?? null)
   const liveKey = useAcp((state) => activeAcp(state)?.key)
-  const leadStop = useLeadStop({ conversationKey: liveKey, onStopLead: () => void stopCurrentTurn() })
+  const apexStop = useApexStop({ conversationKey: liveKey, onStopApex: () => void stopCurrentTurn() })
   // Another device's conversation read from its copy while that device is off: a message waits for it, words alone.
   const copyOn = useReadingCopy()
   const steeringKind = useThreads((state) => {
@@ -1104,11 +1144,13 @@ export function Composer() {
     steerOnEnter,
   })
   const resume = useComposerResume(liveOwnsComposer && !turnRunning && hostConnected && !held)
+  const addressee = useAddressee((state) => (liveKey ? state.to[liveKey] : undefined))
   const primaryAction = composerActionKind({
     running: turnRunning && hostConnected && !held,
     hasContent,
     steer: enterAction === "steer",
     resume: resume !== null,
+    straight: Boolean(addressee && liveOwnsComposer && !held),
   })
   const viewingResumeUnavailable = useThreads(
     (state) => state.viewing?.ref.resumeUnavailable
@@ -1119,7 +1161,9 @@ export function Composer() {
   // A session whose records a newer version of its harness wrote goes on from its transcript until the harness is updated (`RestorePlan`).
   const viewingOutdated = useRestorePlans((state) => viewingPath !== undefined && state.plans[viewingPath]?.kind === "update")
   const newHarness = useThreads((state) => state.composerHarness)
-  const placeholder = planDecision && !held
+  const placeholder = addressee && liveOwnsComposer && !held
+    ? `Message ${addressee.title} straight — the ${APEX_WORD} takes no turn`
+    : planDecision && !held
     ? `Tell ${harnessTitle(planDecision.harness ?? newHarness)} what to change in the plan`
     : planning && !held && !turnRunning
     ? `Describe what to plan — ${harnessTitle(newHarness)} proposes a plan before changing anything`
@@ -1395,7 +1439,7 @@ export function Composer() {
                * times its width and made the pair read as one lump.
                */}
               <span className="relative flex">
-              {leadStop.popover}
+              {apexStop.popover}
               <ComposerActionButton
                 action={primaryAction}
                 resumeLabel={resume?.resume.label}
@@ -1405,7 +1449,7 @@ export function Composer() {
                 stopping={liveOwnsComposer && stopping}
                 steerTitle={steerTitle}
                 onSend={() => void submit(primaryAction === "steer" ? "steer" : undefined)}
-                onStop={leadStop.press}
+                onStop={apexStop.press}
               />
               </span>
             </div>

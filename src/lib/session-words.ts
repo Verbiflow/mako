@@ -73,7 +73,7 @@ export function standingBrief(facts: SessionFacts, now: number): string {
 
 /**
  * Where the composer's words go, said quietly by the composer of a Thread with more than one Session: "To Cursor · Ship
- * the session picker". The same words name a child or the Thread's lead wherever a message can go to one of several.
+ * the session picker". The same words name a Fin or the Thread's Apex wherever a message can go to one of several.
  */
 export function sendsToWords(facts: Pick<SessionFacts, "title" | "fork">, harness: string): string {
   return `To ${sessionCalled(facts, harness)}`

@@ -8,7 +8,7 @@ import { togglePref, usePrefs } from "@/state/prefs"
 import { copyAge, formatBytes, formatRelative, formatTime } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
-import type { AgentsDiagnostics } from "@mako/host/contracts/agents"
+import { APEX_WORD, FIN_WORD, finsWord, type AgentsDiagnostics } from "@mako/host/contracts/agents"
 import type { NativeRoutingReading } from "@mako/host/contracts/native-routing"
 import { harnessLabel } from "@/lib/harness-label"
 import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
@@ -178,7 +178,7 @@ export function DiagnosticsSection() {
 
       <UnreadRecords report={unread} />
 
-      {agents?.children ? <ChildrenReadout agents={agents} /> : null}
+      {agents?.fins ? <FinsReadout agents={agents} /> : null}
 
       {routing.length ? <NativeRoutingReadout readings={routing} /> : null}
 
@@ -361,24 +361,24 @@ function BackgroundWorkReadout({ work }: { work: NonNullable<ProviderResidencySn
   )
 }
 
-/** The Threads other Threads started here, and the trees nearest their budgets. */
-function ChildrenReadout({ agents }: { agents: AgentsDiagnostics }) {
+/** The Fins Apexes started here, the trees nearest their budgets, and where the person's messages went. */
+function FinsReadout({ agents }: { agents: AgentsDiagnostics }) {
   const fullest = [...agents.trees].sort((a, b) => b.running - a.running || b.started - a.started).slice(0, 5)
   return (
     <div data-agents-diagnostics="" className="mt-2 rounded-lg bg-surface px-3 py-2 ring-1 ring-hairline">
-      <p className="text-ui">Children</p>
+      <p className="text-ui">{FIN_WORD}s</p>
       <p className="text-label text-faint">
-        {agents.children} Threads other Threads started · {agents.running} running
+        {finsWord(agents.fins)} · {agents.running} running
         {agents.followed ? ` (${agents.followed} in a process Mako didn't start)` : ""} · {agents.queued} queued ·{" "}
         {agents.notices} reports not yet delivered
       </p>
       <p className="mt-1 text-label leading-relaxed text-faint">
-        Each tree runs at most {agents.budget.running} at once and starts at most {agents.budget.started}.{" "}
+        Each {APEX_WORD} and its {FIN_WORD}s run at most {agents.budget.running} at once and starts at most {agents.budget.started}.{" "}
         {fullest.map((tree) => `${tree.running} running, ${tree.started} started`).join(" · ")}
       </p>
       <p className="mt-1 text-label leading-relaxed text-faint">
-        Leads passed on {messagesWord(agents.routes.forwarded)} from the person and sent {messagesWord(agents.routes.sent)} of their own ·
-        the person moved {messagesWord(agents.routes.redirected)} to another Thread
+        {APEX_WORD}es passed on {messagesWord(agents.routes.forwarded)} from the person and sent {messagesWord(agents.routes.sent)} of their own ·
+        the person wrote {messagesWord(agents.routes.direct)} straight to a {FIN_WORD} and moved {messagesWord(agents.routes.redirected)} to another
       </p>
     </div>
   )
@@ -388,16 +388,16 @@ function messagesWord(count: number): string {
   return count === 1 ? "1 message" : `${count} messages`
 }
 
-/** What a reading says of its harness in a lead. */
+/** What a reading says of its harness in an Apex. */
 function routingState(reading: NativeRoutingReading): string {
   if (reading.state === "words") return "Mako's instructions alone"
   const checked = reading.verified?.version ?? ""
-  if (reading.state === "control") return `Off in a lead, checked on ${checked}`
+  if (reading.state === "control") return `Off in an ${APEX_WORD}, checked on ${checked}`
   return reading.installed ? `Unverified: checked on ${checked}, this Mac runs ${reading.installed}` : `Unverified: checked on ${checked}, this Mac's version isn't read yet`
 }
 
 /**
- * Each harness's own subagents in a lead: switched off by a control seen
+ * Each harness's own subagents in an Apex: switched off by a control seen
  * working on the version installed, unverified on another, or left to the
  * instructions.
  */
@@ -406,7 +406,7 @@ function NativeRoutingReadout({ readings }: { readings: NativeRoutingReading[] }
     <div data-native-routing="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
       <div className="px-3 py-2">
         <p className="text-ui">Native subagents</p>
-        <p className="text-label text-faint">A Thread that leads others starts its agents through Mako.</p>
+        <p className="text-label text-faint">An {APEX_WORD} starts its {FIN_WORD}s through Mako.</p>
       </div>
       <div className="border-t border-hairline">
         {readings.map((reading) => (

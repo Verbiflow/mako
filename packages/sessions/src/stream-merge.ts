@@ -47,6 +47,17 @@ export const SETUP_NOTICES: StreamDifference = {
 }
 
 /**
+ * The person's message an Apex's conversation sent straight to a Fin
+ * (`TranscriptEvent.direct`): Mako writes it into the Apex's conversation
+ * and never sends it to the Apex's harness, so no record holds it.
+ */
+export const DIRECT_MESSAGES: StreamDifference = {
+  holds: "stream",
+  entry: { type: "event", direct: true },
+  why: "Mako writes the person's message to a Fin into its Apex's conversation itself and sends the Apex's harness nothing, so no harness records it.",
+}
+
+/**
  * Mako's marker for a provider's retries of the model, measured as they
  * streamed: how many, how long, and whether the model answered or the
  * provider gave up. A record keeps at most each retry's own notice, never
@@ -87,6 +98,8 @@ export interface EntryPattern {
   setup?: true
   /** A marker summing up a provider's retries (`TranscriptEvent.retries`). */
   retries?: true
+  /** The person's message to a Fin its Apex's conversation keeps (`TranscriptEvent.direct`). */
+  direct?: true
   command?: MakoCommand
   steered?: true
   cutOff?: true
@@ -471,6 +484,7 @@ function matches(pattern: EntryPattern, entry: Entry, cutOff: boolean): boolean 
   if (pattern.cutOff && !cutOff) return false
   if (pattern.setup && !(entry.type === "event" && entry.setup)) return false
   if (pattern.retries && !(entry.type === "event" && entry.retries)) return false
+  if (pattern.direct && !(entry.type === "event" && entry.direct)) return false
   if (pattern.command && !(entry.type === "user" && entry.command === pattern.command)) return false
   if (pattern.steered && !(entry.type === "user" && entry.steeringFor)) return false
   if (pattern.label) {

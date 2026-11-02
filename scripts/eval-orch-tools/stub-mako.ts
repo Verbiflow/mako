@@ -31,7 +31,7 @@ const toolOf = (channel: AgentToolDefinition["channel"]) => AGENT_TOOLS.find((to
 const Named = z.object({ name: z.string().optional() }).catch({})
 const Sent = z.object({ to: z.string().optional() }).catch({})
 
-/** A lead's Threads a case starts with, as the stub lists them. */
+/** An Apex's Fins a case starts with, as the stub lists them. */
 export function startedAlready(names: readonly string[]): AgentsStarted[] {
   return names.map((name, index) => ({ child: randomUUID(), name, state: "working", tree: { running: index + 1, started: index + 1, of: { running: 8, started: 32 } }, next: AFTER_START }))
 }

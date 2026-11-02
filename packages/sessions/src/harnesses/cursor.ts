@@ -1,5 +1,5 @@
 import { defineVocabulary } from "./vocabulary.js"
-import { SETUP_NOTICES, STOP_MARKER, type StreamDifference } from "../stream-merge.js"
+import { DIRECT_MESSAGES, SETUP_NOTICES, STOP_MARKER, type StreamDifference } from "../stream-merge.js"
 
 /**
  * Names are the SDK's live ones (`ToolType` in `@cursor/sdk`, which
@@ -132,7 +132,7 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     // stopped or killed run whole in its own record (index.db's runs row and
     // run_events, store.db's prompt record), checkpointed or not, and the
     // reader replays it from there (`CursorProvider.unrecordedTurn`).
-    stream: [SETUP_NOTICES, STOP_MARKER, RUN_LOST, SUMMARY_LANDS_LATE],
+    stream: [SETUP_NOTICES, STOP_MARKER, RUN_LOST, SUMMARY_LANDS_LATE, DIRECT_MESSAGES],
   },
 })
 

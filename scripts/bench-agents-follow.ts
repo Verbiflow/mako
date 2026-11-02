@@ -64,7 +64,7 @@ interface Run {
 async function run(count: number, follow: boolean): Promise<Run> {
   const threads = new ThreadStore(join(root, `${count}-${follow}-${randomUUID()}.sqlite`))
   const conversation = randomUUID()
-  const lead = threads.registerJournal({ conversationId: conversation, createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
+  const apex = threads.registerJournal({ conversationId: conversation, createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
   const sessions = new Map<string, { ref: ThreadRef; entries: Entry[] }>()
   const subscribers = new Set<(event: HostEvent) => void>()
   let reads = 0
@@ -118,7 +118,7 @@ async function run(count: number, follow: boolean): Promise<Run> {
     for (const nativeId of natives) {
       const run = spawn("/bin/sh", ["-c", "sleep 120"], { detached: true, stdio: "ignore" })
       pids.push(run.pid!)
-      const linked = await agents.link({ kind: "agent", session: lead.session }, { harness: "claude", session: nativeId, pid: run.pid! })
+      const linked = await agents.link({ kind: "agent", session: apex.session }, { harness: "claude", session: nativeId, pid: run.pid! })
       assert.ok(!("refused" in linked), JSON.stringify(linked))
     }
   }

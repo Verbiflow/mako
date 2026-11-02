@@ -139,7 +139,7 @@ function noteLiveOutcome(
     }
     return
   }
-  // A child's turn ends into its report, which its lead hears and tells the
+  // A Fin's turn ends into its report, which its Apex hears and tells the
   // person of; only what waits on the person (above) is theirs to hear here.
   if (conversation.parent) return
   // A drop Mako is about to continue itself is not an outcome yet: the thread

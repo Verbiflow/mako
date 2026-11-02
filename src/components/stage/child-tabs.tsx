@@ -1,16 +1,17 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
-import { childGroup, childLine, childStateOf, childWord, rollup, threadsWord } from "@mako/host/contracts/children"
+import { childGroup, childLine, childStateOf, childWord, rollup } from "@mako/host/contracts/children"
+import { finsWord } from "@mako/host/contracts/agents"
 import type { ChildState } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import { LeadMark } from "@/components/ui/lead-mark"
+import { ApexMark } from "@/components/ui/apex-mark"
 import { useHarnessIdentity, harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { openChildInLead, useLeadView, useThreadChildren } from "@/state/lead-children"
+import { openFinInApex, useApexView, useThreadChildren } from "@/state/apex-fins"
 import { stage } from "@/state/stage"
 
-/** A child tab's widths: narrower than a Session's, so a lead's Threads read as its own work beside them; they give way to the narrowest before one goes behind "+N". */
+/** A Fin tab's widths: narrower than a Session's, so an Apex's Fins read as its own work beside them; they give way to the narrowest before one goes behind "+N". */
 const CHILD_TAB_PX = 160
 const CHILD_TAB_MIN_PX = 96
 const GAP_PX = 6
@@ -74,18 +75,18 @@ const ChildTab = memo(function ChildTab({ agent, selected, onOpen }: { agent: Na
 })
 
 /**
- * A lead's Threads in its own strip, after its Sessions: a hairline, their
+ * An Apex's Fins in its own strip, after its Sessions: a hairline, their
  * count (which opens the Agents panel), then a tab each, what needs the person
  * first. As many as fit; the rest are one "+N" pinned at the end.
  */
-export function LeadChildTabs({ thread, leadTitle }: { thread: string; leadTitle: string }) {
+export function ApexFinTabs({ thread, apexTitle }: { thread: string; apexTitle: string }) {
   const children = useThreadChildren(thread)
-  const open = useLeadView((state) => (state.open?.lead === thread ? state.open.child : undefined))
+  const open = useApexView((state) => (state.open?.apex === thread ? state.open.child : undefined))
   const region = useRef<HTMLDivElement>(null)
   const [fit, setFit] = useState({ alone: 4, beside: 3 })
   const hasChildren = children.length > 0
-  // Stable, so a batch moving one child repaints that child's tab alone.
-  const press = useCallback((agent: NativeAgent) => openChildInLead(thread, leadTitle, agent), [thread, leadTitle])
+  // Stable, so a batch moving one Fin repaints that Fin's tab alone.
+  const press = useCallback((agent: NativeAgent) => openFinInApex(thread, apexTitle, agent), [thread, apexTitle])
   useLayoutEffect(() => {
     const node = region.current
     if (!node) return
@@ -110,12 +111,12 @@ export function LeadChildTabs({ thread, leadTitle }: { thread: string; leadTitle
       <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-hairline" />
       <button
         type="button"
-        data-lead-count={counts.total}
+        data-apex-count={counts.total}
         onClick={() => stage.open("agents")}
-        title={`${threadsWord(counts.total)} under ${leadTitle}, in the Agents panel`}
+        title={`${finsWord(counts.total)} under ${apexTitle}, in the Agents panel`}
         className="pressable flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
       >
-        <LeadMark className="size-3.5" />
+        <ApexMark className="size-3.5" />
         <span className="tabular">{counts.total}</span>
       </button>
       <div ref={region} data-child-tabs style={{ minWidth: CHILD_TAB_MIN_PX + GAP_PX + MORE_PX }} className="flex flex-1 items-center gap-1.5 overflow-hidden">
@@ -127,7 +128,7 @@ export function LeadChildTabs({ thread, leadTitle }: { thread: string; leadTitle
             type="button"
             data-child-more={rest}
             onClick={() => stage.open("agents")}
-            title={`${threadsWord(rest)} more under ${leadTitle}, in the Agents panel`}
+            title={`${finsWord(rest)} more under ${apexTitle}, in the Agents panel`}
             className="pressable ml-auto flex h-7 shrink-0 items-center rounded-md px-2 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
           >
             <span className="tabular">+{rest}</span>

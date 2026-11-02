@@ -12,10 +12,10 @@ import { readTemplate } from "./templates.ts"
  * T3 Code's method for Claude and Codex: the harness's own captured prompt
  * and tools (`templates/`), Mako's `mako` server as it describes itself, the
  * case's Thread, and the model's decisions, step by step. Nothing runs:
- * `agents_*` get the stub's answers, a native spawn its routed deny (a lead,
+ * `agents_*` get the stub's answers, a native spawn its routed deny (an Apex,
  * routing on) or a finished subagent, the shell the case's mocks or nothing.
- * Routing on is the control (Claude's deny, Codex's lead tools) and the
- * native-child words; off leaves Mako's instructions alone.
+ * Routing on is the control (Claude's deny, Codex's Apex tools) and the
+ * native-Fin words; off leaves Mako's instructions alone.
  */
 
 export const REPLAY_HARNESSES = ["claude", "codex"] as const
@@ -24,7 +24,7 @@ export type Described = Awaited<ReturnType<StubMako["describe"]>>
 type Routing = "on" | "off"
 type Measured = Sample & { tokens: { input: number; output: number } }
 
-const role = (orchCase: OrchCase): RoutedThread["role"] => orchCase.setup.role === "lead" ? "lead" : "thread"
+const role = (orchCase: OrchCase): RoutedThread["role"] => orchCase.setup.role === "apex" ? "apex" : "thread"
 const MCP_HEADING = "# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n## mako\n"
 const NOTHING = "(no output)"
 const Usage = z.looseObject({ input_tokens: z.number(), output_tokens: z.number() })
@@ -131,7 +131,7 @@ const CodexCall = z.union([
 const AdditionalTools = z.looseObject({ type: z.literal("additional_tools"), tools: z.array(z.json()) })
 
 function codexBody(orchCase: OrchCase, routing: Routing, mako: Described, model: string) {
-  const template = readTemplate(routing === "on" && role(orchCase) === "lead" ? "codex-lead" : "codex")
+  const template = readTemplate(routing === "on" && role(orchCase) === "apex" ? "codex-lead" : "codex")
   const namespace = { type: "namespace", name: "mcp__mako__", description: mako.instructions, tools: mako.tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, strict: false, parameters: tool.inputSchema })) }
   const captured = z.array(z.json()).parse(template.input).map((item): JsonValue => {
     const listed = AdditionalTools.safeParse(item)

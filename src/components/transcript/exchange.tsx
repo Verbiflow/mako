@@ -118,15 +118,33 @@ import {
  * what lets "copy" mean "the agent's answer to this", once, instead of
  * appearing on every fragment of a long reply.
  */
-export const Exchange = memo(function Exchange({
-  exchange,
-  streaming,
-  interrupted,
-  sentByMako,
-  carried,
-  woke,
-  failed,
-}: {
+export const Exchange = memo(function Exchange(props: ExchangeProps) {
+  return props.exchange.direct ? <DirectExchange id={props.exchange.id} message={props.exchange.direct} /> : <TurnExchange {...props} />
+})
+
+/**
+ * The person's message an Apex's conversation sent straight to a Fin: their
+ * words as they wrote them, and where they went, with no answer under them,
+ * since no turn of the Apex's ran.
+ */
+function DirectExchange({ id, message }: { id: string; message: ChatMessage }) {
+  const direct = message.note?.direct
+  const prompt = useMemo<ChatMessage>(
+    () => ({ id: message.id, role: "user", blocks: [{ type: "text", text: message.note?.body ?? "" }], timestamp: message.timestamp, origin: message.origin }),
+    [message]
+  )
+  if (!direct) return null
+  return (
+    <article data-exchange={id} data-direct-exchange className="contain-turn scroll-mt-6">
+      <Prompt message={prompt} />
+      <div className="mt-1">
+        <RoutedLine routed={{ to: direct.to, forward: true, direct: true }} landed={{ child: direct.fin, request: direct.received, delivery: direct.delivery }} />
+      </div>
+    </article>
+  )
+}
+
+interface ExchangeProps {
   exchange: ExchangeData
   streaming?: boolean
   /** True when the turn stopped early; a `TurnStop` also says why and whether it can be continued. */
@@ -138,7 +156,17 @@ export const Exchange = memo(function Exchange({
   /** The person's words reached this session after it rested a day or more (`wokeAfterRest`). */
   woke?: WokeAfterRest
   failed?: boolean
-}) {
+}
+
+function TurnExchange({
+  exchange,
+  streaming,
+  interrupted,
+  sentByMako,
+  carried,
+  woke,
+  failed,
+}: ExchangeProps) {
   useHarnessIdentity()
   // A saved conversation keeps no request: Mako's goal steps are known by their words.
   const savedByMako = useMemo(
@@ -312,7 +340,7 @@ export const Exchange = memo(function Exchange({
       </TurnRunningContext>
     </AnswerTimeContext.Provider>
   )
-})
+}
 
 /** NOTHING running yet: the live row under a prompt, prose or a note says what the turn does without a step of its own. */
 const NOTHING_RUNNING: LiveStepData = { calls: [], thinking: false }

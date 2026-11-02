@@ -7,35 +7,35 @@ import { namedUuid } from "./cloud-moves.js"
 
 export { FROM_AGENTS, fromAgent } from "../contracts/children.js"
 
-/** An idle parent waits this long after a notice for the others of its burst, then wakes once for all of them. */
+/** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
-/** A result the parent waited for goes after this: the parent asked for it, so only what settles with it joins it. */
+/** A result the Apex waited for goes after this: the Apex asked for it, so only what settles with it joins it. */
 export const RESULT_COALESCE_MS = 250
 /** The most of a waited-for result its wake carries; `agents_read` gives the rest. */
 const RESULT_CHARS = 8_000
-/** Wakes a lead takes in a minute; notices past them wait for the next wake. */
+/** Wakes an Apex takes in a minute; notices past them wait for the next wake. */
 export const WAKES_PER_MINUTE = 6
 const MINUTE_MS = 60_000
 
-/** `notice:{child}:{reportId}`: a report its parent's owner hears, under an ID a resend repeats. */
+/** `notice:{child}:{reportId}`: a report its Apex's owner hears, under an ID a resend repeats. */
 export interface Notice {
   id: string
   report: Report
-  /** The child as the digest names it: `"name" (Harness)`. */
+  /** The Fin as the digest names it: `"name" (Harness)`. */
   label: string
-  /** The child's own Session, which the wake's request names as its actor: an agent's words, never the person's. */
+  /** The Fin's own Session, which the wake's request names as its actor: an agent's words, never the person's. */
   from: string
   /** The request already named to carry it, by a host that stopped before it was sent (`ThreadStore.assignWake`). */
   wake?: string
-  /** The result of a `wait` start whose window ended first: it starts the parent's next turn, in full, and is never steered into a running one. */
+  /** The result of a `wait` start whose window ended first: it starts the Apex's next turn, in full, and is never steered into a running one. */
   settledOnly?: true
 }
 
-/** What a parent's conversation can take now. */
+/** What an Apex's conversation can take now. */
 export type ParentReady = "steer" | "queue" | "idle" | "gone"
 
 export interface AgentWakesDeps {
-  /** What the parent's conversation is doing: busy at a step a message joins, busy until its turn's end, idle, or not here. */
+  /** What the Apex's conversation is doing: busy at a step a message joins, busy until its turn's end, idle, or not here. */
   ready(conversation: string): ParentReady
   /** Starts a turn with the digest, under `request`: a request taken once already is taken again as the same one. */
   wake(conversation: string, request: string, text: string, actor: Extract<Actor, { kind: "agent" }>): void
@@ -44,32 +44,32 @@ export interface AgentWakesDeps {
   /** The request named before it's sent, and the reports marked heard once it was (`ThreadStore`). */
   assign(reports: readonly string[], request: string): void
   delivered(reports: readonly string[], at: number): void
-  /** The digest's last line: how the parent's children stand now. */
+  /** The digest's last line: how the Apex's Fins stand now. */
   counts(conversation: string): string
   now?(): number
 }
 
 interface Waiting {
-  /** The lead whose wake budget it spends. */
-  lead: string
+  /** The Apex whose wake budget it spends. */
+  apex: string
   notices: Notice[]
   timer?: NodeJS.Timeout
-  /** Waits for the parent's turn to end (`settled`). */
+  /** Waits for the Apex's turn to end (`settled`). */
   forTurnEnd?: true
   /** A steer this turn didn't take: the rest go at its end, as a turn of their own. */
   unsteerable?: true
 }
 
 /**
- * The parent's side of a report (6.6): the notices its children's owners
+ * The Apex's side of a report (6.6): the notices its Fins' owners
  * send it, coalesced, and delivered the one way its harness takes them now.
- * An idle parent waits `WAKE_COALESCE_MS` after a burst's first notice and
- * then starts ONE turn with the digest; a parent busy on a harness whose
+ * An idle Apex waits `WAKE_COALESCE_MS` after a burst's first notice and
+ * then starts ONE turn with the digest; an Apex busy on a harness whose
  * steer lands at a step gets them at its next step; one whose steer would
  * interrupt (Cursor) gets them as a message queued for its turn's end. A
- * result the parent waited for (`settledOnly`) is never steered: it goes
- * once the parent is idle, after `RESULT_COALESCE_MS`, first and in full.
- * Wakes past `WAKES_PER_MINUTE` for a lead wait, decisions first. Nothing
+ * result the Apex waited for (`settledOnly`) is never steered: it goes
+ * once the Apex is idle, after `RESULT_COALESCE_MS`, first and in full.
+ * Wakes past `WAKES_PER_MINUTE` for an Apex wait, decisions first. Nothing
  * polls: a timer runs only while notices wait.
  */
 export class AgentWakes {
@@ -85,12 +85,12 @@ export class AgentWakes {
     this.deps = deps
   }
 
-  /** A notice for `conversation`, the parent's, under lead `lead`; one already heard or waiting changes nothing. */
-  notice(conversation: string, lead: string, notice: Notice): void {
+  /** A notice for `conversation`, the Apex's, under Apex `apex`; one already heard or waiting changes nothing. */
+  notice(conversation: string, apex: string, notice: Notice): void {
     if (this.stopped || this.heard.has(notice.id) || this.steering.has(notice.id)) return
     const held = this.waiting.get(conversation)
     if (held?.notices.some((waiting) => waiting.id === notice.id)) return
-    const waiting = held ?? { lead, notices: [] }
+    const waiting = held ?? { apex, notices: [] }
     waiting.notices.push(notice)
     this.waiting.set(conversation, waiting)
     hostLog("agents", "notice", { notice: notice.id, report: notice.report.id, status: notice.report.status, conversation, ...(notice.settledOnly && { settledOnly: true }) })
@@ -102,7 +102,7 @@ export class AgentWakes {
     if (!waiting.timer) this.after(conversation, waiting, notice.settledOnly ? RESULT_COALESCE_MS : WAKE_COALESCE_MS)
   }
 
-  /** The parent's turn ended: what waited for it, and the results it waited for, go now, as a wake once it's idle. */
+  /** The Apex's turn ended: what waited for it, and the results it waited for, go now, as a wake once it's idle. */
   settled(conversation: string): void {
     const waiting = this.waiting.get(conversation)
     if (!waiting) return
@@ -112,7 +112,7 @@ export class AgentWakes {
     this.after(conversation, waiting, coalesceMs(waiting.notices))
   }
 
-  /** Takes back a notice its parent heard another way (a `wait` start that answers its result); false when none waits. */
+  /** Takes back a notice its Apex heard another way (a `wait` start that answers its result); false when none waits. */
   withdraw(conversation: string, id: string): boolean {
     const waiting = this.waiting.get(conversation)
     const before = waiting?.notices.length ?? 0
@@ -126,7 +126,7 @@ export class AgentWakes {
     return waiting.notices.length < before
   }
 
-  /** How many notices wait, across every parent: Diagnostics shows it. */
+  /** How many notices wait, across every Apex: Diagnostics shows it. */
   pending(): number {
     let count = this.steering.size
     for (const waiting of this.waiting.values()) count += waiting.notices.length
@@ -156,7 +156,7 @@ export class AgentWakes {
     if (!waiting?.notices.length || this.stopped) return
     const ready = this.deps.ready(conversation)
     if (ready === "gone") {
-      // Kept unheard in the store: the host that has the parent sends them on its start.
+      // Kept unheard in the store: the host that has the Apex sends them on its start.
       this.waiting.delete(conversation)
       return
     }
@@ -179,12 +179,12 @@ export class AgentWakes {
       }
       waiting.notices = waiting.notices.filter((notice) => !batch.includes(notice))
       for (const notice of batch) this.steering.add(notice.id)
-      void steer.then((took) => this.steered(conversation, waiting.lead, batch, request, took))
+      void steer.then((took) => this.steered(conversation, waiting.apex, batch, request, took))
       return
     }
     const now = this.now()
-    const recent = (this.wakes.get(waiting.lead) ?? []).filter((at) => now - at < MINUTE_MS)
-    this.wakes.set(waiting.lead, recent)
+    const recent = (this.wakes.get(waiting.apex) ?? []).filter((at) => now - at < MINUTE_MS)
+    this.wakes.set(waiting.apex, recent)
     if (recent.length >= WAKES_PER_MINUTE) return this.after(conversation, waiting, recent[0]! + MINUTE_MS - now)
     try {
       if (!batch[0]!.wake) this.deps.assign(ids, request)
@@ -197,11 +197,11 @@ export class AgentWakes {
     this.sent(conversation, waiting, batch, request, "turn")
   }
 
-  /** The harness answered a steer: what it took is heard; what it didn't goes as the parent's next turn, never dropped. */
-  private steered(conversation: string, lead: string, batch: readonly Notice[], request: string, took: boolean): void {
+  /** The harness answered a steer: what it took is heard; what it didn't goes as the Apex's next turn, never dropped. */
+  private steered(conversation: string, apex: string, batch: readonly Notice[], request: string, took: boolean): void {
     for (const notice of batch) this.steering.delete(notice.id)
     if (this.stopped) return
-    const waiting = this.waiting.get(conversation) ?? { lead, notices: [] }
+    const waiting = this.waiting.get(conversation) ?? { apex, notices: [] }
     this.waiting.set(conversation, waiting)
     if (took) return this.sent(conversation, waiting, batch, request, "steer")
     hostLog("agents", "steer not taken; its notices go as the next turn", { conversation, request, notices: batch.length })
@@ -228,7 +228,7 @@ export class AgentWakes {
 
 /**
  * The notices one delivery carries: those a stopped host already named a
- * request for go again alone under it, so a turn the parent took before the
+ * request for go again alone under it, so a turn the Apex took before the
  * stop is taken as the same turn; the rest go together, decisions first.
  */
 function nextBatch(notices: readonly Notice[]): Notice[] {
@@ -273,7 +273,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
   return lines.join("\n")
 }
 
-/** The window before a delivery: short once a result the parent waited for is among what waits. */
+/** The window before a delivery: short once a result the Apex waited for is among what waits. */
 function coalesceMs(notices: readonly Notice[]): number {
   return notices.some((notice) => notice.settledOnly) ? RESULT_COALESCE_MS : WAKE_COALESCE_MS
 }

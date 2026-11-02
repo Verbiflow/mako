@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { RollupBadge } from "@/components/rail/rollup-badge"
-import { useThreadRollup } from "@/state/lead-children"
+import { useThreadRollup } from "@/state/apex-fins"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
 import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
@@ -439,7 +439,7 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
   return away
 }
 
-/** A lead's row wears its Threads' badge where the time stands, from the snapshot this page holds of it (`rollup`). */
+/** An Apex's row wears its Fins' badge where the time stands, from the snapshot this page holds of it (`rollup`). */
 function LeadOrTime({ thread, activityAt }: { thread: string; activityAt: WebThread["activityAt"] }) {
   const counts = useThreadRollup(thread)
   return counts.total ? <RollupBadge counts={counts} size="phone" /> : <span className="tabular text-label text-faint">{formatRelative(activityAt)}</span>

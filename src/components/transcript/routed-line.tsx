@@ -1,14 +1,15 @@
 import { memo, use, useState } from "react"
 import { toast } from "sonner"
-import { CornerDownRightIcon, MoveRightIcon } from "lucide-react"
-import { childStateOf, type Routed, type RoutedAnswer } from "@mako/host/contracts/children"
+import { CornerDownRightIcon, MoveRightIcon, ReplyIcon } from "lucide-react"
+import type { Routed, RoutedAnswer } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { useAcp } from "@/state/acp"
-import { openChildInLead, redirectRouted, useThreadChildren } from "@/state/lead-children"
+import { address, addresseeOf, finStopped, openFinInApex, redirectRouted, useThreadChildren } from "@/state/apex-fins"
+import { FIN_WORD } from "@mako/host/contracts/agents"
 
 const DELIVERY = {
   turn: "",
@@ -16,32 +17,29 @@ const DELIVERY = {
   queued: "after its current turn",
 } satisfies Record<RoutedAnswer["delivery"], string>
 
-/** A stopped Thread's delegation is over: nothing is moved to it. */
-function stopped(agent: NativeAgent): boolean {
-  const state = childStateOf(agent)
-  return state.kind === "ended" && state.outcome === "stopped"
-}
-
 /**
- * Where the lead sent a message, as one line where its call returned: the
- * Thread by name, opened with a press, and while the lead's conversation is
- * here, a way to move it to another of its Threads. Read from the call and
- * its answer, so a saved turn draws the same line.
+ * Where a message went from an Apex's conversation, as one line: where the
+ * Apex's call returned, or where the person wrote to a Fin straight
+ * (`routed.direct`). The Fin by name, opened with a press, and while the
+ * Apex's conversation is here, Reply, which writes the next message to that
+ * Fin, and a way to move this one to another of its Fins. Read from the call
+ * and its answer, or the direct message's record, so a saved turn draws the
+ * same line.
  */
 export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed: Routed; landed?: RoutedAnswer }) {
   const source = useTranscriptSource()
-  const leadThread = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.threadId : undefined))
-  const leadTitle = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.title : undefined))
-  const children = useThreadChildren(leadThread)
+  const apexThread = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.threadId : undefined))
+  const apexTitle = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.title : undefined))
+  const children = useThreadChildren(apexThread)
   const open = use(RoutedOpenContext)
   const [moved, setMoved] = useState<string>()
   const target = children.find((agent) => (landed ? agent.child?.thread === landed.child : agent.title === routed.to))
-  const others = children.filter((agent) => agent !== target && agent.child?.thread && !stopped(agent))
+  const others = children.filter((agent) => agent !== target && agent.child?.thread && !finStopped(agent))
   const name = target?.title ?? routed.to
   const when = moved ? "" : landed ? DELIVERY[landed.delivery] : ""
   const openTarget = (agent: NativeAgent) => {
     if (open) return open(agent)
-    if (leadThread) openChildInLead(leadThread, leadTitle ?? "Lead", agent)
+    if (apexThread) openFinInApex(apexThread, apexTitle ?? "Apex", agent)
   }
   const redirect = async (agent: NativeAgent) => {
     if (!source.liveId || !landed || !agent.child?.thread) return
@@ -50,10 +48,16 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
     setMoved(agent.title)
     if (!answer.withdrawn) toast(`${name} had already started on it`, { description: `${agent.title} has it now too.` })
   }
+  const replyTo = source.liveId && target ? addresseeOf(target) : undefined
+  const reply = () => {
+    if (!source.liveId || !replyTo) return
+    address(source.liveId, replyTo)
+    window.dispatchEvent(new Event("mako:focus-composer"))
+  }
   return (
-    <div data-routed={routed.to} className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-label text-faint">
+    <div data-routed={routed.to} data-routed-direct={routed.direct ? "" : undefined} className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-label text-faint">
       <CornerDownRightIcon aria-hidden className="size-3.5 shrink-0" />
-      <span className="shrink-0">{routed.forward ? "Passed your message to" : "Sent a message to"}</span>
+      <span className="shrink-0">{routed.direct ? `${FIN_WORD} ·` : routed.forward ? "Passed your message to" : "Sent a message to"}</span>
       <button
         type="button"
         disabled={!target}
@@ -64,7 +68,20 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
         {target ? <HarnessIcon harness={target.provider} className="size-3.5 shrink-0" /> : null}
         <span className="min-w-0 truncate">{name}</span>
       </button>
-      {when ? <span className="shrink-0">{when}</span> : null}
+      {routed.direct ? <span className="shrink-0">· direct</span> : null}
+      {when ? <span className="shrink-0">{routed.direct ? `· ${when}` : when}</span> : null}
+      {replyTo && !moved ? (
+        <button
+          type="button"
+          data-routed-reply
+          onClick={reply}
+          title={`Write your next message to ${replyTo.name}, with no turn of this Thread's`}
+          className="pressable flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+        >
+          <ReplyIcon aria-hidden className="size-3" />
+          Reply
+        </button>
+      ) : null}
       {moved ? (
         <span data-routed-moved className="flex min-w-0 items-center gap-1 text-muted-foreground">
           <MoveRightIcon aria-hidden className="size-3 shrink-0" />

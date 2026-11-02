@@ -48,7 +48,7 @@ export const LifecycleWorkSchema = z.object({
   cwd: z.string(),
   status: z.enum(["running", "waiting", "queued", "finishing"]),
   stoppable: z.boolean(),
-  /** A child's lead: the conversation whose children the sheet lists as one row. A child's turn an exit cuts short continues on the next start. */
+  /** A Fin's Apex: the conversation whose Fins the sheet lists as one row. A Fin's turn an exit cuts short continues on the next start. */
   lead: z.object({ id: z.string(), title: z.string() }).optional(),
 })
 export type LifecycleWork = z.infer<typeof LifecycleWorkSchema>

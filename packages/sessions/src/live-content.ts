@@ -882,6 +882,7 @@ function reduce(
         if (update.limit) block.limit = update.limit
         if (update.nearLimit) block.nearLimit = update.nearLimit
         if (update.retries) block.retries = update.retries
+        if (update.direct) block.direct = update.direct
         if (update.id) block.id = update.id
         if (update.completes) {
           let index = next.length - 1

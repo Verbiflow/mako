@@ -424,13 +424,13 @@ export interface LiveSummary {
   threadId?: string
   sessionId?: string
   /**
-   * The Thread that leads this one's, from its edge, as its catalog row says it (`ThreadRef.parent`): a child is shown
-   * inside its lead's Thread and never as a row of its own.
+   * The Apex's Thread over this one's, from its edge, as its catalog row says it (`ThreadRef.parent`): a Fin is shown
+   * inside its Apex's Thread and never as a row of its own.
    */
   parent?: { thread: string; session: string }
   /**
-   * A lead's children counted (`rollup`), for a window's rail before it holds the lead's roster: the roster, once a
-   * batch brings it, says the same. Absent from a conversation that leads none.
+   * An Apex's Fins counted (`rollup`), for a window's rail before it holds the Apex's roster: the roster, once a
+   * batch brings it, says the same. Absent from a conversation with no Fins.
    */
   children?: Rollup
   /**
