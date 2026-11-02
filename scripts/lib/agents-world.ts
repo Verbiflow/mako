@@ -40,6 +40,8 @@ export interface WorldOptions {
   budget?: TreeBudget
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
+  /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
+  launching?: (conversation: string) => Promise<void> | void
 }
 
 /**
@@ -218,7 +220,9 @@ export class AgentsWorld {
         this.holds.get(id)?.()
       },
       close: () => {},
-      setMode: async () => {},
+      setMode: async (id) => {
+        await this.options.launching?.(id)
+      },
     }
   }
 }

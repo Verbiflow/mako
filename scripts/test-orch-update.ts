@@ -111,6 +111,43 @@ async function leadMidWake(): Promise<void> {
   }
 }
 
+/** The update lands as a child's harness has started and its brief isn't sent yet: the new host sends the brief once. */
+async function launchCut(): Promise<void> {
+  let host = 1
+  let reached: (() => void) | undefined
+  let finish: (() => void) | undefined
+  const launched = new Promise<void>((resolve) => { reached = resolve })
+  const world = new AgentsWorld({
+    root: join(root, "launch-cut"),
+    script: (turn) => (turn.text.includes("child:") ? `Done: ${turn.harness} reviewed its part.` : "ok"),
+    // Only a child's launch carries a brief from an agent; the lead's goes on. The child's goes on once the exit has begun.
+    launching: (conversation) => {
+      if (host !== 1 || world.live.snapshot(conversation)?.requests[0]?.actor?.kind !== "agent") return
+      reached?.()
+      return new Promise<void>((resolve) => { finish = resolve })
+    },
+  })
+  try {
+    const lead = await world.lead("codex")
+    const started = await world.agents.start(world.caller(lead.conversation), { brief: { objective: "Review cursor's part." }, harness: "cursor", name: "review-cursor", clientKey: "cursor", cwd: world.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    const child = started.conversation
+    await launched
+    assert.equal(promptsOf(world, child).length, 0, "the brief wasn't sent before the update")
+    host = 2
+    const restarted = world.restart()
+    finish?.()
+    await restarted
+    await world.settle()
+    const briefs = promptsOf(world, child).filter((prompt) => prompt.text.includes("child:"))
+    assert.equal(briefs.length, 1, "the new host sends the brief once")
+    assert.equal(world.store.reportsOf(world.store.edges().all[0]!.child, 0).length, 1, "and the child reports once")
+    assert.equal(digests(world, lead.conversation).length, 1, "which wakes the lead once")
+  } finally {
+    await world.close()
+  }
+}
+
 /** Six leads, one per harness, each with three children on three others: each burst wakes each lead once, across an update mid-burst. */
 async function sixLeads(): Promise<void> {
   let host = 1
@@ -159,6 +196,7 @@ try {
   await childrenMidTurn()
   await reportsUnheard()
   await leadMidWake()
+  await launchCut()
   console.log("orch update: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

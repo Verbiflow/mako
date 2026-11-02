@@ -993,9 +993,12 @@ export class LiveConversations {
   /**
    * A message waiting here may go: sent now if the harness is connected, or once a sleeping conversation wakes. A
    * restart leaves its conversations asleep with their queues paused, and Resume, or the message asked for again, has
-   * to wake it: draining alone found no harness and sent nothing.
+   * to wake it: draining alone found no harness and sent nothing. An update's exit closes them, and a closed one
+   * opens again for the message as for a new one (`reopenClosed`): waking alone leaves a closed conversation shut.
    */
   private release(resident: Resident): void {
+    if (resident.snapshot.session.status === "closed" && !resident.closing && !resident.driver && launched(activeBinding(resident)))
+      this.reopenClosed(resident)
     if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) void this.hibernation.wake(resident)
     else this.dispatch.drain(resident)
   }
