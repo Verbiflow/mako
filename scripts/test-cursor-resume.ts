@@ -1,5 +1,6 @@
 import { assessProviderResume } from "@mako/host/harnesses/provider-recovery"
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -198,6 +199,17 @@ try {
   store.prepare("INSERT INTO blobs (id, data) VALUES ('b2', x'00')").run()
   const sdkSecond = cursorSdkCheckpoint(nativeStores, stateRoot, directoryName)
   assert.ok(sdkSecond && sdkSecond !== sdkFirst, "a new turn moves the checkpoint")
+  // Collecting the roots the SDK left behind deletes blobs; the head the SDK resumes from is where it was.
+  for (let step = 0; step < 40; step += 1) store.prepare("INSERT INTO blobs (id, data) VALUES (?, x'0a20')").run(`left-${step}`)
+  const beforeCollection = cursorSdkCheckpoint(nativeStores, stateRoot, directoryName)
+  const savedBefore = createHash("sha256").update(JSON.stringify([agentId, "root-2", 42])).digest("hex")
+  store.exec("DELETE FROM blobs WHERE id LIKE 'left-%' AND id != 'left-39'")
+  assert.equal(cursorSdkCheckpoint(nativeStores, stateRoot, directoryName), beforeCollection, "a collection leaves the checkpoint where it was")
+  assert.equal(cursorSdkCheckpoint(nativeStores, stateRoot, directoryName, beforeCollection), beforeCollection, "and compares the same")
+  assert.equal(cursorSdkCheckpoint(nativeStores, stateRoot, directoryName, savedBefore), savedBefore, "a binding saved with the blob count still reads as it did after a collection")
+  setRoot("root-3")
+  assert.notEqual(cursorSdkCheckpoint(nativeStores, stateRoot, directoryName, savedBefore), savedBefore, "and as moved once its root moves")
+  setRoot("root-2")
   // Admission now observes the source inode across executables. The fixture
   // writer must finish before expecting an idle native store.
   index.close()
@@ -219,6 +231,7 @@ try {
   assert.deepEqual(await verdict({ ...sdkBinding, checkpoint: sdkFirst }), { kind: "resumable", record: "moved" })
   assert.deepEqual(await verdict({ ...sdkBinding, checkpoint: undefined }), { kind: "resumable", record: "unknown" }, "a binding without a checkpoint reopens without claiming unchanged history")
   assert.equal(await resume.checkpoint(sdkStorePath), sdkSecond, "the catalog path reads the same head")
+  assert.deepEqual(await verdict({ ...sdkBinding, checkpoint: savedBefore }), { kind: "resumable", record: "same" }, "a binding saved before its store was collected resumes as unmoved")
 
   const acpBinding: ProviderBinding = { id: "b2", provider: "cursor", nativeId: legacyId, path: acpPath, checkpoint: second, coveredBlocks: 1, includesBase: true }
   assert.deepEqual(await verdict(acpBinding), { kind: "resumable", record: "same" }, "an ACP store resumes: the SDK imports it")

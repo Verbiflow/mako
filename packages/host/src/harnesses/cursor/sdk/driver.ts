@@ -513,10 +513,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return source
   }
 
-  const checkpoint = async (path: string): Promise<string | undefined> => {
+  const checkpoint = async (path: string, previous?: string): Promise<string | undefined> => {
     const origin = cursorStoreOrigin(path, { stateRoot: dependencies.stateRoot(), home: dependencies.home })
     if (!origin) return undefined
-    if (origin.origin === "sdk") return cursorSdkCheckpoint(dependencies.stores, dependencies.stateRoot(), origin.directoryName)
+    if (origin.origin === "sdk") return cursorSdkCheckpoint(dependencies.stores, dependencies.stateRoot(), origin.directoryName, previous)
     return cursorLegacyCheckpoint(dependencies.stores, path, origin.sessionId)
   }
 
@@ -533,7 +533,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       return { kind: "unavailable", reason: "The saved binding does not point at a Cursor session store." }
     const sourcePath = binding.path
     if (origin.origin === "sdk") return inspectNativeSource(binding, cursorProcessProbe, async () => {
-      const current = await checkpoint(sourcePath)
+      const current = await checkpoint(sourcePath, binding.checkpoint)
       return current === undefined
         ? { kind: "unavailable", reason: "The Cursor session store is missing or unreadable." }
         : { kind: "available", checkpoint: current }
