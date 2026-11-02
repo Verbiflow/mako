@@ -912,6 +912,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     checkUpdateSource: (force: boolean) =>
       invokeTrustedHost<UpdateInstallation>("mako:check-update-source", force),
     buildUpdate: () => invokeTrustedHost<void>("mako:build-update"),
+    /** Measures a built update's performance again, after a Mac too busy to measure it. */
+    measureUpdateAgain: () => invokeTrustedHost<void>("mako:measure-update-again"),
     updateState: () => invokeTrustedHost<UpdateState>("mako:update-state"),
     checkUpdates: () => invokeTrustedHost<UpdateState>("mako:check-updates"),
     installUpdate: () => invokeTrustedHost<void>("mako:install-update"),

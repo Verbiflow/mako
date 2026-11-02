@@ -126,6 +126,7 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
     },
     changed: (state) => {
       waiting.set(state.operation.kind === "waiting")
+      updates.holdMeasuring(state.operation.kind !== "idle" && state.operation.kind !== "error")
       dependencies.emit({ type: "application-lifecycle", lifecycle: state })
     },
   })
@@ -150,15 +151,22 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
     return updates.selectSource(path)
   })
   methods.handle("mako:check-update-source", (force: boolean) => updates.checkSource(force))
+  const operationPending = () =>
+    lifecycle.snapshot().operation.kind !== "idle" &&
+    lifecycle.snapshot().operation.kind !== "error"
   methods.handle("mako:build-update", () => {
-    if (
-      lifecycle.snapshot().operation.kind !== "idle" &&
-      lifecycle.snapshot().operation.kind !== "error"
-    )
+    if (operationPending())
       throw new Error(
         "Cancel the pending operation before starting another build."
       )
     updates.build()
+  })
+  methods.handle("mako:measure-update-again", () => {
+    if (operationPending())
+      throw new Error(
+        "Cancel the pending operation before measuring the update again."
+      )
+    updates.measureAgain()
   })
   methods.handle("mako:update-state", () => updates.state())
   methods.handle("mako:check-updates", () => updates.check())

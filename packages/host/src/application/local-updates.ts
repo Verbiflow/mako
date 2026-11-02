@@ -7,6 +7,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   stat,
   statfs,
   writeFile,
@@ -22,8 +23,12 @@ import {
   type BuildIdentity,
   type LocalBuildState,
   type RevisionChanges,
+  type UnsurePerformance,
   type UpdateSource,
 } from "../contracts/app-lifecycle.js"
+import { describeRow, parseVerdicts, PERFORMANCE_VERDICT_VARIABLE } from "../contracts/performance-verdict.js"
+import { busyReasons, describeMachine, readMachine, type MachineReading } from "../base/machine-load.js"
+import { hostLog } from "../base/host-log.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
 import { BUILD_UNCOMMITTED_VARIABLE, bringForward, changesSince, readUncommitted, readUpdateSource } from "./local-update-source.js"
@@ -166,7 +171,40 @@ export interface LocalUpdateOptions {
   statfs?: DiskReader
   /** How long npm install in the checkout may run; `DEPENDENCY_INSTALL_TIMEOUT_MS` unless a test shortens it. */
   installTimeoutMs?: number
+  /** Packages the checked build into `output` and verifies what it made; the real packager and codesign unless a test stands in. */
+  candidate?: CandidateMaker
+  /** Reads the Mac while an update waits for it to quiet down; `readMachine` unless a test simulates one. */
+  machine?: () => Promise<MachineReading>
+  /** How often a waiting update reads the Mac; `QUIET_EVERY_MS` unless a test shortens it. */
+  quietEveryMs?: number
 }
+
+export interface CandidateMaker {
+  package(checkout: string, output: string, env: NodeJS.ProcessEnv): Promise<void>
+  verify(app: string): Promise<BuildIdentity>
+}
+
+/**
+ * The private build copy. Spotlight leaves a folder named `.noindex` alone:
+ * a build rewrites the copy's 50,000 dependency files whenever the lockfile
+ * moves, and indexing them kept `mds_stores` at a full core through the
+ * performance check that followed.
+ */
+const CHECKOUT = "checkout.noindex"
+/** Where builds before `CHECKOUT` kept the copy; moved once, so the next build stays incremental. */
+const LEGACY_CHECKOUT = "checkout"
+/** The file a build's performance check appends its verdicts to, in the build's own folder. */
+const VERDICTS = "performance-verdict.jsonl"
+/** How long one build step may run. */
+const BUILD_STEP_MS = 20 * 60_000
+/**
+ * How long the performance check may run: on a busy Mac each of its two
+ * comparisons waits up to 3 minutes for quiet and measures for 5 more.
+ */
+const PERFORMANCE_CHECK_MS = 40 * 60_000
+/** How often an update the Mac was too busy to measure reads it again, and how many quiet readings in a row measure again. */
+export const QUIET_EVERY_MS = 60_000
+export const QUIET_READINGS = 3
 
 export class LocalUpdates {
   private source: string | null = null
@@ -176,6 +214,12 @@ export class LocalUpdates {
   private job: Promise<void> | null = null
   private stamp: string | null = null
   private lastReady: LocalBuildState | null = null
+  /** How the last build ran its checks, for measuring its performance again. */
+  private checks: { npm: string; env: NodeJS.ProcessEnv } | null = null
+  /** The next reading of the Mac, while an update waits for it to quiet down. */
+  private quietTimer: NodeJS.Timeout | null = null
+  /** An install or restart is pending; the update stays as it is until it's done or cancelled. */
+  private held = false
   /** The source against its upstream, as last read, and the reading under way. */
   private reading: UpdateSource | null = null
   private pendingRead: Promise<UpdateSource> | null = null
@@ -326,6 +370,7 @@ export class LocalUpdates {
       mode: 0o600,
     })
     this.source = source
+    this.stopWaiting()
     this.candidate = null
     this.stamp = null
     this.lastReady = null
@@ -341,6 +386,7 @@ export class LocalUpdates {
     if (!this.source)
       throw new Error("Choose a trusted Mako source checkout first.")
     const source = this.source
+    this.stopWaiting()
     this.state = { kind: "building", phase: "copying" }
     this.candidate = null
     this.job = this.build(source)
@@ -371,6 +417,114 @@ export class LocalUpdates {
         "The prepared update changed. Build it again before installing."
       )
     return { app: this.candidate, identity: this.identity }
+  }
+
+  /**
+   * Measure a built update's performance again, after a Mac too busy to
+   * measure it: nothing is rebuilt, and on a pass it's ready as any other.
+   * Mako starts this itself once the Mac is quiet; Retry starts it at once.
+   */
+  measureAgain(): void {
+    if (this.job) return
+    const waiting = this.state.kind === "ready" && this.state.performance ? this.state : null
+    if (!waiting || !this.checks || !this.preparedRoot) throw new Error("No update is waiting to have its performance measured again.")
+    this.stopWaiting()
+    const { npm, env } = this.checks
+    const revision = waiting.build.revision ?? undefined
+    this.state = { kind: "building", phase: "checking", remeasuring: true, ...revision && { revision } }
+    this.job = this.checkPerformance(npm, join(this.root, CHECKOUT), env, this.preparedRoot, revision)
+      .then((performance) => {
+        this.state = { kind: "ready", build: waiting.build, changes: waiting.changes, forwarded: waiting.forwarded, ...performance && { performance } }
+        this.lastReady = performance ? null : this.state
+        if (performance) this.waitForQuiet()
+      })
+      .catch((error) => {
+        const reason = error instanceof Error ? error.message.slice(0, 1500) : "Unexpected failure"
+        this.state = { kind: "error", message: `The update failed its performance check: ${reason} Your installed app and agents were not changed.` }
+      })
+      .finally(() => {
+        this.job = null
+        this.changed()
+      })
+    this.changed()
+  }
+
+  /**
+   * `test:performance`, alone, its verdicts read from the file it's handed
+   * (`PERFORMANCE_VERDICT_VARIABLE`): a slower row fails the build by name,
+   * and rows the Mac was too busy to settle come back as the update's caveat.
+   * A checkout from before verdicts writes none; its exit code says it all.
+   */
+  private async checkPerformance(npm: string, checkout: string, env: NodeJS.ProcessEnv, folder: string, revision: string | undefined): Promise<UnsurePerformance | undefined> {
+    const file = join(folder, VERDICTS)
+    await (await physicalFiles()).rm(file, { force: true })
+    const started = Date.now()
+    let failure: Error | undefined
+    try {
+      await runBuild(npm, ["run", "test:performance"], checkout, { ...env, [PERFORMANCE_VERDICT_VARIABLE]: file }, undefined, PERFORMANCE_CHECK_MS)
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error))
+    }
+    const verdicts = parseVerdicts(await readFile(file, "utf8").catch(() => ""))
+    const rows = verdicts.flatMap((verdict) => verdict.rows)
+    const slower = rows.filter((row) => row.outcome === "slower").map(describeRow)
+    const unsure = rows.filter((row) => row.outcome === "unsure").map(describeRow)
+    const busy = [...new Set(verdicts.flatMap((verdict) => verdict.busy))]
+    const machine = verdicts.find((verdict) => verdict.busy.length)?.machine ?? verdicts.at(-1)?.machine ?? ""
+    hostLog("updates", "performance check", {
+      revision: revision?.slice(0, 12),
+      outcome: failure ? "failed" : unsure.length ? "unsure" : "passed",
+      measured: rows.length,
+      slower: slower.join("; ") || undefined,
+      unsure: unsure.join("; ") || undefined,
+      machine: machine || undefined,
+      ms: Date.now() - started,
+    })
+    if (failure) {
+      const named = slower.length ? `${slower.length === 1 ? "this row is" : "these rows are"} slower than the code ${slower.length === 1 ? "its baseline" : "their baselines"} measured, beside it on this Mac: ${slower.join("; ")}. ` : ""
+      throw new Error(`test:performance: ${named}${failure.message}`)
+    }
+    return unsure.length ? { rows: unsure, machine, busy, measuredAt: new Date().toISOString() } : undefined
+  }
+
+  /** Once the Mac reads quiet `QUIET_READINGS` times running, measure the waiting update again. */
+  private waitForQuiet(): void {
+    this.stopWaiting()
+    const read = this.options.machine ?? (() => readMachine())
+    let quiet = 0
+    const look = () => {
+      const timer = setTimeout(() => void read().then((reading) => {
+        if (this.quietTimer !== timer) return
+        if (this.job || this.state.kind !== "ready" || !this.state.performance) return this.stopWaiting()
+        quiet = this.held || busyReasons(reading).length ? 0 : quiet + 1
+        if (quiet < QUIET_READINGS) return look()
+        hostLog("updates", "the Mac is quiet; measuring the update's performance again", { machine: describeMachine(reading) })
+        this.quietTimer = null
+        this.measureAgain()
+      }, () => {
+        if (this.quietTimer === timer) look()
+      }), this.options.quietEveryMs ?? QUIET_EVERY_MS)
+      timer.unref()
+      this.quietTimer = timer
+    }
+    look()
+  }
+
+  hold(held: boolean): void {
+    this.held = held
+  }
+
+  private stopWaiting(): void {
+    if (this.quietTimer) clearTimeout(this.quietTimer)
+    this.quietTimer = null
+  }
+
+  /** The packager and codesign this build's checkout carries. */
+  private packager(node: string): CandidateMaker {
+    return {
+      package: (checkout, output, env) => runBuild(node, ["scripts/package-mac.mjs", "--local", "--dir", `--output=${output}`], checkout, env),
+      verify: (app) => verifyLocalCandidate(app, this.identity),
+    }
   }
 
   private phase(
@@ -428,7 +582,8 @@ export class LocalUpdates {
       })
       this.phase("copying")
     }
-    const checkout = join(this.root, "checkout")
+    const checkout = join(this.root, CHECKOUT)
+    await moveLegacyCheckout(this.root)
     const job = await mkdtemp(join(this.root, "build-"))
     const output = join(job, "output")
     try {
@@ -471,7 +626,7 @@ export class LocalUpdates {
         runBuild(npm, ["run", "lint"], checkout, env),
       ])
       this.phase("checking")
-      const checks = ["test:performance", "test:application", "test:renderer-assets"]
+      const checks = ["test:application", "test:renderer-assets"]
       const results = await Promise.allSettled(
         checks.map((script) => runBuild(npm, ["run", script], checkout, env))
       )
@@ -481,16 +636,14 @@ export class LocalUpdates {
           : []
       )
       if (failures.length) throw new Error(failures.join(" "))
+      // Alone, after the rest: a timing that shares the Mac with the update's own checks measures them too.
+      const performance = await this.checkPerformance(npm, checkout, env, job, revision)
       this.phase("packaging")
-      await runBuild(
-        node,
-        ["scripts/package-mac.mjs", "--local", "--dir", `--output=${output}`],
-        checkout,
-        env
-      )
+      const maker = this.options.candidate ?? this.packager(node)
+      await maker.package(checkout, output, env)
       this.phase("verifying")
       const candidate = join(output, "mac-arm64/Mako.app")
-      const build = await verifyLocalCandidate(candidate, this.identity)
+      const build = await maker.verify(candidate)
       if (this.preparedRoot) {
         await unregisterBundle(
           join(this.preparedRoot, "output/mac-arm64/Mako.app")
@@ -502,9 +655,12 @@ export class LocalUpdates {
       // Counted to the revision the build stamped, whatever moved in the checkout meanwhile.
       const changes = this.running?.revision && build.revision ? await changesSince(this.git, source, this.running.revision, build.revision) : null
       if (changes) await writeFile(join(this.root, BUILD_CHANGES), JSON.stringify({ build: build.id, changes } satisfies z.infer<typeof buildChanges>), { mode: 0o600 })
-      this.state = { kind: "ready", build, changes, forwarded }
-      this.lastReady = this.state
+      this.state = { kind: "ready", build, changes, forwarded, ...performance && { performance } }
       this.stamp = stamp
+      this.checks = { npm, env }
+      // A build the Mac was too busy to measure isn't one to hand back unmeasured on the next Build.
+      this.lastReady = performance ? null : this.state
+      if (performance) this.waitForQuiet()
     } finally {
       if (this.preparedRoot !== job) {
         await unregisterBundle(join(output, "mac-arm64/Mako.app"))
@@ -512,6 +668,14 @@ export class LocalUpdates {
       }
     }
   }
+}
+
+/** The copy an earlier build kept as `checkout`, renamed `CHECKOUT` where nothing is there yet: its manifest and compile output carry over. */
+async function moveLegacyCheckout(root: string): Promise<void> {
+  const legacy = join(root, LEGACY_CHECKOUT)
+  const info = await lstat(legacy).catch(() => null)
+  if (!info?.isDirectory() || (await lstat(join(root, CHECKOUT)).catch(() => null))) return
+  await rename(legacy, join(root, CHECKOUT))
 }
 
 const buildCaches = new Set([".git", ".next", ".eve", ".output", ".vercel", ".cache", ".turbo", ".DS_Store"])
@@ -775,7 +939,8 @@ async function runBuild(
   args: string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs = BUILD_STEP_MS
 ): Promise<void> {
   // Keep a bounded diagnostic tail. Discarding all output made a failed
   // Settings check report only "exited with 1", hiding the failing test.
@@ -786,7 +951,7 @@ async function runBuild(
     env,
     stdio: "pipe",
     signal,
-    timeoutMs: 20 * 60_000,
+    timeoutMs,
     output: (stream, text) => {
       if (stream === "stdout") stdout = (stdout + text).slice(-8192)
       else stderr = (stderr + text).slice(-8192)

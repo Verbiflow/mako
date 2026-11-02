@@ -287,6 +287,9 @@ async function review() {
     installFailed: "npm install didn't finish within 10 minutes",
     building: "Building 079f9b31",
     ready: "Moved main forward from",
+    busy: "other work kept 12.6 of 14 cores busy",
+    remeasuring: "Measuring performance again",
+    slower: "this row is slower than the code its baseline measured",
     installed: "21 changes in this build",
   }
   for (const theme of ["light", "dark"]) {
@@ -298,9 +301,27 @@ async function review() {
       await evaluate("document.querySelector('[data-testid=updates-section] [role=alert]')?.scrollIntoView({ block: 'nearest' }); true")
       // The files behind the count, opened as a person would to see them.
       if (scene === "uncommitted") await evaluate("for (const list of document.querySelectorAll('[data-testid=updates-section] [data-testid=uncommitted]')) list.open = true; true")
+      // What was measured, and the choice under it.
+      if (scene === "busy") await evaluate("document.querySelector('[data-testid=update-performance]').scrollIntoView({ block: 'start' }); true")
       await screenshot(`updater-${scene}-${theme}.png`)
     }
   }
+  // A Mac too busy to time the update: never "failed", Retry measures again, and it installs anyway on request.
+  await fixture("f.sourceScene('busy')")
+  await until("document.querySelector('[data-testid=update-performance]') !== null")
+  assert.equal(await evaluate("document.querySelector('[data-testid=updates-section] [role=alert]') === null && !document.querySelector('[data-testid=updates-section]').textContent.includes('failed')"), true, "a Mac too busy to measure isn't a failed update")
+  assert.equal(await evaluate("[...document.querySelectorAll('[data-testid=updates-section] button')].some(b => b.textContent.trim() === 'Build again')"), false, "Retry measures again instead")
+  const reveal = (text) => evaluate(`[...document.querySelectorAll('[data-testid=updates-section] button')].find(b => b.textContent.trim() === ${JSON.stringify(text)})?.scrollIntoView({ block: 'nearest' }); true`)
+  await reveal("Retry")
+  await click("Retry")
+  await until(`import('/src/dev/application-check.tsx').then(f => f.calls.measuredAgain === 1)`)
+  await until("document.querySelector('[data-testid=update-title]')?.textContent === 'Measuring performance again'")
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Build progress\"]') === null"), true, "measuring again rebuilds nothing")
+  await fixture("f.sourceScene('busy')")
+  const installs = await fixture("return f.calls.waited + f.calls.stopped")
+  await reveal("Install anyway")
+  await click("Install anyway")
+  await until(`import('/src/dev/application-check.tsx').then(f => f.calls.waited + f.calls.stopped === ${installs + 1})`)
   const built = await fixture("return f.calls.build")
   await fixture("f.sourceScene('behind')")
   await click("Update to main 079f9b31 (21 new changes)")

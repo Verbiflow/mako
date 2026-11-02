@@ -11,23 +11,46 @@
  * `node_modules` of links: `@mako/*` to its own packages, everything else to
  * this checkout's. Its sessions and host packages are built with this
  * checkout's compiler, and its own script measures it.
+ *
+ * A busy machine is measured, not guessed at (`@mako/host/base/machine-load`):
+ * the comparison waits a while for a quiet window, each run notes how many
+ * cores other work kept busy meanwhile, and a row the rounds can't settle on
+ * a busy machine is unsure, never slower. The local updater reads that from
+ * the verdict file it names (`@mako/host/contracts/performance-verdict`).
  */
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
-import { mkdir, mkdtemp, open, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
-import { availableParallelism, loadavg, tmpdir } from "node:os"
+import { appendFile, mkdir, mkdtemp, open, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { z } from "zod"
+import { busyReasons, describeMachine, readMachine, type MachineReading } from "@mako/host/base/machine-load"
+import { PERFORMANCE_VERDICT_VARIABLE, type MeasuredRow, type PerformanceVerdict } from "@mako/host/contracts/performance-verdict"
 import { median } from "./performance-measure"
 
 /** How many times each side runs at least: one run is one sample of the machine. */
 export const ROUNDS = 3
 /**
- * How many more rounds a row over its allowance gets before it's called slower. A process is placed on a
- * performance or an efficiency core as a whole, and a memory-heavy row slows there more than the calibration does,
- * so one side's three processes can all draw the slower cores: unchanged code read 30% apart that way.
+ * How many more rounds a row the first ones don't settle gets each time. A process is placed on a performance or an
+ * efficiency core as a whole, and a memory-heavy row slows there more than the calibration does, so one side's three
+ * processes can all draw the slower cores: unchanged code read 30% apart that way.
  */
 export const CONFIRM_ROUNDS = 4
+/** The rounds a row measured on a busy machine gets at most before it's called unsure; a quiet one is decided after `ROUNDS + CONFIRM_ROUNDS`. */
+export const MAX_ROUNDS = 15
+/** A row with at least this share of its runs measured busy is read as a busy machine's. */
+export const BUSY_RUNS = 0.25
+/** How long a comparison waits for a quiet window, all told, before it measures anyway. */
+export const QUIET_WAIT_MS = 3 * 60_000
+const QUIET_POLL_MS = 10_000
+/**
+ * How long a comparison measures on a busy machine, all told, before rows it
+ * hasn't settled are unsure: three rows took about 5 minutes there, and the
+ * updater runs two scripts that compare inside one check.
+ */
+export const BUSY_MEASURE_MS = 5 * 60_000
+/** Each side of the interval misses the true median at most this often: the sign test's 95%, one-sided. */
+const MISS = 0.05
 
 const SavedRunSchema = z.record(z.string(), z.object({ units: z.number() }))
 
@@ -221,37 +244,114 @@ export interface Paired {
   /** Each reference run's units, in the order they ran: none if the reference has no such row. */
   reference: number[]
   head: number[]
+  /** Per round, whether the machine was busy during either of its two runs. */
+  busy: boolean[]
+}
+
+/**
+ * How the machine is read; tests pass a machine of their own. A reading
+ * is taken with nothing measured running, so what it sees busy is other
+ * work's: a measured process's own threads (its compiler, its collector)
+ * would otherwise read as load.
+ */
+export interface Machine {
+  read(): Promise<MachineReading>
+  /** Waits `ms`; a test's machine waits for nothing. */
+  wait(ms: number): Promise<void>
+}
+
+/** The window each run's reading covers, just before the run. */
+const READING_MS = 1_000
+
+export const thisMachine: Machine = {
+  read: () => readMachine(READING_MS),
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }
 
 /**
  * `keys` measured `rounds` times in each tree, in separate processes, the
  * two trees taking turns and swapping who goes first each round so neither
- * always meets the machine as the other left it.
+ * always meets the machine as the other left it. The machine is read before
+ * each run, each reading going to `read`.
  */
-export async function paired(head: string, reference: string, keys: string[], measure: Measurer, rounds = ROUNDS): Promise<Paired[]> {
-  const results = new Map<string, Paired>(keys.map((key) => [key, { key, reference: [], head: [] }]))
+export async function paired(head: string, reference: string, keys: string[], measure: Measurer, rounds = ROUNDS, machine = thisMachine, read: (reading: MachineReading) => void = () => {}): Promise<Paired[]> {
+  const results = new Map<string, Paired>(keys.map((key) => [key, { key, reference: [], head: [], busy: [] }]))
   for (let round = 0; round < rounds; round++) {
     const sides = round % 2 === 0 ? (["reference", "head"] as const) : (["head", "reference"] as const)
+    let busy = false
     for (const side of sides) {
+      const reading = await machine.read()
+      read(reading)
+      busy ||= busyReasons(reading).length > 0
       const units = await measure(side === "head" ? head : reference, keys)
       for (const key of keys) if (units[key] !== undefined) results.get(key)![side].push(units[key])
     }
+    for (const result of results.values()) result.busy.push(busy)
   }
   return [...results.values()]
 }
 
-/**
- * The rows over `allowed` after the first rounds measured again (`more`), their runs added to the first, so a row is
- * called slower on every run both sides made, not on three that may have drawn the slower cores.
- */
-export async function confirmed(results: Paired[], allowed: number, more: (keys: string[]) => Promise<Paired[]>): Promise<Paired[]> {
-  const doubtful = results.filter(({ reference, head }) => reference.length && head.length && median(head) / median(reference) > allowed).map(({ key }) => key)
-  if (!doubtful.length) return results
-  const again = new Map((await more(doubtful)).map((result) => [result.key, result]))
+/** One round's runs added to another's, row by row. */
+function joined(results: Paired[], more: Paired[]): Paired[] {
+  const again = new Map(more.map((result) => [result.key, result]))
   return results.map((result) => {
     const extra = again.get(result.key)
-    return extra ? { key: result.key, reference: [...result.reference, ...extra.reference], head: [...result.head, ...extra.head] } : result
+    return extra ? { key: result.key, reference: [...result.reference, ...extra.reference], head: [...result.head, ...extra.head], busy: [...result.busy, ...extra.busy] } : result
   })
+}
+
+/**
+ * The order statistics bounding the median of `values` from below and above,
+ * each missing it at most `MISS` of the time: the sign test's interval, which
+ * assumes only that the rounds are independent. None with fewer than five.
+ */
+export function medianInterval(values: readonly number[]): [number, number] | undefined {
+  const sorted = [...values].sort((left, right) => left - right)
+  const n = sorted.length
+  let trimmed = 0
+  let below = 0
+  let ways = 1
+  for (let count = 0; count < n; count++) {
+    below += ways / 2 ** n
+    if (below > MISS) break
+    trimmed = count + 1
+    ways = (ways * (n - count)) / (count + 1)
+  }
+  return trimmed ? [sorted[trimmed - 1]!, sorted[n - trimmed]!] : undefined
+}
+
+export interface Judged {
+  /** Undefined while more rounds could still settle it. */
+  outcome: MeasuredRow["outcome"] | undefined
+  /** The median of each round's head over its reference: the two met much the same machine. */
+  change: number
+  interval: [number, number] | undefined
+  busyShare: number
+}
+
+/**
+ * Whether a row is within `allowed` of its reference, slower, or can't be
+ * told apart from the machine's noise. An interval wholly over the allowance
+ * is slower and one wholly under it within, busy or not; past that a quiet
+ * machine's median decides, after `ROUNDS + CONFIRM_ROUNDS` for a row over,
+ * and a busy machine's rows get up to `MAX_ROUNDS`, or past
+ * `ROUNDS + CONFIRM_ROUNDS` until the time a busy machine gets is spent
+ * (`outOfTime`), before they're unsure.
+ */
+export function judge({ reference, head, busy }: Paired, allowed: number, outOfTime = false): Judged {
+  const rounds = Math.min(reference.length, head.length)
+  const ratios = Array.from({ length: rounds }, (_, round) => head[round]! / reference[round]!)
+  const change = median(ratios)
+  const interval = medianInterval(ratios)
+  const busyShare = busy.length ? busy.filter(Boolean).length / busy.length : 0
+  const quiet = busyShare < BUSY_RUNS
+  const judged = (outcome: Judged["outcome"]): Judged => ({ outcome, change, interval, busyShare })
+  if (interval && interval[0] > allowed) return judged("slower")
+  if (interval && interval[1] <= allowed) return judged("within")
+  if (quiet && change <= allowed) return judged("within")
+  if (quiet) return judged(rounds >= ROUNDS + CONFIRM_ROUNDS ? "slower" : undefined)
+  // Seven rounds bound the median, so a regression that holds through the noise is caught before time runs out.
+  return judged(rounds >= MAX_ROUNDS || (outOfTime && rounds >= ROUNDS + CONFIRM_ROUNDS) ? "unsure" : undefined)
 }
 
 /** A row over its budget, or one asked to be measured beside a reference. */
@@ -273,21 +373,84 @@ export interface Settling {
   say: (line: string) => void
   /** How both trees measure the suspects, given the reference's tree and a folder of its own. */
   measurer: (reference: string, keys: string[], scratch: string) => Promise<Measurer>
+  /** The tree to build a reference commit in; this checkout's history by default. */
+  reference?: (commit: string, scratch: string) => Promise<string>
+  machine?: Machine
+  /** How long to wait for a quiet window, all told; `QUIET_WAIT_MS` by default. */
+  quietWaitMs?: number
+  /** How long rounds on a busy machine may take, all told; `BUSY_MEASURE_MS` by default. */
+  busyMeasureMs?: number
+}
+
+export interface Settled {
+  /** Rows slower than allowed, and rows over budget that couldn't be measured beside a reference, a line each. */
+  failed: string[]
+  /** Rows the machine was too busy to settle, a line each. */
+  unsure: string[]
+  rows: MeasuredRow[]
+  /** The machine while the rows were measured, and why it was busy, if it was. */
+  machine: string
+  busy: string[]
+}
+
+/** Waits, within what's left of the budget, until the machine is quiet; says what it found. */
+async function quietWindow(machine: Machine, budget: { leftMs: number }, say: (line: string) => void, read: (reading: MachineReading) => void): Promise<void> {
+  let reading = await machine.read()
+  read(reading)
+  let reasons = busyReasons(reading)
+  if (!reasons.length || budget.leftMs <= 0) return
+  say(`This machine is busy (${reasons.join(", ")}); waiting up to ${Math.round(budget.leftMs / 1000)} s for a quiet moment before measuring.`)
+  let waited = 0
+  while (budget.leftMs > 0) {
+    const ms = Math.min(QUIET_POLL_MS, budget.leftMs)
+    await machine.wait(ms)
+    budget.leftMs -= ms
+    waited += ms
+    reading = await machine.read()
+    read(reading)
+    reasons = busyReasons(reading)
+    if (!reasons.length) {
+      say(`Quiet after ${Math.round(waited / 1000)} s (${describeMachine(reading)}); measuring.`)
+      return
+    }
+  }
+  say(`Still busy after ${Math.round(waited / 1000)} s (${reasons.join(", ")}); measuring anyway, in up to ${MAX_ROUNDS} rounds, and a row they can't settle is unsure, not slower.`)
+}
+
+/** The readings in one: the median of what other work took, and the worst of the rest. */
+function summary(readings: readonly MachineReading[]): MachineReading | undefined {
+  if (!readings.length) return undefined
+  const worst = <T extends string>(order: readonly T[], values: (T | undefined)[]) => order[Math.max(...values.map((value) => (value === undefined ? -1 : order.indexOf(value))))]
+  return {
+    cores: readings[0]!.cores,
+    othersBusy: median(readings.map((reading) => reading.othersBusy)),
+    loadAverage: Math.max(...readings.map((reading) => reading.loadAverage)),
+    memory: worst(["normal", "warning", "critical"] as const, readings.map((reading) => reading.memory)) ?? "normal",
+    thermal: worst(["nominal", "moderate", "heavy", "critical"] as const, readings.map((reading) => reading.thermal)),
+  }
 }
 
 /**
- * Each suspect measured beside its reference, in turns, and the rows that
- * stay more than `allowed` times as slow there; a row over budget whose reference
- * can't be built fails as it is, with the reason.
+ * Each suspect measured beside its reference, in turns, each row judged on
+ * its rounds (`judge`), with more rounds while they can't settle it; a row
+ * over budget whose reference can't be built fails as it is, with the reason.
  */
-export async function settle(suspects: Suspect[], settling: Settling): Promise<string[]> {
+export async function settle(suspects: Suspect[], settling: Settling): Promise<Settled> {
   const { allowed, rounds, say } = settling
+  const machine = settling.machine ?? thisMachine
+  const budget = { leftMs: settling.quietWaitMs ?? QUIET_WAIT_MS }
+  const busyTime = { leftMs: settling.busyMeasureMs ?? BUSY_MEASURE_MS }
+  let spent = false
   const here = checkout()
   const scratch = await mkdtemp(join(tmpdir(), "mako-perf-reference-"))
   const references = new References(here, join(scratch, "trees"))
+  const build = settling.reference ?? ((commit: string) => references.build(commit))
   const failed: string[] = []
-  const table: string[][] = [["row", "beside", "reference runs", "this checkout's runs", "reference", "this checkout", "change"]]
-  const loadBefore = loadavg()
+  const unsure: string[] = []
+  const rows: MeasuredRow[] = []
+  const readings: MachineReading[] = []
+  const read = (reading: MachineReading) => readings.push(reading)
+  const table: string[][] = [["row", "beside", "reference runs", "this checkout's runs", "reference", "this checkout", "change", "between", "busy rounds", "verdict"]]
   const commits = new Map<string | undefined, Suspect[]>()
   for (const suspect of suspects) commits.set(suspect.at, [...(commits.get(suspect.at) ?? []), suspect])
   const overBudget = suspects.filter((suspect) => suspect.over).length
@@ -308,37 +471,76 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<s
       const keys = group.map((suspect) => suspect.key)
       let results: Paired[]
       try {
-        const tree = await references.build(at)
+        const tree = await build(at, join(scratch, "trees"))
         const measurer = await settling.measurer(tree, keys, join(scratch, "runs", at))
-        results = await confirmed(await paired(here.root, tree, keys, measurer, rounds), allowed, (doubtful) => {
-          say(`${doubtful.join(", ")}: over after ${rounds} rounds; ${CONFIRM_ROUNDS} more each before calling ${doubtful.length === 1 ? "it" : "them"} slower.`)
-          return paired(here.root, tree, doubtful, measurer, CONFIRM_ROUNDS)
-        })
+        await quietWindow(machine, budget, say, read)
+        const measured = async (which: string[], count: number) => {
+          const started = Date.now()
+          const more = await paired(here.root, tree, which, measurer, count, machine, read)
+          if (more.some((result) => result.busy.some(Boolean))) busyTime.leftMs -= Date.now() - started
+          return more
+        }
+        results = await measured(keys, rounds)
+        for (;;) {
+          const outOfTime = busyTime.leftMs <= 0
+          const open = results.filter((result) => result.reference.length && result.head.length && judge(result, allowed, outOfTime).outcome === undefined)
+          if (outOfTime && !spent && results.some((result) => judge(result, allowed).outcome === undefined && judge(result, allowed, true).outcome === "unsure")) {
+            spent = true
+            say(`Measured for the ${Math.round((settling.busyMeasureMs ?? BUSY_MEASURE_MS) / 1000)} s a busy machine gets; rows it hasn't settled are unsure.`)
+          }
+          if (!open.length) break
+          const busy = open.some((result) => judge(result, allowed).busyShare >= BUSY_RUNS)
+          say(`${open.map((result) => result.key).join(", ")}: unsettled after ${open[0]!.head.length} rounds${busy ? " on a busy machine" : ""}; ${CONFIRM_ROUNDS} more each.`)
+          if (busy) await quietWindow(machine, budget, say, read)
+          results = joined(results, await measured(open.map((result) => result.key), CONFIRM_ROUNDS))
+        }
       } catch (error) {
         unsettled(group, `it can't be measured beside ${at.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`)
         continue
       }
-      for (const { key, reference, head } of results) {
+      for (const result of results) {
+        const { key, reference, head } = result
         if (!reference.length || !head.length) {
           unsettled(group.filter((suspect) => suspect.key === key), `${reference.length ? "this checkout" : at.slice(0, 8)} has no such row to measure`)
           continue
         }
-        const change = median(head) / median(reference)
+        const { outcome = "unsure", change, interval, busyShare } = judge(result, allowed, busyTime.leftMs <= 0)
         const runs = (units: number[]) => units.map((value) => value.toFixed(3)).join(" ")
-        table.push([key, at.slice(0, 8), runs(reference), runs(head), median(reference).toFixed(3), median(head).toFixed(3), percent(change - 1)])
-        if (change > allowed)
-          failed.push(`${key}: ${percent(change - 1)} over ${at.slice(0, 8)} measured beside it (${median(head).toFixed(3)} against ${median(reference).toFixed(3)})`)
+        const between = interval ? `${percent(interval[0] - 1)} to ${percent(interval[1] - 1)}` : "-"
+        const busyRounds = `${result.busy.filter(Boolean).length}/${result.busy.length}`
+        table.push([key, at.slice(0, 8), runs(reference), runs(head), median(reference).toFixed(3), median(head).toFixed(3), percent(change - 1), between, busyRounds, outcome])
+        rows.push({ key, beside: at, outcome, reference: median(reference), head: median(head), change, ...interval && { interval }, rounds: head.length, busyShare })
+        const bounds = interval ? `, between ${percent(interval[0] - 1)} and ${percent(interval[1] - 1)}` : ""
+        const measured = `${percent(change - 1)} beside ${at.slice(0, 8)} (${median(head).toFixed(3)} against ${median(reference).toFixed(3)}${bounds}, ${head.length} rounds)`
+        if (outcome === "slower") failed.push(`${key}: ${measured}: slower`)
+        if (outcome === "unsure") unsure.push(`${key}: ${measured}: the machine was too busy to tell, ${busyRounds} rounds busy`)
       }
     }
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
+  const overall = summary(readings)
+  const busy = overall && unsure.length ? busyReasons(overall) : []
   if (table.length > 1) {
-    const load = (averages: number[]) => averages.map((value) => value.toFixed(2)).join(" ")
-    say(`\nMedians of ${rounds} runs each (${rounds + CONFIRM_ROUNDS} for a row over after ${rounds}), in turns; load average ${load(loadBefore)} before, ${load(loadavg())} after, on ${availableParallelism()} cores.\n`)
+    say(`\nMedians in turns, each row's change the median of its rounds' head over reference, "between" where that lies at 95%; ${overall ? describeMachine(overall) : "the machine wasn't read"}.\n`)
     printTable(table, say)
   }
-  return failed
+  return { failed, unsure, rows, machine: overall ? describeMachine(overall) : "", busy }
+}
+
+/**
+ * What a script makes of `settled`: the lines to fail on. Under the local
+ * updater, which names a verdict file (`PERFORMANCE_VERDICT_VARIABLE`), the
+ * verdict goes there and an unsure row doesn't fail; anywhere else nobody is
+ * there to choose, so it fails beside a slower one.
+ */
+export async function concluded(script: string, settled: Settled, allowed: number, file = process.env[PERFORMANCE_VERDICT_VARIABLE]): Promise<string[]> {
+  if (file) {
+    const verdict: PerformanceVerdict = { script, allowed, rows: settled.rows, machine: settled.machine, busy: settled.busy }
+    await appendFile(file, `${JSON.stringify(verdict)}\n`)
+    return settled.failed
+  }
+  return [...settled.failed, ...settled.unsure.map((line) => `${line}; measure it again on a quieter machine`)]
 }
 
 /** HEAD, if the tree holds nothing uncommitted but `baseline` itself: the code a baseline recorded now measured. */

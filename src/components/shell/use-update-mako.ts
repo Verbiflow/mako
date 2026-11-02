@@ -5,7 +5,8 @@ import { updates, useUpdates } from "@/state/updates"
 export function useUpdateMakoAction() {
   const status = useUpdates((state) => state.status)
   const distribution = useApplication((state) => state.installation?.distribution)
-  const localReady = useApplication((state) => state.installation?.local.kind === "ready")
+  // A build the Mac was too busy to measure installs from Updates, where what was measured is shown.
+  const localReady = useApplication((state) => state.installation?.local.kind === "ready" && !state.installation.local.performance)
   const busy = status === "checking" || status === "downloading"
   const label = status === "ready" || localReady ? "Install update" : status === "checking" ? "Checking…" : status === "downloading" ? "Downloading…" : "Update"
   const act = () => {

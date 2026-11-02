@@ -165,6 +165,21 @@ export interface MissingDependencies {
   names: string[]
 }
 
+/**
+ * A performance check that couldn't trust what it measured: the Mac was too
+ * busy to tell the update's speed from its own noise. The update is built and
+ * verified; Mako measures again once the Mac is quiet, and installing it
+ * anyway is the person's to choose.
+ */
+export interface UnsurePerformance {
+  /** Each row it couldn't settle, as `describeRow` says it. */
+  rows: string[]
+  /** The Mac while it measured, in words, and why that was too busy. */
+  machine: string
+  busy: string[]
+  measuredAt: string
+}
+
 export type LocalBuildState =
   | { kind: "idle" }
   | {
@@ -175,6 +190,8 @@ export type LocalBuildState =
       revision?: string
       /** What the install brings, while `phase` is `installing`. */
       dependencies?: MissingDependencies
+      /** Measuring a built update's performance again, after a Mac too busy to measure it; nothing is rebuilt. */
+      remeasuring?: true
     }
   | {
       kind: "ready"
@@ -183,6 +200,8 @@ export type LocalBuildState =
       changes: RevisionChanges | null
       /** The branch fast-forwarded before building, and to which commit. */
       forwarded: { branch: string; from: string; to: string } | null
+      /** Set when the performance check couldn't settle; absent when it passed. */
+      performance?: UnsurePerformance
     }
   | {
       kind: "error"

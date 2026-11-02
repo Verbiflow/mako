@@ -9,7 +9,7 @@
  * over its baseline is measured again to rule out a passing stall, then
  * beside the commit the baselines were recorded at (`at`), in turns
  * (`perf-reference.ts`): it fails only if it's more than 25% slower than that
- * code on this machine now.
+ * code on this machine now, and is unsure when the machine is too busy to tell.
  *
  *   npm run test:performance                                                   check every budget
  *   npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --update         record what this machine measures now, at HEAD
@@ -24,7 +24,7 @@ import { deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates, type LivePendin
 import { SessionUsage, type UsageObservation } from "@mako/host/harnesses/session-usage"
 import { decoders } from "./native-decoding"
 import { timing, type Work } from "./performance-measure"
-import { committed, ROUNDS, script, settle, type Measurer, type Suspect } from "./perf-reference"
+import { committed, concluded, ROUNDS, script, settle, type Measurer, type Suspect } from "./perf-reference"
 import type { Entry } from "@mako/sessions/entries"
 
 const BUDGETS = join(import.meta.dirname, "performance-budgets.json")
@@ -152,7 +152,10 @@ if (update) {
   console.log(`Recorded ${Object.keys(measured).length} baselines in ${BUDGETS}${at ? ` at ${at.slice(0, 8)}` : ""}`)
   if (!at) console.warn("This tree has uncommitted changes, so these baselines name no commit to measure beside when one goes over budget. Commit the code, then run --update again.")
 } else if (!measureOnly) {
-  if (suspects.length) failures.push(...await settle(suspects, { allowed: ALLOWED_REGRESSION, rounds: ROUNDS, say: console.log, measurer: budgetRuns }))
+  if (suspects.length) {
+    const settled = await settle(suspects, { allowed: ALLOWED_REGRESSION, rounds: ROUNDS, say: console.log, measurer: budgetRuns })
+    failures.push(...await concluded("performance budgets", settled, ALLOWED_REGRESSION))
+  }
   assert.deepEqual(failures, [], failures.join("\n"))
   console.log(`Performance budgets: ${Object.keys(budgets).length} hot paths within ${Math.round((ALLOWED_REGRESSION - 1) * 100)}% of their baselines`)
 }

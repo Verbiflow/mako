@@ -3227,6 +3227,7 @@ export function installMockBridge() {
       installed: null,
     }),
     buildUpdate: async () => {},
+    measureUpdateAgain: async () => {},
     updateState: async (): Promise<UpdateState> => {
       if (!newerStoresScene) return { status: "unsupported", version: "0.0.0-mock" }
       if (mockUpdate === "ready") return { status: "ready", version: "0.161.2", available: "0.163.0" }
