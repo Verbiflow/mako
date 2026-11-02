@@ -7,7 +7,7 @@ import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contract
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { LivePermissionRequest, LivePermissionResponse, LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
@@ -19,6 +19,12 @@ import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.t
 /** The six harnesses, as an Apex or a child runs on them here: each a scripted driver, two of them steering at the next step as Claude's and OpenCode's do. */
 export const HARNESSES = ["claude", "codex", "cursor", "grok", "opencode", "devin"] as const
 const STEERS_AT_STEP = new Set<string>(["claude", "opencode"])
+/** An approval's answers, as ACP harnesses offer them. */
+export const APPROVAL_OPTIONS: LivePermissionRequest["options"] = [
+  { optionId: "allow", name: "Allow once", kind: "allow_once" },
+  { optionId: "always", name: "Always allow", kind: "allow_always" },
+  { optionId: "reject", name: "Reject", kind: "reject_once" },
+]
 /** Every access tier, as a harness that offers Mako's modes lists them. */
 const MODES = ACCESS_TIERS.map((info) => ({ id: accessModeId(info.tier), name: info.label, access: info.tier }))
 
@@ -68,7 +74,10 @@ export class AgentsWorld {
   /** Every prompt a driver was sent, in order: a turn lost or run twice shows here. */
   readonly prompts: { conversation: string; harness: string; text: string; at: number }[] = []
   readonly steers: { conversation: string; text: string; at: number }[] = []
+  /** Every answer to an approval a driver was sent: its conversation, its harness's request, and the answer. */
+  readonly answers: { conversation: string; request: string; response: LivePermissionResponse; at: number }[] = []
   readonly events: HostEvent[] = []
+  private asking = new Map<string, { observationId: string; answered: (response: LivePermissionResponse) => void }>()
   store!: ThreadStore
   live!: LiveConversations
   agents!: Agents
@@ -157,6 +166,20 @@ export class AgentsWorld {
     return request
   }
 
+  /**
+   * The conversation's harness asks the person, as its running turn would: an
+   * approval with `options`, or with `questions` a question asked as one.
+   * Resolves with the answer once one reaches the harness, which ends the ask.
+   */
+  ask(conversation: string, title: string, asked: Pick<LivePermissionRequest, "options" | "questions"> = { options: APPROVAL_OPTIONS }): Promise<LivePermissionResponse> {
+    const id = `ask-${randomUUID()}`
+    const observationId = randomUUID()
+    return new Promise((answered) => {
+      this.asking.set(`${conversation}:${id}`, { observationId, answered })
+      this.live.observe({ type: "live-permission", request: { id, observationId, sessionId: conversation, title, ...asked } })
+    })
+  }
+
   /** Lets a held turn end (`hold`). */
   release(conversation: string): void {
     this.holds.get(conversation)?.()
@@ -235,7 +258,17 @@ export class AgentsWorld {
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))
       },
-      permission: async () => {},
+      permission: async (id, request, response, dispatch) => {
+        dispatch.report({ kind: "submitted", source: "callback" })
+        this.answers.push({ conversation: id, request, response, at: Date.now() })
+        const asked = this.asking.get(`${id}:${request}`)
+        if (!asked) return
+        this.asking.delete(`${id}:${request}`)
+        setTimeout(() => {
+          this.live.observe({ type: "live-permission-ended", id, requestId: request, observationId: asked.observationId, source: "native-resolution" })
+          asked.answered(response)
+        }, 0)
+      },
       cancel: async (id) => {
         this.holds.get(id)?.()
       },
@@ -254,7 +287,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, snapshot: () => null, editQueued: none, transfer: none, submit: none,
-    act: async () => none(), cancel: async () => {}, waitingOn: () => undefined, steersAtStep: () => false,
+    act: async () => none(), cancel: async () => {}, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
 }

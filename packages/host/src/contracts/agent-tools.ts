@@ -1,6 +1,7 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { HostCallReplay } from "./host-call-policy.js"
+import type { AskOption, FinAsk } from "./native-agents.js"
 
 /**
  * The orchestration operations, each defined once: a host call
@@ -126,6 +127,12 @@ export interface AgentsReportInput {
   summary: string
   artifacts?: Artifact[]
   question?: string
+  /** The answers the question offers; each a tap for the person. */
+  options?: AskOption[]
+  /** The option you recommend, by its place in `options`, from 0. */
+  recommended?: number
+  /** What whoever answers does, in one sentence. */
+  action?: string
   /** A repeat with the same key is the same report. */
   clientKey: string
 }
@@ -152,6 +159,29 @@ export interface AgentsSent {
 }
 export type AgentsSendResult = AgentsSent | AgentRefused
 
+export interface AgentsAnswerInput {
+  /** The Fin's name or Thread ID. */
+  to: string
+  /** Your answer: one of its options, by its label, or your own words. For an approval, what you say with a refusal. */
+  answer?: string
+  /** For an approval its harness asks: true allows it once, false refuses it. */
+  allow?: boolean
+  /** Leave the question to the person: it reaches them on every device, with its options. */
+  person?: boolean
+  /** A repeat with the same key is the same answer. */
+  clientKey: string
+}
+export interface AgentsAnswered {
+  child: string
+  name: string
+  /** What it answered: a question in its report, its harness's question or approval; `person` when it was left to them. */
+  answered: FinAsk["kind"] | "person"
+  /** How a report's answer reached it, as a message does. */
+  delivery?: FinDelivery
+  deduped?: true
+}
+export type AgentsAnswerResult = AgentsAnswered | AgentRefused
+
 export interface AgentsStopInput {
   /** The Fin's name or Thread ID, or `all` for every Fin of the caller. */
   child: string
@@ -177,6 +207,7 @@ export interface AgentOperations {
   read(caller: AgentCaller, input: AgentsReadInput): Promise<AgentsReadResult>
   report(caller: AgentCaller, input: AgentsReportInput): Promise<AgentsReportResult>
   send(caller: AgentCaller, input: AgentsSendInput): Promise<AgentsSendResult>
+  answer(caller: AgentCaller, input: AgentsAnswerInput): Promise<AgentsAnswerResult>
   stop(caller: AgentCaller, input: AgentsStopInput): Promise<AgentsStopResult>
   wait(caller: AgentCaller, input: AgentsWaitInput): Promise<AgentsWaitResult>
 }
@@ -228,7 +259,7 @@ export function afterStart(wake: WakeOn, waited?: StartWaited): string {
   if (waited?.outcome === "pending") return "It's still working. End your turn now: its result starts your next turn. Don't wait or poll."
   if (waited?.outcome === "question")
     return waited.answers === "you"
-      ? "It needs a decision from you: tell the person, or stop it with agents_stop. Its result starts a turn of yours once it finishes."
+      ? "It needs a decision from you: answer it with agents_answer, or leave it to the person with agents_answer person: true. Its result starts a turn of yours once it finishes."
       : "It asks the person, who answers it in its Thread. End your turn: its result starts your next turn."
   if (wake === "finish") return "Its result wakes you; its questions go to the person. End your turn or keep working; don't wait or poll."
   if (wake === "never") return "Nothing it reports wakes you, and its questions go to the person: read it with agents_read when you need it."
@@ -248,7 +279,8 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report, ask or take messages.`,
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
-  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision; ending your turn without one reports how it ended.`,
+  `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide.`,
+  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended.`,
 ].join(" ")
 
 /** A Fin as the front door's note shows it to its Apex: typed facts the host already holds, never its transcript. */
@@ -306,7 +338,7 @@ function stateWords(state: ChildState, report: FrontDoorChild["report"], now: nu
     case "idle":
       return "idle"
     case "blocked":
-      return `waits on ${state.on === "lead" ? "you" : "the person"}: ${state.question}`
+      return `waits on ${state.on === "lead" ? "you (agents_answer)" : "the person"}: ${state.question}`
     case "ended":
       return `${state.outcome}${report ? ` ${ago(report.at, now)}: ${report.line}` : state.reason ? `: ${state.reason}` : ""}`
   }
@@ -412,7 +444,32 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         summary: "What happened, first sentence first; where to read more.",
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
         question: "For blocked or needs-input: the decision you need.",
+        options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
+        recommended: "The option you recommend, by its place in options, from 0.",
+        action: "What whoever answers does, in one sentence: \"Pick the branch the release goes from.\"",
         clientKey: "Your own key for this report: a repeat with it is the same report.",
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+  },
+  {
+    verb: "answer",
+    channel: "mako:agents-answer",
+    replay: "replay",
+    filled: [],
+    mcp: {
+      name: "agents_answer",
+      description: [
+        `Answer what one of this Thread's ${FIN_WORD}s waits on: the question its report asks, or its harness's own question or approval. The ${FIN_WORD} goes on at once.`,
+        "Answer within your own access: an approval only when this Thread is on full access, a question on any.",
+        "Leave it to the person (person: true) when it's theirs to decide; it reaches them on every device with its options.",
+      ].join(" "),
+      fields: {
+        to: `The ${FIN_WORD}'s name (fin:<name>) or Thread ID.`,
+        answer: "One of its options by its label, or your own words. For an approval you refuse, why.",
+        allow: "For an approval: true allows it once, false refuses it.",
+        person: "true: leave it to the person instead of answering.",
+        clientKey: "Your own key for this answer: a repeat with it is the same answer.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

@@ -4,7 +4,7 @@ import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
-import { ACCESS_TIER_NAMES, accessModeId, accessTierOfModeId, type AccessTier } from "../contracts/access.js"
+import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } from "../contracts/access.js"
 import {
   childAccess,
   childEntry,
@@ -26,6 +26,7 @@ import {
   type AgentsRedirectInput,
   type Brief,
   type ChildStart,
+  type FinDelivery,
   type ChildState,
   type ChildThread,
   type QueueReason,
@@ -46,6 +47,9 @@ import {
   type AgentsReadResult,
   type AgentsReportInput,
   type AgentsReportResult,
+  type AgentsAnswered,
+  type AgentsAnswerInput,
+  type AgentsAnswerResult,
   type AgentsSendInput,
   type AgentsSendResult,
   type AgentsSent,
@@ -61,11 +65,12 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, BRIEF_CLOSE, briefIntro, finName, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
-import type { NativeAgent } from "../contracts/native-agents.js"
+import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
+import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
-import type { LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
+import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
@@ -81,7 +86,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "waitingOn" | "steersAtStep" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -175,6 +180,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The person's direct messages by their request, delivering or delivered, so a repeat answers the first. */
   private readonly directed = new Map<string, Promise<AgentsDirected | AgentRefused>>()
   private readonly routes = { forwarded: 0, sent: 0, redirected: 0, direct: 0 }
+  /** What each `agents_answer` key did, so a retry answers the same. */
+  private readonly answers = new Map<string, AgentsAnswered>()
+  private readonly answerCounts = { apex: 0, passed: 0, refused: 0 }
   private latest = new Map<string, Report>()
   private seen: unknown
   private draining = false
@@ -503,6 +511,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       summary: input.summary,
       ...(input.artifacts?.length && { artifacts: input.artifacts }),
       ...(input.question && { question: input.question }),
+      ...(input.options?.length && { options: input.options.slice(0, ASK_OPTIONS).map((option) => ({ label: option.label.slice(0, 200), ...(option.detail && { detail: option.detail.slice(0, 600) }) })) }),
+      ...(input.recommended !== undefined && input.recommended < (input.options?.length ?? 0) && { recommended: input.recommended }),
+      ...(input.action && { action: input.action.slice(0, 400) }),
       ownerGeneration: this.generation,
       at: this.now(),
     }
@@ -542,6 +553,87 @@ export class Agents implements AgentOperations, ConversationChildren {
     else this.routes.sent += 1
     hostLog("agents", "send", { op, child: edge.child, request, delivery: sent.delivery, forward: input.forward ?? false, ms: Math.round(performance.now() - began) })
     return answer
+  }
+
+  /**
+   * An Apex answers what one of its Fins waits on, within its own access: the
+   * person's access mode is the grant, so an Apex on full access answers its
+   * Fins' approvals as the person would, and one on any mode answers their
+   * questions, which grant nothing. Or it leaves the ask to the person.
+   */
+  async answer(caller: AgentCaller, input: AgentsAnswerInput): Promise<AgentsAnswerResult> {
+    const began = performance.now()
+    const apex = this.apexOf(caller)
+    if ("refused" in apex) return apex
+    const edge = this.resolve(apex, input.to, false)
+    if (!edge) return unknownFin(input.to)
+    const op = `answer:${apex.session}:${input.clientKey}`
+    const kept = this.answers.get(op)
+    if (kept) return { ...kept, deduped: true }
+    const answered = await this.answerOnce(apex, edge, op, input)
+    const ms = Math.round(performance.now() - began)
+    if ("refused" in answered) {
+      if (answered.refused === "access") this.answerCounts.refused += 1
+      hostLog("agents", "answer refused", { op, child: edge.child, refused: answered.refused, ms })
+      return answered
+    }
+    this.answers.set(op, answered)
+    this.answerCounts[answered.answered === "person" ? "passed" : "apex"] += 1
+    hostLog("agents", "answer", { op, child: edge.child, answered: answered.answered, ...(answered.delivery && { delivery: answered.delivery }), ms })
+    return answered
+  }
+
+  private async answerOnce(apex: Apex, edge: ThreadParent, op: string, input: AgentsAnswerInput): Promise<AgentsAnswered | AgentRefused> {
+    const state = this.stateOf(edge)
+    if (state.kind !== "blocked" || !state.ask)
+      return { refused: "conflict", why: `${edge.name} isn't waiting on a question or an approval: agents_send gives it a message.` }
+    const { ask } = state
+    const done = (answered: AgentsAnswered["answered"], delivery?: FinDelivery): AgentsAnswered => ({ child: edge.child, name: edge.name, answered, ...(delivery && { delivery }) })
+    if (input.person) {
+      this.passToPerson(edge, ask, state.question)
+      return done("person")
+    }
+    if (ask.kind === "report") {
+      const words = input.answer?.trim()
+      if (!words) return { refused: "conflict", why: "Its question needs an answer: one of its options by its label, or your own words." }
+      const picked = ask.options?.find((option) => sameWords(option.label, words))
+      const sent = await this.deliver(edge, namedUuid(op), `${fromAgent(YOUR_APEX)}\n${answerText(state.question, picked?.label ?? words)}`, [], { kind: "agent", session: SessionIdSchema.parse(apex.session) })
+      return "refused" in sent ? sent : done("report", sent.delivery)
+    }
+    const tier = this.tierOf(apex)
+    if (ask.kind === "approval" && tier !== "full")
+      return { refused: "access", why: `${edge.name}'s approval is the person's: this Thread is on ${tier}, and only an ${APEX_WORD} on full access answers its ${FIN_WORD}s' approvals. Leave it to them with person: true.` }
+    const conversation = this.conversationOf(edge.child)
+    const pending = conversation ? this.deps.live.pendingAsk(conversation) : undefined
+    if (!conversation || !pending || pending.request !== ask.id) return { refused: "conflict", why: `${edge.name} no longer waits on that: it was answered.` }
+    if (pending.gone) return { refused: "unavailable", why: `${edge.name}'s harness exited while it waited, so no answer reaches it: agents_send gives it a message to go on.` }
+    const response = permissionAnswer(pending, input)
+    if ("refused" in response) return response
+    try {
+      await this.deps.live.permission(conversation, pending.request, response)
+    } catch (error) {
+      return { refused: "unavailable", why: `${edge.name}'s harness didn't take the answer: ${errorMessage({ error })}` }
+    }
+    return done(ask.kind)
+  }
+
+  /** The Apex leaves a Fin's ask to the person: a report on the Fin that no Apex hears, with the ask's options. */
+  private passToPerson(edge: ThreadParent, ask: FinAsk, question: string): void {
+    const from = ask.kind === "report" ? this.latest.get(edge.child) : undefined
+    this.keepReport(edge, {
+      id: passedId(edge.child, ask.id),
+      child: ThreadIdSchema.parse(edge.child),
+      status: "needs-input",
+      summary: from?.summary ?? `It waits: ${question}`,
+      question: from?.question ?? question,
+      ...(ask.options && { options: ask.options }),
+      ...(ask.recommended !== undefined && { recommended: ask.recommended }),
+      ...(ask.action && { action: ask.action }),
+      for: "person",
+      implicit: true,
+      ownerGeneration: this.generation,
+      at: this.now(),
+    })
   }
 
   async stop(caller: AgentCaller, input: AgentsStopInput): Promise<AgentsStopResult> {
@@ -606,7 +698,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The host's Fins and budgets, for Diagnostics. */
   diagnostics(): AgentsDiagnostics {
     const store = this.store()
-    if (!store) return { fins: 0, running: 0, followed: 0, queued: 0, notices: 0, budget: this.budget, trees: [], routes: { ...this.routes } }
+    if (!store) return { fins: 0, running: 0, followed: 0, queued: 0, notices: 0, budget: this.budget, trees: [], routes: { ...this.routes }, answers: { ...this.answerCounts } }
     const edges = store.edges()
     const roots = new Set(edges.all.map((edge) => this.rootOf(edge.parent)))
     const trees = [...roots].map((apex) => ({ apex, ...this.treeCounts(apex) }))
@@ -619,6 +711,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       budget: this.budget,
       trees,
       routes: { ...this.routes },
+      answers: { ...this.answerCounts },
     }
   }
 
@@ -888,7 +981,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** `notice:{child}:{reportId}` to the Apex's owner: this host, which has the Apex's conversation; a report its spawn asked not to hear goes nowhere but its strip. */
   private noticeOf(edge: ThreadParent, report: Report, wake?: string): void {
     const store = this.store()!
-    const route = reportRoute(edge.asked, report.status)
+    const route = report.for === "person" ? "person" : reportRoute(edge.asked, report.status)
     if (route !== "apex") {
       store.markReportsDelivered([report.id], this.now())
       hostLog("agents", "report kept", { op: edge.op, report: report.id, status: report.status, to: route, wake: edge.asked.wake ?? "decisions" })
@@ -981,7 +1074,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...((session.status === "starting" || this.starting.has(edge.op)) && { starting: "launching" as const }),
       ...(working && { working }),
       ...(working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
-      ...(waiting && { waiting: { question: this.waitingLine(edge, waiting.line), on: this.decides(edge) === "apex" ? "lead" : "person" } }),
+      ...(waiting && { waiting: this.waitingOf(edge, waiting.line, live.pendingAsk(conversation)) }),
       ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: last.createdAt ?? edge.createdAt } }),
       ...(!working && last?.status === "interrupted" && last.interruption?.reason === "stopped" && { ended: { outcome: "stopped" as const, at: last.interruption.at } }),
       startedAt: edge.createdAt,
@@ -989,19 +1082,25 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
   }
 
-  /** Who answers a Fin's approval: its Apex on full access, unless its spawn asked to hear only its result; else the person, told why. */
-  private decides(edge: ThreadParent): "apex" | "person" {
-    if (reportRoute(edge.asked, "blocked") !== "apex") return "person"
-    const parent = this.frontOf(edge.parent, edge.parentSession)
-    const tier = parent ? this.tierOfConversation(parent) : undefined
-    return tier === "full" ? "apex" : "person"
+  /** What a Fin's harness waits on, as its state says it: whose it is (the line says why when it's the person's) and what answers it. */
+  private waitingOf(edge: ThreadParent, line: string, pending: PendingAsk | undefined): NonNullable<ChildThread["waiting"]> {
+    const ask = pending ? nativeAsk(pending) : undefined
+    const why = this.personsBecause(edge, ask)
+    return { question: why ? `${line} (yours to answer: ${why})` : line, on: !why ? "lead" : ask?.kind === "approval" ? "approval" : "person", ...(ask && { ask }) }
   }
 
-  private waitingLine(edge: ThreadParent, line: string): string {
-    if (this.decides(edge) === "apex") return line
-    return reportRoute(edge.asked, "blocked") === "apex"
-      ? `${line} (yours to answer: its ${APEX_WORD} isn't on full access)`
-      : `${line} (yours to answer: its ${APEX_WORD} hears only ${edge.asked.wake === "never" ? "what it reads" : "its result"})`
+  /**
+   * Why a Fin's ask is the person's, or undefined when it's its Apex's: an Apex
+   * answers within its own access (a question on any, an approval on full
+   * access), unless its spawn asked to hear only its result or it left the ask
+   * to the person.
+   */
+  private personsBecause(edge: ThreadParent, ask: FinAsk | undefined): string | undefined {
+    if (reportRoute(edge.asked, "blocked") !== "apex") return `its ${APEX_WORD} hears only ${edge.asked.wake === "never" ? "what it reads" : "its result"}`
+    if (ask && this.latest.get(edge.child)?.id === passedId(edge.child, ask.id)) return `its ${APEX_WORD} left it to you`
+    if (ask?.kind !== "approval") return undefined
+    const parent = this.frontOf(edge.parent, edge.parentSession)
+    return (parent ? this.tierOfConversation(parent) : undefined) === "full" ? undefined : `its ${APEX_WORD} isn't on full access`
   }
 
   private stateOf(edge: ThreadParent): ChildState {
@@ -1041,25 +1140,28 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const hold of this.holds) if (hold.child === child) hold.check()
   }
 
-  /** A Fin waiting on an approval or a question under an Apex on full access: the Apex hears it as `blocked`, keyed by what it waits on. */
+  /** A Fin's harness waits on a question, or an approval under an Apex on full access: the Apex hears it as `blocked`, keyed by what it waits on. */
   private askApex(edge: ThreadParent): void {
     const conversation = this.conversationOf(edge.child)
     const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
-    if (!waiting) {
+    if (!conversation || !waiting) {
       this.asked.delete(edge.child)
       return
     }
     if (this.asked.get(edge.child) === waiting.line) return
     this.asked.set(edge.child, waiting.line)
-    const on = this.decides(edge)
-    hostLog("agents", "approval routed", { op: edge.op, child: edge.child, to: on })
-    if (on !== "apex") return
+    const pending = this.deps.live.pendingAsk(conversation)
+    const ask = pending ? nativeAsk(pending) : undefined
+    const why = this.personsBecause(edge, ask)
+    hostLog("agents", "ask routed", { op: edge.op, child: edge.child, ask: ask?.kind ?? waiting.for, to: why ? "person" : "apex" })
+    if (why) return
     this.keepReport(edge, {
       id: `report:${edge.child}:waiting:${namedUuid(waiting.line)}`,
       child: ThreadIdSchema.parse(edge.child),
       status: "blocked",
       summary: `It waits: ${waiting.line}`,
-      question: `${waiting.line}. Answer it in its Thread, or stop it with agents_stop.`,
+      question: apexAsk(waiting.line, ask?.kind === "approval"),
+      ...(ask?.options && { options: ask.options }),
       implicit: true,
       ownerGeneration: this.generation,
       at: this.now(),
@@ -1138,9 +1240,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   private tierOfConversation(conversation: string): AccessTier | undefined {
-    const session = this.deps.live.session(conversation)
-    const mode = session?.launchMode ?? session?.currentMode ?? ""
-    return session?.modes.find((offered) => offered.id === mode)?.access ?? accessTierOfModeId(mode) ?? undefined
+    return sessionAccessTier(this.deps.live.session(conversation))
   }
 
   private harnessOf(edge: ThreadParent): string {
@@ -1392,6 +1492,50 @@ function parseQueued(record: string): QueuedStart | undefined {
 
 function waitedReport(report: Report): WaitedReport {
   return { status: report.status, summary: report.summary, ...(report.artifacts?.length && { artifacts: report.artifacts }), ...(report.question && { question: report.question }) }
+}
+
+/** The report that leaves an ask to the person, one per ask. */
+function passedId(child: string, ask: string): string {
+  return `report:${child}:person:${namedUuid(ask)}`
+}
+
+function sameWords(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
+/** A harness's ask as a Fin's: an approval's options, or its one open question's. */
+function nativeAsk(pending: PendingAsk): FinAsk {
+  const options = pending.kind === "approval"
+    ? pending.options.map((option) => ({ label: option.name.slice(0, 200) }))
+    : pending.questions.length === 1
+      ? pending.questions[0]!.options.map((option) => ({ label: option.label.slice(0, 200), ...(option.description && { detail: option.description.slice(0, 600) }) }))
+      : []
+  return { kind: pending.kind, id: pending.request, ...(options.length && { options: options.filter((option) => option.label).slice(0, ASK_OPTIONS) }) }
+}
+
+/**
+ * An answer as its harness takes it: an approval's option (one named by its
+ * label, else its allow-once or refuse-once by `allow`), or the one open
+ * question's answer, an option's value when it names one.
+ */
+function permissionAnswer(pending: PendingAsk, input: AgentsAnswerInput): LivePermissionResponse | AgentRefused {
+  const words = input.answer?.trim()
+  if (pending.kind === "approval") {
+    const named = words ? pending.options.find((option) => sameWords(option.name, words)) : undefined
+    const by = (kind: "allow" | "reject") => pending.options.find((option) => option.kind === `${kind}_once`) ?? pending.options.find((option) => option.kind?.startsWith(kind))
+    const option = named ?? (input.allow === undefined ? undefined : by(input.allow ? "allow" : "reject"))
+    if (!option) return { refused: "conflict", why: `It asks for an approval: say allow: true or false, or name one of its options: ${pending.options.map((each) => each.name).join(", ")}.` }
+    const feedback = !named && input.allow === false && words && pending.feedbackOption === option.optionId ? words : undefined
+    return { kind: "choice", optionId: option.optionId, ...(feedback && { feedback }) }
+  }
+  if (pending.questions.length !== 1)
+    return { refused: "conflict", why: `It asks ${pending.questions.length} questions at once, which only its Thread answers: leave them to the person with person: true.` }
+  const question = pending.questions[0]!
+  if (!words) return { refused: "conflict", why: "Its question needs an answer: one of its options by its label, or your own words." }
+  const picked = question.options.find((option) => sameWords(option.label, words))
+  if (!picked && question.options.length && !question.allowOther)
+    return { refused: "conflict", why: `Its question takes one of its options: ${question.options.map((option) => option.label).join(", ")}.` }
+  return { kind: "answers", answers: { [question.id]: [picked ? picked.value ?? picked.label : words] } }
 }
 
 function unknownFin(ref: string): AgentRefused {

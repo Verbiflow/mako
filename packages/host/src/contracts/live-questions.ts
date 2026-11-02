@@ -24,6 +24,20 @@ export const LiveInputQuestionSchema = z.object({
 })
 export type LiveInputQuestion = z.infer<typeof LiveInputQuestionSchema>
 
+/** What a conversation waits on of the person, whole (`LiveConversations.pendingAsk`): the approval or question `waitingOn` names. */
+export interface PendingAsk {
+  /** The approval's id or the question's, as `mako:live-permission` takes it. */
+  request: string
+  kind: "approval" | "question"
+  /** An approval's options, as its harness offers them. */
+  options: { optionId: string; name: string; kind?: string }[]
+  /** A question's items not yet answered. */
+  questions: LiveInputQuestion[]
+  feedbackOption?: string
+  /** Its process exited, so nothing can answer it. */
+  gone?: true
+}
+
 /** Only answered, visible predecessors participate in dependent questions. */
 export function activeInputQuestions(questions: readonly LiveInputQuestion[], answers: Record<string, string[]>): LiveInputQuestion[] {
   const visible: LiveInputQuestion[] = []

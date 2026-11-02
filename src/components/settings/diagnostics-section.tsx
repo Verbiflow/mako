@@ -380,12 +380,20 @@ function FinsReadout({ agents }: { agents: AgentsDiagnostics }) {
         {APEX_WORD}es passed on {messagesWord(agents.routes.forwarded)} from the person and sent {messagesWord(agents.routes.sent)} of their own ·
         the person wrote {messagesWord(agents.routes.direct)} straight to a {FIN_WORD} and moved {messagesWord(agents.routes.redirected)} to another
       </p>
+      <p className="mt-1 text-label leading-relaxed text-faint">
+        {APEX_WORD}es answered {asksWord(agents.answers.apex)} of their {FIN_WORD}s and left {asksWord(agents.answers.passed)} to the person ·
+        {" "}{agents.answers.refused === 1 ? "1 approval was" : `${agents.answers.refused} approvals were`} refused to an {APEX_WORD} below full access
+      </p>
     </div>
   )
 }
 
 function messagesWord(count: number): string {
   return count === 1 ? "1 message" : `${count} messages`
+}
+
+function asksWord(count: number): string {
+  return count === 1 ? "1 ask" : `${count} asks`
 }
 
 /** What a reading says of its harness in an Apex. */

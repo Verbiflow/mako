@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
 import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import type { Report } from "@mako/host/contracts/agents"
+import { apexAsk } from "@mako/host/contracts/children"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { controlNote } from "@mako/host/control/launch"
+import { digest } from "@mako/host/conversations/agent-wakes"
 
 /**
  * The cases of `eval:orch-tools`, in T3 Code's MCP tool-use schema rewritten
@@ -22,12 +27,12 @@ const PriorTurn = z.object({
   toolCalls: z.array(z.object({ tool: z.string(), input: z.json(), result: z.json() })).optional(),
 })
 
-export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door"] as const
+export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer"] as const
 
-/** The budget each area counts toward, per harness and model: route ≥ 90%, front door ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%. */
+/** The budget each area counts toward, per harness and model: route ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%. */
 export const BUDGET = {
   route: { areas: ["route", "headless-shell", "place"], floor: 0.9 },
-  "front door": { areas: ["front-door"], floor: 0.9 },
+  "front door": { areas: ["front-door", "answer"], floor: 0.9 },
   "don't spawn": { areas: ["dont-spawn", "native-child"], floor: 0.95 },
   "no polling": { areas: ["no-polling"], floor: 0.95 },
   "stay native": { areas: ["stay-native"], floor: 0.85 },
@@ -46,6 +51,16 @@ const EvalChild = z.object({
   direct: z.object({ line: z.string(), minutesAgo: z.number() }).optional(),
 })
 type EvalChild = z.infer<typeof EvalChild>
+
+/** A Fin's ask that wakes its Apex: its harness's approval or question, or a question in its report with options. */
+const EvalAsk = z.object({
+  name: z.string(),
+  kind: z.enum(["approval", "question", "report"]),
+  line: z.string(),
+  options: z.array(z.string()).optional(),
+  recommended: z.number().int().nonnegative().optional(),
+})
+type EvalAsk = z.infer<typeof EvalAsk>
 
 export const OrchCase = z.object({
   id: z.string(),
@@ -67,6 +82,8 @@ export const OrchCase = z.object({
     shellMocks: z.array(z.object({ match: z.string(), output: z.string() })).optional(),
     /** An Apex's Fins as they stand: the front-door note the host sends ahead of the person's message (`frontDoorNote`). */
     children: z.array(EvalChild).optional(),
+    /** Asks of those Fins that wake the Apex: the case's agent reads the wake the host sends, after the person's message (`prompt`) as an earlier turn. */
+    asks: z.array(EvalAsk).optional(),
   }),
   prompt: z.string(),
   expect: z.object({
@@ -126,6 +143,47 @@ function frontDoorChild(child: EvalChild): FrontDoorChild {
 /** What a case's agent reads ahead of the person's message: the note an Apex with these Fins hears, as the host writes it. */
 export function frontDoorText(orchCase: OrchCase): string | undefined {
   return orchCase.setup.children?.length ? controlNote(frontDoorNote(orchCase.setup.children.map(frontDoorChild), NOW)) : undefined
+}
+
+function askReport(ask: EvalAsk, child: EvalChild): Report {
+  return {
+    id: randomUUID(),
+    child: ThreadIdSchema.parse(randomUUID()),
+    status: ask.kind === "report" ? "needs-input" : "blocked",
+    summary: ask.kind === "report" ? child.topic : `It waits: ${ask.line}`,
+    question: ask.kind === "report" ? ask.line : apexAsk(ask.line, ask.kind === "approval"),
+    ...(ask.options && { options: ask.options.map((label) => ({ label })) }),
+    ...(ask.recommended !== undefined && { recommended: ask.recommended }),
+    ownerGeneration: 1,
+    at: NOW,
+  }
+}
+
+/** The wake a case's asks send its Apex, as the host writes it (`digest`). */
+export function wakeText(orchCase: OrchCase): string | undefined {
+  const { asks, children = [] } = orchCase.setup
+  if (!asks?.length) return undefined
+  const notices = asks.map((ask) => {
+    const child = children.find((each) => each.name === ask.name)
+    if (!child) throw new Error(`${orchCase.id}: ${ask.name} asks, but isn't one of its children`)
+    return { id: randomUUID(), report: askReport(ask, child), label: `"${child.name}" (${child.harness})`, from: randomUUID() }
+  })
+  const tally = (states: readonly EvalChild["state"][]) => children.filter((child) => states.includes(child.state)).length
+  return digest(notices, `${tally(["working"])} working, ${tally(["blocked"])} blocked, ${tally(["done", "failed", "stopped"])} ended.`)
+}
+
+/** The case's Thread before the turn it grades: its earlier turns, and the person's message when its Fins' wake is the turn. */
+export function priorTurns(orchCase: OrchCase): z.infer<typeof PriorTurn>[] {
+  const prior = orchCase.setup.priorTurns ?? []
+  return orchCase.setup.asks?.length ? [...prior, { role: "user", text: orchCase.prompt }] : prior
+}
+
+/** What the graded turn opens with: the wake its Fins send, or the person's message behind the note an Apex's Fins send ahead of it. */
+export function turnText(orchCase: OrchCase): string {
+  const wake = wakeText(orchCase)
+  if (wake) return wake
+  const note = frontDoorText(orchCase)
+  return note ? `${note}\n\n${orchCase.prompt}` : orchCase.prompt
 }
 
 /** Whether a case runs on `harness`. */

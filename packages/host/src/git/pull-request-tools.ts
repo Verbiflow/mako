@@ -165,7 +165,21 @@ const ONE_PER_REPOSITORY =
  * the calling conversation edits on, one repository at a time. GitHub is
  * reached through the user's own `gh` login, as the Git sidebar reaches it.
  */
-export function registerPullRequestTools(server: McpServer, tools: PullRequestTools, conversationId: () => string): void {
+export function registerPullRequestTools(server: McpServer, tools: PullRequestTools, conversationId: () => string, fullAccess: (conversation: string) => boolean): void {
+  // The person's access mode is the grant: on full access a Thread opens and merges as the next step of its work, without asking.
+  const full = (() => {
+    try {
+      return fullAccess(conversationId())
+    } catch {
+      return false
+    }
+  })()
+  const openWhen = full
+    ? "Call when this branch's work is ready for review, or when the user asks to open a pull request, or to push to or update the open one: this Thread is on full access, so it opens one without asking first."
+    : "Call when the user asks to open a pull request, or to push to or update the open one."
+  const mergeWhen = full
+    ? "Call when the user asks to merge this branch's pull request on GitHub, or when merging it is the next step of the work you were given: this Thread is on full access, so it merges without asking first."
+    : "Call only when the user asks to merge this branch's pull request on GitHub: on this Thread's access, merging is the user's call, and only full access lets a Thread merge on its own."
   server.registerTool(
     "pull_request_status",
     {
@@ -183,7 +197,7 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     "pull_request_open",
     {
       description:
-        `Call when the user asks to open a pull request, or to push to or update the open one. Pushes the branch this Session edits on, never forcing, and opens its pull request; when one is open already it pushes the new commits instead, and edits its title or body only when you pass them. Commit what belongs in it first: uncommitted files stay behind, and the reply says how many. The base defaults to the branch this Thread's worktree started from when origin has it, else the repository's default. Refused on the default branch, with no commits to carry, or when origin has commits the branch lacks. ${ONE_PER_REPOSITORY} in the project folder itself it acts on the only repository with work, and when several have work it lists where each stands and pushes nothing, so call it once per repository, each with a title and body for that repository's own change. When one repository's change needs another's, say so in both bodies, with a link to the other pull request. In a cloud Thread whose person opens pull requests as themselves, it pushes and opens with their own GitHub token; when theirs can't be used it refuses with what happened and pushes nothing, so tell the person and let them choose. Use this instead of \`gh pr create\`, so the base and the push follow the same rules as the Git sidebar and the user sees it there at once.\n\nWrite the title and body from what the branch does and why, by these rules:\n\n${PULL_REQUEST_WRITING}`,
+        `${openWhen} Pushes the branch this Session edits on, never forcing, and opens its pull request; when one is open already it pushes the new commits instead, and edits its title or body only when you pass them. Commit what belongs in it first: uncommitted files stay behind, and the reply says how many. The base defaults to the branch this Thread's worktree started from when origin has it, else the repository's default. Refused on the default branch, with no commits to carry, or when origin has commits the branch lacks. ${ONE_PER_REPOSITORY} in the project folder itself it acts on the only repository with work, and when several have work it lists where each stands and pushes nothing, so call it once per repository, each with a title and body for that repository's own change. When one repository's change needs another's, say so in both bodies, with a link to the other pull request. In a cloud Thread whose person opens pull requests as themselves, it pushes and opens with their own GitHub token; when theirs can't be used it refuses with what happened and pushes nothing, so tell the person and let them choose. Use this instead of \`gh pr create\`, so the base and the push follow the same rules as the Git sidebar and the user sees it there at once.\n\nWrite the title and body from what the branch does and why, by these rules:\n\n${PULL_REQUEST_WRITING}`,
       inputSchema: z.object({
         title: z.string().max(256).optional().describe("Required for a new pull request; for an open one, only to change it."),
         body: z.string().max(60_000).optional().describe("Markdown; for an open one, only to change it."),
@@ -200,7 +214,7 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     "pull_request_merge",
     {
       description:
-        `Call only when the user asks to merge this branch's pull request on GitHub. Merges it with the method given, or the first the repository allows of squash, merge and rebase. Refused while it conflicts, a check fails or is still running, or changes are requested; the reply says which. The branch is kept, since this Thread's worktree may still be on it. ${ONE_PER_REPOSITORY} in the project folder itself it merges the only open one, and when several are open it lists them and merges none. Merge a project's pull requests one at a time, the one the others depend on first, and use method merge for a repository whose commits another one pins by hash: a squash or rebase puts different commits on its default branch, and the pinned one is left off it.`,
+        `${mergeWhen} Merges it with the method given, or the first the repository allows of squash, merge and rebase. Refused while it conflicts, a check fails or is still running, or changes are requested; the reply says which. The branch is kept, since this Thread's worktree may still be on it. ${ONE_PER_REPOSITORY} in the project folder itself it merges the only open one, and when several are open it lists them and merges none. Merge a project's pull requests one at a time, the one the others depend on first, and use method merge for a repository whose commits another one pins by hash: a squash or rebase puts different commits on its default branch, and the pinned one is left off it.`,
       inputSchema: z.object({ method: z.enum(MERGE_METHODS).optional(), repository: REPOSITORY, as: AS_APP }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },

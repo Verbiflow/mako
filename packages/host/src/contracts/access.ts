@@ -31,7 +31,7 @@ export const ACCESS_TIERS: readonly AccessTierInfo[] = [
   { tier: "ask", label: "Ask before acting", summary: "Edits and commands wait for your approval." },
   { tier: "edits", label: "Accept edits", summary: "File edits run. Commands wait for approval." },
   { tier: "auto", label: "Auto review", summary: "The provider's reviewer approves routine actions and asks about the rest." },
-  { tier: "full", label: "Full access", summary: "Nothing waits for approval. Use in a workspace you can throw away." },
+  { tier: "full", label: "Full access", summary: "Nothing waits for approval: it answers its Fins' approvals and merges its own pull requests. Use in a workspace you can throw away." },
   { tier: "deny", label: "Deny unapproved", summary: "Unapproved tools fail instead of asking." },
 ]
 
@@ -51,4 +51,10 @@ export function accessTierOfModeId(id: string): AccessTier | null {
   const name = id.slice("access:".length)
   const info = ACCESS_TIERS.find((item) => item.tier === name)
   return info ? info.tier : null
+}
+
+/** The tier a live session runs on: the mode it launched in, else the one it's in, by its driver's word or Mako's mode id. */
+export function sessionAccessTier(session: { launchMode?: string; currentMode?: string | null; modes: readonly { id: string; access?: AccessTier }[] } | undefined): AccessTier | undefined {
+  const mode = session?.launchMode ?? session?.currentMode ?? ""
+  return session?.modes.find((offered) => offered.id === mode)?.access ?? accessTierOfModeId(mode) ?? undefined
 }

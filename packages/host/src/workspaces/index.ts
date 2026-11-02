@@ -1,3 +1,4 @@
+import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
 import type { Git } from "@mako/git"
 import { realpathSync } from "node:fs"
@@ -339,7 +340,7 @@ function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps
   return [
     (server, conversationId) => registerWorkspaceTools(server, workspace, conversationId),
     ...(appTools ? [(server, conversationId) => registerEnvironmentTools(server, appTools, conversationId)] satisfies MakoTools[] : []),
-    (server, conversationId) => registerPullRequestTools(server, pulls, conversationId),
+    (server, conversationId) => registerPullRequestTools(server, pulls, conversationId, (id) => sessionAccessTier(live.session(id)) === "full"),
   ]
 }
 
