@@ -171,6 +171,7 @@ export const AFTER_START = "Its report wakes you. End your turn or keep working;
 export const ORCHESTRATION_INSTRUCTIONS = [
   "agents_*: other Threads this Thread starts and leads; it is their " + ROLE_WORD + ".",
   "Background, parallel, cross-harness or remote work goes through `agents_start` (from a shell, `mako agents start` is the same tool).",
+  "Use `agents_start` for parallel or background work even when your harness has its own subagent tool; keep that tool for a quick look you wait for.",
   "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
   "Don't run an agent CLI with nohup: one you start from your shell still shows as your child, but it can't report, ask or take messages.",
   "After starting, end your turn: reports wake you. Don't poll `agents_list` or wait in a loop.",
