@@ -868,27 +868,23 @@
             }
           }
         },
-        "workflow": {
+        "update_goal": {
           "form": "function",
           "description": {
-            "chars": 592,
-            "sha": "d78593fdfd49"
+            "chars": 133,
+            "sha": "9c6bb96d3a59"
           },
           "parameters": {
-            "source": {
-              "type": "object",
-              "required": true
-            },
-            "agent_budget": {
-              "type": "integer|null",
+            "completed": {
+              "type": "boolean|null",
               "required": false
             },
-            "args": {
-              "type": "any",
+            "message": {
+              "type": "string|null",
               "required": false
             },
-            "validate_only": {
-              "type": "boolean",
+            "blocked_reason": {
+              "type": "string|null",
               "required": false
             }
           }
@@ -1967,27 +1963,23 @@
             }
           }
         },
-        "workflow": {
+        "update_goal": {
           "form": "function",
           "description": {
-            "chars": 592,
-            "sha": "d78593fdfd49"
+            "chars": 133,
+            "sha": "9c6bb96d3a59"
           },
           "parameters": {
-            "source": {
-              "type": "object",
-              "required": true
-            },
-            "agent_budget": {
-              "type": "integer|null",
+            "completed": {
+              "type": "boolean|null",
               "required": false
             },
-            "args": {
-              "type": "any",
+            "message": {
+              "type": "string|null",
               "required": false
             },
-            "validate_only": {
-              "type": "boolean",
+            "blocked_reason": {
+              "type": "string|null",
               "required": false
             }
           }
@@ -3066,27 +3058,23 @@
             }
           }
         },
-        "workflow": {
+        "update_goal": {
           "form": "function",
           "description": {
-            "chars": 592,
-            "sha": "d78593fdfd49"
+            "chars": 133,
+            "sha": "9c6bb96d3a59"
           },
           "parameters": {
-            "source": {
-              "type": "object",
-              "required": true
-            },
-            "agent_budget": {
-              "type": "integer|null",
+            "completed": {
+              "type": "boolean|null",
               "required": false
             },
-            "args": {
-              "type": "any",
+            "message": {
+              "type": "string|null",
               "required": false
             },
-            "validate_only": {
-              "type": "boolean",
+            "blocked_reason": {
+              "type": "string|null",
               "required": false
             }
           }
@@ -4165,27 +4153,23 @@
             }
           }
         },
-        "workflow": {
+        "update_goal": {
           "form": "function",
           "description": {
-            "chars": 592,
-            "sha": "d78593fdfd49"
+            "chars": 133,
+            "sha": "9c6bb96d3a59"
           },
           "parameters": {
-            "source": {
-              "type": "object",
-              "required": true
-            },
-            "agent_budget": {
-              "type": "integer|null",
+            "completed": {
+              "type": "boolean|null",
               "required": false
             },
-            "args": {
-              "type": "any",
+            "message": {
+              "type": "string|null",
               "required": false
             },
-            "validate_only": {
-              "type": "boolean",
+            "blocked_reason": {
+              "type": "string|null",
               "required": false
             }
           }

@@ -3320,7 +3320,7 @@ export function installMockBridge() {
     nativeRouting: async () => [
       { harness: "claude", state: "control", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`.", verified: { version: "2.1.314", how: "test:native-routing-live" }, installed: "2.1.314" },
       { harness: "codex", state: "control", via: "`agents.enabled = false` in the config `thread/start`, `thread/resume` and `thread/fork` carry.", verified: { version: "0.166.0", how: "test:native-routing-live" }, installed: "0.166.0" },
-      { harness: "grok", state: "unverified", via: "`GROK_SUBAGENTS=0` in the agent's environment, which removes `spawn_subagent`.", verified: { version: "1.0.70", how: "test:native-routing-live" }, installed: "1.0.74" },
+      { harness: "grok", state: "unverified", via: "`GROK_SUBAGENTS=0` and `GROK_WORKFLOWS=0` in the agent's environment, which remove `spawn_subagent` and `workflow`.", verified: { version: "1.0.70", how: "test:native-routing-live" }, installed: "1.0.74" },
       { harness: "opencode", state: "unverified", via: "A deny on the `subagent` permission, last in the Build and Plan agents' rules.", verified: { version: "2.2.3", how: "test:native-routing-live" } },
     ],
     clearCrashes: async () => {},
