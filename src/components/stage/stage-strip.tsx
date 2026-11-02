@@ -2,7 +2,9 @@ import { IconAction } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
-import { useMemo, type ReactNode } from "react"
+import { LeadChildTabs } from "@/components/stage/child-tabs"
+import { useLeadView } from "@/state/lead-children"
+import { Fragment, useMemo, type ReactNode } from "react"
 import { CheckoutChip } from "@/components/stage/checkout-chip"
 import { AppControl } from "@/components/stage/app-control"
 import { onScreenTab, useOnScreen, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
@@ -40,10 +42,12 @@ export function StageStrip({
   })
   const active = useOnScreen()
   const bound = pane?.session
+  // A child opened from its lead's strip keeps that strip: the lead's Sessions, none of them selected, and its tab.
+  const inLead = useLeadView((state) => (!bound && state.open && state.open.child === active.thread ? state.open : null))
   // A chat without focus shows its own Session, and so do its tabs.
   const here = useMemo<OnScreen>(
-    () => (bound ? { thread: bound.thread, session: bound.tab } : active),
-    [active, bound]
+    () => (bound ? { thread: bound.thread, session: bound.tab } : inLead ? { thread: inLead.lead, cwd: active.cwd } : active),
+    [active, bound, inLead]
   )
   const sessionTabs = useThreadTabs(here)
   const workspaceCwd = useSession((state) => state.meta?.cwd)
@@ -118,13 +122,15 @@ export function StageStrip({
         const active = id === pane.activeId
         if (agent && sessionTabs.length > 0)
           return (
-            <SessionTabList
-              key={`${id}:${here.thread ?? ""}`}
-              tabs={sessionTabs}
-              here={here}
-              paneId={pane.id}
-              agentActive={active}
-            />
+            <Fragment key={`${id}:${here.thread ?? ""}`}>
+              <SessionTabList
+                tabs={sessionTabs}
+                here={here}
+                paneId={pane.id}
+                agentActive={active}
+              />
+              {here.thread && !bound ? <LeadChildTabs thread={here.thread} leadTitle={inLead?.leadTitle ?? here.title ?? "this Thread"} /> : null}
+            </Fragment>
           )
         const title = agent ? agentTitle : document.title
         const pinned = agent || document.pinned

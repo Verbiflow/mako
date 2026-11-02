@@ -1,4 +1,5 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
+import { ChildOfLeadNote } from "./lead-children"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -152,6 +153,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         <PromptQueue onEdit={editing.begin} />
       </div>
       <ReviewTray conversation={conversation} />
+      <ChildOfLeadNote />
       <Composer
         key={draftKey}
         draftKey={draftKey}
@@ -159,6 +161,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         running={running}
         stopping={canceling}
         onStop={() => void acp.cancel()}
+        stopFor={conversation}
         onSend={send}
         onWrite={target.cloudThread ? () => void wakeThread(target.cloudThread!, conversation) : undefined}
         onUnsent={(message: Outgoing) => keepUnsent({ ...message, conversation })}

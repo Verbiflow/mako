@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { RollupBadge } from "@/components/rail/rollup-badge"
+import { useThreadRollup } from "@/state/lead-children"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
 import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
@@ -374,7 +376,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
             <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
             <span className="flex shrink-0 items-center gap-1.5 self-center">
               {unread ? <span aria-hidden data-unread-mark className="size-2 rounded-full bg-foreground" /> : null}
-              <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
+              <LeadOrTime thread={thread.id} activityAt={thread.activityAt} />
             </span>
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
@@ -435,4 +437,10 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
     return () => node.removeEventListener("scroll", scrolled)
   }, [scroller, on])
   return away
+}
+
+/** A lead's row wears its Threads' badge where the time stands, from the snapshot this page holds of it (`rollup`). */
+function LeadOrTime({ thread, activityAt }: { thread: string; activityAt: WebThread["activityAt"] }) {
+  const counts = useThreadRollup(thread)
+  return counts.total ? <RollupBadge counts={counts} size="phone" /> : <span className="tabular text-label text-faint">{formatRelative(activityAt)}</span>
 }

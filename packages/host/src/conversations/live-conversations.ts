@@ -33,6 +33,7 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
+import { rollup } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -372,7 +373,11 @@ export class LiveConversations {
   }
 
   summaries(): LiveSummary[] {
-    return this.records.listing().map((summary) => ({ ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id) }))
+    const agents = this.dependencies.agents?.()
+    return this.records.listing().map((summary) => {
+      const children = agents ? rollup(agents.roster(summary.session.id)) : undefined
+      return { ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id), ...(children?.total && { children }) }
+    })
   }
 
   /** A connected driver is authoritative even if a ledger write failed earlier. */
@@ -501,7 +506,8 @@ export class LiveConversations {
   /** The snapshot as this host numbers it; the renderer merges batches only onto the same epoch. */
   private stamp(snapshot: LiveSnapshot): LiveSnapshot {
     const placed = this.threads.placement(snapshot.session.id)
-    return snapshot.epoch === this.epoch && snapshot.threadId === placed.threadId && snapshot.sessionId === placed.sessionId
+    return snapshot.epoch === this.epoch && snapshot.threadId === placed.threadId && snapshot.sessionId === placed.sessionId &&
+      snapshot.parent?.thread === placed.parent?.thread && snapshot.parent?.session === placed.parent?.session
       ? snapshot
       : { ...snapshot, epoch: this.epoch, ...placed }
   }

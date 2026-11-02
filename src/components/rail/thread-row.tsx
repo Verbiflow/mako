@@ -8,6 +8,7 @@ import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
+import { ThreadRollup } from "@/components/rail/rollup-badge"
 import { MarkStack } from "@/components/ui/mark-stack"
 import {
   FOLD_GLYPHS,
@@ -364,6 +365,7 @@ export const ThreadRow = memo(function ThreadRow({
         )}
         <ThreadPurposeChip thread={thread} />
         {folded ? <SessionCount count={folded.members.length} /> : null}
+        <ThreadRollup thread={thread} />
         {/* The branch itself is in the tip and on the chat's strip; the row
             spends its width on the title. */}
         {made ? (
