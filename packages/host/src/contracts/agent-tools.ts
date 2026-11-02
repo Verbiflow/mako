@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { ROLE_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type ReportStatus } from "./agents.js"
+import { ROLE_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 
 /**
@@ -33,9 +33,34 @@ export interface AgentsStartInput extends DoorFilled {
   workspace?: { branch?: string; base?: string }
   title?: string
   role?: ChildRole
+  /** `background` (absent): the answer comes at once. `wait`: the answer holds its result if it comes within the door's window, and else its result starts the caller's next turn. */
+  mode?: StartMode
+  /** Which of its reports wake the caller (`reportRoute`); absent: `decisions`. */
+  wake?: WakeOn
+  /** A `wait`'s window, at most `WAIT_LIMIT_MS`. */
+  timeoutMs?: number
   /** The caller's own key for this spawn: a repeat with the same key answers the same child. */
   clientKey: string
 }
+
+/** A report as a `wait` answer carries it: in full, as `agents_read` gives it. */
+export interface WaitedReport {
+  status: ReportStatus
+  summary: string
+  artifacts?: Artifact[]
+  question?: string
+}
+
+/**
+ * How a `wait` start's window ended: with the child's result, with a question
+ * it asks (`answers` says whose it is), or with neither, when its result
+ * starts the caller's next turn (`settled-only`, never steered into a turn).
+ */
+export type StartWaited =
+  | { outcome: "result"; report: WaitedReport }
+  | { outcome: "question"; question: string; answers: "you" | "the person"; report?: WaitedReport }
+  | { outcome: "pending" }
+
 export interface AgentsStarted {
   /** Its Thread; absent while it's queued, when its name addresses it. */
   child?: string
@@ -49,6 +74,8 @@ export interface AgentsStarted {
   tree: { running: number; started: number; of: { running: number; started: number } }
   /** A repeat of an earlier spawn: this is that spawn's child. */
   deduped?: true
+  /** A `wait` start's outcome; a repeat of one answers its result again. */
+  waited?: StartWaited
   next: string
 }
 export type AgentsStartResult = AgentsStarted | AgentRefused
@@ -114,7 +141,7 @@ export type AgentsStopResult = { stopped: string[] } | AgentRefused
 export interface AgentsWaitInput {
   /** Names or Thread IDs; absent: every child of the caller. */
   children?: string[]
-  /** At most 12 s on the in-Thread server, which times a request out at 15 s. */
+  /** At most `WAIT_LIMIT_MS`. */
   timeoutMs?: number
   /** The cursor a previous wait returned; reports after it count. */
   after?: number
@@ -160,8 +187,31 @@ export interface AgentToolFilled {
 /** The environment variable naming the Session whose agent started a process (`applyThreadEnvironment`): discovery's key, and a command's caller. */
 export const SESSION_VARIABLE = "MAKO_SESSION_ID"
 
-/** What every spawn's answer tells its caller to do next. */
+/**
+ * The longest a wait (`agents_wait`, a `wait` start) holds a call on any door:
+ * half the 60 s after which Cursor's MCP client, and any client left at the
+ * MCP default, ends a tool call, so the start's own launch fits too. A longer
+ * one would hold the caller's turn open with nothing to show; past it, the
+ * result wakes the caller instead.
+ */
+export const WAIT_LIMIT_MS = 30_000
+const WAIT_WORDS = `${WAIT_LIMIT_MS / 1000} seconds`
+
+/** What a background spawn's answer tells its caller to do next. */
 export const AFTER_START = "Its report wakes you. End your turn or keep working; don't wait or poll."
+
+/** What a start's answer tells its caller to do next: by how it asked to hear back, and how a wait's window ended. */
+export function afterStart(wake: WakeOn, waited?: StartWaited): string {
+  if (waited?.outcome === "result") return "It finished: its report is above. Go on with it."
+  if (waited?.outcome === "pending") return "It's still working. End your turn now: its result starts your next turn. Don't wait or poll."
+  if (waited?.outcome === "question")
+    return waited.answers === "you"
+      ? "It needs a decision from you: tell the person, or stop it with agents_stop. Its result starts a turn of yours once it finishes."
+      : "It asks the person, who answers it in its Thread. End your turn: its result starts your next turn."
+  if (wake === "finish") return "Its result wakes you; its questions go to the person. End your turn or keep working; don't wait or poll."
+  if (wake === "never") return "Nothing it reports wakes you, and its questions go to the person: read it with agents_read when you need it."
+  return AFTER_START
+}
 
 /**
  * The paragraph the `mako` server's instructions carry on every harness, with
@@ -174,7 +224,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   "Use `agents_start` for parallel or background work even when your harness has its own subagent tool; keep that tool for a quick look you wait for.",
   "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
   "Don't run an agent CLI with nohup: one you start from your shell still shows as your child, but it can't report, ask or take messages.",
-  "After starting, end your turn: reports wake you. Don't poll `agents_list` or wait in a loop.",
+  "After starting, end your turn: reports wake you. Don't poll `agents_list` or wait in a loop; when your next step needs a child's result, start it with `mode: \"wait\"`.",
   "If you were started by another Thread, call `agents_report` when you finish, are blocked, or need a decision; ending your turn without one reports how it ended.",
 ].join(" ")
 
@@ -183,7 +233,9 @@ const START = [
   "Use it for work that outlives this turn, runs in parallel with other work, writes code beside another writer, needs another harness or model, or should be something the person can open and steer.",
   "Don't use it for a one-file change, a question you can answer, or work that needs this conversation's own context: do those in your turn.",
   "The brief is everything it knows; it sees none of this conversation.",
-  "It returns at once. " + AFTER_START,
+  "By default it returns at once and its reports wake you (mode background, wake decisions): use that whenever you have other work or can end your turn.",
+  "Use mode wait only when your next step can't go on without its result: you get the result here if it comes within " + WAIT_WORDS + ", else your turn ends and the result starts your next one.",
+  "Don't wait or poll after starting.",
 ].join(" ")
 
 export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
@@ -206,6 +258,9 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         workspace: "Its own worktree: on branch if it exists, else a new branch from base. Absent: this Thread's folder, for reading or one writer.",
         title: "A few words the person sees for it.",
         role: "worker (default), reviewer, verifier, researcher, or lead for a sub-lead that starts its own.",
+        mode: "background (default): returns at once; work on or end your turn. wait: only when your next step needs its result; you get it here if it's quick, else your turn ends and the result starts your next turn. Never wait on work that can run while you do other things.",
+        wake: "What wakes you: decisions (default: it finished, failed, is blocked or asks), finish (only its result; its questions go to the person), or never (nothing; read it with agents_read; its questions go to the person).",
+        timeoutMs: `For wait: how long to hold for its result here, at most ${WAIT_LIMIT_MS} (the default).`,
         clientKey: "Your own key for this spawn: a repeat with it answers the same child.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -284,12 +339,10 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_wait",
-      description: "Wait up to 12 seconds for a child's next report. Reports wake you without it: end your turn instead. Use it only for a step that truly can't go on without the answer.",
-      fields: { children: "Names or Thread IDs; all children when absent.", timeoutMs: "At most 12000.", after: "The cursor an earlier wait returned." },
+      description: `Wait up to ${WAIT_WORDS} for a child's next report. Reports wake you without it: end your turn instead. When your next step needs one child's result, start it with mode wait rather than calling this.`,
+      fields: { children: "Names or Thread IDs; all children when absent.", timeoutMs: `At most ${WAIT_LIMIT_MS}.`, after: "The cursor an earlier wait returned." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
 ]
 
-/** The longest `agents_wait` waits on a door whose requests time out at 15 s. */
-export const WAIT_LIMIT_MS = 12_000

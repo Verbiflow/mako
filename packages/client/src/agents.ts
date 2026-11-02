@@ -4,13 +4,14 @@ import { extname } from "node:path"
 import { parseArgs } from "node:util"
 import { heavy } from "@mako/host/base/heavy-packages"
 import type { AgentCaller } from "@mako/host/contracts/agents"
-import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS, SESSION_VARIABLE, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
+import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS, SESSION_VARIABLE, WAIT_LIMIT_MS, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import { AgentAnswerSchema, agentToolText, registerAgentTools, type AgentToolDoor } from "@mako/host/conversations/agent-tools"
 import { z } from "zod"
 import { localHost, type HostTransport } from "./transport.js"
 
 export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--access <tier>]
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
+                    [--wait [--timeout <ms>]] [--wake decisions|finish|never]
   mako agents list [--tree]
   mako agents read <child> [--transcript]
   mako agents report <status> <summary> [--question <q>] [--key <k>]
@@ -20,7 +21,8 @@ export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--mo
   mako mcp [--cwd <folder>]   the same operations as an MCP server on stdio
 
   A brief file ending .json is a brief ({objective, doneWhen, boundaries, output}); any other is its objective.
-  The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell. --key repeats a start or report.`
+  The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell. --key repeats a start or report.
+  --wait holds for the child's result (at most ${WAIT_LIMIT_MS / 1000} s); past that, the result starts the caller's next turn.`
 
 const BriefSchema = z.object({ objective: z.string(), doneWhen: z.array(z.string()).optional(), boundaries: z.array(z.string()).optional(), output: z.string().optional() }).strict()
 
@@ -63,6 +65,8 @@ const OPTIONS = {
   tree: { type: "boolean" },
   transcript: { type: "boolean" },
   question: { type: "string" },
+  wait: { type: "boolean" },
+  wake: { type: "string" },
   timeout: { type: "string" },
   reason: { type: "string" },
   pid: { type: "string" },
@@ -77,6 +81,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       if (!first || !values["brief-file"]) throw new Error("agents start needs a harness and --brief-file")
       if ((values.branch || values.base) && !values.worktree) throw new Error("--branch and --base name its worktree: add --worktree")
       if (values.branch && values.base) throw new Error("--branch or --base, not both")
+      if (values.timeout && !values.wait) throw new Error("--timeout is how long --wait holds: add --wait")
       return {
         tool: tool("start"),
         input: {
@@ -90,6 +95,9 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
           ...(values.worktree && { workspace: { ...(values.branch && { branch: values.branch }), ...(values.base && { base: values.base }) } }),
           ...(values.title && { title: values.title }),
           ...(values.name && { name: values.name }),
+          ...(values.wait && { mode: "wait" }),
+          ...(values.wake && { wake: values.wake }),
+          ...(values.timeout && { timeoutMs: Number(values.timeout) }),
         },
       }
     }

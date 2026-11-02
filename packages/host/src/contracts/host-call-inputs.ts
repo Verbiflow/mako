@@ -150,6 +150,15 @@ const inputs = {
             z.literal("researcher"),
           ])
           .optional(),
+        mode: z.union([z.literal("wait"), z.literal("background")]).optional(),
+        wake: z
+          .union([
+            z.literal("never"),
+            z.literal("decisions"),
+            z.literal("finish"),
+          ])
+          .optional(),
+        timeoutMs: z.number().optional(),
         clientKey: z.string(),
         cwd: z.string().optional(),
       }),
@@ -902,6 +911,16 @@ const inputs = {
                   branch: z.string().optional(),
                   base: z.string().optional(),
                 })
+                .optional(),
+              mode: z
+                .union([z.literal("wait"), z.literal("background")])
+                .optional(),
+              wake: z
+                .union([
+                  z.literal("never"),
+                  z.literal("decisions"),
+                  z.literal("finish"),
+                ])
                 .optional(),
             }),
             parentSession: z.string(),
