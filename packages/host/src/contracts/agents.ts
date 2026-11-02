@@ -358,6 +358,25 @@ export interface AgentsDiagnostics {
   notices: number
   budget: TreeBudget
   trees: { lead: string; running: number; started: number }[]
+  /** Messages leads routed since this host started: the person's passed on, their own sent, and the person's moved to another child. */
+  routes: { forwarded: number; sent: number; redirected: number }
+}
+
+/** The person moving a message their lead passed on (`agents_send`) from the child it reached to the one it was for. */
+export interface AgentsRedirectInput {
+  /** The child it reached, by name or Thread. */
+  from: string
+  /** Its request in that child's conversation. */
+  request: string
+  /** The child it was for. */
+  to: string
+}
+
+export interface AgentsRedirected {
+  to: string
+  /** Whether it left the first child before that child began on it. */
+  withdrawn: boolean
+  delivery: "turn" | "steer" | "queued"
 }
 
 /** Who calls an orchestration operation: the door stamps it, and through the socket it's a label, not a grant. */

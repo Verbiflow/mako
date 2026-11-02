@@ -153,7 +153,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         <PromptQueue onEdit={editing.begin} />
       </div>
       <ReviewTray conversation={conversation} />
-      <ChildOfLeadNote />
+      <ChildOfLeadNote conversation={conversation} />
       <Composer
         key={draftKey}
         draftKey={draftKey}

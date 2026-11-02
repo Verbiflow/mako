@@ -92,7 +92,7 @@ async function summarize(results: CaseResult[]) {
     const name = `${result.harness} · ${result.model} · routing ${result.routing}`
     groups.set(name, [...groups.get(name) ?? [], result])
   }
-  const lines = ["| run | route | don't spawn | no polling | stay native | time | cost |", "| --- | --- | --- | --- | --- | --- | --- |"]
+  const lines = ["| run | route | front door | don't spawn | no polling | stay native | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- |"]
   for (const [name, group] of groups) {
     const rates = budget(group)
     const cell = (line: string) => {
@@ -100,7 +100,7 @@ async function summarize(results: CaseResult[]) {
       return entry.rate === undefined ? "–" : `${Math.round(entry.rate * 100)}% (${entry.passed}/${entry.of})${entry.met ? "" : " ✗"}`
     }
     const usd = group.reduce((sum, result) => sum + (result.usd ?? 0), 0)
-    lines.push(`| ${name} | ${cell("route")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
+    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
   }
   const failing = results.filter((result) => !result.error && result.passes.filter(Boolean).length * 2 <= result.passes.length)
   const errors = results.filter((result) => result.error)
@@ -135,6 +135,10 @@ try {
       const text = JSON.stringify(body)
       assert.ok(text.includes("agents_start"), `${harness} ${orchCase.id}: the request names agents_start`)
       assert.ok(text.includes(JSON.stringify(orchCase.prompt).slice(1, -1)), `${harness} ${orchCase.id}: the request carries the prompt`)
+      if (orchCase.setup.children?.length) {
+        assert.ok(text.includes("agents_send"), `${harness} ${orchCase.id}: the request names agents_send`)
+        assert.ok(text.includes("You're this Thread's lead") && orchCase.setup.children.every((child) => text.includes(`child:${child.name}`)), `${harness} ${orchCase.id}: the request carries the front-door note`)
+      }
       bodies++
       bytes += text.length
       if (out) {
@@ -145,6 +149,7 @@ try {
     const byId = new Map(loadCases().map((orchCase) => [orchCase.id, orchCase]))
     const sample = (steps: Sample["steps"], shell: string[] = [], ended = true): Sample => ({ steps, shell, text: "", ended })
     const start = (args: ToolArgs = {}) => ({ tool: "agents_start", args })
+    const send = (to: string, forward = true) => ({ tool: "agents_send", args: { to, forward, clientKey: "k" } })
     const graded: [string, Sample, boolean][] = [
       ["route-parallel-reviewers", sample([[start(), start(), start()]]), true],
       ["route-parallel-reviewers", sample([[{ tool: "native_spawn", args: {} }, start(), start()]]), false],
@@ -155,6 +160,15 @@ try {
       ["no-poll-after-start", sample([[start()]], ["sleep 60"]), false],
       ["native-find-definition", sample([[{ tool: "grep", args: {} }]]), true],
       ["native-find-definition", sample([[start()]]), false],
+      ["fd-continue-child", sample([[send("child:android")]]), true],
+      ["fd-continue-child", sample([[send("android"), start()]]), false],
+      ["fd-continue-child", sample([[send("ios")]]), false],
+      ["fd-new-child-when-nothing-fits", sample([[start()]]), true],
+      ["fd-new-child-when-nothing-fits", sample([[send("android")]]), false],
+      ["fd-stale-fork", sample([[send("cloud-envs")]]), true],
+      ["fd-stale-fork", sample([[send("thread-env-old")]]), false],
+      ["fd-finished-child-follow-up", sample([[send("ios")]]), true],
+      ["fd-finished-child-follow-up", sample([[start()]]), false],
     ]
     for (const [id, synthetic, passes] of graded) {
       const orchCase = byId.get(id)

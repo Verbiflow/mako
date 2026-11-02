@@ -69,6 +69,11 @@ const inputs = {
         maxChars: z.number().optional(),
       }),
     ]),
+  "mako:agents-redirect": () =>
+    z.tuple([
+      z.string(),
+      z.object({ from: z.string(), request: z.string(), to: z.string() }),
+    ]),
   "mako:agents-report": () =>
     z.tuple([
       z.union([
@@ -102,6 +107,19 @@ const inputs = {
           )
           .optional(),
         question: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
+  "mako:agents-send": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        to: z.string(),
+        forward: z.boolean().optional(),
+        text: z.string().optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -2003,7 +2021,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:agents-link", "conversations"],
   ["mako:agents-list", "conversations"],
   ["mako:agents-read", "conversations"],
+  ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],
+  ["mako:agents-send", "conversations"],
   ["mako:agents-start", "conversations"],
   ["mako:agents-stop", "conversations"],
   ["mako:agents-wait", "conversations"],

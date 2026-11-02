@@ -1,5 +1,8 @@
 import { childGroup, childStateOf, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
+import type { AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
+import { toast } from "sonner"
+import { getMako, hasBridge } from "@/lib/bridge"
 import { acp, acpStore, useAcp, type AcpState } from "@/state/acp"
 import type { AcpConversation } from "@/state/acp-state"
 import { createHook, createStore } from "@/state/store"
@@ -170,4 +173,24 @@ export function useLeadTitle(liveId: string | undefined, threadPath: string | un
   const listed = useThreads((state) => (thread ? state.threads.find((ref) => ref.threadId === thread)?.title : undefined))
   const live = useAcp((state) => (thread ? Object.values(state.conversations).find((conversation) => conversation.threadId === thread)?.title : undefined))
   return opened ?? listed ?? live
+}
+
+/**
+ * Moves a message the lead passed on to one of its Threads to another, as
+ * the person's own words there (`mako:agents-redirect`). Undefined when it
+ * couldn't, the person told why.
+ */
+export async function redirectRouted(lead: string, input: AgentsRedirectInput): Promise<AgentsRedirected | undefined> {
+  if (!hasBridge()) return undefined
+  try {
+    const answer = await getMako().agentsRedirect(lead, input)
+    if ("refused" in answer) {
+      toast.error("Your message couldn't be moved", { description: answer.why })
+      return undefined
+    }
+    return answer
+  } catch (error) {
+    toast.error("Your message couldn't be moved", { description: error instanceof Error ? error.message : String(error) })
+    return undefined
+  }
 }

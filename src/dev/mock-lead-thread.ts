@@ -1,6 +1,6 @@
 import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { childEntry, ROLE_WORD, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
-import { BRIEF_CLOSE, briefIntro, fromAgent, rollup, rosterChildren } from "@mako/host/contracts/children"
+import { BRIEF_CLOSE, briefIntro, fromAgent, PASSED_ON_NOTE, passedOn, rollup, rosterChildren } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "@/lib/types"
@@ -201,9 +201,19 @@ function brief(fixture: ChildFixture): string {
   return [fromAgent(`your ${ROLE_WORD}`), briefIntro(fixture.name), "", fixture.objective, "", BRIEF_CLOSE].join("\n")
 }
 
-/** The lead's own conversation: its turn running, its roster the twelve. */
+/** What the person wrote to the lead that its Sheet motion Thread was for, and the lead passed on. */
+export const ROUTED_WORDS = "The sheet still jumps when the keyboard opens in split view."
+const ROUTED_AT = Date.now() - 4 * 60_000
+const ROUTED_REQUEST = "1ead1ead-8100-4000-8000-000000000002"
+const SHEET_MOTION = 1
+
+/** The lead's own conversation: the person's first ask, a message it passed on to Sheet motion, its turn running, its roster the twelve. */
 export function leadSnapshot(): LiveSnapshot {
-  const request = { id: "1ead1ead-7000-4000-8000-000000000001", createdAt: STARTED, text: "Split the phone polish list into Threads and see them through. Ask me only for what you can't decide.", attachments: [], status: "dispatching" as const }
+  const first = { id: "1ead1ead-7000-4000-8000-000000000001", createdAt: STARTED, text: "Split the phone polish list into Threads and see them through. Ask me only for what you can't decide.", attachments: [], status: "completed" as const }
+  const routed = { id: "1ead1ead-7000-4000-8000-000000000002", createdAt: ROUTED_AT, text: ROUTED_WORDS, attachments: [], status: "completed" as const }
+  const request = { id: "1ead1ead-7000-4000-8000-000000000003", createdAt: Date.now() - 60_000, text: "How are the queued ones doing?", attachments: [], status: "dispatching" as const }
+  const sent = { to: "sheet-motion", forward: true, clientKey: "sheet-keyboard" }
+  const landed = { child: childThread(SHEET_MOTION), name: "sheet-motion", request: ROUTED_REQUEST, delivery: "steer" }
   return {
     session: {
       id: LEAD_CONVERSATION,
@@ -227,11 +237,15 @@ export function leadSnapshot(): LiveSnapshot {
     sessionId: LEAD_SESSION,
     base: null,
     permissions: [],
-    requests: [request],
+    requests: [first, routed, request],
     blocks: [
-      { type: "user", text: request.text, requestId: request.id },
+      { type: "user", text: first.text, requestId: first.id },
       { type: "text", text: "Twelve pieces, each its own Thread. I'll start them as the tree allows and read their reports as they come." },
       { type: "tool", id: "lead-start", toolKind: "other", title: "agents_start ×12", input: "{}", output: "started 10, queued 2", status: "completed" },
+      { type: "user", text: routed.text, requestId: routed.id },
+      { type: "tool", id: "lead-send", name: "mcp__mako__agents_send", toolKind: "other", title: "mako: agents send", input: JSON.stringify(sent), output: JSON.stringify(landed, null, 2), status: "completed" },
+      { type: "text", text: "That's Sheet motion's: it's measuring the container in split view now, so it takes this at its next step." },
+      { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],
     control: { activeBindingId: LEAD_CONVERSATION, bindings: [], merges: [], transfers: [], actions: [] },
@@ -273,6 +287,12 @@ export function leadChildSnapshot(index: number): LiveSnapshot {
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: fixture.said ?? `Starting on it: ${fixture.objective.charAt(0).toLowerCase()}${fixture.objective.slice(1)}` },
       { type: "tool", id: `lead-child-read-${index}`, toolKind: "read", title: "Read src/web-client/sheet.tsx", input: "{\"path\":\"src/web-client/sheet.tsx\"}", output: "export function Sheet() {}", status: "completed" },
+      ...(index === SHEET_MOTION
+        ? [
+          { type: "user" as const, text: `${passedOn(`your ${ROLE_WORD}`)}\n${ROUTED_WORDS}\n\n${PASSED_ON_NOTE}\nIt shows on the 11-inch iPad in landscape, after your last change.`, steeringFor: request.id, at: ROUTED_AT },
+          { type: "text" as const, text: "The keyboard's inset moves the container too, so I'll measure after the inset settles, then rerun the iPad case." },
+        ]
+        : []),
       ...(waits ? [{ type: "tool" as const, id: `lead-child-ci-${index}`, toolKind: "execute" as const, title: "npm ci", input: "{\"command\":\"npm ci\"}", status: "pending" as const }] : []),
       ...(fixture.state.kind === "ended" && fixture.state.reason ? [{ type: "text" as const, text: fixture.state.reason }] : []),
     ],

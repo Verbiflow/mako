@@ -131,6 +131,27 @@ export interface AgentsReportInput {
 }
 export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none" } | AgentRefused
 
+export interface AgentsSendInput {
+  /** The child's name or Thread ID. */
+  to: string
+  /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
+  forward?: boolean
+  /** The sender's own words: with `forward`, what it adds beneath the person's; without, the whole message. */
+  text?: string
+  /** A repeat with the same key is the same message. */
+  clientKey: string
+}
+export interface AgentsSent {
+  child: string
+  name: string
+  /** The request the message is in the child's conversation: a redirect names it. */
+  request: string
+  /** It started the child's next turn (an idle or finished child: the same Thread, a new task), joined its running turn at the next step, or waits for that turn to end. */
+  delivery: "turn" | "steer" | "queued"
+  deduped?: true
+}
+export type AgentsSendResult = AgentsSent | AgentRefused
+
 export interface AgentsStopInput {
   /** The child's name or Thread ID, or `all` for every child of the caller. */
   child: string
@@ -155,6 +176,7 @@ export interface AgentOperations {
   list(caller: AgentCaller, input: AgentsListInput): Promise<AgentsListResult>
   read(caller: AgentCaller, input: AgentsReadInput): Promise<AgentsReadResult>
   report(caller: AgentCaller, input: AgentsReportInput): Promise<AgentsReportResult>
+  send(caller: AgentCaller, input: AgentsSendInput): Promise<AgentsSendResult>
   stop(caller: AgentCaller, input: AgentsStopInput): Promise<AgentsStopResult>
   wait(caller: AgentCaller, input: AgentsWaitInput): Promise<AgentsWaitResult>
 }
@@ -225,8 +247,83 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
   "Don't run an agent CLI with nohup: one you start from your shell still shows as your child, but it can't report, ask or take messages.",
   "After starting, end your turn: reports wake you. Don't poll `agents_list` or wait in a loop; when your next step needs a child's result, start it with `mode: \"wait\"`.",
+  "The person writes to this Thread, not to its Threads: a message for one of them goes there with `agents_send` (`forward: true`) as your first call, then end your turn.",
   "If you were started by another Thread, call `agents_report` when you finish, are blocked, or need a decision; ending your turn without one reports how it ended.",
 ].join(" ")
+
+/** A child as the front door's note shows it to its lead: typed facts the host already holds, never its transcript. */
+export interface FrontDoorChild {
+  name: string
+  /** Its harness's name, as the person reads it. */
+  harness: string
+  state: ChildState
+  /** What it was asked, its first sentence. */
+  topic: string
+  branch?: string
+  report?: { status: ReportStatus; line: string; at: number }
+  /** The person's newest words to it directly, in its own Thread. */
+  direct?: { line: string; at: number }
+}
+
+/** Children the note lists by name; the rest are counted, and `agents_list` has them. */
+export const FRONT_DOOR_LISTED = 16
+
+/**
+ * What a lead hears before each message the person sends it (Mako's control
+ * note, never shown as the person's words): its Threads as they stand, and how
+ * to route the message. It's read from typed state, so routing costs no read
+ * of any transcript and no tool call before the one that sends it on.
+ */
+export function frontDoorNote(children: readonly FrontDoorChild[], now: number): string[] {
+  if (!children.length) return []
+  const listed = [...children].sort((a, b) => routeOrder(a.state) - routeOrder(b.state)).slice(0, FRONT_DOOR_LISTED)
+  const more = children.length - listed.length
+  return [
+    `You're this Thread's ${ROLE_WORD}: the person writes to you, and you decide who handles it. Your Threads now:`,
+    ...listed.map((child) => frontDoorLine(child, now)),
+    ...(more > 0 ? [`… and ${more} more (agents_list).`] : []),
+    "If the message is for one of them (its work, its branch, what it asked or reported), call agents_send {to, forward: true} first, adding text only for what it can't know, and end your turn. A finished one takes it as its next task, in its own Thread.",
+    "If it's for you, or about how they stand, answer from this list. If none fits and it's work worth a Thread, use agents_start; otherwise do it yourself.",
+  ]
+}
+
+function frontDoorLine(child: FrontDoorChild, now: number): string {
+  const parts = [`- child:${child.name} · ${child.harness} · ${stateWords(child.state, child.report, now)}`, `asked: ${child.topic}`]
+  if (child.branch) parts.push(`branch ${child.branch}`)
+  if (child.report && child.state.kind !== "ended") parts.push(`last report (${child.report.status}, ${ago(child.report.at, now)}): ${child.report.line}`)
+  if (child.direct) parts.push(`the person wrote to it directly ${ago(child.direct.at, now)}: "${child.direct.line}"`)
+  return parts.join(" · ")
+}
+
+function stateWords(state: ChildState, report: FrontDoorChild["report"], now: number): string {
+  switch (state.kind) {
+    case "working":
+      return `working${state.phase ?? state.step ? `: ${state.phase ?? state.step}` : ""}`
+    case "starting":
+      return "starting"
+    case "queued":
+      return `queued, ${state.ahead} ahead`
+    case "idle":
+      return "idle"
+    case "blocked":
+      return `waits on ${state.on === "lead" ? "you" : "the person"}: ${state.question}`
+    case "ended":
+      return `${state.outcome}${report ? ` ${ago(report.at, now)}: ${report.line}` : state.reason ? `: ${state.reason}` : ""}`
+  }
+}
+
+/** Live work first, then what waits, then what's finished: what a message is most likely for comes first. */
+function routeOrder(state: ChildState): number {
+  return state.kind === "blocked" ? 0 : state.kind === "working" || state.kind === "starting" ? 1 : state.kind === "queued" || state.kind === "idle" ? 2 : 3
+}
+
+function ago(at: number, now: number): string {
+  const minutes = Math.max(0, Math.round((now - at) / 60_000))
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`
+}
 
 const START = [
   "Start another Thread that works for this one: its own Session on any harness, in this checkout or its own worktree and branch, with its own model and access (at most yours).",
@@ -316,6 +413,27 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
         question: "For blocked or needs-input: the decision you need.",
         clientKey: "Your own key for this report: a repeat with it is the same report.",
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+  },
+  {
+    verb: "send",
+    channel: "mako:agents-send",
+    replay: "replay",
+    filled: [],
+    mcp: {
+      name: "agents_send",
+      description: [
+        "Give one of this Thread's children a message: the person's (forward: true passes on the one this turn answers, word for word, so don't retype it) or your own.",
+        "An idle or finished child takes it as its next task in its own Thread; a working one hears it at its next step, or when its turn ends.",
+        "It returns at once; what the child does reports back as its work does.",
+      ].join(" "),
+      fields: {
+        to: "The child's name or Thread ID.",
+        forward: "true: pass on the person's message this turn answers, as their words.",
+        text: "Your own words: beneath the person's with forward, else the whole message.",
+        clientKey: "Your own key for this message: a repeat with it is the same message.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

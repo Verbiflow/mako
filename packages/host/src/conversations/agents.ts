@@ -17,6 +17,8 @@ import {
   type AgentCaller,
   type AgentRefused,
   type AgentsDiagnostics,
+  type AgentsRedirected,
+  type AgentsRedirectInput,
   type Brief,
   type ChildStart,
   type ChildState,
@@ -39,6 +41,9 @@ import {
   type AgentsReadResult,
   type AgentsReportInput,
   type AgentsReportResult,
+  type AgentsSendInput,
+  type AgentsSendResult,
+  type AgentsSent,
   type AgentsStarted,
   type AgentsStartInput,
   type AgentsStartResult,
@@ -48,12 +53,15 @@ import {
   type AgentsWaitResult,
   type StartWaited,
   type WaitedReport,
+  type FrontDoorChild,
+  frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { BRIEF_CLOSE, briefIntro } from "../contracts/children.js"
+import { agentWords, BRIEF_CLOSE, briefIntro, PASSED_ON_NOTE, passedOn } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
-import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeAgent } from "../contracts/native-agents.js"
-import { SessionIdSchema, ThreadIdSchema } from "../contracts/thread-identity.js"
+import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
+import type { PromptAttachment } from "../contracts/providers-acp.js"
+import { SessionIdSchema, ThreadIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type RunEnd } from "./agent-runs.js"
 import { AgentWakes, digest, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
@@ -151,6 +159,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly held = new Map<string, Notice[]>()
   /** The decision a blocked child's lead was told of, by child: told once per question. */
   private readonly asked = new Map<string, string>()
+  /** What each `agents_send` key delivered, so a retry answers the same. */
+  private readonly sent = new Map<string, AgentsSent>()
+  /** What joined a running turn as a step, by its id: no request holds it for `redirect` to find. */
+  private readonly steered = new Map<string, Pick<LiveRequest, "text" | "attachments">>()
+  private readonly routes = { forwarded: 0, sent: 0, redirected: 0 }
   private latest = new Map<string, Report>()
   private seen: unknown
   private draining = false
@@ -244,6 +257,50 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.roster(conversation).length) return true
     const thread = this.store()?.journalPlacement(conversation)?.thread
     return thread !== undefined && this.store()?.edges().of(thread)?.role === "lead"
+  }
+
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[] {
+    if (request.actor && request.actor.kind !== "person") return []
+    const store = this.store()
+    const thread = store?.journalPlacement(conversation)?.thread
+    if (!store || !thread) return []
+    const open = store.edges().children(thread).filter((edge) => !edge.closedAt)
+    if (!open.length) return []
+    this.sync()
+    const lines = frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), this.now())
+    hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
+    return lines
+  }
+
+  /**
+   * The person moved a message their lead passed on to the wrong child: it
+   * leaves that child if it hasn't started there, and goes to `to` as the
+   * person's own. The lead learns of it from its next front-door note, which
+   * names the person's direct words to each child.
+   */
+  async redirect(conversation: string, input: AgentsRedirectInput): Promise<AgentsRedirected | AgentRefused> {
+    const store = this.store()
+    const placed = store?.journalPlacement(conversation)
+    if (!store || !placed) return { refused: "unavailable", why: "That conversation isn't a Thread here." }
+    const lead: Lead = { session: placed.session, thread: placed.thread, conversation }
+    const from = this.resolve(lead, input.from, false)
+    const to = this.resolve(lead, input.to, false)
+    if (!from) return unknownChild(input.from)
+    if (!to) return unknownChild(input.to)
+    const was = this.conversationOf(from.child)
+    const queued = was ? this.deps.live.held(was)?.requests.find((request) => request.id === input.request) : undefined
+    const passed = queued ?? this.steered.get(input.request)
+    if (!was || !passed) return { refused: "unknown-child", why: `${from.name} has no such message.` }
+    const words = agentWords(passed.text)
+    const text = words?.passedOn ? words.body : passed.text
+    if (queued && (queued.status === "queued" || queued.status === "held"))
+      this.deps.live.editQueued(was, { requestId: queued.id, expectedText: queued.text, change: { kind: "remove" } })
+    const withdrawn = queued !== undefined && ["queued", "held", "canceled"].includes(queued.status)
+    const sent = await this.deliver(to, namedUuid(`redirect:${input.request}:${to.child}`), text, passed.attachments, undefined)
+    if ("refused" in sent) return sent
+    if (!sent.deduped) this.routes.redirected += 1
+    hostLog("agents", "redirect", { from: from.op, to: to.op, request: input.request, withdrawn, delivery: sent.delivery })
+    return { to: to.name, withdrawn, delivery: sent.delivery }
   }
 
   async stopChild(conversation: string, child: string): Promise<boolean> {
@@ -397,6 +454,39 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { id: kept.report.id, ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice" }
   }
 
+  async send(caller: AgentCaller, input: AgentsSendInput): Promise<AgentsSendResult> {
+    const began = performance.now()
+    const lead = this.leadOf(caller)
+    if ("refused" in lead) return lead
+    const edge = this.resolve(lead, input.to, false)
+    if (!edge) return unknownChild(input.to)
+    const op = `send:${lead.session}:${input.clientKey}`
+    const request = namedUuid(op)
+    const kept = this.sent.get(op)
+    if (kept) return { ...kept, deduped: true }
+    const own = input.text?.trim()
+    let text: string
+    let attachments: PromptAttachment[] = []
+    if (input.forward) {
+      const asked = this.personsMessage(lead)
+      if (!asked) return this.refuse(op, "unavailable", "No message from the person is in this Thread to pass on: send your own words as text instead.")
+      text = `${passedOn(`your ${ROLE_WORD}`)}\n${asked.text}${own ? `\n\n${PASSED_ON_NOTE}\n${own}` : ""}`
+      attachments = asked.attachments
+    } else {
+      if (!own) return this.refuse(op, "conflict", "A message needs text, or forward: true to pass on the person's.")
+      text = `${fromAgent(`your ${ROLE_WORD}`)}\n${own}`
+    }
+    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(lead.session) })
+    if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
+    const answer: AgentsSent = { child: edge.child, name: edge.name, request, delivery: sent.delivery, ...(sent.deduped && { deduped: true as const }) }
+    this.sent.set(op, answer)
+    if (sent.delivery === "steer") this.steered.set(request, { text, attachments })
+    if (input.forward) this.routes.forwarded += 1
+    else this.routes.sent += 1
+    hostLog("agents", "send", { op, child: edge.child, request, delivery: sent.delivery, forward: input.forward ?? false, ms: Math.round(performance.now() - began) })
+    return answer
+  }
+
   async stop(caller: AgentCaller, input: AgentsStopInput): Promise<AgentsStopResult> {
     const lead = this.leadOf(caller)
     if ("refused" in lead) return lead
@@ -459,7 +549,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The host's children and budgets, for Diagnostics. */
   diagnostics(): AgentsDiagnostics {
     const store = this.store()
-    if (!store) return { children: 0, running: 0, followed: 0, queued: 0, notices: 0, budget: this.budget, trees: [] }
+    if (!store) return { children: 0, running: 0, followed: 0, queued: 0, notices: 0, budget: this.budget, trees: [], routes: { ...this.routes } }
     const edges = store.edges()
     const roots = new Set(edges.all.map((edge) => this.rootOf(edge.parent)))
     const trees = [...roots].map((lead) => ({ lead, ...this.treeCounts(lead) }))
@@ -471,6 +561,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       notices: this.wakes.pending(),
       budget: this.budget,
       trees,
+      routes: { ...this.routes },
     }
   }
 
@@ -660,7 +751,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store || !edge || outcome.outcome === "pending") return outcome
     const report = store.reportsOf(child, 0).filter((candidate) => candidate.status !== "progress").at(-1)
     if (!report || (outcome.outcome === "question" && !outcome.report)) return outcome
-    const conversation = this.conversationOfSession(edge.parentSession) ?? this.conversationOf(edge.parent)
+    const conversation = this.frontOf(edge.parent, edge.parentSession)
     if (conversation) this.wakes.withdraw(conversation, `notice:${child}:${report.id}`)
     store.markReportsDelivered([report.id], this.now())
     return outcome
@@ -754,7 +845,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(wake && { wake }),
       ...(edge.asked.mode === "wait" && (report.status === "done" || report.status === "failed") && { settledOnly: true as const }),
     }
-    const conversation = this.conversationOfSession(edge.parentSession) ?? this.conversationOf(edge.parent)
+    const conversation = this.frontOf(edge.parent, edge.parentSession)
     if (conversation) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
     if (this.runs.running(edge.parent)) {
       const held = this.held.get(edge.parent) ?? []
@@ -844,7 +935,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** Who answers a child's approval: its lead on full access, unless its spawn asked to hear only its result; else the person, told why. */
   private decides(edge: ThreadParent): "lead" | "person" {
     if (reportRoute(edge.asked, "blocked") !== "lead") return "person"
-    const parent = this.conversationOfSession(edge.parentSession) ?? this.conversationOf(edge.parent)
+    const parent = this.frontOf(edge.parent, edge.parentSession)
     const tier = parent ? this.tierOfConversation(parent) : undefined
     return tier === "full" ? "lead" : "person"
   }
@@ -1095,6 +1186,73 @@ export class Agents implements AgentOperations, ConversationChildren {
       })
   }
 
+  /**
+   * A message into a child's Thread, as its next turn, a step of its running
+   * one, or queued behind it: the same Thread whether it's at work, idle or
+   * done, so a finished child takes a follow-up where its work is.
+   */
+  private async deliver(edge: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined): Promise<{ delivery: AgentsSent["delivery"]; deduped?: true } | AgentRefused> {
+    if (edge.closedAt)
+      return { refused: "conflict", why: `${edge.name} was stopped, and a stopped Thread's delegation stays over: start a new one with agents_start, or the person can open it and talk to it there.` }
+    if (edge.run && !edge.run.ended)
+      return { refused: "unavailable", why: `${edge.name} runs in a process Mako follows but didn't start, which takes no message until it exits: its report reaches you when it does.` }
+    const conversation = this.conversationOf(edge.child)
+    const ready = conversation ? this.ready(conversation) : "gone"
+    if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
+    const held = this.deps.live.held(conversation)?.requests.find((asked) => asked.id === request)
+    if (held) return { delivery: held.status === "queued" || held.status === "held" ? "queued" : "turn", deduped: true }
+    const running = ready === "steer" ? this.deps.live.held(conversation)?.requests.find((asked) => asked.status === "dispatching") : undefined
+    if (running?.nativeRun) {
+      try {
+        await this.deps.live.act(conversation, { kind: "steer", id: request, requestId: running.id, text, attachments })
+        return { delivery: "steer" }
+      } catch (error) {
+        hostWarn("agents", "a message could not join the running turn; it waits for the turn's end", { op: edge.op, error: errorMessage({ error }) })
+      }
+    }
+    this.deps.live.submit(conversation, request, text, attachments, undefined, undefined, undefined, actor)
+    return { delivery: ready === "idle" ? "turn" : "queued" }
+  }
+
+  /** The message the lead's turn answers: its newest from the person, with what came with it. */
+  private personsMessage(lead: Lead): LiveRequest | undefined {
+    const requests = lead.conversation ? this.deps.live.held(lead.conversation)?.requests ?? [] : []
+    const own = requests.filter((request) => !request.actor || request.actor.kind === "person")
+    return own.find((request) => request.status === "dispatching") ?? own.at(-1)
+  }
+
+  /** A child as its lead's front-door note names it: what it was asked, where it stands and what it said last. */
+  private frontDoorChild(edge: ThreadParent): FrontDoorChild {
+    const latest = this.latest.get(edge.child)
+    const conversation = this.conversationOf(edge.child)
+    const direct = conversation
+      ? this.deps.live.held(conversation)?.requests.filter((request) => request.actor?.kind === "person" && request.createdAt !== undefined).at(-1)
+      : undefined
+    return {
+      name: edge.name,
+      harness: this.deps.harnessLabel(this.harnessOf(edge)),
+      state: this.stateOf(edge),
+      topic: noteLine(edge.asked.brief.objective, 160),
+      ...(edge.asked.workspace?.branch && { branch: edge.asked.workspace.branch }),
+      ...(latest && { report: { status: latest.status, line: noteLine(reportPhase(latest) ?? latest.status, 160), at: latest.at } }),
+      ...(direct && { direct: { line: noteLine(direct.displayText ?? direct.text, 120), at: direct.createdAt! } }),
+    }
+  }
+
+  /**
+   * Where a Thread hears its children: the Session the person last wrote in,
+   * which is the one speaking as its lead; before any, the one that started
+   * them. One Session answers, so two never act as the lead at once.
+   */
+  private frontOf(thread: string, started: string): string | undefined {
+    let front: { conversation: string; at: number } | undefined
+    for (const conversation of this.conversationsOfThread(thread)) {
+      const asked = this.deps.live.held(conversation)?.requests.filter((request) => (!request.actor || request.actor.kind === "person") && request.createdAt !== undefined).at(-1)
+      if (asked && (!front || asked.createdAt! > front.at)) front = { conversation, at: asked.createdAt! }
+    }
+    return front?.conversation ?? this.conversationOfSession(started) ?? this.conversationOf(thread)
+  }
+
   private conversationOwns(ref: Pick<ThreadRef, "harness" | "nativeId" | "sessionId">): boolean {
     return this.deps.live.connectedSession(ref.harness, ref.nativeId) !== null ||
       (ref.sessionId !== undefined && (this.store()?.conversationsOf(ref.sessionId).length ?? 0) > 0)
@@ -1187,6 +1345,13 @@ export function briefText(brief: Brief, name: string): string {
   if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
   lines.push("", BRIEF_CLOSE)
   return lines.join("\n")
+}
+
+/** Words on one line of a note: the first sentence, cut at `max` characters. */
+function noteLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim()
+  const sentence = /^(.+?[.!?])(?:\s|$)/.exec(flat)?.[1] ?? flat
+  return sentence.length > max ? `${sentence.slice(0, max - 1).trimEnd()}…` : sentence
 }
 
 function entryLine(entry: Entry): string {

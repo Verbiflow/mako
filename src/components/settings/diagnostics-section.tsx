@@ -376,8 +376,16 @@ function ChildrenReadout({ agents }: { agents: AgentsDiagnostics }) {
         Each tree runs at most {agents.budget.running} at once and starts at most {agents.budget.started}.{" "}
         {fullest.map((tree) => `${tree.running} running, ${tree.started} started`).join(" · ")}
       </p>
+      <p className="mt-1 text-label leading-relaxed text-faint">
+        Leads passed on {messagesWord(agents.routes.forwarded)} from the person and sent {messagesWord(agents.routes.sent)} of their own ·
+        the person moved {messagesWord(agents.routes.redirected)} to another Thread
+      </p>
     </div>
   )
+}
+
+function messagesWord(count: number): string {
+  return count === 1 ? "1 message" : `${count} messages`
 }
 
 /** What a reading says of its harness in a lead. */

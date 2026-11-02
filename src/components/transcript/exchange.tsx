@@ -21,6 +21,7 @@ import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useContext, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { AgentWordsCard } from "@/components/transcript/agent-words"
+import { RoutedLine } from "@/components/transcript/routed-line"
 import { agentWords } from "@mako/host/contracts/children"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AgentMark, LeadSlot, ToolRow } from "@/components/transcript/tool-row"
@@ -194,12 +195,9 @@ export const Exchange = memo(function Exchange({
         <SystemNotes key={section.id} messages={noteRun(sections, index)} refused={exchange.refused} inline />
       )
     ) : section.kind === "steer" ? (
-      <div key={section.id} className="mt-1">
-        <p className="mb-1 text-right text-label text-faint">
-          Steered mid-turn
-        </p>
-        <Prompt message={section.message} />
-      </div>
+      <SteerSection key={section.id} message={section.message} />
+    ) : section.kind === "routed" ? (
+      <RoutedLine key={section.id} routed={section.routed} landed={section.landed} />
     ) : section.kind === "continued" ? (
       <TurnWentOn key={section.id} continued={section.continued} message={section.message} provider={provider} />
     ) : section.kind === "prose" ? (
@@ -239,6 +237,7 @@ export const Exchange = memo(function Exchange({
           const note = sections[at]!
           return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline />
             : note.kind === "shown" || note.kind === "made" ? <TurnMedia key={note.id} media={note.media} shown={note.kind === "shown"} />
+              : note.kind === "routed" ? <RoutedLine key={note.id} routed={note.routed} landed={note.landed} />
               : note.kind === "continued" ? <TurnWentOn key={note.id} continued={note.continued} message={note.message} provider={provider} /> : null
         })}
       >
@@ -268,7 +267,7 @@ export const Exchange = memo(function Exchange({
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
           ) : fromAgent && promptText ? (
-            <AgentWordsCard from={fromAgent.from} body={fromAgent.body} raw={promptText} timestamp={exchange.prompt.timestamp} />
+            <AgentWordsCard words={fromAgent} raw={promptText} timestamp={exchange.prompt.timestamp} />
           ) : (
             <>
               {carried ? <CarriedLine carried={carried} time={exchange.prompt.timestamp} /> : null}
@@ -520,6 +519,20 @@ function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: 
         <p className="text-faint">{said}</p>
       ) : null}
     </EventLine>
+  )
+}
+
+/** A message that joined the running turn: the person's, or another Thread's words read from their header. */
+function SteerSection({ message }: { message: ChatMessage }) {
+  const raw = textOf(message.blocks)
+  const words = useMemo(() => agentWords(raw), [raw])
+  return (
+    <div className="mt-1">
+      <p className="mb-1 text-right text-label text-faint">
+        Steered mid-turn
+      </p>
+      {words ? <AgentWordsCard words={words} raw={raw} timestamp={message.timestamp} /> : <Prompt message={message} />}
+    </div>
   )
 }
 
