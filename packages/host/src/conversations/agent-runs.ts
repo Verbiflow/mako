@@ -5,7 +5,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { identifyTool } from "@mako/sessions/tool-identity"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { markedProcesses, processesHolding, processFolders } from "../base/marked-processes.js"
+import { markedProcesses, processesHolding, processFolders, type MarkedProcess } from "../base/marked-processes.js"
 import { processIdentityMatches, processStartedAt } from "../base/process-liveness.js"
 import { errorMessage } from "../base/error-message.js"
 import type { AgentRefused, ChildOrigin, ChildRole, ChildThread, FollowedRun, ThreadParent } from "../contracts/agents.js"
@@ -49,18 +49,32 @@ interface RunReading {
   toolUses?: number
 }
 
+/** What a new Session's process is found by: the marked processes, the files and folders they hold, their starts. */
+export interface ProcessReads {
+  marked(variable: string, signal: AbortSignal): Promise<MarkedProcess[]>
+  holding(file: string, pids: readonly number[], signal: AbortSignal): Promise<Set<number>>
+  folders(pids: readonly number[], signal: AbortSignal): Promise<Map<number, string>>
+  startedAt(pid: number, signal: AbortSignal): Promise<number>
+}
+
+const PROCESS_READS: ProcessReads = { marked: markedProcesses, holding: processesHolding, folders: processFolders, startedAt: processStartedAt }
+
 export interface AgentRunsDeps {
   store(): ThreadStore | undefined
   catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce">
   jobs: HostJobs
   /** Whether `harness` has a CLI a conversation's shell can run, so a Session of it can be one started there. */
   runs(harness: string): boolean
-  /** Whether this native session is a conversation's own (one Mako runs, or the Session of one): never a followed run. */
-  conversationOwns(ref: Pick<ThreadRef, "harness" | "nativeId" | "sessionId">): boolean
+  /**
+   * Whether this native session is a conversation's own (one Mako runs, or the Session of one): never a followed
+   * run. `marker` is the Session a process that holds it names, whose own harness may not have named it yet.
+   */
+  conversationOwns(ref: Pick<ThreadRef, "harness" | "nativeId" | "sessionId">, marker?: string): boolean
   /** A followed child's reading changed; `progressOnly` when only a step or a count did. */
   changed(edge: ThreadParent, progressOnly: boolean): void
   /** A followed run ended, once: written to its edge before this is called. */
   ended(edge: ThreadParent, ended: RunEnd): void
+  processes?: ProcessReads
   now?(): number
 }
 
@@ -120,6 +134,11 @@ export class AgentRuns {
     this.cancelJob = deps.jobs.every("follow agent runs", LIVENESS_MS, () => this.check(), { firstAfterMs: 0, needs: [this.demand] })
     this.unsubscribe = deps.catalog.subscribe((event) => this.catalogEvent(event))
     this.sync()
+  }
+
+  /** Settles once every new Session's search for the process that started it, begun so far, has ended. */
+  discovered(): Promise<void> {
+    return this.discoveries
   }
 
   /** What a followed child's Thread shows now; undefined for a child no process of its own runs. */
@@ -419,18 +438,19 @@ export class AgentRuns {
     this.discovering.add(key)
     this.discoveries = this.discoveries.then(async () => {
       if (this.stopped || this.deps.conversationOwns(ref)) return
-      const marked = await markedProcesses(SESSION_VARIABLE, this.abort.signal)
+      const reads = this.deps.processes ?? PROCESS_READS
+      const marked = await reads.marked(SESSION_VARIABLE, this.abort.signal)
       if (!marked.length) return
       const pids = marked.map((process) => process.pid)
-      const holding = await processesHolding(ref.path, pids, this.abort.signal)
+      const holding = await reads.holding(ref.path, pids, this.abort.signal)
       let found = marked.find((process) => holding.has(process.pid))
       let startedAt: number | undefined
       if (!found) {
-        const folders = await processFolders(pids, this.abort.signal)
+        const folders = await reads.folders(pids, this.abort.signal)
         let best: number | undefined
         for (const process of marked) {
           if (folders.get(process.pid) !== ref.cwd) continue
-          const at = await processStartedAt(process.pid, this.abort.signal).catch(() => undefined)
+          const at = await reads.startedAt(process.pid, this.abort.signal).catch(() => undefined)
           if (at === undefined || Math.abs(at - started) > DISCOVER_START_MS || (best !== undefined && at < best)) continue
           best = at
           found = process
@@ -438,9 +458,9 @@ export class AgentRuns {
         startedAt = best
       }
       if (!found) return
-      startedAt ??= await processStartedAt(found.pid, this.abort.signal).catch(() => undefined)
-      // A conversation's own harness carries the marker too, and may bind its new Session while the processes were read.
-      if (this.stopped || this.deps.conversationOwns(ref) || !this.deps.store()?.conversationsOf(found.value).length) return
+      startedAt ??= await reads.startedAt(found.pid, this.abort.signal).catch(() => undefined)
+      // A conversation's own harness carries the marker too, and writes its new Session before its driver names it.
+      if (this.stopped || this.deps.conversationOwns(ref, found.value) || !this.deps.store()?.conversationsOf(found.value).length) return
       const adopted = await this.adopt({
         parentSession: found.value,
         ref,

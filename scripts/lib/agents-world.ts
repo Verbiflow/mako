@@ -9,6 +9,7 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -46,6 +47,12 @@ export interface WorldOptions {
   refuseSteers?: true
   /** A harness's own modes, as its real driver declares them, in place of Mako's tier ids. */
   ladders?: Partial<Record<string, readonly LiveSessionMode[]>>
+  /** The Sessions the catalog lists, each one a run a shell may have started: none are followed without it. */
+  catalog?: AgentsDeps["catalog"]
+  /** The processes a new Session's is looked for among. */
+  processes?: ProcessReads
+  /** Runs as a harness starts, before its driver names the native session it opened (`native-<conversation>`). */
+  starting?: (conversation: string, harness: string) => Promise<void> | void
 }
 
 /**
@@ -95,17 +102,18 @@ export class AgentsWorld {
     })
     const deps: AgentsDeps = {
       store: () => this.store,
-      catalog: emptyCatalog(),
+      catalog: this.options.catalog ?? emptyCatalog(),
       jobs: this.jobs,
       live: this.live,
       startLive: async (harness, cwd, options) => {
         await this.live.start(harness, cwd, options)
       },
       harnesses: () => HARNESSES,
-      runs: () => false,
+      runs: () => this.options.catalog !== undefined,
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
       modes: (harness) => drivers.get(harness)?.modes,
       ...(this.options.budget && { budget: this.options.budget }),
+      ...(this.options.processes && { processes: this.options.processes }),
     }
     this.agents = new Agents(deps)
     this.agents.resume()
@@ -210,7 +218,10 @@ export class AgentsWorld {
       }),
       provider: harness,
       available: () => true,
-      start: async (_cwd, options) => state(options.conversationId, options.resume ? { nativeId: options.resume } : {}),
+      start: async (_cwd, options) => {
+        await this.options.starting?.(options.conversationId, harness)
+        return state(options.conversationId, options.resume ? { nativeId: options.resume } : {})
+      },
       prompt: async (id, text, _attachments, _settings, dispatch) => {
         dispatch.report({ kind: "submitted", source: "transport-call" })
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })

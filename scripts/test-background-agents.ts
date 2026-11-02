@@ -8,6 +8,7 @@ import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { HostJobs } from "@mako/host/base/host-jobs"
+import type { MarkedProcess } from "@mako/host/base/marked-processes"
 import { accessModeId } from "@mako/host/contracts/access"
 import { childEntry, childMode, childState, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
@@ -31,7 +32,8 @@ import { AgentsWorld, noConversations, type Script } from "./lib/agents-world.ts
  * entry, the edge and reports in the store, and `Agents` on a host whose six
  * harnesses are scripted models: a spawn's receipt, its brief as the lead's
  * words, the access ceiling, places, budgets, keys, a report waking its lead
- * once, stops, waits, and a run a Thread's shell started followed to its end.
+ * once, stops, waits, and a run a Thread's shell started followed to its end,
+ * found by its process, while a lead's own session never is one.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-agents-"))
 const NOW = 1_800_000_000_000
@@ -389,6 +391,48 @@ async function followsShellRuns(): Promise<void> {
   }
 }
 
+/**
+ * A lead's own harness carries `MAKO_SESSION_ID` and writes its new session before its driver names it: that
+ * session is the lead's, never a run its shell started, or each of its turns would end as a report that wakes it.
+ * A session its shell starts once it runs is one.
+ */
+async function ownSessionIsNoChild(): Promise<void> {
+  const folder = join(root, "own-session")
+  const fake = fakeCatalog()
+  /** The lead's harness, started in its folder with its Session in its environment. */
+  const marked: MarkedProcess[] = []
+  const at = () => new Date().toISOString()
+  const w: AgentsWorld = new AgentsWorld({
+    root: folder,
+    script: () => "ok",
+    catalog: fake.catalog,
+    processes: {
+      marked: async () => marked,
+      holding: async () => new Set(),
+      folders: async (pids) => new Map(pids.map((pid) => [pid, folder])),
+      startedAt: async () => Date.now(),
+    },
+    async starting(conversation, harness) {
+      const session = w.store.journalPlacement(conversation)?.session
+      assert.ok(session, "a lead has its Session before its harness starts")
+      marked.push({ pid: process.pid, value: session })
+      fake.write({ harness, nativeId: `native-${conversation}`, path: `/opencode/native-${conversation}`, cwd: folder, startedAt: at() }, [])
+      await w.agents.runs.discovered()
+    },
+  })
+  try {
+    const lead = await w.lead("opencode")
+    await waitFor(() => w.live.session(lead.conversation)?.nativeId !== undefined, "the lead's harness to name its session")
+    assert.equal(w.store.edges().byRun("opencode", `native-${lead.conversation}`), undefined, "a lead's own session isn't its child")
+    const nativeId = randomUUID()
+    fake.write({ harness: "opencode", nativeId, path: `/opencode/${nativeId}`, cwd: folder, startedAt: at() }, [])
+    await w.agents.runs.discovered()
+    assert.equal(w.store.edges().byRun("opencode", nativeId)?.origin, "discovered", "a session its shell started is its child")
+  } finally {
+    await w.close()
+  }
+}
+
 try {
   statesAndEntries()
   rosterAndLists()
@@ -400,6 +444,7 @@ try {
   await harnessLadders()
   await stopAllUnqueues()
   await followsShellRuns()
+  await ownSessionIsNoChild()
   console.log("agents engine: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

@@ -64,7 +64,7 @@ import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversati
 import type { LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
-import { AgentRuns, lastStep, type RunEnd } from "./agent-runs.js"
+import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { AgentWakes, digest, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
@@ -95,6 +95,7 @@ export interface AgentsDeps {
   /** The modes `harness`'s live driver declares, each with its access tier; undefined for one that declares none. */
   modes(harness: string): readonly LiveSessionMode[] | undefined
   budget?: TreeBudget
+  processes?: ProcessReads
   now?(): number
 }
 
@@ -181,9 +182,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       catalog: deps.catalog,
       jobs: deps.jobs,
       runs: deps.runs,
-      conversationOwns: (ref) => this.conversationOwns(ref),
+      conversationOwns: (ref, marker) => this.conversationOwns(ref, marker),
       changed: (edge, progressOnly) => this.childMoved(edge, progressOnly),
       ended: (edge, ended) => this.runEnded(edge, ended),
+      ...(deps.processes && { processes: deps.processes }),
       now: deps.now,
     })
     this.wakes = new AgentWakes({
@@ -1263,9 +1265,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     return front?.conversation ?? this.conversationOfSession(started) ?? this.conversationOf(thread)
   }
 
-  private conversationOwns(ref: Pick<ThreadRef, "harness" | "nativeId" | "sessionId">): boolean {
-    return this.deps.live.connectedSession(ref.harness, ref.nativeId) !== null ||
-      (ref.sessionId !== undefined && (this.store()?.conversationsOf(ref.sessionId).length ?? 0) > 0)
+  /**
+   * A conversation of the `marker` Session on the same harness that is still starting, or hasn't named its native
+   * session, may own this one: its shell can't have run anything yet.
+   */
+  private conversationOwns(ref: Pick<ThreadRef, "harness" | "nativeId" | "sessionId">, marker?: string): boolean {
+    if (this.deps.live.connectedSession(ref.harness, ref.nativeId) !== null) return true
+    if (ref.sessionId !== undefined && (this.store()?.conversationsOf(ref.sessionId).length ?? 0) > 0) return true
+    return marker !== undefined && (this.store()?.conversationsOf(marker) ?? []).some((conversation) => {
+      const session = this.deps.live.session(conversation)
+      return session?.harness === ref.harness && (session.nativeId === undefined || session.connection === "starting")
+    })
   }
 
   private conversationOfSession(session: string): string | undefined {
