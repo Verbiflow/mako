@@ -211,6 +211,13 @@ export interface ThreadRef {
    * and Mako's ID for the agent; overlaid by the host from the Thread store.
    */
   agentOf?: { session: string; agent: string }
+  /**
+   * A child's Session: its Thread has a parent edge (`thread_parents` in the
+   * host's Thread store), so it is never a row of its own and shows inside
+   * its parent's Thread. The parent's Thread and the Session its notices go
+   * to; overlaid by the host from the Thread store.
+   */
+  parent?: { thread: string; session: string }
 }
 
 /** The key two refs share when they present the same conversation. */

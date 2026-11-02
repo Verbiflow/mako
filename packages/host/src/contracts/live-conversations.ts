@@ -57,6 +57,12 @@ export interface LiveStartOptions {
   review?: import("./live-reviews.js").ReviewTarget
   /** Run this new conversation on a cloud machine instead, in a clone of the repository; `cwd` is then the machine's. */
   cloud?: import("./cloud-threads.js").CloudPlacement
+  /**
+   * This new Thread is a child (`contracts/agents.ts`): its edge is written
+   * with its Session, before its harness starts, so it's never a row of its
+   * own and its first turn already has a parent to report to.
+   */
+  parent?: import("./agents.js").ChildStart
 }
 
 /**
