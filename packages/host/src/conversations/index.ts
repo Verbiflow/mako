@@ -1,5 +1,6 @@
 import { noteCarried } from "@mako/sessions/record-carried"
 import type { Foreground } from "../base/foreground.js"
+import type { NativeRoutingReading } from "../contracts/native-routing.js"
 import type { HostWork } from "../base/event-loop.js"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
@@ -19,7 +20,7 @@ import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "../contracts/live-history.js"
 import { createContinuationPlanner, type ContinuationPlanner } from "./continuation.js"
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "../workspaces/index.js"
-import { harnessLabel, resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
+import { harnessLabel, nativeRoutingReadings, resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
@@ -94,6 +95,8 @@ export interface Conversations {
   route(channel: string, args: unknown[]): Promise<ConversationRoutingResult>
   /** A harness's id as people read it, as the registry labels it. */
   harnessLabel(harness: string): string
+  /** Where each harness stands on a lead's native spawns, for Diagnostics. */
+  nativeRouting(): Promise<NativeRoutingReading[]>
   /**
    * What a reply to the session at `path` will do, for a session its
    * harness deleted that Mako keeps the records of: restore and resume
@@ -319,6 +322,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     history,
     route: (channel, args) => shared ? shared.route(channel, args) : Promise.resolve({ handled: false }),
     harnessLabel: (harness) => harnessLabel(host, harness),
+    nativeRouting: () => nativeRoutingReadings(host),
     async restorePlan(path) {
       const ref = catalog.ref(path)
       if (!ref) return { kind: "none" }
@@ -669,4 +673,5 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   })
   methods.handle("mako:provider-residency", () => live.residency())
   methods.handle("mako:agents-diagnostics", () => conversations.agents?.diagnostics() ?? null)
+  methods.handle("mako:native-routing", () => conversations.nativeRouting())
 }

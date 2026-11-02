@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path"
 import { z } from "zod"
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk"
 import type { CallBounds } from "../call-bounds.js"
+import { claudeRoutedCall, type ClaudeRouting } from "./routing.js"
 
 /** Claude's tools that write the one file their input names. */
 const FILE_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"])
@@ -22,14 +23,17 @@ export interface ClaudeCallHooks {
  * Claude's PreToolUse and PostToolUse hooks as a call's exact bounds
  * (`CallBounds`). Claude runs PreToolUse before asking for approval and
  * reports with PostToolUse how long the tool itself ran, so the start is the
- * later of the two. Each answers at once and changes nothing: the person's
- * own hooks on the same events run beside them as before. A subagent's calls
- * come through too (`agent_id`), which the stream never shows.
+ * later of the two. Each answers at once and changes nothing, but for a
+ * native spawn `routing` denies, which never starts: the person's own hooks
+ * on the same events run beside them as before. A subagent's calls come
+ * through too (`agent_id`), which the stream never shows.
  */
-export function claudeCallHooks(bounds: CallBounds): ClaudeCallHooks {
+export function claudeCallHooks(bounds: CallBounds, routing?: ClaudeRouting): ClaudeCallHooks {
   return {
     pre: async (input) => {
       if (input.hook_event_name !== "PreToolUse") return {}
+      const routed = routing && claudeRoutedCall(routing, input)
+      if (routed) return routed
       const tool = ToolInputSchema.safeParse(input.tool_input).data
       const path = FILE_TOOLS.has(input.tool_name) ? (tool?.file_path ?? tool?.notebook_path) : undefined
       bounds.before(input.tool_use_id, path && isAbsolute(path) ? [path] : [])

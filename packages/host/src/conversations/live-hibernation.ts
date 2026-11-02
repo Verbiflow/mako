@@ -10,7 +10,7 @@ import { resumes, restorableTotals, verifyRecoveredSession } from "../harnesses/
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { nativeStart } from "./live-launches.js"
 import { releaseHold } from "./live-ledger.js"
-import { activeBinding, conversationControl, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launchRouting, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { updateBinding } from "./live-sources.js"
 import { reconnectRefusal } from "./live-transfers.js"
 
@@ -497,6 +497,7 @@ export class LiveHibernation {
           : undefined,
         conversationTools,
         threadEnvironment,
+        nativeRouting: launchRouting(dependencies, resident.snapshot.session.id, conversationTools),
       }))
       startedSession = session
       if (resident.generation !== generation) {

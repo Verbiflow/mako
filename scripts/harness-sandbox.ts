@@ -1,11 +1,12 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, realpath } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 /**
  * A harness run sealed off from the person's own: a throwaway home and
@@ -52,7 +53,8 @@ export async function sandboxed<T>(prefix: string, harness: string, work: (sandb
       .replaceAll(new Date().toLocaleString("en-US", { month: "long", year: "numeric" }), "<this month>")
     return await work({ root, home, project, env, scrub })
   } finally {
-    await rm(root, { recursive: true, force: true })
+    // A harness can still be writing there, as Codex clones its plugins in the background.
+    await removeScratch(root)
   }
 }
 

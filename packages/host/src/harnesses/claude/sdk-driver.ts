@@ -45,6 +45,7 @@ import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { CallBounds } from "../call-bounds.js"
 import { claudeCallHooks } from "./call-hooks.js"
+import { claudeSubagentStart } from "./routing.js"
 import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
 import { claudeGoalFeedback, claudeGoalLine, readClaudeGoal } from "./goals.js"
 import { claudeReviewCommand } from "./review.js"
@@ -583,6 +584,7 @@ export function createClaudeSdkDriver(
     fork: { kind: "native", point: "checkpoint", via: "The Agent SDK's `forkSession` at a checkpoint (`resumeSessionAt`)." },
     questions: { kind: "request", via: "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input." },
     nativeAgents: { kind: "observed", via: "Agent and Workflow tool calls and their sidechain messages." },
+    nativeRouting: { kind: "per-call", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`; SubagentStart adds the native-child paragraph.", verified: { version: "2.1.314", how: "test:native-routing-live (2026-11-01): as a lead the scripted model's `Agent` call was denied and the model read the message next, no subagent observed; as an ordinary Thread the child ran, was observed and heard the paragraph" } },
     modeSwitching: { kind: "native", via: "Claude Code's permission modes, set on the running query with `setPermissionMode`." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel." },
     stopNativeAgent: async (id, nativeId) => {
@@ -698,7 +700,8 @@ export function createClaudeSdkDriver(
       const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
         hostWarn(CLAUDE_AUTH_LOG, "Native authentication failure", { conversation: conversationId, ...fields }),
       dependencies.inspectCredentials)
-      const callHooks = claudeCallHooks(new CallBounds(conversationId))
+      const routing = options.nativeRouting && { thread: options.nativeRouting, teams: (config.env ?? process.env).CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === "1", conversation: conversationId }
+      const callHooks = claudeCallHooks(new CallBounds(conversationId), routing)
       let query: ClaudeQuery
       try { query = await dependencies.query({
         prompt: input,
@@ -718,6 +721,7 @@ export function createClaudeSdkDriver(
             PreToolUse: [...(config.hooks?.PreToolUse ?? []), { hooks: [callHooks.pre] }],
             PostToolUse: [...(config.hooks?.PostToolUse ?? []), { hooks: [callHooks.post] }],
             PostToolUseFailure: [...(config.hooks?.PostToolUseFailure ?? []), { hooks: [callHooks.post] }],
+            ...routing && { SubagentStart: [...(config.hooks?.SubagentStart ?? []), { hooks: [claudeSubagentStart] }] },
           },
           spawnClaudeCodeProcess: (options) => {
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))

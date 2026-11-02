@@ -197,6 +197,8 @@ export const SdkOpenParamsSchema = z.object({
   name: z.string().optional(),
   model: CursorSdkModelSelectionSchema.optional(),
   mcpServers: z.record(z.string(), SdkMcpServerSchema).optional(),
+  /** Leave out Cursor's `task` tool: the Thread's background and parallel work goes through Mako (`nativeSpawnsOff`). */
+  noTask: z.boolean().optional(),
   /** HTTP/1.1 with SSE for the agent stream; the child's default. `false` uses the SDK's HTTP/2. */
   http1: z.boolean().optional(),
   /**

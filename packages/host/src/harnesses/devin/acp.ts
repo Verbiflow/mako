@@ -49,6 +49,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
       feedback: { kind: "next-message", reason: "its plan approval is ACP's session/request_permission, whose answer is an option id, and devin 3000.10.23 reads no words with a rejection." } },
     ...DEVIN_ACP_HOOKS,
     clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
+    nativeRouting: { kind: "at-launch", via: "`subagents_enabled: false` in the copy of the person's `config.json` its launch's own config folder holds, which removes `run_subagent` and `read_subagent`; leaving out `cognition.ai/subagentSupport` doesn't.", verified: { version: "3000.11.234", how: "harness:native-tools records each mode as a lead without them on 3000.11.234 and 3000.10.23, and with them when the capability is left out (2026-11-01); test:native-routing-live: a lead's call was refused as unavailable, an ordinary Thread's child ran and was observed" } },
     agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", child: devinChildUpdate, observe: input => new DevinAgents(input) },
     observeBackground: devinBackground,
     providerTurns: devinProviderTurns,
@@ -91,7 +92,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
         // launch runs is what Mako stamps the session's records with, which a restore weighs (`restoreGate`).
         versionArgs: ["--version"],
         configureEnvironment: configureDevinEnvironment,
-        prepareMcp: prepareDevinMcp,
+        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true),
         async prepareApprovals({ previous, publish }) {
           const { DevinApprovalObserver, readDevinApprovalDecisions } = await adapters.devinApprovals.load("devin approvals")
           if (options.nativePath && options.resume) {

@@ -21,6 +21,7 @@ import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { AccountLaunch } from "./accounts.js"
 import type { UsageAmendment } from "./account-usage-readings.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
+import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
@@ -321,6 +322,13 @@ export interface ProviderStartOptions extends LiveStartOptions {
   /** Set on the agent process with `applyThreadEnvironment`, beside the control environment. */
   threadEnvironment?: ThreadEnvironment
   /**
+   * The Thread as native routing reads it now (`routeNativeSpawn`): read at
+   * launch for a switch the harness takes then, and at each spawn where the
+   * harness asks. Absent where the host serves no `agents_start`: every
+   * native spawn is the harness's own.
+   */
+  nativeRouting?: () => RoutedThread
+  /**
    * Nobody is at this host to sign a harness in (a cloud machine, whose sign-ins come from the account): a start that
    * would ask a person to sign in fails at once, saying the harness isn't signed in, instead of waiting for an answer.
    */
@@ -402,6 +410,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   steering: SteerCapability
   questions: QuestionCapability
   nativeAgents: NativeAgentsCapability
+  /** How a lead's native spawns go to Mako instead (`contracts/native-routing.ts`). */
+  nativeRouting: NativeRoutingCapability
   contextBreakdown: ContextBreakdownCapability
   compaction: ProviderCompaction
   goals: GoalsCapability
@@ -536,14 +546,16 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
 /** The words each capability declaration carries, so none is left empty. */
 function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
   const text = (value: { kind: string; via?: string; reason?: string }) => value.via ?? value.reason ?? ""
-  const { resume, fork, steering, questions, nativeAgents, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
+  const { resume, fork, steering, questions, nativeAgents, nativeRouting, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
   const texts: [string, string][] = [
     ["resume", text(resume)], ["fork", text(fork)], ["steering", text(steering)], ["questions", text(questions)],
-    ["subagents", text(nativeAgents)], ["context breakdown", text(contextBreakdown)],
+    ["subagents", text(nativeAgents)], ["native routing", text(nativeRouting)], ["context breakdown", text(contextBreakdown)],
     ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["goals", text(goals)],
     ["side questions", text(sideQuestions)], ["review", text(review)], ["mode switching", text(modeSwitching)],
   ]
   if (resume.kind === "native") texts.push(["idle wake", resume.wake])
+  // A routing control is declared only once it was seen to work: on which build, and how.
+  if (nativeRouting.kind !== "words") texts.push(["native routing's version", nativeRouting.verified.version], ["native routing's check", nativeRouting.verified.how])
   return texts
 }
 
