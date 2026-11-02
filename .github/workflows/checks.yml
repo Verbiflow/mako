@@ -118,6 +118,10 @@ jobs:
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
       # Each harness's concepts against its self-report fixture, Mako's reads against them, and harness-concepts.md.
       - run: npx tsx scripts/test-harness-concepts.ts
+      # Native routing's policy, each harness's control and Diagnostics' reading of them; then every
+      # eval:orch-tools case's first request for Claude and Codex, built and its grading checked, at $0.
+      - run: npm run test:native-routing
+      - run: npm run eval:orch-tools -- --dry-run
       - run: npm run test:decoders
       - run: npm run test:usage
       # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.

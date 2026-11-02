@@ -49,6 +49,7 @@ import type {
   SdkRunResult,
 } from "./wire.js"
 import { cursorSdkExitReason } from "./wire.js"
+import { launchSpawnsOff } from "../../native-routing.js"
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill"> & Partial<Pick<CursorSdkClient, "adopt">>
 const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
@@ -571,6 +572,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation",
       feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },
     nativeAgents: { kind: "observed", via: "`task` tool calls and the subagent runs they start." },
+    nativeRouting: { kind: "at-launch", via: "`disallowedTools: [\"task\"]` on the SDK's `Agent.create` and every `Agent.resume`, which removes the task tool.", verified: { version: "1.2.0", how: "test:native-routing-cursor (2026-11-01), real turns asking for a subagent: a lead called no task tool and said it had none, as did that lead resumed; an ordinary Thread's task ran and its subagent was observed" } },
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
     contextBreakdown: {
       kind: "itemized",
@@ -817,6 +819,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           name: options.title,
           model: selection,
           mcpServers: servers,
+          noTask: launchSpawnsOff("cursor", "disallowedTools task", options.conversationId, options.nativeRouting) || undefined,
           importFrom,
           forkFrom: fork && { agentId: fork.nativeId, runId: fork.runId },
         }))

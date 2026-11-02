@@ -1,5 +1,6 @@
 import type { z } from "zod"
 import type { AcpDecoderHooks, AcpPlanDecoder as AcpUpdatePlans } from "@mako/sessions/acp-decoder"
+import type { NativeRoutingCapability } from "../contracts/native-routing.js"
 import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -36,6 +37,8 @@ export interface AcpLaunchOptions {
   access?: AccessTier
   /** The folder the process runs in, for providers whose settings depend on it. */
   cwd: string
+  /** Native routing has the Thread's own spawns off (`nativeSpawnsOff`), for the source's `nativeRouting` control. */
+  nativeSpawnsOff?: boolean
 }
 
 export interface AcpLaunch {
@@ -236,6 +239,8 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   /** A permission request's title when the agent leaves the tool call's title out. */
   permissionTitle?(request: RequestPermissionRequest): string | undefined
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
+  /** How the agent's own spawns are routed to Mako; a source with a control reads `AcpLaunchOptions.nativeSpawnsOff`. */
+  nativeRouting: NativeRoutingCapability
   resume: AcpResume
   steering: AcpSteering
   access?: AcpAccessPolicy
