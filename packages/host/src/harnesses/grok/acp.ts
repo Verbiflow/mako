@@ -241,7 +241,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
     ...GROK_ACP_HOOKS,
     requests: grokRequests,
     clientCapabilities: { _meta: GROK_FOLDER_TRUST_CAPABILITY },
-    nativeRouting: { kind: "at-launch", via: "`GROK_SUBAGENTS=0` in the agent's environment, which removes `spawn_subagent`. Its `workflow` tool stays: `GROK_WORKFLOWS=0` would also move `/goal` to the legacy driver Mako's goals don't read.", verified: { version: "1.0.70", how: "harness:native-tools records each mode as a lead without `spawn_subagent` (2026-11-01); test:native-routing-live: a lead offered none, an ordinary Thread's child ran and was observed" } },
+    nativeRouting: { kind: "at-launch", via: "`GROK_SUBAGENTS=0` and `GROK_WORKFLOWS=0` in the agent's environment, which remove `spawn_subagent` and `workflow`. An Apex's `/goal` then runs on Grok's `update_goal` driver, whose `goal_updated` Mako reads as it reads the workflow driver's.", verified: { version: "1.0.70", how: "harness:native-tools records each mode as a lead without `spawn_subagent` or `workflow` (2026-11-02); test:native-routing-live: a lead offered neither, an ordinary Thread's child ran and was observed; test-grok-goal-live --apex: a goal set, completed and cleared on the update_goal driver" } },
     steering: { kind: "supported", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
     launchOptionIds: ["effort"],
     access: {
@@ -271,7 +271,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
         configureEnvironment(env) {
           env.GROK_DISABLE_AUTOUPDATER = "1"
           Object.assign(env, GROK_OWN_PERMISSIONS)
-          if (options.nativeSpawnsOff) env.GROK_SUBAGENTS = "0"
+          if (options.nativeSpawnsOff) Object.assign(env, { GROK_SUBAGENTS: "0", GROK_WORKFLOWS: "0" })
         },
         async prepareApprovals({ root, previous, publish }) {
           const folder = join(root, "grok")

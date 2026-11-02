@@ -143,12 +143,10 @@ assert.deepEqual(codexRoutingConfig("c", undefined), {})
  * offers. Claude decides each call instead, and Cursor's definitions come
  * from its SDK's schema, not a launch.
  */
-const KEPT_IN_A_LEAD = new Map([["grok:workflow", "GROK_WORKFLOWS=0 would also move Grok's /goal to its legacy driver, which Mako's Grok goals don't read"]])
 for (const harness of ["codex", "grok", "opencode", "devin"]) {
   const newest = storedDefinitions(harness).at(-1)!
   const vocabulary = VOCABULARIES.find((each) => each.harness === harness)!
   const spawns = Object.entries(vocabulary.tools).filter(([, tool]) => tool.kind === "agent").flatMap(([name, tool]) => [name, ...tool.aliases ?? []])
-    .filter((name) => !KEPT_IN_A_LEAD.has(`${harness}:${name}`))
   const apexes = newest.configurations.filter((configuration) => configuration.name.endsWith(", lead"))
   assert.ok(apexes.length, `${harness} ${newest.version} has no Apex configuration; record one with npm run harness:native-tools -- ${harness}`)
   for (const apex of apexes) {

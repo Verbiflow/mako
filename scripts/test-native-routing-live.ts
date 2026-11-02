@@ -50,11 +50,11 @@ const CHILD_TASK = "List the files in this folder and report their names."
 /** The deny's own words, as the model reads them in the spawn's result. */
 const ROUTED = "routes background, parallel and writing work through Mako"
 
-/** Each harness's spawn tool, called as its model calls it, and the mode its turn runs in. */
-const SPAWNS = new Map<string, { tool: string; arguments: JsonObject; mode?: string }>([
+/** Each harness's spawn tool, called as its model calls it, the mode its turn runs in, and its other spawn tools an Apex isn't offered. */
+const SPAWNS = new Map<string, { tool: string; arguments: JsonObject; mode?: string; others?: string[] }>([
   ["claude", { tool: "Agent", arguments: { description: "List files", prompt: CHILD_TASK, subagent_type: "general-purpose", run_in_background: false }, mode: "bypassPermissions" }],
   ["codex", { tool: "spawn_agent", arguments: { task_name: "list_files", message: CHILD_TASK } }],
-  ["grok", { tool: "spawn_subagent", arguments: { description: "List files", prompt: CHILD_TASK }, mode: "access:full" }],
+  ["grok", { tool: "spawn_subagent", arguments: { description: "List files", prompt: CHILD_TASK }, mode: "access:full", others: ["workflow"] }],
   ["opencode", { tool: "subagent", arguments: { agent: "general", description: "List files", prompt: CHILD_TASK } }],
   ["devin", { tool: "run_subagent", arguments: { title: "List files", task: CHILD_TASK, profile: "subagent_explore" }, mode: "bypass" }],
 ])
@@ -176,13 +176,14 @@ async function turn(harness: string, sandbox: Sandbox, driver: ProviderLiveDrive
 const observedChildren = (run: Run) => run.events.filter((event) => event.type === "live-agent")
 
 async function check(harness: string, driver: ProviderLiveDriver): Promise<string> {
-  const { tool } = SPAWNS.get(harness)!
+  const { tool, others = [] } = SPAWNS.get(harness)!
   const lines: string[] = []
   await sandboxed("mako-native-routing", harness, async (sandbox) => {
     const apex = await turn(harness, sandbox, driver, "apex")
     const apexTools = offered(apex.heard[0] ?? "")
     if (!apexTools && READABLE.has(harness)) throw new Error(`${harness}'s first request named no tools this check reads`)
     if (apexTools && harness !== "claude") assert.ok(!apexTools.has(tool), `${harness} as an Apex still offers ${tool}`)
+    for (const other of others) assert.ok(!apexTools?.has(other), `${harness} as an Apex still offers ${other}`)
     assert.deepEqual(observedChildren(apex), [], `${harness} as an Apex: no subagent reaches the roster`)
     if (harness === "devin") assert.ok(apex.heard.slice(1).some((heard) => heard.includes(`Tool '${tool}' is not available`)), "Devin refuses the call itself: its tool is gone")
     if (harness === "claude") {
@@ -190,7 +191,7 @@ async function check(harness: string, driver: ProviderLiveDriver): Promise<strin
       assert.ok(apex.heard.slice(1).some((heard) => heard.includes(ROUTED)), "Claude's model reads the deny that names agents_start")
       assert.ok(!apex.heard.some((heard) => heard.includes(NATIVE_CHILD_INSTRUCTIONS)), "no child started, so none heard the child paragraph")
     }
-    lines.push(`Apex: ${harness === "claude" ? `${tool} offered, its call denied with the agents_start message` : apexTools ? `${tool} not offered` : `the call refused, ${tool} not available`}, ${apex.heard.length} model requests, no subagent observed`)
+    lines.push(`Apex: ${harness === "claude" ? `${tool} offered, its call denied with the agents_start message` : apexTools ? `${[tool, ...others].join(" or ")} not offered` : `the call refused, ${tool} not available`}, ${apex.heard.length} model requests, no subagent observed`)
 
     if (harness === "codex") {
       assert.ok(apex.nativeId, "Codex named its thread")
@@ -203,7 +204,7 @@ async function check(harness: string, driver: ProviderLiveDriver): Promise<strin
 
     const thread = await turn(harness, sandbox, driver, "thread")
     const threadTools = offered(thread.heard[0] ?? "")
-    if (threadTools) assert.ok(threadTools.has(tool), `${harness} as an ordinary Thread lost ${tool}`)
+    if (threadTools) for (const kept of [tool, ...others]) assert.ok(threadTools.has(kept), `${harness} as an ordinary Thread lost ${kept}`)
     assert.ok(observedChildren(thread).length > 0, `${harness} as an ordinary Thread: its subagent is observed`)
     assert.ok(updates(thread.events).some((update) => update.kind === "tool" && update.name === tool), `${harness}: the spawn reached the transcript`)
     if (harness === "claude") {
