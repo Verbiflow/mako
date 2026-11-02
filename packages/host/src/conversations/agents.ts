@@ -11,6 +11,7 @@ import {
   childState,
   PlaceSchema,
   reportPhase,
+  reportRoute,
   ROLE_WORD,
   TREE_BUDGET,
   type AgentCaller,
@@ -26,7 +27,7 @@ import {
   type TreeBudget,
 } from "../contracts/agents.js"
 import {
-  AFTER_START,
+  afterStart,
   WAIT_LIMIT_MS,
   type AgentOperations,
   type AgentStrip,
@@ -45,6 +46,8 @@ import {
   type AgentsStopResult,
   type AgentsWaitInput,
   type AgentsWaitResult,
+  type StartWaited,
+  type WaitedReport,
 } from "../contracts/agent-tools.js"
 import { BRIEF_CLOSE, briefIntro } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
@@ -109,6 +112,14 @@ const QueuedStartSchema = z.object({
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
 type TreeCounts = { [Count in keyof TreeBudget]: number }
 
+/** A `wait` start holding for its child: the lead's conversation whose turn made the call, and how it hears the child move. */
+interface Hold {
+  child: string
+  lead?: string
+  check(): void
+  end(): void
+}
+
 /**
  * The one engine every child goes through (`contracts/agents.ts`): a Thread
  * another Thread's agent started (`agents_start`), or a harness CLI run its
@@ -134,6 +145,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly childOf = new Map<string, string>()
   private readonly starting = new Set<string>()
   private readonly waiters = new Set<() => void>()
+  /** `wait` starts holding now: while one holds a child, its reports answer the start rather than wake its lead. */
+  private readonly holds = new Set<Hold>()
   /** Notices for a parent whose turns a followed process runs: they start its next turn once that process ends. */
   private readonly held = new Map<string, Notice[]>()
   /** The decision a blocked child's lead was told of, by child: told once per question. */
@@ -242,6 +255,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   settled(conversation: string, request: string): void {
+    // A turn that ended mid-wait left no one to answer: the child's result wakes it instead.
+    for (const hold of this.holds) if (hold.lead === conversation) hold.end()
     this.wakes.settled(conversation)
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
@@ -258,7 +273,21 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   // ── AgentOperations ──
 
-  async start(caller: AgentCaller, input: AgentsStartInput): Promise<AgentsStartResult> {
+  start(caller: AgentCaller, input: AgentsStartInput): Promise<AgentsStartResult> {
+    return input.mode === "wait" ? this.startWaiting(caller, input) : this.admit(caller, input)
+  }
+
+  private async startWaiting(caller: AgentCaller, input: AgentsStartInput): Promise<AgentsStartResult> {
+    const began = this.now()
+    const answer = await this.admit(caller, input)
+    if ("refused" in answer) return answer
+    const window = Math.max(0, Math.min(input.timeoutMs ?? WAIT_LIMIT_MS, WAIT_LIMIT_MS) - (this.now() - began))
+    const waited = answer.child ? await this.hold(answer.child, window) : { outcome: "pending" as const }
+    hostLog("agents", "start waited", { child: answer.child ?? answer.name, outcome: waited.outcome, ms: this.now() - began, ...(answer.deduped && { deduped: true }) })
+    return { ...answer, waited, next: afterStart(input.wake ?? "decisions", waited) }
+  }
+
+  private async admit(caller: AgentCaller, input: AgentsStartInput): Promise<AgentsStartResult> {
     const lead = this.leadOf(caller)
     if ("refused" in lead) return lead
     const store = this.store()!
@@ -450,6 +479,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.runs.dispose()
     this.wakes.dispose()
     for (const wake of this.waiters) wake()
+    for (const hold of this.holds) hold.end()
   }
 
   // ── Starting ──
@@ -476,6 +506,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         access: tier,
         ...(input.place && { place: input.place }),
         ...(input.workspace && { workspace: input.workspace }),
+        ...(input.mode && { mode: input.mode }),
+        ...(input.wake && { wake: input.wake }),
       },
       op,
       startedBy: { kind: "agent", session: SessionIdSchema.parse(lead.session) },
@@ -549,7 +581,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       state: state.kind,
       tree: { ...counts, of: { ...this.budget } },
       ...(deduped && { deduped: true as const }),
-      next: AFTER_START,
+      next: afterStart(edge.asked.wake ?? "decisions"),
     }
   }
 
@@ -566,8 +598,72 @@ export class Agents implements AgentOperations, ConversationChildren {
       why: `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${Math.max(0, ahead)} ahead).`,
       tree: { ...counts, of: { ...this.budget } },
       ...(deduped && { deduped: true as const }),
-      next: AFTER_START,
+      next: afterStart(queued?.input.wake ?? "decisions"),
     }
+  }
+
+  // ── A wait ──
+
+  /**
+   * Holds a `wait` start's answer for at most `window` ms: until its child's
+   * result, a question it asks, or the window's or the lead's turn's end.
+   * While it holds, the child's reports answer it instead of waking the lead,
+   * and once it lets go they wake the lead (`reportRoute`), the result
+   * settled-only. A repeat of the start answers the result again.
+   */
+  private hold(child: string, window: number): Promise<StartWaited> {
+    const now = this.outcomeOf(child)
+    if (now || window <= 0) return Promise.resolve(this.answered(child, now ?? { outcome: "pending" }))
+    const edge = this.store()!.edges().of(child)
+    const lead = edge && (this.conversationOfSession(edge.parentSession) ?? this.conversationOf(edge.parent))
+    return new Promise((resolve) => {
+      const done = (outcome: StartWaited) => {
+        clearTimeout(timer)
+        this.holds.delete(hold)
+        resolve(this.answered(child, outcome))
+      }
+      const hold: Hold = {
+        child,
+        ...(lead && { lead }),
+        check: () => {
+          const outcome = this.outcomeOf(child)
+          if (outcome) done(outcome)
+        },
+        end: () => done({ outcome: "pending" }),
+      }
+      const timer = setTimeout(() => hold.end(), window)
+      this.holds.add(hold)
+    })
+  }
+
+  /** Where a waited-for child stands: its result, a question it waits on, or nothing yet. */
+  private outcomeOf(child: string): StartWaited | undefined {
+    const store = this.store()
+    const edge = store?.edges().of(child)
+    if (!store || !edge) return { outcome: "result", report: { status: "failed", summary: "Its Thread is gone from this device." } }
+    const last = store.reportsOf(child, 0).filter((report) => report.status !== "progress").at(-1)
+    if (last && (last.status === "done" || last.status === "failed")) return { outcome: "result", report: waitedReport(last) }
+    const state = this.stateOf(edge)
+    if (state.kind === "blocked") {
+      const asking = last && (last.status === "blocked" || last.status === "needs-input") ? waitedReport(last) : undefined
+      return { outcome: "question", question: state.question, answers: state.on === "lead" ? "you" : "the person", ...(asking && { report: asking }) }
+    }
+    // A turn's end writes its report just after it shows as ended; only a closed delegation ends without one.
+    if (state.kind === "ended" && edge.closedAt) return { outcome: "result", report: { status: "failed", summary: `It was stopped${state.reason ? `: ${state.reason}` : "."}` } }
+    return undefined
+  }
+
+  /** A wait's answer carried the report: the lead heard it, so a wake waiting with it is taken back. */
+  private answered(child: string, outcome: StartWaited): StartWaited {
+    const store = this.store()
+    const edge = store?.edges().of(child)
+    if (!store || !edge || outcome.outcome === "pending") return outcome
+    const report = store.reportsOf(child, 0).filter((candidate) => candidate.status !== "progress").at(-1)
+    if (!report || (outcome.outcome === "question" && !outcome.report)) return outcome
+    const conversation = this.conversationOfSession(edge.parentSession) ?? this.conversationOf(edge.parent)
+    if (conversation) this.wakes.withdraw(conversation, `notice:${child}:${report.id}`)
+    store.markReportsDelivered([report.id], this.now())
+    return outcome
   }
 
   private refuse(op: string, refused: AgentRefused["refused"], why: string): AgentRefused {
@@ -637,18 +733,26 @@ export class Agents implements AgentOperations, ConversationChildren {
     else this.noticeOf(edge, kept.report)
     this.childMoved(edge, false)
     for (const wake of this.waiters) wake()
+    this.checkHolds(edge.child)
     return kept
   }
 
-  /** `notice:{child}:{reportId}` to the parent's owner: this host, which has the parent's conversation. */
+  /** `notice:{child}:{reportId}` to the parent's owner: this host, which has the parent's conversation; a report its spawn asked not to hear goes nowhere but its strip. */
   private noticeOf(edge: ThreadParent, report: Report, wake?: string): void {
     const store = this.store()!
+    const route = reportRoute(edge.asked, report.status)
+    if (route !== "lead") {
+      store.markReportsDelivered([report.id], this.now())
+      hostLog("agents", "report kept", { op: edge.op, report: report.id, status: report.status, to: route, wake: edge.asked.wake ?? "decisions" })
+      return
+    }
     const notice: Notice = {
       id: `notice:${edge.child}:${report.id}`,
       report,
       label: `"${edge.name}" (${this.deps.harnessLabel(this.harnessOf(edge))})`,
       from: store.thread(edge.child)?.sessions[0] ?? edge.parentSession,
       ...(wake && { wake }),
+      ...(edge.asked.mode === "wait" && (report.status === "done" || report.status === "failed") && { settledOnly: true as const }),
     }
     const conversation = this.conversationOfSession(edge.parentSession) ?? this.conversationOf(edge.parent)
     if (conversation) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
@@ -737,15 +841,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
   }
 
-  /** Who answers a child's approval: its lead on full access, else the person, told why. */
+  /** Who answers a child's approval: its lead on full access, unless its spawn asked to hear only its result; else the person, told why. */
   private decides(edge: ThreadParent): "lead" | "person" {
+    if (reportRoute(edge.asked, "blocked") !== "lead") return "person"
     const parent = this.conversationOfSession(edge.parentSession) ?? this.conversationOf(edge.parent)
     const tier = parent ? this.tierOfConversation(parent) : undefined
     return tier === "full" ? "lead" : "person"
   }
 
   private waitingLine(edge: ThreadParent, line: string): string {
-    return this.decides(edge) === "lead" ? line : `${line} (yours to answer: its ${ROLE_WORD} isn't on full access)`
+    if (this.decides(edge) === "lead") return line
+    return reportRoute(edge.asked, "blocked") === "lead"
+      ? `${line} (yours to answer: its ${ROLE_WORD} isn't on full access)`
+      : `${line} (yours to answer: its ${ROLE_WORD} hears only ${edge.asked.wake === "never" ? "what it reads" : "its result"})`
   }
 
   private stateOf(edge: ThreadParent): ChildState {
@@ -777,7 +885,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
     for (const conversation of this.conversationsOfThread(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
     this.askLead(edge)
+    if (kindChanged) this.checkHolds(edge.child)
     if (before && before.state.kind === "working" && entry.state.kind !== "working") void this.drain()
+  }
+
+  private checkHolds(child: string): void {
+    for (const hold of this.holds) if (hold.child === child) hold.check()
   }
 
   /** A child waiting on an approval or a question under a lead on full access: the lead hears it as `blocked`, keyed by what it waits on. */
@@ -967,12 +1080,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.deps.live.steersAtStep(conversation) ? "steer" : "queue"
   }
 
-  private steer(conversation: string, id: string, text: string): boolean {
+  private steer(conversation: string, id: string, text: string): Promise<boolean> | false {
     const running = this.deps.live.held(conversation)?.requests.find((request) => request.status === "dispatching")
     if (!running) return false
-    this.deps.live.act(conversation, { kind: "steer", id, requestId: running.id, text, attachments: [] }).catch((error) =>
-      hostWarn("agents", "a digest could not join the running turn", { conversation, error: errorMessage({ error }) }))
-    return true
+    return this.deps.live.act(conversation, { kind: "steer", id, requestId: running.id, text, attachments: [] }).then(
+      (action) => {
+        const took = action.state.kind === "accepted" || action.state.kind === "completed"
+        if (!took) hostWarn("agents", "a digest wasn't taken by the running turn", { conversation, state: action.state.kind })
+        return took
+      },
+      (error) => {
+        hostWarn("agents", "a digest could not join the running turn", { conversation, error: errorMessage({ error }) })
+        return false
+      })
   }
 
   private conversationOwns(ref: Pick<ThreadRef, "harness" | "nativeId" | "sessionId">): boolean {
@@ -1044,6 +1164,10 @@ function parseQueued(record: string): QueuedStart | undefined {
   } catch {
     return undefined
   }
+}
+
+function waitedReport(report: Report): WaitedReport {
+  return { status: report.status, summary: report.summary, ...(report.artifacts?.length && { artifacts: report.artifacts }), ...(report.question && { question: report.question }) }
 }
 
 function unknownChild(ref: string): AgentRefused {
