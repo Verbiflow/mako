@@ -68,9 +68,12 @@ function routes(): void {
     asked: { brief: { objective: "x" }, ...(wake && { wake }) }, op: "start:c", startedBy: { kind: "agent", session: apex }, createdAt: 1,
   })
   const asking = { latest: ReportSchema.parse({ id: "r", child: randomUUID(), status: "needs-input", summary: "Which?", question: "Main or next?", ownerGeneration: 1, at: 1 }) }
-  assert.deepEqual(childState(edge(), { source: "live" }, asking), { kind: "blocked", question: "Main or next?", on: "lead" })
-  assert.deepEqual(childState(edge("finish"), { source: "live" }, asking), { kind: "blocked", question: "Main or next?", on: "person" }, "a question its Apex won't hear is the person's")
-  assert.deepEqual(childState(edge("never"), { source: "live" }, asking), { kind: "blocked", question: "Main or next?", on: "person" })
+  const ask = { kind: "report", id: "r" } as const
+  assert.deepEqual(childState(edge(), { source: "live" }, asking), { kind: "blocked", question: "Main or next?", on: "lead", ask })
+  assert.deepEqual(childState(edge("finish"), { source: "live" }, asking), { kind: "blocked", question: "Main or next?", on: "person", ask }, "a question its Apex won't hear is the person's")
+  assert.deepEqual(childState(edge("never"), { source: "live" }, asking), { kind: "blocked", question: "Main or next?", on: "person", ask })
+  const passed = { latest: { ...asking.latest, for: "person" as const, options: [{ label: "main" }, { label: "next" }], recommended: 1 } }
+  assert.deepEqual(childState(edge(), { source: "live" }, passed), { kind: "blocked", question: "Main or next?", on: "person", ask: { ...ask, options: passed.latest.options, recommended: 1 } }, "a question its Apex left to the person is theirs, with its options")
 }
 
 /** The model sees both choices on every door, each said when to use. */
@@ -130,7 +133,7 @@ async function finishOnly(): Promise<void> {
     assert.equal(wakesOf(w, apex.conversation).length, 0, "the question didn't wake the Apex")
     const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed)
-    assert.deepEqual(listed.children[0]!.state, { kind: "blocked", question: "Main or next?", on: "person" }, "it's the person's to answer")
+    assert.deepEqual(listed.children[0]!.state, { kind: "blocked", question: "Main or next?", on: "person", ask: { kind: "report", id: `report:${answer.child}:q` } }, "it's the person's to answer")
     assert.equal(w.store.edges().of(answer.child!)!.asked.wake, "finish", "the edge keeps what was asked")
     w.say(answer.conversation!, "Main.")
     await w.settle()
@@ -165,7 +168,8 @@ async function never(): Promise<void> {
     assert.ok("text" in read && /Indexed 4,000 symbols/.test(read.text), "the Apex reads it when it wants")
     const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed)
-    assert.deepEqual(listed.children.find((strip) => strip.name === "sign")!.state, { kind: "blocked", question: "Which signing key?", on: "person" }, "the question reaches the person")
+    const sign = listed.children.find((strip) => strip.name === "sign")!
+    assert.deepEqual(sign.state, { kind: "blocked", question: "Which signing key?", on: "person", ask: { kind: "report", id: `report:${sign.child}:q` } }, "the question reaches the person")
     await w.restart()
     await w.settle()
     assert.equal(wakesOf(w, apex.conversation).length, 0, "a restart doesn't wake it either")

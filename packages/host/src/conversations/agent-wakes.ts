@@ -256,8 +256,12 @@ export function digest(notices: readonly Notice[], counts: string): string {
   }
   if (decisions.length) {
     lines.push(`${decisions.length} ${decisions.length === 1 ? "needs" : "need"} a decision:`)
-    for (const { label, report } of decisions)
+    for (const { label, report } of decisions) {
       lines.push(`  • ${label} is ${report.status === "blocked" ? "blocked" : "asking"}: ${report.question ?? reportPhase(report) ?? "it asks for a decision."}`)
+      if (report.options?.length)
+        lines.push(`    options: ${report.options.map((option, index) => `${option.label}${index === report.recommended ? " (recommended)" : ""}`).join(" · ")}`)
+    }
+    lines.push("  agents_answer answers each, or leaves it to the person with person: true.")
   }
   if (finished.length) {
     lines.push(`${finished.length} finished:`)

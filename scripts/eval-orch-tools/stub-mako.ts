@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { AFTER_START, AGENT_TOOLS, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
+import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
@@ -55,6 +55,11 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
     const to = Sent.parse(args).to ?? "child"
     const sent: AgentsSent = { child: randomUUID(), name: to.replace(/^child:/, ""), request: randomUUID(), delivery: "turn" }
     return { ...sent }
+  }
+  if (tool === "agents_answer") {
+    const answer = z.object({ to: z.string().optional(), person: z.boolean().optional(), allow: z.boolean().optional() }).catch({}).parse(args)
+    const answered: AgentsAnswered = { child: randomUUID(), name: (answer.to ?? "child").replace(/^fin:/, ""), answered: answer.person ? "person" : answer.allow === undefined ? "question" : "approval" }
+    return { ...answered }
   }
   if (tool === "agents_wait") {
     const waited: AgentsWaitResult = { reports: [], cursor: 0, timedOut: true }

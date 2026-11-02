@@ -22,6 +22,20 @@ const inputs = {
   "mako:account-usage": () => z.tuple([z.string(), z.string()]),
   "mako:accounts": () => z.tuple([]),
   "mako:activate-tab": () => z.tuple([z.string()]),
+  "mako:agents-answer": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        to: z.string(),
+        answer: z.string().optional(),
+        allow: z.boolean().optional(),
+        person: z.boolean().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:agents-diagnostics": () => z.tuple([]),
   "mako:agents-direct": () =>
     z.tuple([
@@ -127,6 +141,11 @@ const inputs = {
           )
           .optional(),
         question: z.string().optional(),
+        options: z
+          .array(z.object({ label: z.string(), detail: z.string().optional() }))
+          .optional(),
+        recommended: z.number().optional(),
+        action: z.string().optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -2038,6 +2057,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:account-usage", "harnesses"],
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
+  ["mako:agents-answer", "conversations"],
   ["mako:agents-diagnostics", "conversations"],
   ["mako:agents-direct", "conversations"],
   ["mako:agents-link", "conversations"],

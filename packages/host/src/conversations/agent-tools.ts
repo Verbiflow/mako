@@ -7,6 +7,7 @@ import {
   type AgentOperations,
   type AgentToolDefinition,
   type AgentToolFilled,
+  type AgentsAnswerInput,
   type AgentsLinkInput,
   type AgentsListInput,
   type AgentsReadInput,
@@ -28,6 +29,7 @@ export function declareAgentMethods(methods: MethodTable, agents: () => AgentOpe
   methods.handle("mako:agents-read", (caller: AgentCaller, input: AgentsReadInput) => agents()?.read(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => agents()?.report(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => agents()?.send(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => agents()?.answer(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => agents()?.stop(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => agents()?.wait(caller, input) ?? UNAVAILABLE)
 }

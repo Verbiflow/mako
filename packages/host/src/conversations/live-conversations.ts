@@ -34,7 +34,7 @@ import {
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
 import { rollup } from "../contracts/children.js"
-import { latestPendingQuestion, retireQuestionsForInput } from "../contracts/live-questions.js"
+import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
@@ -444,6 +444,25 @@ export class LiveConversations {
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const asked = question?.native.questions.find((item) => !question.answered?.includes(item.id))
     return asked ? questionWaiting(asked.question) : undefined
+  }
+
+  /** What `waitingOn` names, whole, so an answer can reach it through `permission`. */
+  pendingAsk(id: string): PendingAsk | undefined {
+    const resident = this.records.has(id) ? this.records.load(id) : undefined
+    if (!resident) return undefined
+    const permission = resident.snapshot.permissions[0]
+    if (permission)
+      return {
+        request: permission.id,
+        kind: permission.questions?.length ? "question" : "approval",
+        options: permission.options,
+        questions: permission.questions ?? [],
+        ...(permission.feedbackOption && { feedbackOption: permission.feedbackOption }),
+        ...(permission.gone && { gone: true as const }),
+      }
+    const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
+    const open = question?.native.questions.filter((item) => !question.answered?.includes(item.id)) ?? []
+    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : undefined
   }
 
   /**

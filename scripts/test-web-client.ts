@@ -1265,7 +1265,7 @@ test("the sheet's effort: the chosen model's own levels, its absence said in pla
 })
 
 test("an access level in plain words: its tier's, else the harness's own", () => {
-  assert.deepEqual([modeLabel(full), modeSummary(full)], ["Full access", "Nothing waits for approval. Use in a workspace you can throw away."])
+  assert.deepEqual([modeLabel(full), modeSummary(full)], ["Full access", "Nothing waits for approval: it answers its Fins' approvals and merges its own pull requests. Use in a workspace you can throw away."])
   assert.equal(modeLabel({ id: "plan", name: "Plan", access: "plan" }), "Read-only")
   assert.deepEqual([modeLabel({ id: "x", name: "Agent", description: "Cursor's own." }), modeSummary({ id: "x", name: "Agent", description: "Cursor's own." })], ["Agent", "Cursor's own."])
 })

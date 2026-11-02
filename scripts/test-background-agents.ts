@@ -65,7 +65,8 @@ function statesAndEntries(): void {
   assert.deepEqual(childState(started, { source: "live", working: true, step: "Shell npm test" }, {}), { kind: "working", step: "Shell npm test" })
   assert.deepEqual(childState(started, { source: "live", working: true }, { latest: report(started.child, "progress", "Half the rows are fixed. Next the footer.") }), { kind: "working", phase: "Half the rows are fixed." }, "a progress report is the phase it shows")
   assert.deepEqual(childState(started, { source: "live" }, { latest: report(started.child, "done", "Fixed it.") }), { kind: "ended", outcome: "done" })
-  assert.deepEqual(childState(started, { source: "live" }, { latest: { ...report(started.child, "blocked", "Which branch?"), question: "Main or next?" } }), { kind: "blocked", question: "Main or next?", on: "lead" })
+  const blocked = { ...report(started.child, "blocked", "Which branch?"), question: "Main or next?" }
+  assert.deepEqual(childState(started, { source: "live" }, { latest: blocked }), { kind: "blocked", question: "Main or next?", on: "lead", ask: { kind: "report", id: blocked.id } }, "a question in a report is an ask its Apex answers by the report")
   assert.deepEqual(childState({ ...started, closedAt: NOW }, { source: "live" }, {}), { kind: "ended", outcome: "stopped" }, "a closed delegation reads as stopped")
   assert.deepEqual(childState(started, { source: "live" }, {}), { kind: "idle" }, "a child between turns is idle: a message gives it its next one")
   assert.deepEqual(childState(started, { source: "followed", ended: { outcome: "unknown", at: NOW } }, {}).kind, "ended")

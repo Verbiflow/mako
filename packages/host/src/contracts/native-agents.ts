@@ -18,6 +18,33 @@ export const NativeAgentStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("canceled") }),
   z.object({ kind: z.literal("unknown"), reason: note }),
 ])
+
+/** The most answers one question offers. */
+export const ASK_OPTIONS = 12
+/** One answer a Fin's question offers: what's picked, and what picking it does. */
+export const AskOptionSchema = z.object({
+  label: z.string().min(1).max(200),
+  detail: z.string().max(600).optional(),
+})
+export type AskOption = z.infer<typeof AskOptionSchema>
+
+/**
+ * What a blocked Fin asks, whole, so it can be answered without opening its
+ * Thread: a question in its report (`agents_report`), or its harness's own
+ * question or approval. `id` names the ask, so an answer says which one it
+ * answers and a second answer to the same one is refused, not sent twice.
+ */
+export const FinAskSchema = z.object({
+  kind: z.enum(["report", "question", "approval"]),
+  id: z.string().min(1).max(600),
+  options: z.array(AskOptionSchema).max(ASK_OPTIONS).optional(),
+  /** The option it recommends, by its place in `options`. */
+  recommended: z.number().int().nonnegative().optional(),
+  /** What whoever answers does, in one sentence. */
+  action: z.string().max(400).optional(),
+})
+export type FinAsk = z.infer<typeof FinAskSchema>
+
 /**
  * A child's state as `childState` computes it (`contracts/agents.ts`), carried
  * on its entry so every surface (the rail's badge, the strip, the panel, the
@@ -28,7 +55,7 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
   z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional() }),
   z.object({ kind: z.literal("idle") }),
-  z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]) }),
+  z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional() }),
   z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional() }),
 ])
 export type ChildStateReading = z.infer<typeof ChildStateSchema>

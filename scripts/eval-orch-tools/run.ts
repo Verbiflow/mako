@@ -22,7 +22,7 @@ import { appendFile, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { BaselineResult, budget, grade, loadCases, needsThird, regressions, runsOn, type CaseResult, type OrchCase, type Sample, type ToolArgs } from "./cases.ts"
+import { BaselineResult, budget, grade, loadCases, needsThird, regressions, runsOn, wakeText, type CaseResult, type OrchCase, type Sample, type ToolArgs } from "./cases.ts"
 import { firstRequest, replaySample, REPLAY_HARNESSES, type Described, type ReplayHarness } from "./replay.ts"
 import { startStubMako } from "./stub-mako.ts"
 import { TEMPLATE_NAMES, writeTemplate } from "./templates.ts"
@@ -135,7 +135,9 @@ try {
       const text = JSON.stringify(body)
       assert.ok(text.includes("agents_start"), `${harness} ${orchCase.id}: the request names agents_start`)
       assert.ok(text.includes(JSON.stringify(orchCase.prompt).slice(1, -1)), `${harness} ${orchCase.id}: the request carries the prompt`)
-      if (orchCase.setup.children?.length) {
+      if (orchCase.setup.asks?.length)
+        assert.ok(text.includes("agents_answer") && text.includes(JSON.stringify(wakeText(orchCase)).slice(1, -1)), `${harness} ${orchCase.id}: the request carries its Fins' wake`)
+      else if (orchCase.setup.children?.length) {
         assert.ok(text.includes("agents_send"), `${harness} ${orchCase.id}: the request names agents_send`)
         assert.ok(text.includes("You're this Thread's Apex") && orchCase.setup.children.every((child) => text.includes(`fin:${child.name}`)), `${harness} ${orchCase.id}: the request carries the front-door note`)
       }

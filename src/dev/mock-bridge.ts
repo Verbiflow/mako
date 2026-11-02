@@ -3279,6 +3279,7 @@ export function installMockBridge() {
       budget: TREE_BUDGET,
       trees: [{ apex: "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f", running: 3, started: 5 }, { apex: "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", running: 1, started: 2 }],
       routes: { forwarded: 9, sent: 2, redirected: 1, direct: 4 },
+      answers: { apex: 3, passed: 1, refused: 1 },
     }),
     agentsRedirect: async (_conversation: string, input: { to: string }) => ({ to: input.to, withdrawn: true, delivery: "turn" as const }),
     // As the host draws it: an event in the Apex's conversation, and no turn of the Apex's.

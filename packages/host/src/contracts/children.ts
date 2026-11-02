@@ -23,6 +23,16 @@ export function fromAgent(name: string): string {
 export function passedOn(name: string): string {
   return `[mako · the person's words, passed on by ${name} (agent)]`
 }
+
+/** What an Apex hears its Fin's harness ask, with how it answers: an approval is allowed or refused, a question answered. */
+export function apexAsk(line: string, approval: boolean): string {
+  return `${line}. ${approval ? "Allow it with agents_answer allow: true, refuse it with allow: false" : "Answer it with agents_answer"}, leave it to the person with person: true, or stop it with agents_stop.`
+}
+
+/** An answer to a Fin's question, beneath its header: the question it answers, then the answer. */
+export function answerText(question: string, answer: string): string {
+  return `Your question: ${question}\nAnswer: ${answer}`
+}
 /** Between the person's words an Apex passed on and what it added. */
 export const PASSED_ON_NOTE = `[mako · what ${YOUR_APEX} adds]`
 const PASSED_ON_NOTES = [PASSED_ON_NOTE, `[mako · what your ${LEGACY_APEX_WORD} adds]`]

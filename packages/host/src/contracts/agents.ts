@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
-import { CHILDREN_BINDING, type ChildStateReading, type NativeAgent } from "./native-agents.js"
+import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, type ChildStateReading, type FinAsk, type NativeAgent } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 
@@ -180,6 +180,14 @@ export const ReportSchema = z.object({
   artifacts: z.array(ArtifactSchema).max(64).optional(),
   /** What it waits on, for `blocked` and `needs-input`. */
   question: z.string().max(4_000).optional(),
+  /** The answers its question offers, each a tap on the person's phone. */
+  options: z.array(AskOptionSchema).max(ASK_OPTIONS).optional(),
+  /** The option it recommends, by its place in `options`. */
+  recommended: z.number().int().nonnegative().optional(),
+  /** What whoever answers does, in one sentence: "Pick the branch the release goes from." */
+  action: z.string().max(400).optional(),
+  /** Its Apex left its question to the person (`agents_answer` with `person`). */
+  for: z.literal("person").optional(),
   /** Recorded by the owner because the turn ended without one. */
   implicit: z.literal(true).optional(),
   /** The child owner's generation when it was written: a report from a stale owner is refused. */
@@ -221,8 +229,8 @@ export interface ChildThread {
   working?: boolean
   /** The last thing its transcript shows it doing (`lastStep`). */
   step?: string
-  /** An approval or question in it waits, and on whom. */
-  waiting?: { question: string; on: "lead" | "person" | "approval" }
+  /** An approval or question in it waits, on whom, and what answers it. */
+  waiting?: { question: string; on: "lead" | "person" | "approval"; ask?: FinAsk }
   /** How its last turn or run ended; absent while one runs or before any ended. */
   ended?: { outcome: "done" | "failed" | "stopped" | "unknown"; reason?: string; at: number }
   toolUses?: number
@@ -251,12 +259,17 @@ export function reportPhase(report: Report | undefined): string | undefined {
 export function childState(edge: ThreadParent, thread: ChildThread, journal: ChildJournal): ChildState {
   if (thread.queued) return { kind: "queued", reason: thread.queued.reason, ahead: thread.queued.ahead }
   if (thread.starting) return { kind: "starting", step: thread.starting }
-  if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on }
+  if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }
   const latest = journal.latest
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
   if (thread.working) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
-    return { kind: "blocked", question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.", on: reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person" }
+    return {
+      kind: "blocked",
+      question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.",
+      on: latest.for !== "person" && reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person",
+      ask: reportAsk(latest),
+    }
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
   if (latest?.status === "done") return { kind: "ended", outcome: "done" }
@@ -266,6 +279,18 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
     : { kind: "ended", outcome: ended.outcome === "unknown" ? "failed" : ended.outcome, ...(ended.reason && { reason: ended.reason }) }
   if (edge.closedAt) return { kind: "ended", outcome: "stopped" }
   return { kind: "idle" }
+}
+
+/** A report's question as an ask: what it offers, keyed by the report. */
+export function reportAsk(report: Report): FinAsk {
+  const recommended = report.recommended !== undefined && report.recommended < (report.options?.length ?? 0) ? report.recommended : undefined
+  return {
+    kind: "report",
+    id: report.id,
+    ...(report.options?.length && { options: report.options }),
+    ...(recommended !== undefined && { recommended }),
+    ...(report.action && { action: report.action }),
+  }
 }
 
 /** A roster entry's id for a child: stable for its whole life, whatever runs its turns. */
@@ -396,6 +421,8 @@ export interface AgentsDiagnostics {
    * the person's moved to another Fin, and the person's sent straight to a Fin with no Apex turn.
    */
   routes: { forwarded: number; sent: number; redirected: number; direct: number }
+  /** Fins' asks answered since this host started: by their Apex, left by it to the person, and refused to an Apex whose access doesn't cover them. */
+  answers: { apex: number; passed: number; refused: number }
 }
 
 /** How a message reached a Fin: as its next turn, a step of its running one, or queued behind it. */

@@ -269,7 +269,8 @@ try {
   let changed = 0
   const alone: ReachableRepository = { name: "project", root: project, startedFrom: "origin/release" }
   const tools = pullRequestTools({ git: gitRunner, place: async () => ({ folder: project, repositories: [alone], here: alone }), changed: () => { changed += 1 } })
-  grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => ({ content: [] }), [(server, id) => registerPullRequestTools(server, tools, id)])
+  const onFullAccess = new Set(["full"])
+  grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => ({ content: [] }), [(server, id) => registerPullRequestTools(server, tools, id, (conversation) => onFullAccess.has(conversation))])
   const grant = grants.mint("binding", "c")
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
   const listed = (await agent.listTools()).tools
@@ -298,6 +299,18 @@ try {
     assert.match(tool.description ?? "", /one pull request per repository/, `${tool.name} says how it picks a project's repository`)
   }
   assert.match(describe("pull_request_merge").description!, /the one the others depend on first, and use method merge for a repository whose commits another one pins/)
+  assert.match(describe("pull_request_merge").description!, /^Call only when the user asks to merge .*only full access lets a Thread merge on its own\./, "below full access, merging is the person's call")
+  assert.match(describe("pull_request_open").description!, /^Call when the user asks to open a pull request/)
+
+  // On full access the person's mode is the grant: the Thread opens and merges as the next step of its work.
+  const fullGrant = grants.mint("binding-full", "full")
+  const fullAgent = new Client({ name: "git-actions-full-agent", version: "1" })
+  await fullAgent.connect(new StreamableHTTPClientTransport(new URL(fullGrant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${fullGrant.token}` } } }))
+  const onFull = new Map((await fullAgent.listTools()).tools.map((tool) => [tool.name, tool.description ?? ""]))
+  await fullAgent.close()
+  assert.match(onFull.get("pull_request_merge")!, /^Call when the user asks to merge .* or when merging it is the next step of the work you were given: this Thread is on full access, so it merges without asking first\./)
+  assert.match(onFull.get("pull_request_open")!, /^Call when this branch's work is ready for review, .*this Thread is on full access, so it opens one without asking first\./)
+  assert.equal(onFull.get("pull_request_status"), describe("pull_request_status").description, "reading is the same on every access")
 
   // A project folder of two repositories on one branch: a pull request each, the repository named by its folder.
   const multi = join(root, "multi")

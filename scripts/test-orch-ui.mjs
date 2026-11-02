@@ -321,6 +321,7 @@ async function check() {
   assert.match(diagnostics, /^Fins 7 Fins · \d+ running/)
   assert.match(diagnostics, /Each Apex and its Fins run at most/)
   assert.match(diagnostics, /the person wrote 4 messages straight to a Fin/)
+  assert.match(diagnostics, /Apexes answered 3 asks of their Fins and left 1 ask to the person · 1 approval was refused to an Apex below full access/)
   await both("diagnostics", "orch-names-")
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true")
   await until("!document.querySelector('[data-agents-diagnostics]')", "Settings closing")

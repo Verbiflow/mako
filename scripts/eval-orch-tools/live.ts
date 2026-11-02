@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
-import { frontDoorText, ToolArgs, type OrchCase, type Sample } from "./cases.ts"
+import { priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
 import { bareName, isShell, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
@@ -54,9 +54,8 @@ function toolArgs(input: string): ToolArgs {
 
 /** The case's Thread as one prompt: its earlier turns as a transcript, then the person's message. */
 function prompt(orchCase: OrchCase): string {
-  const prior = (orchCase.setup.priorTurns ?? []).map((turn) => `${turn.role === "user" ? "The person" : "You"}: ${turn.text}${turn.toolCalls?.length ? ` [${turn.toolCalls.map((call) => `${call.tool} → ${JSON.stringify(call.result)}`).join("; ")}]` : ""}`)
-  const note = frontDoorText(orchCase)
-  const asked = note ? `${note}\n\n${orchCase.prompt}` : orchCase.prompt
+  const prior = priorTurns(orchCase).map((turn) => `${turn.role === "user" ? "The person" : "You"}: ${turn.text}${turn.toolCalls?.length ? ` [${turn.toolCalls.map((call) => `${call.tool} → ${JSON.stringify(call.result)}`).join("; ")}]` : ""}`)
+  const asked = turnText(orchCase)
   return prior.length ? `Earlier in this Thread:\n${prior.join("\n")}\n\n${asked}` : asked
 }
 
