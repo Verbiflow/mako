@@ -141,10 +141,12 @@ export class LiveThreads {
    * the edge and never written into the journal: a merge or a move changes
    * it, and the store is the one place that knows.
    */
-  placement(id: string): Pick<LiveSummary, "threadId" | "sessionId"> {
+  placement(id: string): Pick<LiveSummary, "threadId" | "sessionId" | "parent"> {
     try {
-      const placed = this.dependencies.threads?.journalPlacement(id)
-      return placed ? { threadId: placed.thread, sessionId: placed.session } : {}
+      const threads = this.dependencies.threads
+      const placed = threads?.journalPlacement(id)
+      const edge = placed && threads?.edges().of(placed.thread)
+      return placed ? { threadId: placed.thread, sessionId: placed.session, ...(edge && { parent: { thread: edge.parent, session: edge.parentSession } }) } : {}
     } catch (error) {
       if (!this.placementWarned) hostWarn("threads", "a conversation's Thread could not be read; it is served without one", { conversation: id, error: errorMessage({ error }) })
       this.placementWarned = true

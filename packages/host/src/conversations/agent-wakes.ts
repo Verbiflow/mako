@@ -1,20 +1,17 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
 import { reportPhase, type Report } from "../contracts/agents.js"
+import { FROM_AGENTS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
+
+export { FROM_AGENTS, fromAgent } from "../contracts/children.js"
 
 /** An idle parent waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
 /** Wakes a lead takes in a minute; notices past them wait for the next wake. */
 export const WAKES_PER_MINUTE = 6
 const MINUTE_MS = 60_000
-
-/** The header every delivery an agent wrote starts with: the model reads it as an agent's words, never the person's. */
-export const FROM_AGENTS = "[mako · from your agents, not the person]"
-export function fromAgent(name: string): string {
-  return `[mako · from ${name} (agent), not the person]`
-}
 
 /** `notice:{child}:{reportId}`: a report its parent's owner hears, under an ID a resend repeats. */
 export interface Notice {

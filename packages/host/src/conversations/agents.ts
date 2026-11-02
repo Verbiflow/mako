@@ -46,6 +46,7 @@ import {
   type AgentsWaitInput,
   type AgentsWaitResult,
 } from "../contracts/agent-tools.js"
+import { BRIEF_CLOSE, briefIntro } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeAgent } from "../contracts/native-agents.js"
@@ -712,6 +713,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
     return {
       source: "live",
+      conversation,
       session: this.store()?.thread(edge.child)?.sessions[0],
       ...(session.nativeId && { nativeId: session.nativeId }),
       ...(session.nativePath && { path: session.nativePath }),
@@ -1046,14 +1048,14 @@ function unknownChild(ref: string): AgentRefused {
 export function briefText(brief: Brief, name: string): string {
   const lines = [
     fromAgent(`your ${ROLE_WORD}`),
-    `You're child:${name}, a Thread another Thread started to do one piece of work. It reads your reports, not this conversation.`,
+    briefIntro(name),
     "",
     brief.objective,
   ]
   if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
   if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
   if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
-  lines.push("", `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${ROLE_WORD} how it ended.`)
+  lines.push("", BRIEF_CLOSE)
   return lines.join("\n")
 }
 
