@@ -1364,6 +1364,7 @@ const inputs = {
     ]),
   "mako:native-receipt": () => z.tuple([z.string()]),
   "mako:native-requests": () => z.tuple([]),
+  "mako:native-routing": () => z.tuple([]),
   "mako:native-submit": () =>
     z.tuple([
       z.object({
@@ -2169,6 +2170,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:native-edit-queued", "conversations"],
   ["mako:native-receipt", "conversations"],
   ["mako:native-requests", "conversations"],
+  ["mako:native-routing", "conversations"],
   ["mako:native-submit", "conversations"],
   ["mako:navigate-tree", "workspaces"],
   ["mako:new-session", "workspaces"],

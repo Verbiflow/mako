@@ -226,6 +226,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     return agents
   }
 
+  leads(conversation: string): boolean {
+    if (this.roster(conversation).length) return true
+    const thread = this.store()?.journalPlacement(conversation)?.thread
+    return thread !== undefined && this.store()?.edges().of(thread)?.role === "lead"
+  }
+
   async stopChild(conversation: string, child: string): Promise<boolean> {
     const store = this.store()
     const thread = store?.journalPlacement(conversation)?.thread

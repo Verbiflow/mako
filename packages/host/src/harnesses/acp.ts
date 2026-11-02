@@ -64,6 +64,7 @@ import { readRuntimeVersion } from "./runtime-updates.js"
 import { parseVersion } from "../contracts/runtime-version.js"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { launchSpawnsOff } from "./native-routing.js"
 import { bindProviderPid } from "../base/provider-children.js"
 import { errorMessage } from "../base/error-message.js"
 import { objectValue } from "../base/json-values.js"
@@ -337,6 +338,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       tuning: options.tuning,
     }
     if (launchAccess) launchOptions.access = launchAccess
+    if (source.nativeRouting.kind !== "words" && launchSpawnsOff(harness, source.nativeRouting.via, options.conversationId, options.nativeRouting))
+      launchOptions.nativeSpawnsOff = true
     const spec = await trace.step("runtime-discovery", () => source.launch(launchOptions))
     if (!spec) throw new Error(`${harness} does not speak ACP here yet`)
 

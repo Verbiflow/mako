@@ -77,6 +77,8 @@ import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
+import { codexRoutingConfig } from "./codex/routing.js"
+import type { RoutedThread } from "../contracts/native-routing.js"
 import { approvalRoot, type HarnessContext } from "./host.js"
 
 type Live = {
@@ -108,6 +110,8 @@ type Live = {
   /** Mako's instructions for the model (`conversationInstructions`), handed to every turn as Codex's application context. */
   instructions?: string
   mcpSnapshot: McpRegistrySnapshot
+  /** The Thread as native routing reads it (`ProviderStartOptions.nativeRouting`), read when the thread opens. */
+  nativeRouting?: () => RoutedThread
   nextRequestId: number
   pending: Map<string, PendingRpc>
   serverRequests: Map<string, PendingServerRequest>
@@ -238,6 +242,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       makoServers: options.conversationTools ? conversationServers(options.conversationTools) : [],
       instructions: conversationInstructions(options.conversationTools),
       mcpSnapshot,
+      nativeRouting: options.nativeRouting,
       nextRequestId: 0,
       pending: new Map(),
       serverRequests: new Map(),
@@ -697,7 +702,8 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     }))
     const tuning = threadTuning(
       live.tuning,
-      codexMcpConfig(live.mcpSnapshot, live.makoServers)
+      codexMcpConfig(live.mcpSnapshot, live.makoServers),
+      codexRoutingConfig(live.id, live.nativeRouting)
     )
     const open = () => {
       if (fork)
@@ -723,11 +729,12 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
 
   function threadTuning(
     tuning: Tuning | undefined,
-    mcpConfig: JsonObject
+    mcpConfig: JsonObject,
+    routingConfig: JsonObject
   ): Omit<RpcParams["thread/start"], "cwd"> {
     const result: Omit<RpcParams["thread/start"], "cwd"> = {}
     const selected = codexWireSettings(tuning)
-    const base = codexInteractiveConfig(selected.effort)
+    const base = { ...codexInteractiveConfig(selected.effort), ...routingConfig }
     const config = mergeCodexConfig(base, mcpConfig)
     if (selected.model) result.model = selected.model
     if (selected.serviceTier !== undefined)

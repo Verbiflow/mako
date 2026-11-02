@@ -13,10 +13,26 @@ import { join } from "node:path"
 import type { McpServer } from "@agentclientprotocol/sdk"
 import { removeRetiredMakoMcp } from "../../tools/index.js"
 
-/** Devin's ACP tool router currently reads file configuration, not session MCP additions. */
+const DevinSettings = z.record(z.string(), z.json())
+
+/** A file of the person's Devin config, `{}` when they have none. */
+const nativeFile = (path: string) => readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+  if (error.code === "ENOENT") return "{}"
+  throw error
+})
+
+/**
+ * Devin's ACP tool router currently reads file configuration, not session MCP
+ * additions, so each launch gets a config folder of its own: the person's
+ * files linked, with `mcp_config.json` written as theirs plus Mako's servers.
+ * With `subagentsOff`, `config.json` is written too, as theirs with
+ * `subagents_enabled: false`: Devin reads one user config, so a file of
+ * Mako's own in its place (`--config`) would drop the person's settings.
+ */
 export async function prepareDevinMcp(
   servers: readonly McpServer[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  subagentsOff = false
 ) {
   const root = await mkdtemp(join(tmpdir(), "mako-devin-mcp-"))
   const source = env.XDG_CONFIG_HOME || join(homedir(), ".config")
@@ -34,20 +50,15 @@ export async function prepareDevinMcp(
       if (error.code === "ENOENT") return []
       throw error
     })
+    const written = new Set(["mcp_config.json", ...subagentsOff ? ["config.json"] : []])
     for (const entry of nativeEntries) {
-      if (entry.name !== "mcp_config.json")
+      if (!written.has(entry.name))
         await symlink(
           join(source, "devin", entry.name),
           join(directory, entry.name)
         )
     }
-    const nativeText = await readFile(
-      join(source, "devin", "mcp_config.json"),
-      "utf8"
-    ).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return "{}"
-      throw error
-    })
+    const nativeText = await nativeFile(join(source, "devin", "mcp_config.json"))
     const config = z
       .object({ mcpServers: z.record(z.string(), z.json()).default({}) })
       .catchall(z.json())
@@ -78,6 +89,10 @@ export async function prepareDevinMcp(
       JSON.stringify(config),
       { mode: 0o600 }
     )
+    if (subagentsOff) {
+      const settings = DevinSettings.parse(JSON.parse(await nativeFile(join(source, "devin", "config.json"))))
+      await writeFile(join(directory, "config.json"), JSON.stringify({ ...settings, subagents_enabled: false }), { mode: 0o600 })
+    }
     env.XDG_CONFIG_HOME = root
     return () => rm(root, { recursive: true, force: true })
   } catch (error) {
