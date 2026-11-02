@@ -20,6 +20,8 @@ import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useContext, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
+import { AgentWordsCard } from "@/components/transcript/agent-words"
+import { agentWords } from "@mako/host/contracts/children"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AgentMark, LeadSlot, ToolRow } from "@/components/transcript/tool-row"
 import { readPersonTokenProblem } from "@mako/host/contracts/github-person"
@@ -137,6 +139,8 @@ export const Exchange = memo(function Exchange({
     [sentByMako, exchange.prompt]
   )
   const mako = sentByMako ?? savedByMako
+  const promptText = exchange.prompt ? textOf(exchange.prompt.blocks) : undefined
+  const fromAgent = useMemo(() => (promptText === undefined ? undefined : agentWords(promptText)), [promptText])
   // `toExchanges` never opens a turn on a continuation; one handed in that way is still never drawn as the person's words.
   const continuedPrompt = useMemo(() => (exchange.prompt ? isContinuation(exchange.prompt) : undefined), [exchange.prompt])
   // The request the turn stands on now: its newest continuation's, else its prompt's.
@@ -257,6 +261,8 @@ export const Exchange = memo(function Exchange({
             <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
+          ) : fromAgent && promptText ? (
+            <AgentWordsCard from={fromAgent.from} body={fromAgent.body} raw={promptText} timestamp={exchange.prompt.timestamp} />
           ) : (
             <>
               {carried ? <CarriedLine carried={carried} time={exchange.prompt.timestamp} /> : null}

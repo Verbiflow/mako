@@ -16,6 +16,8 @@ export interface AcpPresence {
   threadPath?: string
   threadId?: string
   sessionId?: string
+  /** The Thread that leads this one's (`LiveSummary.parent`): a child is shown inside it, never as a row. */
+  lead?: string
   /** What Mako is starting this Thread for, before the host has recorded it. */
   purpose?: ThreadPurposeKind
   /** `background`: the turn ended and the provider still runs work it will wake on. */
@@ -96,6 +98,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
                   : conversation.session.status,
       }
       if (presence.status === "background" && work) presence.background = work.count
+      if (conversation.parent) presence.lead = conversation.parent.thread
       if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
       if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
       if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
@@ -130,6 +133,7 @@ export function sameAcpPresence(
         candidate.threadPath === presence.threadPath &&
         candidate.threadId === presence.threadId &&
         candidate.sessionId === presence.sessionId &&
+        candidate.lead === presence.lead &&
         candidate.purpose === presence.purpose &&
         (candidate.nativePaths ?? []).join("\0") ===
           (presence.nativePaths ?? []).join("\0") &&

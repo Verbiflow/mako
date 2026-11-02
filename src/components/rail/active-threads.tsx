@@ -4,6 +4,7 @@ import { useState } from "react"
 import { CloudIcon, LaptopIcon } from "lucide-react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
+import { ThreadRollup } from "@/components/rail/rollup-badge"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { MarkStack } from "@/components/ui/mark-stack"
 import { harnessLabel } from "@/components/rail/harness-meta"
@@ -173,6 +174,7 @@ export function LiveAgentRow({
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
         {presence.elsewhere && (!routed || presence.elsewhere === CLOUD_WHERE) ? <ElsewhereMark where={presence.elsewhere} /> : null}
         {folded ? <SessionCount count={folded.members.length} /> : null}
+        <ThreadRollup thread={thread} />
         {/* The branch its owner's worktree is on, as a row this Mac made one for wears it. */}
         {presence.worktreeBranch ? <WorktreeMark worktree={{ branch: presence.worktreeBranch }} summary={undefined} /> : null}
         {!indent ? (

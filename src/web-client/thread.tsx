@@ -37,6 +37,10 @@ import { QuietStrip } from "./quiet-strip"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
+import { ChildOfLeadContext, OpenChildContext, childSession } from "./child-of-lead"
+import { PhoneChildChips } from "./lead-children"
+import { LeadMark } from "@/components/ui/lead-mark"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
 
 /** The renderer's live conversation: its transcript, approvals and questions, the desktop's own code. Its own chunk. */
 const LiveSession = lazy(() => import("./live-session"))
@@ -52,6 +56,9 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   // The Session it opened on, when the address names none: kept while the screen is open, so a Session that stops
   // waiting or working doesn't hand the screen to another tab under the person's thumb.
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
+  // One of its Threads opened from a chip under its bar, back to it by the bar's back button.
+  const [child, setChild] = useState<{ lead: string; agent: NativeAgent } | null>(null)
+  if (child && child.lead !== threadId) setChild(null)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
   // A branch made from a reply here opens as this Thread's new tab once its owner lists it.
@@ -88,6 +95,23 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   if (sessionId === undefined && openedOn !== session.row.session && !thread.sessions.some((each) => each.row.session === openedOn)) setOpenedOn(session.row.session)
   const owner = ownerOf(session)
   const addingTo: AddingTo | undefined = session.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner, where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
+  const opened = child ? childSession(session, child.agent) : undefined
+  if (child && opened)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col bg-surface" data-thread-screen={thread.id} data-child-of={thread.id}>
+        <ThreadBar
+          onBack={() => setChild(null)}
+          backLabel={thread.title}
+          title={child.agent.title}
+          subtitle={subtitle(thread, session)}
+          place={session.row.runsOn.kind === "cloud" ? "cloud" : "device"}
+          headingRef={heading}
+        />
+        <ChildOfLeadContext value={thread.title}>
+          <ThreadBody thread={thread} session={opened} />
+        </ChildOfLeadContext>
+      </div>
+    )
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface" data-thread-screen={thread.id}>
       <ThreadBar
@@ -99,7 +123,14 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
         actions={thread.archived ? undefined : <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />}
       />
       {thread.sessions.length > 1 ? <SessionTabs thread={thread} current={session} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
-      <ThreadBody thread={thread} session={session} />
+      <OpenChildContext
+        value={(agent) => {
+          if (agent.child?.conversation) setChild({ lead: thread.id, agent })
+        }}
+      >
+        <PhoneChildChips thread={thread.id} conversation={session.row.conversation} />
+        <ThreadBody thread={thread} session={session} />
+      </OpenChildContext>
       {addingTo ? (
         <StartSheet
           open={adding}
@@ -226,12 +257,18 @@ function ServerCards({ session }: { session: WebSession }) {
   )
 }
 
-function ThreadBar({ onBack, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; title: string; subtitle: string | undefined; place?: "cloud" | "device" | "quiet"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
+function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; backLabel?: string; title: string; subtitle: string | undefined; place?: "cloud" | "device" | "quiet"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
   // Where it runs, as the desk's strip and the list's rows draw it: a Mac asleep or offline under the moon.
   const Place = place === "cloud" ? CloudIcon : place === "quiet" ? MoonIcon : LaptopIcon
   return (
     <header className="web-bar web-bar-thread flex shrink-0 items-center gap-1 px-1.5">
-      {onBack ? (
+      {onBack && backLabel ? (
+        <button type="button" aria-label={`Back to ${backLabel}`} data-back-to-lead onClick={onBack} className="pressable flex h-11 max-w-[40%] shrink-0 items-center gap-0.5 pr-1.5 text-ui text-muted-foreground">
+          <ChevronLeftIcon className="size-6 shrink-0" strokeWidth={2} />
+          <LeadMark className="size-3 shrink-0" />
+          <span className="ml-1 truncate">{backLabel}</span>
+        </button>
+      ) : onBack ? (
         <button type="button" aria-label="Back to threads" onClick={onBack} className="web-icon-button">
           <ChevronLeftIcon className="size-6" strokeWidth={2} />
         </button>

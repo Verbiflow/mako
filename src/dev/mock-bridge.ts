@@ -24,7 +24,7 @@ import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoi
 import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
 import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
 import { PROVIDER_FAILURE_KINDS, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
-import type { ContextBreakdown, Entry, GitStatus, ThreadRef, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UpdateState, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
+import type { ContextBreakdown, Entry, GitStatus, ThreadRef, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, NativeAgent, PullRequest, UpdateState, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
 import type { SideConversation, SideExchange, SideQuestionCommand } from "@mako/host/contracts/live-side-questions"
@@ -82,6 +82,7 @@ import {
   mockThreads,
 } from "./mock-runtime-fixtures"
 import { busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
+import { benchChild, benchLeads, CHURN, leadRefs, leadSnapshots, leadSummaries, LEAD_CONVERSATION, LEAD_THREAD, LEAD_TITLE } from "./mock-lead-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -413,6 +414,7 @@ export function installMockBridge() {
   // Node tests install the bridge on a bare `window` with no address.
   const scene = "location" in window ? new URLSearchParams(window.location.search).get("app") : null
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
+  const benchScene = benchLeads(scene === "lead" ? Number(new URLSearchParams(window.location.search).get("leads") ?? 0) : 0, 20)
   /**
    * `?app=kept`: sessions their harness deleted, at the top of the rail: one
    * whose records Mako's record store kept, and one only Mako's copy keeps
@@ -423,6 +425,55 @@ export function installMockBridge() {
   if (scene === "busy") {
     BUSY_SESSIONS.forEach((entry, index) => liveSnapshots.set(entry.conversation, busySnapshot(index)))
     boot.live.push(...busySummaries())
+  }
+  /**
+   * `?app=lead`: "Mobile lead" and its twelve Threads in every state, each started one with its own conversation.
+   * `window.leadScene.setChildren` moves its roster as the host's batches would, for the click-through and the bench;
+   * `churn` moves one child a tick. `&leads=50` adds that many more leads of twenty Threads each, for the rail's bench.
+   */
+  if (scene === "lead") {
+    for (const snapshot of [...leadSnapshots(), ...benchScene.snapshots]) {
+      liveSnapshots.set(snapshot.session.id, snapshot)
+      acpSessions.set(snapshot.session.id, snapshot.session)
+    }
+    boot.live.push(...leadSummaries(), ...benchScene.summaries)
+    const setChildren = (agents: NativeAgent[]) => {
+      const snapshot = liveSnapshots.get(LEAD_CONVERSATION)
+      if (!snapshot) return
+      const nativeAgents = { agents, limited: false }
+      const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
+      liveSnapshots.set(LEAD_CONVERSATION, next)
+      // Through JSON, as the host's batch crosses to the window: every entry a new object, unchanged ones equal.
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: LEAD_CONVERSATION, revision: next.revision, updates: [], nativeAgents })) })
+    }
+    Reflect.set(window, "leadScene", {
+      setChildren,
+      /** `count` children, one of them moving to its next state every `every` ms; returns the stop. */
+      churn(count: number, every: number) {
+        const steps = Array.from({ length: count }, (_, index) => index % CHURN.length)
+        const agents = steps.map((step, index) => benchChild(index, CHURN[step]!))
+        setChildren(agents)
+        let turn = 0
+        const timer = setInterval(() => {
+          const index = turn++ % count
+          steps[index] = (steps[index]! + 1) % CHURN.length
+          agents[index] = benchChild(index, CHURN[steps[index]!]!)
+          setChildren([...agents])
+        }, every)
+        return () => clearInterval(timer)
+      },
+      children: () => liveSnapshots.get(LEAD_CONVERSATION)?.nativeAgents?.agents ?? [],
+      /** The lead's turn runs again, as a wake would start it. */
+      setRunning(running: boolean) {
+        const snapshot = liveSnapshots.get(LEAD_CONVERSATION)
+        if (!snapshot) return
+        const session: LiveSessionState = { ...(acpSessions.get(LEAD_CONVERSATION) ?? snapshot.session), status: running ? "running" : "ready" }
+        acpSessions.set(LEAD_CONVERSATION, session)
+        const next = { ...snapshot, session, revision: snapshot.revision + 1 }
+        liveSnapshots.set(LEAD_CONVERSATION, next)
+        emit({ type: "live-batch", batch: { id: LEAD_CONVERSATION, revision: next.revision, updates: [], session } })
+      },
+    })
   }
   /** `?app=slow-start`: a start the host takes 26 s to accept, as a cloud Thread's might, with its steps, to see the wait. */
   const slowStart = scene === "slow-start"
@@ -559,6 +610,7 @@ export function installMockBridge() {
   /** Threads renamed in this page, as the Thread store keeps them. */
   const titles = new Map<string, ThreadTitleEntry>()
   if (scene === "busy") titles.set(BUSY_THREAD, { thread: BUSY_THREAD, title: BUSY_TITLE, source: "user" })
+  if (scene === "lead") titles.set(LEAD_THREAD, { thread: LEAD_THREAD, title: LEAD_TITLE, source: "user" })
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false
   // The host gives every profile Mako's default for new conversations.
@@ -1404,7 +1456,7 @@ export function installMockBridge() {
         },
       ]
       // A recorded scene leaves out the demo's failing plugin and its notice.
-      if (!setupScene)
+      if (!setupScene && scene !== "lead")
         plugins.push({ id: "broken-example", source: "export function setup(){ throw new Error('deliberate failure for the demo') }" })
       return plugins
     },
@@ -1449,7 +1501,7 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
-      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...fixture.threads]
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "lead" ? [...leadRefs(), ...benchScene.refs] : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
         setTimeout(() => {
@@ -2833,7 +2885,14 @@ export function installMockBridge() {
       const snapshot = liveSnapshots.get(id)
       const agent = snapshot?.nativeAgents?.agents.find((candidate) => candidate.nativeId === nativeId && candidate.stoppable && (candidate.state.kind === "working" || candidate.state.kind === "waiting"))
       if (!snapshot?.nativeAgents || !agent) return false
-      const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((candidate) => candidate === agent ? { ...candidate, stoppable: false, state: { kind: "canceled" as const }, settledAt: Date.now() } : candidate) }
+      const stopped = (candidate: NativeAgent): NativeAgent => ({
+        ...candidate,
+        stoppable: false,
+        state: { kind: "canceled" },
+        settledAt: Date.now(),
+        ...(candidate.child && { child: { ...candidate.child, state: { kind: "ended", outcome: "stopped" } } }),
+      })
+      const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((candidate) => candidate === agent ? stopped(candidate) : candidate) }
       const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
       liveSnapshots.set(id, next)
       emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], nativeAgents } })

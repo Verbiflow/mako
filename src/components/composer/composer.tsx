@@ -1,4 +1,6 @@
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
+import { ChildComposerNote } from "@/components/stage/child-view"
+import { useLeadStop } from "@/components/composer/stop-lead"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { gitConflictAttachment } from "@/state/git-conflicts"
 import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
@@ -1017,6 +1019,8 @@ export function Composer() {
 
   const busy = status.streaming || status.compacting
   const liveHarness = useAcp((state) => activeAcp(state)?.harness ?? null)
+  const liveKey = useAcp((state) => activeAcp(state)?.key)
+  const leadStop = useLeadStop({ conversationKey: liveKey, onStopLead: () => void stopCurrentTurn() })
   // Another device's conversation read from its copy while that device is off: a message waits for it, words alone.
   const copyOn = useReadingCopy()
   const steeringKind = useThreads((state) => {
@@ -1167,6 +1171,7 @@ export function Composer() {
 
         {planDecision ? <PlanDecisionBar key={planDecision.plan.id} decision={planDecision} /> : null}
         <ComposerNotices meta={meta} draftKey={draftKey} />
+        <ChildComposerNote />
 
         <input
           ref={filePicker}
@@ -1373,6 +1378,8 @@ export function Composer() {
                * toggle here once sat 4px from the primary action at three
                * times its width and made the pair read as one lump.
                */}
+              <span className="relative flex">
+              {leadStop.popover}
               <ComposerActionButton
                 action={primaryAction}
                 resumeLabel={resume?.resume.label}
@@ -1382,8 +1389,9 @@ export function Composer() {
                 stopping={liveOwnsComposer && stopping}
                 steerTitle={steerTitle}
                 onSend={() => void submit(primaryAction === "steer" ? "steer" : undefined)}
-                onStop={() => void stopCurrentTurn()}
+                onStop={leadStop.press}
               />
+              </span>
             </div>
           </div>
         </div>

@@ -29,6 +29,7 @@ import { ArrowLeftIcon, MoonIcon } from "lucide-react"
 import { QUIET_WORDS } from "@/lib/quiet-device"
 import { Blank } from "@/components/ui/kit"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
+import { ChildBreadcrumb } from "@/components/stage/child-view"
 import type { TabStage } from "@/state/stage"
 
 /** Identity-stable fallback so the selector never allocates per render. */
@@ -244,6 +245,7 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
   const scope = usePaneScope(session)
   return (
     <main className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {composer ? <ChildBreadcrumb /> : null}
       <ConversationScopeContext.Provider value={scope}>
         <TranscriptPaneContext value={paneId ?? null}>
           <ConversationSurface />
