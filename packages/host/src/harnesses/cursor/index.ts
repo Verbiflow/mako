@@ -16,6 +16,7 @@ import { createCursorProfileLoader } from "./profile.js"
 import { CursorSdkAuth } from "./sdk/auth.js"
 import { CursorAccountKeys, CursorCredentialStore, cursorLegacyFiles } from "./sdk/credentials.js"
 import { cursorDecoderSource } from "./sdk/decoder-source.js"
+import { CursorCheckpointCollector } from "./sdk/checkpoint-collector.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
 import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
@@ -47,6 +48,9 @@ export const installCursor: ProviderModule = (host, context) => {
   const auth = new CursorSdkAuth({ env, openUrl: (url) => context.openUrl(url), credentials })
   // Each account's models, kept an hour per credential and shared by display and starts.
   const modelCache = createCursorModelCache()
+  // The fixture desk writes no store, so it collects none.
+  const checkpoints = context.stores.strict ? undefined : new CursorCheckpointCollector({ stateRoot: sdkRoot, stampsPath: join(context.dataRoot, "cursor-checkpoints.json") })
+  if (checkpoints) host.storage.register(checkpoints)
   installHarness(host, {
     provider: "cursor",
     presentation: cursorPresentation,
@@ -97,6 +101,7 @@ export const installCursor: ProviderModule = (host, context) => {
       modelCache,
       streams: context.streams,
       heapSnapshots: join(logsRoot(context.dataRoot), "cursor-heaps"),
+      checkpoints,
     }),
     decoder: cursorDecoderSource,
     profile: createCursorProfileLoader({
@@ -117,6 +122,7 @@ export const installCursor: ProviderModule = (host, context) => {
       childLaunch: env => auth.childLaunch(env),
       stateRoot,
       stores: context.stores,
+      checkpoints,
       models: async (env) => normalizeCursorSdkModels(await modelCache(env, () => listCursorSdkModels({ env }))),
     }),
     processProbe: cursorProcessProbe,

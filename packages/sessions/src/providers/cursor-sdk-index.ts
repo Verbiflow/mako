@@ -124,7 +124,7 @@ function statusOf(value: string | undefined): CursorSdkAgentRecord["status"] {
     : "UNKNOWN"
 }
 
-function checkpointBlobId(raw: string | undefined): string | undefined {
+export function checkpointBlobId(raw: string | undefined): string | undefined {
   if (!raw) return undefined
   try {
     const parsed: { blobId?: string } = JSON.parse(raw)

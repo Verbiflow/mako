@@ -80,6 +80,8 @@ const reads = [
   "mako:worktrees",
   "mako:worktree-ahead",
   "mako:worktree-inventory",
+  /** Measures Mako's folders with `du`; writes nothing. */
+  "mako:storage",
   "mako:worktree-review",
   "mako:worktree-review-diffs",
   "mako:worktree-branches",
@@ -191,6 +193,8 @@ const reads = [
  * content differs.
  */
 const replays = [
+  /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
+  "mako:storage-free",
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */
   "mako:live-prompt",
   "mako:live-continue",

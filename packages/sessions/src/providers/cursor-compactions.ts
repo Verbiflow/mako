@@ -14,8 +14,9 @@ import { eachField, parseBlobDataRow, parseRoot, parseRootContext, parseRootExte
  * summary left is measured only by the checkpoint after the next model call;
  * a marker drawn where the summary happened can say only what came before.
  *
- * A saved store keeps every root, content-addressed, in `blobs` in the order
- * it was written (`rowid`), with the agent's subagents' roots between them.
+ * A saved store keeps its roots, content-addressed, in `blobs` in the order
+ * it was written (`rowid`), with the agent's subagents' roots between them;
+ * Mako's collector drops the ones no run names and this search never reads.
  * A main root is told from a subagent's by its first message (the run's
  * system prompt) and by naming a workspace (field 9); a window, which also
  * starts with the system prompt, names none.
@@ -94,9 +95,17 @@ const ROWS_PER_PAGE = 64
  * reading the run started from. Each window is found by binary search over
  * the run's rows, so a store of gigabytes is read a few dozen blobs per
  * window. A window no run archived (one an imported store already had) has
- * no entry, as the live child never saw it happen.
+ * no entry, as the live child never saw it happen. `seen` hears the row of
+ * each main root the search settles on: a store that keeps those roots
+ * answers the same with every other intermediate root gone, which is what
+ * `collectCursorCheckpoints` relies on.
  */
-export function cursorCompactionReadings(database: DatabaseSync, runs: readonly CursorCompactionRun[], wanted: ReadonlySet<string>): Map<string, CursorCompactionPlace> {
+export function cursorCompactionReadings(
+  database: DatabaseSync,
+  runs: readonly CursorCompactionRun[],
+  wanted: ReadonlySet<string>,
+  seen?: (row: number) => void,
+): Map<string, CursorCompactionPlace> {
   const found = new Map<string, CursorCompactionPlace>()
   if (!wanted.size) return found
   const blob = database.prepare("SELECT rowid AS row, data FROM blobs WHERE id = ?")
@@ -122,7 +131,7 @@ export function cursorCompactionReadings(database: DatabaseSync, runs: readonly 
     if (latest) eachField(latest.data, (field, value) => {
       if (lineage === undefined && field === 1 && value instanceof Uint8Array) lineage = Buffer.from(value).toString("hex")
     })
-    const made = latest && lineage ? { latest, start: read(run?.startRootId), first: (from: number, to: number) => firstMain(forward, from, to, lineage!) } : null
+    const made = latest && lineage ? { latest, start: read(run?.startRootId), first: (from: number, to: number) => firstMain(forward, from, to, lineage!, seen) } : null
     spans.set(index, made)
     return made
   }
@@ -146,7 +155,7 @@ export function cursorCompactionReadings(database: DatabaseSync, runs: readonly 
         if (probe.windows.includes(window)) high = probe.row
         else low = probe
       }
-      const tokensBefore = low?.used ?? lastReadingBefore(backward, start?.row ?? 0, low?.row ?? high, latest.data) ?? opening
+      const tokensBefore = low?.used ?? lastReadingBefore(backward, start?.row ?? 0, low?.row ?? high, latest.data, seen) ?? opening
       const boundary = parseBlobDataRow(at.get(high))?.data
       const holds = new Set(boundary ? parseRootExtent(boundary).windows : [window])
       // The step the root after the summary ends on; one after the run's last step keeps none, so the window's last.
@@ -187,12 +196,12 @@ function measured(first: (from: number, to: number) => Step | undefined, from: n
 }
 
 /** `lastReading` in the lineage of the run whose latest root is `latest`. */
-function lastReadingBefore(rows: StatementSync, floor: number, before: number, latest: Uint8Array): number | undefined {
+function lastReadingBefore(rows: StatementSync, floor: number, before: number, latest: Uint8Array, seen?: (row: number) => void): number | undefined {
   let lineage: string | undefined
   eachField(latest, (field, value) => {
     if (lineage === undefined && field === 1 && value instanceof Uint8Array) lineage = Buffer.from(value).toString("hex")
   })
-  return lineage ? lastReading(rows, floor, before, lineage) : undefined
+  return lineage ? lastReading(rows, floor, before, lineage, seen) : undefined
 }
 
 /** The calls of the last step in `hashes` that made any. */
@@ -208,13 +217,16 @@ function lastStepCalls(messages: StatementSync, hashes: readonly string[]): stri
 }
 
 /** The first main root at rows `from` to `to`. */
-function firstMain(rows: StatementSync, from: number, to: number, lineage: string): Step | undefined {
+function firstMain(rows: StatementSync, from: number, to: number, lineage: string, seen?: (row: number) => void): Step | undefined {
   for (let at = from; at <= to;) {
     const page = rows.all(at, to, ROWS_PER_PAGE)
     for (const row of page) {
       const data = parseBlobDataRow(row)?.data
       const step = data && mainStep(Number(row["row"]), data, lineage)
-      if (step) return step
+      if (step) {
+        seen?.(step.row)
+        return step
+      }
     }
     if (page.length < ROWS_PER_PAGE) return undefined
     at = Number(page.at(-1)?.["row"]) + 1
@@ -223,13 +235,16 @@ function firstMain(rows: StatementSync, from: number, to: number, lineage: strin
 }
 
 /** The reading of the last main root holding one, at rows from `floor` up to `before`. */
-function lastReading(rows: StatementSync, floor: number, before: number, lineage: string): number | undefined {
+function lastReading(rows: StatementSync, floor: number, before: number, lineage: string, seen?: (row: number) => void): number | undefined {
   for (let at = before; at > floor;) {
     const page = rows.all(floor, at, ROWS_PER_PAGE)
     for (const row of page) {
       const data = parseBlobDataRow(row)?.data
-      const used = data && mainStep(Number(row["row"]), data, lineage)?.used
-      if (used !== undefined) return used
+      const step = data && mainStep(Number(row["row"]), data, lineage)
+      if (step?.used !== undefined) {
+        seen?.(step.row)
+        return step.used
+      }
     }
     if (page.length < ROWS_PER_PAGE) return undefined
     at = Number(page.at(-1)?.["row"])

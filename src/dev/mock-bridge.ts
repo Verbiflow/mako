@@ -16,6 +16,7 @@ import type { AccessChoices } from "@mako/host/contracts/access-choices"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
+import { mockStorage } from "./mock-storage"
 import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import type { FileWriters, RewindPreview, WorkspaceSnapshot } from "@mako/host/contracts/workspace-snapshots"
@@ -854,6 +855,7 @@ export function installMockBridge() {
     },
     worktreeAhead: async () => null,
     worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),
+    ...mockStorage(),
     worktreeReview: async (path: string): Promise<WorktreeReview> => {
       if (!sinceWorktree || path !== sinceWorktree.path) throw new Error("Worktrees are unavailable in the mock bridge")
       return {

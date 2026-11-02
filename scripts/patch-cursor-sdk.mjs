@@ -16,6 +16,11 @@
 //    a new child starts at zero, so both rewrite the file in full, which the
 //    SDK's own streamed writer (`streamFullJsonlWrites`) does a megabyte at a
 //    time instead of as one string.
+// Separately, an agent store waits 5 s for a lock before a write fails, and
+// Mako's checkpoint collector compacts a quiet store with a VACUUM that holds
+// the lock for as long as rewriting what's kept takes (10.7 s for 1.9 GB on
+// 2026-11-01). The patched store waits a minute, so a run resumed meanwhile,
+// from this host or another, writes once the compaction ends.
 // Separately, the SDK runs every turn with a logger that drops every entry,
 // among them its only account of why a run's stream was cut and how it retried
 // or resumed. The patched logger hands each entry to the process as a
@@ -47,6 +52,8 @@ const appendTranscript = writer => [
   "return s.chain=s.chain.then((()=>{const m=r.rootPromptMessagesJson,c=s.count>=16&&a()===s.archives&&m.length>=s.count&&k(m[s.count-1])===s.last?s.count:0;",
   "return e.writeFromStateIncremental(t,r,n,c,o)})).then((c=>{s.count=c||0,s.archives=a(),s.last=s.count>0?k(r.rootPromptMessagesJson[s.count-1]):void 0}),(()=>{s.count=0})),s.chain}",
 ].join("")
+
+const STORE_LOCK_WAIT = [["PRAGMA busy_timeout = 5000;", "PRAGMA busy_timeout = 60000;"]]
 
 /** The same in the esm and cjs builds: the module's names don't differ between them in 1.2.0. */
 const BLOB_STORE = [
@@ -130,12 +137,14 @@ export const CURSOR_SDK_PATCHES = [
   { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
   { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), runLog("BF")], change: "incremental transcripts and the run log" },
   { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), runLog("qF")], change: "incremental transcripts and the run log" },
+  { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
+  { target: "dist/cjs/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
 ]
 
 function assertVersion(read) {
   const { version } = JSON.parse(read("package.json"))
   if (version !== VERSION)
-    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes and the run log, then port or delete this patch.`)
+    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes, the store's lock wait and the run log, then port or delete this patch.`)
 }
 
 /** Checks every replacement, including the SDK bytes inside the built archive. */

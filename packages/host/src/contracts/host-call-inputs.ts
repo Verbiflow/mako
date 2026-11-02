@@ -1428,6 +1428,8 @@ const inputs = {
     ]),
   "mako:stage-file": () => z.tuple([z.string(), z.string()]),
   "mako:stage-file-path": () => z.tuple([z.string()]),
+  "mako:storage": () => z.tuple([z.boolean()]),
+  "mako:storage-free": () => z.tuple([]),
   "mako:store-formats": () => z.tuple([]),
   "mako:stream-original": () =>
     z.tuple([
@@ -1996,6 +1998,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:skills-sync-preview", "tools"],
   ["mako:stage-file", "workspaces"],
   ["mako:stage-file-path", "workspaces"],
+  ["mako:storage", "usage"],
+  ["mako:storage-free", "usage"],
   ["mako:store-formats", "threads"],
   ["mako:stream-original", "threads"],
   ["mako:sync-readings", "conversations"],
