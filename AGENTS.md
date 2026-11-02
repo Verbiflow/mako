@@ -197,32 +197,41 @@ Claude's captured messages and covers the state, the ranking and the
 conflation; Settings > Diagnostics lists each session's background work with
 its sources.
 
-A background agent is a harness's own headless run that works for a
-conversation past its turn (`contracts/background-agents.ts`,
-`conversations/background-agents.ts`). The agent starts one with
-`agent_start` on the `mako` server (Claude Code and Cursor name its Session
-up front, the rest are matched to the new Session by folder, start and
-prompt); one its shell ran is found by the `MAKO_SESSION_ID` every harness
-process carries (the marked process that holds the new Session open, else
-the one that started with it in its folder); `agent_link` takes one by its
-Session ID. The Thread store keeps each under its parent Session
-(`background_agents`, `ThreadStore.backgroundAgents`), so its Session is
-annotated `agentOf` and `threadList` never lists it as a Thread: not in the
-rail, Recent, Status or the account's list (`ownedSessions` skips it), while
-its copy and originals still sync right after its parent's
-(`uploadScope`). Every harness's is followed one way, through its own
-Session in the catalog (the step its tail shows, worded by `identifyTool`,
-its calls, its process probe) and its process; no output is parsed. Its
-end is written once (the exit status its `sh` wrapper writes, else what its
-Session last shows), so a run that ended while no host watched never shows
-running. It is a roster entry like any other (`work: "agent"`, `detached`,
-under `BACKGROUND_AGENTS_BINDING`): the Agents panel (a sheet on a phone,
-`web-client/agents.tsx`) names its kind ("Background agent"), its harness's
-icon and its transcript, the line at the transcript's end lists it, and the
-composer's toggle wears the harnesses at work.
-`npm run test:background-agents` covers it and
-`npm run bench:background-agents` holds the follow, the reads and the
-panel to budgets.
+A child is a Thread another Thread started or took to work for it, its
+lead (`ROLE_WORD`); the edge is the record (`thread_parents`,
+`contracts/agents.ts`), on the child's `ThreadRef.parent`, so `threadList`
+lists it under its lead and never as a Thread of its own (`listedAsThread`),
+while its copy and originals still sync right after its parent's
+(`uploadScope`). How a child stands is computed, never stored
+(`childState(edge, thread, journal)`). `Agents` (`conversations/agents.ts`)
+starts, follows, delivers and ends them; each verb is defined once in
+`contracts/agent-tools.ts` as `mako:agents-<verb>` (start, link, list, read,
+report, stop, wait), its schema generated from the handler, and reaches the
+agent three ways from the one projection (`conversations/agent-tools.ts`):
+the in-Thread `mako` server, `mako agents <verb>` and `mako mcp`, the caller
+named by `MAKO_SESSION_ID`. A start commits the child's Thread, its edge,
+its Session and its first request (the brief, the lead's words, not the
+person's) together (`LiveStartOptions.parent`), at an access tier no higher
+than its lead's, here only (`place` other than `here` is refused); past a
+tree's running budget it queues with why, past its started budget it is
+refused with the count (`TREE_BUDGET`); a cycle is refused and there's no
+depth limit. One a Thread's shell ran is followed through its own Session in
+the catalog and its process (`agent-runs.ts`, at most
+`TAIL_READS_PER_SECOND` tail reads across the host), its end written once.
+A report (`agents_report`, else one implicit report at a turn's end) sends
+its lead a notice; an idle lead waits `WAKE_COALESCE_MS` and takes ONE turn
+with the digest, a busy one gets it at its next step where its harness
+steers there and at its turn's end where it doesn't, at most
+`WAKES_PER_MINUTE` a lead (`agent-wakes.ts`): the lead never polls. A
+child's turn an exit or an update cut short always continues in the next
+host (`LeftTurn.always`), and its messages the exit paused go on. Children
+are roster entries (`childEntry` under `CHILDREN_BINDING`, `withChildren`)
+built from the store, never saved in a journal. `npm run
+test:background-agents` covers the engine, `test:agents-doors` the three
+doors, `test:agents-migrate` migration 6 from #286's `background_agents`,
+`test:orch-update` an update mid-tree, and `bench:agents-follow`,
+`bench:orch-wake`, `bench:orch-spawn` and `bench:orch-host` hold the
+follow, the wakes, a spawn's receipt and the host's loop to budgets.
 
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a

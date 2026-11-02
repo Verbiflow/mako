@@ -7,6 +7,7 @@ import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { configuredListenPort } from "../base/listen-port.js"
 import { heavy } from "../base/heavy-packages.js"
+import { ORCHESTRATION_INSTRUCTIONS } from "../contracts/agent-tools.js"
 
 /** Whose agents call: it throws unless `bindingId` is the conversation's binding that is running now. */
 export interface AgentOwner {
@@ -48,6 +49,7 @@ const MAKO_INSTRUCTIONS = [
   "port_holder: who holds a port, before you assume it's free or stop anything.",
   `show: ${SHOW_MEDIA_LINE}`,
   "thread_history: this Thread's earlier turns, every session and harness of it, and the threads its messages referenced, read whole: list, read, search, and any tool output in full. Use it instead of guessing what was said or done before, and when a transcript points to it.",
+  ORCHESTRATION_INSTRUCTIONS,
 ].join("\n")
 
 type Route = "computer" | "mako"

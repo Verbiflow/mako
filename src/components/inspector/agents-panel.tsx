@@ -40,21 +40,28 @@ const kinds = {
   task: "Task",
 } satisfies Record<NativeWork, string>
 
+/** How a child came to be one, said only when it wasn't started through a door. */
+function childOrigin(origin: NonNullable<NativeAgent["child"]>["origin"]): string | undefined {
+  if (origin === "discovered") return "Found in its shell"
+  if (origin === "linked") return "Linked"
+  return undefined
+}
+
 /**
  * What an entry is, in the one vocabulary every harness's entries share: a
  * subagent its provider runs inside the turn, a background command or
- * monitor, or a background agent, a harness's own run working for the
- * conversation past its turn (`detached`).
+ * monitor, or an agent, a child Thread among them (`child`).
  */
 function workKind(agent: NativeAgent): string {
-  return agent.detached ? "Background agent" : kinds[agent.work ?? "agent"]
+  const origin = agent.child && childOrigin(agent.child.origin)
+  return origin ? `${kinds[agent.work ?? "agent"]} · ${origin}` : kinds[agent.work ?? "agent"]
 }
 
-/** A background agent's Session, which opens read-only like any session's transcript. */
+/** A child's Session, which opens read-only like any session's transcript. */
 function openTranscript(agent: NativeAgent): void {
-  const detached = agent.detached
-  if (!detached?.path || !detached.session) return
-  void threads.view({ harness: agent.provider, nativeId: detached.session, path: detached.path, title: agent.title }, "native")
+  const child = agent.child
+  if (!child?.path || !child.nativeId) return
+  void threads.view({ harness: agent.provider, nativeId: child.nativeId, path: child.path, title: agent.title }, "native")
 }
 
 function activity(agent: NativeAgent): string | undefined {
@@ -152,7 +159,7 @@ function AgentRoster({
   conversation?: string
   roster?: NativeAgentRoster
   provider?: string
-  /** Whether a background agent's row opens its transcript, which only the desk can show. */
+  /** Whether a child's row opens its transcript, which only the desk can show. */
   transcripts: boolean
   /** What the session waits on between turns, in words; absent while a turn runs or nothing does. */
   waiting?: string
@@ -306,7 +313,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
           </span>
         </span>
       </button>
-      {transcript && agent.detached?.path && agent.detached.session ? (
+      {transcript && agent.child?.path && agent.child.nativeId ? (
         <button
           type="button"
           data-open-transcript

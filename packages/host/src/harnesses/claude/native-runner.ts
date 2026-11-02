@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import {
   CLI_OWNED_CREDENTIALS,
   argumentAfter,
   commandTuning,
   dropUncarried,
-  type BackgroundCommand,
   type NativeCommand,
   type NativeRunner,
 } from "../native-runner.js"
@@ -72,12 +70,6 @@ export const claudeNativeRunner: NativeRunner = {
     )
   },
   fresh: freshCommand,
-  /** `fresh`'s run under a session ID Mako names, so its Session is known before Claude Code writes it. */
-  background(prompt, options): BackgroundCommand {
-    const session = randomUUID()
-    const command = freshCommand(prompt, options)
-    return { ...command, args: [...command.args, "--session-id", session], session }
-  },
   describe({ args, env }) {
     const options: Record<string, string | boolean> = {}
     const teams = env?.[AGENT_TEAMS]

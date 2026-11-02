@@ -115,6 +115,10 @@ const reads = [
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
+  /** A Thread's children, a child's report or transcript, and a wait for the next report (`contracts/agent-tools.ts`). */
+  "mako:agents-list",
+  "mako:agents-read",
+  "mako:agents-wait",
   "mako:live-context-breakdown",
   "mako:live-read",
   "mako:live-attach",
@@ -161,6 +165,7 @@ const reads = [
   "mako:crashes-dir",
   "mako:host-log-path",
   "mako:provider-residency",
+  "mako:agents-diagnostics",
   "mako:daemon-status",
   "mako:session-reader-history",
   "mako:daemon-login",
@@ -215,6 +220,11 @@ const replays = [
   "mako:live-capture",
   /** `NativeRequests.submit`: the request id; content is fingerprinted. */
   "mako:native-submit",
+  /** A spawn, a link and a report are settled by the caller's key; stopping a stopped child stops nothing. */
+  "mako:agents-start",
+  "mako:agents-link",
+  "mako:agents-report",
+  "mako:agents-stop",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
   /** Stopping a background task that has already ended stops nothing. */

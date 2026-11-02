@@ -26,7 +26,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { HostConnectionNotice } from "@/components/shell/host-connection-notice"
 import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
 import { updateLive } from "@/state/acp-live"
-import { NativeAgentRosterSchema } from "@mako/host/contracts/native-agents"
+import { CHILDREN_BINDING, NativeAgentRosterSchema } from "@mako/host/contracts/native-agents"
 import { acpStore } from "@/state/acp"
 import { threadsStore } from "@/state/thread-store"
 import { store } from "@/state/session"
@@ -469,14 +469,14 @@ function publishBackground() {
 const agentsProfile = { commits: 0, ms: 0 }
 const chatProfile = { commits: 0, ms: 0 }
 const BENCH_HARNESSES = ["claude", "cursor", "codex", "grok", "opencode", "devin"]
-/** `detached`: every entry a background agent (`backgroundAgentEntry`'s shape) on one of six harnesses, as `agent_start`'s are. */
+/** `detached`: every entry a child Thread (`childEntry`'s shape) on one of six harnesses, as `agents_start`'s are. */
 async function backgroundBench(reconciled: boolean, entries = 50, batches = 120, detached = false) {
   const now = Date.now()
   const agents = Array.from({ length: entries }, (_, index) => detached
     ? {
-        bindingId: "mako:background-agents", provider: BENCH_HARNESSES[index % BENCH_HARNESSES.length]!, nativeId: `mako-agent:bench-${index}`, title: `Background agent ${index}`, work: "agent" as const,
+        bindingId: CHILDREN_BINDING, provider: BENCH_HARNESSES[index % BENCH_HARNESSES.length]!, nativeId: `mako-child:bench-${index}`, title: `Child ${index}`, work: "agent" as const,
         background: true, stoppable: true, startedAt: now - index * 1_000, observedAt: now, state: { kind: "working" as const, activity: "Starting" },
-        detached: { id: `bench-${index}`, origin: "started" as const, session: `bench-${index}`, path: `/bench/${index}.jsonl` },
+        child: { thread: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`, origin: "started" as const, nativeId: `bench-${index}`, path: `/bench/${index}.jsonl` },
       }
     : {
         bindingId: id, provider: "claude", nativeId: `task-${index}`, title: `Background task ${index}`, work: index % 3 ? "command" as const : "agent" as const,

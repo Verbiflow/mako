@@ -1,5 +1,5 @@
 import type { LiveRequest, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
-import type { NativeAgent } from "@mako/host/contracts/native-agents"
+import { CHILDREN_BINDING, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { personPromptedAt } from "@mako/host/contracts/worked-at"
 import { ThreadGroupSchema, type ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { ThreadRef } from "@/lib/types"
@@ -72,19 +72,20 @@ export function busyRefs(): ThreadRef[] {
   return agentsChoice() ? [...own, ...helperRefs()] : own
 }
 
-/** The sessions of `?agents=` background agents, newest of all, as the catalog lists them: under their parent, no rows. */
+/** The sessions of `?agents=` children, newest of all, as the catalog lists them: under their parent, no rows. */
 function helperRefs(): ThreadRef[] {
   const parent = BUSY_SESSIONS[0]!.session
   return namedRoster(BUSY_SESSIONS[0]!.conversation, agentsChoice()!).flatMap((agent): ThreadRef[] =>
-    agent.detached?.session && agent.detached.path
+    agent.child?.nativeId && agent.child.path
       ? [{
           harness: agent.provider,
-          nativeId: agent.detached.session,
-          path: agent.detached.path,
+          nativeId: agent.child.nativeId,
+          path: agent.child.path,
           cwd: BUSY_CWD,
           title: `You are a headless worker started by the coordinator: ${agent.title}`,
           updatedAt: new Date().toISOString(),
-          agentOf: { session: parent, agent: agent.detached.id },
+          threadId: agent.child.thread,
+          parent: { thread: BUSY_THREAD, session: parent },
         }]
       : [])
 }
@@ -120,14 +121,19 @@ const COMMANDS = [
   "npm run generate:host-inputs",
 ] as const
 
-/** A background agent of `harness` (`backgroundAgentEntry`'s shape), as Mako follows one through its own Session. */
-function backgroundAgent(index: number, harness: string, title: string, state: NativeAgent["state"], minutes: number, toolUses?: number): NativeAgent {
+/** A made-up Thread ID for the mock's `index`th child. */
+function busyThread(index: number): string {
+  return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`
+}
+
+/** A child Thread on `harness` (`childEntry`'s shape), as Mako draws one from its edge and its own Thread. */
+function childAgent(index: number, harness: string, title: string, state: NativeAgent["state"], minutes: number, toolUses?: number): NativeAgent {
   const now = Date.now()
   const active = state.kind === "working" || state.kind === "waiting"
   const agent: NativeAgent = {
-    bindingId: "mako:background-agents",
+    bindingId: CHILDREN_BINDING,
     provider: harness,
-    nativeId: `mako-agent:busy-${index}`,
+    nativeId: `mako-child:busy-${index}`,
     title,
     work: "agent",
     background: true,
@@ -135,7 +141,7 @@ function backgroundAgent(index: number, harness: string, title: string, state: N
     state,
     observedAt: now,
     startedAt: now - minutes * 60_000,
-    detached: { id: `busy-${index}`, origin: "started", session: `busy-helper-${index}`, path: `/mock/busy-helper-${index}.jsonl` },
+    child: { thread: busyThread(index), origin: index % 4 === 1 ? "discovered" : "started", nativeId: `busy-helper-${index}`, path: `/mock/busy-helper-${index}.jsonl` },
   }
   if (toolUses) agent.usage = { toolUses }
   if (!active) agent.settledAt = now - 60_000
@@ -144,18 +150,18 @@ function backgroundAgent(index: number, harness: string, title: string, state: N
 
 /**
  * `?mock&app=busy&agents=states`: one entry in each state, across harnesses and kinds, as every surface words them.
- * `agents=32`: thirty-two background agents at work, for the render budget.
+ * `agents=32`: thirty-two children at work, for the render budget.
  */
 export function namedRoster(binding: string, choice: string): NativeAgent[] {
   const now = Date.now()
   if (choice === "32") {
     const harnesses = ["claude", "cursor", "codex", "grok", "opencode", "devin"]
-    return Array.from({ length: 32 }, (_, index) => backgroundAgent(index, harnesses[index % harnesses.length]!, `Worker ${index + 1}: ${PROMPTS[index % PROMPTS.length]!.slice(0, 48)}`, { kind: "working", activity: COMMANDS[index % COMMANDS.length] ? `Shell ${COMMANDS[index % COMMANDS.length]}` : "Thinking" }, 3 + index, 10 + index * 7))
+    return Array.from({ length: 32 }, (_, index) => childAgent(index, harnesses[index % harnesses.length]!, `Worker ${index + 1}: ${PROMPTS[index % PROMPTS.length]!.slice(0, 48)}`, { kind: "working", activity: COMMANDS[index % COMMANDS.length] ? `Shell ${COMMANDS[index % COMMANDS.length]}` : "Thinking" }, 3 + index, 10 + index * 7))
   }
   return [
-    backgroundAgent(0, "cursor", "Unify the agents roster across harnesses", { kind: "working", activity: "Shell npm run test:decoders" }, 42, 187),
-    backgroundAgent(1, "claude", "Review the sidebar filter", { kind: "waiting", reason: "Waiting on you in its own terminal" }, 18, 64),
-    backgroundAgent(2, "codex", "Bench the follow cost", { kind: "working", activity: "Starting" }, 0.2),
+    childAgent(0, "cursor", "Unify the agents roster across harnesses", { kind: "working", activity: "Shell npm run test:decoders" }, 42, 187),
+    childAgent(1, "claude", "Review the sidebar filter", { kind: "waiting", reason: "Waiting on you in its own terminal" }, 18, 64),
+    childAgent(2, "codex", "Bench the follow cost", { kind: "working", activity: "Starting" }, 0.2),
     {
       bindingId: binding, provider: "claude", nativeId: "busy-subagent", title: "Explore the catalog's annotate path", work: "agent", role: "Explore",
       background: false, stoppable: true, state: { kind: "working", activity: "Read packages/host/src/threads/catalog.ts" }, observedAt: now, startedAt: now - 95_000, usage: { toolUses: 12 },
@@ -164,10 +170,10 @@ export function namedRoster(binding: string, choice: string): NativeAgent[] {
       bindingId: binding, provider: "claude", nativeId: "busy-lint", title: "npm run lint", detail: "npm run lint", work: "command",
       background: true, stoppable: true, state: { kind: "working" }, observedAt: now, startedAt: now - 140_000,
     },
-    backgroundAgent(3, "grok", "Read the rail's search path", { kind: "completed", summary: "Search reads the catalog's rail list, so a helper never matches; notifications key on Thread rows, which helpers have none of." }, 25, 38),
-    backgroundAgent(4, "opencode", "Record the phone footer", { kind: "failed", error: "It exited with code 1: Error: no browser found at the configured path" }, 9, 11),
-    backgroundAgent(5, "cursor", "Try the old stdout decoder", { kind: "canceled" }, 31, 72),
-    backgroundAgent(6, "devin", "Check the gateway's roster schema", { kind: "unknown", reason: "Its process ended without saying how it went." }, 54, 19),
+    childAgent(3, "grok", "Read the rail's search path", { kind: "completed", summary: "Search reads the catalog's rail list, so a helper never matches; notifications key on Thread rows, which helpers have none of." }, 25, 38),
+    childAgent(4, "opencode", "Record the phone footer", { kind: "failed", error: "It exited with code 1: Error: no browser found at the configured path" }, 9, 11),
+    childAgent(5, "cursor", "Try the old stdout decoder", { kind: "canceled" }, 31, 72),
+    childAgent(6, "devin", "Check the gateway's roster schema", { kind: "unknown", reason: "Its process ended without saying how it went." }, 54, 19),
   ]
 }
 

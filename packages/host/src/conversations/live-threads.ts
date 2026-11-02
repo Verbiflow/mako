@@ -1,5 +1,6 @@
 import { errorMessage } from "../base/error-message.js"
-import { hostWarn } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
+import { ChildStartSchema, type ChildStart } from "../contracts/agents.js"
 import type { LiveSnapshot, LiveStartOptions, LiveSummary } from "../contracts/live-conversations.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
@@ -85,6 +86,21 @@ export class LiveThreads {
     } catch (error) {
       hostWarn("threads", "a Thread's purpose could not be recorded", { conversation: conversationId, purpose: purpose.kind, error: errorMessage({ error }) })
     }
+  }
+
+  /**
+   * A child's edge, under the Thread its start just made. A start that can't
+   * write it fails: a child with no edge would be a Thread of its own.
+   */
+  markParent(conversationId: string, parent: ChildStart): void {
+    const threads = this.dependencies.threads
+    if (!threads?.writable) throw new Error("A child Thread needs the Thread store, which can't be written.")
+    const placed = threads.journalPlacement(conversationId)
+    if (!placed) throw new Error("The child's conversation has no Thread yet.")
+    const asked = ChildStartSchema.parse(parent)
+    const edge = threads.keepEdge({ ...asked, child: placed.thread, createdAt: Date.now() })
+    if (edge.op !== asked.op) throw new Error("That Thread already has a parent.")
+    hostLog("agents", "edge written", { op: asked.op, child: placed.thread, parent: asked.parent, name: edge.name })
   }
 
   /**

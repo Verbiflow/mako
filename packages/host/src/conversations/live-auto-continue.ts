@@ -76,7 +76,8 @@ export class LiveAutoContinue {
       resident.closing ||
       this.access.pending(resident) ||
       resident.snapshot.session.status === "running" ||
-      resident.snapshot.session.status === "closed" ||
+      // The exit that cut a restarted turn closed its conversation as it went; any other close declines the turn.
+      (resident.snapshot.session.status === "closed" && !pending.restarted) ||
       resident.snapshot.permissions.length > 0
     ) {
       this.access.flush(resident)

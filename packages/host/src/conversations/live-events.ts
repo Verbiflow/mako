@@ -22,7 +22,7 @@ import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
   "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "keep" | "schedule" | "drain" | "storageFailed" | "signInHold" |
-  "scheduleAutoContinue" | "goalSettled" | "goalObserved" | "goalSpent" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
+  "scheduleAutoContinue" | "goalSettled" | "turnSettled" | "goalObserved" | "goalSpent" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
 
 /** The parts a driver's events land in. */
 export interface EventParts {
@@ -229,6 +229,7 @@ export class LiveEvents {
           else checkpoints.settle(resident, settling.id)
           this.access.scheduleAutoContinue(resident, settling.id)
           this.access.goalSettled(resident, settling.id)
+          this.access.turnSettled(resident, settling.id)
         }
       }
       // The process went between turns: what it spent after the last one is kept, and its meter is counted no more.

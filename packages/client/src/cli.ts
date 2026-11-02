@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util"
+import { AGENTS_HELP, agentsMain } from "./agents.js"
 import { MakoClient, type StartOptions } from "./client.js"
 import type { ConversationChange } from "./conversation.js"
 import { cloudThread, localHost } from "./transport.js"
@@ -16,13 +17,18 @@ const HELP = `mako: a conversation with any harness, from a terminal, on this co
   mako stop <conversation>
   mako history <conversation>
 
+${AGENTS_HELP}
+
   --json            each change as a line of JSON, for scripts
   --socket <path>   another host on this computer (default: Mako's, or MAKO_PROFILE's)
   --gateway <url> --thread <id>   a cloud Thread directly, as MAKO_DEVICE with MAKO_TOKEN's connection token
 
 A conversation on a cloud Thread works through this computer's Mako as it works in the app.`
 
+/** `agents` and `mcp` parse their own options (`agentsMain`). */
+const delegated = process.argv[2] === "agents" || process.argv[2] === "mcp"
 const { values, positionals } = parseArgs({
+  args: delegated ? [] : process.argv.slice(2),
   allowPositionals: true,
   options: {
     cwd: { type: "string" },
@@ -191,4 +197,4 @@ async function settle(client: MakoClient, conversationId: string, requestId: str
   if (request?.status !== "completed") process.exitCode = 1
 }
 
-main().catch((error: Error) => fail(error.message))
+(delegated ? agentsMain(process.argv.slice(2)) : main()).catch((error: Error) => fail(error.message))
