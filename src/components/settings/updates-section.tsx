@@ -7,7 +7,7 @@ import {
   RefreshCwIcon,
   ShieldCheckIcon,
 } from "lucide-react"
-import type { RevisionChanges, UncommittedChanges, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
+import type { RevisionChanges, UncommittedChanges, UnsurePerformance, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
 import {
   builtWith,
   missingDependenciesText,
@@ -85,6 +85,30 @@ function UncommittedFiles({ uncommitted, label, className }: { uncommitted: Unco
   )
 }
 
+/** What a performance check the Mac was too busy for measured: when, how busy, and the rows it couldn't settle. */
+function MeasuredPerformance({ performance }: { performance: UnsurePerformance }) {
+  const at = new Date(performance.measuredAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+  return (
+    <div className="mx-4 mb-4 flex flex-col gap-2 rounded-lg border border-hairline bg-background/40 p-3 text-label" data-testid="update-performance">
+      <p className="leading-relaxed text-muted-foreground">
+        Measured {at}
+        {performance.busy.length ? `: ${performance.busy.join("; ")}.` : "."}
+      </p>
+      {performance.machine && <p className="font-mono text-faint">{performance.machine}</p>}
+      <p className="text-faint">
+        {performance.rows.length === 1 ? "A timing it couldn't tell" : `${performance.rows.length} timings it couldn't tell`} from the code {performance.rows.length === 1 ? "its baseline" : "their baselines"} measured:
+      </p>
+      <ul aria-label="Timings it couldn't tell" className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+        {performance.rows.map((row) => (
+          <li key={row} className="truncate font-mono text-muted-foreground" title={row}>
+            {row}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 /** The card's headline and the sentence under it. */
 interface CardCopy {
   title: string
@@ -97,7 +121,17 @@ interface CardCopy {
  */
 function localCopy(installation: UpdateInstallation, text: UpdateSourceText | null): CardCopy {
   const { local, checkout } = installation
+  if (local.kind === "ready" && local.performance)
+    return {
+      title: "Your Mac was too busy to measure performance",
+      detail: "The update is built and verified. Mako will check its performance again when the Mac is quieter, or you can install it without that check.",
+    }
   if (local.kind === "ready") return { title: "Your update is ready", detail: "Verified and ready. Install after agents finish, or choose when to stop them." }
+  if (local.kind === "building" && local.remeasuring)
+    return {
+      title: "Measuring performance again",
+      detail: "The update is built. Mako is timing it again beside the code its performance baselines measured. Your installed app and agents stay running.",
+    }
   if (local.kind === "building" && local.phase === "installing")
     return {
       title: "Installing dependencies…",
@@ -155,11 +189,13 @@ export function UpdatesSection() {
   const fix = installation?.local.kind === "error" ? installation.local.command : undefined
   const copy = local && installation ? localCopy(installation, text) : null
   const prepared = installation?.local.kind === "ready" ? installation.local : null
+  const unsure = prepared?.performance
+  const remeasuring = installation?.local.kind === "building" && installation.local.remeasuring
   // What Build would bring, listed before it runs; nothing while it builds or once it's ready.
   const coming = !building && !prepared && checkout?.kind === "checkout" && text?.action ? checkout.changes : null
   // The uncommitted files Build would take as they are, until the build it makes names its own.
   const taking = !prepared && checkout?.kind === "checkout" && (building || text?.action) ? checkout.uncommitted : undefined
-  const buildLabel = building ? "Building…" : ready ? "Build again" : text?.action ?? "Build update"
+  const buildLabel = remeasuring ? "Measuring…" : building ? "Building…" : ready ? "Build again" : text?.action ?? "Build update"
   const nothingToBuild = Boolean(text && !text.action) || checkout?.kind === "unreadable"
   const label = local
     ? "Local installation"
@@ -242,7 +278,7 @@ export function UpdatesSection() {
               </p>
             )}
           </div>
-          {ready && (
+          {ready && !unsure && (
             <ShieldCheckIcon className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
           )}
         </div>
@@ -291,7 +327,7 @@ export function UpdatesSection() {
         )}
         <UncommittedFiles uncommitted={taking} label="Uncommitted changes Build takes" className="mx-4 mb-4" />
 
-        {building && (
+        {building && !remeasuring && (
           <ol
             className="grid grid-cols-5 gap-2 px-4 pb-5"
             aria-label="Build progress"
@@ -348,6 +384,7 @@ export function UpdatesSection() {
             <UncommittedFiles uncommitted={nextBuild.uncommitted} label="Uncommitted changes in this update" />
           </div>
         )}
+        {unsure && <MeasuredPerformance performance={unsure} />}
         {published && release.status === "downloading" && (
           <div className="px-4 pb-4">
             <progress
@@ -378,20 +415,33 @@ export function UpdatesSection() {
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-3">
-          {ready && (
+          {unsure && (
             <Action
               tone="solid"
+              size="md"
+              disabled={busy || pending}
+              onClick={() => void application.measureAgain()}
+            >
+              <RefreshCwIcon />
+              Retry
+            </Action>
+          )}
+          {ready && (
+            <Action
+              tone={unsure ? "outline" : "solid"}
               size="md"
               disabled={busy || pending}
               onClick={() => void application.request("install")}
             >
               <DownloadIcon />
-              {lifecycle?.work.length
-                ? "Install when agents finish"
-                : "Install update"}
+              {unsure
+                ? lifecycle?.work.length ? "Install anyway when agents finish" : "Install anyway"
+                : lifecycle?.work.length
+                  ? "Install when agents finish"
+                  : "Install update"}
             </Action>
           )}
-          {local && (building || ready || !nothingToBuild) && (
+          {local && !unsure && (building || ready || !nothingToBuild) && (
             <Action
               tone={ready ? "outline" : "solid"}
               size="md"

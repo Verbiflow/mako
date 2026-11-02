@@ -23,8 +23,8 @@
  * slows some rows more than the calibration. That commit is built beside this
  * checkout (`perf-reference.ts`) and both measure the row in turns, in
  * separate processes, on this checkout's recordings; the row fails if this
- * checkout's median is more than 25% over the reference's. A passing run
- * builds nothing.
+ * checkout is more than 25% slower there, and on a machine too busy to tell
+ * it's unsure (`perf-reference.ts`). A passing run builds nothing.
  *
  *   npm run perf:decoders                          the kept rows against scripts/perf-decoders-baseline.json
  *   npm run perf:decoders -- --real                with this Mac's stores, read-only
@@ -55,7 +55,7 @@ import { projectLive, type LiveProjection } from "../src/state/live-projection"
 import { PAIRS_FOLDER, PairSchema, liveUpdates, storeReader } from "./decode-compare"
 import { decoders, FIXTURE_ROOT, readRecording, replayed, type Recording } from "./native-decoding"
 import { hotspots, keptPairStores, profiled, timing, type Timing, type Work } from "./performance-measure"
-import { committed, decoderRows, percent, printTable, ROUNDS, settle, type Suspect } from "./perf-reference"
+import { committed, concluded, decoderRows, percent, printTable, ROUNDS, settle, type Suspect } from "./perf-reference"
 import type { Entry, RecordRef } from "@mako/sessions/entries"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { nativeStream } from "@mako/host/harnesses/native-stream"
@@ -405,16 +405,17 @@ if (values.update) {
   if (!at) console.warn("This tree has uncommitted changes, so these rows name no commit to measure beside when one goes over budget. Commit the code, then run --update again.")
 }
 if (suspects.length) {
-  over.push(...await settle(suspects, {
+  const settled = await settle(suspects, {
     allowed: ALLOWED_REGRESSION,
     rounds,
     ...values.reference !== undefined && { beside: values.reference },
     say: values.json ? console.error : console.log,
     measurer: (reference, keys, scratch) => decoderRows(reference, keys, values.fixtures, scratch),
-  }))
+  })
+  over.push(...await concluded("perf:decoders", settled, ALLOWED_REGRESSION))
 }
 if (over.length) {
-  console.error(`\nMore than ${Math.round((ALLOWED_REGRESSION - 1) * 100)}% slower than the baseline:\n${over.join("\n")}`)
+  console.error(`\nRows that failed against the baseline (${Math.round((ALLOWED_REGRESSION - 1) * 100)}% slower allowed):\n${over.join("\n")}`)
   process.exitCode = 1
 }
 

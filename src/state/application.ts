@@ -186,6 +186,15 @@ export const application = {
       })
     })
   },
+  /** Retry: measure a built update's performance again, after a Mac too busy to measure it. */
+  measureAgain(): Promise<void> {
+    return perform(async () => {
+      await getMako().measureUpdateAgain()
+      applicationStore.set({
+        installation: await getMako().installationState(),
+      })
+    })
+  },
   async shutdown(requestId: string): Promise<void> {
     try {
       assertDraftsSaved()

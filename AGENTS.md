@@ -3941,14 +3941,29 @@ therefore measured again beside the commit its baseline names (`at`):
 `perf-reference.ts` exports that commit with `git archive`, links `@mako/*`
 to its own packages and everything else to this checkout's `node_modules`,
 builds its sessions and host packages, and runs its script and this
-checkout's in turns, three processes each, on this checkout's recordings; a
-row still over after three gets four more each and is judged on all seven,
+checkout's in turns, three processes each, on this checkout's recordings,
 because macOS places a whole process on a performance or an efficiency core
 and a memory-heavy row slows there more than the calibration (unchanged merge
 code once read 30% apart on three unlucky draws).
 A child's results are read from a file: a Node process that exits on an
-uncaught error drops what it queued for a pipe on macOS. The row fails only if this checkout's median is more than 25%
-over the reference's; the table prints with the load average and core count.
+uncaught error drops what it queued for a pipe on macOS. A row is judged on
+its rounds' head over reference (`judge`): a sign-test interval for their
+median wholly over 1.25 is slower and wholly under it within, busy or not.
+Before each run the machine is read for a second with nothing measured
+running (`@mako/host/base/machine-load`): other work holding more than half
+the cores, thermal pressure or memory pressure makes it busy; the load
+average is printed but not judged, since it lags and counts the measurement's
+own threads. On a quiet machine the median decides, within on three rounds
+and slower after seven; a busy machine is first waited out for up to 3
+minutes, then a row gets up to 15 rounds (past seven, only within 5 minutes
+of busy measuring), and one they can't settle is unsure, not slower. On the
+morning a person's update failed, the update's own dependency copy had Spotlight
+indexing at a full core and the load average at 26.7: unchanged merge code read
++43% there and +3% on CI. Every load is simulated in `test-perf-reference.ts`;
+`test-machine-load.ts` loads every core for real. Without
+`MAKO_PERFORMANCE_VERDICT` an unsure row fails as a slower one does, saying to
+measure it on a quieter machine; the table prints each row's rounds, its
+interval and how many rounds were busy.
 A passing run builds nothing. A reference that can't be built or has no such
 row fails the row as before, with the reason. The rows read `@mako/*` from
 `packages/*/dist`, so build the packages before measuring, or a run times
@@ -3964,9 +3979,17 @@ one goes over and compares the row with that old commit. Devin's saved open
 crossed at a person's update that way, +69% over its baseline's commit, from
 two changes neither over budget: a subagent analysis on every read, and the
 media `_meta` parses below. `npm run update:local` runs no `test:performance`; Settings >
-Updates does, in a copy without `.git`, alongside `test:application` and
-`test:renderer-assets`, and names its source in `MAKO_BUILD_SOURCE` for the
-export. An installed app from before that variable doesn't pass it, so a copy
+Updates does, in a copy without `.git` (`updates/checkout.noindex`, named so
+Spotlight skips its 50,000 dependency files), alone after `test:application`
+and `test:renderer-assets` so it doesn't time them, and names its source in
+`MAKO_BUILD_SOURCE` for the export. It names a file in
+`MAKO_PERFORMANCE_VERDICT` (`contracts/performance-verdict.ts`) that each
+comparing script appends its rows to: a slower row fails the update by name,
+and unsure rows leave it built, verified and `ready` with `performance` set,
+saying "Your Mac was too busy to measure performance" with what was measured,
+Retry (`mako:measure-update-again`, the check alone again) and Install anyway.
+Mako measures again by itself after three quiet one-minute readings in a row,
+not while an install or restart is pending. An installed app from before that variable doesn't pass it, so a copy
 with neither reads the checkout `source.json` names beside it, which every
 updater writes (`buildRepository`, `test-perf-reference.ts`); without it the
 first update after the A/B landed failed on rows it couldn't measure. On a per-message path, a `WeakMap` entry per message cost the

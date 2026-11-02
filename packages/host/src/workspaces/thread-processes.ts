@@ -174,8 +174,6 @@ export interface Leftover {
   sure: boolean
 }
 
-export type MemoryPressure = "normal" | "warning" | "critical"
-
 /**
  * What an app held at one look: its processes' physical footprint on macOS,
  * as Activity Monitor counts it, else resident memory, and what its
@@ -1325,18 +1323,4 @@ function completeCharacters(bytes: Buffer): Buffer {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/**
- * How short of memory this machine is: macOS's own pressure level, or
- * Linux's pressure stall figures. Anything unreadable counts as normal.
- */
-export async function memoryPressure(): Promise<MemoryPressure> {
-  if (onMac()) {
-    const level = await run("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).then(({ stdout }) => Number(stdout.trim()), () => 1)
-    return level >= 4 ? "critical" : level >= 2 ? "warning" : "normal"
-  }
-  const text = await readFile("/proc/pressure/memory", "utf8").catch(() => "")
-  const average = (kind: string) => Number(new RegExp(`^${kind} avg10=([\\d.]+)`, "m").exec(text)?.[1] ?? 0)
-  return average("full") > 10 ? "critical" : average("some") > 20 ? "warning" : "normal"
 }

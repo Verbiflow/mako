@@ -6,7 +6,7 @@ import { bindTheme, prefsStore } from "@/state/prefs"
 import { getMako } from "@/lib/bridge"
 import { installMockBridge } from "./mock-bridge"
 import { threadMoveStepped } from "@/state/cloud-moves"
-import type { LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UncommittedChanges, UpdateInstallation, UpdateSource } from "@mako/host/contracts/app-lifecycle"
+import type { LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UncommittedChanges, UnsurePerformance, UpdateInstallation, UpdateSource } from "@mako/host/contracts/app-lifecycle"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import "../index.css"
 
@@ -79,10 +79,23 @@ const reading = (overrides: Partial<Extract<UpdateSource, { kind: "checkout" }>>
 })
 const LEVEL = reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } })
 const BY_HAND = "cd '/Users/developer/Projects/mako' && npm install"
+const READY: LocalBuildState = { kind: "ready", build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, changes: CHANGES, forwarded: { branch: "main", from: INSTALLED, to: UPSTREAM } }
+/** The morning the Mac indexed a fresh dependency tree while the update timed itself: three rows it couldn't settle in 15 rounds. */
+const BUSY: UnsurePerformance = {
+  rows: [
+    "merge/merge large (same): +43% beside 9a7a5c0c, between −4% and +71%, 15 rounds, 12 busy",
+    "merge/merge large (far apart): +18% beside 9a7a5c0c, between −9% and +52%, 15 rounds, 12 busy",
+    "decode/claude transcript: +31% beside 9a7a5c0c, between −2% and +66%, 15 rounds, 11 busy",
+  ],
+  machine: "other work 12.6 of 14 cores, load average 26.7, memory normal",
+  busy: ["other work kept 12.6 of 14 cores busy"],
+  measuredAt: "2026-10-28T09:01:00.000Z",
+}
 /**
  * The source checkout's states, as Settings › Updates draws them: behind and clean, already installed, kept from the
  * update by local changes, on another branch, offline, installing what the new package-lock.json lists (or refusing
- * to, or failing to), mid-build, ready, and the build that installed it.
+ * to, or failing to), mid-build, ready, built but too busy a Mac to time it (and timing it again), slower than the
+ * code it replaces, and the build that installed it.
  */
 export const SOURCE_SCENES = {
   behind: { checkout: reading({}) },
@@ -96,7 +109,10 @@ export const SOURCE_SCENES = {
   installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, uncommitted: { count: 1, files: [{ path: "package-lock.json", change: "edited" }] }, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "error", message: `The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
   installFailed: { checkout: LEVEL, local: { kind: "error", message: `The update couldn't install dependencies: npm install didn't finish within 10 minutes, so Mako stopped it. Run npm install yourself to see the whole error, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
   building: { checkout: LEVEL, local: { kind: "building", phase: "checking", revision: UPSTREAM } },
-  ready: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "ready", build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, changes: CHANGES, forwarded: { branch: "main", from: INSTALLED, to: UPSTREAM } } },
+  ready: { checkout: LEVEL, local: READY },
+  busy: { checkout: LEVEL, local: { ...READY, performance: BUSY } },
+  remeasuring: { checkout: LEVEL, local: { kind: "building", phase: "checking", remeasuring: true, revision: UPSTREAM } },
+  slower: { checkout: LEVEL, local: { kind: "error", message: "The update failed during checking: test:performance: this row is slower than the code its baseline measured, beside it on this Mac: merge/merge large (same): +61% beside 9a7a5c0c, between +48% and +77%, 7 rounds, 0 busy. Rows that failed against the baseline (25% slower allowed). Your installed app and agents were not changed." } },
   installed: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "current" }, changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, installed: CHANGES },
 } satisfies Record<string, Partial<UpdateInstallation>>
 export function sourceScene(name: keyof typeof SOURCE_SCENES) {
@@ -140,6 +156,7 @@ let lifecycle: LifecycleState = {
 }
 export const calls = {
   build: 0,
+  measuredAgain: 0,
   quit: 0,
   stopped: 0,
   waited: 0,
@@ -227,6 +244,10 @@ window.mako = {
   buildUpdate: async () => {
     calls.build++
     setLocal({ kind: "building", phase: "compiling" })
+  },
+  measureUpdateAgain: async () => {
+    calls.measuredAgain++
+    setLocal({ kind: "building", phase: "checking", remeasuring: true })
   },
   quitClient: async () => {
     calls.quit++

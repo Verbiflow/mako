@@ -161,6 +161,140 @@ try {
     assert.ok(checkFailure.message.length < 1800, "Build diagnostics remain bounded")
   }
 
+  // The performance check runs alone after the others, and reads its verdicts
+  // from the file it's handed: a Mac too busy to time it leaves the update
+  // ready with that caveat, measured again on Retry or once the Mac is quiet;
+  // a slower row is a failure that names it.
+  const timedSource = join(root, "timed-source")
+  const order = join(root, "timed-order.log")
+  const mode = join(root, "timed-mode.txt")
+  await mkdir(timedSource)
+  await writeFile(join(timedSource, "package.json"), JSON.stringify({
+    name: "mako",
+    scripts: {
+      build: "node pass.cjs",
+      lint: "node pass.cjs",
+      "package:mac:local": "node pass.cjs",
+      "test:application": "node check.cjs application",
+      "test:renderer-assets": "node check.cjs renderer",
+      "test:performance": "node performance.cjs",
+    },
+  }))
+  await writeFile(join(timedSource, "pass.cjs"), "process.exit(0)")
+  await writeFile(join(timedSource, "check.cjs"), `const fs = require("fs")
+fs.appendFileSync(${JSON.stringify(order)}, process.argv[2] + " start\\n")
+setTimeout(() => fs.appendFileSync(${JSON.stringify(order)}, process.argv[2] + " end\\n"), 300)`)
+  await writeFile(join(timedSource, "performance.cjs"), `const fs = require("fs")
+fs.appendFileSync(${JSON.stringify(order)}, "performance\\n")
+const mode = fs.readFileSync(${JSON.stringify(mode)}, "utf8").trim()
+const row = { key: "merge/merge large (same)", beside: "3c2c7d6d".padEnd(40, "0"), outcome: mode, reference: 0.476, head: 0.681, change: mode === "slower" ? 1.6 : 1.43, interval: mode === "slower" ? [1.4, 1.8] : [0.96, 1.71], rounds: 15, busyShare: mode === "unsure" ? 0.8 : 0 }
+const busy = mode === "unsure" ? ["other work kept 12.6 of 14 cores busy"] : []
+fs.appendFileSync(process.env.MAKO_PERFORMANCE_VERDICT, JSON.stringify({ script: "perf:decoders", allowed: 1.25, rows: [row], machine: "other work 12.6 of 14 cores, load average 26.7, memory normal", busy }) + "\\n")
+if (mode === "slower") { process.stderr.write("Rows that failed against the baseline (25% slower allowed)\\n"); process.exitCode = 1 }`)
+  execFileSync("git", ["init", "-q", timedSource])
+  execFileSync("git", ["-C", timedSource, "add", "."])
+  execFileSync("git", ["-C", timedSource, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "Timed fixture"])
+  const candidate = {
+    async package(_checkout: string, output: string) {
+      await mkdir(join(output, "mac-arm64/Mako.app"), { recursive: true })
+    },
+    async verify() {
+      return { id: "c".repeat(16), builtAt: new Date().toISOString(), revision: null, dirty: false }
+    },
+  }
+  let quietMac = false
+  const reading = (othersBusy: number) => ({ cores: 14, othersBusy, loadAverage: othersBusy, memory: "normal" as const, thermal: "nominal" as const })
+  const timedRoot = join(root, "timed-updates")
+  // An updater from before the private copy was named for Spotlight to skip.
+  await mkdir(join(timedRoot, "checkout"), { recursive: true })
+  const seen: string[] = []
+  const timed: LocalUpdates = new LocalUpdates(gitRunner, timedRoot, "A".repeat(40), () => {
+    const local = timed.snapshot().local
+    seen.push(local.kind === "building" ? `${local.phase}${local.remeasuring ? " again" : ""}` : local.kind === "ready" && local.performance ? "ready, unsure" : local.kind)
+  }, null, { candidate, machine: async () => reading(quietMac ? 1 : 12.6), quietEveryMs: 10 })
+  const settled = async (what: string) => {
+    const deadline = Date.now() + 60_000
+    while (timed.building || timed.snapshot().local.kind === "building") {
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}: ${seen.join(", ")}`)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    return timed.snapshot().local
+  }
+  const runs = async () => (await readFile(order, "utf8")).split("\n").filter((line) => line === "performance").length
+  await writeFile(mode, "unsure")
+  await timed.select(timedSource)
+  timed.start()
+  const unsure = await settled("a build on a busy Mac")
+  assert.equal(unsure.kind, "ready", `a Mac too busy to measure leaves the update ready: ${JSON.stringify(unsure)}`)
+  if (unsure.kind === "ready") {
+    assert.deepEqual(unsure.performance?.rows, ["merge/merge large (same): +43% beside 3c2c7d6d, between −4% and +71%, 15 rounds, 12 busy"])
+    assert.deepEqual(unsure.performance?.busy, ["other work kept 12.6 of 14 cores busy"])
+    assert.equal(unsure.performance?.machine, "other work 12.6 of 14 cores, load average 26.7, memory normal")
+  }
+  const steps = (await readFile(order, "utf8")).trim().split("\n")
+  assert.deepEqual(steps.slice(-1), ["performance"])
+  assert.deepEqual(new Set(steps.slice(0, 4)), new Set(["application start", "renderer start", "application end", "renderer end"]), "the other checks finish before the performance check starts")
+  const names = await readdir(timedRoot)
+  assert.ok(names.includes("checkout.noindex") && !names.includes("checkout"), `the private copy moves to a folder Spotlight skips: ${names.join(", ")}`)
+
+  // Retry measures again without rebuilding; still busy, still unsure.
+  timed.measureAgain()
+  assert.deepEqual(seen.at(-1), "checking again")
+  assert.equal((await settled("Retry on a busy Mac")).kind, "ready")
+  assert.ok(timed.snapshot().local.kind === "ready" && timed.snapshot().local.performance)
+  assert.equal(await runs(), 2)
+  assert.ok(!(await readFile(order, "utf8")).split("\n").slice(4).some((line) => line.startsWith("application")), "measuring again rebuilds and rechecks nothing else")
+
+  // A row measured again slower fails, naming it.
+  await writeFile(mode, "slower")
+  timed.measureAgain()
+  const slowerAgain = await settled("Retry that measures slower")
+  assert.equal(slowerAgain.kind, "error")
+  if (slowerAgain.kind === "error") {
+    assert.match(slowerAgain.message, /^The update failed its performance check: test:performance: this row is slower than the code its baseline measured, beside it on this Mac: merge\/merge large \(same\): \+60% beside 3c2c7d6d, between \+40% and \+80%, 15 rounds, 0 busy\. /)
+    assert.match(slowerAgain.message, /Rows that failed against the baseline \(25% slower allowed\)/)
+  }
+
+  // Built again on a busy Mac, it waits; an install pending holds it; once
+  // the Mac reads quiet three times running, it measures again by itself.
+  await writeFile(mode, "unsure")
+  timed.start()
+  assert.equal((await settled("a rebuild on a busy Mac")).kind, "ready")
+  assert.equal(await runs(), 4, "an unsure build is built and measured again, not handed back")
+  await writeFile(mode, "within")
+  timed.hold(true)
+  quietMac = true
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(await runs(), 4, "a pending install keeps the update as it is")
+  timed.hold(false)
+  const deadline = Date.now() + 30_000
+  const measuredWithin = () => {
+    const local = timed.snapshot().local
+    return local.kind === "ready" && !local.performance
+  }
+  while (!measuredWithin()) {
+    if (Date.now() > deadline) throw new Error(`The quiet Mac never measured again: ${seen.join(", ")}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(await runs(), 5)
+  assert.ok(seen.includes("checking again"))
+  assert.ok(timed.ready, "measured within, it installs as any other")
+
+  // A build whose own check is slower fails during checking, naming the row.
+  await writeFile(mode, "slower")
+  const slowRoot = join(root, "slow-updates")
+  let finishSlow = () => {}
+  const slowFinished = new Promise<void>((resolve) => { finishSlow = resolve })
+  const slow: LocalUpdates = new LocalUpdates(gitRunner, slowRoot, "A".repeat(40), () => {
+    if (!slow.building && slow.snapshot().local.kind === "error") finishSlow()
+  }, null, { candidate })
+  await slow.select(timedSource)
+  slow.start()
+  await slowFinished
+  const slower = slow.snapshot().local
+  assert.equal(slower.kind, "error")
+  if (slower.kind === "error") assert.match(slower.message, /^The update failed during checking: test:performance: this row is slower than the code its baseline measured, beside it on this Mac: merge\/merge large \(same\): \+60%/)
+
   // The disk guard refuses below what the copy, a packaged app and the margin
   // need, says both numbers, and runs before anything is copied.
   const disk = (free: number) => async () => ({ bavail: free, bsize: 1 })
@@ -202,7 +336,7 @@ try {
   const same = new LocalUpdates(gitRunner, receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() - 1000)))
   await same.load()
   assert.equal(same.snapshot().local.kind, "error", "A failure after the running build was built still applies")
-  console.log("Local build copies preserve workspace links and security configuration, isolate writes, exclude generated data, reject escaping links, prune earlier build directories, refuse a build the disk can't hold, report the real preparation error and ignore superseded install receipts")
+  console.log("Local build copies preserve workspace links and security configuration, isolate writes, exclude generated data, reject escaping links, prune earlier build directories, time performance alone after the other checks (a busy Mac leaves it ready to measure again, a slower row fails by name), refuse a build the disk can't hold, report the real preparation error and ignore superseded install receipts")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

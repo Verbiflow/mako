@@ -93,6 +93,17 @@ export class Updates {
     this.local.start()
   }
 
+  /** Measure a built update's performance again, after a Mac too busy to measure it. */
+  measureAgain(): void {
+    if (!this.local) throw new Error(UNAVAILABLE)
+    this.local.measureAgain()
+  }
+
+  /** While an install or restart is pending, a quiet Mac doesn't take the update back to measure it. */
+  holdMeasuring(held: boolean): void {
+    this.local?.hold(held)
+  }
+
   state(): UpdateState {
     return this.desktop.state() ?? { status: "unsupported", version: this.environment.version }
   }
