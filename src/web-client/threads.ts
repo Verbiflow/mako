@@ -1,7 +1,8 @@
 import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import type { WaitingFor } from "@mako/protocol/attention"
-import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
+import { CLOUD_FOLDER_WHERE, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
+import { byLastWorked, staleTarget, type OpenedBy, type SessionFacts } from "@mako/host/contracts/session-choice"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import type { AccountListState, WebDevice } from "./account-list"
 import type { Owner } from "./start"
@@ -17,6 +18,8 @@ export interface WebSession {
   /** When the cloud last heard from its device, while that device is quiet. */
   quietSince?: string
   waiting: readonly WaitingMessage[]
+  /** What every client knows of it, for the one rule that names, orders and picks a Thread's Sessions (`session-choice.ts`). */
+  facts: SessionFacts
 }
 
 /** How a Thread stands, its Sessions taken together: the one most for the person first. */
@@ -92,9 +95,25 @@ export function sessionOf(row: ListedSession, list: Pick<AccountListState, "devi
     summary: listedSummary(row, row.runsOn.kind === "cloud" ? CLOUD_FOLDER_WHERE : where, quietSince),
     where,
     waiting: list.waiting.get(row.session) ?? [],
+    facts: listedFacts(row, quietSince !== undefined),
   }
   if (quietSince) session.quietSince = quietSince
   return session
+}
+
+/** A listed row as the one rule reads a Session: a terminal's session by its harness's own last write, as Mako saw no message of it. */
+export function listedFacts(row: ListedSession, quiet: boolean): SessionFacts {
+  const facts: SessionFacts = { id: row.session, harness: row.harness, state: row.state, createdAt: Date.parse(row.createdAt) }
+  if (row.title) facts.title = row.title
+  const promptedAt = listedPromptedAt(row)
+  if (promptedAt !== undefined) facts.promptedAt = promptedAt
+  if (row.capture) facts.harnessWroteAt = Date.parse(row.activityAt)
+  if (quiet) facts.quiet = true
+  if (row.forkOf) {
+    facts.fork = true
+    facts.forkOf = row.forkOf
+  }
+  return facts
 }
 
 function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): WebThread {
@@ -175,6 +194,18 @@ export function openingSession(thread: WebThread): WebSession {
   if (waiting) return waiting
   const working = [...thread.sessions].reverse().find((session) => session.row.state === "working" && !session.quietSince)
   return working ?? thread.sessions[0]!
+}
+
+/** The Session to offer instead before a send to `session` asks first (`staleTarget`), if it does. */
+export function newerThan(thread: WebThread, session: WebSession, now: number, openedBy: OpenedBy): WebSession | undefined {
+  const newest = staleTarget(session.facts, thread.sessions.map((each) => each.facts), now, openedBy)
+  return newest && thread.sessions.find((each) => each.facts === newest)
+}
+
+/** A Thread's Sessions newest first, by when the person last worked in each (`byLastWorked`). */
+export function sessionsByLastWorked(thread: WebThread): WebSession[] {
+  const order = new Map(byLastWorked(thread.sessions.map((session) => session.facts)).map((facts, index) => [facts, index]))
+  return [...thread.sessions].sort((left, right) => order.get(left.facts)! - order.get(right.facts)!)
 }
 
 /** Who answers a Session's calls: its Mac, or its cloud Thread's machine. */

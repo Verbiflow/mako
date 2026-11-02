@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
+import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -20,6 +20,8 @@ import { acpStore } from "@/state/acp-state"
 import { shallowEqual } from "@/state/store"
 import { record, type AnsweredRecord } from "./answered"
 import { Composer, type EditingQueued, type Outgoing, type Steering } from "./composer"
+import { HeldSendContext } from "./held-send"
+import { WebHarnessIcon } from "./harness-icon"
 import { ThreadChips } from "./thread-chips"
 import { useSwitching } from "./switching"
 import { answeredWords, dockStatus, statusWords, workingWords, type DockStatus } from "./dock-status"
@@ -68,9 +70,23 @@ export interface DockProps {
   jump: () => void
   /** The link's way back after a drop: asks the gateway to reconnect now. */
   reconnect: () => void
+  /** A send here asks first, offering the Session the person worked in since. */
+  elsewhere?: SendElsewhere
+  /** Where the words go, in a Thread of more than one Session (`sendsToWords`): "To Cursor · Ship the session picker". */
+  sendsTo?: string
 }
 
-export function WebDock({ conversation, harness, target, draftKey, away, jump, reconnect }: DockProps) {
+/** Before a send to a Session asleep while a newer one of its Thread exists: what's said, and the way to the newer. */
+export interface SendElsewhere {
+  /** "Send to Cursor fork, idle 20 days?" */
+  title: string
+  /** "Newest: Claude Code, last message 4 minutes ago" */
+  newest: string
+  /** Opens the newer Session with these words in its field. */
+  switchTo: (text: string) => void
+}
+
+export function WebDock({ conversation, harness, target, draftKey, away, jump, reconnect, elsewhere, sendsTo }: DockProps) {
   const ask = useAsk()
   const running = useAcp((state) => {
     const live = activeLiveAcp(state)
@@ -82,6 +98,9 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
     typed.current = answer
   }, [])
   const unsent = useOutbox((state) => state.unsent.filter((each) => each.conversation === conversation), shallowArray)
+  // Said once: after "Send here", the next message goes too, before the list hears of the first.
+  const [sure, setSure] = useState(false)
+  const asksFirst = elsewhere && !sure ? elsewhere : undefined
   const send = async (text: string, attachments: PromptAttachment[], id: string): Promise<boolean> => {
     // A question waiting: the words are its answer, not a message.
     if (ask?.kind === "question" && attachments.length === 0 && typed.current?.(text)) return true
@@ -105,7 +124,9 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   // Read from its Mac's copy while that Mac is off: a message waits in the account for it, its words alone, so nothing
   // to attach and no choices to make here, as on the desk.
   const waits = useReadingCopy() !== null
-  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer ${harness}` : `Queue a message for ${harness}`) : `Message ${harness}`
+  // Where the line over the field names the Session, the placeholder doesn't say its harness again.
+  const whom = sendsTo ? "" : ` ${harness}`
+  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer${whom}` : `Queue a message${sendsTo ? "" : ` for ${harness}`}`) : `Message${whom}`
   return (
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : undefined}>
       <div aria-hidden className="web-dock-fade" />
@@ -149,7 +170,47 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         editing={editing.current}
         waiting={switching ? "Switching access…" : undefined}
         tools={harnessId && !waits ? <ThreadChips conversation={conversation} harness={harnessId} /> : undefined}
+        header={sendsTo && harnessId ? <SendsTo harness={harnessId} words={sendsTo} /> : undefined}
+        hold={asksFirst && ask?.kind !== "question" && !running ? <StaleSend words={asksFirst} onSure={() => setSure(true)} /> : undefined}
       />
+    </div>
+  )
+}
+
+/** Over the field, quietly, the Session the words go to: its harness's mark and "To Cursor · Ship the session picker". */
+function SendsTo({ harness, words }: { harness: string; words: string }) {
+  return (
+    <p className="web-sends-to" data-sends-to>
+      <WebHarnessIcon harness={harness} className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{words}</span>
+    </p>
+  )
+}
+
+/** The line above the composer when a send here asks first: one tap sends, one takes the words to the newer Session. */
+function StaleSend({ words, onSure }: { words: SendElsewhere; onSure: () => void }) {
+  const held = use(HeldSendContext)
+  return (
+    <div role="alert" className="web-stale-send" data-stale-send>
+      <p className="min-w-0 flex-1 basis-56 text-label">
+        <span className="font-medium text-foreground">{words.title}</span>
+        <span className="block truncate text-faint">{words.newest}</span>
+      </p>
+      <span className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          className="web-quiet-button"
+          onClick={() => {
+            onSure()
+            held?.go()
+          }}
+        >
+          Send here
+        </button>
+        <button type="button" className="web-button" onClick={() => held && words.switchTo(held.take())}>
+          Switch to the newest
+        </button>
+      </span>
     </div>
   )
 }

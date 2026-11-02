@@ -298,6 +298,9 @@ function threadGroups(): void {
   assert.equal(forked.thread, home.thread, "a fork asked into its parent's Thread joins it")
   assert.notEqual(forked.session, home.session, "as its own Session")
   assert.deepEqual(threads.group(home.thread)?.sessions.map((session) => [session.id, session.started]), [[home.session, true], [forked.session, true]])
+  // A fork's tab names the Session it was forked from, read alike one Thread at a time and all at once.
+  assert.deepEqual(threads.group(home.thread)?.sessions.map((session) => session.forkOf), [undefined, home.session])
+  assert.deepEqual(threads.groups(), [threads.group(home.thread)])
 
   const tab = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: threads.person() })
   assert.deepEqual(threads.group(home.thread)?.sessions.at(-1), { id: tab.session, origin: "new", started: false }, "an unsent tab's Session is empty")

@@ -17,6 +17,7 @@ import { useFailureNotice } from "@/components/viewer/failure-notice"
 import { useTransferNotice } from "@/components/viewer/transfer-notice"
 import { useLiveActionNotice } from "@/components/viewer/live-action-notice"
 import { useApprovalStatusNotice } from "@/components/viewer/approval-status-notice"
+import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
 import { registerNotice } from "@/extend/notices"
 
 /**
@@ -27,6 +28,7 @@ import { registerNotice } from "@/extend/notices"
 export function installComposerNotices(): Array<() => void> {
   return [
     registerNotice("element-pick", useElementPickNotice),
+    registerNotice("stale-send", useStaleSendNotice, -11),
     registerNotice("runtime-version", useRuntimeVersionNotice, -10),
     registerNotice("restore-version", useRestoreVersionNotice, -9),
     registerNotice("newer-ledger", useLedgerNotice, -8),

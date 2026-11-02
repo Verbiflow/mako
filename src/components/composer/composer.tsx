@@ -20,6 +20,7 @@ import type { ProposedPlan } from "@mako/sessions/content"
 import type { ContextInput } from "@/lib/context-detail"
 import { parsePlanContext } from "@/lib/proposed-plan"
 import { PlanContextChips } from "@/components/composer/plan-context"
+import { ComposerSendsTo } from "@/components/composer/sends-to"
 import { PlanDecisionBar } from "@/components/composer/plan-decision"
 import { hostConnectionStore, useHostConnection } from "@/state/host-connection"
 import { toast } from "sonner"
@@ -90,7 +91,8 @@ import { cn } from "@/lib/utils"
 import { acp, acpStore, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { noteComposing } from "@/state/prewarm"
 import { openSessionDraft, sessionDraftKey, threadGroupsStore, useThreadGroups } from "@/state/thread-groups"
-import { startInThread } from "@/state/thread-sessions"
+import { asksBeforeSend, forgetAsking, receiveCarried, switchToNewest } from "@/state/stale-send"
+import { currentOnScreen, startInThread } from "@/state/thread-sessions"
 import { useTabDrag } from "@/state/tab-drag"
 import { readGoalLine } from "@/state/goals"
 import { goalRoute, sendGoalLine } from "@/state/goal-commands"
@@ -619,6 +621,7 @@ export function Composer() {
         return
       }
       if (!(await settleViewedRoute(setConfirmingRoute))) return
+      if (!deliver && asksBeforeSend()) return
 
       const goalLine = deliver ? null : readGoalLine(text)
       if (goalLine) {
@@ -876,6 +879,18 @@ export function Composer() {
     window.addEventListener("mako:composer-send", send)
     return () => window.removeEventListener("mako:composer-send", send)
   }, [submit])
+  const carries = attachments.items.length === 0
+  useEffect(() => {
+    const go = () => switchToNewest(draftKey, carries)
+    window.addEventListener("mako:stale-send-switch", go)
+    return () => window.removeEventListener("mako:stale-send-switch", go)
+  }, [draftKey, carries])
+  // The field now holds another Session's words: a line asking about the last one goes, and words carried here land.
+  useEffect(() => {
+    const { session } = currentOnScreen()
+    forgetAsking(session)
+    receiveCarried(session, draftKey)
+  }, [draftKey])
 
   const pick = useCallback(
     (value: string, context?: ContextInput) => {
@@ -1222,6 +1237,7 @@ export function Composer() {
            * native caret, IME, undo, and spellcheck — a contenteditable would
            * trade all four for the same visual result.
            */}
+          <ComposerSendsTo />
           <PlanContextChips
             plans={draftPlans ?? []}
             onRemove={(plan) => removeDraftPlan(draftKey, plan)}

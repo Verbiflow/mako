@@ -442,7 +442,7 @@ export interface LiveSummary {
  * before, how many things its ended turn left running, which it waits on, and that another app has it open (link
  * version 14 on).
  */
-export type ListedRail = Pick<ReportedSession, "project" | "worktree" | "lineage" | "background" | "openElsewhere">
+export type ListedRail = Pick<ReportedSession, "project" | "worktree" | "lineage" | "background" | "openElsewhere" | "forkOf">
 
 /** Whether a quiet device's Thread may continue in the cloud now (no `refusal` when it may), and the continue the account carries of it. */
 export type ListedContinueChoice = { refusal?: ContinueRefusal; continued?: ListedContinue }

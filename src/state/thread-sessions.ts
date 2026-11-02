@@ -1,5 +1,7 @@
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
+import type { OpenedBy, SessionFacts, SessionState } from "@mako/host/contracts/session-choice"
+import { laterPrompt } from "@mako/host/contracts/worked-at"
 import type { PromptAttachment, ThreadRef } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { getMako } from "@/lib/bridge"
@@ -213,6 +215,64 @@ export function sessionTabTitle(tab: SessionTab): string {
   return tab.presence?.title ?? tab.ref?.title ?? (harness ? harnessLabel(harness) : "Untitled session")
 }
 
+const PRESENCE_STATE = {
+  starting: "working",
+  running: "working",
+  background: "working",
+  "needs-permission": "waiting",
+  failed: "failed",
+  ready: "idle",
+} satisfies Record<AcpPresence["status"], SessionState>
+
+/**
+ * What the shared rule (`session-choice.ts`) reads of a Session tab. When the person last worked in it is their last
+ * message (`promptedAt`, kept on a conversation the host closed too); a session Mako never ran, one its harness wrote
+ * elsewhere, by its harness's own last write. A Mako conversation's journal is rewritten by opening it, so its
+ * catalog row's `updatedAt` never says it was worked in.
+ */
+export function sessionTabFacts(tab: Extract<SessionTab, { kind: "session" }>, group: ThreadGroup | undefined, promptedAt: number | undefined): SessionFacts {
+  const { ref, presence } = tab
+  const member = group?.sessions.find((session) => session.id === tab.id)
+  const origin = member?.origin
+  const harness = presence?.harness ?? ref?.harness ?? ""
+  const facts: SessionFacts = {
+    id: tab.id,
+    harness,
+    state: presence ? PRESENCE_STATE[presence.status] : "idle",
+    createdAt: presence?.createdAt ?? rowStarted(ref ?? {}),
+  }
+  const title = presence?.title ?? ref?.title
+  if (title) facts.title = title
+  // The host lists a message a beat after this window's conversation took it.
+  const prompted = laterPrompt(presence?.promptedAt, promptedAt)
+  if (prompted !== undefined) facts.promptedAt = prompted
+  else if (!presence && origin !== "started" && origin !== "fork" && origin !== "new" && ref?.updatedAt) facts.harnessWroteAt = Date.parse(ref.updatedAt)
+  if (presence?.quietSince !== undefined) facts.quiet = true
+  const forkOf = member?.forkOf ?? presence?.forkOf
+  if (origin === "fork" || forkOf) facts.fork = true
+  if (forkOf) facts.forkOf = forkOf
+  return facts
+}
+
+/** When the person last sent a Session a message, from any conversation of it this window holds, closed ones too. */
+export function sessionPromptedAt(state: AcpState, session: string): number | undefined {
+  let latest: number | undefined
+  for (const conversation of Object.values(state.conversations))
+    if (conversation.sessionId === session && conversation.kind !== "starting" && conversation.promptedAt !== undefined)
+      latest = Math.max(latest ?? 0, conversation.promptedAt)
+  return latest
+}
+
+/** The time, read again each minute: a Session's age moves on while it shows. */
+export function useMinute(): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  return now
+}
+
 function showDraft(draft: SessionDraft): void {
   const harness = draft.harness ?? threadsStore.get().composerHarness
   acp.deactivate()
@@ -224,7 +284,25 @@ function showDraft(draft: SessionDraft): void {
   window.dispatchEvent(new CustomEvent("mako:focus-composer"))
 }
 
+/**
+ * The Session this window put on screen by itself, with nothing of the person's to go on (a folded rail row opened on
+ * its news or its first Session, an address naming none), until they pick one of its Thread's tabs. Only a send to it
+ * may ask first (`staleTarget`): a Session the person picked is where they mean their words to go.
+ */
+let openedByScreen: string | undefined
+
+/** How the Session on screen got there (`OpenedBy`). */
+export function openedBy(session: string): OpenedBy {
+  return session === openedByScreen ? "screen" : "person"
+}
+
+/** This window opened `session` by itself; undefined, the person picked what's on screen. */
+export function noteOpenedByScreen(session: string | undefined): void {
+  openedByScreen = session
+}
+
 export function openSessionTab(tab: SessionTab): void {
+  openedByScreen = undefined
   const here = currentOnScreen()
   if (tab.id === onScreenTab(here)) return
   if (tab.kind === "draft") {
@@ -312,8 +390,9 @@ export function threadHasTabs(): boolean {
 export function openFoldedThread(thread: string, members: readonly FoldRow[]): void {
   const last = threadGroupsStore.get().lastViewed[thread]
   const state = threadsStore.get()
+  const remembered = members.find((row) => foldRowSession(row) === last)
   const target =
-    members.find((row) => foldRowSession(row) === last) ??
+    remembered ??
     members.find((row) => {
       if (row.kind === "live") return row.presence.status === "failed" || row.presence.status === "needs-permission"
       const status = threadStatus(row.ref, state)
@@ -321,6 +400,7 @@ export function openFoldedThread(thread: string, members: readonly FoldRow[]): v
     }) ??
     members[0]
   if (!target) return
+  openedByScreen = remembered ? undefined : foldRowSession(target)
   if (target.kind === "native") void threads.view(target.ref)
   else openConversation(target.presence)
 }

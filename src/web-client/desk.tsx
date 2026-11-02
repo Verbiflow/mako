@@ -5,6 +5,7 @@ import { CommandPalette } from "@/components/palette/command-palette"
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
+import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
 import { SessionTabList } from "@/components/stage/session-tabs"
 import { Welcome } from "@/components/transcript/transcript"
 import { OceanScene } from "@/components/ui/ocean-scene"
@@ -16,11 +17,12 @@ import { MenuItem } from "@/components/ui/menu"
 import { ConfirmHost } from "@/components/ui/confirm-host"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { commands, formatChord, keysFor, matchesChord, registerCommands } from "@/extend/commands"
+import { registerNotice } from "@/extend/notices"
 import { cn } from "@/lib/utils"
 import { acp, acpStore, activeLiveAcp, useAcp } from "@/state/acp"
 import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { store } from "@/state/session"
-import { useThreadTabs } from "@/state/thread-sessions"
+import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
@@ -104,6 +106,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
     []
   )
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
+  // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
+  useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -414,6 +418,11 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
     }
   }, [addSessionRef, canAdd])
   const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
+  const shown = session?.row.session
+  // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
+  useEffect(() => {
+    if (sessionId === undefined && shown) noteOpenedByScreen(shown)
+  }, [sessionId, shown])
   if (!thread || !session) {
     const starting = startingWhere(threadId)
     return (

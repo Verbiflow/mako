@@ -81,7 +81,7 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
-import { busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
+import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -760,7 +760,7 @@ export function installMockBridge() {
       stop: null,
       external: false,
     }),
-    threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : []),
+    threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : scene === "busy" ? agedGroup() : []),
     threadPurposes: async () => [...purposes],
     threadTitles: async () => [...titles.values()],
     renameThread: async (_operationId: string, thread: string, title: string | null) => {

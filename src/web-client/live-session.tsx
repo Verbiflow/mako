@@ -9,12 +9,15 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { AgentsSheet } from "./agents"
 import { useWebClient } from "./client"
 import { sameSwitches, switchesOf, useAnswered } from "./answered"
-import { AnsweredLine, WebDock } from "./dock"
-import { threadDraftKey } from "./drafts"
+import { AnsweredLine, WebDock, type SendElsewhere } from "./dock"
+import { readDraft, threadDraftKey, writeDraft } from "./drafts"
 import { webHarnessLabel } from "./labels"
 import { DELIVERY_WORDS, deliveryOf } from "./delivery"
 import { resumeOutbox, retryUnconfirmed, useOutbox } from "./outbox"
-import type { WebSession } from "./threads"
+import { newerThan, type WebSession, type WebThread } from "./threads"
+import { useNow } from "./trouble-state"
+import type { OpenedBy } from "@mako/host/contracts/session-choice"
+import { sendsToWords, staleSendWords } from "@/lib/session-words"
 import { PhoneReply, ReplySheet } from "./reply"
 import { useReplyHold } from "./replies"
 import { useWide } from "./route"
@@ -30,7 +33,7 @@ const NO_RECORDS: never[] = []
  * pinned above the composer, a capsule saying what it's doing, the queue and the phone's composer. Either way each
  * message the person sent says under it how its delivery stands (`outbox.ts`).
  */
-export default function LiveSession({ session, desk = false }: { session: WebSession; desk?: boolean }) {
+export default function LiveSession({ session, desk = false, thread, openedBy = "person", onSession }: { session: WebSession; desk?: boolean; thread?: WebThread; openedBy?: OpenedBy; onSession?: (session: string) => void }) {
   const client = useWebClient()
   const conversation = session.row.conversation
   // Opened once per conversation: the row it was opened from changes as the list does, and its batches say more.
@@ -80,6 +83,8 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
     [records, switches, harnessId]
   )
   const harness = webHarnessLabel(session.row.harness)
+  // Said only where a Thread has more than one Session: with one, there's nowhere else it could go.
+  const sendsTo = (thread?.sessions.length ?? 0) > 1 ? sendsToWords(session.facts, harness) : undefined
   const cloudThread = session.owner.kind === "cloud" ? session.owner.threadId : undefined
   const target = useMemo(() => ({ conversation, ...(cloudThread && { cloudThread }) }), [conversation, cloudThread])
   // Under a finger: replies offer Copy and Branch; on a phone's width a run of steps is one line that opens them.
@@ -89,6 +94,7 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
   const hold = useReplyHold(live)
   const [agents, setAgents] = useState(false)
   const showAgents = useCallback(() => setAgents(true), [])
+  const elsewhere = useSendElsewhere(session, thread, openedBy, onSession)
   if (desk)
     return (
       <PromptNoteContext value={note}>
@@ -114,6 +120,8 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
               away={away}
               jump={() => jump.to?.()}
               reconnect={() => client.gateway.wake()}
+              elsewhere={elsewhere}
+              sendsTo={sendsTo}
             />
             <ReplySheet reply={hold.reply} onDismiss={hold.close} />
             <AgentsSheet conversation={conversation} open={agents} onDismiss={() => setAgents(false)} />
@@ -124,6 +132,28 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
       </ExchangeNoteContext>
     </PromptNoteContext>
   )
+}
+
+/**
+ * Whether a message here asks first (`newerThan`): the screen opened on this Session by itself, asleep a day while the
+ * person has worked in another of its Thread since. Switching takes the words to that one's draft, after any kept
+ * there, and opens it.
+ */
+function useSendElsewhere(session: WebSession, thread: WebThread | undefined, openedBy: OpenedBy, onSession: ((session: string) => void) | undefined): SendElsewhere | undefined {
+  const client = useWebClient()
+  const now = useNow(60_000)
+  const newest = thread && onSession ? newerThan(thread, session, now, openedBy) : undefined
+  return useMemo(() => {
+    if (!newest || !onSession) return undefined
+    const key = threadDraftKey(client.account.id, newest.row.conversation)
+    return {
+      ...staleSendWords(session.facts, newest.facts, webHarnessLabel, now),
+      switchTo: (text) => {
+        writeDraft(key, [readDraft(key)?.text ?? "", text].filter((each) => each.trim()).join("\n\n"))
+        onSession(newest.row.session)
+      },
+    }
+  }, [client, newest, onSession, session.facts, now])
 }
 
 /** Under each message the person sent, how its delivery stands, in a word; "Not confirmed" with Retry. */

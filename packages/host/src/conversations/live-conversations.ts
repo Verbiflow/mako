@@ -8,6 +8,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccountRemovalSession } from "../contracts/accounts.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
+import { ASLEEP_AFTER_MS } from "../contracts/session-choice.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
 import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
 import type { SideQuestionCommand } from "../contracts/live-side-questions.js"
@@ -645,6 +646,8 @@ export class LiveConversations {
     if (!text.trim() && !attachments.length)
       throw new Error("A prompt cannot be empty")
     if (resident.snapshot.session.status === "closed") this.reopenClosed(resident)
+    const rested = (request.createdAt ?? Date.now()) - (resident.snapshot.requests.at(-1)?.createdAt ?? Number.POSITIVE_INFINITY)
+    if (rested > ASLEEP_AFTER_MS) hostLog("residency", "a message reaches a session asleep a day or more", { conversation: id, request: requestId, restedMs: rested })
     // The user's own message supersedes any continuation Mako was about to send.
     this.autoContinue.decline(resident)
     if (marks.goal?.step !== "continue") this.goals.decline(resident)
