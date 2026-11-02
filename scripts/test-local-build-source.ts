@@ -240,8 +240,8 @@ if (mode === "slower") { process.stderr.write("Rows that failed against the base
   // Retry measures again without rebuilding; still busy, still unsure.
   timed.measureAgain()
   assert.deepEqual(seen.at(-1), "checking again")
-  assert.equal((await settled("Retry on a busy Mac")).kind, "ready")
-  assert.ok(timed.snapshot().local.kind === "ready" && timed.snapshot().local.performance)
+  const retried = await settled("Retry on a busy Mac")
+  assert.ok(retried.kind === "ready" && retried.performance, "still busy, still unsure")
   assert.equal(await runs(), 2)
   assert.ok(!(await readFile(order, "utf8")).split("\n").slice(4).some((line) => line.startsWith("application")), "measuring again rebuilds and rechecks nothing else")
 
