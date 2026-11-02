@@ -43,6 +43,14 @@ export const BriefSchema = z.object({
 })
 export type Brief = z.infer<typeof BriefSchema>
 
+/** How a spawn's caller hears back: at once and woken by reports (`background`), or holding for its result (`wait`). */
+export const StartModeSchema = z.enum(["background", "wait"])
+export type StartMode = z.infer<typeof StartModeSchema>
+
+/** Which reports wake the parent (`reportRoute`). */
+export const WakeOnSchema = z.enum(["decisions", "finish", "never"])
+export type WakeOn = z.infer<typeof WakeOnSchema>
+
 /**
  * What a spawn asked for, kept as asked. What the child runs as now (its
  * harness, model, access, folder and branch) is its Thread's and Session's,
@@ -58,8 +66,26 @@ export const ChildSpecSchema = z.object({
   /** A `Place`, kept as the text it was asked as: a start's options carry it through the host call's generated schema. */
   place: z.string().regex(PLACE_TEXT).optional(),
   workspace: z.object({ branch: z.string().min(1).max(256).optional(), base: z.string().min(1).max(256).optional() }).optional(),
+  /** Absent: `background`. */
+  mode: StartModeSchema.optional(),
+  /** Absent: `decisions`. */
+  wake: WakeOnSchema.optional(),
 })
 export type ChildSpec = z.infer<typeof ChildSpecSchema>
+
+/**
+ * Where a child's report goes (6.6): a notice that wakes its parent (`lead`),
+ * a question the person answers in the child's Thread (`person`), or nowhere
+ * but the child's strip and `agents_read` (`none`). Progress never wakes. A
+ * `wait` spawn's result always reaches its parent, settled-only: as the
+ * parent's next turn, never steered into the turn that's running.
+ */
+export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: ReportStatus): "lead" | "person" | "none" {
+  if (status === "progress") return "none"
+  const wake = asked.wake ?? "decisions"
+  if (status === "blocked" || status === "needs-input") return wake === "decisions" ? "lead" : "person"
+  return wake !== "never" || asked.mode === "wait" ? "lead" : "none"
+}
 
 /**
  * A run Mako didn't start (`discovered`, `linked`): its harness's own process,
@@ -216,7 +242,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
   if (thread.working) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
-    return { kind: "blocked", question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.", on: "lead" }
+    return { kind: "blocked", question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.", on: reportRoute(edge.asked, latest.status) === "lead" ? "lead" : "person" }
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
   if (latest?.status === "done") return { kind: "ended", outcome: "done" }

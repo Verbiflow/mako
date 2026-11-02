@@ -42,6 +42,8 @@ export interface WorldOptions {
   autoContinueDelayMs?: number
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
   launching?: (conversation: string) => Promise<void> | void
+  /** Every steer is refused, as a harness whose turn moved on refuses one. */
+  refuseSteers?: true
 }
 
 /**
@@ -56,7 +58,7 @@ export class AgentsWorld {
   readonly options: WorldOptions
   /** Every prompt a driver was sent, in order: a turn lost or run twice shows here. */
   readonly prompts: { conversation: string; harness: string; text: string; at: number }[] = []
-  readonly steers: { conversation: string; text: string }[] = []
+  readonly steers: { conversation: string; text: string; at: number }[] = []
   readonly events: HostEvent[] = []
   store!: ThreadStore
   live!: LiveConversations
@@ -194,7 +196,8 @@ export class AgentsWorld {
           lands: "step" as const,
           via: "Scripted model",
           steer: async (id: string, input: { text: string }) => {
-            this.steers.push({ conversation: id, text: input.text })
+            if (this.options.refuseSteers) return { kind: "not-accepted" as const, reason: "The turn moved on" }
+            this.steers.push({ conversation: id, text: input.text, at: Date.now() })
             return { kind: "accepted" as const }
           },
         },
@@ -206,7 +209,7 @@ export class AgentsWorld {
         dispatch.report({ kind: "submitted", source: "transport-call" })
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
         const session = this.live.snapshot(id)?.session ?? state(id)
-        this.live.observe({ type: "live-session", session: { ...session, status: "running" } })
+        this.live.observe({ type: "live-session", session: { ...session, status: "running", nativeRunId: `run-${this.prompts.length}` } })
         const turn = (async () => {
           const reply = await this.options.script({ world: this, conversation: id, harness, text, caller: this.caller(id) })
           this.live.observe({ type: "live-update", id, update: { kind: "text", text: reply } })
