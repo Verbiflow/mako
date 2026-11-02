@@ -49,6 +49,7 @@ import type {
   SdkRunResult,
 } from "./wire.js"
 import { cursorSdkExitReason } from "./wire.js"
+import type { CursorCheckpointCollector } from "./checkpoint-collector.js"
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill"> & Partial<Pick<CursorSdkClient, "adopt">>
 const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
@@ -113,6 +114,8 @@ export interface CursorSdkDriverDependencies {
   streams?: string
   /** Where `kill -USR2 <pid>` writes a conversation child's heap snapshot; without it the signal is not armed. */
   heapSnapshots?: string
+  /** Holds an agent's store while its child has it open, so no checkpoint sweep compacts it then. */
+  checkpoints?: Pick<CursorCheckpointCollector, "hold">
 }
 
 interface Live {
@@ -510,10 +513,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return source
   }
 
-  const checkpoint = async (path: string): Promise<string | undefined> => {
+  const checkpoint = async (path: string, previous?: string): Promise<string | undefined> => {
     const origin = cursorStoreOrigin(path, { stateRoot: dependencies.stateRoot(), home: dependencies.home })
     if (!origin) return undefined
-    if (origin.origin === "sdk") return cursorSdkCheckpoint(dependencies.stores, dependencies.stateRoot(), origin.directoryName)
+    if (origin.origin === "sdk") return cursorSdkCheckpoint(dependencies.stores, dependencies.stateRoot(), origin.directoryName, previous)
     return cursorLegacyCheckpoint(dependencies.stores, path, origin.sessionId)
   }
 
@@ -530,7 +533,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       return { kind: "unavailable", reason: "The saved binding does not point at a Cursor session store." }
     const sourcePath = binding.path
     if (origin.origin === "sdk") return inspectNativeSource(binding, cursorProcessProbe, async () => {
-      const current = await checkpoint(sourcePath)
+      const current = await checkpoint(sourcePath, binding.checkpoint)
       return current === undefined
         ? { kind: "unavailable", reason: "The Cursor session store is missing or unreadable." }
         : { kind: "available", checkpoint: current }
@@ -807,6 +810,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         await identityObservation
         if (live.closed) throw new Error("Cursor disconnected during identity verification")
         const fork = options.fork
+        const release = await dependencies.checkpoints?.hold(fork ? [agentId, fork.nativeId] : [agentId])
+        if (release) void live.client.exited.then(release, release)
         if (options.resume || fork) live.stream?.opening()
         const opened = await trace.step(options.resume ? "session-resume" : fork ? "session-fork" : "session-open", () => live.client.request("open", {
           cwd,

@@ -12,7 +12,8 @@ import { readLegacyStoreSnapshot } from "./legacy-store.js"
  *
  * Every writer of this store format — `cursor-agent acp`, `cursor-agent -p`,
  * the SDK — moves a root blob with each turn, and the digest is that root
- * plus the blob count, never a hash of the file: the store is SQLite in WAL
+ * plus the blob count (an SDK agent's is its root alone,
+ * `cursorSdkCheckpoint`), never a hash of the file: the store is SQLite in WAL
  * mode, so new turns sit in `store.db-wal` while `store.db` is unchanged,
  * and hashing a 45 MB file per turn is a cost with no information in it.
  */
@@ -39,27 +40,45 @@ export function cursorLegacyCheckpoint(stores: NativeStores, path: string, id: s
   }
 }
 
+/** An SDK agent's head as its agent and root alone. */
+const SDK_HEAD = "sdk-head:"
+const RowidSchema = z.object({ rowid: z.number().nullable() })
+
 /**
- * The same digest for an SDK agent, named by its `agent-<hash>` directory.
- * The SDK writes the store in the same format but leaves the meta row's
- * `latestRootBlobId` empty: the head it moves with each turn is
- * `latest_checkpoint_ref_json` in the state root's `index.db`, so the root
- * comes from there and only the blob count from the store. The directory
- * rather than the meta row names the agent because an imported store keeps
- * the `cursor-agent` session's meta, and the SDK agent may sit under another id.
- * An agent whose first turn never ended has no root yet; that is its head,
- * not a missing store.
+ * The head of an SDK agent, named by its `agent-<hash>` directory. The SDK
+ * writes the store in the same format but leaves the meta row's
+ * `latestRootBlobId` empty: the head it moves with each step is
+ * `latest_checkpoint_ref_json` in the state root's `index.db`, and that root
+ * is all a resume continues from. The store's blob count is no part of it:
+ * Mako collects the roots the SDK leaves behind (`cursor-sdk-collect`), and
+ * a count would read every collected agent as continued elsewhere. The
+ * directory rather than the meta row names the agent because an imported
+ * store keeps the `cursor-agent` session's meta, and the SDK agent may sit
+ * under another id. An agent whose first turn never ended has no root yet;
+ * that is its head, not a missing store.
+ *
+ * A binding saved before this form (`previous` without `SDK_HEAD`) hashed
+ * the blob count with the root, and is compared in that form: collecting
+ * only lowers the count, and never below what the store holds now nor above
+ * its newest rowid, so a binding whose root hasn't moved still reads as it did.
  */
-export function cursorSdkCheckpoint(stores: NativeStores, stateRoot: string, directoryName: string): string | undefined {
+export function cursorSdkCheckpoint(stores: NativeStores, stateRoot: string, directoryName: string, previous?: string): string | undefined {
   const index = cursorSdkIndexPath(stateRoot)
   const agentId = cursorSdkAgentIdForDirectory(stores, index, directoryName)
   if (!agentId) return undefined
   const record = readCursorSdkAgent(stores, index, agentId)
   if (!record) return undefined
+  const root = record.rootId ?? null
   let db: DatabaseSync | undefined
   try {
     db = stores.open(join(stateRoot, "agents", directoryName, "store.db"))
-    return digest([agentId, record.rootId ?? null, blobCount(db)])
+    const count = blobCount(db)
+    if (previous === undefined || previous.startsWith(SDK_HEAD)) return `${SDK_HEAD}${digest([agentId, root])}`
+    if (count === null) return digest([agentId, root, count])
+    const newest = RowidSchema.parse(db.prepare("SELECT max(rowid) AS rowid FROM blobs").get()).rowid ?? count
+    for (let counted = count; counted <= newest; counted += 1)
+      if (digest([agentId, root, counted]) === previous) return previous
+    return digest([agentId, root, count])
   } catch {
     return undefined
   } finally {

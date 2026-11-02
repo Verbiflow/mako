@@ -9,7 +9,7 @@ import type { NativeRunner } from "./native-runner.js"
 import type { ProviderProcessProbe } from "../threads/index.js"
 import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderUpdateSource } from "./update-source.js"
-import type { ProviderUsageHistory } from "../usage/index.js"
+import type { HarnessStorage, ProviderUsageHistory } from "../usage/index.js"
 import { ProviderRegistry } from "./registry.js"
 import { DiscoveryProcesses } from "./discovery-process.js"
 import { LiveDrivers } from "./live-drivers.js"
@@ -49,6 +49,8 @@ export interface ProviderHost {
   updateSources: ProviderRegistry<ProviderUpdateSource>
   /** Each harness's own spend records, read for Settings › Usage. */
   usageHistories: ProviderRegistry<ProviderUsageHistory>
+  /** Each harness's collector of what it leaves under Mako's user root, run and shown by Settings › Storage. */
+  storage: ProviderRegistry<HarnessStorage>
   /** The CLIs run to discover settings, accounts and versions, bounded together. */
   discovery: DiscoveryProcesses
   /** The installed version each launch would start, bound to the runtime readings once the harnesses open. */
@@ -114,6 +116,7 @@ export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<Harn
     connections: new ProviderRegistry(),
     updateSources,
     usageHistories: new ProviderRegistry(),
+    storage: new ProviderRegistry(),
     accountCapabilities,
     accounts,
     discovery: new DiscoveryProcesses(),

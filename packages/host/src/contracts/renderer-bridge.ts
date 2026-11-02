@@ -78,6 +78,7 @@ import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
 import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadContextOptions, ThreadFileContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
+import type { StorageReport } from "./storage.js"
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
 import type { Capabilities, IntegrationCatalogSnapshot, MakoComputerPermissions, McpRegistrySnapshot, McpSyncPreview, McpSyncTarget, SkillReference, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./mcp-skills-integrations.js"
 import type { ContinuationPlan, ContinuationResolution } from "./thread-continuation.js"
@@ -187,6 +188,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
     worktreeInventory: () => invokeTrustedHost<WorktreeInventory>("mako:worktree-inventory"),
+    storage: (measure: boolean) => invokeTrustedHost<StorageReport>("mako:storage", measure),
+    freeStorage: () => invokeTrustedHost<StorageReport>("mako:storage-free"),
     worktreeReview: (path: string) => invokeTrustedHost<WorktreeReview>("mako:worktree-review", path),
     worktreeReviewDiffs: (path: string) => invokeTrustedHost<{ diffs: GitDiff[]; truncated: number }>("mako:worktree-review-diffs", path),
     mergeWorktree: (path: string) => invokeTrustedHost<{ branch: string; into: string }>("mako:worktree-merge", path),

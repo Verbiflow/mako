@@ -3045,6 +3045,31 @@ only the blob count from the store; read as an ACP store it judged every
 agent "unreadable" after a host restart. Removing an SDK thread also deletes
 the agent's index rows.
 
+The SDK saves a new root after every step and never deletes the one it
+replaced, so an agent's store grows by its whole hash list each step (on
+2026-11-01 one long-used Mac kept 30.85 GB of them, one agent 9.45 GB of
+roots in a 10.63 GB store). Mako collects them
+(`packages/sessions/src/providers/cursor-sdk-collect.ts`): it keeps every
+root a run, the meta row or a kept blob names, and every root the
+compaction search settles on, deletes the other roots of an agent idle for
+half an hour (five minutes when the person asks) in short checked
+transactions, and VACUUMs once enough went.
+The host runs it in a worker per agent (`harnesses/cursor/sdk/checkpoint-collector.ts`),
+every six hours, on a disk under 10 GB free and from Settings › Storage, and
+stops a sweep of an agent the driver or the native runner is about to open
+(`hold`). A VACUUM holds the store for seconds, so `patch-cursor-sdk.mjs`
+raises the SDK's busy wait to a minute. `packages/sessions/test/cursor-sdk-collect.mjs`
+covers crashes between batches, a write mid-sweep and that every agent reads
+the same after; `scripts/prove-cursor-checkpoints.ts --root <copy>` collects a
+copy of a real store and diffs every agent's read.
+
+Settings › Storage (`usage/storage.ts`, `mako:storage`, `mako:storage-free`)
+measures each folder in the user and data roots with `du` off the event
+loop, lists each harness's `HarnessStorage` (`host.storage`), frees what they
+collect on request, and warns once through a `notice` when the disk drops
+under 10 GB free. `scripts/test-storage.ts` covers it and
+`scripts/storage-ui-screenshots.mjs` draws it from the mock bridge.
+
 A `cursor-agent` store goes on in place through the SDK (`import.ts`).
 Verified 2026-09-13 (SDK 1.0.31): `acp`, `-p` and the SDK write the same blob
 store — content-addressed encrypted blobs whose `meta` row names the agent,

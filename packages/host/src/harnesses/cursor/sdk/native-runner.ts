@@ -5,6 +5,7 @@ import { cursorLegacyIdentity, cursorSdkReportedSettings, cursorSdkSelection, cu
 import type { SessionModel } from "@mako/sessions/settings"
 import { headlessNodeExecutable } from "../../../base/headless-node.js"
 import type { NativeCommand, NativeLaunch, NativeRunner, NativeRunOptions } from "../../native-runner.js"
+import type { CursorCheckpointCollector } from "./checkpoint-collector.js"
 import { cursorSdkChildEntry } from "./client.js"
 import { CURSOR_SDK_HEADLESS, SdkHeadlessSpecSchema, type SdkHeadlessSpec, type SdkImportSource } from "./wire.js"
 
@@ -17,6 +18,8 @@ export interface CursorNativeRunnerDependencies {
   /** The account's models and default, from the cache the live driver and profile share. */
   models(env: NodeJS.ProcessEnv): Promise<{ models: readonly SessionModel[]; defaultModel?: string }>
   home?: string
+  /** Stops a checkpoint sweep of the agent a run resumes; a sweep that reaches it later finds the run in the SDK's index and leaves it. */
+  checkpoints?: Pick<CursorCheckpointCollector, "hold">
 }
 
 /**
@@ -66,7 +69,11 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
     async prepare(options, env) {
       return { options, dropped: (await selection(options, env)).dropped }
     },
-    resume: (id, prompt, options, env) => command({ agentId: id, create: false, prompt, importFrom: importFrom(id, options?.nativePath) }, options, env),
+    async resume(id, prompt, options, env) {
+      const release = await dependencies.checkpoints?.hold([id])
+      release?.()
+      return command({ agentId: id, create: false, prompt, importFrom: importFrom(id, options?.nativePath) }, options, env)
+    },
     fresh: (prompt, options, env) => command({ agentId: randomUUID(), create: true, prompt }, options, env),
     /** `fresh`'s run under the agent ID Mako picks, which is its Session's. */
     async background(prompt, options, env) {
