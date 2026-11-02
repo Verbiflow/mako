@@ -90,7 +90,8 @@ import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSna
 import type { CrashReport } from "./crash-report.js"
 import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./transcript-document.js"
 import type { ProviderResidencySnapshot } from "./provider-residency.js"
-import type { AgentRefused, AgentsDiagnostics, AgentsDirected, AgentsDirectInput, AgentsRedirected, AgentsRedirectInput } from "./agents.js"
+import type { AgentsAnswered } from "./agent-tools.js"
+import type { AgentRefused, AgentsDiagnostics, AgentsDirected, AgentsDirectInput, AgentsRedirected, AgentsRedirectInput, AgentsRespondInput } from "./agents.js"
 import type { NativeRoutingReading } from "./native-routing.js"
 import type { SessionReaderHistory } from "./session-reader.js"
 import type { AccountHarness, AccountLogin, AccountLoginResult, AccountProvider, AccountRemovalOutcome, AccountRemovalPlan, AccountUsage, AccountCatalog, ResetCreditOutcome } from "./accounts.js"
@@ -940,6 +941,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Sends the person's message from an Apex's conversation straight to one of its Fins, with no Apex turn. */
     agentsDirect: (conversation: string, input: AgentsDirectInput) =>
       invokeTrustedHost<AgentsDirected | AgentRefused>("mako:agents-direct", conversation, input),
+    agentsRespond: (conversation: string, input: AgentsRespondInput) =>
+      invokeTrustedHost<AgentsAnswered | AgentRefused>("mako:agents-respond", conversation, input),
     /** Where each harness stands on an Apex's native spawns: its control, unverified on this version, or words alone. */
     nativeRouting: () =>
       invokeTrustedHost<NativeRoutingReading[]>("mako:native-routing"),

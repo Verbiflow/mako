@@ -14,7 +14,7 @@ import { AccountEventSchema } from "../dist/account-events.js"
 import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
-import { CONTINUE_VERSION, FORKS_VERSION } from "../dist/version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FORKS_VERSION } from "../dist/version.js"
 import { ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
 import { ArchivedThreadSchema, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
@@ -111,7 +111,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 17)
+    assert.equal(SUPPORTED_VERSIONS.max, 18)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -2162,6 +2162,14 @@ describe("what tells the person a Session needs them, the same on every surface"
     assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("idle"))?.kind, "finished", "an approval refused that ends the turn")
     assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("waiting", { waitingFor: "approval", waitingOn: "Approve: b" }))?.kind, "approval", "a second approval in one turn is a new fact")
     assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("waiting", { waitingFor: "approval", waitingOn: "Approve: a", activityAt: "2026-10-28T18:01:00.000Z" })), undefined, "the same ask moving on the clock is no new fact")
+    const fin = (under, fields = {}) => row("waiting", { waitingFor: "question", waitingOn: "release: Which branch?", asking: { under }, ...fields })
+    assert.equal(attentionFact(row("idle"), fin("idle"))?.kind, "question", "a Fin's ask its Apex's row waits on is the person's")
+    assert.equal(attentionFact(fin("idle"), row("idle")), undefined, "answered, the Apex's row is back at rest, and no turn of its finished")
+    assert.equal(attentionFact(fin("working"), row("working")), undefined)
+    assert.equal(attentionFact(fin("working"), row("idle"))?.kind, "finished", "the Apex's own turn ended under the ask")
+    assert.equal(attentionFact(fin("failed"), row("failed")), undefined, "a failure said once")
+    assert.equal(attentionFact(fin("idle"), fin("idle", { waitingOn: "docs: Which tone?" }))?.kind, "question", "the next Fin's ask is a new fact")
+    assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), fin("idle"))?.kind, "question", "its own approval answered, a Fin's ask behind it")
     assert.equal(attentionFact(undefined, row("idle")), undefined, "a Session first heard at rest says nothing")
     assert.equal(attentionFact(row("idle"), row("idle")), undefined)
     assert.equal(attentionFact(row("failed"), row("failed")), undefined)
@@ -2265,7 +2273,6 @@ describe("a Session continued in the cloud while its device is off", () => {
 
   test("a fork says the Session it came from from link 17; an older link goes without and keeps the rest", () => {
     assert.equal(FORKS_VERSION, 17)
-    assert.equal(LINK_VERSION, FORKS_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     const fork = { ...reported, forkOf: "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f" }
     assert.deepEqual(ReportedSessionSchema.parse(fork), fork)
@@ -2275,6 +2282,26 @@ describe("a Session continued in the cloud while its device is off", () => {
     assert.deepEqual(older.repository, reported.repository, "and keeps what 16 knows")
     assert.throws(() => ReportedSessionSchema.parse({ ...reported, forkOf: "not-a-session" }))
     assert.ok(!sameListed({ ...row, forkOf: fork.forkOf }, row), "a row that becomes known as a fork is a change every list shows")
+  })
+
+  test("an Apex's row waits on its Fin's ask from link 18; an older link hears where the Apex stands under it", () => {
+    assert.equal(ASKING_VERSION, 18)
+    assert.equal(LINK_VERSION, ASKING_VERSION)
+    const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
+    const asking = {
+      ...reported, state: "waiting", waitingFor: "question", waitingOn: "release: Which branch?",
+      asking: { fin: "2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091", name: "release", ask: "report:2b3c4d5e:q", options: ["main", "release-6"], recommended: 1, under: "idle" },
+    }
+    assert.deepEqual(ReportedSessionSchema.parse(asking), asking)
+    assert.deepEqual(rowsForLink([asking], ASKING_VERSION), [asking])
+    const older = rowsForLink([asking], ASKING_VERSION - 1)[0]
+    assert.deepEqual([older.state, older.waitingOn, older.waitingFor, older.asking], ["idle", undefined, undefined, undefined], "a gateway before 18 refuses it, and hears the row as it stands under the ask")
+    assert.deepEqual(older.forkOf, reported.forkOf, "and keeps what 17 knows")
+    assert.equal(rowsForLink([{ ...asking, asking: { ...asking.asking, under: "working" } }], CONTINUE_VERSION)[0].state, "working")
+    assert.throws(() => ReportedSessionSchema.parse({ ...asking, asking: { ...asking.asking, options: Array.from({ length: 7 }, (_, index) => `option ${index}`) } }), "a row carries six options at most")
+    assert.throws(() => ReportedSessionSchema.parse({ ...asking, asking: { ...asking.asking, under: "waiting" } }), "under an ask, the Apex works, rests or failed")
+    assert.ok(!sameListed({ ...row, ...asking }, { ...row, ...asking, asking: { ...asking.asking, ask: "report:2b3c4d5e:r" } }), "a new ask is news")
+    assert.ok(sameListed({ ...row, ...asking }, { ...row, ...asking, asking: { ...asking.asking } }))
   })
 
   test("the offer: only a quiet device's Thread, every row of it ready, in its own pushed worktree, from a Mako that takes it back", () => {

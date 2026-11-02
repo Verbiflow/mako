@@ -421,8 +421,11 @@ export interface AgentsDiagnostics {
    * the person's moved to another Fin, and the person's sent straight to a Fin with no Apex turn.
    */
   routes: { forwarded: number; sent: number; redirected: number; direct: number }
-  /** Fins' asks answered since this host started: by their Apex, left by it to the person, and refused to an Apex whose access doesn't cover them. */
-  answers: { apex: number; passed: number; refused: number }
+  /**
+   * Fins' asks answered since this host started: by their Apex, left by it to the person, refused to an Apex whose
+   * access doesn't cover them, and answered by the person from the Apex's Thread on any device.
+   */
+  answers: { apex: number; passed: number; refused: number; person: number }
 }
 
 /** How a message reached a Fin: as its next turn, a step of its running one, or queued behind it. */
@@ -465,6 +468,24 @@ export interface AgentsDirected {
   to: string
   fin: string
   delivery: FinDelivery
+}
+
+/**
+ * The person answering what one of an Apex's Fins asks them, from the Apex's
+ * Thread on any device (`mako:agents-respond`): one of its options by its
+ * place, or their own words, or for an approval, allow or refuse. It names the
+ * ask it answers, so an answer given after the ask moved on answers nothing,
+ * and it's settled by `request`: a repeat answers once.
+ */
+export interface AgentsRespondInput {
+  /** The Fin, by Thread ID: one anywhere under the Apex. */
+  fin: string
+  /** The ask (`FinAsk.id`). */
+  ask: string
+  option?: number
+  answer?: string
+  allow?: boolean
+  request: string
 }
 
 /** Who calls an orchestration operation: the door stamps it, and through the socket it's a label, not a grant. */

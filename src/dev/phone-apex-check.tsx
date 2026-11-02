@@ -2,7 +2,8 @@
 import { createRoot } from "react-dom/client"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
+import { getMako } from "@/lib/bridge"
 import { acp } from "@/state/acp"
 import { threadsStore } from "@/state/thread-store"
 import type { ListedSession } from "@mako/protocol/thread-listing"
@@ -27,6 +28,10 @@ applyTheme(search.get("theme") === "light" ? "light" : "dark")
 installMockBridge()
 threadsStore.set({ descriptors: fixtureHarnesses })
 for (const snapshot of apexSnapshots()) applyLiveSnapshot(snapshot)
+// The Apex's host moving its Fins on (an answer, a stop), as the gateway brings its batches to the phone.
+getMako().onEvent((event) => {
+  if (event.type === "live-batch") applyLiveBatch(event.batch)
+})
 
 const DEVICE = "00000000-0000-4000-8000-0000000000d1"
 const now = new Date().toISOString()

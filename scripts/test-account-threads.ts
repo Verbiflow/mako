@@ -1,3 +1,4 @@
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { Waiting } from "@mako/protocol/attention"
 import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -12,7 +13,7 @@ import { AccountSessions } from "@mako/protocol/account-sessions"
 import { MovesUnderWay } from "@mako/host/conversations/moves-under-way"
 import { SENT_EVERY_MS, SentProgress } from "@mako/host/conversations/cloud-moves"
 import type { MoveSent } from "@mako/host/contracts/cloud-threads"
-import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
+import { ACTIVITY_REPORT_MS, conversationShown, finAsking, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
@@ -367,6 +368,19 @@ test("a row says what its owner's rail shows of it: the project it's filed under
   heads.set("/Users/ana/api/src", { kind: "branch", name: "main" })
   assert.deepEqual(ownedSessions(sources).find((each) => each.conversation === "c-1")?.project?.head, { kind: "branch", name: "main" }, "once the project's checkout is read, its rows say it")
   assert.equal(conversationShown({ session: { id: "c-3", status: "running" }, working: "running", waitingOn: () => undefined, background: 3 }).background, undefined, "a turn at work is at work, whatever else runs")
+})
+
+test("an Apex's row waits on its Fin's ask that's the person's, saying what it stood at under it, and its own ask goes first", () => {
+  const fin = ThreadIdSchema.parse("00000000-0000-4000-8000-00000000f1f1")
+  const asks = finAsking({ fin, name: "push-wording", line: "Which tone? Plain or friendly?", ask: { kind: "report", id: "report:1", options: [{ label: "Plain" }, { label: "x".repeat(120) }, ...Array.from({ length: 6 }, (_, index) => ({ label: `more ${index}` }))], recommended: 7 }, more: 2 })
+  assert.deepEqual(asks?.asking, { fin, name: "push-wording", ask: "report:1", options: ["Plain", `${"x".repeat(79)}…`, "more 0", "more 1", "more 2", "more 3"], more: 2 }, "six options at most, each clipped, and a recommendation past them dropped")
+  const working = conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, background: 2, asking: () => asks })
+  assert.deepEqual({ state: working.state, waitingOn: working.waitingOn, waitingFor: working.waitingFor, under: working.asking?.under, background: working.background }, { state: "waiting", waitingOn: "push-wording: Which tone? Plain or friendly?", waitingFor: "question", under: "working", background: undefined })
+  assert.equal(conversationShown({ session: { id: "apex", status: "ready" }, working: undefined, waitingOn: () => undefined, asking: () => asks }).asking?.under, "idle", "an Apex at rest under it rests")
+  const own = conversationShown({ session: { id: "apex", status: "running" }, working: "waiting", waitingOn: () => ({ for: "approval", line: "Approve: git push" }), asking: () => asks })
+  assert.deepEqual({ state: own.state, waitingOn: own.waitingOn, asking: own.asking }, { state: "waiting", waitingOn: "Approve: git push", asking: undefined }, "its own ask first")
+  const approval = finAsking({ fin, name: "sheet-motion", line: "Approve: npm ci", ask: { kind: "approval", id: "a-1" }, more: 0 })
+  assert.deepEqual(approval, { waiting: { for: "approval", line: "sheet-motion: Approve: npm ci" }, asking: { fin, name: "sheet-motion", ask: "a-1" } })
 })
 
 test("a Thread moving to the cloud says so on every row of it from the move's first step, each step once, and not after it ends", () => {

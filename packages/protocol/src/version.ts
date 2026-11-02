@@ -30,10 +30,11 @@ export const PROTOCOL_VERSION = 1
  * messages from the gateway, and the runtime's `media-ack` for what it took of them. 16 lets a `sessions` row say its
  * folder's origin on GitHub and the branch it pushes to (`repository`), which a Session continued in the cloud while
  * its owner is off clones (`continues.ts`), and says a runtime that agreed it takes such a continue back as a move when
- * it returns. 17 lets a `sessions` row say the Session it was forked from (`forkOf`). Every envelope stays at
- * `PROTOCOL_VERSION` on every link version.
+ * it returns. 17 lets a `sessions` row say the Session it was forked from (`forkOf`). 18 lets a `sessions` row say
+ * what one of its Session's Fins asks the person (`asking`), which the row waits on, and where the Session stands
+ * under it. Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 17
+export const LINK_VERSION = 18
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -100,6 +101,12 @@ export const CONTINUE_VERSION = 16
 
 /** The first link version whose `sessions` rows may say the Session they were forked from (`forkOf`); a gateway that agreed less refuses it. */
 export const FORKS_VERSION = 17
+
+/**
+ * The first link version whose `sessions` rows may say what a Session's Fin asks the person (`asking`): a link that
+ * agreed less hears the row as it stands under the ask, and none of it.
+ */
+export const ASKING_VERSION = 18
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

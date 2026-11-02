@@ -15,6 +15,7 @@ import { threadTitlesStore } from "@/state/thread-titles"
 import type { AttentionByPath, ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
 import { backgroundWork } from "@mako/host/contracts/background-work"
+import { finAskLine } from "@/state/fin-asks"
 
 export type ThreadStatus =
   | { kind: "idle" }
@@ -93,6 +94,9 @@ export function threadStatus(
   if (owned?.kind === "live" && owned.session.connection === "connected") {
     if (owned.permission)
       return { kind: "needs-permission", since: owned.updatedAt, detail: owned.permission.title }
+    // A Fin asking the person: its Apex's Thread needs them, as an ask of its own would, while the Apex works on.
+    const finAsk = finAskLine(owned)
+    if (finAsk) return { kind: "needs-permission", since: owned.updatedAt, detail: finAsk }
     if (owned.session.status === "running" || owned.session.status === "starting")
       return state.working[owned.threadPath ?? ref.path] ?? { kind: "working", since: owned.createdAt }
     // A failure is an outcome you acknowledge by opening the thread, exactly

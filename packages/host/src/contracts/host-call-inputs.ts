@@ -149,6 +149,18 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:agents-respond": () =>
+    z.tuple([
+      z.string(),
+      z.object({
+        fin: z.string(),
+        ask: z.string(),
+        option: z.number().optional(),
+        answer: z.string().optional(),
+        allow: z.boolean().optional(),
+        request: z.string(),
+      }),
+    ]),
   "mako:agents-send": () =>
     z.tuple([
       z.union([
@@ -1981,7 +1993,7 @@ const inputs = {
   "mako:workspace-move-answer": () =>
     z.tuple([
       z.string(),
-      z.union([z.literal("deny"), z.literal("allow"), z.literal("always")]),
+      z.union([z.literal("allow"), z.literal("deny"), z.literal("always")]),
     ]),
   "mako:workspace-move-bring": () => z.tuple([z.string(), z.boolean()]),
   "mako:workspace-move-bring-stayed": () => z.tuple([z.string()]),
@@ -2065,6 +2077,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:agents-read", "conversations"],
   ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],
+  ["mako:agents-respond", "conversations"],
   ["mako:agents-send", "conversations"],
   ["mako:agents-start", "conversations"],
   ["mako:agents-stop", "conversations"],

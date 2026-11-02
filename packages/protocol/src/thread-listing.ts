@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
-import { CONTINUE_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -69,6 +69,31 @@ export const ListedProjectSchema = z
   })
   .strict()
 export type ListedProject = z.infer<typeof ListedProjectSchema>
+
+/** The most options an asking row carries, each a tap on the person's phone; the rest are answered in the Thread. */
+export const LISTED_ASK_OPTIONS = 6
+
+/**
+ * What one of a Session's Fins asks the person, which its row waits on (link version 18 on): an Apex's Fins have no rows
+ * of their own, so their asks are the Apex's. `under` is where the Session itself stands, and what its row says once
+ * the ask is answered, so an answer is never heard as its turn finishing.
+ */
+export const ListedAskingSchema = z
+  .object({
+    /** The Fin, by Thread ID, and by the name its Apex gave it. */
+    fin: ThreadIdSchema,
+    name: z.string().min(1).max(200),
+    /** The ask, by its owner's ID: an answer names it, so one given after the ask moved on answers nothing. */
+    ask: z.string().min(1).max(600),
+    options: z.array(z.string().min(1).max(80)).min(1).max(LISTED_ASK_OPTIONS).optional(),
+    /** The option it recommends, by its place in `options`. */
+    recommended: z.number().int().nonnegative().optional(),
+    under: z.enum(["working", "idle", "failed"]),
+    /** How many more of its Fins ask behind this one. */
+    more: z.number().int().positive().max(10_000).optional(),
+  })
+  .strict()
+export type ListedAsking = z.infer<typeof ListedAskingSchema>
 
 /** The harnesses a Session ran in before its current one, oldest first, as its rail row wears them: at most this many. */
 export const LISTED_LINEAGE = 8
@@ -150,6 +175,8 @@ export const ReportedSessionSchema = z
      * Sessions of a Thread with the same title, a fork and the one it came from, can be told apart at a glance.
      */
     forkOf: z.uuid().optional(),
+    /** What one of its Fins asks the person, said with `state: "waiting"` (`ListedAskingSchema`, link version 18 on). */
+    asking: ListedAskingSchema.optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -256,16 +283,27 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 17, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 18, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= FORKS_VERSION) return [...rows]
+  if (version >= ASKING_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // Before version 18 a gateway knows no `asking`: the row stands where its Session does under its Fins' asks.
+    if (older.asking) {
+      older.state = older.asking.under
+      delete older.waitingOn
+      delete older.waitingFor
+      delete older.asking
+    }
+    if (version >= FORKS_VERSION) {
+      kept.push(older)
+      continue
+    }
     // Before version 17 a gateway knows no `forkOf` (a fork reads as any other Session).
     delete older.forkOf
     if (version >= CONTINUE_VERSION) {
@@ -317,6 +355,10 @@ export function sameHead(left: ListedHead | undefined, right: ListedHead | undef
   return right.kind !== "detached" && right.kind === left.kind && right.name === left.name
 }
 
+function sameAsking(left: ListedAsking | undefined, right: ListedAsking | undefined): boolean {
+  return left === right || (left !== undefined && right !== undefined && JSON.stringify(left) === JSON.stringify(right))
+}
+
 export function sameRunsOn(left: RunsOn, right: RunsOn): boolean {
   return left.kind === "device" ? right.kind === "device" && left.deviceId === right.deviceId : right.kind === "cloud" && left.threadId === right.threadId
 }
@@ -338,6 +380,7 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.state === right.state &&
     left.waitingOn === right.waitingOn &&
     left.waitingFor === right.waitingFor &&
+    sameAsking(left.asking, right.asking) &&
     left.folder === right.folder &&
     left.createdAt === right.createdAt &&
     left.activityAt === right.activityAt &&

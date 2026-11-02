@@ -113,6 +113,8 @@ export type AttentionRow = {
   waitingFor?: WaitingFor | undefined
   generation: number
   activityAt: string
+  /** It waits on one of its Fins' asks, standing `under` as its own (`ListedAsking`). */
+  asking?: { under: "working" | "idle" | "failed" } | undefined
 }
 
 /**
@@ -140,7 +142,8 @@ export type AttentionFact = { kind: AttentionKind; key: string; generation: numb
 /**
  * The fact a row's change says, if any: the one rule every surface uses. A Session that starts waiting (or waits on
  * something new), fails, or comes to rest from work. A row first heard at rest says nothing; nor does a rename, a
- * move, or a report heard again.
+ * move, or a report heard again. A Fin's ask answered leaves its Apex's row where the Apex stood under it, which says
+ * only what the Apex itself did meanwhile.
  */
 export function attentionFact(previous: AttentionRow | undefined, next: AttentionRow): AttentionFact | undefined {
   const fact = (kind: AttentionKind): AttentionFact => {
@@ -153,8 +156,9 @@ export function attentionFact(previous: AttentionRow | undefined, next: Attentio
     if (previous?.state !== "waiting" || previous.waitingOn !== next.waitingOn || rowWaitingFor(previous) !== kind) return fact(kind)
     return undefined
   }
-  if (next.state === "failed" && previous?.state !== "failed") return fact("failed")
-  if (next.state === "idle" && (previous?.state === "working" || previous?.state === "waiting")) return fact("finished")
+  const stood = previous?.asking?.under ?? previous?.state
+  if (next.state === "failed" && stood !== "failed") return fact("failed")
+  if (next.state === "idle" && (stood === "working" || stood === "waiting")) return fact("finished")
   return undefined
 }
 

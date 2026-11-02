@@ -4,7 +4,8 @@ import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
-import { TREE_BUDGET, type AgentRefused, type AgentsDirected, type AgentsDirectInput } from "@mako/host/contracts/agents"
+import { TREE_BUDGET, type AgentRefused, type AgentsDirected, type AgentsDirectInput, type AgentsRespondInput, type ChildState } from "@mako/host/contracts/agents"
+import type { AgentsAnswered } from "@mako/host/contracts/agent-tools"
 import { fixtureUsageSummary } from "./usage-fixture"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
@@ -340,6 +341,7 @@ export function installMockBridge() {
   const nativeRequests: NativeRequest[] = []
   const liveSnapshots = new Map<string, LiveSnapshot>()
   const directCalls: Array<AgentsDirectInput & { conversation: string }> = []
+  const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -468,6 +470,8 @@ export function installMockBridge() {
       /** What the person asked the Apex itself, each a turn of its own; a message straight to a Fin is none. */
       asked: () => liveSnapshots.get(APEX_CONVERSATION)?.requests.length ?? 0,
       directs: () => [...directCalls],
+      /** The person's answers to Fins' asks, as the Apex's host heard them. */
+      responds: () => [...respondCalls],
       /** The Apex's turn runs again, as a wake would start it. */
       setRunning(running: boolean) {
         const snapshot = liveSnapshots.get(APEX_CONVERSATION)
@@ -3279,7 +3283,7 @@ export function installMockBridge() {
       budget: TREE_BUDGET,
       trees: [{ apex: "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f", running: 3, started: 5 }, { apex: "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", running: 1, started: 2 }],
       routes: { forwarded: 9, sent: 2, redirected: 1, direct: 4 },
-      answers: { apex: 3, passed: 1, refused: 1 },
+      answers: { apex: 3, passed: 1, refused: 1, person: 2 },
     }),
     agentsRedirect: async (_conversation: string, input: { to: string }) => ({ to: input.to, withdrawn: true, delivery: "turn" as const }),
     // As the host draws it: an event in the Apex's conversation, and no turn of the Apex's.
@@ -3296,6 +3300,22 @@ export function installMockBridge() {
         emit({ type: "live-batch", batch: { id: conversation, revision: next.revision, updates: [event] } })
       }
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
+    },
+    // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.
+    agentsRespond: async (conversation: string, input: AgentsRespondInput): Promise<AgentsAnswered | AgentRefused> => {
+      respondCalls.push({ conversation, ...input })
+      const snapshot = liveSnapshots.get(conversation)
+      const agent = snapshot?.nativeAgents?.agents.find((each) => each.child?.thread === input.fin)
+      const state = agent?.child?.state
+      if (!snapshot?.nativeAgents || !agent?.child) return { refused: "unknown-child", why: "That isn't one of this Thread's Fins." }
+      if (state?.kind !== "blocked" || state.ask?.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
+      const going: ChildState = { kind: "working", step: "Read your answer" }
+      const moved: NativeAgent = { ...agent, state: { kind: "working" }, child: { ...agent.child, state: going } }
+      const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((each) => (each === agent ? moved : each)) }
+      const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
+      liveSnapshots.set(conversation, next)
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
+      return { child: agent.child.thread, name: agent.child.name ?? agent.title, answered: state.ask.kind, ...(state.ask.kind === "report" && { delivery: "turn" as const }) }
     },
     nativeRouting: async () => [
       { harness: "claude", state: "control", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`.", verified: { version: "2.1.314", how: "test:native-routing-live" }, installed: "2.1.314" },

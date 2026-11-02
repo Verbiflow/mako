@@ -1,5 +1,6 @@
-import { LISTED_LINEAGE, LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, sameHead, type ListedHead, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { LISTED_ASK_OPTIONS, LISTED_LINEAGE, LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, sameHead, type ListedAsking, type ListedHead, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import type { ThreadRef } from "@mako/sessions"
+import type { FinAsk } from "../contracts/native-agents.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { CheckoutHead } from "../contracts/checkout-heads.js"
 import { projectFolder } from "../contracts/worktree-paths.js"
@@ -78,7 +79,23 @@ export type ReportSources = {
   repository?(folder: string): ReportedSession["repository"]
   /** How many things a conversation whose turn ended still waits on (`backgroundWork`); undefined while none. */
   background?(conversationId: string): number | undefined
+  /** What one of a conversation's Fins asks the person, which its row waits on (`finAsking`). */
+  asking?(conversationId: string): FinAsking | undefined
   now(): number
+}
+
+/** A Fin's ask on its Apex's row: what the row waits on, and the ask a phone answers in a tap. */
+export type FinAsking = { waiting: Waiting; asking: Omit<ListedAsking, "under"> }
+
+/** What the person's row says of a Fin's ask that's theirs (`Agents.personAsk`): the Fin's name before its line. */
+export function finAsking(found: { fin: ThreadId; name: string; line: string; ask: FinAsk; more: number } | undefined): FinAsking | undefined {
+  if (!found) return undefined
+  const options = found.ask.options?.slice(0, LISTED_ASK_OPTIONS).map((option) => (option.label.length > 80 ? `${option.label.slice(0, 79)}…` : option.label))
+  const asking: FinAsking["asking"] = { fin: found.fin, name: found.name.slice(0, 200), ask: found.ask.id }
+  if (options?.length) asking.options = options
+  if (options && found.ask.recommended !== undefined && found.ask.recommended < options.length) asking.recommended = found.ask.recommended
+  if (found.more) asking.more = found.more
+  return { waiting: { for: found.ask.kind === "approval" ? "approval" : "question", line: line(`${found.name}: ${found.line}`) }, asking }
 }
 
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -99,7 +116,7 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
 }
 
 /** What a list shows of a conversation that its own turns move: where it stands, its title, what it waits on, and its background work. */
-export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background" | "promptedAt">
+export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background" | "promptedAt" | "asking">
 
 /**
  * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
@@ -116,6 +133,7 @@ export function conversationShown(conversation: {
   waitingOn: (conversationId: string) => Waiting | undefined
   background?: number | undefined
   promptedAt?: number | undefined
+  asking?: ((conversationId: string) => FinAsking | undefined) | undefined
 }): ConversationShown {
   const { session, working, execution } = conversation
   const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
@@ -133,6 +151,16 @@ export function conversationShown(conversation: {
     const on = conversation.waitingOn(session.id) ?? needsYouWaiting(undefined)
     shown.waitingOn = on.line
     shown.waitingFor = on.for
+  }
+  // Its own ask goes first; a Fin's waits behind it, and a move says nothing more.
+  const under = state === "working" || state === "idle" || state === "failed" ? state : undefined
+  const fin = under && conversation.asking?.(session.id)
+  if (fin) {
+    shown.state = "waiting"
+    shown.waitingOn = fin.waiting.line
+    shown.waitingFor = fin.waiting.for
+    shown.asking = { ...fin.asking, under }
+    delete shown.background
   }
   return shown
 }
@@ -238,7 +266,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const { session } = summary
     const execution = executions.get(placed.session)
     if (execution?.state === "elsewhere") continue
-    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn, background: sources.background?.(session.id), promptedAt: summary.promptedAt })
+    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn, background: sources.background?.(session.id), promptedAt: summary.promptedAt, asking: sources.asking })
     const movedAt = Math.max(summary.createdAt, sources.lastMoved(session.id, summary.revision) ?? 0)
     const row: ReportedSession = {
       session: placed.session,
@@ -329,7 +357,8 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path && left.background === right.background &&
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
     left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
-    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf
+    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf &&
+    JSON.stringify(left.asking) === JSON.stringify(right.asking)
 }
 
 /**
@@ -732,7 +761,7 @@ export class SessionPublisher {
   #sawBatch(conversation: string, trace: string | undefined): void {
     const shown = this.#shown?.(conversation)
     if (!shown) return
-    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}\0${shown.promptedAt ?? ""}`
+    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}\0${shown.promptedAt ?? ""}\0${shown.asking ? JSON.stringify(shown.asking) : ""}`
     const before = this.#shownOf.get(conversation)
     if (before?.key === key) return
     this.#shownOf.set(conversation, { key, promptedAt: shown.promptedAt })
