@@ -72,7 +72,7 @@ async function call(client: Client, name: string, args: Parameters<Client["callT
 }
 
 const world = new AgentsWorld({ root: join(root, "host"), script: async (turn) => {
-  if (!turn.text.includes("child:")) return "ok"
+  if (!turn.text.includes("You're fin:")) return "ok"
   await turn.world.hold(turn.conversation)
   return "Done: the sidebar is reviewed."
 } })
@@ -86,14 +86,14 @@ try {
   assert.deepEqual(handRegistered(), [], "every agents_* tool comes from the projection")
   for (const tool of AGENT_TOOLS) assert.equal(hostCallReplay(tool.channel), tool.replay, `${tool.channel} replays as its definition says`)
 
-  const lead = await world.lead("codex")
-  const session = lead.caller.kind === "agent" ? lead.caller.session : ""
+  const apex = await world.apex("codex")
+  const session = apex.caller.kind === "agent" ? apex.caller.session : ""
   const cwd = world.root
 
   const inThread = new McpServer({ name: "mako", version: "1.0.0" })
   registerAgentTools(inThread, {
     invoke: async (channel, args) => AgentAnswerSchema.parse(decodeRuntimeValue(await methods.invoke(channel, args))),
-    caller: () => lead.caller,
+    caller: () => apex.caller,
     filled: () => ({ cwd }),
   })
   const [serverSide, clientSide] = InMemoryTransport.createLinkedPair()

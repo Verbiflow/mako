@@ -1,18 +1,18 @@
 import "./lib/scratch-git.mjs"
 // Native routing as each real harness runs it: the CLI Mako launches, through
 // Mako's own live driver, in a sealed home, against the scripted model (no
-// account; nothing leaves this machine). Each harness runs one turn as a lead
+// account; nothing leaves this machine). Each harness runs one turn as an Apex
 // and one as an ordinary Thread, and in each the model calls the harness's
 // own spawn tool:
 //
-// - as a lead, the spawn never starts a child: the harness offered no such
+// - as an Apex, the spawn never starts a child: the harness offered no such
 //   tool, or Claude's PreToolUse denied it with the message naming
 //   `agents_start`, which the model reads next; and no subagent reaches the
 //   roster;
 // - as an ordinary Thread, the child runs and is observed (`live-agent`), and
 //   Claude's child starts with Mako's paragraph for native children.
 //
-// Codex also resumes the lead's thread in a new app-server, which must keep
+// Codex also resumes the Apex's thread in a new app-server, which must keep
 // spawning off. Cursor has no stand-in for its model, so its control is
 // checked against its own service by `test:native-routing-cursor`.
 //
@@ -179,26 +179,26 @@ async function check(harness: string, driver: ProviderLiveDriver): Promise<strin
   const { tool } = SPAWNS.get(harness)!
   const lines: string[] = []
   await sandboxed("mako-native-routing", harness, async (sandbox) => {
-    const lead = await turn(harness, sandbox, driver, "lead")
-    const leadTools = offered(lead.heard[0] ?? "")
-    if (!leadTools && READABLE.has(harness)) throw new Error(`${harness}'s first request named no tools this check reads`)
-    if (leadTools && harness !== "claude") assert.ok(!leadTools.has(tool), `${harness} as a lead still offers ${tool}`)
-    assert.deepEqual(observedChildren(lead), [], `${harness} as a lead: no subagent reaches the roster`)
-    if (harness === "devin") assert.ok(lead.heard.slice(1).some((heard) => heard.includes(`Tool '${tool}' is not available`)), "Devin refuses the call itself: its tool is gone")
+    const apex = await turn(harness, sandbox, driver, "apex")
+    const apexTools = offered(apex.heard[0] ?? "")
+    if (!apexTools && READABLE.has(harness)) throw new Error(`${harness}'s first request named no tools this check reads`)
+    if (apexTools && harness !== "claude") assert.ok(!apexTools.has(tool), `${harness} as an Apex still offers ${tool}`)
+    assert.deepEqual(observedChildren(apex), [], `${harness} as an Apex: no subagent reaches the roster`)
+    if (harness === "devin") assert.ok(apex.heard.slice(1).some((heard) => heard.includes(`Tool '${tool}' is not available`)), "Devin refuses the call itself: its tool is gone")
     if (harness === "claude") {
-      assert.ok(leadTools?.has(tool), "Claude keeps Agent offered and decides each call")
-      assert.ok(lead.heard.slice(1).some((heard) => heard.includes(ROUTED)), "Claude's model reads the deny that names agents_start")
-      assert.ok(!lead.heard.some((heard) => heard.includes(NATIVE_CHILD_INSTRUCTIONS)), "no child started, so none heard the child paragraph")
+      assert.ok(apexTools?.has(tool), "Claude keeps Agent offered and decides each call")
+      assert.ok(apex.heard.slice(1).some((heard) => heard.includes(ROUTED)), "Claude's model reads the deny that names agents_start")
+      assert.ok(!apex.heard.some((heard) => heard.includes(NATIVE_CHILD_INSTRUCTIONS)), "no child started, so none heard the child paragraph")
     }
-    lines.push(`lead: ${harness === "claude" ? `${tool} offered, its call denied with the agents_start message` : leadTools ? `${tool} not offered` : `the call refused, ${tool} not available`}, ${lead.heard.length} model requests, no subagent observed`)
+    lines.push(`Apex: ${harness === "claude" ? `${tool} offered, its call denied with the agents_start message` : apexTools ? `${tool} not offered` : `the call refused, ${tool} not available`}, ${apex.heard.length} model requests, no subagent observed`)
 
     if (harness === "codex") {
-      assert.ok(lead.nativeId, "Codex named its thread")
-      const resumed = await turn(harness, sandbox, driver, "lead", lead.nativeId)
+      assert.ok(apex.nativeId, "Codex named its thread")
+      const resumed = await turn(harness, sandbox, driver, "apex", apex.nativeId)
       const tools = offered(resumed.heard[0] ?? "")
-      assert.ok(tools && !tools.has(tool), `Codex resumed as a lead offers ${tool} again`)
-      assert.deepEqual(observedChildren(resumed), [], "Codex resumed as a lead: no subagent observed")
-      lines.push(`lead resumed in a new app-server: ${tool} still not offered`)
+      assert.ok(tools && !tools.has(tool), `Codex resumed as an Apex offers ${tool} again`)
+      assert.deepEqual(observedChildren(resumed), [], "Codex resumed as an Apex: no subagent observed")
+      lines.push(`Apex resumed in a new app-server: ${tool} still not offered`)
     }
 
     const thread = await turn(harness, sandbox, driver, "thread")

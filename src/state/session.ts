@@ -19,7 +19,7 @@ import { applyAccessChoices, loadAccessChoices } from "@/state/access-choices"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
-import { watchLeadView } from "@/state/lead-children"
+import { watchApexView } from "@/state/apex-fins"
 import { watchSessionPanes } from "@/state/session-panes"
 import { watchLiveResidency } from "@/state/live-residency"
 import { receiveControlActivity } from "@/state/control-preview"
@@ -715,7 +715,7 @@ function adoptBoot(boot: BootPayload) {
   hydrateLiveSummaries(boot.live)
   stopOutboxWatch ??= watchPendingMessages(() => { void restorePendingMessages() })
   stopThreadWatch ??= watchThreadSessions()
-  stopLeadWatch ??= watchLeadView()
+  stopLeadWatch ??= watchApexView()
   stopPaneWatch ??= watchSessionPanes()
   stopResidencyWatch ??= watchLiveResidency()
   void restorePendingMessages()

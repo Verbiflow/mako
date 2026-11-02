@@ -1,17 +1,17 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { ChevronRightIcon } from "lucide-react"
-import { childGroup, childLine, childStateOf, childWord, threadsWord, type ChildGroup } from "@mako/host/contracts/children"
-import { ROLE_WORD } from "@mako/host/contracts/agents"
+import { childGroup, childLine, childStateOf, childWord, type ChildGroup } from "@mako/host/contracts/children"
+import { APEX_ROLE, APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ChildStatusMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import { LeadMark } from "@/components/ui/lead-mark"
+import { ApexMark } from "@/components/ui/apex-mark"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acp, acpStore } from "@/state/acp"
-import { threadChildren, useThreadChildren } from "@/state/lead-children"
+import { threadChildren, useThreadChildren } from "@/state/apex-fins"
 import { Elapsed } from "@/components/inspector/elapsed"
 
 const HEADINGS = {
@@ -25,22 +25,22 @@ const HEADINGS = {
 type Row = { kind: "heading"; group: ChildGroup; count: number } | { kind: "child"; agent: NativeAgent }
 
 /**
- * A lead's Threads in its Agents panel, above what its harness runs in the
+ * An Apex's Fins in its Agents panel, above what its harness runs in the
  * turn: what needs the person, then at work, queued, failed and done, one
- * strip each. Rows are drawn as they scroll into the panel, so a lead of a
+ * strip each. Rows are drawn as they scroll into the panel, so an Apex of a
  * thousand costs what a screenful does.
  */
-export function LeadChildrenSection({
+export function ApexFinsSection({
   children,
   conversation,
-  leadTitle,
+  apexTitle,
   scroller,
   open,
   onOpen,
 }: {
   children: readonly NativeAgent[]
   conversation: string | undefined
-  leadTitle: string
+  apexTitle: string
   scroller: RefObject<HTMLDivElement | null>
   open?: string
   onOpen?: (agent: NativeAgent) => void
@@ -84,16 +84,16 @@ export function LeadChildrenSection({
     for (const agent of threadChildren(acpStore.get(), thread)) if (agent.stoppable) void acp.stopAgent(conversation, agent.nativeId)
   }
   return (
-    <section data-lead-children={children.length} aria-label={`${leadTitle}'s Threads`} className="mb-2">
+    <section data-apex-fins={children.length} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-2">
       <div className="flex h-7 items-center gap-1.5 px-2.5 text-label text-faint">
-        <LeadMark className="size-3" />
-        <span className="min-w-0 truncate text-muted-foreground">{leadTitle}'s Threads</span>
+        <ApexMark className="size-3" />
+        <span className="min-w-0 truncate text-muted-foreground">{apexTitle}'s {FIN_WORD}s</span>
         <span className="tabular shrink-0">· {children.length}</span>
         {stoppable && conversation ? (
           <button
             type="button"
             onClick={stopAll}
-            title={`Stop ${threadsWord(stoppable)} under ${leadTitle}; the ${ROLE_WORD} keeps running`}
+            title={`Stop ${finsWord(stoppable)} under ${apexTitle}; the ${APEX_WORD} keeps running`}
             className="pressable ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Stop all
@@ -127,7 +127,7 @@ export function LeadChildrenSection({
   )
 }
 
-/** One child as a strip: harness, name, state and time, then its question or phase, then what it runs as. Memoized on its entry. */
+/** One Fin as a strip: harness, name, state and time, then its question or phase, then what it runs as. Memoized on its entry. */
 const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = false }: { agent: NativeAgent; onOpen?: (agent: NativeAgent) => void; nested?: boolean; lit?: boolean }) {
   useHarnessIdentity()
   const state = childStateOf(agent)
@@ -136,7 +136,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
   const facts = [
     harnessLabel(agent.provider),
     agent.model,
-    agent.role === ROLE_WORD ? ROLE_WORD : undefined,
+    agent.role === APEX_ROLE ? APEX_WORD : undefined,
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
   ].filter(Boolean)
   return (
@@ -172,13 +172,13 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
           </span>
         </span>
       </button>
-      {agent.role === ROLE_WORD && agent.child ? <SubLeadFold thread={agent.child.thread} onOpen={onOpen} /> : null}
+      {agent.role === APEX_ROLE && agent.child ? <SubApexFold thread={agent.child.thread} onOpen={onOpen} /> : null}
     </div>
   )
 })
 
-/** A child that leads its own: its Threads fold under it, closed until asked, counted as its badge counts them. */
-function SubLeadFold({ thread, onOpen }: { thread: string; onOpen?: (agent: NativeAgent) => void }) {
+/** A Fin that is an Apex of its own: its Fins fold under it, closed until asked, counted as its badge counts them. */
+function SubApexFold({ thread, onOpen }: { thread: string; onOpen?: (agent: NativeAgent) => void }) {
   const children = useThreadChildren(thread)
   const [open, setOpen] = useState(false)
   if (!children.length) return null
@@ -191,8 +191,8 @@ function SubLeadFold({ thread, onOpen }: { thread: string; onOpen?: (agent: Nati
         className="pressable ml-[2.375rem] flex items-center gap-1 rounded-md px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       >
         <ChevronRightIcon className={cn("size-3 transition-transform duration-150", open && "rotate-90")} />
-        <LeadMark className="size-3" />
-        {threadsWord(children.length)}
+        <ApexMark className="size-3" />
+        {finsWord(children.length)}
       </button>
       {open ? children.map((agent) => <ChildRow key={agent.nativeId} agent={agent} onOpen={onOpen} nested />) : null}
     </div>

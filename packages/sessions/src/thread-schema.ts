@@ -1,6 +1,6 @@
 import { SessionSettingsSchema } from "./settings.js"
 import { z } from "zod"
-import { NativeEventSourceSchema, RetriesSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
+import { DirectRouteSchema, NativeEventSourceSchema, RetriesSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
 import {
   AttachmentContentSchema,
   ToolDetailSchema,
@@ -89,6 +89,8 @@ export const DecodedEntrySchema = z.discriminatedUnion("kind", [
     nearLimit: UsageLimitSchema.optional(),
     /** A provider's retries, as Mako measured them (`TranscriptEvent.retries`). */
     retries: RetriesSchema.optional(),
+    /** The person's message its Apex's conversation sent straight to a Fin (`TranscriptEvent.direct`). */
+    direct: DirectRouteSchema.optional(),
     /**
      * The provider started a turn on its own and this is what it reported as
      * the cause (a background command finishing). It opens the turn the way a

@@ -4,7 +4,7 @@ import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
-import { TREE_BUDGET } from "@mako/host/contracts/agents"
+import { TREE_BUDGET, type AgentRefused, type AgentsDirected, type AgentsDirectInput } from "@mako/host/contracts/agents"
 import { fixtureUsageSummary } from "./usage-fixture"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
@@ -83,7 +83,7 @@ import {
   mockThreads,
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
-import { benchChild, benchLeads, CHURN, leadRefs, leadSnapshots, leadSummaries, LEAD_CONVERSATION, LEAD_THREAD, LEAD_TITLE } from "./mock-lead-thread"
+import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -339,6 +339,7 @@ export function installMockBridge() {
 
   const nativeRequests: NativeRequest[] = []
   const liveSnapshots = new Map<string, LiveSnapshot>()
+  const directCalls: Array<AgentsDirectInput & { conversation: string }> = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -415,7 +416,7 @@ export function installMockBridge() {
   // Node tests install the bridge on a bare `window` with no address.
   const scene = "location" in window ? new URLSearchParams(window.location.search).get("app") : null
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
-  const benchScene = benchLeads(scene === "lead" ? Number(new URLSearchParams(window.location.search).get("leads") ?? 0) : 0, 20)
+  const benchScene = benchApexes(scene === "apex" ? Number(new URLSearchParams(window.location.search).get("apexes") ?? 0) : 0, 20)
   /**
    * `?app=kept`: sessions their harness deleted, at the top of the rail: one
    * whose records Mako's record store kept, and one only Mako's copy keeps
@@ -428,28 +429,28 @@ export function installMockBridge() {
     boot.live.push(...busySummaries())
   }
   /**
-   * `?app=lead`: "Mobile lead" and its twelve Threads in every state, each started one with its own conversation.
-   * `window.leadScene.setChildren` moves its roster as the host's batches would, for the click-through and the bench;
-   * `churn` moves one child a tick. `&leads=50` adds that many more leads of twenty Threads each, for the rail's bench.
+   * `?app=apex`: "Mobile polish" and its twelve Fins in every state, each started one with its own conversation.
+   * `window.apexScene.setChildren` moves its roster as the host's batches would, for the click-through and the bench;
+   * `churn` moves one Fin a tick. `&apexes=50` adds that many more Apexes of twenty Fins each, for the rail's bench.
    */
-  if (scene === "lead") {
-    for (const snapshot of [...leadSnapshots(), ...benchScene.snapshots]) {
+  if (scene === "apex") {
+    for (const snapshot of [...apexSnapshots(), ...benchScene.snapshots]) {
       liveSnapshots.set(snapshot.session.id, snapshot)
       acpSessions.set(snapshot.session.id, snapshot.session)
     }
-    boot.live.push(...leadSummaries(), ...benchScene.summaries)
+    boot.live.push(...apexSummaries(), ...benchScene.summaries)
     const setChildren = (agents: NativeAgent[]) => {
-      const snapshot = liveSnapshots.get(LEAD_CONVERSATION)
+      const snapshot = liveSnapshots.get(APEX_CONVERSATION)
       if (!snapshot) return
       const nativeAgents = { agents, limited: false }
       const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
-      liveSnapshots.set(LEAD_CONVERSATION, next)
+      liveSnapshots.set(APEX_CONVERSATION, next)
       // Through JSON, as the host's batch crosses to the window: every entry a new object, unchanged ones equal.
-      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: LEAD_CONVERSATION, revision: next.revision, updates: [], nativeAgents })) })
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], nativeAgents })) })
     }
-    Reflect.set(window, "leadScene", {
+    Reflect.set(window, "apexScene", {
       setChildren,
-      /** `count` children, one of them moving to its next state every `every` ms; returns the stop. */
+      /** `count` Fins, one of them moving to its next state every `every` ms; returns the stop. */
       churn(count: number, every: number) {
         const steps = Array.from({ length: count }, (_, index) => index % CHURN.length)
         const agents = steps.map((step, index) => benchChild(index, CHURN[step]!))
@@ -463,16 +464,19 @@ export function installMockBridge() {
         }, every)
         return () => clearInterval(timer)
       },
-      children: () => liveSnapshots.get(LEAD_CONVERSATION)?.nativeAgents?.agents ?? [],
-      /** The lead's turn runs again, as a wake would start it. */
+      children: () => liveSnapshots.get(APEX_CONVERSATION)?.nativeAgents?.agents ?? [],
+      /** What the person asked the Apex itself, each a turn of its own; a message straight to a Fin is none. */
+      asked: () => liveSnapshots.get(APEX_CONVERSATION)?.requests.length ?? 0,
+      directs: () => [...directCalls],
+      /** The Apex's turn runs again, as a wake would start it. */
       setRunning(running: boolean) {
-        const snapshot = liveSnapshots.get(LEAD_CONVERSATION)
+        const snapshot = liveSnapshots.get(APEX_CONVERSATION)
         if (!snapshot) return
-        const session: LiveSessionState = { ...(acpSessions.get(LEAD_CONVERSATION) ?? snapshot.session), status: running ? "running" : "ready" }
-        acpSessions.set(LEAD_CONVERSATION, session)
+        const session: LiveSessionState = { ...(acpSessions.get(APEX_CONVERSATION) ?? snapshot.session), status: running ? "running" : "ready" }
+        acpSessions.set(APEX_CONVERSATION, session)
         const next = { ...snapshot, session, revision: snapshot.revision + 1 }
-        liveSnapshots.set(LEAD_CONVERSATION, next)
-        emit({ type: "live-batch", batch: { id: LEAD_CONVERSATION, revision: next.revision, updates: [], session } })
+        liveSnapshots.set(APEX_CONVERSATION, next)
+        emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session } })
       },
     })
   }
@@ -611,7 +615,7 @@ export function installMockBridge() {
   /** Threads renamed in this page, as the Thread store keeps them. */
   const titles = new Map<string, ThreadTitleEntry>()
   if (scene === "busy") titles.set(BUSY_THREAD, { thread: BUSY_THREAD, title: BUSY_TITLE, source: "user" })
-  if (scene === "lead") titles.set(LEAD_THREAD, { thread: LEAD_THREAD, title: LEAD_TITLE, source: "user" })
+  if (scene === "apex") titles.set(APEX_THREAD, { thread: APEX_THREAD, title: APEX_TITLE, source: "user" })
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false
   // The host gives every profile Mako's default for new conversations.
@@ -1458,7 +1462,7 @@ export function installMockBridge() {
         },
       ]
       // A recorded scene leaves out the demo's failing plugin and its notice.
-      if (!setupScene && scene !== "lead")
+      if (!setupScene && scene !== "apex")
         plugins.push({ id: "broken-example", source: "export function setup(){ throw new Error('deliberate failure for the demo') }" })
       return plugins
     },
@@ -1503,7 +1507,7 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
-      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "lead" ? [...leadRefs(), ...benchScene.refs] : []), ...fixture.threads]
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
         setTimeout(() => {
@@ -3266,16 +3270,31 @@ export function installMockBridge() {
       memory: { loaded: 0, unloaded: 0, bytes: 0, pinnedBytes: 0, budget: 128 * 1024 * 1024, loads: [], held: [] },
     }),
     agentsDiagnostics: async () => ({
-      children: 7,
+      fins: 7,
       running: 4,
       followed: 1,
       queued: 1,
       notices: 2,
       budget: TREE_BUDGET,
-      trees: [{ lead: "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f", running: 3, started: 5 }, { lead: "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", running: 1, started: 2 }],
-      routes: { forwarded: 9, sent: 2, redirected: 1 },
+      trees: [{ apex: "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f", running: 3, started: 5 }, { apex: "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", running: 1, started: 2 }],
+      routes: { forwarded: 9, sent: 2, redirected: 1, direct: 4 },
     }),
     agentsRedirect: async (_conversation: string, input: { to: string }) => ({ to: input.to, withdrawn: true, delivery: "turn" as const }),
+    // As the host draws it: an event in the Apex's conversation, and no turn of the Apex's.
+    agentsDirect: async (conversation: string, input: AgentsDirectInput): Promise<AgentsDirected | AgentRefused> => {
+      directCalls.push({ conversation, ...input })
+      const snapshot = liveSnapshots.get(conversation)
+      const agent = snapshot?.nativeAgents?.agents.find((each) => each.child?.thread === input.to)
+      if (!snapshot || !agent?.child?.name) return { refused: "unknown-child", why: "That isn't one of this Thread's Fins." }
+      const direct = { to: agent.child.name, fin: agent.child.thread, request: input.request, received: crypto.randomUUID(), delivery: "turn" as const, at: Date.now() }
+      if (!snapshot.blocks.some((block) => block.type === "event" && block.direct?.request === input.request)) {
+        const event = { kind: "event" as const, label: `You wrote to ${direct.to} directly`, body: input.text, direct }
+        const next = { ...snapshot, revision: snapshot.revision + 1, blocks: [...snapshot.blocks, { type: "event" as const, label: event.label, body: event.body, direct }] }
+        liveSnapshots.set(conversation, next)
+        emit({ type: "live-batch", batch: { id: conversation, revision: next.revision, updates: [event] } })
+      }
+      return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
+    },
     nativeRouting: async () => [
       { harness: "claude", state: "control", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`.", verified: { version: "2.1.314", how: "test:native-routing-live" }, installed: "2.1.314" },
       { harness: "codex", state: "control", via: "`agents.enabled = false` in the config `thread/start`, `thread/resume` and `thread/fork` carry.", verified: { version: "0.166.0", how: "test:native-routing-live" }, installed: "0.166.0" },

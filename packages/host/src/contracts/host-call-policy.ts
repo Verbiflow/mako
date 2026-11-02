@@ -229,6 +229,8 @@ const replays = [
   "mako:agents-stop",
   /** The moved message's id names the one it becomes; a message already moved is withdrawn once. */
   "mako:agents-redirect",
+  /** The person's message to a Fin is settled by its request id: a repeat answers the first delivery. */
+  "mako:agents-direct",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
   /** Stopping a background task that has already ended stops nothing. */

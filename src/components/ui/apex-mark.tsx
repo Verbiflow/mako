@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 
-/** A Thread that leads others: a stem that branches, worn on its row's badge, its strip's count, its panel and its chips. */
-export function LeadMark({ className }: { className?: string }) {
+/** An Apex: a stem that branches to its Fins, worn on its row's badge, its strip's count, its panel and its chips. */
+export function ApexMark({ className }: { className?: string }) {
   return (
     <svg aria-hidden viewBox="0 0 16 16" fill="none" className={cn("size-3.5 shrink-0", className)}>
       <circle cx="4" cy="3.5" r="1.75" fill="currentColor" />

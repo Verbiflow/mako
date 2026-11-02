@@ -37,6 +37,12 @@ export interface Exchange {
    */
   opener?: ChatMessage
   /**
+   * The person's message sent from an Apex's conversation straight to one
+   * of its Fins (`note.direct`): its own exchange, with no answer, since no
+   * turn of the Apex's ran for it. Never set together with `prompt`.
+   */
+  direct?: ChatMessage
+  /**
    * Everything after the prompt, in order: assistant and tool messages, any
    * message the user steered in while the agent was still working, and each
    * continuation that picked the turn up after it was cut short
@@ -84,7 +90,7 @@ export type ResponseSection =
    */
   | { kind: "shown"; id: string; message: ChatMessage; media: MediaCandidate[] }
   /**
-   * Where a lead sent a message (`agents_send`), drawn where the call
+   * Where an Apex sent a message (`agents_send`), drawn where the call
    * returned, as `shown` is: the call's row stays in the work. `landed` is
    * where its answer says it went, when the result kept it.
    */
@@ -362,6 +368,12 @@ export function toExchanges(
       continue
     }
 
+    // The Apex's turn, if one runs, goes on in its own exchange: this one never answers.
+    if (message.role === "system" && message.note?.direct) {
+      exchanges.push({ id: message.id, direct: message, response: [], system: [], timestamp: message.timestamp })
+      continue
+    }
+
     if (message.role === "system" && message.opensTurn) {
       if (current && current.id !== LEAD_EXCHANGE_ID && current.response.length === 0) {
         current.system.push({ message, after: 0 })
@@ -380,9 +392,10 @@ export function toExchanges(
 
     if (!current) {
       // The agent spoke first — a resumed session, or a system note before any
-      // prompt. It still needs somewhere to live.
+      // prompt. It still needs somewhere to live; after a direct message,
+      // which is no prompt, it isn't the leading exchange.
       current = {
-        id: LEAD_EXCHANGE_ID,
+        id: exchanges.length ? message.id : LEAD_EXCHANGE_ID,
         response: [],
         system: [],
         timestamp: message.timestamp,
@@ -401,6 +414,7 @@ export function toExchanges(
     return old &&
       old.prompt === exchange.prompt &&
       old.opener === exchange.opener &&
+      old.direct === exchange.direct &&
       old.response.length === exchange.response.length &&
       old.system.length === exchange.system.length &&
       old.response.every(
@@ -523,8 +537,15 @@ export function responseText(exchange: Exchange): string {
 }
 
 /** A one-line label for the navigator and the jump list. */
+/** The newest exchange a turn answers: what streams, stopped or failed. A direct message after it is no turn's. */
+export function turnExchange(exchanges: readonly Exchange[]): Exchange | undefined {
+  return exchanges.findLast((exchange) => !exchange.direct)
+}
+
 export function promptLabel(exchange: Exchange): string {
   if (exchange.unloaded !== undefined) return exchange.unloaded
+  const direct = exchange.direct?.note
+  if (direct?.direct) return `To ${direct.direct.to}: ${(direct.body ?? "").replace(/\s+/g, " ").trim()}`
   const cause = !exchange.prompt ? exchange.opener?.note?.cause : undefined
   if (cause) return eventLabel(causeWords(cause))
   const opening = exchange.prompt ?? exchange.opener

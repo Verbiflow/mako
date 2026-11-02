@@ -164,9 +164,9 @@ export function handOffScene(kind: "all" | "mixed" | "none") {
   lifecycle = { ...lifecycle, work: WORK, operation: { kind: "idle" } }
   applicationStore.set({ lifecycle, busy: false, dialog: null, error: null })
 }
-/** A lead's three children at work beside the person's own: the sheet lists them as one row under their lead. */
+/** An Apex's three Fins at work beside the person's own: the sheet lists them as one row under their Apex. */
 export function childrenScene() {
-  const lead = { id: "one", title: WORK[0].title }
+  const apex = { id: "one", title: WORK[0].title }
   const children = [
     { title: "Map the update states", provider: "claude" },
     { title: "Write the install copy", provider: "codex" },
@@ -179,7 +179,7 @@ export function childrenScene() {
     cwd: "/Projects/mako",
     status: "running",
     stoppable: true,
-    lead,
+    lead: apex,
   }))
   lifecycle = { ...lifecycle, work: [...WORK, ...children], operation: { kind: "idle" } }
   applicationStore.set({ lifecycle, busy: false, dialog: null, error: null })

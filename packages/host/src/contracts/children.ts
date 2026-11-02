@@ -1,43 +1,58 @@
 import { z } from "zod"
-import { ROLE_WORD, type ChildState } from "./agents.js"
+import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { isProviderWork, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
 
+/** Who an agent's words in a Thread are from, as their header names them: a Fin's Apex, or an Apex's Fins (a digest of their reports). */
+export const YOUR_APEX = `your ${APEX_WORD}`
+export const YOUR_FINS = `your ${FIN_WORD}s`
+/** How the headers of builds before the names said the same two: read, never written. */
+const LEGACY_FROM: ReadonlyMap<string, string> = new Map([[`your ${LEGACY_APEX_WORD}`, YOUR_APEX], ["your agents", YOUR_FINS]])
+
 /** The header every delivery an agent wrote starts with: the model reads it as an agent's words, never the person's. */
-export const FROM_AGENTS = "[mako · from your agents, not the person]"
+export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }
 
 /**
- * The header of the person's own message a lead passed on to a child
- * (`agents_send` with `forward`): the child reads them as the person's words,
- * which reached it through its lead, and the lead's words (if any) after them.
+ * The header of the person's own message an Apex passed on to a Fin
+ * (`agents_send` with `forward`): the Fin reads them as the person's words,
+ * which reached it through its Apex, and the Apex's words (if any) after them.
  */
 export function passedOn(name: string): string {
   return `[mako · the person's words, passed on by ${name} (agent)]`
 }
-/** Between the person's words a lead passed on and what it added. */
-export const PASSED_ON_NOTE = `[mako · what your ${ROLE_WORD} adds]`
+/** Between the person's words an Apex passed on and what it added. */
+export const PASSED_ON_NOTE = `[mako · what ${YOUR_APEX} adds]`
+const PASSED_ON_NOTES = [PASSED_ON_NOTE, `[mako · what your ${LEGACY_APEX_WORD} adds]`]
 
 const AGENT_HEADER = /^\[mako · from (.+?)(?: \(agent\))?, not the person\]\n?/
 const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(agent\)\]\n?/
 
-/** A brief's lines for its child alone, who it is and how it reports: the person's card of the brief leaves them out. */
+/** A brief's lines for its Fin alone, who it is and how it reports: the person's card of the brief leaves them out. */
 export function briefIntro(name: string): string {
-  return `You're child:${name}${INTRO_TAIL}`
+  return `You're fin:${name}${INTRO_TAIL}`
 }
-const INTRO_TAIL = ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation."
-export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${ROLE_WORD} how it ended.`
+const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
+export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells ${YOUR_APEX} how it ended.`
+/** A brief's lines as builds before the names wrote them, still left out of its card. */
+const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation." }
+const LEGACY_BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${LEGACY_APEX_WORD} how it ended.`
+
+/** Whether `text` is a brief: it carries the line every brief ends on, as this build or an earlier one wrote it. */
+export function isBrief(text: string): boolean {
+  return text.includes(BRIEF_CLOSE) || text.includes(LEGACY_BRIEF_CLOSE)
+}
 
 /**
- * Words an agent wrote into a conversation (`fromAgent`, `FROM_AGENTS`), read
- * from their own header, so a saved transcript and a live one say the same:
- * who wrote them as the header names them (`your lead`, `your agents`), and the
- * words after it, less a brief's lines for its child alone. Undefined for the
- * person's own words.
+ * Words an agent wrote into a Thread (`fromAgent`, `FROM_AGENTS`), read from
+ * their own header, so a saved transcript and a live one say the same: who
+ * wrote them as the header names them (`YOUR_APEX`, `YOUR_FINS`, an earlier
+ * build's words for either read as them), and the words after it, less a
+ * brief's lines for its Fin alone; for the person's own message an Apex passed
+ * on, what it added. Undefined for the person's own words.
  */
-/** Words an agent wrote into a Thread, read from their header: who wrote them, and for the person's own message a lead passed on, what it added. */
 export interface AgentWords {
   from: string
   body: string
@@ -47,31 +62,52 @@ export interface AgentWords {
 export function agentWords(text: string): AgentWords | undefined {
   const passed = PASSED_ON_HEADER.exec(text)
   if (passed) {
-    const [said, added] = text.slice(passed[0].length).split(`\n\n${PASSED_ON_NOTE}\n`)
-    return { from: passed[1]!, body: said!.trim(), passedOn: { ...(added?.trim() && { added: added.trim() }) } }
+    const rest = text.slice(passed[0].length)
+    const note = PASSED_ON_NOTES.find((candidate) => rest.includes(`\n\n${candidate}\n`))
+    const [said, added] = note ? rest.split(`\n\n${note}\n`) : [rest]
+    return { from: spoken(passed[1]!), body: said!.trim(), passedOn: { ...(added?.trim() && { added: added.trim() }) } }
   }
   const header = AGENT_HEADER.exec(text)
   if (!header) return undefined
   const body = text
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && !(line.startsWith("You're child:") && line.endsWith(INTRO_TAIL)))
+    .filter((line) => line !== BRIEF_CLOSE && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line))
     .join("\n")
     .trim()
-  return { from: header[1]!, body }
+  return { from: spoken(header[1]!), body }
+}
+
+function spoken(from: string): string {
+  return LEGACY_FROM.get(from) ?? from
+}
+
+function briefIntroLine(line: string): boolean {
+  return (line.startsWith("You're fin:") && line.endsWith(INTRO_TAIL)) || (line.startsWith(LEGACY_INTRO.head) && line.endsWith(LEGACY_INTRO.tail))
+}
+
+/** A Fin's name as an agent may write it: `fin:<name>`, `child:<name>` as builds before the names taught it, or bare. */
+export function finName(ref: string): string {
+  return ref.startsWith("fin:") ? ref.slice("fin:".length) : ref.startsWith("child:") ? ref.slice("child:".length) : ref
 }
 
 type ToolCallBlock = Extract<Block, { type: "toolCall" }>
 
-/** A lead's `agents_send` as its transcript keeps the call: to whom, and whether it passed on the person's message. */
+/**
+ * A message that went from an Apex's conversation to a Fin, as its transcript
+ * keeps it: the Apex's `agents_send` (to whom, and whether it passed on the
+ * person's message), or the person's own written straight to the Fin with no
+ * turn of the Apex's (`direct`).
+ */
 export interface Routed {
   to: string
   forward: boolean
   text?: string
+  direct?: true
 }
 
 /**
- * A call on Mako's `mako` server that routed a message to a child, read from
+ * A call on Mako's `mako` server that routed a message to a Fin, read from
  * the call itself (its server, its tool and its arguments, as every harness's
  * decoder names them), so a live turn and a saved one draw the same line.
  */
@@ -80,7 +116,7 @@ export function routedCall(block: ToolCallBlock): Routed | undefined {
   const call = RoutedCallSchema.safeParse(block.arguments)
   if (!call.success) return undefined
   const { to, forward, text } = call.data
-  return { to: to.startsWith("child:") ? to.slice("child:".length) : to, forward: forward === true, ...(text?.trim() && { text: text.trim() }) }
+  return { to: finName(to), forward: forward === true, ...(text?.trim() && { text: text.trim() }) }
 }
 const RoutedArgsSchema = z.looseObject({ to: z.string().min(1), forward: z.boolean().optional(), text: z.string().optional() })
 
@@ -133,8 +169,8 @@ export function childStateOf(agent: NativeAgent): ChildState {
 }
 
 /**
- * Where a child stands for the person. A question on its lead is the lead's
- * to answer, so that child is still at work as far as the person goes; an
+ * Where a Fin stands for the person. A question on its Apex is the Apex's
+ * to answer, so that Fin is still at work as far as the person goes; an
  * idle one has nothing running and nothing asked.
  */
 export function childGroup(state: ChildState): ChildGroup {
@@ -172,7 +208,7 @@ export function orderedChildren(children: readonly NativeAgent[]): NativeAgent[]
   return [...children].sort((left, right) => rank(left) - rank(right) || (left.startedAt ?? left.observedAt) - (right.startedAt ?? right.observedAt))
 }
 
-/** How many of a lead's Threads stand in each group: the rail's badge, the strip's count, the panel's headings and the phone's list. */
+/** How many of an Apex's Fins stand in each group: the rail's badge, the strip's count, the panel's headings and the phone's list. */
 export interface Rollup {
   total: number
   needs: number
@@ -185,7 +221,7 @@ export interface Rollup {
 const EMPTY_ROLLUP: Rollup = { total: 0, needs: 0, working: 0, queued: 0, failed: 0, done: 0 }
 const rollups = new WeakMap<readonly NativeAgent[], Rollup>()
 
-/** The one count of a lead's children every surface shows: the same object while the children are. */
+/** The one count of an Apex's Fins every surface shows: the same object while the Fins are. */
 export function rollup(children: readonly NativeAgent[]): Rollup {
   if (!children.length) return EMPTY_ROLLUP
   const held = rollups.get(children)
@@ -201,11 +237,7 @@ export function sameRollup(left: Rollup, right: Rollup): boolean {
     left.queued === right.queued && left.failed === right.failed && left.done === right.done
 }
 
-export function threadsWord(count: number): string {
-  return count === 1 ? "1 Thread" : `${count} Threads`
-}
-
-/** The badge's words, for screen readers and its tip: "12 Threads: 2 need you, 5 working, 2 queued, 3 done". */
+/** The badge's words, for screen readers and its tip: "12 Fins: 2 need you, 5 working, 2 queued, 3 done". */
 export function rollupLabel(counts: Rollup): string {
   const parts = [
     `${counts.needs} ${counts.needs === 1 ? "needs" : "need"} you`,
@@ -214,18 +246,18 @@ export function rollupLabel(counts: Rollup): string {
     ...(counts.failed ? [`${counts.failed} failed`] : []),
     `${counts.done} done`,
   ]
-  return `${threadsWord(counts.total)}: ${parts.join(", ")}`
+  return `${finsWord(counts.total)}: ${parts.join(", ")}`
 }
 
 /**
- * A lead's composer line: what's at work and what waits on the person, "5 working · 2 need you"; with neither, what's
- * queued, failed or done. Queued and asking children are never "running".
+ * An Apex's line: what's at work and what waits on the person, "3 Fins working · 1 needs you"; with neither, what's
+ * queued, failed or done. Queued and asking Fins are never "running". The first count names them.
  */
 export function rollupLine(counts: Rollup): string {
-  const now = [...(counts.working ? [`${counts.working} working`] : []), ...(counts.needs ? [`${counts.needs} ${counts.needs === 1 ? "needs" : "need"} you`] : [])]
-  if (now.length) return now.join(" · ")
-  const rest = [...(counts.queued ? [`${counts.queued} queued`] : []), ...(counts.failed ? [`${counts.failed} failed`] : []), ...(counts.done ? [`${counts.done} done`] : [])]
-  return rest.join(" · ")
+  const needs = (count: number) => (count === 1 ? "needs" : "need")
+  const now = [...(counts.working ? [[counts.working, "working"] as const] : []), ...(counts.needs ? [[counts.needs, `${needs(counts.needs)} you`] as const] : [])]
+  const rest = [...(counts.queued ? [[counts.queued, "queued"] as const] : []), ...(counts.failed ? [[counts.failed, "failed"] as const] : []), ...(counts.done ? [[counts.done, "done"] as const] : [])]
+  return (now.length ? now : rest).map(([count, words], index) => `${index === 0 ? finsWord(count) : count} ${words}`).join(" · ")
 }
 
 /** What a child's state says in a line: its question, its phase or step, why it waits, or how it ended. */
@@ -256,7 +288,7 @@ export function childWord(state: ChildState): string {
     case "working":
       return "Working"
     case "blocked":
-      return state.on === "lead" ? `Asks its ${ROLE_WORD}` : state.on === "approval" ? "Needs approval" : "Needs your answer"
+      return state.on === "lead" ? `Asks its ${APEX_WORD}` : state.on === "approval" ? "Needs approval" : "Needs your answer"
     case "idle":
       return "Idle"
     case "ended":

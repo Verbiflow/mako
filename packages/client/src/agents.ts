@@ -13,17 +13,18 @@ export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--mo
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
                     [--wait [--timeout <ms>]] [--wake decisions|finish|never]
   mako agents list [--tree]
-  mako agents read <child> [--transcript]
+  mako agents read <fin> [--transcript]
   mako agents report <status> <summary> [--question <q>] [--key <k>]
-  mako agents wait [child…] [--timeout <ms>]
-  mako agents send <child> [words…] [--forward] [--key <k>]
-  mako agents stop <child|all> [--reason <words>]
+  mako agents wait [fin…] [--timeout <ms>]
+  mako agents send <fin> [words…] [--forward] [--key <k>]
+  mako agents stop <fin|all> [--reason <words>]
   mako agents link <harness> <session> [--pid <n>]
   mako mcp [--cwd <folder>]   the same operations as an MCP server on stdio
 
   A brief file ending .json is a brief ({objective, doneWhen, boundaries, output}); any other is its objective.
-  The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell. --key repeats a start, report or message.
-  --wait holds for the child's result (at most ${WAIT_LIMIT_MS / 1000} s); past that, the result starts the caller's next turn.
+  The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell: an Apex, and each Thread it starts
+  one of its Fins, named by its name, fin:<name> or its Thread ID. --key repeats a start, report or message.
+  --wait holds for the Fin's result (at most ${WAIT_LIMIT_MS / 1000} s); past that, the result starts the caller's next turn.
   send --forward passes on the person's message the caller's turn answers; any words go beneath it.`
 
 const BriefSchema = z.object({ objective: z.string(), doneWhen: z.array(z.string()).optional(), boundaries: z.array(z.string()).optional(), output: z.string().optional() }).strict()
@@ -107,7 +108,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
     case "list":
       return { tool: tool("list"), input: values.tree ? { scope: "tree" } : {} }
     case "read":
-      if (!first) throw new Error("agents read needs a child")
+      if (!first) throw new Error("agents read needs a Fin")
       return { tool: tool("read"), input: { child: first, ...(values.transcript && { view: "transcript" }) } }
     case "report":
       if (!first || !second) throw new Error("agents report needs a status and a summary")
@@ -122,14 +123,14 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       }
     case "send": {
       const words = [second, ...more].filter(Boolean).join(" ")
-      if (!first || (!words && !values.forward)) throw new Error("agents send needs a child and words, or --forward")
+      if (!first || (!words && !values.forward)) throw new Error("agents send needs a Fin and words, or --forward")
       return {
         tool: tool("send"),
         input: { to: first, clientKey: values.key ?? randomUUID(), ...(values.forward && { forward: true }), ...(words && { text: words }) },
       }
     }
     case "stop":
-      if (!first) throw new Error("agents stop needs a child, or all")
+      if (!first) throw new Error("agents stop needs a Fin, or all")
       return { tool: tool("stop"), input: { child: first, ...(values.reason && { reason: values.reason }) } }
     case "link":
       if (!first || !second) throw new Error("agents link needs a harness and a session")

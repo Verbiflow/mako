@@ -137,7 +137,7 @@ try {
       assert.ok(text.includes(JSON.stringify(orchCase.prompt).slice(1, -1)), `${harness} ${orchCase.id}: the request carries the prompt`)
       if (orchCase.setup.children?.length) {
         assert.ok(text.includes("agents_send"), `${harness} ${orchCase.id}: the request names agents_send`)
-        assert.ok(text.includes("You're this Thread's lead") && orchCase.setup.children.every((child) => text.includes(`child:${child.name}`)), `${harness} ${orchCase.id}: the request carries the front-door note`)
+        assert.ok(text.includes("You're this Thread's Apex") && orchCase.setup.children.every((child) => text.includes(`fin:${child.name}`)), `${harness} ${orchCase.id}: the request carries the front-door note`)
       }
       bodies++
       bytes += text.length
@@ -169,6 +169,9 @@ try {
       ["fd-stale-fork", sample([[send("thread-env-old")]]), false],
       ["fd-finished-child-follow-up", sample([[send("ios")]]), true],
       ["fd-finished-child-follow-up", sample([[start()]]), false],
+      ["fd-direct-not-resent", sample([[send("android")]]), false],
+      ["fd-after-direct-by-content", sample([[send("ios")]]), true],
+      ["fd-after-direct-by-content", sample([[send("android")]]), false],
     ]
     for (const [id, synthetic, passes] of graded) {
       const orchCase = byId.get(id)

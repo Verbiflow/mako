@@ -41,9 +41,9 @@ import { QuietStrip } from "./quiet-strip"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
-import { ChildOfLeadContext, OpenChildContext, childSession } from "./child-of-lead"
-import { PhoneChildChips } from "./lead-children"
-import { LeadMark } from "@/components/ui/lead-mark"
+import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
+import { PhoneChildChips } from "./apex-fins"
+import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 
 /** The renderer's live conversation: its transcript, approvals and questions, the desktop's own code. Its own chunk. */
@@ -60,9 +60,9 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   // The Session it opened on, when the address names none: kept while the screen is open, so a Session that stops
   // waiting or working doesn't hand the screen to another tab under the person's thumb.
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
-  // One of its Threads opened from a chip under its bar, back to it by the bar's back button.
-  const [child, setChild] = useState<{ lead: string; agent: NativeAgent } | null>(null)
-  if (child && child.lead !== threadId) setChild(null)
+  // One of its Fins opened from a chip under its bar, back to it by the bar's back button.
+  const [child, setChild] = useState<{ apex: string; agent: NativeAgent } | null>(null)
+  if (child && child.apex !== threadId) setChild(null)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
   // A branch made from a reply here opens as this Thread's new tab once its owner lists it.
@@ -101,7 +101,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   const addingTo: AddingTo | undefined = session.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner, where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
   const opened = child ? childSession(session, child.agent) : undefined
   const openChild = (agent: NativeAgent) => {
-    if (agent.child?.conversation) setChild({ lead: thread.id, agent })
+    if (agent.child?.conversation) setChild({ apex: thread.id, agent })
   }
   if (child && opened)
     return (
@@ -114,9 +114,9 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
           place={session.row.runsOn.kind === "cloud" ? "cloud" : "device"}
           headingRef={heading}
         />
-        <ChildOfLeadContext value={thread.title}>
+        <FinOfApexContext value={thread.title}>
           <ThreadBody thread={thread} session={opened} />
-        </ChildOfLeadContext>
+        </FinOfApexContext>
       </div>
     )
   return (
@@ -268,9 +268,9 @@ function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, acti
   return (
     <header className="web-bar web-bar-thread flex shrink-0 items-center gap-1 px-1.5">
       {onBack && backLabel ? (
-        <button type="button" aria-label={`Back to ${backLabel}`} data-back-to-lead onClick={onBack} className="pressable flex h-11 max-w-[40%] shrink-0 items-center gap-0.5 pr-1.5 text-ui text-muted-foreground">
+        <button type="button" aria-label={`Back to ${backLabel}`} data-back-to-apex onClick={onBack} className="pressable flex h-11 max-w-[40%] shrink-0 items-center gap-0.5 pr-1.5 text-ui text-muted-foreground">
           <ChevronLeftIcon className="size-6 shrink-0" strokeWidth={2} />
-          <LeadMark className="size-3 shrink-0" />
+          <ApexMark className="size-3 shrink-0" />
           <span className="ml-1 truncate">{backLabel}</span>
         </button>
       ) : onBack ? (

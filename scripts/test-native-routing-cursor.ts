@@ -5,9 +5,9 @@ import "./lib/scratch-git.mjs"
 // person's other sign-ins), each asking for one subagent through Cursor's
 // `task` tool:
 //
-// - as a lead, `disallowedTools: ["task"]` on `Agent.create`: no task call,
+// - as an Apex, `disallowedTools: ["task"]` on `Agent.create`: no task call,
 //   no subagent observed, and the model says it has no such tool;
-// - the same lead resumed (`Agent.resume`, which keeps no exclusion of its
+// - the same Apex resumed (`Agent.resume`, which keeps no exclusion of its
 //   own): still none;
 // - as an ordinary Thread: the task call runs and its subagent is observed.
 //
@@ -103,18 +103,18 @@ try {
   const driver = sealedDrivers([installCursor]).get("cursor")!
   assert.ok(driver.available(process.cwd()), "Cursor's SDK is installed")
 
-  const lead = await turn(driver, scratch, project, "lead", "lead")
-  assert.deepEqual(taskCalls(lead.events), [], "Cursor as a lead called no task tool")
-  assert.deepEqual(children(lead.events), [], "Cursor as a lead: no subagent observed")
-  assert.ok(said(lead.events).includes(NONE), "Cursor as a lead says it has no task tool")
-  assert.ok(lead.nativeId, "Cursor named its agent")
-  console.log(`cursor: lead: no task tool, no subagent (${lead.seconds} s)`)
+  const apex = await turn(driver, scratch, project, "apex", "apex")
+  assert.deepEqual(taskCalls(apex.events), [], "Cursor as an Apex called no task tool")
+  assert.deepEqual(children(apex.events), [], "Cursor as an Apex: no subagent observed")
+  assert.ok(said(apex.events).includes(NONE), "Cursor as an Apex says it has no task tool")
+  assert.ok(apex.nativeId, "Cursor named its agent")
+  console.log(`cursor: Apex: no task tool, no subagent (${apex.seconds} s)`)
 
-  const resumed = await turn(driver, scratch, project, "lead resumed", "lead", lead.nativeId)
-  assert.deepEqual(taskCalls(resumed.events), [], "Cursor's lead resumed called no task tool")
-  assert.deepEqual(children(resumed.events), [], "Cursor's lead resumed: no subagent observed")
-  assert.ok(said(resumed.events).includes(NONE), "Cursor's lead resumed says it has no task tool")
-  console.log(`cursor: lead resumed: still no task tool (${resumed.seconds} s)`)
+  const resumed = await turn(driver, scratch, project, "Apex resumed", "apex", apex.nativeId)
+  assert.deepEqual(taskCalls(resumed.events), [], "Cursor's Apex resumed called no task tool")
+  assert.deepEqual(children(resumed.events), [], "Cursor's Apex resumed: no subagent observed")
+  assert.ok(said(resumed.events).includes(NONE), "Cursor's Apex resumed says it has no task tool")
+  console.log(`cursor: Apex resumed: still no task tool (${resumed.seconds} s)`)
 
   const thread = await turn(driver, scratch, project, "thread", "thread")
   assert.ok(taskCalls(thread.events).length > 0, "Cursor as an ordinary Thread called its task tool")

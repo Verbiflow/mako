@@ -167,20 +167,20 @@ export interface Resident {
 export function launchRouting(dependencies: Pick<Dependencies, "agents">, session: string, tools: ConversationTools | undefined): (() => RoutedThread) | undefined {
   const agents = dependencies.agents
   if (!tools || !agents) return undefined
-  return () => ({ role: agents()?.leads(session) ? "lead" : "thread" })
+  return () => ({ role: agents()?.isApex(session) ? "apex" : "thread" })
 }
 
-/** What a conversation's children are to its turns and its roster (`Agents`). */
+/** What a conversation's Fins are to its turns and its roster (`Agents`). */
 export interface ConversationChildren {
-  /** The conversation's children as roster entries, the same array until one of them changes. */
+  /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
   settled(conversation: string, request: string): void
-  /** Whether the conversation's Thread leads: it has children or queued spawns, or was started as a lead. */
-  leads(conversation: string): boolean
-  /** What a lead hears before a message the person sends it: its Threads as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
+  /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
+  isApex(conversation: string): boolean
+  /** What an Apex hears before a message the person sends it: its Fins as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
 }
 export interface Dependencies {

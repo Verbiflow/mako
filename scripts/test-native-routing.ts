@@ -19,43 +19,43 @@ import { prepareDevinMcp } from "@mako/host/harnesses/devin/session-mcp"
 import { storedDefinitions } from "./native-tools.ts"
 
 const HookDecision = z.object({ hookSpecificOutput: z.object({ permissionDecision: z.string().optional() }).loose().optional() }).loose()
-const lead: RoutedThread = { role: "lead" }
+const apex: RoutedThread = { role: "apex" }
 const thread: RoutedThread = { role: "thread" }
 
 /** 4.1's table, as Claude's `Agent` calls: who decides, what the call carries, and where it goes. */
-const CLAUDE_CASES: { name: string; tool: string; input: JsonObject; teams?: boolean; lead: "allow" | "deny"; thread: "allow" | "deny" }[] = [
-  { name: "a background agent, Claude's default", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, lead: "deny", thread: "allow" },
-  { name: "a background agent, said outright", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: true }, lead: "deny", thread: "allow" },
-  { name: "a foreground agent that isn't Explore", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: false }, lead: "deny", thread: "allow" },
-  { name: "Explore in the turn", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d", run_in_background: false }, lead: "allow", thread: "allow" },
-  { name: "Explore in the background by default", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d" }, lead: "deny", thread: "allow" },
-  { name: "Explore in a worktree", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d", run_in_background: false, isolation: "worktree" }, lead: "deny", thread: "deny" },
-  { name: "an agent in a worktree", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", isolation: "worktree" }, lead: "deny", thread: "deny" },
-  { name: "a remote agent", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", isolation: "remote" }, lead: "deny", thread: "deny" },
-  { name: "a named agent with agent teams on: a teammate", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", name: "reviewer" }, teams: true, lead: "deny", thread: "deny" },
-  { name: "a named agent with agent teams off", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", name: "reviewer" }, lead: "deny", thread: "allow" },
-  { name: "Task, the tool's name before Claude Code 2.1", tool: "Task", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, lead: "deny", thread: "allow" },
-  { name: "a workflow, a script of agents", tool: "Workflow", input: { script: "x" }, lead: "deny", thread: "allow" },
+const CLAUDE_CASES: { name: string; tool: string; input: JsonObject; teams?: boolean; apex: "allow" | "deny"; thread: "allow" | "deny" }[] = [
+  { name: "a background agent, Claude's default", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, apex: "deny", thread: "allow" },
+  { name: "a background agent, said outright", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: true }, apex: "deny", thread: "allow" },
+  { name: "a foreground agent that isn't Explore", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: false }, apex: "deny", thread: "allow" },
+  { name: "Explore in the turn", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d", run_in_background: false }, apex: "allow", thread: "allow" },
+  { name: "Explore in the background by default", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d" }, apex: "deny", thread: "allow" },
+  { name: "Explore in a worktree", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d", run_in_background: false, isolation: "worktree" }, apex: "deny", thread: "deny" },
+  { name: "an agent in a worktree", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", isolation: "worktree" }, apex: "deny", thread: "deny" },
+  { name: "a remote agent", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", isolation: "remote" }, apex: "deny", thread: "deny" },
+  { name: "a named agent with agent teams on: a teammate", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", name: "reviewer" }, teams: true, apex: "deny", thread: "deny" },
+  { name: "a named agent with agent teams off", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", name: "reviewer" }, apex: "deny", thread: "allow" },
+  { name: "Task, the tool's name before Claude Code 2.1", tool: "Task", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, apex: "deny", thread: "allow" },
+  { name: "a workflow, a script of agents", tool: "Workflow", input: { script: "x" }, apex: "deny", thread: "allow" },
 ]
 
 for (const entry of CLAUDE_CASES) {
   const spawn = claudeSpawn(entry.tool, ClaudeAgentInput.parse(entry.input), entry.teams ?? false)
   assert.ok(spawn, `${entry.name}: a spawn`)
-  assert.equal(routeNativeSpawn(lead, spawn).kind, entry.lead, `${entry.name}, in a lead`)
+  assert.equal(routeNativeSpawn(apex, spawn).kind, entry.apex, `${entry.name}, in an Apex`)
   assert.equal(routeNativeSpawn(thread, spawn).kind, entry.thread, `${entry.name}, in an ordinary Thread`)
 }
 
 for (const tool of ["Bash", "Read", "SendMessage", "TaskStop", "mcp__mako__agents_start"])
   assert.equal(claudeSpawn(tool, {}, true), undefined, `${tool} starts no native subagent`)
 
-// The flags, for any harness: in a lead only an exploration in the turn stays; elsewhere only isolation and teammates go to Mako.
-assert.equal(routeNativeSpawn(lead, { tool: "spawn_agent", start: "agents_start" }).kind, "deny")
+// The flags, for any harness: in an Apex only an exploration in the turn stays; elsewhere only isolation and teammates go to Mako.
+assert.equal(routeNativeSpawn(apex, { tool: "spawn_agent", start: "agents_start" }).kind, "deny")
 assert.equal(routeNativeSpawn(thread, { tool: "spawn_agent", start: "agents_start" }).kind, "allow")
-assert.equal(routeNativeSpawn(lead, { tool: "x", start: "agents_start", inTurnExplore: true }).kind, "allow")
+assert.equal(routeNativeSpawn(apex, { tool: "x", start: "agents_start", inTurnExplore: true }).kind, "allow")
 assert.equal(routeNativeSpawn(thread, { tool: "x", start: "agents_start", isolated: true }).kind, "deny")
 assert.equal(routeNativeSpawn(thread, { tool: "x", start: "agents_start", teammate: true }).kind, "deny")
-assert.equal(routeNativeSpawn(lead, { tool: "x", start: "agents_start", inTurnExplore: true, isolated: true }).kind, "deny", "isolation goes to Mako even for an exploration in the turn")
-assert.equal(nativeSpawnsOff(lead), true, "a lead's harness launches with its spawning off")
+assert.equal(routeNativeSpawn(apex, { tool: "x", start: "agents_start", inTurnExplore: true, isolated: true }).kind, "deny", "isolation goes to Mako even for an exploration in the turn")
+assert.equal(nativeSpawnsOff(apex), true, "an Apex's harness launches with its spawning off")
 assert.equal(nativeSpawnsOff(thread), false, "an ordinary Thread's harness keeps its spawning")
 
 // The deny is one string: it names the tool as the harness calls it, and repeats agents_start's own after-start words.
@@ -64,7 +64,7 @@ assert.equal(CLAUDE_START_TOOL, "mcp__mako__agents_start")
 assert.match(message, /Call `agents_start` \(mcp__mako__agents_start\) with this brief instead\./)
 assert.ok(message.endsWith(AFTER_START), "the message ends as agents_start's result does")
 assert.doesNotMatch(message, /\n/, "one line")
-const denied = routeNativeSpawn(lead, claudeSpawn("Agent", { subagent_type: "general-purpose" }, false)!)
+const denied = routeNativeSpawn(apex, claudeSpawn("Agent", { subagent_type: "general-purpose" }, false)!)
 assert.deepEqual(denied, { kind: "deny", message })
 
 // Claude's PreToolUse: the deny carries the message, and a denied call never reaches the call bounds, so it leaves nothing behind.
@@ -77,10 +77,10 @@ assert.deepEqual(denied, { kind: "deny", message })
   const routing = { thread: () => ({ role }), teams: false, conversation: "c" }
   const answer = claudeRoutedCall(routing, call("Agent", { subagent_type: "general-purpose" }, "a"))
   assert.equal(answer, undefined, "an ordinary Thread keeps its background agents")
-  role = "lead"
+  role = "apex"
   assert.deepEqual(claudeRoutedCall(routing, call("Agent", { subagent_type: "general-purpose" }, "b")), {
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: message },
-  }, "the role is read at each spawn: a Thread that became a lead denies from its next spawn")
+  }, "the role is read at each spawn: a Thread that became an Apex denies from its next spawn")
   assert.equal(claudeRoutedCall(routing, call("Agent", { subagent_type: "Explore", run_in_background: false }, "c")), undefined)
 
   const started: string[] = []
@@ -97,13 +97,13 @@ assert.deepEqual(denied, { kind: "deny", message })
 }
 
 // The switches the at-launch harnesses take.
-assert.deepEqual(codexRoutingConfig("c", () => lead), { "agents.enabled": false, "features.multi_agent_v2": false })
+assert.deepEqual(codexRoutingConfig("c", () => apex), { "agents.enabled": false, "features.multi_agent_v2": false })
 assert.deepEqual(codexRoutingConfig("c", () => thread), {})
 assert.deepEqual(codexRoutingConfig("c", undefined), {})
 {
   const env: NodeJS.ProcessEnv = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ agents: { build: { permissions: [{ action: "subagent", resource: "*", effect: "allow" }] } } }) }
   configureOpenCodePermissions(env, "full")
-  configureOpenCodeRouting(env, "c", () => lead)
+  configureOpenCodeRouting(env, "c", () => apex)
   const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!)
   for (const agent of ["build", "plan"])
     assert.deepEqual(config.agents[agent].permissions.at(-1), { action: OPENCODE_SPAWN_ACTION, resource: "*", effect: "deny" }, `${agent}'s last rule is the deny, so it wins`)
@@ -138,7 +138,7 @@ assert.deepEqual(codexRoutingConfig("c", undefined), {})
 
 /**
  * Each at-launch control as recorded (`harness:native-tools`): the newest
- * definitions of each harness hold a lead configuration beside each of its
+ * definitions of each harness hold an Apex configuration beside each of its
  * own, which offers none of the harness's spawn tools that the ordinary one
  * offers. Claude decides each call instead, and Cursor's definitions come
  * from its SDK's schema, not a launch.
@@ -149,13 +149,13 @@ for (const harness of ["codex", "grok", "opencode", "devin"]) {
   const vocabulary = VOCABULARIES.find((each) => each.harness === harness)!
   const spawns = Object.entries(vocabulary.tools).filter(([, tool]) => tool.kind === "agent").flatMap(([name, tool]) => [name, ...tool.aliases ?? []])
     .filter((name) => !KEPT_IN_A_LEAD.has(`${harness}:${name}`))
-  const leads = newest.configurations.filter((configuration) => configuration.name.endsWith(", lead"))
-  assert.ok(leads.length, `${harness} ${newest.version} has no lead configuration; record one with npm run harness:native-tools -- ${harness}`)
-  for (const lead of leads) {
-    const ordinary = newest.configurations.find((configuration) => configuration.name === lead.name.slice(0, -", lead".length))
-    assert.ok(ordinary, `${harness} ${lead.name} has no ordinary configuration beside it`)
+  const apexes = newest.configurations.filter((configuration) => configuration.name.endsWith(", lead"))
+  assert.ok(apexes.length, `${harness} ${newest.version} has no Apex configuration; record one with npm run harness:native-tools -- ${harness}`)
+  for (const apex of apexes) {
+    const ordinary = newest.configurations.find((configuration) => configuration.name === apex.name.slice(0, -", lead".length))
+    assert.ok(ordinary, `${harness} ${apex.name} has no ordinary configuration beside it`)
     const offered = spawns.filter((name) => name in ordinary.tools)
-    assert.deepEqual(spawns.filter((name) => name in lead.tools), [], `${harness} ${newest.version} offers ${offered.join(", ")} in ${lead.name}`)
+    assert.deepEqual(spawns.filter((name) => name in apex.tools), [], `${harness} ${newest.version} offers ${offered.join(", ")} in ${apex.name}`)
   }
   assert.ok(newest.configurations.some((configuration) => spawns.some((name) => name in configuration.tools)), `${harness} ${newest.version}: an ordinary Thread keeps its spawn tool somewhere`)
 }
@@ -176,7 +176,7 @@ for (const harness of ["codex", "grok", "opencode", "devin"]) {
     updateSources: { get: (harness) => harness === "shipped" ? { versions: { tested: "2.0.0", bundled: { package: "a-sdk", version: "0.2.0" } } } : undefined },
     launchReadings: { read: async (harness) => installed.get(harness) },
   }
-  assert.equal(launchSpawnsOff("same", "a switch", "conversation", () => ({ role: "lead" })), true)
+  assert.equal(launchSpawnsOff("same", "a switch", "conversation", () => ({ role: "apex" })), true)
   assert.equal(launchSpawnsOff("same", "a switch", "conversation", () => ({ role: "thread" })), false)
   const readings = new Map((await nativeRoutingReadings(host)).map((reading) => [reading.harness, reading]))
   assert.deepEqual(Object.fromEntries([...readings].map(([harness, reading]) => [harness, reading.state])), { same: "control", moved: "unverified", unread: "unverified", shipped: "control", spoken: "words" })

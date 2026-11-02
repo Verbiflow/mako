@@ -6,11 +6,11 @@ import { FROM_AGENTS, WAKES_PER_MINUTE } from "@mako/host/conversations/agent-wa
 import { AgentsWorld } from "./lib/agents-world.ts"
 
 /*
- * What a burst of reports costs a lead (`npm run bench:orch-wake`): one idle
- * lead starts CHILDREN children, more than the tree's running budget, so the
+ * What a burst of reports costs an Apex (`npm run bench:orch-wake`): one idle
+ * apex starts CHILDREN children, more than the tree's running budget, so the
  * rest queue and start as others end; each child's turn reports EACH times
  * over a few seconds, 300 reports in all. Every report has its own number,
- * taken as it's made. The lead's wakes are its prompts: how many there are,
+ * taken as it's made. The Apex's wakes are its prompts: how many there are,
  * whether a report reached it twice or never, and whether the numbers came
  * in the order the reports were made. Each budget fails the run.
  */
@@ -27,7 +27,7 @@ const world = new AgentsWorld({
   root,
   script: async (turn) => {
     if (turn.text.startsWith(FROM_AGENTS)) return "Noted."
-    if (!turn.text.includes("child:")) return "ok"
+    if (!turn.text.includes("You're fin:")) return "ok"
     for (let i = 0; i < EACH; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, GAP_MS.min + Math.random() * GAP_MS.spread))
       made += 1
@@ -38,17 +38,17 @@ const world = new AgentsWorld({
   },
 })
 try {
-  const lead = await world.lead("codex")
+  const apex = await world.apex("codex")
   const harnesses = ["claude", "cursor", "grok", "opencode", "devin"]
   const began = performance.now()
   for (let i = 0; i < CHILDREN; i += 1) {
-    const started = await world.agents.start(lead.caller, { brief: { objective: `Review part ${i} of the sidebar.` }, harness: harnesses[i % harnesses.length]!, name: `part-${i}`, clientKey: `part-${i}`, cwd: root })
+    const started = await world.agents.start(apex.caller, { brief: { objective: `Review part ${i} of the sidebar.` }, harness: harnesses[i % harnesses.length]!, name: `part-${i}`, clientKey: `part-${i}`, cwd: root })
     assert.ok(!("refused" in started), JSON.stringify(started))
   }
   await world.settle(2_600, 240_000)
   const elapsed = performance.now() - began
-  const wakes = world.prompts.filter((prompt) => prompt.conversation === lead.conversation)
-  assert.equal(world.steers.length, 0, "a Codex lead is woken by turns, never steered")
+  const wakes = world.prompts.filter((prompt) => prompt.conversation === apex.conversation)
+  assert.equal(world.steers.length, 0, "a Codex apex is woken by turns, never steered")
   const numbers = wakes.flatMap((wake) => [...wake.text.matchAll(/: R(\d+)\./g)].map((match) => Number(match[1])))
   const duplicates = numbers.length - new Set(numbers).size
   const missing = REPORTS - new Set(numbers).size
@@ -57,9 +57,9 @@ try {
   console.log(JSON.stringify({ children: CHILDREN, reports: made, wakes: wakes.length, perWake: sizes, duplicates, missing, inOrder, wakesPerMinuteCap: WAKES_PER_MINUTE, elapsedMs: Math.round(elapsed) }))
   assert.equal(made, REPORTS)
   assert.ok(wakes.length <= BUDGET.wakes, `${wakes.length} wakes for ${REPORTS} reports; the budget is ${BUDGET.wakes}`)
-  assert.equal(duplicates, BUDGET.duplicates, "no report reaches the lead twice")
+  assert.equal(duplicates, BUDGET.duplicates, "no report reaches the Apex twice")
   assert.equal(missing, 0, "and none never")
-  assert.ok(inOrder, "the lead hears them in the order they were made")
+  assert.ok(inOrder, "the Apex hears them in the order they were made")
   const minute = wakes.map((wake) => wake.at).sort((a, b) => a - b)
   for (let i = WAKES_PER_MINUTE; i < minute.length; i += 1)
     assert.ok(minute[i]! - minute[i - WAKES_PER_MINUTE]! >= 60_000, `more than ${WAKES_PER_MINUTE} wakes in a minute`)

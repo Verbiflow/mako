@@ -197,53 +197,74 @@ Claude's captured messages and covers the state, the ranking and the
 conflation; Settings > Diagnostics lists each session's background work with
 its sources.
 
-A child is a Thread another Thread started or took to work for it, its
-lead (`ROLE_WORD`); the edge is the record (`thread_parents`,
-`contracts/agents.ts`), on the child's `ThreadRef.parent`, so `threadList`
-lists it under its lead and never as a Thread of its own (`listedAsThread`),
-while its copy and originals still sync right after its parent's
-(`uploadScope`). How a child stands is computed, never stored
-(`childState(edge, thread, journal)`). `Agents` (`conversations/agents.ts`)
-starts, follows, delivers and ends them; each verb is defined once in
-`contracts/agent-tools.ts` as `mako:agents-<verb>` (start, link, list, read,
-report, stop, wait), its schema generated from the handler, and reaches the
-agent three ways from the one projection (`conversations/agent-tools.ts`):
-the in-Thread `mako` server, `mako agents <verb>` and `mako mcp`, the caller
-named by `MAKO_SESSION_ID`. A start commits the child's Thread, its edge,
-its Session and its first request (the brief, the lead's words, not the
-person's) together (`LiveStartOptions.parent`), at an access tier no higher
-than its lead's, here only (`place` other than `here` is refused); past a
-tree's running budget it queues with why, past its started budget it is
-refused with the count (`TREE_BUDGET`); a cycle is refused and there's no
-depth limit. One a Thread's shell ran is followed through its own Session in
-the catalog and its process (`agent-runs.ts`, at most
-`TAIL_READS_PER_SECOND` tail reads across the host), its end written once.
-A report (`agents_report`, else one implicit report at a turn's end) sends
-its lead a notice; an idle lead waits `WAKE_COALESCE_MS` and takes ONE turn
-with the digest, a busy one gets it at its next step where its harness
-steers there and at its turn's end where it doesn't, at most
-`WAKES_PER_MINUTE` a lead (`agent-wakes.ts`): the lead never polls. A steer
-the harness doesn't take goes as the lead's next turn, never dropped. Each
-start sets its `mode` and `wake` (on the edge's `asked`), and `reportRoute`
-is where its reports go: `background` returns at once, `wait` holds the call
-at most `WAIT_LIMIT_MS` (half the 60 s Cursor's MCP client and the MCP
-default give a tool call) for the result or a question, then answers
-`pending`; a timeout never stops the child, and the result it waited for
-starts the lead's next turn, never steered (`settledOnly`, after
-`RESULT_COALESCE_MS`), in full. `wake: decisions` (the default) wakes the lead
-for results and questions, `finish` for results only, `never` for none
-unless it waited; a question its lead doesn't hear is the person's, never
-dropped. A child's turn an exit or an update cut short always continues in the next
-host (`LeftTurn.always`), and its messages the exit paused go on. Children
-are roster entries (`childEntry` under `CHILDREN_BINDING`, `withChildren`)
-built from the store, never saved in a journal. `npm run
-test:background-agents` covers the engine, `test:agents-doors` the three
-doors, `test:agents-migrate` migration 6 from #286's `background_agents`,
-`test:orch-update` an update mid-tree, `test:agents-wake` every mode and wake
-setting, and `bench:agents-follow`, `bench:orch-wake`,
-`bench:orch-wake-latency`, `bench:orch-spawn` and `bench:orch-host` hold the
-follow, the wakes, a report's way to its lead, a spawn's receipt and the
-host's loop to budgets.
+Glossary: a Thread that starts others is an **Apex**, and each one it
+started or took is a **Fin** (`APEX_WORD`, `FIN_WORD`); there is no word for
+the group. Data structures still say parent and child (`thread_parents`,
+`ChildState`), and the wire keeps `"lead"` for the role and for a question
+the Apex answers (`APEX_ROLE`, `blocked.on`), so builds on either side of the
+names read each other.
+
+A Fin's edge is the record (`thread_parents`, `contracts/agents.ts`), on its
+`ThreadRef.parent`, so `threadList` lists it under its Apex and never as a
+Thread of its own (`listedAsThread`), while its copy and originals still
+sync right after its parent's (`uploadScope`). How a Fin stands is computed,
+never stored (`childState(edge, thread, journal)`). `Agents`
+(`conversations/agents.ts`) starts, follows, delivers and ends them; each
+verb is defined once in `contracts/agent-tools.ts` as `mako:agents-<verb>`
+(start, link, list, read, report, stop, wait), its schema generated from the
+handler, and reaches the agent three ways from the one projection
+(`conversations/agent-tools.ts`): the in-Thread `mako` server, `mako agents
+<verb>` and `mako mcp`, the caller named by `MAKO_SESSION_ID`. A start
+commits the Fin's Thread, its edge, its Session and its first request (the
+brief, the Apex's words, not the person's) together
+(`LiveStartOptions.parent`), at an access tier no higher than its Apex's,
+here only (`place` other than `here` is refused); past a tree's running
+budget it queues with why, past its started budget it is refused with the
+count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. One a
+Thread's shell ran is followed through its own Session in the catalog and
+its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
+across the host), its end written once. A report (`agents_report`, else one
+implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
+`WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
+its next step where its harness steers there and at its turn's end where it
+doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex
+never polls. A steer the harness doesn't take goes as the Apex's next turn,
+never dropped. Each start sets its `mode` and `wake` (on the edge's
+`asked`), and `reportRoute` is where its reports go: `background` returns at
+once, `wait` holds the call at most `WAIT_LIMIT_MS` (half the 60 s Cursor's
+MCP client and the MCP default give a tool call) for the result or a
+question, then answers `pending`; a timeout never stops the Fin, and the
+result it waited for starts the Apex's next turn, never steered
+(`settledOnly`, after `RESULT_COALESCE_MS`), in full. `wake: decisions` (the
+default) wakes the Apex for results and questions, `finish` for results
+only, `never` for none unless it waited; a question its Apex doesn't hear is
+the person's, never dropped. A Fin's turn an exit or an update cut short
+always continues in the next host (`LeftTurn.always`), and its messages the
+exit paused go on. Fins are roster entries (`childEntry` under
+`CHILDREN_BINDING`, `withChildren`) built from the store, never saved in a
+journal. `npm run test:background-agents` covers the engine,
+`test:agents-doors` the three doors, `test:agents-migrate` migration 6 from
+#286's `background_agents`, `test:orch-update` an update mid-tree,
+`test:agents-wake` every mode and wake setting, and `bench:agents-follow`,
+`bench:orch-wake`, `bench:orch-wake-latency`, `bench:orch-spawn` and
+`bench:orch-host` hold the follow, the wakes, a report's way to its Apex, a
+spawn's receipt and the host's loop to budgets.
+
+The person's message in an Apex's conversation goes to the Apex, which
+passes it on (`agents_send`, drawn as a routing line). Nothing goes where
+the last one went. To skip the Apex's turn, the person presses Reply on a
+routing line or picks a Fin from `@` in the Apex's composer
+(`addresseeStore`, cleared once sent): `mako:agents-direct` delivers it to
+that Fin as the person's own words through the same `deliver` as
+`agents_send`, settled by the composer's request ID so a retry delivers
+once, and records it in the Apex's conversation as a stream-only event
+(`DirectRoute`, `recordDirect`) that the harness never sees, so no Apex turn
+runs. It is drawn as the same routing line, marked direct, and the Apex
+hears of it in its next front-door note. A roster entry's `child.name` says
+its host takes direct messages; one without it offers no Reply or `@`.
+`test:orch-front-door` covers both ways (`addressedFromTheApex`: no Apex
+turn, dedupe, steer and queue, refusals), and `bench:orch-route` times a
+message in a Fin's tab, addressed, and routed through a scripted Apex.
 
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a

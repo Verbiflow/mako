@@ -1,11 +1,11 @@
 import { memo } from "react"
 import { rollupLabel, type Rollup } from "@mako/host/contracts/children"
-import { LeadMark } from "@/components/ui/lead-mark"
-import { useThreadRollup } from "@/state/lead-children"
+import { ApexMark } from "@/components/ui/apex-mark"
+import { useThreadRollup } from "@/state/apex-fins"
 import { cn } from "@/lib/utils"
 
 /**
- * A lead's children as two numbers and one bar, never as rows: how many need
+ * An Apex's Fins as two numbers and one bar, never as rows: how many need
  * the person, in caution, then all of them with each group's share drawn
  * under the count.
  */
@@ -26,7 +26,7 @@ export function RollupBadge({ counts, size = "rail" }: { counts: Rollup; size?: 
         </span>
       ) : null}
       <span className={cn("tabular flex items-center gap-1 rounded bg-fill-selected px-1 text-label text-muted-foreground", size === "phone" ? "h-5" : "h-4")}>
-        <LeadMark className="size-3" />
+        <ApexMark className="size-3" />
         {counts.total}
         <span aria-hidden className="flex h-[3px] w-3.5 overflow-hidden rounded-full bg-foreground/10">
           {parts.map(([value, tone], index) => (value ? <span key={index} className={tone} style={{ width: `${(value / counts.total) * 100}%` }} /> : null))}
@@ -36,7 +36,7 @@ export function RollupBadge({ counts, size = "rail" }: { counts: Rollup; size?: 
   )
 }
 
-/** The badge a Thread's rail row wears while it leads any: it repaints only when a count moves. */
+/** The badge a Thread's rail row wears while it is an Apex: it repaints only when a count moves. */
 export const ThreadRollup = memo(function ThreadRollup({ thread, size }: { thread: string | undefined; size?: "rail" | "phone" }) {
   const counts = useThreadRollup(thread)
   return counts.total ? <RollupBadge counts={counts} size={size} /> : null

@@ -5,12 +5,14 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-// A lead's Threads on the desk and the phone, through production components on the mock bridge (`?mock&app=lead`):
-// the rail lists no child and wears the lead's badge; a child's tab opens it in place with its brief and its
-// breadcrumb, and Back returns; Stop in the lead's composer asks first; the Agents panel groups the children; the
-// phone's list, chips, child and stop. Screenshots of each, dark and light, land in the evidence folder (or
-// `MAKO_ORCH_UI_SHOTS`). Pass a dev server's URL to use it (`node scripts/test-orch-ui.mjs http://127.0.0.1:20026/`);
-// with none it serves its own. `--bench` measures the strip, badge and panel under churn, and a rail of 50 leads.
+// An Apex's Fins on the desk and the phone, through production components on the mock bridge (`?mock&app=apex`):
+// the rail lists no Fin and wears the Apex's badge; a Fin's tab opens it in place with its brief and its
+// breadcrumb, and Back returns; Stop in the Apex's composer asks first; the Agents panel groups the Fins; a message
+// the person wrote to a Fin straight stands as its own routing line, and Reply or `@` writes the next one to a Fin
+// with no turn of the Apex's; the phone's list, chips, Fin, Reply and stop. Screenshots of each, dark and light, land
+// in the evidence folder (or `MAKO_ORCH_UI_SHOTS`). Pass a dev server's URL to use it
+// (`node scripts/test-orch-ui.mjs http://127.0.0.1:20026/`); with none it serves its own. `--bench` measures the
+// strip, badge and panel under churn, and a rail of 50 Apexes.
 if (process.versions.electron) {
   void check().catch(async (error) => {
     console.error(error)
@@ -61,6 +63,11 @@ async function check() {
   }
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
+  page.debugger.attach("1.3")
+  const type = (text) => page.debugger.sendCommand("Input.insertText", { text })
+  const key = async (name, code, windowsVirtualKeyCode) => {
+    for (const each of ["keyDown", "keyUp"]) await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: each, key: name, code, windowsVirtualKeyCode })
+  }
   const errors = []
   page.on("console-message", (event) => {
     if (event.level === "error") errors.push(event.message)
@@ -94,28 +101,28 @@ async function check() {
   const press = (selector) =>
     evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 1 })); node.click(); return true })()`)
 
-  await window.loadURL(`${base}?mock&app=lead`)
-  await until("Boolean(document.querySelector('.thread-jump-scope [data-rollup]'))", "the lead's badge in the rail")
+  await window.loadURL(`${base}?mock&app=apex`)
+  await until("Boolean(document.querySelector('.thread-jump-scope [data-rollup]'))", "the Apex's badge in the rail")
 
-  // The rail lists the lead once and none of its Threads.
-  const children = await evaluate("window.leadScene.children().map((agent) => agent.title)")
+  // The rail lists the Apex once and none of its Fins.
+  const children = await evaluate("window.apexScene.children().map((agent) => agent.title)")
   assert.equal(children.length, 12)
   const rail = await evaluate("document.querySelector('.thread-jump-scope').innerText")
-  for (const title of children) assert.ok(!rail.includes(title), `the rail lists no child: ${title}`)
-  assert.equal(await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-rollup]')].length"), 1, "one lead row wears the badge")
+  for (const title of children) assert.ok(!rail.includes(title), `the rail lists no Fin: ${title}`)
+  assert.equal(await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-rollup]')].length"), 1, "one Apex row wears the badge")
   const label = await evaluate("document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('aria-label')")
-  assert.equal(label, "12 Threads: 2 need you, 5 working, 2 queued, 3 done")
+  assert.equal(label, "12 Fins: 2 need you, 5 working, 2 queued, 3 done")
   assert.equal(await evaluate("document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('title')"), label)
   await both("rail")
 
-  // Recent, Status and search list none of them either; the lead is there in each.
+  // Recent, Status and search list none of them either; the Apex is there in each.
   for (const scope of ["Recent", "Status", "Projects"]) {
     await evaluate(`[...document.querySelectorAll('[aria-label="Thread view"] button')].find((button) => button.innerText === ${JSON.stringify(scope)}).click(); true`)
     await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].find((button) => button.innerText === ${JSON.stringify(scope)})?.getAttribute('aria-pressed') === 'true'`, `the rail's ${scope}`)
     await settle()
     const listed = await evaluate("document.querySelector('.thread-jump-scope').innerText")
-    assert.match(listed, /Mobile lead/, `${scope} lists the lead`)
-    for (const title of children) assert.ok(!listed.includes(title), `${scope} lists no child: ${title}`)
+    assert.match(listed, /Mobile polish/, `${scope} lists the Apex`)
+    for (const title of children) assert.ok(!listed.includes(title), `${scope} lists no Fin: ${title}`)
   }
   await click('[aria-label="Search threads"]')
   await until("Boolean(document.querySelector('[aria-label=\"Search every thread\"]'))", "the rail's search")
@@ -124,67 +131,117 @@ async function check() {
     await settle()
     const found = await evaluate("document.querySelector('.thread-jump-scope').innerText")
     if (query === "Mobile") {
-      assert.match(found, /Mobile lead/, "search finds the lead")
+      assert.match(found, /Mobile polish/, "search finds the Apex")
       assert.ok(!found.includes("Refactor the composer"), "search filters the rail")
     }
-    else assert.ok(!found.includes("Sheet motion on iPad"), "search finds no child")
+    else assert.ok(!found.includes("Sheet motion on iPad"), "search finds no Fin")
   }
   await click('[aria-label="Close search"]')
 
-  // The lead opens from its row.
+  // The Apex opens from its row.
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-rollup]')).click(); true")
-  // The strip: the lead's Sessions, a hairline, the count, then as many child tabs as fit and "+N".
-  await until("Boolean(document.querySelector('[data-child-tabs] [data-child-tab]'))", "the lead's child tabs")
+  // The strip: the Apex's Sessions, a hairline, the count, then as many Fin tabs as fit and "+N".
+  await until("Boolean(document.querySelector('[data-child-tabs] [data-child-tab]'))", "the Apex's Fin tabs")
   const strip = await evaluate(`(() => {
     const tabs = [...document.querySelectorAll('[data-child-tab]')]
     const more = document.querySelector('[data-child-more]')
-    return { tabs: tabs.map((tab) => tab.title), more: more ? Number(more.dataset.childMore) : 0, count: document.querySelector('[data-lead-count]')?.dataset.leadCount }
+    return { tabs: tabs.map((tab) => tab.title), more: more ? Number(more.dataset.childMore) : 0, count: document.querySelector('[data-apex-count]')?.dataset.apexCount }
   })()`)
   console.log("STRIP", JSON.stringify(strip))
-  // The composer's agents line counts the lead's Threads by the rollup: queued and asking ones aren't "running".
-  assert.equal(await evaluate("document.querySelector('[data-agents-toggle]')?.innerText.trim()"), "5 working · 2 need you")
+  // The composer's agents line counts the Apex's Fins by the rollup: queued and asking ones aren't "running".
+  assert.equal(await evaluate("document.querySelector('[data-agents-toggle]')?.innerText.trim()"), "5 Fins working · 2 need you")
   await both("strip")
 
-  // The front door: the composer says a message goes to the lead; where the lead sent one stands as a line in its
+  // The front door: the composer says a message goes to the Apex; where the Apex sent one stands as a line in its
   // turn, the Thread by name, and the person can send it elsewhere.
-  await until("Boolean(document.querySelector('[data-routed]'))", "the lead's routing line")
+  await until("Boolean(document.querySelector('[data-routed]'))", "the Apex's routing line")
   const door = await evaluate(`(() => ({
-    note: document.querySelector('[data-child-note=lead]')?.innerText,
+    note: document.querySelector('[data-child-note=apex]')?.innerText,
     line: document.querySelector('[data-routed]').innerText.replace(/\\s+/g, ' '),
     elsewhere: Boolean(document.querySelector('[data-routed-elsewhere]')),
   }))()`)
   console.log("FRONT DOOR", JSON.stringify(door))
-  assert.equal(door.note, "To the lead · it passes it on to the right Thread")
+  assert.equal(door.note, "To the Apex · it passes it on to the right Fin, or @ a Fin to write to it straight")
   assert.match(door.line, /^Passed your message to Sheet motion on iPad at its next step/)
   assert.equal(door.elsewhere, true)
   await evaluate("document.querySelector('[data-routed]').scrollIntoView({ block: 'center' }); true")
-  await both("lead", "orch-front-door-")
+  await both("apex", "orch-front-door-")
   await click("[data-routed-elsewhere]")
   await until("[...document.querySelectorAll('[data-slot=popover-content]')].some((node) => node.innerText.startsWith('Move your message to'))", "Send elsewhere's list")
   await both("elsewhere", "orch-front-door-")
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true")
   await until("![...document.querySelectorAll('[data-slot=popover-content]')].some((node) => node.innerText.startsWith('Move your message to'))", "the list closing")
 
-  // The count opens the Agents panel: the lead's Threads by group, above what its harness runs in the turn.
-  await click("[data-lead-count]")
-  await until("Boolean(document.querySelector('[data-lead-children]'))", "the panel's children section")
+  // What the person wrote to a Fin straight stands apart from the Apex's turn: their words, then the routing line,
+  // marked direct. Reply on a line writes the next message to that Fin; × takes it back to the Apex.
+  const directLine = await evaluate(`(() => {
+    const exchange = document.querySelector('[data-direct-exchange]')
+    exchange?.scrollIntoView({ block: 'center' })
+    return exchange ? { text: exchange.innerText.replace(/\\s+/g, ' '), reply: Boolean(exchange.querySelector('[data-routed-reply]')) } : null
+  })()`)
+  console.log("DIRECT LINE", JSON.stringify(directLine))
+  assert.match(directLine?.text ?? "", /Keep the keyboard's own mic as the fallback.*Fin · Dictation fallback · direct/)
+  assert.equal(directLine.reply, true)
+  await both("direct-line", "orch-names-")
+  await click("[data-direct-exchange] [data-routed-reply]")
+  await until("Boolean(document.querySelector('[data-child-note=direct][data-addressee=dictation]'))", "Reply addressing the next message")
+  const addressed = await evaluate(`(() => ({ note: document.querySelector('[data-child-note=direct]').innerText.replace(/\\s+/g, ' '), placeholder: document.querySelector('.composer-input')?.placeholder, focused: document.activeElement === document.querySelector('.composer-input') }))()`)
+  console.log("ADDRESSED", JSON.stringify(addressed))
+  assert.equal(addressed.note, "To Dictation fallback Straight · Mobile polish sees what you said")
+  assert.equal(addressed.placeholder, "Message Dictation fallback straight — the Apex takes no turn")
+  assert.equal(addressed.focused, true, "Reply puts the caret in the composer")
+  await both("reply", "orch-names-")
+  await click("[data-child-note=direct] button")
+  await until("Boolean(document.querySelector('[data-child-note=apex]'))", "× writing to the Apex again")
+  // `@` offers the Apex's Fins first; a pick addresses the message rather than inserting a mention.
+  await evaluate("document.querySelector('.composer-input').focus(); true")
+  await type("@Push")
+  await until("Boolean(document.querySelector('[data-mention-menu=\"@\"] [role=group][aria-label=Fins] [role=option]'))", "the Fins in the @ menu")
+  const menu = await evaluate("[...document.querySelectorAll('[data-mention-menu] [role=group]')].map((group) => ({ group: group.getAttribute('aria-label'), rows: [...group.querySelectorAll('[role=option]')].map((row) => row.innerText.replace(/\\s+/g, ' ')) }))")
+  console.log("MENTION", JSON.stringify(menu))
+  assert.equal(menu[0]?.group, "Fins", "the Fins come first")
+  assert.match(menu[0].rows[0], /Push token refresh.*Fin · token-refresh · straight to it/)
+  await both("mention", "orch-names-")
+  await key("Enter", "Enter", 13)
+  await until("Boolean(document.querySelector('[data-child-note=direct][data-addressee=token-refresh]'))", "the pick addressing the message")
+  assert.equal(await evaluate("document.querySelector('.composer-input').value"), "", "the mention isn't left in the draft")
+  // Sent, it goes to the Fin through the host: no request of the Apex's, its own line in the transcript, and the next
+  // message goes to the Apex again.
+  const asked = await evaluate("window.apexScene.asked()")
+  const lines = await evaluate("document.querySelectorAll('[data-direct-exchange]').length")
+  await type("Retry once, then drop it.")
+  await key("Enter", "Enter", 13)
+  await until("window.apexScene.directs().length === 1", "the direct message")
+  const sent = await evaluate("window.apexScene.directs()[0]")
+  assert.equal(sent.text, "Retry once, then drop it.")
+  assert.match(sent.to, /^[0-9a-f-]{36}$/, "the Fin by its Thread")
+  assert.match(sent.request, /^[0-9a-f-]{36}$/, "under the message's own ID")
+  await until(`document.querySelectorAll('[data-direct-exchange]').length === ${lines + 1}`, "its routing line")
+  await until("Boolean(document.querySelector('[data-child-note=apex]'))", "the next message going to the Apex")
+  assert.equal(await evaluate("window.apexScene.asked()"), asked, "no turn of the Apex's")
+  await evaluate("[...document.querySelectorAll('[data-direct-exchange]')].at(-1).scrollIntoView({ block: 'center' }); true")
+  await both("direct-sent", "orch-names-")
+
+  // The count opens the Agents panel: the Apex's Fins by group, above what its harness runs in the turn.
+  await click("[data-apex-count]")
+  await until("Boolean(document.querySelector('[data-apex-fins]'))", "the panel's Fins section")
   const panel = await evaluate(`(() => {
-    const section = document.querySelector('[data-lead-children]')
+    const section = document.querySelector('[data-apex-fins]')
     return { heading: section.querySelector('div').innerText, groups: [...section.querySelectorAll('[data-child-group]')].map((group) => group.innerText.replace(/\\s+/g, ' ')), rows: section.querySelectorAll('[data-child-row]').length }
   })()`)
   console.log("PANEL", JSON.stringify(panel))
-  assert.match(panel.heading, /Mobile lead's Threads/)
+  assert.match(panel.heading, /Mobile polish's Fins/)
   assert.match(panel.heading, /12/)
   assert.match(panel.heading, /Stop all/)
   assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2", "Done 3"])
   await both("panel")
 
-  // A child's tab opens it in place: its breadcrumb, its brief from the lead first, the approval it waits on, its
-  // composer saying the lead hears it, and its tab selected in the lead's strip.
+  // A Fin's tab opens it in place: its breadcrumb, its brief from the Apex first, the approval it waits on, its
+  // composer saying the Apex hears it, and its tab selected in the Apex's strip.
   const opened = await evaluate(`(() => { const tab = [...document.querySelectorAll('[data-child-tab]')].find((node) => node.title.startsWith('Sheet motion')); return tab?.dataset.childTab })()`)
-  assert.ok(opened, "the child waiting on approval has a tab")
+  assert.ok(opened, "the Fin waiting on approval has a tab")
   await press(`[data-child-tab="${opened}"]`)
-  await until("Boolean(document.querySelector('[data-child-breadcrumb]'))", "the child's breadcrumb")
+  await until("Boolean(document.querySelector('[data-child-breadcrumb]'))", "the Fin's breadcrumb")
   await until("Boolean(document.querySelector('[data-agent-words=Brief]'))", "the brief's card")
   const child = await evaluate(`(() => ({
     crumb: document.querySelector('[data-child-breadcrumb]').innerText.replace(/\\s+/g, ' '),
@@ -197,114 +254,137 @@ async function check() {
     lit: document.querySelector('[data-child-row][aria-current=true]')?.innerText.split('\\n')[0],
   }))()`)
   console.log("CHILD", JSON.stringify(child))
-  assert.match(child.crumb, /^Mobile lead \/ Sheet motion on iPad/)
+  assert.match(child.crumb, /^Mobile polish \/ Sheet motion on iPad/)
   assert.match(child.crumb, /Stop$/)
-  assert.match(child.brief, /^From Mobile lead · Brief/)
-  assert.doesNotMatch(child.brief, /agents_report|You're child:/, "the brief's lines for the child alone stay out of the card")
+  assert.match(child.brief, /^From Mobile polish · Brief/)
+  assert.doesNotMatch(child.brief, /agents_report|You're (fin|child):/, "the brief's lines for the Fin alone stay out of the card")
   assert.equal(child.first, true, "the brief is the first card")
-  assert.equal(child.note, "Straight to Sheet motion on iPad · Mobile lead sees what you said")
+  assert.equal(child.note, "Straight to Sheet motion on iPad · Mobile polish sees what you said")
   assert.equal(child.selected, "true")
-  assert.equal(child.sessionSelected, false, "no Session of the lead is selected while its child is shown")
+  assert.equal(child.sessionSelected, false, "no Session of the Apex is selected while its Fin is shown")
   assert.equal(child.approval, true)
-  assert.equal(child.lit, "Sheet motion on iPad", "the panel keeps the lead's Threads, the open one lit")
+  assert.equal(child.lit, "Sheet motion on iPad", "the panel keeps the Apex's Fins, the open one lit")
   await both("child")
-  // The message the lead passed on reads as the person's own, with what the lead added under it.
+  // The message the Apex passed on reads as the person's own, with what the Apex added under it.
   const passed = await evaluate(`(() => { const card = document.querySelector('[data-agent-words="Passed on"]'); if (!card) return null; card.scrollIntoView({ block: 'center' }); return card.innerText.replace(/\\s+/g, ' ') })()`)
   console.log("PASSED ON", JSON.stringify(passed))
-  assert.match(passed ?? "", /^Your message, passed on by Mobile lead/)
+  assert.match(passed ?? "", /^Your message, passed on by Mobile polish/)
   assert.match(passed ?? "", /The sheet still jumps when the keyboard opens in split view\./)
-  assert.match(passed ?? "", /Mobile lead added It shows on the 11-inch iPad/)
+  assert.match(passed ?? "", /Mobile polish added It shows on the 11-inch iPad/)
   await both("child", "orch-front-door-")
 
-  // Back returns to the lead; the lead's own tab does too.
+  // Back returns to the Apex; the Apex's own tab does too.
   await click("[data-child-breadcrumb] button")
-  await until("!document.querySelector('[data-child-breadcrumb]') && [...document.querySelectorAll('[data-session-tab]')].some((tab) => tab.getAttribute('aria-selected') === 'true')", "the lead after Back")
+  await until("!document.querySelector('[data-child-breadcrumb]') && [...document.querySelectorAll('[data-session-tab]')].some((tab) => tab.getAttribute('aria-selected') === 'true')", "the Apex after Back")
   await press(`[data-child-tab="${opened}"]`)
-  await until("Boolean(document.querySelector('[data-child-breadcrumb]'))", "the child again")
+  await until("Boolean(document.querySelector('[data-child-breadcrumb]'))", "the Fin again")
   await press("[data-session-tab]")
-  await until("!document.querySelector('[data-child-breadcrumb]')", "the lead after its tab")
+  await until("!document.querySelector('[data-child-breadcrumb]')", "the Apex after its tab")
 
-  // Stop in the lead's composer asks first while any of its Threads works.
+  // Stop in the Apex's composer asks first while any of its Fins works.
   const stop = "[data-composer] button[aria-label=Stop]"
-  await until(`Boolean(document.querySelector(${JSON.stringify(stop)}))`, "the lead's Stop")
+  await until(`Boolean(document.querySelector(${JSON.stringify(stop)}))`, "the Apex's Stop")
   await click(stop)
-  await until("Boolean(document.querySelector('[data-stop-lead]'))", "the stop popover")
+  await until("Boolean(document.querySelector('[data-stop-apex]'))", "the stop popover")
   const popover = await evaluate(`(() => {
-    const card = document.querySelector('[data-stop-lead]')
+    const card = document.querySelector('[data-stop-apex]')
     const box = card.getBoundingClientRect()
     return { width: box.width, height: box.height, text: card.innerText.replace(/\\s+/g, ' '), focused: document.activeElement?.innerText, scrim: getComputedStyle(document.body).overflow }
   })()`)
   console.log("STOP", JSON.stringify(popover))
   assert.ok(popover.width <= 320 && popover.height <= 120, `the popover is at most 320×120 (${popover.width}×${popover.height})`)
-  assert.match(popover.text, /^5 of its Threads are working/)
-  assert.match(popover.text, /Stop the lead only/)
-  assert.match(popover.text, /Stop all \d+/)
-  assert.equal(popover.focused, "Stop the lead only", "the safe choice is focused")
+  assert.match(popover.text, /^5 Fins working, 4 more waiting/)
+  assert.match(popover.text, /Stop the Apex only/)
+  assert.match(popover.text, /Stop all$/)
+  assert.equal(await evaluate("[...document.querySelectorAll('[data-stop-apex] button')].at(-1).title"), "Stop the Apex and 9 Fins")
+  assert.equal(popover.focused, "Stop the Apex only", "the safe choice is focused")
   await both("stop")
-  await evaluate("[...document.querySelectorAll('[data-stop-lead] button')].find((button) => button.innerText === 'Stop the lead only').click(); true")
-  await until("!document.querySelector('[data-stop-lead]')", "the popover closing on Stop the lead only")
-  await evaluate("window.leadScene.setRunning(true); true")
-  await until(`Boolean(document.querySelector(${JSON.stringify(stop)}))`, "the lead's Stop again")
+  await evaluate("[...document.querySelectorAll('[data-stop-apex] button')].find((button) => button.innerText === 'Stop the Apex only').click(); true")
+  await until("!document.querySelector('[data-stop-apex]')", "the popover closing on Stop the Apex only")
+  await evaluate("window.apexScene.setRunning(true); true")
+  await until(`Boolean(document.querySelector(${JSON.stringify(stop)}))`, "the Apex's Stop again")
   await click(stop)
-  await until("Boolean(document.querySelector('[data-stop-lead]'))", "the popover reopening")
+  await until("Boolean(document.querySelector('[data-stop-apex]'))", "the popover reopening")
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true")
-  await until("!document.querySelector('[data-stop-lead]')", "Escape closing the popover")
-  assert.ok(await evaluate(`Boolean(document.querySelector(${JSON.stringify(stop)}))`), "Escape closed the popover without stopping the lead")
+  await until("!document.querySelector('[data-stop-apex]')", "Escape closing the popover")
+  assert.ok(await evaluate(`Boolean(document.querySelector(${JSON.stringify(stop)}))`), "Escape closed the popover without stopping the Apex")
   await click(stop)
-  await until("Boolean(document.querySelector('[data-stop-lead]'))", "the popover again")
+  await until("Boolean(document.querySelector('[data-stop-apex]'))", "the popover again")
   await evaluate("document.querySelector('main').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); true")
-  await until("!document.querySelector('[data-stop-lead]')", "an outside click closing the popover")
+  await until("!document.querySelector('[data-stop-apex]')", "an outside click closing the popover")
 
-  // The phone: the list shows the lead as one row with the same badge; its screen's chips open a child, whose back
-  // reads the lead's name; Stop asks first, full width.
+  // Diagnostics counts the Fins and where the person's messages went, straight to a Fin among them.
+  await evaluate(`window.dispatchEvent(new CustomEvent("mako:settings", { detail: "diagnostics" })); true`)
+  await until("Boolean(document.querySelector('[data-agents-diagnostics]'))", "Diagnostics' Fins")
+  const diagnostics = await evaluate(`(() => { const node = document.querySelector('[data-agents-diagnostics]'); node.scrollIntoView({ block: 'center' }); return node.innerText.replace(/\\s+/g, ' ') })()`)
+  console.log("DIAGNOSTICS", JSON.stringify(diagnostics))
+  assert.match(diagnostics, /^Fins 7 Fins · \d+ running/)
+  assert.match(diagnostics, /Each Apex and its Fins run at most/)
+  assert.match(diagnostics, /the person wrote 4 messages straight to a Fin/)
+  await both("diagnostics", "orch-names-")
+  await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true")
+  await until("!document.querySelector('[data-agents-diagnostics]')", "Settings closing")
+
+  // The phone: the list shows the Apex as one row with the same badge; its screen's chips open a Fin, whose back
+  // reads the Apex's name; Stop asks first, full width.
   window.setContentSize(390, 844)
-  await window.loadURL(`${base}scripts/phone-lead.html?app=lead`)
-  await until("Boolean(document.querySelector('[data-thread] [data-rollup]'))", "the lead's badge in the phone's list")
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await until("Boolean(document.querySelector('[data-thread] [data-rollup]'))", "the Apex's badge in the phone's list")
   const list = await evaluate(`(() => ({ text: document.querySelector('[data-list]').innerText, rows: document.querySelectorAll('[data-thread]').length, label: document.querySelector('[data-thread] [data-rollup]').getAttribute('aria-label') }))()`)
-  for (const title of children) assert.ok(!list.text.includes(title), `the phone's list lists no child (${title})`)
+  for (const title of children) assert.ok(!list.text.includes(title), `the phone's list lists no Fin (${title})`)
   assert.equal(list.rows, 4)
-  assert.equal(list.label, "12 Threads: 2 need you, 5 working, 2 queued, 3 done")
+  assert.equal(list.label, "12 Fins: 2 need you, 5 working, 2 queued, 3 done")
   await both("phone-list")
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('[data-child-chips]'))", "the lead's chips")
+  await until("Boolean(document.querySelector('[data-child-chips]'))", "the Apex's chips")
   const chips = await evaluate("[...document.querySelectorAll('[data-child-chip]')].map((chip) => chip.innerText.replace(/\\s+/g, ' '))")
   console.log("CHIPS", JSON.stringify(chips))
-  assert.equal(chips.length, 7, "chips for the children that need the person or are working")
+  assert.equal(chips.length, 7, "chips for the Fins that need the person or are working")
   assert.match(chips[0], /Sheet motion|Push wording/)
-  await until("Boolean(document.querySelector('[data-send-action=stop]'))", "the lead's transcript and dock on the phone")
-  await both("phone-lead")
+  await until("Boolean(document.querySelector('[data-send-action=stop]'))", "the Apex's transcript and dock on the phone")
+  await both("phone-apex")
   await until("Boolean(document.querySelector('[data-routed]'))", "the routing line on the phone")
-  const phoneDoor = await evaluate(`(() => ({ note: document.querySelector('[data-child-note=lead]')?.innerText, line: document.querySelector('[data-routed]').innerText.replace(/\\s+/g, ' ') }))()`)
+  const phoneDoor = await evaluate(`(() => ({ note: document.querySelector('[data-child-note=apex]')?.innerText, line: document.querySelector('[data-routed]').innerText.replace(/\\s+/g, ' ') }))()`)
   console.log("PHONE FRONT DOOR", JSON.stringify(phoneDoor))
-  assert.equal(phoneDoor.note, "To the lead · it passes it on to the right Thread")
+  assert.equal(phoneDoor.note, "To the Apex · it passes it on to the right Fin")
   assert.match(phoneDoor.line, /^Passed your message to Sheet motion on iPad/)
   await evaluate("document.querySelector('[data-routed]').scrollIntoView({ block: 'center' }); true")
-  await both("phone-lead", "orch-front-door-")
-  // The count opens the Agents sheet on the lead's Threads; a row there opens that Thread, the sheet put away.
-  assert.equal(await evaluate("document.querySelector('[data-child-chips] [data-lead-count]')?.dataset.leadCount"), "12")
-  await click("[data-child-chips] [data-lead-count]")
-  await until("Boolean(document.querySelector('[data-agents-sheet] [data-lead-children]'))", "the phone's Agents sheet on the lead's Threads")
+  await both("phone-apex", "orch-front-door-")
+  // On the phone, Reply on a routing line writes the next message to that Fin, straight.
+  await click("[data-routed] [data-routed-reply]")
+  await until("Boolean(document.querySelector('[data-child-note=direct][data-addressee=sheet-motion]'))", "Reply on the phone")
+  const phoneAddressed = await evaluate(`(() => ({ note: document.querySelector('[data-child-note=direct]').innerText.replace(/\\s+/g, ' '), placeholder: document.querySelector('.web-dock textarea')?.placeholder }))()`)
+  console.log("PHONE ADDRESSED", JSON.stringify(phoneAddressed))
+  assert.equal(phoneAddressed.note, "To Sheet motion on iPad Mobile polish sees what you said")
+  assert.equal(phoneAddressed.placeholder, "Message Sheet motion on iPad straight")
+  await both("phone-reply", "orch-names-")
+  await click("[data-child-note=direct] button")
+  await until("Boolean(document.querySelector('[data-child-note=apex]'))", "the phone writing to the Apex again")
+  // The count opens the Agents sheet on the Apex's Fins; a row there opens that Fin, the sheet put away.
+  assert.equal(await evaluate("document.querySelector('[data-child-chips] [data-apex-count]')?.dataset.apexCount"), "12")
+  await click("[data-child-chips] [data-apex-count]")
+  await until("Boolean(document.querySelector('[data-agents-sheet] [data-apex-fins]'))", "the phone's Agents sheet on the Apex's Fins")
   await both("phone-agents")
   await click(`[data-agents-sheet] [data-child-row="${opened}"]`)
-  await until("Boolean(document.querySelector('[data-child-of]')) && !document.querySelector('[data-agents-sheet] [data-lead-children]')", "the child from the sheet")
-  await click("[data-back-to-lead]")
-  await until("Boolean(document.querySelector('[data-child-chips]')) && !document.querySelector('[data-child-of]')", "the lead again")
+  await until("Boolean(document.querySelector('[data-child-of]')) && !document.querySelector('[data-agents-sheet] [data-apex-fins]')", "the Fin from the sheet")
+  await click("[data-back-to-apex]")
+  await until("Boolean(document.querySelector('[data-child-chips]')) && !document.querySelector('[data-child-of]')", "the Apex again")
   await click(`[data-child-chip="${opened}"]`)
-  await until("Boolean(document.querySelector('[data-child-of]'))", "the child on the phone")
-  await until("Boolean(document.querySelector('[data-agent-words=Brief]'))", "the child's brief on the phone")
-  const phoneChild = await evaluate(`(() => ({ back: document.querySelector('[data-back-to-lead]')?.innerText, brief: document.querySelector('[data-agent-words=Brief]').innerText.replace(/\\s+/g, ' '), note: document.querySelector('[data-child-note]')?.innerText }))()`)
+  await until("Boolean(document.querySelector('[data-child-of]'))", "the Fin on the phone")
+  await until("Boolean(document.querySelector('[data-agent-words=Brief]'))", "the Fin's brief on the phone")
+  const phoneChild = await evaluate(`(() => ({ back: document.querySelector('[data-back-to-apex]')?.innerText, brief: document.querySelector('[data-agent-words=Brief]').innerText.replace(/\\s+/g, ' '), note: document.querySelector('[data-child-note]')?.innerText }))()`)
   console.log("PHONE CHILD", JSON.stringify(phoneChild))
-  assert.equal(phoneChild.back, "Mobile lead")
-  assert.match(phoneChild.brief, /^From Mobile lead · Brief/)
-  assert.equal(phoneChild.note, "Straight to this Thread · Mobile lead sees what you said")
+  assert.equal(phoneChild.back, "Mobile polish")
+  assert.match(phoneChild.brief, /^From Mobile polish · Brief/)
+  assert.equal(phoneChild.note, "Straight to this Fin · Mobile polish sees what you said")
   await both("phone-child")
-  await click("[data-back-to-lead]")
-  await until("Boolean(document.querySelector('[data-child-chips]')) && !document.querySelector('[data-child-of]')", "the lead after the phone's back")
+  await click("[data-back-to-apex]")
+  await until("Boolean(document.querySelector('[data-child-chips]')) && !document.querySelector('[data-child-of]')", "the Apex after the phone's back")
   const phoneStop = "[data-send-action=stop]"
-  await until(`Boolean(document.querySelector(${JSON.stringify(phoneStop)}))`, "the lead's Stop on the phone")
+  await until(`Boolean(document.querySelector(${JSON.stringify(phoneStop)}))`, "the Apex's Stop on the phone")
   await click(phoneStop)
-  await until("Boolean(document.querySelector('[data-stop-lead]'))", "the stop popover on the phone")
-  const phonePopover = await evaluate("(() => { const box = document.querySelector('[data-stop-lead]').getBoundingClientRect(); return { left: box.left, right: innerWidth - box.right, height: box.height } })()")
+  await until("Boolean(document.querySelector('[data-stop-apex]'))", "the stop popover on the phone")
+  const phonePopover = await evaluate("(() => { const box = document.querySelector('[data-stop-apex]').getBoundingClientRect(); return { left: box.left, right: innerWidth - box.right, height: box.height } })()")
   console.log("PHONE STOP", JSON.stringify(phonePopover))
   assert.deepEqual([Math.round(phonePopover.left), Math.round(phonePopover.right)], [12, 12], "full width less its margins")
   assert.ok(phonePopover.height <= 120)
@@ -387,9 +467,9 @@ function frameNumbers({ gaps, longest }) {
 }
 
 /**
- * The numbers the brief asks for, on the mock: twenty children each changing once a second under the lead's strip,
+ * The numbers the brief asks for, on the mock: twenty Fins each changing once a second under the Apex's strip,
  * the rail's badge and the Agents panel (commits a second by area, renders a second by component, the longest
- * frame); and a rail of fifty leads of twenty Threads each (its first render, and frames scrolling it).
+ * frame); and a rail of fifty Apexes of twenty Fins each (its first render, and frames scrolling it).
  */
 async function bench(BrowserWindow, base, root) {
   const preload = join(root, "commit-counter.cjs")
@@ -397,7 +477,7 @@ async function bench(BrowserWindow, base, root) {
   const open = async (query, counting) => {
     const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false, ...(counting && { preload, contextIsolation: false, sandbox: false }) } })
     // A cold dev server reloads the page once its dependencies are bundled, aborting this load; the wait below holds.
-    await window.loadURL(`${base}?mock&app=lead${query}`).catch((error) => {
+    await window.loadURL(`${base}?mock&app=apex${query}`).catch((error) => {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
     })
     const evaluate = (code) => window.webContents.executeJavaScript(code)
@@ -413,14 +493,14 @@ async function bench(BrowserWindow, base, root) {
   const wait = (ms) => new Promise((done) => setTimeout(done, ms))
   const SECONDS = 10
 
-  // The lead open, its Agents panel showing, twenty children churning: one moves every 50 ms, so each once a second.
+  // The Apex open, its Agents panel showing, twenty Fins churning: one moves every 50 ms, so each once a second.
   const churned = async (counting) => {
     const { window, evaluate, until } = await open("", counting)
-    await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile lead'))", "the lead's row")
-    await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile lead')).click(); true")
-    await until("Boolean(document.querySelector('[data-composer]'))", "the lead's composer")
+    await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row")
+    await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+    await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer")
     await evaluate("[...document.querySelectorAll('button, [role=tab]')].find((node) => node.innerText.trim() === 'Agents')?.click(); true")
-    await evaluate("window.__stopChurn = window.leadScene.churn(20, 50); true")
+    await evaluate("window.__stopChurn = window.apexScene.churn(20, 50); true")
     await wait(2000)
     if (counting) await evaluate("window.__benchReset(); true")
     else await evaluate(FRAME_WATCH)
@@ -437,7 +517,7 @@ async function bench(BrowserWindow, base, root) {
   const churn = {
     commitsPerSecond: perSecond(tally.commits),
     areas: Object.fromEntries(Object.entries(tally.areas).map(([area, { commits, renders, ms }]) => [area, { commitsPerSecond: perSecond(commits), rendersPerSecond: perSecond(renders), renderMsPerSecond: perSecond(ms) }])),
-    // The children's own components, then the most rendered of any: where a regression shows first.
+    // The Fins' own components, then the most rendered of any: where a regression shows first.
     componentRendersPerSecond: Object.fromEntries(["ChildTab", "ThreadRollup", "ChildRow", "AgentRow"].map((name) => [name, perSecond(tally.components[name] ?? 0)])),
     mostRenderedPerSecond: Object.fromEntries(Object.entries(tally.components).toSorted((left, right) => right[1] - left[1]).slice(0, 12).map(([name, count]) => [name, perSecond(count)])),
     reactRenderMsPerSecond: perSecond(tally.renderMs),
@@ -445,9 +525,9 @@ async function bench(BrowserWindow, base, root) {
     ...frameNumbers((say("churn, frames"), await churned(false))),
   }
 
-  // Fifty leads of twenty: React's work drawing the rail the first time, then frames scrolling it top to bottom.
+  // Fifty Apexes of twenty: React's work drawing the rail the first time, then frames scrolling it top to bottom.
   const rail = async (counting) => {
-    const { window, evaluate, until } = await open("&leads=50", counting)
+    const { window, evaluate, until } = await open("&apexes=50", counting)
     await until("document.querySelectorAll('.thread-jump-scope [data-flip-key]').length > 10", "the rail's rows")
     await wait(1500)
     const boot = counting ? await evaluate("window.__benchTally()") : undefined

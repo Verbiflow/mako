@@ -17,30 +17,31 @@ import { application, useApplication } from "@/state/application"
 import { useCloudMoves } from "@/state/cloud-moves"
 import { useHandOff } from "@/state/handoff"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
+import { finsWord } from "@mako/host/contracts/agents"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 
-/** A lead whose children are at work, as one row. */
-type LeadRow = NonNullable<LifecycleWork["lead"]> & { children: number }
+/** An Apex whose Fins are at work, as one row. */
+type ApexRow = NonNullable<LifecycleWork["lead"]> & { fins: number }
 
-interface WorkByLead {
+interface WorkByApex {
   own: LifecycleWork[]
-  leads: LeadRow[]
+  apexes: ApexRow[]
 }
 
-/** Children at work, one row per lead: what the person decides is the lead's, and the children's cut turns continue on their own. */
-function byLead(work: readonly LifecycleWork[]): WorkByLead {
+/** Fins at work, one row per Apex: what the person decides is the Apex's, and the Fins' cut turns continue on their own. */
+function byApex(work: readonly LifecycleWork[]): WorkByApex {
   const own: LifecycleWork[] = []
-  const leads = new Map<string, LeadRow>()
+  const apexes = new Map<string, ApexRow>()
   for (const item of work) {
     if (!item.lead) {
       own.push(item)
       continue
     }
-    const lead = leads.get(item.lead.id) ?? { ...item.lead, children: 0 }
-    lead.children += 1
-    leads.set(lead.id, lead)
+    const apex = apexes.get(item.lead.id) ?? { ...item.lead, fins: 0 }
+    apex.fins += 1
+    apexes.set(apex.id, apex)
   }
-  return { own, leads: [...leads.values()] }
+  return { own, apexes: [...apexes.values()] }
 }
 
 /** A Thread's handoff as its row says it, step by step. */
@@ -98,7 +99,7 @@ export function ApplicationDialog() {
   const quitting = action === "quit"
   const installing = action === "install"
   const work = lifecycle?.work ?? []
-  const rows = byLead(work)
+  const rows = byApex(work)
   const byConversation = new Map((candidates ?? []).map((candidate) => [candidate.conversationId, candidate]))
   const results = new Map((running?.results ?? []).map((result) => [result.conversationId, result]))
   // The cloud is on and at least one Thread at work can go: the sheet offers to hand them over.
@@ -191,15 +192,15 @@ export function ApplicationDialog() {
               <span>{work.length} active</span>
             </div>
             <ul className="max-h-48 overflow-y-auto overscroll-contain px-3">
-              {rows.leads.map((lead) => (
-                <li key={`lead:${lead.id}`} data-lead-children={lead.children} className="contain-turn flex items-center gap-3 border-b border-hairline py-3 last:border-0">
+              {rows.apexes.map((apex) => (
+                <li key={`apex:${apex.id}`} data-apex-fins={apex.fins} className="contain-turn flex items-center gap-3 border-b border-hairline py-3 last:border-0">
                   <span className="mx-1 size-1.5 shrink-0 rounded-full bg-foreground/45" aria-hidden />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-ui" title={lead.title}>
-                      {lead.title}: {lead.children} {lead.children === 1 ? "child" : "children"} working
+                    <p className="truncate text-ui" title={apex.title}>
+                      {apex.title}: {finsWord(apex.fins)} working
                     </p>
                     <p className="mt-0.5 truncate text-label text-faint">
-                      {lead.children === 1 ? "It continues" : "They continue"} {quitting ? "when Mako opens again" : installing ? "after the update" : "after the restart"}, from the step they were on
+                      {apex.fins === 1 ? "It continues" : "They continue"} {quitting ? "when Mako opens again" : installing ? "after the update" : "after the restart"}, from the step they were on
                     </p>
                   </div>
                 </li>
@@ -264,7 +265,7 @@ export function ApplicationDialog() {
               ? canHandOff
                 ? "Agents kept running here need this computer to stay on. Handed to the cloud, they go on while it's off; bring a Thread back from its Cloud chip."
                 : "Agents kept running will need Mako's host and this computer to stay on. Reopen Mako to pick up where you left off."
-              : `Installation closes all Mako windows and replaces the agent host. Conversations are kept; stopped work is not automatically resumed${rows.leads.length ? ", except children's turns, which continue" : ""}.`}
+              : `Installation closes all Mako windows and replaces the agent host. Conversations are kept; stopped work is not automatically resumed${rows.apexes.length ? ", except Fins' turns, which continue" : ""}.`}
           </p>
         </div>
         {error && (

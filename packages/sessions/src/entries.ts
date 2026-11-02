@@ -14,7 +14,7 @@
  */
 import { z } from "zod"
 import { AttachmentContentSchema, ProposedPlanSchema, ToolDetailSchema, type AttachmentContent, type ProposedPlan } from "./content.js"
-import { NativeEventSourceSchema, RetriesSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
+import { DirectRouteSchema, NativeEventSourceSchema, RetriesSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
 import { ToolEffectSchema } from "./tool-effects.js"
 
 export const TurnUsageSchema = z.object({
@@ -161,6 +161,7 @@ export const transcriptEventFields = {
   limit: UsageLimitSchema.optional(),
   nearLimit: UsageLimitSchema.optional(),
   retries: RetriesSchema.optional(),
+  direct: DirectRouteSchema.optional(),
 }
 /** A turn the provider started on its own, as `ProviderTurnCause` from `@mako/sessions/provider-turn` says it. */
 export const providerTurnFields = {

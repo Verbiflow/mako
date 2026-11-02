@@ -200,16 +200,16 @@ async function review() {
   assert.equal(await fixture("return f.calls.stopped"), 0)
   await until("!document.querySelector('.application-dialog')")
 
-  // A lead's children at work: one row under the lead, saying they continue after the update, and not each its own.
+  // An Apex's Fins at work: one row under the Apex, saying they continue after the update, and not each its own.
   await fixture("f.childrenScene()")
   await evaluate("import('/src/state/application.ts').then(({applicationStore}) => applicationStore.set({dialog: 'install'}))")
-  await until("document.querySelector('.application-dialog [data-lead-children]')?.dataset.leadChildren === '3'")
+  await until("document.querySelector('.application-dialog [data-apex-fins]')?.dataset.apexFins === '3'")
   assert.deepEqual(
-    await evaluate("[...document.querySelectorAll('.application-dialog li[data-lead-children] p')].map(p => p.textContent)"),
-    ["Refine the update experience: 3 children working", "They continue after the update, from the step they were on"]
+    await evaluate("[...document.querySelectorAll('.application-dialog li[data-apex-fins] p')].map(p => p.textContent)"),
+    ["Refine the update experience: 3 Fins working", "They continue after the update, from the step they were on"]
   )
-  assert.equal(await evaluate("document.querySelectorAll('.application-dialog li').length"), 4, "the lead's row and the person's three")
-  assert.ok(await evaluate("document.querySelector('.application-dialog').textContent.includes(\"except children's turns, which continue\")"))
+  assert.equal(await evaluate("document.querySelectorAll('.application-dialog li').length"), 4, "the Apex's row and the person's three")
+  assert.ok(await evaluate("document.querySelector('.application-dialog').textContent.includes(\"except Fins' turns, which continue\")"))
   await screenshot("install-children-light.png")
   await fixture("f.theme('dark')")
   await screenshot("install-children-dark.png")

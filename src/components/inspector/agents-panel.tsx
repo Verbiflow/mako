@@ -11,13 +11,13 @@ import { capabilityText } from "@mako/host/contracts/harness-capabilities"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import { isActiveNativeAgent, isProviderWork, type NativeWork } from "@mako/host/contracts/native-agents"
 import { rollup, rollupLine, rosterChildren } from "@mako/host/contracts/children"
-import { LeadChildrenSection } from "@/components/inspector/lead-children-section"
-import { leadConversation, openChildInLead, useLeadView } from "@/state/lead-children"
+import { ApexFinsSection } from "@/components/inspector/apex-fins-section"
+import { apexConversation, openFinInApex, useApexView } from "@/state/apex-fins"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import { LeadMark } from "@/components/ui/lead-mark"
+import { ApexMark } from "@/components/ui/apex-mark"
 import { Elapsed } from "@/components/inspector/elapsed"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -119,10 +119,10 @@ function ordered(agents: readonly NativeAgent[]): NativeAgent[] {
 export function AgentsPanel() {
   const focus = useWorkspaceFocus()
   const key = useAcp((state) => (focus.identity === `live:${state.activeKey}` ? state.activeKey : undefined))
-  // A child open in its lead's Thread keeps the lead's panel, the child's row lit.
-  const open = useLeadView((state) => state.open)
-  const lead = useAcp((state) => (open && key && state.conversations[key]?.threadId === open.child ? leadConversation(state, open.lead)?.key : undefined))
-  return <ConversationAgents key={lead ?? focus.identity} conversation={lead ?? key ?? undefined} litChild={lead ? open?.child : undefined} />
+  // A Fin open in its Apex's Thread keeps the Apex's panel, the Fin's row lit.
+  const open = useApexView((state) => state.open)
+  const apex = useAcp((state) => (open && key && state.conversations[key]?.threadId === open.child ? apexConversation(state, open.apex)?.key : undefined))
+  return <ConversationAgents key={apex ?? focus.identity} conversation={apex ?? key ?? undefined} litChild={apex ? open?.child : undefined} />
 }
 
 function liveConversation(state: AcpState, conversation: string | undefined): LiveAcpConversation | undefined {
@@ -139,23 +139,23 @@ export function ConversationAgents({
 }: {
   conversation?: string
   transcripts?: boolean
-  /** The child shown now, whose row is lit. */
+  /** The Fin shown now, whose row is lit. */
   litChild?: string
-  /** Where a child's row opens it: in place in its lead's Thread on the desk (`openChildInLead`). */
-  onOpenChild?: (agent: NativeAgent, lead: { thread: string; title: string }) => void
+  /** Where a Fin's row opens it: in place in its Apex's Thread on the desk (`openFinInApex`). */
+  onOpenChild?: (agent: NativeAgent, apex: { thread: string; title: string }) => void
 }) {
   const roster = useAcp((state) => liveConversation(state, conversation)?.nativeAgents)
   const provider = useAcp((state) => liveConversation(state, conversation)?.harness)
   const thread = useAcp((state) => liveConversation(state, conversation)?.threadId)
-  const leadTitle = useLeadName(conversation, thread)
-  // Stable, so a batch moving one child repaints that child's row alone.
+  const apexTitle = useApexName(conversation, thread)
+  // Stable, so a batch moving one Fin repaints that Fin's row alone.
   const openChild = useCallback(
     (agent: NativeAgent) => {
       if (!thread) return
-      if (onOpenChild) onOpenChild(agent, { thread, title: leadTitle })
-      else openChildInLead(thread, leadTitle, agent)
+      if (onOpenChild) onOpenChild(agent, { thread, title: apexTitle })
+      else openFinInApex(thread, apexTitle, agent)
     },
-    [onOpenChild, thread, leadTitle]
+    [onOpenChild, thread, apexTitle]
   )
   const background = useAcp((state) => {
     const live = liveConversation(state, conversation)
@@ -168,7 +168,7 @@ export function ConversationAgents({
       roster={roster}
       provider={provider}
       transcripts={transcripts}
-      leadTitle={leadTitle}
+      apexTitle={apexTitle}
       litChild={litChild}
       onOpenChild={thread ? openChild : undefined}
       {...background}
@@ -176,8 +176,8 @@ export function ConversationAgents({
   )
 }
 
-/** A lead's name as its rail row says it: its Thread's, else its conversation's. */
-function useLeadName(conversation: string | undefined, thread: string | undefined): string {
+/** An Apex's name as its rail row says it: its Thread's, else its conversation's. */
+function useApexName(conversation: string | undefined, thread: string | undefined): string {
   const listed = useThreads((state) => (thread ? state.threads.find((ref) => ref.threadId === thread)?.title : undefined))
   const live = useAcp((state) => liveConversation(state, conversation)?.title)
   return listed ?? live ?? "This Thread"
@@ -191,13 +191,13 @@ function AgentRoster({
   waiting,
   unnamed,
   stopping,
-  leadTitle,
+  apexTitle,
   litChild,
   onOpenChild,
 }: {
   conversation?: string
   roster?: NativeAgentRoster
-  leadTitle: string
+  apexTitle: string
   litChild?: string
   onOpenChild?: (agent: NativeAgent) => void
   provider?: string
@@ -256,7 +256,7 @@ function AgentRoster({
       </div>
       <div ref={scroller} data-sheet-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
         {children.length ? (
-          <LeadChildrenSection children={children} conversation={conversation} leadTitle={leadTitle} scroller={scroller} open={litChild} onOpen={onOpenChild} />
+          <ApexFinsSection children={children} conversation={conversation} apexTitle={apexTitle} scroller={scroller} open={litChild} onOpen={onOpenChild} />
         ) : null}
         {children.length && (agents.length || unnamed) ? (
           <div className="flex h-7 items-end px-2.5 pb-1 text-label text-faint">In this turn</div>
@@ -402,12 +402,12 @@ export function AgentsToggle() {
   const reading = useAcp((state) => {
     const live = activeLiveAcp(state)
     const agents = live?.nativeAgents?.agents ?? []
-    // A lead's children say how they stand by the rollup; the rest of the roster counts as it runs.
+    // An Apex's Fins say how they stand by the rollup; the rest of the roster counts as it runs.
     const children = rollup(rosterChildren(live?.nativeAgents))
     const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient && !agent.child)
     return {
       total: agents.length,
-      lead: children.total ? rollupLine(children) : "",
+      fins: children.total ? rollupLine(children) : "",
       running: running.length,
       // The harnesses at work, as one string so a step elsewhere in the roster re-renders nothing.
       harnesses: [...new Set(running.filter((agent) => (agent.work ?? "agent") === "agent").map((agent) => agent.provider))].slice(0, SHOWN_MARKS).join(" "),
@@ -415,8 +415,8 @@ export function AgentsToggle() {
     }
   }, shallowEqual)
   if (!reading.total) return null
-  const label = reading.lead || (reading.running ? `${reading.running} running` : `${reading.total} finished`)
-  const marks = reading.harnesses && !reading.lead ? reading.harnesses.split(" ") : []
+  const label = reading.fins || (reading.running ? `${reading.running} running` : `${reading.total} finished`)
+  const marks = reading.harnesses && !reading.fins ? reading.harnesses.split(" ") : []
   return (
     <button
       type="button"
@@ -433,8 +433,8 @@ export function AgentsToggle() {
             </span>
           ))}
         </span>
-      ) : reading.lead ? (
-        <LeadMark className="size-3" />
+      ) : reading.fins ? (
+        <ApexMark className="size-3" />
       ) : reading.waiting ? (
         <HourglassIcon className="size-3" />
       ) : (

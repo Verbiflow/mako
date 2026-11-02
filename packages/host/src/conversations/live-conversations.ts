@@ -44,7 +44,8 @@ import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
-import { changedEntryStart, deliverLiveUpdates } from "@mako/sessions/live-content"
+import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate } from "@mako/sessions/live-content"
+import type { DirectRoute } from "@mako/sessions/events"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -344,22 +345,22 @@ export class LiveConversations {
   lifecycleWork(): LifecycleWork[] {
     const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => {
       const item = residentWork(resident)
-      const lead = item && this.leadOf(item.id)
-      return item ? (lead ? { ...item, lead } : item) : []
+      const apex = item && this.apexOf(item.id)
+      return item ? (apex ? { ...item, lead: apex } : item) : []
     })
     for (const id of this.launches.startingIds()) if (!work.some((item) => item.id === id)) work.push(startingWork(id))
     for (const path of this.sources.capturing()) work.push({ id: `capture:${path}`, token: path, title: "Saving a conversation", provider: "", cwd: path, status: "finishing", stoppable: false })
     return work
   }
 
-  /** The conversation leading a child's, as the lifecycle names it; undefined for a conversation that isn't a child's. */
-  private leadOf(id: string): LifecycleWork["lead"] {
+  /** The Apex's conversation of a Fin's, as the lifecycle names it; undefined for a conversation that isn't a Fin's. */
+  private apexOf(id: string): LifecycleWork["lead"] {
     const threads = this.dependencies.threads
     const placed = threads?.journalPlacement(id)
     const edge = placed && threads?.edges().of(placed.thread)
     if (!edge) return undefined
-    const lead = threads?.conversationsOf(edge.parentSession).at(-1)
-    return lead ? { id: lead, title: this.records.get(lead)?.snapshot.session.title || "Untitled conversation" } : undefined
+    const apex = threads?.conversationsOf(edge.parentSession).at(-1)
+    return apex ? { id: apex, title: this.records.get(apex)?.snapshot.session.title || "Untitled conversation" } : undefined
   }
 
   /** One conversation's work, as `lifecycleWork` lists it; undefined while it has none. Reads only memory. */
@@ -519,7 +520,7 @@ export class LiveConversations {
   async start(provider: string, cwd: string, options: LiveStartOptions, by?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
     if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", ...options.goal })
     if (options.review !== undefined) ReviewTargetSchema.parse(options.review)
-    // A child's brief is its lead's words, not the person's.
+    // A Fin's brief is its Apex's words, not the person's.
     const actor = by ?? (options.parent && !options.resume ? ActorSchema.parse(options.parent.startedBy) : undefined)
     const state = await this.launches.start(provider, cwd, options, actor, purpose)
     if (options.initialRequest) this.firstMessage(options, actor)
@@ -1255,6 +1256,22 @@ export class LiveConversations {
     if (!resident || this.records.isReleased(resident) || !this.takeChildren(resident)) return
     if (progressOnly) this.schedule(resident)
     else this.keep(resident)
+  }
+
+  /**
+   * Keeps in the conversation the person's message it sent straight to one of
+   * its Fins (`Agents.direct`): an event its harness never sees, so no turn
+   * starts. Kept once under the message's request; false when the
+   * conversation isn't on this host.
+   */
+  recordDirect(id: string, direct: DirectRoute, text: string): boolean {
+    const resident = this.records.load(id)
+    if (!resident) return false
+    this.keep(resident)
+    if (resident.snapshot.blocks.some((block) => block.type === "event" && block.direct?.request === direct.request)) return true
+    queueLiveUpdate(resident, { kind: "event", label: `You wrote to ${direct.to} directly`, body: text, direct })
+    this.keep(resident)
+    return true
   }
 
   /** Whether the roster took a change of its children. */

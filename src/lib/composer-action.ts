@@ -26,6 +26,7 @@ export function composerActionKind({
   hasContent,
   steer = false,
   resume = false,
+  straight = false,
 }: {
   running: boolean
   hasContent: boolean
@@ -33,9 +34,12 @@ export function composerActionKind({
   steer?: boolean
   /** The newest turn can be picked up (`useComposerResume`): an empty, idle composer offers that instead of Send. */
   resume?: boolean
+  /** The words go to a Fin straight, never into this turn: they send now, whatever the turn is doing. */
+  straight?: boolean
 }): ComposerActionKind {
   if (!running) return !hasContent && resume ? "resume" : "send"
   if (!hasContent) return "stop"
+  if (straight) return "send"
   return steer ? "steer" : "queue"
 }
 

@@ -33,7 +33,7 @@ export const BUDGET = {
   "stay native": { areas: ["stay-native"], floor: 0.85 },
 } as const satisfies Record<string, { areas: readonly (typeof AREAS)[number][]; floor: number }>
 
-/** One of a lead's Threads, in minutes ago rather than clock times, so a case reads the same on any day. */
+/** One of an Apex's Fins, in minutes ago rather than clock times, so a case reads the same on any day. */
 const EvalChild = z.object({
   name: z.string(),
   harness: z.string(),
@@ -56,8 +56,8 @@ export const OrchCase = z.object({
   /** The real mistake, in a sentence. */
   experience: z.string(),
   setup: z.object({
-    /** `top`: the person's own Thread; `lead`: one with children; `delegated-child`: one another Thread started; `native-subagent`: a harness's own child. */
-    role: z.enum(["top", "lead", "delegated-child", "native-subagent"]),
+    /** `top`: the person's own Thread; `apex`: one with Fins; `fin`: one another Thread started; `native-subagent`: a harness's own child. */
+    role: z.enum(["top", "apex", "fin", "native-subagent"]),
     /** Only on these harnesses, for cases whose right answer depends on what the harness can do. */
     harness: z.array(z.string()).optional(),
     priorTurns: z.array(PriorTurn).optional(),
@@ -65,7 +65,7 @@ export const OrchCase = z.object({
     world: z.record(z.string(), z.json()).optional(),
     /** Regexes on a shell command, answered with `output` instead of the default. */
     shellMocks: z.array(z.object({ match: z.string(), output: z.string() })).optional(),
-    /** A lead's Threads as they stand: the front-door note the host sends ahead of the person's message (`frontDoorNote`). */
+    /** An Apex's Fins as they stand: the front-door note the host sends ahead of the person's message (`frontDoorNote`). */
     children: z.array(EvalChild).optional(),
   }),
   prompt: z.string(),
@@ -123,7 +123,7 @@ function frontDoorChild(child: EvalChild): FrontDoorChild {
   }
 }
 
-/** What a case's agent reads ahead of the person's message: the note a lead with these Threads hears, as the host writes it. */
+/** What a case's agent reads ahead of the person's message: the note an Apex with these Fins hears, as the host writes it. */
 export function frontDoorText(orchCase: OrchCase): string | undefined {
   return orchCase.setup.children?.length ? controlNote(frontDoorNote(orchCase.setup.children.map(frontDoorChild), NOW)) : undefined
 }

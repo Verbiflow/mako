@@ -1,8 +1,8 @@
 /**
- * `mako agents` end to end, as an agent's shell runs it: a real host in a scratch home, a lead conversation on a
- * stand-in for Grok's CLI that streams its turns (`scripts/fixtures/acp-stream-agent.mjs`), and the lead's Session
+ * `mako agents` end to end, as an agent's shell runs it: a real host in a scratch home, an Apex conversation on a
+ * stand-in for Grok's CLI that streams its turns (`scripts/fixtures/acp-stream-agent.mjs`), and the Apex's Session
  * read from the environment Mako gives its harness's process, as `MAKO_SESSION_ID`. `mako agents start` starts a
- * child from a brief file; its turn ends, its report wakes the lead once, and `list`, `wait` and `read` answer what
+ * child from a brief file; its turn ends, its report wakes the Apex once, and `list`, `wait` and `read` answer what
  * it did. No model is asked and nothing of the person's is read or written.
  *
  *   npm run test:agents-cli
@@ -77,14 +77,14 @@ exit 2
   }
 
   const first = await mako("start", "grok", "Lead the sidebar review", "--cwd", project)
-  const { conversationId: lead } = z.object({ conversationId: z.string() }).parse(first[0])
+  const { conversationId: apex } = z.object({ conversationId: z.string() }).parse(first[0])
   const [session] = (await readFile(sessions, "utf8")).trim().split("\n")
-  assert.ok(session, "the lead's harness was told its Session")
+  assert.ok(session, "the Apex's harness was told its Session")
 
   const briefFile = join(scratch, "brief.md")
   await writeFile(briefFile, "Review the sidebar's filter and say what you'd change.\n")
   const above = await run(process.execPath, [cli, "agents", "start", "grok", "--brief-file", briefFile, "--access", "full", "--socket", location.socket, "--cwd", project, "--json"], { env: { ...env, MAKO_SESSION_ID: session } }).then(() => undefined, (error: { code?: number; stdout?: string }) => error)
-  assert.equal(above?.code, 1, "a child above its lead's access is refused")
+  assert.equal(above?.code, 1, "a child above its Apex's access is refused")
   assert.equal(JSON.parse(above?.stdout ?? "{}").refused, "access")
   const began = performance.now()
   const started = await agents(session, "start", "grok", "--brief-file", briefFile, "--title", "Review the filter")
@@ -105,22 +105,22 @@ exit 2
 
   const names: string[] = listed.children.map((child: { name: string }) => child.name)
   for (const deadline = Date.now() + 30_000; ; ) {
-    const history = await mako("history", lead)
+    const history = await mako("history", apex)
     const digests = history.flatMap((line) => (line.kind === "user" && line.text?.startsWith(FROM_AGENTS) ? [line.text] : []))
     const heard = names.map((name) => digests.join("\n").split(`"${name}"`).length - 1)
     if (heard.every((count) => count > 0)) {
-      assert.deepEqual(heard, names.map(() => 1), "each child's report reaches the lead once")
+      assert.deepEqual(heard, names.map(() => 1), "each child's report reaches the Apex once")
       assert.ok(digests.length <= names.length, "in at most a wake a burst")
       break
     }
-    assert.ok(Date.now() < deadline, `the lead was woken with both reports: ${JSON.stringify(digests)}`)
+    assert.ok(Date.now() < deadline, `the Apex was woken with both reports: ${JSON.stringify(digests)}`)
     await new Promise((settle) => setTimeout(settle, 200))
   }
   const refused = await run(process.execPath, [cli, "agents", "start", "grok", "--brief-file", briefFile, "--socket", location.socket, "--cwd", project, "--json"], { env }).then(() => undefined, (error: { code?: number; stdout?: string }) => error)
   assert.equal(refused?.code, 1, "a caller with no Session is refused")
   assert.equal(JSON.parse(refused?.stdout ?? "{}").refused, "no-parent")
   console.log(JSON.stringify({ receiptMs: Math.round(receiptMs), children: listed.children.map((child: { name: string; state: { kind: string } }) => [child.name, child.state.kind]) }))
-  console.log("PASS: mako agents started children from a lead's shell, each report woke the lead once, and list, wait and read answered")
+  console.log("PASS: mako agents started children from an Apex's shell, each report woke the Apex once, and list, wait and read answered")
 } finally {
   if (host && host.exitCode === null) {
     const exited = once(host, "exit")

@@ -4,7 +4,7 @@ import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { cn } from "@/lib/utils"
 import type { LiveSteering } from "@/lib/types"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
-import { useLeadStop } from "@/components/composer/stop-lead"
+import { useApexStop } from "@/components/composer/stop-apex"
 import { Ticking } from "@/components/ui/ticking"
 import { usePrefs } from "@/state/prefs"
 import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
@@ -73,6 +73,7 @@ export function Composer({
   editing,
   waiting,
   answering = false,
+  straight = false,
   hold,
   stopFor,
 }: {
@@ -99,7 +100,7 @@ export function Composer({
   desk?: boolean
   /** Where its words are kept until they're sent (`drafts.ts`): they outlive the screen, the page and a reload. */
   draftKey?: string
-  /** The conversation Stop stops: a lead's Stop asks first while any of its Threads works (`useLeadStop`). */
+  /** The conversation Stop stops: an Apex's Stop asks first while any of its Fins works (`useApexStop`). */
   stopFor?: string
   /** A key pressed with words in the field: a cloud Thread's machine starts waking. */
   onWrite?: () => void
@@ -112,6 +113,8 @@ export function Composer({
   waiting?: string
   /** The agent's question is open above: the field's words answer it. */
   answering?: boolean
+  /** The words go to one of an Apex's Fins straight (`sendDirect`): Send, never Queue or Steer, while the Apex works. */
+  straight?: boolean
   /** A send that asks first: pressed, the words stay in the field and this line stands above it (`HeldSendContext`). */
   hold?: ReactNode
 }) {
@@ -165,7 +168,7 @@ export function Composer({
 
   const over = encodedBytes(picked) > ATTACHMENT_BUDGET
   const hasContent = Boolean(text.trim() || dictation.hearing) || picked.length > 0
-  const presentation = sendPresentation({ running, hasContent, editingQueued: editing !== undefined, canSteer: steering?.canSteer === true, steerByDefault, sendLabel, answering })
+  const presentation = sendPresentation({ running, hasContent, editingQueued: editing !== undefined, canSteer: steering?.canSteer === true, steerByDefault, sendLabel, answering, straight })
   // A file still being read isn't in `picked` yet: the message waits for it rather than going without it.
   const reads = reading === 0 ? undefined : reading === 1 ? "Reading a file" : `Reading ${reading} files`
   const ready = hasContent && !over && !disabled && sendable && reads === undefined
@@ -316,7 +319,7 @@ export function Composer({
       />
     </>
   ) : null
-  const leadStop = useLeadStop({ conversationKey: stopFor, onStopLead: () => onStop?.(), phone: !desk })
+  const apexStop = useApexStop({ conversationKey: stopFor, onStopApex: () => onStop?.(), phone: !desk })
   const mic =
     !desk && dictation.offered && !dictation.listening ? (
       <button
@@ -334,7 +337,7 @@ export function Composer({
       </button>
     ) : null
   const button = desk ? (
-    <ComposerActionButton action={presentation.kind === "stop" ? "stop" : "send"} ready={ready} stopping={stopping} onSend={() => void send()} onStop={leadStop.press} />
+    <ComposerActionButton action={presentation.kind === "stop" ? "stop" : "send"} ready={ready} stopping={stopping} onSend={() => void send()} onStop={apexStop.press} />
   ) : (
     <SendButton
       presentation={onStop || presentation.kind !== "stop" ? presentation : { kind: "send", label: sendLabel }}
@@ -343,12 +346,12 @@ export function Composer({
       waiting={waiting ?? reads}
       lands={steering?.lands ?? null}
       onSend={(how) => void send(how)}
-      onStop={leadStop.press}
+      onStop={apexStop.press}
     />
   )
   const action = (
     <span className="relative flex shrink-0">
-      {leadStop.popover}
+      {apexStop.popover}
       {button}
     </span>
   )

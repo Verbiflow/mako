@@ -21,9 +21,9 @@ export async function claudeSdkOptions(
     throw new Error("The configured Claude Code executable is unavailable")
   const tuning = ClaudeTuningSchema.parse(input.tuning?.options ?? {})
   const initialMode = ClaudeModeSchema.safeParse(input.modeId)
-  // A lead's team is its children: Mako never turns Claude's agent teams on in one.
+  // An Apex's team is its Fins: Mako never turns Claude's agent teams on in one.
   if (tuning.agentTeams !== undefined)
-    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = tuning.agentTeams && input.nativeRouting?.().role !== "lead" ? "1" : "0"
+    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = tuning.agentTeams && input.nativeRouting?.().role !== "apex" ? "1" : "0"
   // Without it, `/code-review` reports its findings only as prose; with it,
   // the review runs inline and reports them through `ReportFindings`.
   env.CLAUDE_CODE_REPORT_FINDINGS = "1"

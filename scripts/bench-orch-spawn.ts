@@ -6,8 +6,8 @@ import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, HARNESSES } from "./lib/agents-world.ts"
 
 /*
- * How long a lead waits for a spawn's receipt (`npm run bench:orch-spawn`):
- * a lead on each of the six harnesses starts EACH children, round the six
+ * How long an Apex waits for a spawn's receipt (`npm run bench:orch-spawn`):
+ * an Apex on each of the six harnesses starts EACH children, round the six
  * harnesses, while the children already started work; the receipt is what
  * `agents_start` answers, once the child's Thread, edge, Session and first
  * request are committed and its turn is on its way. Then the same spawns
@@ -20,7 +20,7 @@ const root = mkdtempSync(join(tmpdir(), "mako-orch-spawn-"))
 const world = new AgentsWorld({
   root,
   script: async (turn) => {
-    if (turn.text.startsWith(FROM_AGENTS) || !turn.text.includes("child:")) return "ok"
+    if (turn.text.startsWith(FROM_AGENTS) || !turn.text.includes("You're fin:")) return "ok"
     await new Promise((resolve) => setTimeout(resolve, 200))
     return `Done: ${turn.harness} reviewed its part.`
   },
@@ -32,23 +32,23 @@ function percentile(values: number[], p: number): number {
 }
 
 try {
-  const leads = await Promise.all(HARNESSES.map((harness) => world.lead(harness)))
+  const apexes = await Promise.all(HARNESSES.map((harness) => world.apex(harness)))
   const receipts: number[] = []
   const repeats: number[] = []
-  const spawn = async (lead: (typeof leads)[number], i: number) => {
+  const spawn = async (apex: (typeof apexes)[number], i: number) => {
     const input = { brief: { objective: `Review part ${i} of the sidebar.` }, harness: HARNESSES[i % HARNESSES.length]!, name: `part-${i}`, clientKey: `part-${i}`, cwd: root }
     const began = performance.now()
-    const started = await world.agents.start(lead.caller, input)
+    const started = await world.agents.start(apex.caller, input)
     return { elapsed: performance.now() - began, started }
   }
   for (let i = 0; i < EACH; i += 1)
-    for (const lead of leads) {
-      const { elapsed, started } = await spawn(lead, i)
+    for (const apex of apexes) {
+      const { elapsed, started } = await spawn(apex, i)
       assert.ok(!("refused" in started) && !started.deduped, JSON.stringify(started))
       receipts.push(elapsed)
     }
-  for (const lead of leads) {
-    const { elapsed, started } = await spawn(lead, 0)
+  for (const apex of apexes) {
+    const { elapsed, started } = await spawn(apex, 0)
     assert.ok(!("refused" in started) && started.deduped)
     repeats.push(elapsed)
   }

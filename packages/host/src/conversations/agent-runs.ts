@@ -187,8 +187,8 @@ export class AgentRuns {
     if (kept) return kept.parent === parent.thread ? kept : { refused: "conflict", why: "That session already works for another Thread." }
     const child = store.place(ref, input.startedBy).thread
     if (child === parent.thread || store.ancestors(parent.thread).includes(child))
-      return { refused: "cycle", why: "That session is this Thread or one that leads it." }
-    if (store.edges().of(child)) return { refused: "conflict", why: "That session's Thread already has a lead." }
+      return { refused: "cycle", why: "That session is this Thread or one of its Apexes." }
+    if (store.edges().of(child)) return { refused: "conflict", why: "That session's Thread is already a Fin of an Apex." }
     const started = Date.parse(ref.startedAt ?? "")
     const startedAt = Number.isFinite(started) ? started : this.now()
     const name = uniqueName(input.name ?? ref.title ?? ref.harness, new Set(store.edges().children(parent.thread).map((edge) => edge.name)))

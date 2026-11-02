@@ -57,17 +57,21 @@ export const NativeAgentObservationSchema = z.object({
   /** Which native messages the entry was read from, for the diagnostics readout. */
   source: z.string().max(256).optional(),
   /**
-   * A child: a Thread this conversation's Thread leads (`contracts/agents.ts`),
-   * drawn from its edge and its own Thread (`childEntry`), never from a
-   * harness's roster. It outlives the conversation's turns and its provider's
-   * process. `session` is its Session in the Thread store; `nativeId` its
-   * harness's ID for it and `path` where this device's catalog reads it, which
-   * open its transcript; `conversation` its live conversation on that device, which opens it live. `state` is
-   * `childState`'s, absent from a host before it.
+   * A Fin: a Thread that works for this conversation's Thread, its Apex
+   * (`contracts/agents.ts`), drawn from its edge and its own Thread
+   * (`childEntry`), never from a harness's roster. It outlives the
+   * conversation's turns and its provider's process. `session` is its Session
+   * in the Thread store; `nativeId` its harness's ID for it and `path` where
+   * this device's catalog reads it, which open its transcript; `conversation`
+   * its live conversation on that device, which opens it live. `state` is
+   * `childState`'s, absent from a host before it. `name` is what its Apex and
+   * the person address it by; a host that takes the person's messages straight
+   * to it (`mako:agents-direct`) says it, and one before doesn't.
    */
   child: z
     .object({
       thread: z.string().uuid(),
+      name: z.string().min(1).max(512).optional(),
       origin: z.enum(["started", "discovered", "linked", "attached"]),
       session: z.string().uuid().optional(),
       nativeId: z.string().min(1).max(512).optional(),

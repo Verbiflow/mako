@@ -100,7 +100,8 @@ function draw(exchanges: ExchangeData[], message: ChatMessage): void {
   const last = exchanges.at(-1)
   // Mako's words picking up a turn cut short go on in the turn on screen, as one turn (`isContinuation`).
   if (message.role === "user" && isContinuation(message)) {
-    if (last) exchanges[exchanges.length - 1] = { ...last, response: [...last.response, message] }
+    if (last && !last.direct) exchanges[exchanges.length - 1] = { ...last, response: [...last.response, message] }
+    else if (last) exchanges.push({ id: message.id, response: [message], system: [], timestamp: message.timestamp })
     else exchanges.push({ id: LEAD_EXCHANGE_ID, response: [message], system: [], timestamp: message.timestamp })
     return
   }
@@ -108,19 +109,26 @@ function draw(exchanges: ExchangeData[], message: ChatMessage): void {
     exchanges.push({ id: message.id, prompt: message, response: [], system: [], timestamp: message.timestamp })
     return
   }
+  // The person's message straight to a Fin answers nothing; what comes after it, the turn it interrupted
+  // included, goes on in an exchange of its own, as this builder only ever adds to its last.
+  if (message.role === "system" && message.note?.direct) {
+    exchanges.push({ id: message.id, direct: message, response: [], system: [], timestamp: message.timestamp })
+    return
+  }
   // A turn the provider started itself opens its own exchange; under a
   // prompt nothing has answered yet, it was delivered with that prompt and
   // stays under it.
   if (message.role === "system" && message.opensTurn) {
-    if (last && last.id !== LEAD_EXCHANGE_ID && last.response.length === 0)
+    if (last && last.id !== LEAD_EXCHANGE_ID && !last.direct && last.response.length === 0)
       exchanges[exchanges.length - 1] = { ...last, system: [...last.system, { message, after: 0 }] }
     else exchanges.push({ id: message.id, opener: message, response: [], system: [], timestamp: message.timestamp })
     return
   }
-  if (!last) {
+  if (!last || last.direct) {
+    const id = last ? message.id : LEAD_EXCHANGE_ID
     exchanges.push(message.role === "system"
-      ? { id: LEAD_EXCHANGE_ID, response: [], system: [{ message, after: 0 }], timestamp: message.timestamp }
-      : { id: LEAD_EXCHANGE_ID, response: [message], system: [], timestamp: message.timestamp })
+      ? { id, response: [], system: [{ message, after: 0 }], timestamp: message.timestamp }
+      : { id, response: [message], system: [], timestamp: message.timestamp })
     return
   }
   exchanges[exchanges.length - 1] = message.role === "system"

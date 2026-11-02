@@ -38,6 +38,7 @@ export function liveEvent(block: Extract<Entry, { type: "event" }>): TranscriptE
   if (block.limit !== undefined) event.limit = block.limit
   if (block.nearLimit !== undefined) event.nearLimit = block.nearLimit
   if (block.retries !== undefined) event.retries = block.retries
+  if (block.direct !== undefined) event.direct = block.direct
   return event
 }
 

@@ -23,6 +23,26 @@ const inputs = {
   "mako:accounts": () => z.tuple([]),
   "mako:activate-tab": () => z.tuple([z.string()]),
   "mako:agents-diagnostics": () => z.tuple([]),
+  "mako:agents-direct": () =>
+    z.tuple([
+      z.string(),
+      z.object({
+        to: z.string(),
+        request: z.string(),
+        text: z.string(),
+        attachments: z
+          .array(
+            z.object({
+              name: z.string(),
+              mimeType: z.string(),
+              size: z.number().optional(),
+              data: z.string().optional(),
+              path: z.string().optional(),
+            })
+          )
+          .optional(),
+      }),
+    ]),
   "mako:agents-link": () =>
     z.tuple([
       z.union([
@@ -2018,6 +2038,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
   ["mako:agents-diagnostics", "conversations"],
+  ["mako:agents-direct", "conversations"],
   ["mako:agents-link", "conversations"],
   ["mako:agents-list", "conversations"],
   ["mako:agents-read", "conversations"],

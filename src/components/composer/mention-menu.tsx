@@ -42,6 +42,8 @@ import { useProviders } from "@/state/providers"
 import { useSession } from "@/state/session"
 import { skills, useSkills } from "@/state/skills"
 import { useThreads } from "@/state/threads"
+import { addressableFins, finPick, useThreadChildren } from "@/state/apex-fins"
+import { FIN_WORD } from "@mako/host/contracts/agents"
 import type { LiveSessionCommand } from "@/lib/types"
 
 const REFERENCE_LIMIT = 9
@@ -98,7 +100,8 @@ interface Group {
 
 /**
  * One menu for the composer's sigils. `@` offers context: conversations,
- * files and Mako's snapshots. `/` offers what can be invoked: at the start of
+ * files and Mako's snapshots, and first, in an Apex's conversation, its Fins,
+ * one of which the message then goes to straight. `/` offers what can be invoked: at the start of
  * the draft the commands too, and anywhere the skills and MCP servers the
  * selected provider will actually have when it answers, with Mako's own
  * wearing the fin. `#` offers numbered things, pull requests first. They
@@ -166,6 +169,20 @@ export function MentionMenu({
     }
     return [...seen].sort()
   }, [files])
+
+  // A Fin of a host before direct messages has no `child.name`, and isn't offered.
+  const apexThread = useAcp((state) => (kind === "@" ? activeLiveAcp(state)?.threadId : undefined))
+  const fins = useThreadChildren(apexThread)
+  const finGroups = useMemo<Group[]>(() => {
+    const rows = rankReferences(addressableFins(fins).map((fin) => ({
+      value: finPick(fin.fin),
+      title: fin.title,
+      hint: fin.name === fin.title ? `${FIN_WORD} · straight to it` : `${FIN_WORD} · ${fin.name} · straight to it`,
+      icon: <HarnessIcon harness={fin.provider} className="size-3.5" />,
+      key: `${fin.title} ${fin.name} fin`,
+    })), query)
+    return rows.length ? [{ label: `${FIN_WORD}s`, rows }] : []
+  }, [fins, query])
 
   const referenceGroups = useMemo<Group[]>(() => {
     if (capabilities) return []
@@ -381,8 +398,8 @@ export function MentionMenu({
   }, [commands, commandsHarness, kind, leading, query])
 
   const groups = useMemo(
-    () => (capabilities ? [...makoGroup, ...commandGroup, ...capabilityGroups] : kind === "#" ? pullGroups : referenceGroups),
-    [capabilities, kind, makoGroup, commandGroup, capabilityGroups, pullGroups, referenceGroups]
+    () => (capabilities ? [...makoGroup, ...commandGroup, ...capabilityGroups] : kind === "#" ? pullGroups : [...finGroups, ...referenceGroups]),
+    [capabilities, kind, makoGroup, commandGroup, capabilityGroups, pullGroups, finGroups, referenceGroups]
   )
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups])
 

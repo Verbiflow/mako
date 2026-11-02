@@ -10,10 +10,10 @@ import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
  * update's install closes it and a new one opens on the same store and
  * journals. No turn is lost or taken twice: a child's turn the update cut
  * continues once, whatever the person chose for their own turns; reports in
- * but not yet heard wake the lead once from the new host; a wake the lead
- * already took isn't sent again. And the whole tree: a lead on each of the
+ * but not yet heard wake the Apex once from the new host; a wake the Apex
+ * already took isn't sent again. And the whole tree: an Apex on each of the
  * six harnesses, three children each across three harnesses, one wake per
- * lead per burst, before an update and after it.
+ * apex per burst, before an update and after it.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-orch-update-"))
 const CHILDREN = ["claude", "cursor", "grok"]
@@ -28,29 +28,29 @@ async function until(what: string, done: () => boolean, timeoutMs = 10_000): Pro
 
 async function tree(name: string, script: Script) {
   const world = new AgentsWorld({ root: join(root, name), script })
-  const lead = await world.lead("codex")
+  const apex = await world.apex("codex")
   const children: string[] = []
   for (const harness of CHILDREN) {
-    const started = await world.agents.start(lead.caller, { brief: { objective: `Review ${harness}'s part.` }, harness, name: `review-${harness}`, clientKey: harness, cwd: world.root })
+    const started = await world.agents.start(apex.caller, { brief: { objective: `Review ${harness}'s part.` }, harness, name: `review-${harness}`, clientKey: harness, cwd: world.root })
     assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
     children.push(started.conversation)
   }
-  return { world, lead, children }
+  return { world, apex, children }
 }
 
 function promptsOf(world: AgentsWorld, conversation: string) {
   return world.prompts.filter((prompt) => prompt.conversation === conversation)
 }
 
-function digests(world: AgentsWorld, lead: string) {
-  return promptsOf(world, lead).filter((prompt) => prompt.text.startsWith(FROM_AGENTS))
+function digests(world: AgentsWorld, apex: string) {
+  return promptsOf(world, apex).filter((prompt) => prompt.text.startsWith(FROM_AGENTS))
 }
 
-/** The update cuts every child's turn: each continues once on the new host, and their reports wake the lead once. */
+/** The update cuts every child's turn: each continues once on the new host, and their reports wake the Apex once. */
 async function childrenMidTurn(): Promise<void> {
   let host = 1
-  const { world, lead, children } = await tree("mid-turn", async (turn) => {
-    if (!turn.text.includes("child:") && !children.includes(turn.conversation)) return "ok"
+  const { world, apex, children } = await tree("mid-turn", async (turn) => {
+    if (!turn.text.includes("You're fin:") && !children.includes(turn.conversation)) return "ok"
     if (host === 1) await turn.world.hold(turn.conversation)
     return `Done: ${turn.harness} reviewed its part.`
   })
@@ -66,23 +66,23 @@ async function childrenMidTurn(): Promise<void> {
       assert.equal(new Set(requests.map((request) => request.id)).size, requests.length, "no request twice")
       assert.ok(requests.at(-1)!.continues?.auto, "the second is Mako's continuation")
     }
-    const woken = digests(world, lead.conversation)
-    assert.equal(woken.length, 1, "the three reports wake the lead once")
+    const woken = digests(world, apex.conversation)
+    assert.equal(woken.length, 1, "the three reports wake the Apex once")
     assert.match(woken[0]!.text, /3 finished:/)
   } finally {
     await world.close()
   }
 }
 
-/** Reports in, the lead not yet woken: the new host wakes it once with all of them. */
+/** Reports in, the Apex not yet woken: the new host wakes it once with all of them. */
 async function reportsUnheard(): Promise<void> {
-  const { world, lead } = await tree("unheard", (turn) => (turn.text.includes("child:") ? `Done: ${turn.harness} reviewed its part.` : "ok"))
+  const { world, apex } = await tree("unheard", (turn) => (turn.text.includes("You're fin:") ? `Done: ${turn.harness} reviewed its part.` : "ok"))
   try {
     await until("the reports", () => world.store.undeliveredReports().length === CHILDREN.length)
-    assert.equal(digests(world, lead.conversation).length, 0, "still coalescing when the update comes")
+    assert.equal(digests(world, apex.conversation).length, 0, "still coalescing when the update comes")
     await world.restart()
     await world.settle()
-    const woken = digests(world, lead.conversation)
+    const woken = digests(world, apex.conversation)
     assert.equal(woken.length, 1, "one wake, from the new host")
     for (const harness of CHILDREN) assert.equal(woken[0]!.text.split(`"review-${harness}"`).length - 1, 1, `${harness}'s report once`)
     assert.equal(world.store.undeliveredReports().length, 0)
@@ -91,20 +91,20 @@ async function reportsUnheard(): Promise<void> {
   }
 }
 
-/** The lead is mid-wake when the update comes: the reports it took aren't sent again. */
+/** The Apex is mid-wake when the update comes: the reports it took aren't sent again. */
 async function leadMidWake(): Promise<void> {
   let host = 1
-  const { world, lead } = await tree("mid-wake", async (turn) => {
-    if (turn.text.includes("child:")) return `Done: ${turn.harness} reviewed its part.`
+  const { world, apex } = await tree("mid-wake", async (turn) => {
+    if (turn.text.includes("You're fin:")) return `Done: ${turn.harness} reviewed its part.`
     if (turn.text.startsWith(FROM_AGENTS) && host === 1) await turn.world.hold(turn.conversation)
     return "Noted."
   })
   try {
-    await until("the wake", () => digests(world, lead.conversation).length === 1)
+    await until("the wake", () => digests(world, apex.conversation).length === 1)
     host = 2
     await world.restart()
     await world.settle()
-    assert.equal(digests(world, lead.conversation).length, 1, "the wake the lead took isn't sent again")
+    assert.equal(digests(world, apex.conversation).length, 1, "the wake the Apex took isn't sent again")
     assert.equal(world.store.undeliveredReports().length, 0)
   } finally {
     await world.close()
@@ -119,8 +119,8 @@ async function launchCut(): Promise<void> {
   const launched = new Promise<void>((resolve) => { reached = resolve })
   const world = new AgentsWorld({
     root: join(root, "launch-cut"),
-    script: (turn) => (turn.text.includes("child:") ? `Done: ${turn.harness} reviewed its part.` : "ok"),
-    // Only a child's launch carries a brief from an agent; the lead's goes on. The child's goes on once the exit has begun.
+    script: (turn) => (turn.text.includes("You're fin:") ? `Done: ${turn.harness} reviewed its part.` : "ok"),
+    // Only a child's launch carries a brief from an agent; the Apex's goes on. The child's goes on once the exit has begun.
     launching: (conversation) => {
       if (host !== 1 || world.live.snapshot(conversation)?.requests[0]?.actor?.kind !== "agent") return
       reached?.()
@@ -128,8 +128,8 @@ async function launchCut(): Promise<void> {
     },
   })
   try {
-    const lead = await world.lead("codex")
-    const started = await world.agents.start(world.caller(lead.conversation), { brief: { objective: "Review cursor's part." }, harness: "cursor", name: "review-cursor", clientKey: "cursor", cwd: world.root })
+    const apex = await world.apex("codex")
+    const started = await world.agents.start(world.caller(apex.conversation), { brief: { objective: "Review cursor's part." }, harness: "cursor", name: "review-cursor", clientKey: "cursor", cwd: world.root })
     assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
     const child = started.conversation
     await launched
@@ -139,51 +139,51 @@ async function launchCut(): Promise<void> {
     finish?.()
     await restarted
     await world.settle()
-    const briefs = promptsOf(world, child).filter((prompt) => prompt.text.includes("child:"))
+    const briefs = promptsOf(world, child).filter((prompt) => prompt.text.includes("You're fin:"))
     assert.equal(briefs.length, 1, "the new host sends the brief once")
     assert.equal(world.store.reportsOf(world.store.edges().all[0]!.child, 0).length, 1, "and the child reports once")
-    assert.equal(digests(world, lead.conversation).length, 1, "which wakes the lead once")
+    assert.equal(digests(world, apex.conversation).length, 1, "which wakes the Apex once")
   } finally {
     await world.close()
   }
 }
 
-/** Six leads, one per harness, each with three children on three others: each burst wakes each lead once, across an update mid-burst. */
+/** Six apexes, one per harness, each with three children on three others: each burst wakes each apex once, across an update mid-burst. */
 async function sixLeads(): Promise<void> {
   let host = 1
   let burst = 1
   const world = new AgentsWorld({ root: join(root, "six"), script: async (turn) => {
-    if (!turn.text.includes("child:") && !turn.text.includes("Continue")) return "Noted."
+    if (!turn.text.includes("You're fin:") && !turn.text.includes("Continue")) return "Noted."
     if (burst === 2 && host === 1) await turn.world.hold(turn.conversation)
     return `Done: ${turn.harness} finished burst ${burst}.`
   } })
   try {
-    const leads = await Promise.all(HARNESSES.map((harness) => world.lead(harness)))
+    const apexes = await Promise.all(HARNESSES.map((harness) => world.apex(harness)))
     const spawn = async (round: number) => {
-      for (const [index, lead] of leads.entries())
+      for (const [index, apex] of apexes.entries())
         for (let i = 1; i <= 3; i += 1) {
           const harness = HARNESSES[(index + i) % HARNESSES.length]!
-          const started = await world.agents.start(lead.caller, { brief: { objective: `Burst ${round}: review ${harness}'s part.` }, harness, name: `b${round}-${harness}`, clientKey: `b${round}-${harness}`, cwd: world.root })
+          const started = await world.agents.start(apex.caller, { brief: { objective: `Burst ${round}: review ${harness}'s part.` }, harness, name: `b${round}-${harness}`, clientKey: `b${round}-${harness}`, cwd: world.root })
           assert.ok(!("refused" in started), JSON.stringify(started))
         }
     }
     await spawn(1)
     await world.settle()
-    const woken = () => leads.map((lead) => digests(world, lead.conversation).length + world.steers.filter((steer) => steer.conversation === lead.conversation).length)
-    assert.deepEqual(woken(), [1, 1, 1, 1, 1, 1], "the first burst wakes each lead once")
+    const woken = () => apexes.map((apex) => digests(world, apex.conversation).length + world.steers.filter((steer) => steer.conversation === apex.conversation).length)
+    assert.deepEqual(woken(), [1, 1, 1, 1, 1, 1], "the first burst wakes each apex once")
     burst = 2
     await spawn(2)
-    await until("the second burst's turns", () => world.agents.diagnostics().running === leads.length * 3)
+    await until("the second burst's turns", () => world.agents.diagnostics().running === apexes.length * 3)
     host = 2
     await world.restart()
     await world.settle()
     assert.deepEqual(woken(), [2, 2, 2, 2, 2, 2], "and the second, cut by the update, once more each")
     const children = world.store.edges().all
-    assert.equal(children.length, leads.length * 6)
+    assert.equal(children.length, apexes.length * 6)
     assert.ok(children.every((edge) => world.store.reportsOf(edge.child, 0).length === 1), "every child ended once, with one report")
     for (const edge of children) {
       const conversations = world.store.thread(edge.child)!.sessions.flatMap((session) => world.store.conversationsOf(session))
-      const briefs = world.prompts.filter((prompt) => conversations.includes(prompt.conversation) && prompt.text.includes("child:"))
+      const briefs = world.prompts.filter((prompt) => conversations.includes(prompt.conversation) && prompt.text.includes("You're fin:"))
       assert.equal(briefs.length, 1, `${edge.name}: its brief reached its harness once`)
     }
   } finally {

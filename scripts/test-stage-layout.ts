@@ -238,6 +238,8 @@ assert.equal(composerActionKind({ running: false, hasContent: false }), "send")
 assert.equal(composerActionKind({ running: false, hasContent: true }), "send")
 assert.equal(composerActionKind({ running: true, hasContent: false }), "stop")
 assert.equal(composerActionKind({ running: true, hasContent: true }), "queue")
+assert.equal(composerActionKind({ running: true, hasContent: true, steer: true, straight: true }), "send", "words to a Fin straight go now, never into the Apex's turn")
+assert.equal(composerActionKind({ running: true, hasContent: false, straight: true }), "stop", "an empty field still stops the Apex")
 // The word on screen must be the Enter action: steering needs a steerable
 // running turn and the preference, and the placeholder names Enter first.
 assert.equal(composerEnterAction({ canSteer: true, steerOnEnter: true }), "steer")

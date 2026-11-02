@@ -89,7 +89,7 @@ export async function liveSample(input: {
       conversationId: id, emit, ...mode && { modeId: mode }, ...input.model && { tuning: { model: input.model } },
       conversationTools: stub.grant(id),
       mcpSnapshot: async () => ({ cwd: project, generatedAt: Date.now(), servers: [], providers: [] }),
-      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "lead" ? "lead" as const : "thread" as const }) },
+      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }) },
     }, { env }))
     await driver.prompt(id, prompt(orchCase), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     const deadline = Date.now() + 180_000

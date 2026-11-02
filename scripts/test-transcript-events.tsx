@@ -16,7 +16,7 @@ import { MoveDividersContext } from "../src/components/transcript/transcript-not
 import { entriesToMessages } from "../src/lib/entry-messages"
 import { createExchangeBuilder } from "../src/components/viewer/exchange-builder"
 import type { ViewedThread } from "../src/state/thread-state"
-import { exchangeRequests, promptLabel, toExchanges, turnRequest, type Exchange as ExchangeData } from "../src/lib/exchanges"
+import { exchangeRequests, promptLabel, toExchanges, turnExchange, turnRequest, type Exchange as ExchangeData } from "../src/lib/exchanges"
 import { causeWords, eventLabel, eventWords, setupWords } from "../src/lib/transcript-events"
 import { textOf } from "../src/lib/format"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
@@ -252,6 +252,26 @@ assert.match(text(draw(viewedTurns)), /Background command finished Watch the che
 const viewedFolded = viewed([claudeTask(`Background command "Watch" failed with exit code 1`, "failed", 30), { kind: "user", text: "What failed?" }, say("It exited.")])
 assert.match(draw(viewedFolded), /data-provider-turn="command"/)
 assert.doesNotMatch(draw(viewedFolded), /h-px flex-1 bg-hairline/)
+
+// The person wrote to a Fin from its Apex's composer while the Apex's turn ran: their words and the routing line stand
+// apart, answered by no turn, and the Apex's turn goes on as one, streaming where it was.
+const direct = { to: "android", fin: "thread-android", request: "req-direct", received: "received-direct", delivery: "steer", at: Date.parse(at(31)) } as const
+const directEvent: TranscriptEvent = { label: "You wrote to android directly", body: "Use the new signing key.", direct }
+const liveDirect = streamed([go, { kind: "text", id: "t1", text: "Running it." }, marker(directEvent), { kind: "text", id: "t2", text: "All green." }])
+assert.deepEqual(liveDirect.map((exchange) => Boolean(exchange.direct)), [false, true], "the turn, then the direct message beside it")
+assert.equal(liveDirect[0]!.response.length, 2, "the Apex's turn stays one, its words on both sides of the message in it")
+assert.equal(turnExchange(liveDirect)?.id, liveDirect[0]!.id, "the turn still streams, not the message")
+assert.equal(liveDirect[1]!.timestamp, direct.at, "it stands at the time it was sent")
+assert.equal(promptLabel(liveDirect[1]!), "To android: Use the new signing key.")
+const directDrawn = draw(liveDirect)
+assert.match(directDrawn, /data-direct-exchange/)
+assert.match(directDrawn, /data-routed-direct/)
+assert.match(text(directDrawn), /Use the new signing key\. .*Fin · android · direct/, "the person's words, then where they went")
+const viewedDirect = viewed([{ kind: "user", text: "Run the suite" }, say("Running it."), { kind: "event", at: at(31), ...directEvent }, say("All green.")])
+assert.deepEqual(viewedDirect.map((exchange) => Boolean(exchange.direct)), [false, true, false], "saved, the turn's words after it go on below it")
+assert.equal(viewedDirect[2]!.prompt, undefined, "no prompt of the person's opens what follows")
+assert.match(text(draw(viewedDirect)), /Running it\. .*Use the new signing key\. .*Fin · android · direct.*All green\./)
+console.log("Direct messages: the person's words to a Fin stand apart from the Apex's turn, live and saved")
 
 
 /* ------------------------------------------------------------------ */
