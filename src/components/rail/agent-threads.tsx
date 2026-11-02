@@ -258,6 +258,8 @@ export function AgentThreads() {
     const bound = readsThreadRefs(all)
     return liveAgents.filter(
       (presence) =>
+        // A child shows inside its lead's Thread, as its catalog row does (`listedAsThread`).
+        presence.lead === undefined &&
         (grouping === "archived" ? archivedLive(presence, archiveKeys) : !archivedLive(presence, archiveKeys) || presence.status === "running" || presence.status === "starting" || presence.status === "needs-permission") &&
         (!filter.length || filter.includes(presence.harness)) &&
         (scope !== "workspace" || threadBelongsToWorkspace(presence, cwd)) &&

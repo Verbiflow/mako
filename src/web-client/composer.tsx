@@ -4,6 +4,7 @@ import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { cn } from "@/lib/utils"
 import type { LiveSteering } from "@/lib/types"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
+import { useLeadStop } from "@/components/composer/stop-lead"
 import { Ticking } from "@/components/ui/ticking"
 import { usePrefs } from "@/state/prefs"
 import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
@@ -73,6 +74,7 @@ export function Composer({
   waiting,
   answering = false,
   hold,
+  stopFor,
 }: {
   placeholder: string
   /** Sends a message under `id`; says whether it went. One that didn't comes back into an empty field, or to `onUnsent`. */
@@ -97,6 +99,8 @@ export function Composer({
   desk?: boolean
   /** Where its words are kept until they're sent (`drafts.ts`): they outlive the screen, the page and a reload. */
   draftKey?: string
+  /** The conversation Stop stops: a lead's Stop asks first while any of its Threads works (`useLeadStop`). */
+  stopFor?: string
   /** A key pressed with words in the field: a cloud Thread's machine starts waking. */
   onWrite?: () => void
   /** A message that didn't go while the field held other words by then: kept apart, with Retry, rather than lost. */
@@ -312,6 +316,7 @@ export function Composer({
       />
     </>
   ) : null
+  const leadStop = useLeadStop({ conversationKey: stopFor, onStopLead: () => onStop?.(), phone: !desk })
   const mic =
     !desk && dictation.offered && !dictation.listening ? (
       <button
@@ -328,8 +333,8 @@ export function Composer({
         <MicIcon className="size-[18px]" />
       </button>
     ) : null
-  const action = desk ? (
-    <ComposerActionButton action={presentation.kind === "stop" ? "stop" : "send"} ready={ready} stopping={stopping} onSend={() => void send()} onStop={() => onStop?.()} />
+  const button = desk ? (
+    <ComposerActionButton action={presentation.kind === "stop" ? "stop" : "send"} ready={ready} stopping={stopping} onSend={() => void send()} onStop={leadStop.press} />
   ) : (
     <SendButton
       presentation={onStop || presentation.kind !== "stop" ? presentation : { kind: "send", label: sendLabel }}
@@ -338,8 +343,14 @@ export function Composer({
       waiting={waiting ?? reads}
       lands={steering?.lands ?? null}
       onSend={(how) => void send(how)}
-      onStop={() => onStop?.()}
+      onStop={leadStop.press}
     />
+  )
+  const action = (
+    <span className="relative flex shrink-0">
+      {leadStop.popover}
+      {button}
+    </span>
   )
   const recording = dictation.listening ? <RecordingPill dictation={dictation} /> : null
   return (

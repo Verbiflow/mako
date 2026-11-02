@@ -1,5 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { memo, useMemo, useState } from "react"
+import { memo, useCallback, useMemo, useRef, useState } from "react"
 import { ChevronDownIcon, EyeIcon, GitBranchIcon, HourglassIcon, SquareIcon, WorkflowIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import type { AcpState, LiveAcpConversation } from "@/state/acp-state"
@@ -9,13 +9,16 @@ import { threads, useThreads } from "@/state/threads"
 import { descriptorFor } from "@/state/descriptors"
 import { capabilityText } from "@mako/host/contracts/harness-capabilities"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
-import { isActiveNativeAgent, type NativeWork } from "@mako/host/contracts/native-agents"
-import { durationText } from "@mako/sessions/events"
+import { isActiveNativeAgent, isProviderWork, type NativeWork } from "@mako/host/contracts/native-agents"
+import { rollup, rollupLine, rosterChildren } from "@mako/host/contracts/children"
+import { LeadChildrenSection } from "@/components/inspector/lead-children-section"
+import { leadConversation, openChildInLead, useLeadView } from "@/state/lead-children"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import { useSecondClock } from "@/components/ui/second-clock"
+import { LeadMark } from "@/components/ui/lead-mark"
+import { Elapsed } from "@/components/inspector/elapsed"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
@@ -101,17 +104,6 @@ export function WorkGlyph({ work, provider, className }: { work: NativeWork | un
   }
 }
 
-/** How long it has run, counting while it runs; one shared clock ticks every row. */
-export function Elapsed({ agent, className }: { agent: NativeAgent; className?: string }) {
-  const active = isActiveNativeAgent(agent)
-  const now = useSecondClock(active)
-  const start = agent.startedAt ?? agent.observedAt
-  const end = active ? now : (agent.settledAt ?? agent.observedAt)
-  const ms = agent.usage?.durationMs !== undefined && !active ? agent.usage.durationMs : end - start
-  if (ms < 1_000) return null
-  return <span className={cn("tabular shrink-0", className)}>{durationText(ms)}</span>
-}
-
 /** Active first, oldest first, then what settled, newest first; housekeeping last. */
 function ordered(agents: readonly NativeAgent[]): NativeAgent[] {
   const rank = (agent: NativeAgent) => (agent.ambient ? 2 : isActiveNativeAgent(agent) ? 0 : 1)
@@ -127,7 +119,10 @@ function ordered(agents: readonly NativeAgent[]): NativeAgent[] {
 export function AgentsPanel() {
   const focus = useWorkspaceFocus()
   const key = useAcp((state) => (focus.identity === `live:${state.activeKey}` ? state.activeKey : undefined))
-  return <ConversationAgents key={focus.identity} conversation={key ?? undefined} />
+  // A child open in its lead's Thread keeps the lead's panel, the child's row lit.
+  const open = useLeadView((state) => state.open)
+  const lead = useAcp((state) => (open && key && state.conversations[key]?.threadId === open.child ? leadConversation(state, open.lead)?.key : undefined))
+  return <ConversationAgents key={lead ?? focus.identity} conversation={lead ?? key ?? undefined} litChild={lead ? open?.child : undefined} />
 }
 
 function liveConversation(state: AcpState, conversation: string | undefined): LiveAcpConversation | undefined {
@@ -136,15 +131,56 @@ function liveConversation(state: AcpState, conversation: string | undefined): Li
 }
 
 /** One conversation's roster as the desk's Agents panel and a phone's Agents sheet both draw it. */
-export function ConversationAgents({ conversation, transcripts = true }: { conversation?: string; transcripts?: boolean }) {
+export function ConversationAgents({
+  conversation,
+  transcripts = true,
+  onOpenChild,
+  litChild,
+}: {
+  conversation?: string
+  transcripts?: boolean
+  /** The child shown now, whose row is lit. */
+  litChild?: string
+  /** Where a child's row opens it: in place in its lead's Thread on the desk (`openChildInLead`). */
+  onOpenChild?: (agent: NativeAgent, lead: { thread: string; title: string }) => void
+}) {
   const roster = useAcp((state) => liveConversation(state, conversation)?.nativeAgents)
   const provider = useAcp((state) => liveConversation(state, conversation)?.harness)
+  const thread = useAcp((state) => liveConversation(state, conversation)?.threadId)
+  const leadTitle = useLeadName(conversation, thread)
+  // Stable, so a batch moving one child repaints that child's row alone.
+  const openChild = useCallback(
+    (agent: NativeAgent) => {
+      if (!thread) return
+      if (onOpenChild) onOpenChild(agent, { thread, title: leadTitle })
+      else openChildInLead(thread, leadTitle, agent)
+    },
+    [onOpenChild, thread, leadTitle]
+  )
   const background = useAcp((state) => {
     const live = liveConversation(state, conversation)
     const work = live ? backgroundWork(live.session, live.nativeAgents) : null
     return { waiting: work ? backgroundWorkText(work) : undefined, unnamed: work?.unnamed ?? 0, stopping: live?.canceling ?? false }
   }, shallowEqual)
-  return <AgentRoster conversation={conversation} roster={roster} provider={provider} transcripts={transcripts} {...background} />
+  return (
+    <AgentRoster
+      conversation={conversation}
+      roster={roster}
+      provider={provider}
+      transcripts={transcripts}
+      leadTitle={leadTitle}
+      litChild={litChild}
+      onOpenChild={thread ? openChild : undefined}
+      {...background}
+    />
+  )
+}
+
+/** A lead's name as its rail row says it: its Thread's, else its conversation's. */
+function useLeadName(conversation: string | undefined, thread: string | undefined): string {
+  const listed = useThreads((state) => (thread ? state.threads.find((ref) => ref.threadId === thread)?.title : undefined))
+  const live = useAcp((state) => liveConversation(state, conversation)?.title)
+  return listed ?? live ?? "This Thread"
 }
 
 function AgentRoster({
@@ -155,9 +191,15 @@ function AgentRoster({
   waiting,
   unnamed,
   stopping,
+  leadTitle,
+  litChild,
+  onOpenChild,
 }: {
   conversation?: string
   roster?: NativeAgentRoster
+  leadTitle: string
+  litChild?: string
+  onOpenChild?: (agent: NativeAgent) => void
   provider?: string
   /** Whether a child's row opens its transcript, which only the desk can show. */
   transcripts: boolean
@@ -170,8 +212,10 @@ function AgentRoster({
   useHarnessIdentity()
   const [visible, setVisible] = useState(40)
   const capability = useThreads((state) => descriptorFor(state, provider)?.capabilities.nativeAgents)
-  const agents = useMemo(() => ordered(roster?.agents ?? []), [roster])
-  if (agents.length === 0 && !unnamed)
+  const scroller = useRef<HTMLDivElement>(null)
+  const children = rosterChildren(roster)
+  const agents = useMemo(() => ordered((roster?.agents ?? []).filter(isProviderWork)), [roster])
+  if (agents.length === 0 && !unnamed && !children.length)
     return (
       <Blank
         icon={<GitBranchIcon />}
@@ -210,7 +254,13 @@ function AgentRoster({
           </button>
         ) : null}
       </div>
-      <div data-sheet-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
+      <div ref={scroller} data-sheet-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
+        {children.length ? (
+          <LeadChildrenSection children={children} conversation={conversation} leadTitle={leadTitle} scroller={scroller} open={litChild} onOpen={onOpenChild} />
+        ) : null}
+        {children.length && (agents.length || unnamed) ? (
+          <div className="flex h-7 items-end px-2.5 pb-1 text-label text-faint">In this turn</div>
+        ) : null}
         {unnamed > 0 ? (
           <p className="px-2.5 py-2 text-label text-faint">
             {unnamed === 1 ? "1 more task runs" : `${unnamed} more tasks run`} that {provider ? harnessLabel(provider) : "the provider"} counts without naming.
@@ -352,9 +402,12 @@ export function AgentsToggle() {
   const reading = useAcp((state) => {
     const live = activeLiveAcp(state)
     const agents = live?.nativeAgents?.agents ?? []
-    const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient)
+    // A lead's children say how they stand by the rollup; the rest of the roster counts as it runs.
+    const children = rollup(rosterChildren(live?.nativeAgents))
+    const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient && !agent.child)
     return {
       total: agents.length,
+      lead: children.total ? rollupLine(children) : "",
       running: running.length,
       // The harnesses at work, as one string so a step elsewhere in the roster re-renders nothing.
       harnesses: [...new Set(running.filter((agent) => (agent.work ?? "agent") === "agent").map((agent) => agent.provider))].slice(0, SHOWN_MARKS).join(" "),
@@ -362,8 +415,8 @@ export function AgentsToggle() {
     }
   }, shallowEqual)
   if (!reading.total) return null
-  const label = reading.running ? `${reading.running} running` : `${reading.total} finished`
-  const marks = reading.harnesses ? reading.harnesses.split(" ") : []
+  const label = reading.lead || (reading.running ? `${reading.running} running` : `${reading.total} finished`)
+  const marks = reading.harnesses && !reading.lead ? reading.harnesses.split(" ") : []
   return (
     <button
       type="button"
@@ -380,7 +433,13 @@ export function AgentsToggle() {
             </span>
           ))}
         </span>
-      ) : reading.waiting ? <HourglassIcon className="size-3" /> : <GitBranchIcon className="size-3" />}
+      ) : reading.lead ? (
+        <LeadMark className="size-3" />
+      ) : reading.waiting ? (
+        <HourglassIcon className="size-3" />
+      ) : (
+        <GitBranchIcon className="size-3" />
+      )}
       {label}
     </button>
   )
