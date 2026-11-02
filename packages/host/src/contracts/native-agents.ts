@@ -18,6 +18,20 @@ export const NativeAgentStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("canceled") }),
   z.object({ kind: z.literal("unknown"), reason: note }),
 ])
+/**
+ * A child's state as `childState` computes it (`contracts/agents.ts`), carried
+ * on its entry so every surface (the rail's badge, the strip, the panel, the
+ * phone) reads that one computation and never infers it from `state`'s words.
+ */
+export const ChildStateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("queued"), reason: z.enum(["tree-running", "place-full", "device-offline"]), ahead: z.number().int().nonnegative() }),
+  z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
+  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional() }),
+  z.object({ kind: z.literal("idle") }),
+  z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]) }),
+  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional() }),
+])
+export type ChildStateReading = z.infer<typeof ChildStateSchema>
 export const NativeAgentObservationSchema = z.object({
   nativeId: z.string().min(1).max(512),
   nativeRunId: z.string().min(1).max(512).optional(),
@@ -48,7 +62,8 @@ export const NativeAgentObservationSchema = z.object({
    * harness's roster. It outlives the conversation's turns and its provider's
    * process. `session` is its Session in the Thread store; `nativeId` its
    * harness's ID for it and `path` where this device's catalog reads it, which
-   * open its transcript.
+   * open its transcript; `conversation` its live conversation on that device, which opens it live. `state` is
+   * `childState`'s, absent from a host before it.
    */
   child: z
     .object({
@@ -57,6 +72,8 @@ export const NativeAgentObservationSchema = z.object({
       session: z.string().uuid().optional(),
       nativeId: z.string().min(1).max(512).optional(),
       path: z.string().min(1).max(4096).optional(),
+      conversation: z.string().min(1).max(512).optional(),
+      state: ChildStateSchema.optional(),
     })
     .optional(),
   state: NativeAgentStateSchema,

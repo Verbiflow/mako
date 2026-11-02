@@ -31,6 +31,7 @@ import type { LiveSessionUsage } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
 import type { NativePromptReference } from "./native-prompt-identity.js"
 import type { Entry } from "@mako/sessions/entries"
+import type { Rollup } from "./children.js"
 
 export interface LiveStartOptions {
   initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
@@ -422,6 +423,16 @@ export interface LiveSummary {
   /** The Thread and Session this conversation belongs to, the same IDs a catalog row carries. */
   threadId?: string
   sessionId?: string
+  /**
+   * The Thread that leads this one's, from its edge, as its catalog row says it (`ThreadRef.parent`): a child is shown
+   * inside its lead's Thread and never as a row of its own.
+   */
+  parent?: { thread: string; session: string }
+  /**
+   * A lead's children counted (`rollup`), for a window's rail before it holds the lead's roster: the roster, once a
+   * batch brings it, says the same. Absent from a conversation that leads none.
+   */
+  children?: Rollup
   /**
    * Its Thread's name, for a conversation listed from another device: the name the person or Mako gave the Thread
    * there, which titles the Thread's row as this Mac's own Threads' names title theirs.

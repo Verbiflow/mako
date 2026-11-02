@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, type AccessTier } from "./access.js"
-import { CHILDREN_BINDING, type NativeAgent } from "./native-agents.js"
+import { CHILDREN_BINDING, type ChildStateReading, type NativeAgent } from "./native-agents.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 
 export { CHILDREN_BINDING }
@@ -153,15 +153,10 @@ export type QueueReason = "tree-running" | "place-full" | "device-offline"
 
 /**
  * A child's state, computed by `childState` and never stored. `agents_list`,
- * the roster entry and the window's `rollup` all read it.
+ * the roster entry (`NativeAgent.child.state`) and the window's `rollup` all
+ * read it.
  */
-export type ChildState =
-  | { kind: "queued"; reason: QueueReason; ahead: number }
-  | { kind: "starting"; step: "placing" | "preparing" | "booting" | "launching" }
-  | { kind: "working"; step?: string; phase?: string }
-  | { kind: "idle" }
-  | { kind: "blocked"; question: string; on: "lead" | "person" | "approval" }
-  | { kind: "ended"; outcome: "done" | "failed" | "stopped"; reason?: string }
+export type ChildState = ChildStateReading
 
 /**
  * What the child's Thread shows now, from whatever runs its current turn: the
@@ -174,6 +169,8 @@ export interface ChildThread {
   session?: SessionId
   nativeId?: string
   path?: string
+  /** Its live conversation on this device, while it has one. */
+  conversation?: string
   title?: string
   harness?: string
   model?: string
@@ -255,7 +252,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }) },
+    child: { thread: edge.child, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -265,6 +262,22 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (state.kind === "ended") entry.settledAt = thread.ended?.at ?? journal.latest?.at ?? edge.closedAt ?? edge.createdAt
   return entry
 }
+
+/** `state` within the entry's limits: its words are a roster note's at most. */
+function carried(state: ChildState): ChildState {
+  const cut = (text: string) => (text.length > NOTE_LIMIT ? `${text.slice(0, NOTE_LIMIT - 1)}…` : text)
+  switch (state.kind) {
+    case "working":
+      return { kind: "working", ...(state.step && { step: cut(state.step) }), ...(state.phase && { phase: cut(state.phase) }) }
+    case "blocked":
+      return { ...state, question: cut(state.question) }
+    case "ended":
+      return state.reason ? { ...state, reason: cut(state.reason) } : state
+    default:
+      return state
+  }
+}
+const NOTE_LIMIT = 8192
 
 function entryState(state: ChildState): NativeAgent["state"] {
   switch (state.kind) {
