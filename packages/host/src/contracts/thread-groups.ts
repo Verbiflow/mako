@@ -16,6 +16,8 @@ export const ThreadGroupSchema = z.object({
         origin: SessionOriginSchema,
         /** False for a `+` Session whose first send has not started a conversation yet. */
         started: z.boolean(),
+        /** The Session a fork was forked from. */
+        forkOf: SessionIdSchema.optional(),
       })
     )
     .min(2),

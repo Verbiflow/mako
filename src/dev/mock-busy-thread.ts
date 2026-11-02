@@ -1,6 +1,7 @@
 import type { LiveRequest, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { personPromptedAt } from "@mako/host/contracts/worked-at"
+import { ThreadGroupSchema, type ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { ThreadRef } from "@/lib/types"
 
 /*
@@ -14,6 +15,30 @@ import type { ThreadRef } from "@/lib/types"
 export const BUSY_THREAD = "b0b0b0b0-0000-4000-8000-00000000b0b0"
 export const BUSY_CWD = "/Users/you/mako"
 const STARTED = Date.now() - 4 * 3_600_000
+const DAY = 24 * 3_600_000
+
+/**
+ * `?aged`: the second Session is a fork started 22 days ago, last sent a message 20 days ago, read on another device
+ * since, as the one a phone's "Please continue" woke on 2026-11-01 was. Its journal's write stays recent.
+ */
+export function agedChoice(): boolean {
+  return "location" in globalThis && new URLSearchParams(globalThis.location.search).has("aged")
+}
+
+/** When Session `index` started, and when its messages were sent from. */
+function startedAt(index: number): number {
+  return agedChoice() && index === 1 ? Date.now() - 22 * DAY : STARTED + index * 60_000
+}
+function askedFrom(index: number): number {
+  return agedChoice() && index === 1 ? Date.now() - 20 * DAY - 25 * 60_000 : STARTED + index * 60_000
+}
+
+/** The Thread's group under `?aged`: its second Session began as a fork of its first. */
+export function agedGroup(): ThreadGroup[] {
+  return agedChoice()
+    ? [ThreadGroupSchema.parse({ id: BUSY_THREAD, sessions: BUSY_SESSIONS.map((entry, index) => ({ id: entry.session, origin: index === 1 ? "fork" : index ? "new" : "started", started: true, ...(index === 1 && { forkOf: BUSY_SESSIONS[0]!.session }) })) })]
+    : []
+}
 
 /** The Thread's Sessions, the one that started first first, as its tabs are ordered. */
 export const BUSY_SESSIONS = [
@@ -39,7 +64,7 @@ export function busyRefs(): ThreadRef[] {
     cwd: BUSY_CWD,
     title: entry.title,
     updatedAt: new Date(busyActivity(index)).toISOString(),
-    startedAt: new Date(STARTED + index * 60_000).toISOString(),
+    startedAt: new Date(startedAt(index)).toISOString(),
     threadId: BUSY_THREAD,
     sessionId: entry.session,
     bytes: 40_000,
@@ -225,8 +250,8 @@ function busyRequests(prefix: string, count: number, startedAt: number): LiveReq
 export function busySnapshot(index: number): LiveSnapshot {
   const entry = BUSY_SESSIONS[index]!
   const long = index === 0
-  const createdAt = STARTED + index * 60_000
-  const requests = busyRequests(`b${index}b0b0b0`, long ? PROMPTS.length : 2, createdAt)
+  const createdAt = startedAt(index)
+  const requests = busyRequests(`b${index}b0b0b0`, long ? PROMPTS.length : 2, askedFrom(index))
   const blocks: LiveSnapshot["blocks"] = requests.flatMap((request, turn) => [
     { type: "user" as const, text: request.text, requestId: request.id },
     { type: "tool" as const, id: `${entry.conversation}-read-${turn}`, toolKind: "read" as const, title: "Read docs/meta-harness/tracks.md", input: "{\"path\":\"docs/meta-harness/tracks.md\"}", output: "# Tracks", status: "completed" as const },

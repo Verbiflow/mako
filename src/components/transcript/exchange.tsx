@@ -73,6 +73,8 @@ import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, endedAsChosen, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
+import { wokeWords } from "@/lib/session-words"
+import type { WokeAfterRest } from "@/lib/woke-after-rest"
 import { AnswerRequestContext, AnswerTimeContext, HarnessContext, TurnRunningContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -97,6 +99,7 @@ import {
   HistoryIcon,
   LayersIcon,
   PencilIcon,
+  MoonIcon,
   PlayIcon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -118,6 +121,7 @@ export const Exchange = memo(function Exchange({
   interrupted,
   sentByMako,
   carried,
+  woke,
   failed,
 }: {
   exchange: ExchangeData
@@ -128,6 +132,8 @@ export const Exchange = memo(function Exchange({
   sentByMako?: MakoPrompt
   /** The conversation this exchange's prompt carried to a new session: one quiet line above the person's words. */
   carried?: CarriedHistory
+  /** The person's words reached this session after it rested a day or more (`wokeAfterRest`). */
+  woke?: WokeAfterRest
   failed?: boolean
 }) {
   useHarnessIdentity()
@@ -260,6 +266,7 @@ export const Exchange = memo(function Exchange({
           ) : (
             <>
               {carried ? <CarriedLine carried={carried} time={exchange.prompt.timestamp} /> : null}
+              {woke && !carried ? <WokeLine woke={woke} provider={provider} time={exchange.prompt.timestamp} /> : null}
               <Prompt message={exchange.prompt} />
             </>
           )
@@ -430,6 +437,17 @@ function CarriedLine({ carried, time }: { carried: CarriedHistory; time?: number
       }
     />
   )
+}
+
+/**
+ * A message that reached a session after it rested a day or more: a divider above the person's words naming the
+ * session it went to and when its last turn was, so a vague "Please continue" sent to an old fork reads as that, on
+ * every device, live or reloaded.
+ */
+function WokeLine({ woke, provider, time }: { woke: WokeAfterRest; provider?: string; time?: number }) {
+  const harness = woke.harness ?? provider
+  const words = wokeWords(`${harness ? harnessLabel(harness) : "agent"} session`, woke.restedMs, woke.lastAt)
+  return <EventLine variant="divider" icon={MoonIcon} time={time} className="mb-3" data-woke-after={woke.restedMs} words={words} />
 }
 
 /** Mako told the agent it's on its Thread's own branch now, after the move it asked for. */

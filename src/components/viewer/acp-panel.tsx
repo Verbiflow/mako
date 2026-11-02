@@ -201,6 +201,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
   )
   const madeByMako = useMemo(() => makoPrompts(requests), [requests])
   const carried = useMemo(() => carriedHistories(requests), [requests])
+  const askedAt = useMemo(() => new Map(requests.flatMap((request) => (request.createdAt === undefined ? [] : [[request.id, request.createdAt] as const]))), [requests])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
   const unread = useAcp((state) => scopedLiveAcp(state, scope)?.hydrated === false)
   const lastExchangeId = exchanges.at(-1)?.id
@@ -230,6 +231,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       interruptedRequests={interruptedRequests}
       makoPrompts={madeByMako}
       carriedHistories={carried}
+      askedAt={askedAt}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
       opening={historyNote ?? (worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined)}
       empty={unread ? null : historyState === "reading" ? (

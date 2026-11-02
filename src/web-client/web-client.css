@@ -42,7 +42,7 @@
   .web-quiet-button,
   .web-send,
   .web-chip,
-  .web-tab,
+  .web-session-current,
   .web-account,
   .web-attachment-remove {
     transition:
@@ -60,7 +60,7 @@
   .web-button:active:not(:disabled),
   .web-quiet-button:active:not(:disabled),
   .web-chip:active:not(:disabled),
-  .web-tab:active:not(:disabled),
+  .web-session-current:active:not(:disabled),
   .web-account:active {
     transform: scale(0.97);
     transition-duration: 40ms;
@@ -501,14 +501,20 @@
     @apply opacity-45;
   }
 
-  .web-tab {
-    @apply flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-muted-foreground;
+  /* The Session the composer sends to, under the Thread's bar; pressed, all of them (`SessionSwitcher`). */
+  .web-session-current {
+    @apply flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-label;
   }
-  .web-tab-on {
-    @apply bg-fill-selected text-foreground;
+  .web-session-current:active:not(:disabled) {
+    @apply bg-fill-selected;
   }
-  .web-tab-add {
-    @apply w-8 justify-center px-0;
+  @media (hover: hover) {
+    .web-session-current:hover:not(:disabled) {
+      @apply bg-fill-hover;
+    }
+  }
+  .web-session-choice {
+    @apply min-h-14 py-2;
   }
 
   .web-live {
@@ -565,6 +571,10 @@
   }
   .web-where {
     @apply flex min-w-0 items-center gap-0.5;
+  }
+  /* Over a Thread's field when it has more than one Session: the one the words go to, as quiet as the placeholder. */
+  .web-sends-to {
+    @apply flex min-w-0 items-center gap-1.5 px-2.5 pt-1 text-label text-faint;
   }
   .web-where > .web-chip {
     flex-shrink: 1;
@@ -1002,6 +1012,14 @@
 }
 .web-unsent-action {
   @apply h-9 px-3 text-label font-medium;
+}
+/* Before a send to a Session asleep while a newer one exists: which one it would wake, and the way to the newer. */
+.web-stale-send {
+  @apply mx-auto flex w-full max-w-content flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-1.5;
+}
+.web-stale-send .web-quiet-button,
+.web-stale-send .web-button {
+  @apply h-9 px-3 text-label;
 }
 
 /*
@@ -1639,7 +1657,7 @@
   .web-quiet-button:active,
   .web-send:active,
   .web-chip:active,
-  .web-tab:active,
+  .web-session-current:active,
   .web-account:active,
   .web-fab:active,
   .web-fab[data-away],

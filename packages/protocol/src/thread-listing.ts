@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
-import { CONTINUE_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { CONTINUE_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -145,6 +145,11 @@ export const ReportedSessionSchema = z
      * cloud Thread continuing it while its owner is off clones (`continues.ts`, link version 16 on).
      */
     repository: ContinueRepositorySchema.optional(),
+    /**
+     * The Session it was forked from, by Mako's Session ID (link version 17 on): every device names it a fork, so two
+     * Sessions of a Thread with the same title, a fork and the one it came from, can be told apart at a glance.
+     */
+    forkOf: z.uuid().optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -251,16 +256,22 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 16, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 17, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= CONTINUE_VERSION) return [...rows]
+  if (version >= FORKS_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // Before version 17 a gateway knows no `forkOf` (a fork reads as any other Session).
+    delete older.forkOf
+    if (version >= CONTINUE_VERSION) {
+      kept.push(older)
+      continue
+    }
     // Before version 16 a gateway knows no `repository` (nothing continues it while its owner is off).
     delete older.repository
     if (version >= PROMPTED_VERSION) {
@@ -344,6 +355,7 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.openElsewhere === right.openElsewhere &&
     left.repository?.url === right.repository?.url &&
     left.repository?.branch === right.repository?.branch &&
+    left.forkOf === right.forkOf &&
     left.continued?.op === right.continued?.op &&
     left.continued?.phase === right.continued?.phase &&
     left.continued?.reason === right.continued?.reason &&

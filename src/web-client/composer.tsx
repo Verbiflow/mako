@@ -9,6 +9,7 @@ import { usePrefs } from "@/state/prefs"
 import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
 import { appendHeard, elapsedWords, METER_BARS, splitUnsure, useDictation, type Dictation, type MeterLevels } from "./dictation"
 import { noteSending, openingText, readDraft, settleSending, writeDraft } from "./drafts"
+import { HeldSendContext } from "./held-send"
 import { outboxHolds } from "./outbox"
 import { sendPresentation } from "./send-action"
 import { SendButton } from "./send-button"
@@ -71,6 +72,7 @@ export function Composer({
   editing,
   waiting,
   answering = false,
+  hold,
 }: {
   placeholder: string
   /** Sends a message under `id`; says whether it went. One that didn't comes back into an empty field, or to `onUnsent`. */
@@ -106,6 +108,8 @@ export function Composer({
   waiting?: string
   /** The agent's question is open above: the field's words answer it. */
   answering?: boolean
+  /** A send that asks first: pressed, the words stay in the field and this line stands above it (`HeldSendContext`). */
+  hold?: ReactNode
 }) {
   const [text, setText] = useState(() => (draftKey ? openingText(draftKey, outboxHolds) : ""))
   const [picked, setPicked] = useState<Picked[]>([])
@@ -162,7 +166,8 @@ export function Composer({
   const reads = reading === 0 ? undefined : reading === 1 ? "Reading a file" : `Reading ${reading} files`
   const ready = hasContent && !over && !disabled && sendable && reads === undefined
 
-  const send = async (how?: "queue" | "steer") => {
+  const [held, setHeld] = useState<{ how?: "queue" | "steer" } | undefined>(undefined)
+  const send = async (how?: "queue" | "steer", asked = false) => {
     // What's still being heard goes with it, as the person heard it said.
     const spoken = dictation.listening ? dictation.hearing : ""
     const full = appendHeard(text, spoken)
@@ -175,6 +180,12 @@ export function Composer({
       taken.current = undefined
       return saved
     }
+    if (hold && !asked) {
+      if (spoken) setText(full)
+      setHeld({ how })
+      return
+    }
+    setHeld(undefined)
     taken.current = full
     const message = full.trim()
     const attachments = picked.map((each) => each.attachment)
@@ -332,7 +343,22 @@ export function Composer({
   )
   const recording = dictation.listening ? <RecordingPill dictation={dictation} /> : null
   return (
-    <div className="web-composer-wrap">
+    <div className="web-composer-wrap" data-asks-first={hold ? "" : undefined}>
+      {hold && held ? (
+        <HeldSendContext
+          value={{
+            go: () => void send(held.how, true),
+            take: () => {
+              setHeld(undefined)
+              setText("")
+              if (draftKey) writeDraft(draftKey, "")
+              return text
+            },
+          }}
+        >
+          {hold}
+        </HeldSendContext>
+      ) : null}
       {over || problem || dictation.failure ? (
         <p role="alert" className="mx-auto w-full max-w-content px-5 pt-1 text-label text-negative">
           {over ? `Too large to send from a phone yet: ${kilobytes(budget)} of ${kilobytes(ATTACHMENT_BUDGET)}.` : (problem ?? dictation.failure)}

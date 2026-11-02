@@ -1,5 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
+import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
+import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
@@ -23,7 +25,8 @@ import { StartSheet, type AddingTo } from "./new-thread"
 import { PreviewSheet, ServerCard } from "./preview"
 import { appKey, appShownAs, askPreview, loopbackTarget, useApps, useThreadApp } from "./previews"
 import { useForm } from "./route"
-import { CLOUD_WHERE, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
+import { CLOUD_WHERE, openingSession, ownerOf, sessionsByLastWorked, subtitle, type WebSession, type WebThread } from "./threads"
+import { Sheet, SheetScroll } from "./sheet"
 import { startingWhere } from "./started"
 import { useThread } from "./use-thread"
 import { archiveAndSay } from "./archive-thread"
@@ -32,7 +35,7 @@ import { useDelayedStatus } from "./delayed-status"
 import { useBranchOpening } from "./replies"
 import { checkReach, useSessionDiagnosis } from "./thread-trouble"
 import { DiagnosisCard } from "./trouble"
-import { useTryAgain } from "./trouble-state"
+import { useNow, useTryAgain } from "./trouble-state"
 import { QuietStrip } from "./quiet-strip"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openReview } from "./review-open"
@@ -98,8 +101,8 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
         headingRef={heading}
         actions={thread.archived ? undefined : <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />}
       />
-      {thread.sessions.length > 1 ? <SessionTabs thread={thread} current={session} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
-      <ThreadBody thread={thread} session={session} />
+      {thread.sessions.length > 1 ? <SessionSwitcher thread={thread} current={session} wide={wide} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
+      <ThreadBody thread={thread} session={session} openedBy={sessionId === undefined ? "screen" : "person"} onSession={onSession} />
       {addingTo ? (
         <StartSheet
           open={adding}
@@ -124,7 +127,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
  * composer kept under it; above the transcript, what can't be reached, when something can't (its Mac off, and since
  * when), and the servers its app runs. Links in it to the app's own address open the app here.
  */
-export function ThreadBody({ thread, session, desk = false }: { thread: WebThread; session: WebSession; desk?: boolean }) {
+export function ThreadBody({ thread, session, desk = false, openedBy = "person", onSession }: { thread: WebThread; session: WebSession; desk?: boolean; openedBy?: OpenedBy; onSession?: (session: string) => void }) {
   const client = useWebClient()
   // Only whether one goes: the strip follows its steps itself, so its progress re-renders nothing under it.
   const moving = useMoves((state) => state.moves.has(thread.id)) || listedMove(thread) !== undefined
@@ -165,7 +168,7 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
               {moving || session.quietSince ? null : <ServerCards session={session} />}
               <MoveDividersContext value>
                 <Suspense fallback={<TranscriptLoading />}>
-                  <LiveSession key={session.row.conversation} session={session} desk={desk} />
+                  <LiveSession key={session.row.conversation} session={session} desk={desk} thread={thread} openedBy={openedBy} onSession={onSession} />
                 </Suspense>
               </MoveDividersContext>
             </>
@@ -372,33 +375,120 @@ function cloudOn(entitlements: readonly string[]): boolean {
   return entitlements.includes("cloud")
 }
 
-/** A Thread's Sessions, one tab each: Claude beside Codex, as a Mac's tabs show them; `+` adds one. */
-function SessionTabs({ thread, current, onSession, onAdd }: { thread: WebThread; current: WebSession; onSession: (session: string) => void; onAdd: (() => void) | undefined }) {
+/**
+ * A Thread's Sessions under a finger, phone and tablet alike: one line naming the Session the composer sends to (its
+ * harness's mark, its own name, how it stands and when the person last worked in it), and how many there are, with a
+ * dot when another waits on the person or works. Pressed, the Sessions newest first, each said the same way, the ones
+ * asleep folded under the rest; `+` adds one. A row of harness names told nothing apart: a Thread's Sessions are often
+ * one harness, and a fork keeps the title it was forked from.
+ */
+function SessionSwitcher({ thread, current, wide, onSession, onAdd }: { thread: WebThread; current: WebSession; wide: boolean; onSession: (session: string) => void; onAdd: (() => void) | undefined }) {
+  const [open, setOpen] = useState(false)
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const now = useNow(60_000)
+  const others = thread.sessions.filter((session) => session !== current).map((session) => sessionStanding(session.facts, now))
+  const busy = others.includes("waiting") ? "waiting" : others.includes("working") ? "working" : undefined
+  const label = webHarnessLabel(current.row.harness)
+  const name = sessionName(current.facts, label)
+  const parent = forkedFrom(current.facts, thread.sessions.map((session) => session.facts), webHarnessLabel)
   return (
-    <div role="tablist" aria-label="Sessions in this Thread" className="web-scroll flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-hairline px-3 py-2">
-      {thread.sessions.map((session) => {
-        const selected = session.row.session === current.row.session
-        return (
-          <button
-            key={session.row.session}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            onClick={() => onSession(session.row.session)}
-            className={cn("web-tab", selected && "web-tab-on")}
-          >
-            <WebHarnessIcon harness={session.row.harness} className="size-3.5" />
-            {webHarnessLabel(session.row.harness)}
-            {session.row.state === "waiting" && !session.quietSince ? <span aria-label="waiting for you" className="size-1.5 rounded-full bg-caution" /> : null}
-          </button>
-        )
-      })}
+    <div className="flex shrink-0 items-center gap-1 border-b border-hairline px-2 py-1.5" data-session-switcher>
+      <button
+        ref={setAnchor}
+        type="button"
+        aria-haspopup="dialog"
+        aria-label={`Sessions in this Thread: ${thread.sessions.length}. Sending to ${name}, ${sessionDetail(current.facts, now, label, parent)}`}
+        onClick={() => setOpen(true)}
+        className="web-session-current"
+      >
+        <WebHarnessIcon harness={current.row.harness} className="size-4 shrink-0" />
+        <span className="flex min-w-0 flex-1 items-baseline gap-1 text-left">
+          <span className="min-w-0 truncate font-medium text-foreground">{name}</span>
+          {/* A phone's width holds "Fork"; who it was forked from is in the list, one tap away. */}
+          <span className="shrink-0 text-faint">· {sessionBrief(current.facts, now, label, wide ? parent : undefined)}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
+          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-caution" : "bg-ember")} /> : null}
+          {thread.sessions.length}
+          <ChevronsUpDownIcon aria-hidden className="size-3.5" />
+        </span>
+      </button>
       {onAdd ? (
-        <button type="button" aria-label="Add a Session" onClick={onAdd} className="web-tab web-tab-add">
+        <button type="button" aria-label="Add a Session" onClick={onAdd} className="web-icon-button size-9 shrink-0">
           <PlusIcon className="size-4" />
         </button>
       ) : null}
+      <Sheet open={open} onDismiss={() => setOpen(false)} label="Sessions in this Thread" anchor={anchor}>
+        <SessionList
+          thread={thread}
+          current={current}
+          now={now}
+          onPick={(session) => {
+            setOpen(false)
+            // The one already open too: picked, it's where the person means their words to go (`OpenedBy`).
+            onSession(session)
+          }}
+          onAdd={
+            onAdd
+              ? () => {
+                  setOpen(false)
+                  onAdd()
+                }
+              : undefined
+          }
+        />
+      </Sheet>
     </div>
+  )
+}
+
+/** The Sessions of a Thread, newest first, the ones asleep folded unless one is open. */
+function SessionList({ thread, current, now, onPick, onAdd }: { thread: WebThread; current: WebSession; now: number; onPick: (session: string) => void; onAdd: (() => void) | undefined }) {
+  const [unfolded, setUnfolded] = useState(false)
+  const ordered = sessionsByLastWorked(thread)
+  const shown = ordered.filter((session, index) => unfolded || index === 0 || session === current || sessionStanding(session.facts, now) !== "asleep")
+  const folded = ordered.length - shown.length
+  const facts = thread.sessions.map((session) => session.facts)
+  return (
+    <>
+      <h3 className="web-sheet-title">Sessions in this Thread</h3>
+      <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        <ul role="list" aria-label="Sessions in this Thread" className="flex flex-col">
+          {shown.map((session) => {
+            const selected = session === current
+            const label = webHarnessLabel(session.row.harness)
+            const standing = sessionStanding(session.facts, now)
+            return (
+              <li key={session.row.session}>
+                <button type="button" aria-current={selected || undefined} data-session-row={session.row.session} onClick={() => onPick(session.row.session)} className={cn("web-choice web-session-choice", selected && "bg-fill-selected")}>
+                  <WebHarnessIcon harness={session.row.harness} className="size-5 shrink-0" />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate font-medium">{sessionName(session.facts, label)}</span>
+                    <span className={cn("line-clamp-2 text-label", standing === "waiting" ? "text-caution" : standing === "failed" ? "text-negative" : "text-faint")}>
+                      {session.facts.title ? `${label} · ` : ""}
+                      {sessionDetail(session.facts, now, label, forkedFrom(session.facts, facts, webHarnessLabel))}
+                    </span>
+                  </span>
+                  {selected ? <CheckIcon aria-label="Sending here" className="size-4 shrink-0 text-foreground" /> : null}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+        {folded ? (
+          <button type="button" data-session-fold className="web-choice text-muted-foreground" onClick={() => setUnfolded(true)}>
+            <MoonIcon aria-hidden className="size-[18px] shrink-0" />
+            {folded === 1 ? "1 more, asleep" : `${folded} more, asleep`}
+          </button>
+        ) : null}
+        {onAdd ? (
+          <button type="button" className="web-choice text-muted-foreground" onClick={onAdd}>
+            <PlusIcon aria-hidden className="size-[18px] shrink-0" />
+            Add a Session
+          </button>
+        ) : null}
+      </SheetScroll>
+    </>
   )
 }
 

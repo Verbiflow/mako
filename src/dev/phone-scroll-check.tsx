@@ -12,7 +12,7 @@ import { listedOwner, listedSummary } from "@mako/host/contracts/listed-conversa
 import { WebClient, WebClientContext } from "@/web-client/client"
 import LiveSession from "@/web-client/live-session"
 import { applyTheme } from "@/web-client/theme"
-import type { WebSession } from "@/web-client/threads"
+import { listedFacts, type WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
 import "../web-client/style.css"
@@ -118,7 +118,7 @@ const listed: ListedSession = {
   runsOn: { kind: "device", deviceId: "00000000-0000-4000-8000-0000000000a3" },
   listedAt: new Date().toISOString(),
 }
-const session: WebSession = { row: listed, owner: listedOwner(listed), summary: listedSummary(listed, "Studio", undefined), where: "Studio", waiting: [] }
+const session: WebSession = { row: listed, owner: listedOwner(listed), summary: listedSummary(listed, "Studio", undefined), where: "Studio", waiting: [], facts: listedFacts(listed, false) }
 // A stand-in for the started client, without its constructor's gateway: this page opens none, and its conversation is
 // already in the store. `LiveSession` asks it only for these.
 const client: WebClient = Object.assign(Object.create(WebClient.prototype), {

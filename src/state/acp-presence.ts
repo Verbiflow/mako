@@ -42,6 +42,8 @@ export interface AcpPresence {
   promptedAt?: number
   /** Listed from another device, idle, and open in its harness's own app or terminal there (`ListedRail.openElsewhere`). */
   openElsewhere?: true
+  /** Listed from another device as forked from this Session (`ListedRail.forkOf`). */
+  forkOf?: string
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -105,6 +107,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (rail?.project) presence.workspace = rail.project.folder
       if (rail?.worktree) presence.worktreeBranch = rail.worktree.branch
       if (rail?.lineage) presence.lineage = rail.lineage
+      if (rail?.forkOf) presence.forkOf = rail.forkOf
       if (rail?.openElsewhere && presence.status === "ready" && conversation.session.connection === "hibernated") presence.openElsewhere = true
       if (conversation.promptedAt !== undefined) presence.promptedAt = conversation.promptedAt
       return [presence]
@@ -144,6 +147,7 @@ export function sameAcpPresence(
         candidate.lineage === presence.lineage &&
         candidate.promptedAt === presence.promptedAt &&
         candidate.openElsewhere === presence.openElsewhere &&
+        candidate.forkOf === presence.forkOf &&
         candidate.background === presence.background
       )
     })

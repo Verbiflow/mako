@@ -458,6 +458,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         placement: (id) => store.journalPlacement(id),
         executions: (ids) => store.executionsOf(ids),
         titles: (ids) => store.titlesOf(ids),
+        forks: (ids) => store.forksOf(ids),
         moving: (thread) => movesUnderWay.of(thread),
         worktree: (folder) => {
           const found = worktreeAt(made, folder)

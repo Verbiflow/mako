@@ -57,6 +57,7 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
   if (row.project) rail.project = row.project
   if (row.worktree) rail.worktree = row.worktree
   if (row.lineage) rail.lineage = row.lineage
+  if (row.forkOf) rail.forkOf = row.forkOf
   if (background) rail.background = row.background
   // Another app's window on it says nothing while its device can't be reached.
   if (row.openElsewhere && row.state === "idle" && !quiet) rail.openElsewhere = true

@@ -55,6 +55,8 @@ export type ReportSources = {
   executions(sessions: readonly SessionId[]): ReadonlyMap<SessionId, SessionExecution>
   /** Each of these Threads' names (`ThreadStore.titlesOf`), asked once a report as `executions` is. */
   titles(threads: readonly ThreadId[]): ReadonlyMap<ThreadId, { title?: string; titleSource?: string }>
+  /** The Session each of these that is a fork was forked from (`ThreadStore.forksOf`), asked once a report as `executions` is. */
+  forks?(sessions: readonly SessionId[]): ReadonlyMap<SessionId, SessionId>
   /** A move of this Thread to the cloud under way here (`MovesUnderWay`), said on each of its rows while it goes. */
   moving?(thread: ThreadId): ListedMove | undefined
   /**
@@ -198,7 +200,9 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (opened.has(ref.path)) continue
     natives.push({ ref, session: sessionId.data, thread: threadId.data })
   }
-  const executions = sources.executions([...conversations.map(({ placed }) => placed.session), ...natives.map(({ session }) => session)])
+  const placedSessions = [...conversations.map(({ placed }) => placed.session), ...natives.map(({ session }) => session)]
+  const executions = sources.executions(placedSessions)
+  const forks = sources.forks?.(placedSessions)
   const titles = sources.titles([...new Set([...conversations.map(({ placed }) => placed.thread), ...natives.map(({ thread }) => thread)])])
   // What the rail shows of a row besides its state: the project it's filed under and what that has checked out, the
   // worktree it works in, and the agents it ran in before.
@@ -250,6 +254,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (move) row.move = move
     if (session.cwd) row.folder = session.cwd
     if (session.nativeId) row.nativeId = session.nativeId
+    const forkOf = forks?.get(placed.session)
+    if (forkOf) row.forkOf = forkOf
     Object.assign(row, rail(session.cwd || undefined, undefined, (summary.nativeIds ?? []).map((id) => id.provider), session.harness))
     // A harness or ID the protocol can't carry is left out, never the rest.
     const parsed = ReportedSessionSchema.safeParse(row)
@@ -285,6 +291,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const move = sources.moving?.(thread)
     if (move) row.move = move
     if (ref.title) row.title = line(ref.title)
+    const forkOf = forks?.get(session)
+    if (forkOf) row.forkOf = forkOf
     // The hollow ring this Mac's rail draws (`threadStatus`): its harness's app holds it, not another Mako host.
     if (state === "idle" && !ref.heldBy && (activity?.status === "open" || ref.locked)) row.openElsewhere = true
     if (state === "waiting") {
@@ -319,7 +327,7 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path && left.background === right.background &&
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
     left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
-    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere
+    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf
 }
 
 /**

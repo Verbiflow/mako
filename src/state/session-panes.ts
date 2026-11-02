@@ -9,6 +9,7 @@ import { threadGroupsStore } from "@/state/thread-groups"
 import {
   currentOnScreen,
   currentThreadTabs,
+  noteOpenedByScreen,
   onScreenTab,
   openSessionTab,
   useThreadTabs,
@@ -67,6 +68,7 @@ export function openTabInPane(paneId: string, thread: string | undefined, tab: S
     openSessionTab(tab)
     return
   }
+  noteOpenedByScreen(undefined)
   apply({ [paneId]: { thread, tab: tab.id } }, paneId)
 }
 

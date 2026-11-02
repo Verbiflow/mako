@@ -110,6 +110,18 @@ test("a host lists the Sessions it owns, at work first, then newest first, each 
   assert.equal(ownedSessions(host([summary("c-1", NOW)]))[0]?.threadTitle, undefined, "an older build's automatic title isn't shown anywhere")
 })
 
+test("a fork's row says the Session it was forked from, read for every row in one call; a Session that began another way says nothing", () => {
+  const asked: number[] = []
+  const sources: ReportSources = {
+    ...host([summary("c-1", NOW - 3_000), summary("c-2", NOW - 2_000), summary("c-3", NOW - 1_000)]),
+    // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
+    forks: (sessions) => (asked.push(sessions.length), new Map([[uuid(2), uuid(1)]]) as never),
+  }
+  const rows = ownedSessions(sources)
+  assert.deepEqual(rows.map((row) => [row.conversation, row.forkOf]), [["c-3", undefined], ["c-2", uuid(1)], ["c-1", undefined]])
+  assert.deepEqual(asked, [3])
+})
+
 test("a Thread worked in within the week is listed whole, its older Sessions too; an older one only while a Session of it works or waits; when it moved is its journal's last write", () => {
   const old = NOW - SYNC_WINDOW_MS - 1
   const threads = { "c-1": 101, "c-2": 102, "c-3": 103, "c-4": 103 }

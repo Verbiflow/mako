@@ -330,8 +330,13 @@ const SessionExecutionRowSchema = ExecutionRowSchema.extend({
   held: z.string().nullable(),
   generation: z.number().int().positive().nullable(),
 })
+const ForkRowSchema = z.object({ id: z.string(), parent_session: z.string() })
 const ThreadTitleRowSchema = z.object({ id: z.string(), title: z.string().nullable(), title_source: z.enum(["user", "frozen", "auto"]).nullable(), merged_into: z.string().nullable() })
-const GroupMemberRowSchema = z.object({ thread_id: z.string(), merged_into: z.string().nullable(), session_id: z.string(), added_at: z.number(), origin: z.string(), started: z.number() })
+const GroupMemberRowSchema = z.object({ thread_id: z.string(), merged_into: z.string().nullable(), session_id: z.string(), added_at: z.number(), origin: z.string(), parent_session: z.string().nullable(), started: z.number() })
+/** One Session of a Thread's group as a window draws it: a fork says the Session it was forked from. */
+function groupMember(id: string, origin: string, started: boolean, parent: string | null) {
+  return { id, origin, started, ...(origin === "fork" && parent && { forkOf: parent }) }
+}
 const MovePhaseSchema = z.enum(["leaving", "cancelled", "released", "arrived", "refused", "reclaimed"])
 const MoveRowSchema = z.object({
   id: MoveIdSchema,
@@ -598,6 +603,7 @@ export class ThreadStore {
   private revision = 0
   private readonly executionsSeen = new Map<string, SessionExecution | null>()
   private readonly titlesSeen = new Map<string, ThreadTitle | null>()
+  private readonly forksSeen = new Map<string, SessionId | null>()
   private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
   private agentsSeen: { revision: number; agents: BackgroundAgents } | undefined
   private changeSeq = 0
@@ -762,7 +768,7 @@ export class ThreadStore {
     // Grouped by the index alone; the order (each Thread's first Session added, then its ID) is worked out here, which
     // spares reading every membership's row.
     const rows = this.sql(`WITH grouped AS (SELECT thread_id FROM memberships GROUP BY thread_id HAVING count(*) > 1)
-      SELECT g.thread_id, t.merged_into, m.session_id, m.added_at, s.origin,
+      SELECT g.thread_id, t.merged_into, m.session_id, m.added_at, s.origin, s.parent_session,
         EXISTS (SELECT 1 FROM journals WHERE session_id = m.session_id) OR EXISTS (SELECT 1 FROM sources WHERE session_id = m.session_id) AS started
       FROM grouped g JOIN threads t ON t.id = g.thread_id JOIN memberships m ON m.thread_id = g.thread_id JOIN sessions s ON s.id = m.session_id
       ORDER BY g.thread_id, m.position, m.session_id`).all().map((row) => GroupMemberRowSchema.parse(row))
@@ -775,7 +781,7 @@ export class ThreadStore {
       start = end
       const group = head.merged_into
         ? this.group(ThreadIdSchema.parse(head.thread_id))
-        : ThreadGroupSchema.parse({ id: head.thread_id, sessions: members.map((member) => ({ id: member.session_id, origin: member.origin, started: member.started !== 0 })) })
+        : ThreadGroupSchema.parse({ id: head.thread_id, sessions: members.map((member) => groupMember(member.session_id, member.origin, member.started !== 0, member.parent_session)) })
       if (group) found.push({ first: Math.min(...members.map((member) => member.added_at)), id: head.thread_id, group })
     }
     const groups = found.sort((left, right) => left.first - right.first || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).map(({ group }) => group)
@@ -848,11 +854,11 @@ export class ThreadStore {
     if (!thread || thread.sessions.length < 2) return undefined
     return ThreadGroupSchema.parse({
       id: thread.id,
-      sessions: thread.sessions.map((session) => ({
-        id: session,
-        origin: this.sessionRow(session).origin,
-        started: Boolean(this.sql("SELECT 1 AS found FROM journals WHERE session_id = ? UNION ALL SELECT 1 FROM sources WHERE session_id = ? LIMIT 1").get(session, session)),
-      })),
+      sessions: thread.sessions.map((session) => {
+        const row = this.sessionRow(session)
+        const started = Boolean(this.sql("SELECT 1 AS found FROM journals WHERE session_id = ? UNION ALL SELECT 1 FROM sources WHERE session_id = ? LIMIT 1").get(session, session))
+        return groupMember(session, row.origin, started, row.parent_session)
+      }),
     })
   }
 
@@ -1311,6 +1317,37 @@ export class ThreadStore {
       const execution = read.get(session)
       if (remember) this.executionsSeen.set(session, execution ?? null)
       if (execution) found.set(session, execution)
+    }
+    return found
+  }
+
+  /**
+   * The Session each of `sessions` that is a fork was forked from, the rest left out: read in one query, then answered
+   * from memory until any commit (`revision`), as `executionsOf` is.
+   */
+  forksOf(sessions: Iterable<SessionId>): Map<SessionId, SessionId> {
+    this.syncVersion()
+    const remember = this.depth === 0
+    const found = new Map<SessionId, SessionId>()
+    const unread = new Set<SessionId>()
+    for (const session of sessions) {
+      if (!remember || !this.forksSeen.has(session)) unread.add(session)
+      else {
+        const known = this.forksSeen.get(session)
+        if (known) found.set(session, known)
+      }
+    }
+    if (!unread.size) return found
+    const read = new Map<string, SessionId>()
+    const rows = this.sql("SELECT id, parent_session FROM sessions WHERE origin = 'fork' AND parent_session IS NOT NULL AND id IN (SELECT value FROM json_each(?))").all(JSON.stringify([...unread]))
+    for (const row of rows) {
+      const parsed = ForkRowSchema.parse(row)
+      read.set(parsed.id, SessionIdSchema.parse(parsed.parent_session))
+    }
+    for (const session of unread) {
+      const parent = read.get(session)
+      if (remember) this.forksSeen.set(session, parent ?? null)
+      if (parent) found.set(session, parent)
     }
     return found
   }
@@ -2296,6 +2333,7 @@ export class ThreadStore {
     this.revision += 1
     this.executionsSeen.clear()
     this.titlesSeen.clear()
+    this.forksSeen.clear()
     this.groupsSeen = undefined
     this.agentsSeen = undefined
   }

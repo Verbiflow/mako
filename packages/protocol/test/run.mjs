@@ -14,7 +14,7 @@ import { AccountEventSchema } from "../dist/account-events.js"
 import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
-import { CONTINUE_VERSION } from "../dist/version.js"
+import { CONTINUE_VERSION, FORKS_VERSION } from "../dist/version.js"
 import { ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
 import { ArchivedThreadSchema, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
@@ -111,7 +111,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 16)
+    assert.equal(SUPPORTED_VERSIONS.max, 17)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -2249,7 +2249,6 @@ describe("a Session continued in the cloud while its device is off", () => {
 
   test("a row says its repository from link 16, and the account's continue beside it; an older link and an older reader go without", () => {
     assert.equal(CONTINUE_VERSION, 16)
-    assert.equal(LINK_VERSION, CONTINUE_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     assert.deepEqual(ReportedSessionSchema.parse(reported), reported)
     assert.deepEqual(rowsForLink([reported], CONTINUE_VERSION), [reported])
@@ -2262,6 +2261,20 @@ describe("a Session continued in the cloud while its device is off", () => {
     assert.ok(!sameListed(continued, { ...continued, continued: { ...continued.continued, phase: "continued" } }))
     assert.deepEqual(QuietDeviceSchema.parse(quiet[0]), quiet[0])
     assert.deepEqual(QuietDeviceSchema.parse({ deviceId: mac, since: quiet[0].since }), { deviceId: mac, since: quiet[0].since }, "a gateway before 16 says nothing of it")
+  })
+
+  test("a fork says the Session it came from from link 17; an older link goes without and keeps the rest", () => {
+    assert.equal(FORKS_VERSION, 17)
+    assert.equal(LINK_VERSION, FORKS_VERSION)
+    const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
+    const fork = { ...reported, forkOf: "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f" }
+    assert.deepEqual(ReportedSessionSchema.parse(fork), fork)
+    assert.deepEqual(rowsForLink([fork], FORKS_VERSION), [fork])
+    const older = rowsForLink([fork], FORKS_VERSION - 1)[0]
+    assert.equal(older.forkOf, undefined, "a gateway before 17 refuses it")
+    assert.deepEqual(older.repository, reported.repository, "and keeps what 16 knows")
+    assert.throws(() => ReportedSessionSchema.parse({ ...reported, forkOf: "not-a-session" }))
+    assert.ok(!sameListed({ ...row, forkOf: fork.forkOf }, row), "a row that becomes known as a fork is a change every list shows")
   })
 
   test("the offer: only a quiet device's Thread, every row of it ready, in its own pushed worktree, from a Mako that takes it back", () => {

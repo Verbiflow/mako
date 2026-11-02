@@ -39,6 +39,7 @@ import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 import { CompactPresentationContext } from "./compact-presentation"
+import { wokeAfterRest } from "@/lib/woke-after-rest"
 
 const NEAR_BOTTOM = 96
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
@@ -401,6 +402,7 @@ export function ConversationTimeline({
   interruptedRequests,
   makoPrompts,
   carriedHistories,
+  askedAt,
   failedId,
   empty,
   footer,
@@ -421,6 +423,8 @@ export function ConversationTimeline({
   makoPrompts?: ReadonlyMap<string, MakoPrompt>
   /** The history each request carried to a new session (`carriedHistories`), drawn above its words. */
   carriedHistories?: ReadonlyMap<string, CarriedHistory>
+  /** When each request was sent, by request id: a live prompt's time, which its blocks don't carry. */
+  askedAt?: ReadonlyMap<string, number>
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
@@ -1437,6 +1441,7 @@ export function ConversationTimeline({
   }, [activeTurn, exchanges, jump])
 
   const showNavigator = navigates && !isEmpty && exchanges.length >= 3
+  const woke = useMemo(() => wokeAfterRest(exchanges, askedAt), [exchanges, askedAt])
   const renderExchange = (exchange: ExchangeData) => exchange.unloaded !== undefined ? (
     <ReleasedExchange key={keys.get(exchange.id) ?? exchange.id} id={exchange.id} label={exchange.unloaded}
       height={heights.current.get(`${readingSource}:${exchange.id}`) ?? 360} viewport={viewport.current}
@@ -1454,6 +1459,7 @@ export function ConversationTimeline({
       }
       sentByMako={makoPrompts?.get(exchange.prompt?.requestId ?? "")}
       carried={carriedHistories?.get(exchange.prompt?.requestId ?? "")}
+      woke={woke.get(exchange.id)}
       failed={exchange.id === failedId}
     />
   )

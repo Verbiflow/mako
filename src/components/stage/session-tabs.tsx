@@ -1,4 +1,4 @@
-import { memo, useState, type KeyboardEvent, type ReactNode } from "react"
+import { memo, useMemo, useState, type KeyboardEvent, type ReactNode } from "react"
 import { ArchiveIcon, Columns2Icon, PencilLineIcon, PlusIcon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { IconAction } from "@/components/ui/kit"
@@ -12,10 +12,19 @@ import {
   closeDraftTab,
   newSessionInThread,
   onScreenTab,
+  sessionPromptedAt,
+  sessionTabFacts,
   sessionTabTitle,
+  useMinute,
   type OnScreen,
   type SessionTab,
 } from "@/state/thread-sessions"
+import { lastWorked } from "@mako/host/contracts/session-choice"
+import { formatRelative } from "@/lib/format"
+import { harnessLabel } from "@/lib/harness-label"
+import { sessionDetail } from "@/lib/session-words"
+import { useAcp } from "@/state/acp"
+import { useThreadGroups } from "@/state/thread-groups"
 import { archiveSessionTab } from "@/state/session-archive"
 import { openInPane, openTabInPane } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
@@ -46,6 +55,19 @@ function TabStatus({ tab, onScreen }: { tab: SessionTab; onScreen: boolean }) {
   return shown ? <ThreadStatusMark status={shown} /> : null
 }
 
+/**
+ * When the person last worked in a Session, at the tab's end ("20d"), and its standing in the tab's tooltip, with the
+ * tab it was forked from by name (`titles`, each of the strip's Sessions by ID): which tab is the Session left behind,
+ * without opening each.
+ */
+function useTabWorked(tab: SessionTab, thread: string | undefined, titles: ReadonlyMap<string, string>): { at: number; detail: string } | undefined {
+  const group = useThreadGroups((state) => (thread ? state.groups[thread] : undefined))
+  const prompted = useAcp((state) => (tab.kind === "session" ? sessionPromptedAt(state, tab.id) : undefined))
+  const now = useMinute()
+  if (tab.kind !== "session") return undefined
+  const facts = sessionTabFacts(tab, group, prompted)
+  return { at: lastWorked(facts), detail: sessionDetail(facts, now, harnessLabel(facts.harness), facts.forkOf === undefined ? undefined : titles.get(facts.forkOf)) }
+}
 function moveFocus(event: KeyboardEvent<HTMLButtonElement>) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
   event.preventDefault()
@@ -104,12 +126,15 @@ function SessionTabButton({
   stripSince,
   closable,
   menu,
+  titles,
 }: {
   tab: SessionTab
   thread?: string
   paneId: string
   selected: boolean
   stripSince: number
+  /** Each of the strip's Sessions' titles by ID: a fork's tooltip names its parent. */
+  titles: ReadonlyMap<string, string>
   /** False while this is the Thread's only Session: archiving it is archiving the Thread, from its row. */
   closable: boolean
   /** Its own menu: opening it in another pane, its transcript, archiving it. */
@@ -118,6 +143,7 @@ function SessionTabButton({
   const [arrived] = useState(() => performance.now() - stripSince > ARRIVAL_MS)
   const composerHarness = useThreads((state) => state.composerHarness)
   const title = tab.kind === "draft" && !selected ? "Draft" : sessionTabTitle(tab)
+  const worked = useTabWorked(tab, thread, titles)
   const harness =
     tab.kind === "draft"
       ? selected ? composerHarness : tab.draft.harness
@@ -137,7 +163,7 @@ function SessionTabButton({
         if (event.button === 1) close?.()
       }}
       className={cn(
-        "session-tab group relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden rounded-md",
+        "session-tab group @container/tab relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden rounded-md",
         selected
           ? "bg-raised text-foreground"
           : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"
@@ -150,7 +176,7 @@ function SessionTabButton({
         tabIndex={selected ? 0 : -1}
         data-tab-id={selected ? AGENT_TAB_ID : undefined}
         data-session-tab={tab.id}
-        title={tab.kind === "draft" ? `New session in this Thread${selected ? "" : ", not sent yet"}` : title}
+        title={tab.kind === "draft" ? `New session in this Thread${selected ? "" : ", not sent yet"}` : worked ? `${title}\n${worked.detail}` : title}
         onPointerDown={(event) => {
           if (thread && menu) pressTab(event, { tab, thread, title }, event.currentTarget)
         }}
@@ -171,6 +197,7 @@ function SessionTabButton({
         <span className="truncate">{title}</span>
       </button>
       <span className="flex shrink-0 items-center gap-0.5 pr-1">
+        {worked ? <span className="hidden px-0.5 text-label font-normal tabular-nums text-faint @[10rem]/tab:inline" data-session-age>{formatRelative(worked.at)}</span> : null}
         <TabStatus tab={tab} onScreen={selected} />
         {close ? (
           <button
@@ -218,6 +245,7 @@ export function SessionTabList({
   // A window that routes has no host of its own to archive a Session through, nor panes to open one in.
   const routed = useWindowRoutes((state) => state.routes !== null)
   const closable = !routed && tabs.filter((tab) => tab.kind === "session").length > 1
+  const titles = useMemo(() => new Map(tabs.flatMap((tab) => (tab.kind === "session" ? [[tab.id, sessionTabTitle(tab)] as const] : []))), [tabs])
   return (
     <>
       {tabs.map((tab) => (
@@ -230,6 +258,7 @@ export function SessionTabList({
           stripSince={since}
           closable={closable}
           menu={!routed}
+          titles={titles}
         />
       ))}
       <AddSessionButton />
