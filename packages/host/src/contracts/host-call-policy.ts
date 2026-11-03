@@ -125,6 +125,8 @@ const reads = [
   "mako:simulators-list",
   "mako:simulators-read",
   "mako:simulators-shot",
+  /** A viewer's next packets of a simulator's screen: a repeat answered with the first answer loses nothing it can't redraw from the next key frame. */
+  "mako:simulators-watch",
   "mako:live-context-breakdown",
   "mako:live-read",
   "mako:live-attach",

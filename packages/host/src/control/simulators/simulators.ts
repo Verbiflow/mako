@@ -1,13 +1,18 @@
+import { readFile } from "node:fs/promises"
+import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { SetupConsent } from "../../contracts/simulator-setup.js"
 import {
   AFTER_OPEN,
   CLAIM_IDLE_MS,
+  SHOT_INLINE_LIMIT,
+  WATCH_WAIT_MS,
   type ListedSimulator,
   type SimulatorAgent,
   type SimulatorCaller,
   type SimulatorClaim,
   type SimulatorConsent,
+  type SimulatorHostSummary,
   type SimulatorRefused,
   type SimulatorsActInput,
   type SimulatorsActResult,
@@ -23,9 +28,12 @@ import {
   type SimulatorsShot,
   type SimulatorsShotInput,
   type SimulatorsShotResult,
+  type SimulatorsWatchInput,
+  type SimulatorsWatchResult,
 } from "../../contracts/simulators.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
-import { SimulatorUnsupported, type SimulatorHost } from "./host.js"
+import { SimulatorUnsupported, type RemoteSimulatorHost, type SimulatorHost } from "./host.js"
+import { SimulatorStreams } from "./stream.js"
 
 /** The person, when they take a simulator from the panel: a holder like any Thread, so an agent's late action is stale. */
 const PERSON = "person"
@@ -36,18 +44,28 @@ type Who = ({ kind: "agent" } & SimulatorAgent) | { kind: "person" }
 /** Which Thread ended, by whichever of its names the ending knows. */
 export type EndedThread = { thread?: string; conversation?: string; session?: string }
 
+const NOT_OFFERED = "This Mac doesn't offer its simulators to your other devices. Turn it on in Settings › Simulators on this Mac."
+
 /**
  * The simulators every host here can run, and who drives each: one Thread at a time, everyone else watching. Each
  * claim has a generation, and a Thread that lost one (released, idle past `CLAIM_IDLE_MS`, or taken over by the
  * person) is refused as `stale`, so its late action can't land on someone else's screen. Agents are refused until
  * the person allows simulators in their project. Every decision is a `simulators` line in host.log.
+ *
+ * Another Mac's simulators (`remotes`) are that Mac's to decide: a call for one is checked against this Mac's
+ * project consent, then handed on whole with the Thread this Mac already resolved, and its claim is kept there. A
+ * call that came here from another device (`via`) is answered only for this Mac's own simulators, and only while
+ * this Mac offers them (`offered`).
  */
 export class Simulators {
   readonly #hosts: ReadonlyMap<string, SimulatorHost>
+  readonly #remotes: () => readonly RemoteSimulatorHost[]
   readonly #consent: () => Promise<SetupConsent[]>
+  readonly #offered: () => Promise<boolean>
   readonly #agent: (session: string) => SimulatorAgent | undefined
   readonly #now: () => number
   readonly #holding: (on: boolean) => void
+  readonly #streams: SimulatorStreams
   readonly #claims = new Map<string, SimulatorClaim>()
   /** By simulator, the Threads that held it and lost it since. */
   readonly #lost = new Map<string, Set<string>>()
@@ -58,34 +76,48 @@ export class Simulators {
     consent: () => Promise<SetupConsent[]>
     /** The Thread, conversation, title and folder of a Session on this host, as the Thread store and its conversation say. */
     agent: (session: string) => SimulatorAgent | undefined
+    /** The person's other Macs, as they are now: the account's devices come and go. */
+    remotes?: () => readonly RemoteSimulatorHost[]
+    /** Whether this Mac offers its simulators to the account's other devices; never, unless the person said so. */
+    offered?: () => Promise<boolean>
     now?: () => number
     /** Whether any simulator is held, as it changes: the idle sweep runs only while one is. */
     holding?: (on: boolean) => void
+    streams?: SimulatorStreams
   }) {
     this.#hosts = new Map(options.hosts.map((host) => [host.id, host]))
+    this.#remotes = options.remotes ?? (() => [])
     this.#consent = options.consent
+    this.#offered = options.offered ?? (async () => false)
     this.#agent = options.agent
     this.#now = options.now ?? Date.now
     this.#holding = options.holding ?? (() => undefined)
+    this.#streams = options.streams ?? new SimulatorStreams({ now: this.#now })
   }
 
   async list(caller: SimulatorCaller): Promise<SimulatorsListed | SimulatorRefused> {
     const who = this.#who(caller, "list")
     if ("refused" in who) return who
+    const consent = await this.#consentFor(who, caller)
+    if (caller.via && consent !== "allowed") return { hosts: await this.#notOffered(), simulators: [], consent }
     const hosts = [...this.#hosts.values()]
-    const [summaries, lists, consent] = await Promise.all([
+    // Another device hears this Mac's own simulators alone: it reaches the account's other Macs itself.
+    const remotes = caller.via ? [] : this.#remotes()
+    const [summaries, lists, others] = await Promise.all([
       Promise.all(hosts.map((host) => host.summary())),
       Promise.all(hosts.map((host) => host.list().catch(() => []))),
-      this.#consentFor(who),
+      Promise.all(remotes.map((remote) => remote.list(this.#handed(caller, who)))),
     ])
     const simulators = lists.flat().map((simulator): ListedSimulator => {
       const claim = this.#claim(key(simulator.hostId, simulator.id))
       return claim ? { ...simulator, claim } : simulator
     })
-    return { hosts: summaries, simulators, consent }
+    return { hosts: [...summaries, ...others.flatMap((other) => other.hosts)], simulators: [...simulators, ...others.flatMap((other) => other.simulators)], consent }
   }
 
   async open(caller: SimulatorCaller, input: SimulatorsOpenInput): Promise<SimulatorsOpenResult> {
+    const remote = await this.#remote(caller, "open", input)
+    if (remote) return "refused" in remote ? remote : remote.host.open(remote.caller, input)
     const found = await this.#find(caller, "open", input)
     if ("refused" in found) return found
     const { who, host, simulator } = found
@@ -114,11 +146,13 @@ export class Simulators {
     this.#claims.set(id, claim)
     this.#holding(true)
     this.#lost.get(id)?.delete(thread)
-    hostLog("simulators", "open", { ...whoLog(who), simulator: id, generation: claim.generation, ...(holder && holder.thread !== thread && { took: holder.thread }) })
+    hostLog("simulators", "open", { ...whoLog(who, caller), simulator: id, generation: claim.generation, ...(holder && holder.thread !== thread && { took: holder.thread }) })
     return { simulator: { ...simulator, claim }, claim, next: AFTER_OPEN }
   }
 
   async act(caller: SimulatorCaller, input: SimulatorsActInput): Promise<SimulatorsActResult> {
+    const remote = await this.#remote(caller, "act", input)
+    if (remote) return "refused" in remote ? remote : remote.host.act(remote.caller, input)
     return this.#held(caller, "act", input, async (host, simulator) => {
       const started = this.#now()
       await host.act(simulator, input.action)
@@ -127,25 +161,34 @@ export class Simulators {
   }
 
   async read(caller: SimulatorCaller, input: SimulatorsReadInput): Promise<SimulatorsReadResult> {
+    const remote = await this.#remote(caller, "read", input)
+    if (remote) return "refused" in remote ? remote : remote.host.read(remote.caller, input)
     return this.#held(caller, "read", input, async (host, simulator) => ({ what: input.what, ...(await host.read(simulator, input.what, input.after)) }))
   }
 
   /** A shot is a look, so a watcher may take one too; it says nothing about who drives. */
   async shot(caller: SimulatorCaller, input: SimulatorsShotInput): Promise<SimulatorsShotResult> {
+    const remote = await this.#remote(caller, "shot", input)
+    if (remote) return "refused" in remote ? remote : remote.host.shot(remote.caller, input)
     const found = await this.#find(caller, "shot", input)
     if ("refused" in found) return found
     let shot: SimulatorsShot | undefined
     const refused = await this.#perform("shot", found.who, key(found.host.id, found.simulator.id), async () => {
       shot = await found.host.screenshot(found.simulator.id)
+      if (input.inline) shot = await inlined(shot)
     })
     return refused ?? shot ?? { refused: "unsupported", why: "The host took no picture." }
   }
 
   async record(caller: SimulatorCaller, input: SimulatorsRecordInput): Promise<SimulatorsRecordResult> {
+    const remote = await this.#remote(caller, "record", input)
+    if (remote) return "refused" in remote ? remote : remote.host.record(remote.caller, input)
     return this.#held(caller, "record", input, (host, simulator) => host.record(simulator, input.recording))
   }
 
   async release(caller: SimulatorCaller, input: SimulatorsReleaseInput): Promise<SimulatorsReleaseResult> {
+    const remote = await this.#remote(caller, "release", input)
+    if (remote) return "refused" in remote ? remote : remote.host.release(remote.caller, input)
     const who = this.#who(caller, "release")
     if ("refused" in who) return who
     const id = key(input.host, input.simulator)
@@ -153,8 +196,28 @@ export class Simulators {
     const thread = threadOf(who)
     if (!holder) return { released: false }
     if (holder.thread !== thread && who.kind === "agent") return this.#refuse("release", who, id, { refused: "held", why: `${holder.title ?? "Another Thread"} drives this simulator, not this Thread.`, holder })
-    this.#end(id, holder, { ...whoLog(who) })
+    this.#end(id, holder, { ...whoLog(who, caller) })
     return { released: true }
+  }
+
+  /**
+   * A viewer's next packets of a simulator's screen, which anyone may watch. Its name is scoped by where it called
+   * from, so a phone's viewer and a panel's can't take each other's stream.
+   */
+  async watch(caller: SimulatorCaller, input: SimulatorsWatchInput): Promise<SimulatorsWatchResult> {
+    const remote = await this.#remote(caller, "watch", input)
+    if (remote) return "refused" in remote ? remote : remote.host.watch(remote.caller, input)
+    const found = await this.#find(caller, "watch", input)
+    if ("refused" in found) return found
+    const { host, simulator } = found
+    const frames = host.frames?.bind(host)
+    if (!frames) return this.#refuse("watch", found.who, key(host.id, simulator.id), { refused: "unsupported", why: `${host.label} can't stream a simulator's screen yet; simulator_shot takes a picture of it.` })
+    const viewer = `${caller.via?.from ?? "here"}/${input.viewer}`
+    const read = await this.#streams.read(key(host.id, simulator.id), viewer, (sink) => frames(simulator.id, sink), {
+      ...(input.box && { box: input.box }),
+      waitMs: Math.min(Math.max(input.waitMs ?? WATCH_WAIT_MS, 0), WATCH_WAIT_MS),
+    })
+    return { live: read.live, batch: Buffer.from(encodeControlVideoBatch(read)).toString("base64") }
   }
 
   /** A Thread archived lets go of whatever it holds. */
@@ -169,9 +232,38 @@ export class Simulators {
     for (const id of this.#claims.keys()) this.#claim(id)
   }
 
-  /** Every host stops what it started. */
+  /** Every screen stops streaming, and every host stops what it started. */
   async close(): Promise<void> {
+    await this.#streams.close()
     await Promise.all([...this.#hosts.values()].map((host) => host.close().catch((error) => hostWarn("simulators", "host close failed", { host: host.id, error: error instanceof Error ? error.message : String(error) }))))
+  }
+
+  /**
+   * The other Mac a call names, once this Mac's consent lets its agent use it; undefined for this Mac's own hosts. A
+   * call from another device may name only this Mac's own: it reaches the account's other Macs itself.
+   */
+  async #remote(
+    caller: SimulatorCaller,
+    verb: string,
+    input: { simulator: string; host: string }
+  ): Promise<{ host: RemoteSimulatorHost; caller: SimulatorCaller } | SimulatorRefused | undefined> {
+    if (this.#hosts.has(input.host)) return undefined
+    const id = key(input.host, input.simulator)
+    const who = this.#who(caller, verb)
+    if ("refused" in who) return who
+    if (caller.via) return this.#refuse(verb, who, id, { refused: "not-found", why: `This Mac has no host called ${input.host}.` })
+    const remote = this.#remotes().find((each) => each.id === input.host)
+    if (!remote) return undefined
+    if (who.kind === "agent" && (await this.#consentFor(who, caller)) !== "allowed")
+      return this.#refuse(verb, who, id, { refused: "not-allowed", why: "The person hasn't allowed simulators in this project. They can in Settings › Simulators." })
+    hostLog("simulators", "handed on", { verb, ...whoLog(who, caller), simulator: id })
+    return { host: remote, caller: this.#handed(caller, who) }
+  }
+
+  /** The caller as another Mac hears it: an agent carries the Thread this Mac already resolved. */
+  #handed(caller: SimulatorCaller, who: Who): SimulatorCaller {
+    if (who.kind === "person") return { kind: "person", ...(caller.via && { via: caller.via }) }
+    return { kind: "agent", session: who.session, agent: who, ...(caller.via && { via: caller.via }) }
   }
 
   async #held<Result extends object>(
@@ -203,7 +295,8 @@ export class Simulators {
     const who = this.#who(caller, verb)
     if ("refused" in who) return who
     const id = key(input.host, input.simulator)
-    if (who.kind === "agent" && (await this.#consentFor(who)) !== "allowed")
+    if (caller.via && !(await this.#offered())) return this.#refuse(verb, who, id, { refused: "not-offered", why: NOT_OFFERED })
+    if (who.kind === "agent" && !caller.via && (await this.#consentFor(who, caller)) !== "allowed")
       return this.#refuse(verb, who, id, { refused: "not-allowed", why: "The person hasn't allowed simulators in this project. They can in Settings › Simulators." })
     const host = this.#hosts.get(input.host)
     if (!host) return this.#refuse(verb, who, id, { refused: "not-found", why: `No host here is called ${input.host}; simulator_list names them.` })
@@ -215,8 +308,17 @@ export class Simulators {
     return { who, host, simulator }
   }
 
-  /** An agent's Session as the host knows it; the caller names only the Session. */
+  /**
+   * An agent's Session as the host knows it; the caller names only the Session. A call from another Mac already
+   * carries the Thread that Mac resolved (`agent`); this Mac has no Session of its own for it.
+   */
   #who(caller: SimulatorCaller, verb: string): Who | SimulatorRefused {
+    if (caller.via) {
+      if (caller.kind === "person") return { kind: "person" }
+      if (caller.agent) return { kind: "agent", ...caller.agent }
+      hostLog("simulators", "refused", { verb, session: caller.session, reason: "no-thread", via: caller.via.from })
+      return { refused: "no-thread", why: "The calling Mac didn't say which Thread that Session belongs to." }
+    }
     if (caller.kind === "person") return caller
     const agent = this.#agent(caller.session)
     if (agent) return { kind: "agent", ...agent }
@@ -267,8 +369,14 @@ export class Simulators {
     this.#lost.set(id, lost)
   }
 
-  /** The most specific answer for where it works, else for its worktree's project: a subfolder decided on overrides its project's. */
-  async #consentFor(who: Who): Promise<SimulatorConsent> {
+  /**
+   * An agent here by its project's consent; a call from another device by whether this Mac offers its simulators. The
+   * most specific answer for where it works, else for its worktree's project: a subfolder decided on overrides its
+   * project's.
+   */
+  async #consentFor(who: Who, caller?: SimulatorCaller): Promise<SimulatorConsent> {
+    // Via callers skip project consent: that was the calling Mac's to check; this Mac offers or it doesn't.
+    if (caller?.via) return (await this.#offered()) ? "allowed" : "refused"
     if (who.kind === "person") return "allowed"
     const consent = await this.#consent()
     const answerFor = (folder: string) =>
@@ -276,6 +384,20 @@ export class Simulators {
     const answer = answerFor(who.folder) ?? (who.project ? answerFor(who.project) : undefined)
     return answer ? (answer.allowed ? "allowed" : "refused") : "unasked"
   }
+
+  /** This Mac's hosts as another device hears them while it doesn't offer them: there, and not offered. */
+  async #notOffered(): Promise<SimulatorHostSummary[]> {
+    const blocked = { ready: false as const, blocker: "not-offered" as const, why: NOT_OFFERED }
+    return Promise.all([...this.#hosts.values()].map(async (host) => ({ ...(await host.summary()), platforms: { ios: blocked, android: blocked } })))
+  }
+}
+
+/** A picture with its bytes, for a caller on another Mac, when they're small enough to cross in an answer. */
+async function inlined(shot: SimulatorsShot): Promise<SimulatorsShot> {
+  const bytes = await readFile(shot.path)
+  if (bytes.byteLength > SHOT_INLINE_LIMIT) return shot
+  const type = /\.jpe?g$/i.test(shot.path) ? "image/jpeg" : "image/png"
+  return { ...shot, inline: { type, data: bytes.toString("base64") } }
 }
 
 /** A host ID may hold colons (`mac:<device>`), so the pair is kept as JSON. */
@@ -293,6 +415,8 @@ function threadOf(who: Who): string {
   return who.kind === "agent" ? who.thread : PERSON
 }
 
-function whoLog(who: Who): Record<string, string> {
-  return who.kind === "agent" ? { thread: who.thread, session: who.session, ...(who.conversation && { conversation: who.conversation }) } : { caller: PERSON }
+function whoLog(who: Who, caller?: SimulatorCaller): Record<string, string> {
+  return who.kind === "agent"
+    ? { thread: who.thread, session: who.session, ...(who.conversation && { conversation: who.conversation }), ...(caller?.via && { via: caller.via.from }) }
+    : { caller: PERSON, ...(caller?.via && { via: caller.via.from }) }
 }

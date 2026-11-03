@@ -474,15 +474,20 @@ export function installMockBridge() {
       directs: () => [...directCalls],
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
-      /** The Apex's turn runs again, as a wake would start it. */
+      /**
+       * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
+       * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
+       * roster untouched.
+       */
       setRunning(running: boolean) {
         const snapshot = liveSnapshots.get(APEX_CONVERSATION)
         if (!snapshot) return
         const session: LiveSessionState = { ...(acpSessions.get(APEX_CONVERSATION) ?? snapshot.session), status: running ? "running" : "ready" }
         acpSessions.set(APEX_CONVERSATION, session)
-        const next = { ...snapshot, session, revision: snapshot.revision + 1 }
+        const requests = running ? snapshot.requests : snapshot.requests.map((request) => (request.status === "dispatching" ? { ...request, status: "completed" as const } : request))
+        const next = { ...snapshot, session, requests, revision: snapshot.revision + 1 }
         liveSnapshots.set(APEX_CONVERSATION, next)
-        emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session } })
+        emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session, requests } })
       },
     })
   }

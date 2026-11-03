@@ -1,4 +1,3 @@
-import type { AgentCaller } from "./agents.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 
 /**
@@ -30,14 +29,35 @@ export type SimulatorBlocker =
   | "no-runtime"
   /** The host is there, but Mako's driving of it isn't built yet: it lists, and it refuses to act. */
   | "not-built"
+  /** Another Mac of the person's that isn't connected now, or didn't answer in time. */
   | "unreachable"
+  /** Another Mac of the person's that doesn't offer its simulators to the account's other devices. */
+  | "not-offered"
 
 export type SimulatorAvailability = { ready: true } | { ready: false; blocker: SimulatorBlocker; why: string; fix?: string }
 
+/** This Mac's own simulators, as it names them. */
+export const LOCAL_HOST = "local"
+const MAC_HOST = "mac:"
+
+/**
+ * Another Mac of the person's, by its device in the account: `mac:<device>`. A simulator's ID (its UDID) is unique
+ * only on its own Mac, so every simulator is named by its host and its ID together, and the host that owns it keeps
+ * its claim: two Macs never both think they drive one.
+ */
+export function macHostId(device: string): string {
+  return `${MAC_HOST}${device}`
+}
+
+/** The device a `mac:<device>` host names, or undefined for this Mac's own and anything else. */
+export function macHostDevice(host: string): string | undefined {
+  return host.startsWith(MAC_HOST) && host.length > MAC_HOST.length ? host.slice(MAC_HOST.length) : undefined
+}
+
 export interface SimulatorHostSummary {
   /**
-   * `local`, `stand-in`, and later `mac:<device>` for another of the person's Macs. A simulator's ID is its host's
-   * own (a UDID), unique only on that host, so every call names both.
+   * `local`, `stand-in`, or `mac:<device>` for another of the person's Macs. A simulator's ID is its host's own
+   * (a UDID), unique only on that host, so every call names both.
    */
   id: string
   /** What the panel and an agent call it: "This Mac", "WebKit stand-in". */
@@ -97,12 +117,28 @@ export type SimulatorConsent = "unasked" | "allowed" | "refused"
 export const CLAIM_IDLE_MS = 30 * 60_000
 
 /**
+ * Where a call came from when it reached this host through the gateway: the account's device or machine whose link
+ * sent it (`desktop:<device>`, `web:<device>`, `runtime:<runtime>`). The host that receives the call stamps it from
+ * its own record of the connection; what a caller sends as `via` is dropped, so no caller can say it's local.
+ */
+export interface SimulatorVia {
+  from: string
+}
+
+/**
  * Who calls, as orchestration's doors stamp it: an agent by its Session, or the person from the panel. The host finds
  * the Session's Thread, conversation, title and project folder (which consent is per) itself, so a caller can't name
  * another Thread or another project. The person may take any simulator over; an agent may act only on one its
  * Thread holds.
+ *
+ * A call from another of the person's devices carries `via` (stamped here) and, for an agent, the Thread the calling
+ * Mac already resolved (`agent`): that Session isn't on this Mac, so the calling Mac's word of who it is is what this
+ * Mac trusts, under the gateway's account check. Project consent was that Mac's to check; this Mac checks that it
+ * offers its simulators at all.
  */
-export type SimulatorCaller = AgentCaller
+export type SimulatorCaller =
+  | { kind: "agent"; session: string; via?: SimulatorVia; agent?: SimulatorAgent }
+  | { kind: "person"; via?: SimulatorVia }
 
 /** What the host knows of an agent caller's Session: the Thread a claim belongs to, and the folder consent is read for. */
 export interface SimulatorAgent {
@@ -161,6 +197,10 @@ export type SimulatorRefusalReason =
   | "no-thread"
   /** This host can't do that operation. */
   | "unsupported"
+  /** The simulator's Mac isn't connected now, or didn't answer in time. */
+  | "unreachable"
+  /** The simulator's Mac doesn't offer its simulators to the account's other devices. */
+  | "not-offered"
 
 export interface SimulatorRefused {
   refused: SimulatorRefusalReason
@@ -221,14 +261,21 @@ export type SimulatorsReadResult = SimulatorsRead | SimulatorRefused
 export interface SimulatorsShotInput {
   simulator: string
   host: string
+  /** The picture's bytes in the answer as well: what another Mac asks for, since this Mac's path means nothing there. */
+  inline?: boolean
 }
 export interface SimulatorsShot {
-  /** A PNG the host wrote, for `show`. */
+  /** A PNG or JPEG the host wrote, for `show`, on the caller's own Mac. */
   path: string
   width: number
   height: number
+  /** The picture, base64, when `inline` was asked and it's within `SHOT_INLINE_LIMIT`. */
+  inline?: { type: "image/png" | "image/jpeg"; data: string }
 }
 export type SimulatorsShotResult = SimulatorsShot | SimulatorRefused
+
+/** The most of a picture an answer carries inline, well inside every hop's limit once it's base64. */
+export const SHOT_INLINE_LIMIT = 512 * 1024
 
 export interface SimulatorsRecordInput {
   simulator: string
@@ -247,7 +294,32 @@ export interface SimulatorsReleaseInput {
 }
 export type SimulatorsReleaseResult = { released: boolean } | SimulatorRefused
 
-export type SimulatorVerb = "list" | "open" | "act" | "read" | "shot" | "record" | "release"
+/**
+ * A viewer reading a simulator's screen: what it was sent since its last read, as one `ControlVideoBatch` (base64),
+ * the same poster, key and delta packets as a browser preview's, so every client decodes one format. A read waits up
+ * to `waitMs` for something to send. Anyone may watch; watching drives nothing.
+ */
+export interface SimulatorsWatchInput {
+  simulator: string
+  host: string
+  /** The viewer's own name for its stream, unique on the simulator: a random UUID will do. */
+  viewer: string
+  /** The box it draws in, in pixels, so the host never sends more than it shows. */
+  box?: { width: number; height: number }
+  waitMs?: number
+}
+export interface SimulatorsWatched {
+  /** False once the screen stopped streaming: nothing more comes until a viewer watches again. */
+  live: boolean
+  /** An encoded `ControlVideoBatch`, base64. */
+  batch: string
+}
+export type SimulatorsWatchResult = SimulatorsWatched | SimulatorRefused
+
+/** The longest one watch read waits for a packet: under every hop's idle limit, and short enough to notice a viewer gone. */
+export const WATCH_WAIT_MS = 2_000
+
+export type SimulatorVerb = "list" | "open" | "act" | "read" | "shot" | "record" | "release" | "watch"
 
 export interface SimulatorToolDefinition {
   verb: SimulatorVerb
@@ -272,7 +344,7 @@ export const SIMULATOR_TOOLS: readonly SimulatorToolDefinition[] = [
     replay: "read",
     mcp: {
       name: "simulator_list",
-      description: "The iPhone and iPad simulators this Mac can run, each with its state and the Thread that drives it, and each host with what it can't run and why.",
+      description: "The iPhone and iPad simulators this Mac and the person's other Macs can run, each with its state and the Thread that drives it, and each host with what it can't run and why. A simulator on another Mac is named by its host (mac:<device>) and its ID together.",
       fields: {},
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -283,7 +355,7 @@ export const SIMULATOR_TOOLS: readonly SimulatorToolDefinition[] = [
     replay: "replay",
     mcp: {
       name: "simulator_open",
-      description: "Boot a simulator if it isn't running and take it for this Thread, opening a page in Safari if you give one. One Thread drives a simulator at a time: refused while another holds it, with who. Release it when you're done.",
+      description: "Boot a simulator if it isn't running and take it for this Thread, opening a page in Safari if you give one. One Thread drives a simulator at a time: refused while another holds it, with who. Release it when you're done. On another of the person's Macs, pass its host as mac:<device>.",
       fields: { simulator: SIMULATOR, host: HOST, url: "A page to open in Safari once it's up." },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -341,6 +413,23 @@ export const SIMULATOR_TOOLS: readonly SimulatorToolDefinition[] = [
       description: "Let a simulator go so another Thread can drive it. It keeps running, unless its host is billed, which stops it.",
       fields: { simulator: SIMULATOR, host: HOST },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+  },
+  {
+    verb: "watch",
+    channel: "mako:simulators-watch",
+    replay: "read",
+    mcp: {
+      name: "simulator_watch",
+      description: "The next packets of a simulator's screen, as one ControlVideoBatch: a poster then key and delta frames, the same format as a browser preview. Anyone may watch. Call again with the same viewer for more; live false means the stream ended.",
+      fields: {
+        simulator: SIMULATOR,
+        host: HOST,
+        viewer: "This viewer's own name for its stream, unique on the simulator.",
+        box: "The box it draws in, in pixels.",
+        waitMs: "How long to wait for a packet, up to two seconds.",
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
 ]
