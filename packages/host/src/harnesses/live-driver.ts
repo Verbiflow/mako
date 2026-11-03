@@ -154,11 +154,26 @@ export type NativeFork =
  * when its turn ends, so a turn that ends, even stopped or failed, leaves no
  * steer whose fate is unknown: its answer is on its way. `hears`: when the
  * agent hears a steer it took, as another agent reads it in `agents_send`'s
- * result ("hears it …"), seen on a real run of the harness.
+ * result ("hears it …"), seen on a real run of the harness. `landing`: how
+ * the person's message reaches the agent within `STEER_LANDS_MS`.
  */
 export type SteerCapability =
-  | { kind: "supported"; lands: LiveSteering; answersOnEnd?: true; hears?: string; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
+  | { kind: "supported"; lands: LiveSteering; landing?: SteerLanding; answersOnEnd?: true; hears?: string; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
   | DriverAbsent
+
+/**
+ * How a message the person sends into a running turn reaches the agent at once, picked per harness from the latency
+ * `scripts/probe-steer-semantics.ts` measures on it. `native` (the default): its own steer is heard at once.
+ * `confirm`: its own steer is heard at once unless the agent is in a step it holds steers through, and the harness
+ * says which by confirming delivery; one it hasn't confirmed within `STEER_LANDS_MS` is sent as a `restart`.
+ * `restart`: its own steer waits for the running command to return, so Mako stops the turn and sends the message as
+ * the next one, telling the agent what the stopped turn left (`steered`). An agent's own steer (`agents_send`) and a
+ * question's answer always go natively.
+ */
+export type SteerLanding = "native" | "confirm" | "restart"
+
+/** How long a person's steer may wait for a `confirm` harness to confirm it before the turn is restarted for it. */
+export const STEER_LANDS_MS = 1_000
 
 /** When an agent hears a steer its harness took, as `hears` says, or as `lands` implies for one that doesn't. */
 export function steerHeard(steering: Extract<SteerCapability, { kind: "supported" }>): string {

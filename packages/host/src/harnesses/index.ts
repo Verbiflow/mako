@@ -37,7 +37,7 @@ export { AccessChoiceStore, declareAccessChoiceMethods, type AccessChoicesAccoun
 export { CloudSignInSync, installCloudSignIns, type CloudSignInStore } from "./cloud-sign-ins.js"
 export type { CloudSignInPlace } from "./cloud-sign-in.js"
 export { resolveHarnessTuning } from "./harness-models.js"
-export { steerHeard } from "./live-driver.js"
+export { steerHeard, STEER_LANDS_MS } from "./live-driver.js"
 export type { AdmittedLiveDriver, ConversationTools, DriverGoalCommand, DriverSideQuestion, GoalDelivery, GoalsCapability, ProviderLiveDriver, ReviewCapability, ReviewStart, SideQuestionsCapability } from "./live-driver.js"
 export { resumes } from "./live-capabilities.js"
 export { nativeRoutingReadings } from "./native-routing.js"

@@ -1623,7 +1623,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private steer(conversation: string, id: string, text: string): Promise<boolean> | false {
     const running = this.deps.live.held(conversation)?.requests.find((request) => request.status === "dispatching")
     if (!running) return false
-    return this.deps.live.act(conversation, { kind: "steer", id, requestId: running.id, text, attachments: [] }).then(
+    return this.deps.live.act(conversation, { kind: "steer", id, requestId: running.id, text, attachments: [] }, "native").then(
       (action) => {
         const took = action.state.kind === "accepted" || action.state.kind === "completed"
         if (!took) hostWarn("agents", "a digest wasn't taken by the running turn", { conversation, state: action.state.kind })
@@ -1730,7 +1730,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     while (!turn() && Date.now() < deadline && this.deps.live.session(conversation)?.status !== "ready") await new Promise((resolve) => setTimeout(resolve, 50))
     const running = turn()
     if (!running) return { why: "its turn hadn't started yet." }
-    const action = Promise.resolve().then(() => this.deps.live.act(conversation, { kind: "steer-queued", id: namedUuid(`steer:${request}`), requestId: running.id, queuedRequestId: request, text, attachments }))
+    const action = Promise.resolve().then(() => this.deps.live.act(conversation, { kind: "steer-queued", id: namedUuid(`steer:${request}`), requestId: running.id, queuedRequestId: request, text, attachments }, "native"))
     const answered = await Promise.race([
       action.then((taken) => taken.state, (error) => ({ kind: "refused" as const, reason: errorMessage({ error }) })),
       new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now()) + STEER_ANSWER_MS)),

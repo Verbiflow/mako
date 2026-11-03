@@ -126,6 +126,13 @@ export const INTERRUPTION_REASONS = [
    * didn't finish. The new machine continues the turn once, on its own.
    */
   "machine-lost",
+  /**
+   * The person sent a message into the running turn on a harness that would
+   * have held it until its running step returned (`SteerCapability.landing`),
+   * so Mako stopped the turn and sent the message as the next one, at once.
+   * The agent is told what the stopped turn left (`pendingInterruption`).
+   */
+  "steered",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -144,9 +151,10 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * and newer ones read; a reason added later must say its older reading here.
  * `not-saved` and `goal-budget` read as the person's Stop, which is how every
  * build before them recorded these stops; `machine-lost` reads as a handoff,
- * the nearest a build before it knows: Mako carried the turn to another machine.
+ * the nearest a build before it knows: Mako carried the turn to another machine;
+ * `steered` reads as the person's Stop, which it was, for their message.
  */
-export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)

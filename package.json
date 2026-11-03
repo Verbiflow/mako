@@ -264,6 +264,8 @@
     "test:orch-front-door": "tsx scripts/test-orch-front-door.ts && tsx --tsconfig tsconfig.app.json scripts/test-routed-transcript.ts",
     "test:orch-answer": "tsx scripts/test-orch-answer.ts",
     "test:orch-deliver": "tsx scripts/test-orch-deliver.ts",
+    "test:steer-landing": "tsx --tsconfig tsconfig.app.json scripts/test-steer-landing.ts",
+    "probe:steer-lands": "tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts --lands",
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
     "test:orch-ui": "node scripts/test-orch-ui.mjs",
     "test:animations-ui": "node scripts/test-animations-ui.mjs",

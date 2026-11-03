@@ -60,9 +60,10 @@ export interface ProviderConnection {
 
 /**
  * Why Mako stops a provider's turn, as the host log says it: the person's Stop, a handoff of the Thread to another
- * machine, a goal at its token budget, or a conversation Mako can't save.
+ * machine, a goal at its token budget, a conversation Mako can't save, or the person's message steered into a turn
+ * whose harness would have held it (`steer`).
  */
-export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved"
+export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved" | "steer"
 
 /** How each Stop Mako sends ends the turn it stops: only the person's own reads as `stopped`. */
 export const STOPPED_FOR = {
@@ -70,6 +71,7 @@ export const STOPPED_FOR = {
   "handed-off": "handed-off",
   "goal-budget": "goal-budget",
   "not-saved": "not-saved",
+  steer: "steered",
 } as const satisfies Record<ProviderStop, InterruptionReason>
 export type StoppedFor = (typeof STOPPED_FOR)[ProviderStop]
 
