@@ -1,0 +1,183 @@
+/*
+ * Three directions for Mako's agent marks, crew card, composer and avatars (a prototype for the person to pick from;
+ * not wired into the app). Everything is square: no radius anywhere. Motion is transform and opacity on HTML boxes.
+ */
+
+.vd * { border-radius: 0 !important; }
+
+/* ---------- the icon ---------- */
+.vd-icon {
+  --s: 20px;
+  --ink: var(--foreground);
+  position: relative;
+  display: inline-flex;
+  width: var(--s);
+  height: var(--s);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.vd-body {
+  position: relative;
+  display: flex;
+  width: 82%;
+  height: 82%;
+  color: var(--ink);
+  transform-origin: 20% 92%;
+}
+.vd-body svg { width: 100%; height: 100%; overflow: visible; }
+.vd-fin-face { fill: var(--sea); }
+.vd-icon[data-kind="fin"] .vd-body { width: 68%; height: 68%; }
+.vd-icon[data-kind="fin"] .vd-fin-face { fill: currentColor; }
+.vd-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: flex;
+  width: 46%;
+  height: 46%;
+  align-items: center;
+  justify-content: center;
+  background: var(--raised);
+  box-shadow: 0 0 0 1.5px var(--vd-cut, var(--shell));
+}
+.vd-badge > svg, .vd-badge > span { width: 78%; height: 78%; }
+.vd-water, .vd-wake, .vd-band, .vd-bar {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* ---------- Direction A: the living fin ---------- */
+.vd-icon[data-dir="a"] .vd-water {
+  left: 6%;
+  right: 6%;
+  bottom: 4%;
+  height: max(1px, calc(var(--s) * 0.07));
+  background: color-mix(in oklab, var(--foreground) 22%, transparent);
+  opacity: 0;
+}
+.vd-icon[data-dir="a"][data-kind="apex"] .vd-water { opacity: 1; }
+.vd-icon[data-dir="a"] .vd-wake {
+  left: -10%;
+  bottom: 4%;
+  width: 60%;
+  height: max(1px, calc(var(--s) * 0.07));
+  background: repeating-linear-gradient(to right, var(--sea) 0 18%, transparent 18% 34%);
+  opacity: 0;
+}
+.vd-icon[data-dir="a"][data-state="thinking"] .vd-body { animation: vd-bob 2.4s ease-in-out infinite; }
+.vd-icon[data-dir="a"][data-state="writing"] .vd-body { animation: vd-glide 1.4s ease-in-out infinite; }
+.vd-icon[data-dir="a"][data-state="writing"] .vd-wake { opacity: 1; animation: vd-wake 0.7s linear infinite; }
+.vd-icon[data-dir="a"][data-state="tool"] .vd-body { animation: vd-brace 0.9s steps(2, jump-none) infinite; }
+.vd-icon[data-dir="a"][data-state="needs"] .vd-water { opacity: 1; background: var(--caution); animation: vd-breathe 2.4s ease-in-out infinite; }
+.vd-icon[data-dir="a"][data-state="needs"] .vd-body { --ink: var(--caution); }
+.vd-icon[data-dir="a"][data-state="lead"] .vd-body { animation: vd-drift 3.2s ease-in-out infinite; opacity: 0.7; }
+.vd-icon[data-dir="a"][data-state="queued"] .vd-body { opacity: 0.35; }
+.vd-icon[data-dir="a"][data-state="done"] .vd-body { opacity: 0.9; }
+.vd-icon[data-dir="a"][data-state="failed"] .vd-body { --ink: var(--negative); transform: rotate(16deg) translateY(10%); }
+.vd-icon[data-dir="a"][data-state="failed"] .vd-fin-face { fill: var(--negative); }
+.vd-icon[data-dir="a"][data-state="idle"] .vd-body { opacity: 0.6; }
+.vd-icon[data-dir="a"][data-state="idle"] .vd-fin-face { opacity: 0.55; }
+
+/* ---------- Direction B: the tile ---------- */
+.vd-icon[data-dir="b"] { background: var(--raised); overflow: hidden; }
+.vd-icon[data-dir="b"] .vd-body { width: 58%; height: 58%; transform-origin: 50% 50%; }
+.vd-icon[data-dir="b"][data-kind="fin"] .vd-body { width: 50%; height: 50%; }
+.vd-icon[data-dir="b"] .vd-badge { right: -1px; bottom: -1px; box-shadow: none; outline: 1.5px solid var(--vd-cut, var(--shell)); }
+.vd-icon[data-dir="b"] .vd-band {
+  inset: -40% 0 auto 0;
+  height: 40%;
+  background: linear-gradient(to bottom, transparent, color-mix(in oklab, var(--foreground) 22%, transparent), transparent);
+  opacity: 0;
+}
+.vd-icon[data-dir="b"] .vd-bar {
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: max(1.5px, calc(var(--s) * 0.09));
+  background: var(--foreground);
+  opacity: 0;
+  transform-origin: 0 50%;
+}
+.vd-icon[data-dir="b"][data-state="thinking"] .vd-band { opacity: 1; animation: vd-scan 1.8s ease-in-out infinite; }
+.vd-icon[data-dir="b"][data-state="writing"] .vd-bar { opacity: 1; background: var(--sea); animation: vd-type 1.1s var(--ease-out) infinite; }
+.vd-icon[data-dir="b"][data-state="tool"] .vd-bar { opacity: 1; background: repeating-linear-gradient(to right, var(--foreground) 0 26%, transparent 26% 37%); animation: vd-step 0.9s steps(3, jump-none) infinite; }
+.vd-icon[data-dir="b"][data-state="needs"] { background: color-mix(in oklab, var(--caution) 22%, var(--raised)); }
+.vd-icon[data-dir="b"][data-state="needs"] .vd-bar { opacity: 1; background: var(--caution); animation: vd-breathe 2.4s ease-in-out infinite; }
+.vd-icon[data-dir="b"][data-state="needs"] .vd-body { --ink: var(--caution); }
+.vd-icon[data-dir="b"][data-state="lead"] .vd-band { opacity: 1; animation: vd-scan 4s ease-in-out infinite; }
+.vd-icon[data-dir="b"][data-state="lead"] .vd-body { opacity: 0.7; }
+.vd-icon[data-dir="b"][data-state="queued"] { background: transparent; box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 22%, transparent); }
+.vd-icon[data-dir="b"][data-state="queued"] .vd-body { opacity: 0.35; }
+.vd-icon[data-dir="b"][data-state="failed"] { background: color-mix(in oklab, var(--negative) 22%, var(--raised)); }
+.vd-icon[data-dir="b"][data-state="failed"] .vd-body { --ink: var(--negative); }
+.vd-icon[data-dir="b"][data-state="failed"] .vd-fin-face { fill: var(--negative); }
+.vd-icon[data-dir="b"][data-state="idle"] .vd-body { opacity: 0.6; }
+
+/* ---------- Direction C: the waterline ---------- */
+.vd-icon[data-dir="c"] .vd-body { width: 72%; height: 72%; transform: translateY(-8%); }
+.vd-icon[data-dir="c"][data-kind="fin"] .vd-body { width: 60%; height: 60%; }
+.vd-icon[data-dir="c"] .vd-water {
+  left: 0;
+  right: 0;
+  bottom: 6%;
+  height: max(1.5px, calc(var(--s) * 0.09));
+  overflow: hidden;
+  opacity: 0;
+}
+.vd-icon[data-dir="c"] .vd-water > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 200%;
+  background: var(--foreground);
+}
+.vd-icon[data-dir="c"][data-state="thinking"] .vd-water { opacity: 1; }
+.vd-icon[data-dir="c"][data-state="thinking"] .vd-water > i {
+  background: repeating-linear-gradient(to right, var(--foreground) 0 12%, color-mix(in oklab, var(--foreground) 25%, transparent) 12% 25%);
+  animation: vd-flow 2.4s linear infinite;
+}
+.vd-icon[data-dir="c"][data-state="writing"] .vd-water { opacity: 1; }
+.vd-icon[data-dir="c"][data-state="writing"] .vd-water > i { background: repeating-linear-gradient(to right, var(--sea) 0 8%, transparent 8% 14%); animation: vd-flow 0.8s linear infinite; }
+.vd-icon[data-dir="c"][data-state="tool"] .vd-water { opacity: 1; }
+.vd-icon[data-dir="c"][data-state="tool"] .vd-water > i { background: repeating-linear-gradient(to right, var(--foreground) 0 10%, transparent 10% 25%); animation: vd-flow 1s steps(4, jump-none) infinite; }
+.vd-icon[data-dir="c"][data-state="needs"] .vd-water { opacity: 1; animation: vd-breathe 2.4s ease-in-out infinite; }
+.vd-icon[data-dir="c"][data-state="needs"] .vd-water > i { background: var(--caution); }
+.vd-icon[data-dir="c"][data-state="needs"] .vd-body { --ink: var(--caution); }
+.vd-icon[data-dir="c"][data-state="lead"] .vd-water { opacity: 0.7; }
+.vd-icon[data-dir="c"][data-state="lead"] .vd-water > i { background: repeating-linear-gradient(to right, var(--foreground) 0 5%, transparent 5% 14%); animation: vd-flow 5s linear infinite; }
+.vd-icon[data-dir="c"][data-state="queued"] .vd-water { opacity: 0.35; }
+.vd-icon[data-dir="c"][data-state="queued"] .vd-water > i { background: repeating-linear-gradient(to right, var(--foreground) 0 14%, transparent 14% 28%); }
+.vd-icon[data-dir="c"][data-state="queued"] .vd-body { opacity: 0.35; }
+.vd-icon[data-dir="c"][data-state="done"] .vd-water { opacity: 0.25; }
+.vd-icon[data-dir="c"][data-state="failed"] .vd-water { opacity: 1; }
+.vd-icon[data-dir="c"][data-state="failed"] .vd-water > i { background: var(--negative); }
+.vd-icon[data-dir="c"][data-state="failed"] .vd-body { --ink: var(--negative); transform: translateY(-8%) rotate(14deg); }
+.vd-icon[data-dir="c"][data-state="failed"] .vd-fin-face { fill: var(--negative); }
+.vd-icon[data-dir="c"][data-state="idle"] .vd-body { opacity: 0.6; }
+
+@keyframes vd-bob { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-9%) rotate(-4deg); } }
+@keyframes vd-glide { 0%, 100% { transform: translateX(-5%); } 50% { transform: translateX(5%); } }
+@keyframes vd-wake { from { transform: translateX(0); } to { transform: translateX(-34%); } }
+@keyframes vd-brace { from { transform: rotate(0); } to { transform: rotate(-10deg); } }
+@keyframes vd-breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes vd-drift { 0%, 100% { transform: translateX(-4%); } 50% { transform: translateX(4%); } }
+@keyframes vd-scan { from { transform: translateY(0); } to { transform: translateY(350%); } }
+@keyframes vd-type { from { transform: scaleX(0); } 80%, to { transform: scaleX(1); } }
+@keyframes vd-step { from { transform: translateX(-37%); } to { transform: translateX(0); } }
+@keyframes vd-flow { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* Stills for screenshots and frame strips: every animation paused at one point of the shared clock. */
+html[data-still] .vd * { animation-play-state: paused !important; }
+@media (prefers-reduced-motion: reduce) { .vd * { animation: none !important; } }
+
+/* ---------- the crew card, the composer, the avatars ---------- */
+.vd-avatar { display: flex; width: 24px; height: 24px; flex-shrink: 0; align-items: center; justify-content: center; }
+.vd-person { background: linear-gradient(180deg, oklch(0.52 0.09 205), oklch(0.44 0.09 205)); color: oklch(0.95 0.02 205); font-size: var(--text-label); font-weight: 640; }
+.vd-composer { background: var(--raised); }
+.vd-crew { background: var(--surface); }
+.vd-crew-row:hover { background: var(--fill-hover); }
+.vd-crew-needs { background: color-mix(in oklab, var(--caution) 8%, var(--raised)); box-shadow: inset 2px 0 0 var(--caution); }
+.vd-button { background: var(--raised); color: var(--foreground); }
+.vd-button[data-primary] { background: var(--foreground); color: var(--shell); }
+.vd-bar-split { display: flex; height: 3px; gap: 2px; }
+.vd-bar-split > span { min-width: 3px; }
