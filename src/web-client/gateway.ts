@@ -1,7 +1,8 @@
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
+import { watchSocket } from "./probe"
 import { answered, CLOUD, unanswered } from "./reach"
-import { LIVE_FORM, clientEndpointPath, clientSessionOverSockets, problemType, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
+import { LIVE_FORM, clientEndpointPath, clientSessionOverSockets, problemType, renewAtMs, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
 
 /** Who this browser is signed in as, as the gateway says it with each connection token. */
 export interface WebAccount {
@@ -18,7 +19,7 @@ export interface WebAccount {
  */
 export interface WebConnection {
   token: string
-  /** When it runs out, in ms since the epoch. */
+  /** When it runs out, in seconds since 1970, as the gateway signs it (the token's `exp`). */
   expiresAt: number
   deviceId: string
   account: WebAccount
@@ -62,8 +63,6 @@ export const CORRELATION_HEADER = "x-mako-correlation-id"
 export const ARCHIVE_PLANS = "mako:web:archive:"
 /** How long a read that met no answer at all waits before it's asked once more. */
 const READ_RETRY_MS = 300
-/** A token is renewed this long before it runs out, as the host renews its own, or halfway through a shorter one's life. */
-const RENEW_BEFORE_MS = 60_000
 /** Every connection pings this often; one silent for two pings and ten seconds is ended and opened again. */
 const HEARTBEAT_MS = 20_000
 
@@ -97,14 +96,19 @@ export class Gateway {
     })
   }
 
+  /** The token held now, if it's still good: never asks for one. */
+  held(): string | undefined {
+    const held = this.#current
+    return held && held.renewAt > Date.now() ? held.connection.token : undefined
+  }
+
   /** A token good for a minute at least: the one held, or a new one, one ask at a time. */
   async connection(): Promise<WebConnection> {
     const held = this.#current
     if (held && held.renewAt > Date.now()) return held.connection
     this.#asking ??= this.#connect()
       .then((connection) => {
-        const now = Date.now()
-        this.#current = { connection, renewAt: Math.max(connection.expiresAt - RENEW_BEFORE_MS, now + (connection.expiresAt - now) / 2) }
+        this.#current = { connection, renewAt: renewAtMs(connection.token, connection.expiresAt) }
         return connection
       })
       .catch((error) => {
@@ -182,8 +186,10 @@ export class Gateway {
 
   async #open(endpoint: ClientEndpoint): Promise<MessageSocket> {
     const { token } = await this.connection()
-    const socket = new WebSocket(new URL(clientEndpointPath(endpoint, LIVE_FORM), this.origin.replace(/^http/, "ws")), subprotocols(token))
+    const path = clientEndpointPath(endpoint, LIVE_FORM)
+    const socket = new WebSocket(new URL(path, this.origin.replace(/^http/, "ws")), subprotocols(token))
     socket.binaryType = "arraybuffer"
+    watchSocket(path, socket)
     return socket
   }
 

@@ -14,6 +14,7 @@ import {
   type TelemetryOff,
   type TelemetryProps,
   type TelemetryState,
+  scrub,
 } from "../contracts/telemetry.js"
 import type { HostLogFields } from "../base/host-log.js"
 
@@ -329,26 +330,6 @@ function endpointOf(cloud: string | undefined): URL | undefined {
   } catch {
     return undefined
   }
-}
-
-/** The app's own code, whose frames say where an error is; every other path is someone's files. */
-const keepPath = (path: string) => (path.includes("app.asar") ? path : "<path>")
-
-/** The gateway scrubs with the same rules again; a change here belongs there too. */
-const SCRUBS: Array<(text: string) => string> = [
-  (text) => text.replace(/\b(Bearer|Basic)\s+[\w.~+/=-]+/gi, "$1 <secret>"),
-  (text) => text.replace(/\b(?:sk|pk|rk|phc|phx|xaat|xapt|ghp|gho|ghu|ghs|github_pat|mako_dc|e2b)[-_][\w-]{8,}/g, "<secret>"),
-  (text) => text.replace(/\b(?:token|key|secret|password|code)=[^\s&"']+/gi, "<secret>"),
-  (text) => text.replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "<email>"),
-  (text) => text.replace(/(https?:\/\/[^\s/?#]+)[/?#][^\s"')]*/g, "$1/<path>"),
-  (text) => text.replace(/(?<![\w.:/])~?\/(?:[\w.@+-]+\/)+[\w.@+-]*/g, keepPath),
-  (text) => text.replace(/\b[A-Za-z]:\\(?:[^\\\s"'():]+\\)*[^\\\s"'():]*/g, keepPath),
-  (text) => text.replace(/(["'`])[^"'`\n]{40,}\1/g, "$1<text>$1"),
-]
-
-/** Secrets, emails, URLs' paths, file paths and long quoted text out of an error's words. */
-export function scrub(text: string): string {
-  return SCRUBS.reduce((value, rule) => rule(value), text)
 }
 
 type DiagnosticScrubs = { [Name in keyof DiagnosticEvents]: (props: DiagnosticEvents[Name]) => DiagnosticEvents[Name] }

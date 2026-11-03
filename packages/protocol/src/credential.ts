@@ -7,6 +7,7 @@
  * The gateway checks that a renewal speaks for the same account and device as the connection did; a token for
  * anyone else closes it.
  */
+import { z } from "zod"
 
 /** The subprotocol every connection offers first, and the one the gateway answers with. */
 export const SUBPROTOCOL = "mako.v1"
@@ -44,6 +45,36 @@ export type ConnectionCredential = {
   token(): Promise<string>
   /** How long until the token the connection holds is due for renewal, by the supplier's own measure. */
   renewInMs(): number
+}
+
+/** A token is due for renewal this long before it runs out, or halfway through a shorter one's life. */
+export const RENEW_BEFORE_SECONDS = 60
+
+const TokenClaimsSchema = z.object({ iat: z.number(), exp: z.number() })
+
+/**
+ * When a token just received is due, in ms on this device's clock. Its lifetime is read from its own `iat` and `exp`,
+ * both the gateway's clock, so this device's clock only measures the interval and a skewed one renews on time all the
+ * same; a token that doesn't say is measured against `expiresAtMs`. A device token's `expiresAt` is in seconds and the
+ * web connection's in ms: given in the wrong unit, every token looks due at once, as a browser once fetched a fresh one
+ * before every call and every second in each socket.
+ */
+export function renewAtMs(token: string, expiresAtMs: number, now = Date.now()): number {
+  const lifetime = tokenLifetime(token) ?? (expiresAtMs - now) / 1000
+  return now + Math.max(lifetime - RENEW_BEFORE_SECONDS, lifetime / 2, 1) * 1000
+}
+
+/** A token's lifetime in seconds from its middle segment; read for nothing else, and never trusted. */
+function tokenLifetime(token: string): number | undefined {
+  const segment = token.split(".")[1]
+  if (!segment) return undefined
+  try {
+    const base64 = segment.replaceAll("-", "+").replaceAll("_", "/")
+    const claims = TokenClaimsSchema.safeParse(JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))))
+    return claims.success ? claims.data.exp - claims.data.iat : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** The shortest wait before a renewal, so a supplier whose token is already due can't make a connection spin. */

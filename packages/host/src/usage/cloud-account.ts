@@ -34,6 +34,7 @@ import {
   encodeClientFrame,
   problemType,
   renewal,
+  renewAtMs,
   runtimeLinkOverSocket,
   subprotocols,
   PROBE_ANSWER_MS,
@@ -77,8 +78,6 @@ import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, typ
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
 const SIGN_IN_MS = 10 * 60_000
-/** A connection token is renewed this long before it expires. */
-const RENEW_BEFORE_S = 60
 const REQUEST_MS = 15_000
 /** The slowest upload a move waits for before giving up: 100 KB a second. */
 const UPLOAD_BYTES_PER_MS = 100
@@ -167,27 +166,9 @@ const EndedSchema = z.object({ ended: z.number().int().nonnegative() })
 /** `ended`: a Thread standing by that the cloud ended unused; the device stands by with a new one. */
 const CreatedThreadSchema = z.object({ ready: z.boolean().optional(), ended: z.boolean().optional() }).loose()
 const ProblemSchema = z.object({ title: z.string(), detail: z.string().optional() }).partial()
-/** Text that must be JSON, parsed and then checked against `schema`, in one step. */
-const jsonText = <Schema extends z.ZodType>(schema: Schema) =>
-  z
-    .string()
-    .transform((text, context) => {
-      try {
-        return JSON.parse(text)
-      } catch {
-        context.addIssue({ code: "custom", message: "not JSON" })
-        return z.NEVER
-      }
-    })
-    .pipe(schema)
 
 /** Every frame is text; a binary message isn't one. */
 const TextSchema = z.string()
-/** A connection token's middle segment; only its lifetime is read here, never trusted for anything else. */
-const TokenClaimsSchema = z
-  .string()
-  .transform((segment) => Buffer.from(segment, "base64url").toString("utf8"))
-  .pipe(jsonText(z.object({ iat: z.number(), exp: z.number() })))
 
 const StoredSchema = z.object({
   version: z.literal(1),
@@ -1443,11 +1424,8 @@ function endingOf(problem: Problem | undefined): CloudLinkEnding {
   return type === "forbidden" ? "removed" : type === "unauthorized" ? "expired" : "lost"
 }
 
-/** Lifetime from the token's own `iat` and `exp`, both the cloud's clock, so this Mac's clock only measures the interval. */
 function hold(connection: { token: string; expiresAt: number }): HeldToken {
-  const claims = TokenClaimsSchema.safeParse(connection.token.split(".")[1] ?? "")
-  const lifetime = claims.success ? claims.data.exp - claims.data.iat : connection.expiresAt - Date.now() / 1000
-  return { token: connection.token, renewAt: Date.now() + Math.max(lifetime - RENEW_BEFORE_S, lifetime / 2, 1) * 1000 }
+  return { token: connection.token, renewAt: renewAtMs(connection.token, connection.expiresAt * 1000) }
 }
 
 type CloudTarget = { url: URL; problem?: never } | { url?: never; problem: string }

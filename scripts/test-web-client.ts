@@ -8,6 +8,8 @@ import { foldThreads, openingSession } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
+import { renewAtMs } from "@mako/protocol"
+import { deviceOf, errorReading, note, openingThread, readingsStore, readingWords } from "../src/web-client/probe"
 import { rowDetail } from "../src/web-client/rows"
 import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places } from "../src/web-client/places"
 import { ROW, rubberband, SETTLE, springPath } from "../src/web-client/motion"
@@ -25,7 +27,7 @@ import { answeredWords, dockStatus, statusWords, workingWords, type DockStatusIn
 import { DELIVERY_WORDS, deliveryOf, type Sending } from "../src/web-client/delivery"
 import { SAY_WAKING_MS, wakeThread, wakingNow, wakingStore } from "../src/web-client/wake"
 import { sendChoiceDetail, sendPresentation, type SendSituation } from "../src/web-client/send-action"
-import { appendHeard, DictationSession, elapsedWords, frameDecibels, MeterLevels, METER_MS, meterLevel, splitUnsure, type Recognition } from "../src/web-client/dictation"
+import { appendHeard, DictationSession, elapsedWords, frameDecibels, MeterLevels, METER_MS, meterLevel, splitUnsure, STOP_GRACE_MS, type DictationStep, type Recognition } from "../src/web-client/dictation"
 import { freshStep, stepsLine } from "../src/web-client/steps-words"
 import { recordedSwitches, sameSwitches, switchedWords, switchesOf } from "../src/web-client/answered"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
@@ -182,22 +184,53 @@ test("a repository typed in any of Git's shapes is the cloud's", () => {
   assert.equal(typedRepository("https://gitlab.com/a/b"), undefined)
 })
 
-test("a connection token is renewed before it runs out, never on every ask, however short it lives", async () => {
-  for (const lifeMs of [20_000, 5 * 60_000]) {
+/** A web connection as the gateway gives it: a JWT whose `exp` and `iat` are seconds on the gateway's clock, `expiresAt` in ms. */
+function signedToken(asked: number, issuedAt: number, lifeSeconds: number) {
+  const head = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url")
+  const claims = Buffer.from(JSON.stringify({ sub: uuid(2), did: uuid(1), iat: issuedAt, exp: issuedAt + lifeSeconds, n: asked })).toString("base64url")
+  return { token: `${head}.${claims}.sig${asked}`, expiresAt: (issuedAt + lifeSeconds) * 1000 }
+}
+
+test("a connection token is renewed before it runs out, never on every ask, however short it lives or wrong the phone's clock", async () => {
+  // A gateway once sent `expiresAt` in seconds. Read as milliseconds, every token looked due at once: a phone
+  // fetched a fresh one before every request and every second in each socket (72 a minute with two open).
+  for (const [lifeSeconds, skewMs] of [[20, 0], [300, 0], [300, 10 * 60_000], [300, -10 * 60_000]] as const) {
     let asked = 0
     const gateway = new Gateway({
       origin: "https://example.test",
       connect: async () => {
         asked++
-        return { token: `t${asked}`, expiresAt: Date.now() + lifeMs, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }
+        // The gateway's clock is the phone's off by `skewMs`.
+        const { token, expiresAt } = signedToken(asked, Math.floor((Date.now() - skewMs) / 1000), lifeSeconds)
+        return { token, expiresAt, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }
       },
     })
+    const label = `a ${lifeSeconds}s token, the phone's clock ${skewMs / 60_000} min off`
     const first = await gateway.connection()
     const again = await Promise.all([gateway.connection(), gateway.connection()])
-    assert.deepEqual([first.token, ...again.map((connection) => connection.token)], ["t1", "t1", "t1"], `a ${lifeMs / 1000}s token is kept while it's good`)
-    assert.equal(asked, 1)
+    assert.deepEqual([first.token, ...again.map((connection) => connection.token)], Array(3).fill(first.token), `${label}: kept while it's good`)
+    assert.equal(asked, 1, label)
+    const renewIn = renewAtMs(first.token, first.expiresAt) - Date.now()
+    const due = Math.max(lifeSeconds - 60, lifeSeconds / 2) * 1000
+    assert.ok(Math.abs(renewIn - due) < 1_000, `${label}: due in ${renewIn} ms, not ${due}`)
     gateway.close()
   }
+  // A token that doesn't say its own lifetime is measured against its expiry, in ms.
+  assert.ok(Math.abs(renewAtMs("opaque", Date.now() + 300_000) - Date.now() - 240_000) < 1_000)
+  // The gateway's own tokens say: even an `expiresAt` in seconds, as a gateway once sent, renews on the token's life.
+  let asked = 0
+  const old = new Gateway({
+    origin: "https://example.test",
+    connect: async () => {
+      asked++
+      const { token, expiresAt } = signedToken(asked, Math.floor(Date.now() / 1000), 300)
+      return { token, expiresAt: expiresAt / 1000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }
+    },
+  })
+  await Promise.all([old.connection(), old.connection()])
+  await old.connection()
+  assert.equal(asked, 1, "an older gateway's seconds still renew once per token")
+  old.close()
 })
 
 test("a row says one fact under its title: what it waits on, that it failed or works, else its project", () => {
@@ -707,7 +740,7 @@ test("dictation listens until it's stopped: silence starts it again, and what it
   assert.equal(made.length, 2)
   assert.equal(ended, null)
   made[1]!.say([["runner", true]])
-  session.end(false)
+  session.end("stop")
   assert.equal(made[1]!.stopped, true)
   assert.deepEqual(settled, ["Check the retry", "backoff on a slow", "runner"])
   assert.equal(ended, undefined)
@@ -740,7 +773,7 @@ test("dictation's meter goes to its subscribers, every 80 ms, without a render: 
   const before = drawn.length
   await new Promise((done) => setTimeout(done, METER_MS * 2.5))
   assert.equal(drawn.length, before, "a subscriber that let go hears nothing more")
-  session.end(true)
+  session.end("drop")
 })
 
 test("dictation that fails keeps what it heard and says why; one that won't listen stops rather than looping", () => {
@@ -780,6 +813,122 @@ test("dictation that fails keeps what it heard and says why; one that won't list
   for (let index = 0; index < 8 && quit === null; index++) made.at(-1)!.onend?.()
   assert.ok(made.length - before <= 5)
   assert.equal(quit, "Dictation stopped. What it heard is kept.")
+})
+
+test("a stop stops at once, from every state: a recognizer that never ends, a second press, a refused microphone", async () => {
+  // Safari's recognizer sometimes never ends after `stop()`: the microphone stayed open, the timer ran on, and
+  // pressing stop again did nothing.
+  const made: Hanging[] = []
+  class Hanging extends EventTarget implements Recognition {
+    lang = ""
+    continuous = false
+    interimResults = false
+    onresult: Recognition["onresult"] = null
+    onend: Recognition["onend"] = null
+    onerror: Recognition["onerror"] = null
+    stopped = false
+    aborted = false
+    constructor() {
+      super()
+      made.push(this)
+    }
+    start() {}
+    stop() {
+      this.stopped = true
+    }
+    abort() {
+      this.aborted = true
+    }
+    say(results: Array<[string, boolean]>) {
+      this.onresult?.({ resultIndex: 0, results: results.map(([transcript, isFinal]) => ({ isFinal, 0: { transcript } })) })
+    }
+  }
+  const watched = () => {
+    const settled: string[] = []
+    const ended: Array<string | undefined> = []
+    const steps: DictationStep[] = []
+    const seen = { settled, ended, done: 0, steps }
+    const session = new DictationSession(Hanging, {
+      settled: (words) => seen.settled.push(words),
+      hearing: () => undefined,
+      levels: () => undefined,
+      ended: (why) => seen.ended.push(why),
+      done: () => (seen.done += 1),
+      report: (step) => seen.steps.push(step),
+    })
+    session.begin()
+    return { session, seen, recognizer: made.at(-1)! }
+  }
+
+  const hung = watched()
+  hung.recognizer.say([["almost done", false]])
+  hung.session.end("stop")
+  assert.deepEqual(hung.seen.ended, [undefined], "listening is over at the press, whatever the recognizer does")
+  assert.equal(hung.session.listening, false)
+  assert.equal(hung.recognizer.stopped, true, "the recognizer is asked to settle its last words")
+  assert.equal(hung.seen.done, 0)
+  await new Promise((done) => setTimeout(done, STOP_GRACE_MS + 100))
+  assert.deepEqual(hung.seen.settled, ["almost done"], "what it was hearing is taken as said")
+  assert.equal(hung.recognizer.aborted, true, "and the recognizer is let go")
+  assert.equal(hung.seen.done, 1)
+  assert.deepEqual(hung.seen.steps.map((step) => step.step), ["started", "stop-pressed", "levels", "stop-overdue", "stopped"])
+  assert.deepEqual(hung.seen.ended, [undefined], "said once")
+
+  const twice = watched()
+  twice.recognizer.say([["one more", false]])
+  twice.session.end("stop")
+  twice.session.end("stop")
+  assert.deepEqual([twice.seen.settled, twice.recognizer.aborted, twice.seen.done], [["one more"], true, 1], "a second press settles it now")
+
+  const refused = watched()
+  refused.recognizer.say([["before the", false]])
+  refused.recognizer.onerror?.({ error: "not-allowed" })
+  assert.deepEqual(refused.seen.ended, ["Allow the microphone to dictate."], "a refused microphone is over at once, with no end from the recognizer")
+  assert.deepEqual([refused.seen.settled, refused.recognizer.aborted, refused.seen.done], [["before the"], true, 1])
+  assert.equal(refused.seen.steps.find((step) => step.step === "failed")?.step, "failed")
+
+  const late = watched()
+  late.recognizer.say([["send it", false]])
+  late.session.end("stop")
+  late.recognizer.say([["Send it.", true]])
+  late.recognizer.onend?.()
+  assert.deepEqual(late.seen.settled, ["Send it."], "the recognizer's own last words, settled in the grace, replace its guess")
+  assert.deepEqual([late.recognizer.aborted, late.seen.done], [false, 1], "it ended itself: nothing to let go")
+  assert.equal(late.seen.steps.some((step) => step.step === "stop-overdue"), false)
+
+  const put = watched()
+  put.recognizer.say([["on the train", false]])
+  put.session.end("settle")
+  assert.deepEqual([put.seen.settled, put.seen.ended, put.seen.done], [["on the train"], [undefined], 1], "a page put away keeps what was heard and is over")
+})
+
+test("the device's readings: what the phone is, an error's words without anyone's, a few of a kind a minute, an open said once", () => {
+  const phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
+  assert.deepEqual(deviceOf(phone, 5), { os: "iOS", osVersion: "18.7", browser: "safari", browserVersion: "27.0" })
+  assert.deepEqual(deviceOf("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15", 5).os, "iOS", "an iPad asks for the desktop's pages")
+  assert.deepEqual(deviceOf("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0 Mobile/15E148 Safari/604.1", 5).browser, "chrome")
+
+  const thrown = new TypeError("Cannot read ana@example.test's draft at https://app.example.test/t/abc?x=1")
+  thrown.stack = "TypeError: Cannot read\n    at open (https://app.example.test/assets/index-Bq1x.js:1:2040)\n    at /Users/ana/notes/x.js:3:1"
+  const reading = errorReading("web-uncaught", thrown, "https://app.example.test")
+  assert.equal(reading.name, "TypeError")
+  assert.equal(reading.message, "Cannot read <email>'s draft at https://app.example.test/<path>")
+  assert.ok(reading.stack?.includes("(/assets/index-Bq1x.js:1:2040)"), "the app's own frame is kept")
+  assert.ok(!reading.stack?.includes("/Users/ana"), "anyone else's path isn't")
+
+  const before = readingsStore.get().readings.length
+  for (let index = 0; index < 25; index++) note("web.long-task", { ms: 300, during: "idle", source: "timer" }, 1_000_000 + index)
+  assert.equal(readingsStore.get().readings.length - before, 10, "ten of a kind a minute")
+  note("web.long-task", { ms: 300, during: "idle", source: "timer" }, 1_000_000 + 61_000)
+  assert.equal(readingsStore.get().readings.length - before, 11, "and more the next minute")
+
+  const opened = openingThread()
+  opened.caughtUp()
+  opened.painted("kept", 12)
+  opened.close()
+  const said = readingsStore.get().readings.filter((each) => each.name === "web.thread-open")
+  assert.equal(said.length, 1, "said once, with both")
+  assert.match(readingWords(said[0]!), /^Opened: newest in \d+ ms \(kept\), caught up in \d+ ms, 12 turns$/)
 })
 
 const reach = (fields: Partial<ReachInput> = {}): ReachInput => ({ now: Date.parse("2026-10-30T12:00:00Z"), online: true, cloud: "ok", ...fields })

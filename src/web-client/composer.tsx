@@ -175,11 +175,11 @@ export function Composer({
 
   const [held, setHeld] = useState<{ how?: "queue" | "steer" } | undefined>(undefined)
   const send = async (how?: "queue" | "steer", asked = false) => {
-    // What's still being heard goes with it, as the person heard it said.
-    const spoken = dictation.listening ? dictation.hearing : ""
+    // What's still being heard goes with it, as the person heard it said, listening or settling after a stop.
+    const spoken = dictation.hearing
     const full = appendHeard(text, spoken)
     if ((!full.trim() && picked.length === 0) || over || disabled || !sendable || waiting !== undefined || reads !== undefined || taken.current === full) return
-    if (dictation.listening) dictation.cancel()
+    dictation.cancel()
     if (editing) {
       if (!full.trim()) return
       taken.current = full
@@ -258,8 +258,9 @@ export function Composer({
 
   /**
    * The mic: pressed, it starts listening at once. Let go within `HOLD_MS`, it listens on until stopped (a tap); held
-   * longer, it stops on release (push-to-talk). The release is heard on the window: listening puts the recording in the
-   * mic's place, so the button pressed is gone before the finger lifts and never hears it.
+   * longer, it stops on release (push-to-talk). Listening puts the recording in the mic's place, so the button pressed
+   * is out of the page before the finger lifts: the release is heard on the window, where a browser that hit-tests it
+   * again sends it, and on the button itself, where Safari sends a touch's every event, attached or not.
    */
   const release = useRef<AbortController | null>(null)
   useEffect(() => () => release.current?.abort(), [])
@@ -267,16 +268,17 @@ export function Composer({
     if (dictation.listening) return
     const pressed = performance.now()
     const pointer = event.pointerId
+    const button = event.currentTarget
     release.current?.abort()
     const watch = new AbortController()
     release.current = watch
-    const lifted = (up: PointerEvent) => {
-      if (up.pointerId !== pointer) return
+    const lifted = (up: Event) => {
+      if (up instanceof PointerEvent && up.pointerId !== pointer) return
       watch.abort()
       if (performance.now() - pressed >= HOLD_MS) dictation.stop()
     }
-    addEventListener("pointerup", lifted, { signal: watch.signal })
-    addEventListener("pointercancel", lifted, { signal: watch.signal })
+    for (const target of [window, button]) for (const type of ["pointerup", "pointercancel"]) target.addEventListener(type, lifted, { signal: watch.signal })
+    for (const type of ["touchend", "touchcancel"]) button.addEventListener(type, lifted, { signal: watch.signal })
     dictation.start()
   }
 

@@ -106,11 +106,75 @@ export interface DiagnosticEvents {
   "cloud.request": { route: CloudRoute; outcome: "ok" | "refused" | "failed" | "unreachable"; status?: number; ms: number; correlationId: string }
 }
 
+/** What the web app is doing when a reading is taken: a finger on it, a scroll gliding, a Thread opening, or none. */
+export type WebActivity = "touch" | "scroll" | "opening" | "idle"
+
+/**
+ * How the web app runs on the device, measured there: durations, counts and code identifiers, never a word of a
+ * Thread, a name, or an address. Errors' words and frames are scrubbed as the desktop's are.
+ */
+export interface WebDiagnosticEvents {
+  "error.reported": DiagnosticEvents["error.reported"]
+  /** Once a page, and again when the screen turns or the window resizes: what every reading after it ran on. */
+  "web.page": {
+    width: number
+    height: number
+    /** Device pixels per CSS pixel. */
+    scale: number
+    /** Opened from the home screen, without the browser's bars. */
+    standalone: boolean
+    touch: boolean
+    browser: "safari" | "chrome" | "firefox" | "edge" | "other"
+    browserVersion?: string
+  }
+  /** The page's main thread was busy this long in one go: by the browser's own measure, or a timer that fired late. */
+  "web.long-task": { ms: number; during: WebActivity; source: "longtask" | "timer" }
+  /** The browser's layout-shift score above the threshold, where it measures one. */
+  "web.layout-shift": { score: number; during: WebActivity }
+  /**
+   * The app's frame out of step with what the screen shows, by `px`: the page scrolled under a fixed app, wider than
+   * the screen (it pans sideways), or its height not the visible viewport's after the keyboard or a turn.
+   */
+  "web.layout": { kind: "page-scrolled" | "wider-than-screen" | "height-off"; px: number; keyboard: boolean }
+  /**
+   * One scroll gesture, glide included: its frames, those over budget (25 ms, one and a half at 60 Hz), the longest,
+   * and the app's own writes to a scroller while a finger was on it, which put the content back under the finger.
+   */
+  "web.scroll": { ms: number; frames: number; slow: number; worstMs: number; writes: number; touch: boolean }
+  /**
+   * A Thread opened: when its newest turn was painted, from what the device kept or from the network, and when it had
+   * caught up with the Thread as it stands; `turns` is how many it shows.
+   */
+  "web.thread-open": { newestMs: number; from: "kept" | "network"; caughtUpMs?: number; turns: number }
+  /** The live connection came back `ms` after it dropped for `reason`, and had caught up `caughtUpMs` after that. */
+  "web.reconnect": { ms: number; caughtUpMs?: number; reason: "closed" | "offline" | "resumed" | "renewal" }
+  /** One step of dictation (`DictationStep`), timed on the device. */
+  "web.dictation": {
+    step: "started" | "levels" | "stop-pressed" | "stopped" | "failed" | "stop-overdue"
+    ms?: number
+    restarts?: number
+    error?: string
+    peak?: number
+    meter?: "analyser" | "words"
+  }
+}
+
+/** One reading the web client's probe took: when, of what, and its measures. */
+export type WebReading = { [Key in keyof WebDiagnosticEvents]: { id: string; at: number; name: Key; props: WebDiagnosticEvents[Key] } }[keyof WebDiagnosticEvents]
+
+/**
+ * The probe says each reading on the page's `window` as it's taken, a `CustomEvent` of this type whose `detail` is the
+ * `WebReading`: every one, before the per-minute limit on what's kept and sent. A test runner collects them by
+ * listening from the page's start.
+ */
+export const WEB_READING_EVENT = "mako:reading"
+
 export interface TelemetryApp {
   version: string
   build?: string
-  distribution: "signed" | "unsigned" | "local" | "development"
-  os: "macOS" | "Windows" | "Linux" | "other"
+  /** `web`: the web app in a browser, with `os` the device's. */
+  distribution: "signed" | "unsigned" | "local" | "development" | "web"
+  os: "macOS" | "Windows" | "Linux" | "iOS" | "Android" | "other"
   osVersion?: string
   arch: "arm64" | "x64" | "other"
 }
@@ -137,3 +201,26 @@ export interface TelemetryBatch {
 }
 
 export const MAX_BATCH_EVENTS = 100
+
+/**
+ * The app's own code, whose frames say where an error is: the desktop's archive, or the web app's built files, which
+ * its stacks name from the root of its own origin. Every other path is someone's files.
+ */
+const keepPath = (path: string) => (path.includes("app.asar") || /^\/assets\/[\w.-]+$/.test(path) ? path : "<path>")
+
+/** The gateway scrubs with the same rules again; a change here belongs there too. */
+const SCRUBS: Array<(text: string) => string> = [
+  (text) => text.replace(/\b(Bearer|Basic)\s+[\w.~+/=-]+/gi, "$1 <secret>"),
+  (text) => text.replace(/\b(?:sk|pk|rk|phc|phx|xaat|xapt|ghp|gho|ghu|ghs|github_pat|mako_dc|e2b)[-_][\w-]{8,}/g, "<secret>"),
+  (text) => text.replace(/\b(?:token|key|secret|password|code)=[^\s&"']+/gi, "<secret>"),
+  (text) => text.replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "<email>"),
+  (text) => text.replace(/(https?:\/\/[^\s/?#]+)[/?#][^\s"')]*/g, "$1/<path>"),
+  (text) => text.replace(/(?<![\w.:/])~?\/(?:[\w.@+-]+\/)+[\w.@+-]*/g, keepPath),
+  (text) => text.replace(/\b[A-Za-z]:\\(?:[^\\\s"'():]+\\)*[^\\\s"'():]*/g, keepPath),
+  (text) => text.replace(/(["'`])[^"'`\n]{40,}\1/g, "$1<text>$1"),
+]
+
+/** Secrets, emails, URLs' paths, file paths and long quoted text out of an error's words. */
+export function scrub(text: string): string {
+  return SCRUBS.reduce((value, rule) => rule(value), text)
+}

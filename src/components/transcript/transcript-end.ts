@@ -5,6 +5,8 @@ import { createContext } from "react"
  * a phone returning to the app or a Thread tapped again: land on the newest message, following it from there.
  */
 export const TRANSCRIPT_END_EVENT = "mako:transcript-end"
+/** Sent by a transcript's scroller as it writes its own offset while a finger is on it, for the page's readings. */
+export const SCROLL_WRITE_EVENT = "mako:scroll-write"
 
 /** Every transcript drawn within `root` lands on its newest message. */
 export function landTranscriptsAtEnd(root: ParentNode = document): void {

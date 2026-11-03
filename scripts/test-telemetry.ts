@@ -21,7 +21,8 @@ import type { TelemetryBatch } from "@mako/host/contracts/telemetry"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import { HostTelemetry, type HostTelemetrySources } from "@mako/host/usage/host-telemetry"
 import { hashMachineId } from "@mako/host/base/machine-id"
-import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
+import { Telemetry, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
+import { scrub } from "@mako/host/contracts/telemetry"
 import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince, unreadTotals } from "@mako/host/usage/telemetry-events"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { HostJobs } from "@mako/host/base/host-jobs"
@@ -532,6 +533,8 @@ test("the scrubber keeps an error's shape and loses what identifies anyone", () 
   assert.equal(scrub("open ~/Projects/secret/x.ts"), "open <path>")
   assert.equal(scrub("key=abcd1234 and sk-ant-api03-abcdefghij"), "<secret> and <secret>")
   assert.equal(scrub("fetch https://host.example.com"), "fetch https://host.example.com", "a bare host stays")
+  assert.equal(scrub("at open (/assets/index-Bq1x.js:1:2040)"), "at open (/assets/index-Bq1x.js:1:2040)", "the web app's own built file stays")
+  assert.equal(scrub("at open (/assets/ada/notes.js:1:2)"), "at open (<path>:1:2)")
   assert.equal(scrub(`'short'`), `'short'`)
   assert.equal(harnessInventory(["claude", "Bad Name"], {}).length, 1)
   assert.equal(errorReported({ id: "x", kind: "main-rejection", at: "", message: "m", app: { version: "", electron: "", chrome: "", node: "" }, os: { platform: "", arch: "", release: "" }, breadcrumbs: [] }).kind, "main-rejection")

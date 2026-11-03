@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url"
  * - Where the reader stopped holds within a pixel while the answer goes on growing, and the way back to the newest
  *   turn shows; back at the end, it follows again. A finger resting at the end lets it wait, and lifting catches up.
  * - The keyboard opening leaves what's read where it was, and the end in view when it was followed.
+ * - Turned sideways at the end and back, the newest turn stays where the end shows it.
  * - An earlier page arriving under a dragging finger moves the line under it no more than the finger does.
  * - A flick makes no long tasks.
  * - On a laptop, the wheel leaves the end of a streaming answer in a short transcript and a windowed one, and the
@@ -283,6 +284,24 @@ async function checkScroll() {
     console.log(`Short move up: ${Math.round(short)} px from the end, held within ${Math.abs(shortDrift).toFixed(1)} px`)
     await evaluate("window.scrollCheck.stop(), true")
 
+    // 6. The phone turned sideways at the end and back: every line flows again, and the newest turn stays where the
+    // end shows it, not above a blank kept from the taller column of before.
+    await toEnd()
+    const turn = async (sideways) => {
+      await send("Emulation.setDeviceMetricsOverride", { width: sideways ? 852 : 393, height: sideways ? 393 : 852, deviceScaleFactor: 3, mobile: true })
+      await rest()
+    }
+    const belowNewest = () => evaluate(`(() => { const node = ${scroller}; const turns = node.querySelectorAll('[data-exchange]'); return Math.round(node.getBoundingClientRect().bottom - turns[turns.length - 1].getBoundingClientRect().bottom) })()`)
+    const uprightGap = await belowNewest()
+    await turn(true)
+    const sidewaysGap = await belowNewest()
+    await capture("turned-sideways-iphone-dark.png")
+    await turn(false)
+    const backGap = await belowNewest()
+    assert.ok(Math.abs(sidewaysGap - uprightGap) <= 2, `turned sideways at the end, the newest turn ended ${sidewaysGap} px above the transcript's bottom, upright ${uprightGap} px`)
+    assert.ok(Math.abs(backGap - uprightGap) <= 2, `turned upright again, the newest turn ended ${backGap} px above the bottom, at first ${uprightGap} px`)
+    console.log(`Turned sideways and back at the end: the newest turn ended ${uprightGap}, ${sidewaysGap}, ${backGap} px above the bottom`)
+
     // Light, read while streaming.
     await phone("light")
     await evaluate("window.scrollCheck.stream(50, 3), true")
@@ -292,7 +311,7 @@ async function checkScroll() {
     await capture("reading-while-streaming-iphone-light.png")
     await evaluate("window.scrollCheck.stop(), true")
 
-    // 6. An earlier page arriving under a resting finger: the line under it stays.
+    // 7. An earlier page arriving under a resting finger: the line under it stays.
     await window.loadURL(`${new URL("scripts/transcript-scroll-browser.html", process.env.MAKO_SCROLL_URL).href}?turns=90&paged=12`)
     await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 10`, "the paged transcript")
     await rest()
@@ -321,7 +340,7 @@ async function checkScroll() {
     assert.ok(Math.abs(paged) <= 1, `an earlier page moved the line under the finger ${Math.round(paged)} px`)
     console.log(`Paging under a finger: the transcript grew ${first} → ${await height()} px above it, the line under it moved ${Math.abs(paged).toFixed(1)} px beyond the finger`)
 
-    // 7. A laptop's wheel leaves the end of a streaming answer, in a short transcript and a windowed one.
+    // 8. A laptop's wheel leaves the end of a streaming answer, in a short transcript and a windowed one.
     await send("Emulation.setTouchEmulationEnabled", { enabled: false })
     await send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 900, deviceScaleFactor: 1, mobile: false })
     for (const turns of [90, 250]) {
