@@ -817,6 +817,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
     },
+    movePending: (id) => {
+      const answer = late.movers?.moves.answerFor(id)
+      return answer === "asking" || answer === "allowed" || answer === "moving"
+    },
     // Each turn's changes, counted by the attribution journal once it opens.
     turnLedger: () => {
       const attribution = late.attribution
