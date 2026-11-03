@@ -8,7 +8,7 @@ import "../lib/scratch-git.mjs"
 //     built and checked at $0 (CI runs this on every change).
 //   npm run eval:orch-tools -- --replay claude|codex --model <id> [--case <ids>] [--samples 2] [--routing on|off|both] [--out <dir>] [--baseline <results.jsonl>]
 //     the replay against the model's own API (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` from the environment).
-//   npm run eval:orch-tools:live -- <harness...> [--model <id>] [--case <ids>] [--samples 2] [--routing on|off|both] [--out <dir>]
+//   npm run eval:orch-tools:live -- <harness...> [--model <id>] [--case <ids>] [--samples 2] [--routing on|off|both] [--turn-seconds 180] [--out <dir>]
 //     each real harness through Mako's driver (the host's build: Cursor's runs from its dist) in a scratch
 //     home on the person's sign-in for it, against the `mako` stub. Each turn is on that harness's plan.
 //   npm run eval:orch-tools -- --template <kept request.json> claude|codex|codex-lead
@@ -263,7 +263,7 @@ try {
           const result: CaseResult = { id: orchCase.id, area: orchCase.area, kind: orchCase.kind, harness, model, routing, passes: [], failures: [], seconds: 0, tokens: { input: 0, output: 0 } }
           const began = Date.now()
           try {
-            Object.assign(result, await sampled(() => liveSample({ harness, driver, stub, orchCase, routing, env, project, ...option("--model") && { model: option("--model") } }), orchCase))
+            Object.assign(result, await sampled(() => liveSample({ harness, driver, stub, orchCase, routing, env, project, ...option("--model") && { model: option("--model") }, ...option("--turn-seconds") && { turnSeconds: Number(option("--turn-seconds")) } }), orchCase))
           } catch (error) {
             result.error = error instanceof Error ? error.message : String(error)
             result.seconds = Math.round((Date.now() - began) / 1000)

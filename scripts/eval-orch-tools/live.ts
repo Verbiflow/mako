@@ -66,6 +66,8 @@ function prompt(orchCase: OrchCase): string {
 export async function liveSample(input: {
   harness: string; driver: ProviderLiveDriver; stub: StubMako; orchCase: OrchCase; routing: "on" | "off"
   env: NodeJS.ProcessEnv; project: string; model?: string
+  /** How long a turn may run before the sample counts as an error: 180 s unless the run says (`--turn-seconds`). */
+  turnSeconds?: number
 }): Promise<Sample & { seconds: number }> {
   const { harness, driver, stub, orchCase, routing, env, project } = input
   const id = randomUUID()
@@ -98,9 +100,10 @@ export async function liveSample(input: {
       ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }), nativeCalls: () => caseCallThread(orchCase, project) },
     }, { env }))
     await driver.prompt(id, prompt(orchCase), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
-    const deadline = Date.now() + 180_000
+    const seconds = input.turnSeconds ?? 180
+    const deadline = Date.now() + seconds * 1000
     while (Date.now() < deadline && !(status() !== "running" && status() !== "starting" && Date.now() - quiet > 5000)) await delay(250)
-    if (Date.now() >= deadline) throw new Error("the turn didn't settle in three minutes")
+    if (Date.now() >= deadline) throw new Error(`the turn didn't settle in ${seconds} s`)
   } finally {
     await Promise.resolve(driver.close(id)).catch(() => {})
   }
