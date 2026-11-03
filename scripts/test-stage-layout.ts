@@ -151,6 +151,8 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   [".live-mark-comet", { animation: "live-mark-turn", reduced: "global" }],
   ['.live-mark[data-live-mark="needs"] > .live-mark-ring', { animation: "live-mark-breathe", reduced: "global" }],
   ['.live-mark[data-live-mark="lead"] > .live-mark-ring', { animation: "live-mark-turn", reduced: "global" }],
+  // An Apex's working pips: one veil per row sweeping on `transform`, on the same gate.
+  [".fin-pips-veil", { animation: "fin-pips-wave", reduced: /\.fin-pips-veil\s*\{\s*display:\s*none;/ }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]

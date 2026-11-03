@@ -219,6 +219,21 @@
   [data-list="rail"] .web-row-mark {
     @apply w-6;
   }
+  /* An Apex's pips veil in the paint of the row they sit on (`.fin-pips`). */
+  [data-list="screen"] .fin-pips {
+    --pips-under: var(--surface);
+  }
+  [data-list="rail"] .web-row[aria-current="page"] .fin-pips {
+    --pips-under: var(--raised);
+  }
+  @media (hover: hover) {
+    .web-row:hover .fin-pips {
+      --pips-over: var(--fill-hover);
+    }
+  }
+  .web-row:active .fin-pips {
+    --pips-over: var(--fill-selected);
+  }
   .web-account {
     @apply flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-ui text-muted-foreground;
   }

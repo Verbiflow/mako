@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { RollupBadge } from "@/components/rail/rollup-badge"
-import { useThreadRollup } from "@/state/apex-fins"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { finsWord } from "@mako/host/contracts/agents"
+import { FinPips } from "@/components/rail/fin-pips"
+import { apexPips, pipsCounts } from "@/state/fin-pips"
+import { useAcp } from "@/state/acp"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
-import { childStateOf, childWord } from "@mako/host/contracts/children"
+import { childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { finMarkState } from "@/lib/live-mark-state"
 import { shallowEqual } from "@/state/store"
@@ -398,9 +400,10 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
           <span className="flex min-w-0 items-baseline gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
             <span className="flex shrink-0 items-center gap-1.5 self-center">
-              <LeadOrTime thread={thread.id} activityAt={thread.activityAt} />
+              <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
             </span>
           </span>
+          <ApexLineOr thread={thread.id}>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
             {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
             {detail.tone === "working" ? (
@@ -422,6 +425,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
               </span>
             )}
           </span>
+          </ApexLineOr>
         </span>
       </button>
     </div>
@@ -522,8 +526,18 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
   return away
 }
 
-/** An Apex's row wears its Fins' badge where the time stands, from the snapshot this page holds of it (`rollup`). */
-function LeadOrTime({ thread, activityAt }: { thread: string; activityAt: WebThread["activityAt"] }) {
-  const counts = useThreadRollup(thread)
-  return counts.total ? <RollupBadge counts={counts} size="phone" /> : <span className="tabular text-label text-faint">{formatRelative(activityAt)}</span>
+/**
+ * An Apex's second line: one pip per Fin and how many, where another row says what it's doing, from the snapshot this
+ * page holds of it. Its Fins that need the person are rows of their own under Needs you. Repaints when a pip changes.
+ */
+function ApexLineOr({ thread, children }: { thread: string; children: ReactNode }) {
+  const pips = useAcp((state) => apexPips(state, thread))
+  if (!pips) return children
+  const label = rollupLabel(pipsCounts(pips))
+  return (
+    <span role="img" aria-label={label} data-fin-pips={pips} className="flex h-4 min-w-0 items-center gap-2 text-label">
+      <FinPips pips={pips} />
+      <span className="tabular min-w-0 truncate text-faint">{finsWord(pips.length)}</span>
+    </span>
+  )
 }

@@ -106,10 +106,10 @@ async function checkWindow() {
   // Meta on a Mac, Control elsewhere, with Shift: the desk's "mod+shift".
   const MOD_SHIFT = (process.platform === "darwin" ? 4 : 2) | 8
   const inboxCount = () => evaluate(`Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0)`)
-  const rollup = () => evaluate(`document.querySelector('.thread-jump-scope [data-rollup]')?.getAttribute('aria-label') ?? ''`)
+  const rollup = () => evaluate(`document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]')?.getAttribute('aria-label') ?? ''`)
 
   await window.loadURL(`${base}?mock&app=apex`)
-  await until(`document.querySelector('[data-rail-top]') !== null && document.querySelector('.thread-jump-scope [data-rollup]') !== null`, "the rail with the Apex")
+  await until(`document.querySelector('[data-rail-top]') !== null && document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]') !== null`, "the rail with the Apex")
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark'}))`)
   await frames()
 
@@ -161,7 +161,7 @@ async function checkWindow() {
   await until(`Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${expected - 1}`, "the Inbox row counts one fewer")
   const working = await evaluate(`import('/src/state/acp-state.ts').then(({acpStore}) => import('/src/state/apex-fins.ts').then(({threadChildren}) => import('/packages/host/src/contracts/children.ts').then(({childStateOf}) => { const acp = acpStore.get(); const thread = Object.values(acp.conversations).find((c) => c.kind === 'live' && threadChildren(acp, c.threadId).some((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).threadId; return childStateOf(threadChildren(acp, thread).find((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).kind })))`)
   assert.equal(working, "working", "the answered Fin is working")
-  await until(`(document.querySelector('.thread-jump-scope [data-rollup]')?.getAttribute('aria-label') ?? '') !== ${JSON.stringify(before)}`, "the rail's rollup moves with it")
+  await until(`(document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]')?.getAttribute('aria-label') ?? '') !== ${JSON.stringify(before)}`, "the rail's rollup moves with it")
   assert.match(await rollup(), new RegExp(`${facts.fins.length - 1} needs? you`))
   assert.equal(await inboxCount(), expected - 1)
   console.log(`PASS: answering ${answer === "allow" ? "Allow once" : "the first option"} in the Inbox moves the Fin to working everywhere (${await rollup()})`)
