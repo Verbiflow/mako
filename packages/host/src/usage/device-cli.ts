@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { parseArgs } from "node:util"
 import { cloudUrl } from "../base/build-identity.js"
@@ -161,7 +162,8 @@ async function status(accounts: CloudAccounts, json: boolean, local: { host: str
 /** With a host on this data root: the sign-in is the host's, so it's asked, never used from here. */
 async function throughHost(command: Command, environment: HostEnvironment, json: boolean): Promise<number> {
   const socket = process.env.MAKO_WEB_SOCKET ?? runtimeLocation(environment.dataRoot).socket
-  const call = async (channel: string) => CloudAccountSchema.parse(await invokeRuntime(socket, `mako-host-${command}`, channel, []))
+  const client = randomUUID()
+  const call = async (channel: string) => CloudAccountSchema.parse(await invokeRuntime(socket, client, channel, []))
   try {
     const account = await call("mako:cloud-account")
     if (command === "status") return report(account, json, { host: `running, on ${socket}`, kept: "the host's secret store" })
