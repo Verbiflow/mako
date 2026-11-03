@@ -1216,8 +1216,9 @@ diffs-container {
  * and rests off screen through the gate (`observePhaseLockedAnimation`);
  * paused there, under reduced motion, it stands as a still arc.
  */
+/* A container sizes the marks in it with `--live-mark-size`, inherited, so it can from any cascade layer. */
 .live-mark {
-  --lm-size: 20px;
+  --lm-size: var(--live-mark-size, 20px);
   --lm-stroke: calc(var(--lm-size) * 0.075);
   --lm-ink: color-mix(in oklab, var(--foreground) 82%, transparent);
   --lm-track: transparent;
