@@ -173,6 +173,13 @@ const inputs = {
         to: z.string(),
         forward: z.boolean().optional(),
         text: z.string().optional(),
+        deliver: z
+          .union([
+            z.literal("steer"),
+            z.literal("queue"),
+            z.literal("interrupt"),
+          ])
+          .optional(),
         clientKey: z.string(),
       }),
     ]),

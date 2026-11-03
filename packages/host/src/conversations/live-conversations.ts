@@ -49,6 +49,7 @@ import type { DirectRoute } from "@mako/sessions/events"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
 import type { SessionSettings } from "@mako/sessions/settings"
+import { steerHeard } from "../harnesses/index.js"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions } from "./live-actions.js"
 import { LiveApprovals } from "./live-approvals.js"
@@ -416,6 +417,15 @@ export class LiveConversations {
   steersAtStep(id: string): boolean {
     const steering = this.records.get(id)?.driver?.steering
     return steering?.kind === "supported" && steering.lands === "step"
+  }
+
+  /**
+   * How this conversation's harness takes a message into its running turn: when its agent hears one (`steerHeard`),
+   * and whether it answers every steer it holds once that turn ends. Undefined where it takes none.
+   */
+  steering(id: string): { hears: string; answersOnEnd: boolean } | undefined {
+    const steering = this.records.get(id)?.driver?.steering
+    return steering?.kind === "supported" ? { hears: steerHeard(steering), answersOnEnd: steering.answersOnEnd === true } : undefined
   }
 
   /** What the agent said at the end of a request's turn, and how the request ended; undefined for one not in memory. */
@@ -1182,6 +1192,29 @@ export class LiveConversations {
     const result = this.cancelRequest(id, requestId, why).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
     this.stops.set(id, { requestId, result })
     return result
+  }
+
+  /**
+   * Stops the running turn and sends this message as the next one, ahead of what was queued, which follows it in
+   * order; with no turn running it goes as the next message, like any. Answers whether it stopped a turn.
+   */
+  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor): boolean {
+    const running = this.activeRequest(id)
+    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor)
+    if (!running) return false
+    const resident = this.records.require(id)
+    const waiting = new Set(resident.snapshot.requests.filter((request) => request.status === "queued").map((request) => request.id))
+    void this.stopRequest(id, running).catch((error) => hostWarn("live", "an interrupt couldn't stop the turn; its message waits for the turn's end", { conversation: id, error: errorMessage({ error }) }))
+    // The stop held what was queued, as the person's Stop does; an interrupt sends it on, its own message first. That
+    // order is kept in memory alone (the journal keeps requests as they came): it must hold only until this message
+    // starts, and a host that restarts holds its queue anyway.
+    const requests = resident.snapshot.requests.map((request) => waiting.has(request.id) && request.status === "held" ? { ...request, status: "queued" as const } : request)
+    const own = requests.find((request) => request.id === requestId)
+    const rest = requests.filter((request) => request.id !== requestId)
+    const ahead = rest.findIndex((request) => request.status === "queued" || request.status === "held")
+    resident.snapshot = { ...resident.snapshot, requests: own && ahead !== -1 ? [...rest.slice(0, ahead), own, ...rest.slice(ahead)] : requests }
+    this.flush(resident)
+    return true
   }
 
   async cancelRequest(id: string, requestId: string, why: ProviderStop = "person"): Promise<void> {

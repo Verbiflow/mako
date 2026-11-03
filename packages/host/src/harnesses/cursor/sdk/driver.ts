@@ -941,7 +941,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // returned 136 s later, then delivered. The SDK answers a steer it holds
     // when its run ends (`revert_to_followup`), and its words go as the next
     // message: the queued one it came from is put back, else the client sends it.
-    steering: { kind: "supported", lands: "interrupt", answersOnEnd: true, via: "A message sent while a run works cuts a running command short and the model continues with it; a running subagent finishes first. One the run ends before taking goes as the next message.", async steer(id, input): Promise<ProviderSteerResult> {
+    steering: { kind: "supported", lands: "interrupt", answersOnEnd: true, hears: "at once, cutting a running command short; a running subagent finishes first", via: "A message sent while a run works cuts a running command short and the model continues with it; a running subagent finishes first. One the run ends before taking goes as the next message.", async steer(id, input): Promise<ProviderSteerResult> {
       const live = requireLive(id)
       if (live.state.status !== "running" || live.state.nativeRunId !== input.expectedRunId)
         return { kind: "not-accepted", reason: "The Cursor turn had already changed, so it goes as the next message." }
