@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject } from "../contracts/json.js"
-import { routeShellCall, type CallThread } from "../contracts/native-calls.js"
+import { routeNativeTool, routeShellCall, type CallRoute, type CallThread } from "../contracts/native-calls.js"
 
 /** A shell tool's command as one line: argv (`["bash", "-lc", "…"]`) reads as its script. */
 const CommandLine = z.union([
@@ -24,24 +24,33 @@ export const HookCall = z.object({
 }).loose()
 export type HookCall = z.infer<typeof HookCall>
 
+/** A hooked call's route: a shell tool by its command, an MCP tool (`mcp__<server>__<tool>`) by its server. */
+function hookRoute(call: HookCall, thread: CallThread): CallRoute {
+  const command = call.tool_input?.command
+  if (command) {
+    const cwd = call.tool_input?.workdir ?? call.cwd ?? thread.folder
+    return routeShellCall(thread, { command, ...cwd && { cwd } })
+  }
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(call.tool_name ?? "")
+  return mcp ? routeNativeTool(thread, { tool: call.tool_name!, server: mcp[1]! }) : { kind: "allow" }
+}
+
 /**
  * What the hook prints for one call: a deny before it runs, a note after it
- * ran, or nothing. A deny carries both spellings a hook may answer with
- * (`decision: "block"` and PreToolUse's `permissionDecision`), so one answer
- * serves every harness that reads either.
+ * ran (or before it, for `before`), or nothing. A deny carries both spellings
+ * a hook may answer with (`decision: "block"` and PreToolUse's
+ * `permissionDecision`), so one answer serves every harness that reads either.
  */
-export function callGateAnswer(event: "pre" | "post", call: HookCall | undefined, thread: CallThread, conversation: string): JsonObject {
-  const command = call?.tool_input?.command
-  if (!call || !command) return {}
-  const cwd = call.tool_input?.workdir ?? call.cwd ?? thread.folder
-  const route = routeShellCall(thread, { command, ...cwd && { cwd } })
-  if (route.kind === "deny" && event === "pre") {
+export function callGateAnswer(event: "pre" | "post" | "before", call: HookCall | undefined, thread: CallThread, conversation: string): JsonObject {
+  if (!call) return {}
+  const route = hookRoute(call, thread)
+  if (route.kind === "deny" && event !== "post") {
     hostLog("routing", "native call denied", { tool: call.tool_name, conversation, family: route.family, rule: route.rule })
     return { decision: "block", reason: route.message, hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: route.message } }
   }
-  if (route.kind === "warn" && event === "post") {
+  if (route.kind === "warn" && event !== "pre") {
     hostLog("routing", "native call warned", { tool: call.tool_name, conversation, family: route.family, rule: route.rule })
-    return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: route.message } }
+    return { hookSpecificOutput: { hookEventName: event === "before" ? "PreToolUse" : "PostToolUse", additionalContext: route.message } }
   }
   return {}
 }

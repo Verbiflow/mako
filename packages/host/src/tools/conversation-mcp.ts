@@ -55,15 +55,18 @@ const MAKO_INSTRUCTIONS = [
 type Route = "computer" | "mako"
 
 /**
- * A harness's command hook posting one tool call (`/calls/<pre|post>`):
+ * A harness's command hook posting one tool call (`/calls/<pre|post|before>`):
  * what it prints back, decided for the grant's conversation. A hook that gets
  * no answer goes on, so a failure here never stops a call.
  */
-export type CallGate = (conversationId: string, event: "pre" | "post", body: JsonValue) => JsonValue
+export type CallGate = (conversationId: string, event: CallGateEvent, body: JsonValue) => JsonValue
 
-function gatePath(url: string | undefined): "pre" | "post" | undefined {
+/** `pre` and `post` hook a call before and after it runs; `before` is a harness that reads a note before the call as well as a deny. */
+export type CallGateEvent = "pre" | "post" | "before"
+
+function gatePath(url: string | undefined): CallGateEvent | undefined {
   const path = url?.split("?", 1)[0]
-  return path === "/calls/pre" ? "pre" : path === "/calls/post" ? "post" : undefined
+  return path === "/calls/pre" ? "pre" : path === "/calls/post" ? "post" : path === "/calls/before" ? "before" : undefined
 }
 
 /** By path alone: OpenCode adds its own query (`?codemode=false`) to every server's address. */

@@ -418,7 +418,7 @@ export interface NativeTool {
   server?: string
 }
 
-const BROWSER_SERVERS = /^(claude-in-chrome|claude[_-]browser|computer-use|playwright|puppeteer|chrome-devtools|browser-?use|browsermcp|cursor-ide-browser|cursor-browser-extension)$/i
+const BROWSER_SERVERS = /^(claude-in-chrome|claude[_-]browser|computer-use|playwright|puppeteer|chrome-devtools|browser-?use|browsermcp|cursor-ide-browser|cursor-browser-extension|node_repl|cua_repl)$/i
 
 /** The route of a harness's own tool: its worktree and browser tools are Mako's where Mako's own are there. */
 export function routeNativeTool(thread: CallThread, call: NativeTool, names: ToolNames = bareNames): CallRoute {

@@ -22,7 +22,7 @@ import type { StubMako } from "./stub-mako.ts"
  */
 
 /** The harnesses whose driver routes each shell call (`NativeCallsCapability` per-call): a command routing denies there never ran. */
-const ROUTED_CALLS = new Set(["claude", "cursor", "grok", "devin"])
+const ROUTED_CALLS = new Set(["claude", "cursor", "grok", "devin", "codex", "opencode"])
 
 /** Each harness's mode that asks before a command runs; Cursor has only full access. */
 export const ASKING_MODE = new Map([["claude", "default"], ["codex", "access:ask"], ["opencode", "access:ask"], ["grok", "access:ask"], ["devin", "accept-edits"]])

@@ -9,6 +9,10 @@ import { join } from "node:path"
 import { callGateAnswer, HookCall } from "@mako/host/harnesses/call-gate"
 import { GROK_CALL_HOOKS } from "@mako/host/harnesses/grok/call-hooks"
 import { prepareDevinMcp } from "@mako/host/harnesses/devin/session-mcp"
+import { codexCallsConfig } from "@mako/host/harnesses/codex/routing"
+import { configureOpenCodeCalls } from "@mako/host/harnesses/opencode/call-plugin"
+import { pathToFileURL } from "node:url"
+import { codexHookHash } from "@mako/host/harnesses/codex/authoring"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { NATIVE_OVERRIDE, routeNativeTool, routeShellCall, shellLine, shellWords, type CallThread } from "@mako/host/contracts/native-calls"
 
@@ -161,6 +165,28 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   assert.deepEqual(callGateAnswer("pre", HookCall.safeParse("not json we know").data, inWorktree, "c"), {}, "an unreadable call goes on")
 }
 
+// Codex: its hooks ride in the session config with their trust; `before` answers a deny or a note before the call, and its own browser tools by server.
+{
+  assert.deepEqual(codexCallsConfig("c", undefined), {}, "no gate, no hooks")
+  const Config = z.object({ hooks: z.object({ PreToolUse: z.array(z.object({ matcher: z.string(), hooks: z.array(z.record(z.string(), z.json())) })), state: z.record(z.string(), z.object({ trusted_hash: z.string() })) }) })
+  const config = Config.parse(codexCallsConfig("c", { url: "http://127.0.0.1:4100/calls/before", token: "t0k" }))
+  assert.deepEqual(config.hooks.PreToolUse.map((group) => group.matcher), ["Bash", "^mcp__(node_repl|cua_repl)__js(_reset)?$"])
+  assert.deepEqual(Object.keys(config.hooks.state), ["/<session-flags>/config.toml:pre_tool_use:0:0", "/<session-flags>/config.toml:pre_tool_use:1:0"])
+  config.hooks.PreToolUse.forEach((group, index) => {
+    const handler = group.hooks[0]!
+    assert.equal(config.hooks.state[`/<session-flags>/config.toml:pre_tool_use:${index}:0`]?.trusted_hash, codexHookHash("PreToolUse", group.matcher, handler), "each hook is trusted as Codex hashes it")
+    assert.match(String(handler.command), /curl .*'Authorization: Bearer t0k' 'http:\/\/127\.0\.0\.1:4100\/calls\/before'/)
+  })
+  const before = (body: JsonObject) => callGateAnswer("before", HookCall.parse(body), inWorktree, "c")
+  const Specific = z.object({ hookSpecificOutput: z.object({ hookEventName: z.string(), permissionDecision: z.string().optional(), additionalContext: z.string().optional() }) })
+  assert.equal(Specific.parse(before({ tool_name: "Bash", tool_input: { command: "gh pr create --fill" } })).hookSpecificOutput.permissionDecision, "deny")
+  const warned = Specific.parse(before({ tool_name: "Bash", tool_input: { command: "gh pr checks" } })).hookSpecificOutput
+  assert.equal(warned.hookEventName, "PreToolUse")
+  assert.equal(warned.permissionDecision, undefined, "a note before the call carries no decision, which Codex would fail on")
+  assert.match(warned.additionalContext ?? "", /pull_request_status/)
+  assert.equal(Specific.parse(before({ tool_name: "mcp__node_repl__js", tool_input: { code: "1" } })).hookSpecificOutput.permissionDecision, "deny", "Codex's own browser goes to mako-computer")
+}
+
 // The conversation server answers a hook's post for the grant's conversation, and refuses one without a grant.
 {
   const seen: string[] = []
@@ -177,6 +203,34 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
     assert.match(z.object({ reason: z.string() }).parse(await answered.json()).reason, /pull_request_open/)
     assert.deepEqual(seen, ["conv pre"])
     assert.equal((await post({})).status, 401)
+  } finally {
+    servers.close()
+  }
+}
+
+// OpenCode: Mako's plugin is named after the person's own, and the plugin itself throws a deny and appends a note, from the gate's answers.
+{
+  const servers = await startConversationMcp({ authorizeAgent() {} }, async () => ({}), [() => {}], (conversation, event, body) => callGateAnswer(event, HookCall.safeParse(body).data, inWorktree, conversation))
+  try {
+    const grant = servers.mint("b", "conv")
+    const env: NodeJS.ProcessEnv = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugins: ["their-plugin"], agents: {} }) }
+    await configureOpenCodeCalls(env, "conv", { url: grant.makoUrl!.replace(/\/mako$/, "/calls"), token: grant.token })
+    const Plugin = z.object({ package: z.string(), options: z.object({ url: z.string(), token: z.string() }) })
+    const config = z.object({ plugins: z.tuple([z.literal("their-plugin"), Plugin]), agents: z.object({}) }).parse(JSON.parse(env.OPENCODE_CONFIG_CONTENT!))
+    const plugin = config.plugins[1]
+    const Module = z.object({ default: z.object({ id: z.literal("mako-calls"), setup: z.instanceof(Function) }) })
+    const loaded = Module.parse(await import(pathToFileURL(join(plugin.package, "server.js")).href)).default
+    type HookedCall = { tool: string; input: JsonObject; status?: string; result?: { content: string } }
+    const hooks = new Map<string, (call: HookedCall) => Promise<void>>()
+    await loaded.setup({ options: plugin.options, tool: { hook: async (name: string, run: (call: HookedCall) => Promise<void>) => { hooks.set(name, run) } } })
+    await assert.rejects(hooks.get("execute.before")!({ tool: "shell", input: { command: "gh pr create --fill", workdir: worktree } }), /pull_request_open/)
+    await hooks.get("execute.before")!({ tool: "shell", input: { command: "npm test", workdir: worktree } })
+    const after: HookedCall = { tool: "shell", input: { command: "gh pr checks", workdir: worktree }, status: "completed", result: { content: "all green" } }
+    await hooks.get("execute.after")!(after)
+    assert.match(after.result?.content ?? "", /^all green\n\n.*pull_request_status/)
+    const env2: NodeJS.ProcessEnv = {}
+    await configureOpenCodeCalls(env2, "conv", undefined)
+    assert.equal(env2.OPENCODE_CONFIG_CONTENT, undefined, "no gate, no plugin")
   } finally {
     servers.close()
   }
