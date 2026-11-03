@@ -5,6 +5,7 @@ import { KeptRestoreSchema } from "./kept-restore.js"
 import type { StoredChunk } from "./record-chunks.js"
 import type { ExportPage, RecordStore } from "./record-store.js"
 import { UploadBudget, type UploadReservation } from "./upload-budget.js"
+import { inSlices } from "./slices.js"
 
 export type { RecordRemote } from "@mako/protocol/records"
 
@@ -208,7 +209,7 @@ export class RecordSync {
       // A batch at a time, so a long session is never held whole: the remote's mirror moves with each part pushed.
       const batch: ExportPage = { limit: PUSH_VERSIONS }
       if (cursor !== undefined) batch.cursor = cursor
-      const page = this.#store.exportFor(this.#remote.id, harness, nativeId, batch)
+      const page = await inSlices(this.#store.exportSteps(this.#remote.id, harness, nativeId, batch))
       if (!page?.bundle.units.length) break
       let moved = false
       for (const whole of splitBundle(page.bundle)) {
