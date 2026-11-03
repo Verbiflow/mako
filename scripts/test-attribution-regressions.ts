@@ -15,11 +15,13 @@ import { ChildCalls } from "@mako/host/attribution/child-calls"
 import { outsideFolders } from "@mako/host/attribution/index"
 import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribution/ports"
 import { readOnlyCommand } from "@mako/host/attribution/read-only"
+import { untrackable } from "@mako/host/attribution/paths"
 import { ranTexts, SCRIPT_LIMIT } from "@mako/host/attribution/scripts"
 import { partition, shares, side, storedView, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { JournalStore } from "@mako/host/attribution/journal-store"
 import { contentRef } from "@mako/host/attribution/content"
+import { attribute, Evidence, reaches } from "@mako/host/attribution/evidence"
 
 /*
  * Shapes of failures found by replaying real concurrent sessions through the
@@ -1784,4 +1786,260 @@ test("a script outside the checkout counts only as it was when the command start
   const wind = author("wind.png")
   assert.ok(wind.certainty === "window", JSON.stringify(wind))
   await tracker.close()
+})
+
+test("an attribution backlog yields to I/O and takes evidence arriving during its pass", async () => {
+  const clock = new FakeClock(), events = new FakeEventSource(), fs = new FakeFileSystem(clock, events)
+  const storage = mkdtempSync(join(tmpdir(), "mako-attribution-backlog-"))
+  const tracker = await LaptopTracker.open({ fs, events, clock, storage, device: "backlog" })
+  const release = tracker.hold()
+  let timer: ReturnType<typeof setInterval> | undefined
+  try {
+    fs.write("/w/base", "base\n")
+    await tracker.track({ id: "root", path: "/w", kind: "workspace" })
+    for (let i = 0; i < 1500; i++) tracker.reported({
+      thread: "old", session: "old", call: `old-${i}`, status: "completed",
+      startedAt: clock.now() - 5000, endedAt: clock.now() - 4000, effects: [],
+    })
+    clock.advance(100)
+    for (let i = 0; i < 800; i++) fs.write(`/w/file-${i}.txt`, `change ${i}\n`)
+    await tracker.settled()
+    const changedAt = clock.now()
+    clock.advance(20_000)
+    let ticks = 0
+    timer = setInterval(() => { ticks++; tracker.sweep() }, 1)
+    tracker.reported({ thread: "writer", session: "writer", call: "first", status: "completed", startedAt: changedAt, endedAt: changedAt, effects: [] })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    tracker.reported({ thread: "writer", session: "writer", call: "late", status: "completed", startedAt: changedAt, endedAt: changedAt,
+      effects: [{ kind: "write", path: "/w/file-0.txt", content: "change 0\n" }] })
+    release()
+    await tracker.settled()
+    assert.ok(ticks > 1, `timers ran ${ticks} times while the backlog was attributed`)
+    const entry = tracker.changes(0).find((entry) => entry.path === "file-0.txt")!
+    assert.ok(entry)
+    const author = tracker.authorOf(entry.seq)
+    assert.ok(author?.certainty === "exact" && author.author.thread === "writer", JSON.stringify(author))
+  } finally {
+    clearInterval(timer)
+    release()
+    await tracker.close()
+    rmSync(storage, { recursive: true, force: true })
+  }
+})
+
+test("cached attribution spans follow late marks, exact bounds and pruning", () => {
+  const evidence = new Evidence()
+  const fields = { session: "session", thread: "thread" }
+  const turn = evidence.mark({ ...fields, kind: "turn", id: "turn", edge: "start", at: 100 })
+  const interval = evidence.mark({ ...fields, kind: "call", id: "call", edge: "start", at: 110 })
+  assert.deepEqual(evidence.span(turn), { start: 100, end: null })
+  assert.deepEqual(evidence.span(interval), { start: 110, end: null })
+  const report = { ...fields, call: "call", status: "running" as const, effects: [] }
+  evidence.report(report)
+  assert.deepEqual(evidence.callSpan(report), { start: 110, end: null })
+  evidence.mark({ ...fields, kind: "call", id: "call", edge: "end", at: 150 })
+  assert.deepEqual(evidence.callSpan(report), { start: 110, end: 150 })
+  evidence.report({ ...report, status: "completed", exact: { start: 120, end: 140 } })
+  assert.deepEqual(evidence.span(interval), { start: 120, end: 150, exact: true })
+  assert.deepEqual(evidence.span(turn), { start: 100, end: null, exact: true })
+  evidence.prune(10_000)
+  assert.deepEqual(evidence.span(turn), { start: 100, end: null })
+})
+
+/**
+ * The longest the event loop went without a turn while `work` ran, in
+ * milliseconds: by the process's own CPU time when that's less, so a busy
+ * machine scheduling something else meanwhile doesn't count as our slice.
+ */
+async function longestSlice(work: () => Promise<void>): Promise<number> {
+  const cpu = () => {
+    const used = process.cpuUsage()
+    return (used.user + used.system) / 1000
+  }
+  let last = performance.now(), lastCpu = cpu(), longest = 0, running = true
+  const measure = () => {
+    const now = performance.now(), nowCpu = cpu()
+    longest = Math.max(longest, Math.min(now - last, nowCpu - lastCpu))
+    last = now
+    lastCpu = nowCpu
+  }
+  const tick = () => {
+    measure()
+    if (running) setImmediate(tick)
+  }
+  setImmediate(tick)
+  try {
+    await work()
+  } finally {
+    running = false
+    measure()
+  }
+  return longest
+}
+
+/** A file system answering on the event loop's next turn, as the disk does, rather than all at once as memory can. */
+function onTheLoop(fs: FakeFileSystem): TrackerFileSystem {
+  const later = <T>(value: Promise<T>) => value.then((found) => new Promise<T>((resolve) => setImmediate(() => resolve(found))))
+  return { stat: (path) => later(fs.stat(path)), read: (path) => later(fs.read(path)), walk: (root, skip) => later(fs.walk(root, skip)) }
+}
+
+test("no attribution slice blocks the event loop long on a 1,500-change backlog against 6,000 records", async () => {
+  const clock = new FakeClock(), events = new FakeEventSource(), fs = new FakeFileSystem(clock, events)
+  const storage = mkdtempSync(join(tmpdir(), "mako-attribution-slice-"))
+  const tracker = await LaptopTracker.open({ fs: onTheLoop(fs), events, clock, storage, device: "slice" })
+  const release = tracker.hold()
+  const sessions = 20
+  try {
+    fs.write("/w/base", "base\n")
+    await tracker.track({ id: "root", path: "/w", kind: "workspace" })
+    const start = clock.now()
+    for (let s = 0; s < sessions; s++)
+      tracker.activity({ kind: "turn", id: `turn-${s}`, edge: "start", at: start, thread: `t${s}`, session: `s${s}`, checkout: "/w", cwd: "/w" })
+    for (let i = 0; i < 6000 - sessions; i++) {
+      const at = start + 10 + i
+      tracker.reported({
+        thread: `t${i % sessions}`, session: `s${i % sessions}`, turn: `turn-${i % sessions}`, call: `c${i}`, status: "completed", startedAt: at, endedAt: at + 1,
+        exact: { start: at, end: at + 1 }, checkout: "/w", effects: [{ kind: "command", command: `npm test -- pkg-${i % 50}/spec.ts`, cwd: "/w" }],
+      })
+    }
+    // What each command ran is read once its report comes: the setup's own reads, done before anything is measured.
+    await tracker.settled()
+    clock.advance(10_000)
+    // The watcher hears a burst in a few batches; the writes themselves are the test's own work.
+    for (let i = 0; i < 1500; i++) fs.write(`/w/pkg-${i % 50}/file-${i}.txt`, `change ${i}\n`)
+    const backlog = await longestSlice(() => tracker.settled())
+    const changedAt = clock.now()
+    clock.advance(1000)
+    const evidence = await longestSlice(async () => {
+      for (let i = 0; i < 50; i++) {
+        tracker.reported({ thread: "t0", session: "s0", turn: "turn-0", call: `late-${i}`, status: "completed", startedAt: changedAt, endedAt: changedAt + 1,
+          exact: { start: changedAt, end: changedAt + 1 }, effects: i === 49 ? [{ kind: "write", path: "/w/pkg-0/file-0.txt", content: "change 0\n" }] : [] })
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      await tracker.settled()
+    })
+    const entry = tracker.changes(0).find((item) => item.path === "pkg-0/file-0.txt")
+    assert.ok(entry)
+    const author = tracker.authorOf(entry.seq)
+    assert.ok(author?.certainty === "exact" && author.author.thread === "t0", JSON.stringify(author))
+    // Once nothing can reach them, the whole backlog settles.
+    clock.advance(60_000)
+    release()
+    const last = tracker.changes(0, 5000).at(-1)!.seq
+    const settling = await longestSlice(async () => {
+      tracker.sweep()
+      // Changes settle in seq order: the last one settles last.
+      for (let turns = 0; !tracker.store.entry(last)?.settled && turns < 100_000; turns++) await new Promise<void>((resolve) => setImmediate(resolve))
+    })
+    assert.equal(tracker.store.entries(0, 5000).filter((item) => !item.settled).length, 0)
+    assert.ok(backlog < 50, `journaling the backlog blocked the event loop for ${backlog.toFixed(1)} ms`)
+    assert.ok(evidence < 50, `attributing the backlog again blocked the event loop for ${evidence.toFixed(1)} ms`)
+    assert.ok(settling < 50, `settling the backlog blocked the event loop for ${settling.toFixed(1)} ms`)
+  } finally {
+    release()
+    await tracker.close()
+    rmSync(storage, { recursive: true, force: true })
+  }
+})
+
+test("build output and copies of it never reach attribution, though Git doesn't ignore them", async () => {
+  // A Fin's worktree holds a copy of an old build beside the new one. Its
+  // `.gitignore` names `dist`, never `dist-old`: hundreds of files the
+  // watcher hears and a rescan finds, none of them anyone's work.
+  const w = await world({ "src/a.ts": "export const a = 1\n", ".gitignore": "dist\n" })
+  const output = ["dist-old/index.js", "packages/host/dist-old/index.js", "build.bak/app.js", "dist (2)/index.js", "node_modules copy/p/index.js", ".turbo/cache/x.log", "pkg/__pycache__/m.pyc", "dist_2/index.js"]
+  w.mark("turn", "T1", "t1", "start")
+  for (const path of output) w.write(path, "built\n")
+  w.write("src/dist-old.ts", "export const old = 1\n")
+  w.write("src/a.ts", "export const a = 2\n")
+  await w.tracker.settled()
+  const journaled = () => new Set(w.tracker.changes(0).map((entry) => entry.path))
+  assert.deepEqual([...journaled()].sort(), ["src/a.ts", "src/dist-old.ts"])
+  // Nor does a rescan after lost events walk into them.
+  w.events.drop()
+  for (const path of output) w.write(path, "built again\n")
+  w.events.restore()
+  await w.tracker.settled()
+  assert.deepEqual([...journaled()].sort(), ["src/a.ts", "src/dist-old.ts"])
+  assert.ok(output.every((path) => untrackable(path, false)))
+  assert.ok(!untrackable("dist-old/index.js", true), "a file Git tracks is tracked wherever it is")
+  assert.ok(["src/dist-old.ts", "distance/a.ts", "build-tools/run.ts", "outline/a.md"].every((path) => !untrackable(path, false)))
+  await w.tracker.close()
+})
+
+test("attributing again only what new evidence reaches gives every change the author attributing all of them would", () => {
+  // Random sessions mark turns, calls and background work, report effects
+  // (exact bounds, detached work, refusals), run scripts and Mako writes;
+  // after each, the changes its reach takes in are attributed again, as the
+  // tracker does. Every change must then stand where a full pass puts it.
+  let seed = 7
+  const random = () => ((seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31) / 2 ** 31)
+  const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)]!
+  const paths = ["/w/a.ts", "/w/src/b.ts", "/w/src/c.ts", "/w/lib/d.ts", "/v/e.ts"]
+  for (let trial = 0; trial < 150; trial++) {
+    const evidence = new Evidence()
+    const sessions = ["s0", "s1", "s2"]
+    const changes: { change: Parameters<typeof attribute>[0]; author: Attribution }[] = []
+    const open: { session: string; kind: "turn" | "call" | "background"; id: string }[] = []
+    const writes: ReturnType<Evidence["makoStart"]>[] = []
+    let now = 1_000_000
+    let ids = 0
+    const proved = (item: (typeof changes)[number]) => {
+      if (item.author.certainty === "exact") evidence.proved(item.author.author, item.change.path, item.change.changedAt)
+    }
+    for (let step = 0; step < 60; step++) {
+      now += Math.floor(random() * 4_000)
+      const session = pick(sessions)
+      const thread = `t-${session}`
+      const roll = random()
+      if (roll < 0.25) {
+        const path = pick(paths)
+        const change: (typeof changes)[number]["change"] = { path, kind: "modify", changedAt: now - Math.floor(random() * 3_000), root: path.startsWith("/w") ? "/w" : "/v", before: "a\n", after: `a\n${step}\n` }
+        if (random() < 0.15) change.heard = now
+        if (random() < 0.1) change.lost = { from: now - 20_000, to: now }
+        const item = { change, author: attribute(change, evidence) }
+        changes.push(item)
+        proved(item)
+      } else if (roll < 0.5) {
+        const ending = open.length && random() < 0.5 ? open.splice(Math.floor(random() * open.length), 1)[0]! : undefined
+        const kind = ending?.kind ?? pick(["turn", "call", "call", "background"] as const)
+        const id = ending?.id ?? `${kind}-${ids++}`
+        const at = now - Math.floor(random() * 2_000)
+        const named = random() < 0.4 ? [pick(paths)] : undefined
+        evidence.mark({ kind, id, edge: ending ? "end" : "start", at, thread, session: ending?.session ?? session, turn: kind === "turn" ? undefined : "turn-x", checkout: "/w", cwd: pick(["/w", "/w/src", "/v"]), named, ...(random() < 0.1 && { readOnly: true as const }) })
+        if (!ending) open.push({ session, kind, id })
+      } else if (roll < 0.8) {
+        const call = random() < 0.5 && ids ? `call-${Math.floor(random() * ids)}` : `call-${ids++}`
+        const start = now - Math.floor(random() * 6_000)
+        const end = start + Math.floor(random() * 3_000)
+        const target = pick(paths)
+        const choices: ReportedEffect[][] = [
+          [],
+          [{ kind: "write", path: target, content: `a\n${Math.floor(random() * 60)}\n` }],
+          [{ kind: "modify", path: target }],
+          [{ kind: "command", command: `node gen.js ${target}`, cwd: "/w" }],
+          [{ kind: "read", path: target }],
+        ]
+        const effects = pick(choices)
+        const exact = random() < 0.5 ? { start, end, ...(random() < 0.1 && { detached: true as const }) } : undefined
+        evidence.report({ thread, session, call, status: pick(["completed", "completed", "running", "refused"] as const), startedAt: start, ...(random() < 0.8 && { endedAt: end }), ...(exact && { exact }), checkout: "/w", effects })
+        if (random() < 0.2) evidence.ran(session, call, [{ text: `writeFileSync("${pick(paths)}")`, folders: ["/w"] }])
+      } else if (roll < 0.9) {
+        writes.push(evidence.makoStart({ kind: pick(["git", "editor"] as const), operation: "git stash pop", paths: [pick(["/w", "/w/src", "/v"])] }, now - Math.floor(random() * 1_000)))
+      } else if (writes.length) {
+        evidence.makoEnd(writes.splice(Math.floor(random() * writes.length), 1)[0]!, now)
+      }
+      // A pass, rounds until no reach is left, as the tracker runs it.
+      for (let reach = evidence.takeReaches(); reach.length; reach = evidence.takeReaches())
+        for (const item of changes) {
+          if (!reach.some((each) => reaches(each, item.change, item.author))) continue
+          item.author = attribute(item.change, evidence)
+          proved(item)
+        }
+      for (const [index, item] of changes.entries()) {
+        const full = attribute(item.change, evidence)
+        assert.deepEqual(item.author, full, `trial ${trial}, step ${step}: change ${index} on ${item.change.path} at ${item.change.changedAt} is stale`)
+      }
+    }
+  }
 })
