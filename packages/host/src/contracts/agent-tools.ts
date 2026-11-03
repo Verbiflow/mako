@@ -512,7 +512,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_stop",
-      description: `Stop one of this Thread's ${FIN_WORD}s (its running turn, or its process and everything it started), or all of them.`,
+      description: `Stop one of this Thread's ${FIN_WORD}s for good (its running turn, or its process and everything it started), or all of them: it takes no more messages. To stop its turn and redirect it, agents_send with deliver: interrupt.`,
       fields: { child: "Its name or Thread ID, or all.", reason: "Why, for its transcript and your digest." },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
