@@ -220,7 +220,18 @@ brief, the Apex's words, not the person's) together
 (`LiveStartOptions.parent`), at an access tier no higher than its Apex's,
 here only (`place` other than `here` is refused); past a tree's running
 budget it queues with why, past its started budget it is refused with the
-count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. One a
+count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
+this Mac's room it queues too, behind every Fin of any tree that waits for
+room ("Queued: this Mac is busy, 3 ahead"): `macSlots` gives the person a
+seventh of the cores and 4 GB, and each working Fin `FIN_LOAD` (2) cores of
+load and `FIN_MEMORY`, measured 2026-11-03 when 13 Fins at once held a 14-core
+Mac's load at 26.8 and its host and sync daemon timed out the person's
+requests; load the working Fins don't account for is the person's own work,
+a Mac always runs one, and one out of swap or short of disk runs none.
+`MAKO_FIN_SLOTS` sets the count instead, as a test's host does whatever
+machine runs it. The start's answer carries
+the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
+Mac frees up (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
 across the host), its end written once. A report (`agents_report`, else one
@@ -265,6 +276,23 @@ its host takes direct messages; one without it offers no Reply or `@`.
 `test:orch-front-door` covers both ways (`addressedFromTheApex`: no Apex
 turn, dedupe, steer and queue, refusals), and `bench:orch-route` times a
 message in a Fin's tab, addressed, and routed through a scripted Apex.
+
+How a message reaches a working Fin is its sender's choice, `agents_send`'s
+`deliver`: `queue` (the default) after its turn, for more to do; `steer` into
+the turn it runs, for a correction to what it's doing now; `interrupt`, which
+stops that turn (`LiveConversations.interrupt`) and starts the next with the
+message, ahead of what was queued, which still follows in order. An idle Fin
+takes any as its next turn. A direct message, a redirect and an answer steer.
+A steer queues the message first and steers that request (`steer-queued`), so
+one the harness refuses, then or when its turn ends (Cursor's `answersOnEnd`),
+stays where it was queued and nothing sent after it overtakes it; the call
+waits `STEER_WAIT_MS` and `STEER_ANSWER_MS` at most, so a steer Cursor holds
+while its subagent runs answers before it's taken. The result's `hears` says,
+in one sentence, when the Fin hears it on its own harness, never the
+sender's: the driver's `SteerCapability.hears`, seen on a real run
+(`scripts/probe-steer-semantics.ts`). `test:orch-deliver` covers each choice
+across harnesses, and `eval:orch-tools`' `deliver` cases
+(`cases-deliver.ndjson`) whether an agent picks the right one.
 
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a
@@ -2130,6 +2158,13 @@ untitled Session's tab shows its agent's name, never a shared placeholder. A for
 joins its parent's Thread as a tab unless Option-click asks for a new one.
 Moves are per Thread; no control offers to move one Session.
 
+This is changing: a Thread becomes one conversation (`docs/one-conversation.md`).
+The Thread store's split of every multi-Session Thread, forks and `+` as
+Threads beside their source, and shared places (`thread_places`, `placeOf`)
+are built behind `ThreadStoreOptions.oneConversation`, off except on an
+isolated host with `MAKO_ONE_CONVERSATION=1`; the windows' half is listed
+there. `npm run test:thread-split` covers the split.
+
 The composer groups file attachments, screenshots, references, skills, and MCP
 settings under one + popover. `composer.controls` contributions render inside
 that menu and may dismiss it before capture. Three sigils, each one gesture:
@@ -3346,10 +3381,15 @@ driver (`--live` a real turn, `--live-compaction` a real summary), and
 `packages/sessions/test/cursor-server-summary.mjs` the saved marker.
 
 Steering is a capability with a kind, not a command. `step` folds the message
-into the running turn at the agent's next step (Claude, Codex, Devin);
-`interrupt` cancels the current step and continues with the message (Cursor).
-Grok queues a concurrent prompt behind the whole turn, so it advertises no
-steering and messages queue honestly. Enter steers a steerable running turn and
+into the running turn at the agent's next step (Claude, Codex, Grok through
+`_x.ai/interject`, OpenCode, Devin); `interrupt` cancels the current step and
+continues with the message (Cursor). `hears` says when the agent hears one, as
+`npx tsx scripts/probe-steer-semantics.ts [<harness>...] [--cursor]` reads it on
+each real harness against the scripted model (Cursor on its own): a 15 s
+command steered 4 s in. Claude, OpenCode and Grok hear it once the command
+returns; Codex's command yields to the model at once and carries on; Devin
+hears it when its command hands back, which it does by itself after about 10 s;
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.
@@ -4277,10 +4317,19 @@ within `READ_MS` (25 ms). A Cursor chat's fold, a view's write, and a fold's
 comparison with what its listeners hold run as `Steps` `inSlices`, and a
 follow replaces from the first entry that changed, not from the start of its
 exchange: a headless agent's chat is one exchange, so each step it wrote sent
-the whole conversation again. `test/loop-holds.mjs` times each on a 25MB
-Cursor chat against a 50 ms budget. `npm run bench:syncd-loop` runs the real
-daemon on a large chat as it goes on (`--store <store.db>` for a copy of a
-real one, `--writer-holds-ms` to play a backfill pass's lock), with a window
+the whole conversation again. A Cursor SDK agent's run, which a Fin's
+checkpoints fold again from its prompt, replays as `Steps` too: its events
+read from `index.db` a page at a time and projected and reduced between
+yields (`cursorSdkRunEventSteps`, `cursorRunEntrySteps`); one replay in a
+step held the daemon 8 to 14 s on a loaded Mac. A push's export reads 500
+rows and passes at most 2,000 units a read (`RecordStore.exportSteps`), and
+what the account holds after it is noted 500 units a turn (`remoteHolds`).
+`test/loop-holds.mjs` times each on a 25MB Cursor chat, a push of 30,000
+versions and an SDK run of 23,400 events against a 50 ms budget. `npm run
+bench:syncd-loop` runs the real daemon on a large chat as it goes on
+(`--store <store.db>` for a copy of a real one, `--sdk <dir>` for copies of an
+SDK agent's `store.db` and of an `index.db` of its rows, `--writer-holds-ms`
+to play a backfill pass's lock), with a window
 reading it and the host asking its status, and fails when a ping waited past
 50 ms or a status read failed. A status read that fails changes nothing the
 rail shows: `SessionUploads` keeps the status the daemon last answered.
@@ -4312,6 +4361,18 @@ correlation ID one disclosure away. A refusal carries the gateway's `detail`
 (`GatewayHttpError.detail`: which chunk, and why). `test/record-refused-chunks.mjs`,
 `test/sync-not-synced.mjs`, `test/record-reconcile.mjs` and `npm run
 test:sync-status-ui` cover these.
+
+A Session is never "not synced" on a token of Mako's own that ran out. Only
+the host can renew the connection token the daemon's links carry, so a link
+says when its token is due (`renewAt`, the host's `renewAtMs`) and the
+daemon's `LinkCredential` asks the host for a fresh one (a `link-due` event,
+`ThreadCatalog.onLinkDue`) before a call goes on a due one; a call the gateway
+refuses with a 401 renews once and goes again (`GatewayHttpOptions.renew`).
+After the first scope the host gives its links before the scope and each on
+its own (`SessionUploads.#give`): a scope the held daemon didn't answer in 3 s
+once kept every renewed token from it, and six Fins' Sessions went "not
+synced" on "The connection token has expired". `test/link-renewal.mjs` and
+`test-account-threads.ts` cover these.
 
 The sync daemon and the backfill's process write one record store, the same
 newest pack in turn under its write lock. A process's buffer of pack entries

@@ -36,13 +36,14 @@ import {
   readCursorSdkAgent,
   readCursorSdkAgentStamps,
   readCursorSdkRunEvents,
+  cursorSdkRunEventSteps,
   removeCursorSdkAgent,
   type CursorSdkAgentMatch,
   type CursorSdkAgentRecord,
   type CursorSdkAgentStamp,
   type CursorSdkRun,
 } from "./cursor-sdk-index.js"
-import { cursorRunEntries, type CursorRunCompaction, type CursorSdkReplay } from "../cursor-sdk-content.js"
+import { cursorRunEntries, cursorRunEntrySteps, type CursorRunCompaction, type CursorSdkReplay } from "../cursor-sdk-content.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
 import {
   cursorChatIdentity,
@@ -1391,8 +1392,11 @@ export class CursorProvider implements SessionProvider {
           })
           unread()
           if (!span) continue
-          drawReplay(this.replayRun(database, input, span.run, hash, index, span.end, sink))
-          for (let passed = index + 1; passed < span.end; passed++) stop(passed)
+          drawReplay(yield* this.replayRun(database, input, span.run, hash, index, span.end, sink))
+          for (let passed = index + 1; passed < span.end; passed++) {
+            yield
+            stop(passed)
+          }
           index = span.end - 1
           continue
         }
@@ -1640,7 +1644,7 @@ export class CursorProvider implements SessionProvider {
    * A call its stream never ended takes the result the run checkpointed in
    * `hashes[from..end)`, read only when there is such a call.
    */
-  private replayRun(database: DatabaseSync, input: FoldInput, run: CursorSdkRun, prompt: string, from: number, end: number, sink: EntrySink): DecodedEntry[] {
+  private *replayRun(database: DatabaseSync, input: FoldInput, run: CursorSdkRun, prompt: string, from: number, end: number, sink: EntrySink): Steps<DecodedEntry[]> {
     const replay: CursorSdkReplay = {
       runId: run.runId,
       prompt,
@@ -1651,7 +1655,8 @@ export class CursorProvider implements SessionProvider {
     if (ending) replay.ending = ending
     const compactions = this.runCompactions(input, run.runId)
     if (compactions.length) replay.compactions = compactions
-    return cursorRunEntries(readCursorSdkRunEvents(this.stores, input.indexPath, run.runId), replay, { file: input.indexFile, recorded: (item, record) => sink.recorded(item, record) })
+    const events = yield* cursorSdkRunEventSteps(this.stores, input.indexPath, run.runId)
+    return yield* cursorRunEntrySteps(events, replay, { file: input.indexFile, recorded: (item, record) => sink.recorded(item, record) })
   }
 
   /**

@@ -617,7 +617,7 @@ async function bench(BrowserWindow, base, root) {
     commitsPerSecond: perSecond(tally.commits),
     areas: Object.fromEntries(Object.entries(tally.areas).map(([area, { commits, renders, ms }]) => [area, { commitsPerSecond: perSecond(commits), rendersPerSecond: perSecond(renders), renderMsPerSecond: perSecond(ms) }])),
     // The Fins' own components, then the most rendered of any: where a regression shows first.
-    componentRendersPerSecond: Object.fromEntries(["ChildTab", "ThreadRollup", "ChildRow", "AgentRow"].map((name) => [name, perSecond(tally.components[name] ?? 0)])),
+    componentRendersPerSecond: Object.fromEntries(["ChildTab", "ApexCrewLine", "ChildRow", "AgentRow"].map((name) => [name, perSecond(tally.components[name] ?? 0)])),
     mostRenderedPerSecond: Object.fromEntries(Object.entries(tally.components).toSorted((left, right) => right[1] - left[1]).slice(0, 12).map(([name, count]) => [name, perSecond(count)])),
     reactRenderMsPerSecond: perSecond(tally.renderMs),
     longestCommitMs: Math.round(tally.longestCommitMs * 10) / 10,

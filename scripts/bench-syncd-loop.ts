@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { performance } from "node:perf_hooks"
@@ -18,7 +18,9 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  *
  * A scratch home holds a Cursor chat of some 25 MB as `cursor-agent` keeps one (`store.db`: content-addressed blobs,
  * a root naming the messages rewritten at each step, large tool outputs and file snapshots among them), or a copy of a
- * real one (`--store <store.db>`, read once; the bench writes only its own copy). The real sync daemon (this
+ * real one (`--store <store.db>`, read once; the bench writes only its own copy), or a Cursor SDK agent as a Fin's
+ * runs (`--sdk <dir>`: copies of its `store.db` and of an `index.db` holding its rows, its newest run going on as the
+ * turn goes on, its events streamed into the index between checkpoints). The real sync daemon (this
  * checkout's build, or `--daemon <daemon-main.js>` for another's) runs on it as the host starts it, with the chat in
  * its scope and both links at a gateway stand-in in this process. Once the backfill has taken the chat and the account
  * holds it, the chat goes on: `--steps` steps of a turn, each its blobs and a new root, `--every-ms` apart. Meanwhile a
@@ -32,12 +34,13 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  * It fails (exit 1) when the longest ping waited past `--hold-ms` (50) or a status read timed out. `--cpu-prof <dir>`
  * writes the daemon's CPU profile there; `--out <file>` keeps the report.
  *
- *   npm run bench:syncd-loop [-- --daemon <daemon-main.js>] [--store <store.db> [--rows <n>] | --turns 2 --turn-steps 80] [--steps 40] [--every-ms 250] [--hold-ms 50] [--writer-holds-ms 2000] [--cpu-prof <dir>] [--out <file>] [--keep]
+ *   npm run bench:syncd-loop [-- --daemon <daemon-main.js>] [--store <store.db> [--rows <n>] | --sdk <dir> | --turns 2 --turn-steps 80] [--steps 40] [--every-ms 250] [--hold-ms 50] [--writer-holds-ms 2000] [--cpu-prof <dir>] [--out <file>] [--keep]
  */
 const { values } = parseArgs({
   options: {
     daemon: { type: "string" },
     store: { type: "string" },
+    sdk: { type: "string" },
     turns: { type: "string", default: "2" },
     "turn-steps": { type: "string", default: "80" },
     rows: { type: "string" },
@@ -118,6 +121,100 @@ function scratchChat(home: string, rows: readonly ChatRow[], agentId: string, up
   return { path, agentId, write, close: () => db.close() }
 }
 
+const IndexRowSchema = z.record(z.string(), z.union([z.string(), z.number(), z.null(), z.instanceof(Uint8Array)]))
+type IndexRow = z.infer<typeof IndexRowSchema>
+
+/** A Cursor SDK agent as copies of its stores hold it (`--sdk <dir>`: its `store.db`, and an `index.db` of its rows). */
+function sdkAgentOf(dir: string) {
+  const index = new DatabaseSync(join(dir, "index.db"), { readOnly: true })
+  try {
+    const all = (sql: string) => IndexRowSchema.array().parse(index.prepare(sql).all())
+    const agent = all("SELECT * FROM agents")[0]
+    const agentId = z.string().safeParse(agent?.["agent_id"])
+    if (!agent || !agentId.success) throw new Error(`${dir}/index.db names no agent`)
+    return {
+      ...rowsOf(join(dir, "store.db")),
+      agentId: agentId.data,
+      schema: all("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL").map((row) => String(row["sql"])),
+      agent,
+      runs: all("SELECT * FROM runs ORDER BY turn_number"),
+      events: all("SELECT * FROM run_events ORDER BY run_id, seq"),
+    }
+  }
+  finally {
+    index.close()
+  }
+}
+
+/**
+ * The SDK agent in the scratch home as the Cursor SDK keeps one: its blobs in `agents/agent-<sha256(id)>/store.db`,
+ * and in `index.db` its row, its runs and what its newest run streamed. Each `write` adds a step's blobs, points the
+ * agent and its run at the step's root, and adds the step's share of the run's events, as the SDK does at a checkpoint.
+ */
+function scratchSdkAgent(home: string, source: ReturnType<typeof sdkAgentOf>, upTo: number, steps: number) {
+  const root = join(home, ".mako", "cursor-sdk")
+  const folder = join(root, "agents", `agent-${createHash("sha256").update(source.agentId).digest("hex")}`)
+  mkdirSync(folder, { recursive: true })
+  const path = join(folder, "store.db")
+  const db = new DatabaseSync(path)
+  db.exec("PRAGMA journal_mode = WAL; CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+  db.prepare("INSERT INTO meta VALUES ('0', ?)").run(Buffer.from(JSON.stringify({ agentId: source.agentId, latestRootBlobId: "", name: "New Agent", mode: "default", createdAt: Date.now() })).toString("hex"))
+  const index = new DatabaseSync(join(root, "index.db"))
+  index.exec("PRAGMA journal_mode = WAL")
+  for (const sql of source.schema) index.exec(sql)
+  const insertRow = (table: string, row: IndexRow) => {
+    const columns = Object.keys(row)
+    index.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).run(...columns.map((column) => row[column] ?? null))
+  }
+  const live = source.runs.at(-1)?.["run_id"]
+  const checkpoint = (blobId: string) => JSON.stringify({ blobId, storeKind: "local-agent-store" })
+  insertRow("agents", { ...source.agent, status: "RUNNING", active_run_id: live ?? null, latest_checkpoint_ref_json: null })
+  for (const run of source.runs) insertRow("runs", run["run_id"] === live ? { ...run, status: "RUNNING", latest_checkpoint_ref_json: null } : run)
+  const liveEvents = source.events.filter((event) => event["run_id"] === live)
+  for (const event of source.events) if (event["run_id"] !== live) insertRow("run_events", event)
+  let events = 0
+  const addEvents = (until: number) => {
+    for (; events < Math.min(until, liveEvents.length); events++) insertRow("run_events", liveEvents[events]!)
+  }
+  addEvents(Math.round((liveEvents.length * upTo) / Math.max(1, source.rows.length)))
+  const perStep = Math.ceil((liveEvents.length - events) / Math.max(1, steps))
+  const insert = db.prepare("INSERT OR IGNORE INTO blobs VALUES (?, ?)")
+  const pointAt = (rootId: string) => {
+    const now = new Date().toISOString()
+    index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ?, updated_at = ?").run(checkpoint(rootId), now)
+    index.prepare("UPDATE runs SET latest_checkpoint_ref_json = ?, updated_at = ? WHERE run_id = ?").run(checkpoint(rootId), now, live ?? "")
+  }
+  let next = 0
+  /** Writes rows through the next root; false once there are none. */
+  const write = () => {
+    if (next >= source.rows.length) return false
+    let rootId: string | undefined
+    db.exec("BEGIN")
+    for (; next < source.rows.length; next++) {
+      const row = source.rows[next]!
+      insert.run(row.id, row.data)
+      if (row.root) {
+        rootId = row.id
+        next += 1
+        break
+      }
+    }
+    db.exec("COMMIT")
+    index.exec("BEGIN")
+    if (rootId) pointAt(rootId)
+    addEvents(events + perStep)
+    index.exec("COMMIT")
+    return true
+  }
+  while (next < upTo && write());
+  return { path, agentId: source.agentId, write, close: () => {
+    index.prepare("UPDATE runs SET status = 'FINISHED' WHERE run_id = ?").run(live ?? "")
+    index.prepare("UPDATE agents SET status = 'IDLE', active_run_id = NULL").run()
+    index.close()
+    db.close()
+  } }
+}
+
 /** Every `everyMs`, `ask` timed; a request that failed or timed out is counted apart. */
 function probe<Answer>(everyMs: number, ask: () => Promise<Answer>) {
   const ms: number[] = []
@@ -163,12 +260,13 @@ const clients: DaemonClient[] = []
 let failed = false
 try {
   await stand.start()
-  const read = values.store ? rowsOf(resolve(values.store)) : largeCursorChat({ turns: Number(values.turns), steps: Number(values["turn-steps"]) })
+  const sdk = values.sdk ? sdkAgentOf(resolve(values.sdk)) : undefined
+  const read = sdk ?? (values.store ? rowsOf(resolve(values.store)) : largeCursorChat({ turns: Number(values.turns), steps: Number(values["turn-steps"]) }))
   const source = values.rows ? { ...read, rows: read.rows.slice(0, Number(values.rows)) } : read
   // The turn that goes on while the bench watches: the last `--steps` roots and what each step wrote before its root.
   const roots = source.rows.flatMap((row, at) => (row.root ? [at] : []))
   const liveFrom = (roots[Math.max(0, roots.length - steps - 1)] ?? 0) + 1
-  const chat = scratchChat(home, source.rows, source.agentId, liveFrom)
+  const chat = sdk ? scratchSdkAgent(home, { ...sdk, rows: source.rows }, liveFrom, steps) : scratchChat(home, source.rows, source.agentId, liveFrom)
   const env: NodeJS.ProcessEnv = { ...process.env, ...ON_DEMAND_CATALOG_ENV, HOME: home }
   for (const name of ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_DATA_HOME", "OPENCODE_DB", "MAKO_DATA_ROOT", "CURSOR_CONFIG_DIR"]) delete env[name]
   mkdirSync(join(home, ".mako"), { recursive: true })
@@ -270,7 +368,7 @@ try {
   const report = {
     daemon: daemonScript,
     ...writerHolds && { writer: { holdsMs: writerHolds } },
-    chat: { rows: source.rows.length, mib: +(source.rows.reduce((total, row) => total + row.data.length, 0) / 1048576).toFixed(1), steps, everyMs, turnMs: lastMs, ...values.store && { store: "a copy of a real chat" } },
+    chat: { rows: source.rows.length, mib: +(source.rows.reduce((total, row) => total + row.data.length, 0) / 1048576).toFixed(1), steps, everyMs, turnMs: lastMs, ...values.store && { store: "a copy of a real chat" }, ...sdk && { store: "a copy of a real Cursor SDK agent", events: sdk.events.length } },
     firstUpload,
     pings: await pings.stop(),
     status: await status.stop(),

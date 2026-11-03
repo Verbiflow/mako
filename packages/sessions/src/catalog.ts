@@ -69,7 +69,8 @@ import { ReadingCopies, ReceivedCopies, type CopyPage } from "./reading-copies.j
 import { FAILURES_SAID, LASTING_MS, ScopedUploads, countTiers, longestFailing, type CatalogSyncStatus, type SyncFailure, type SyncScope } from "./scoped-uploads.js"
 import type { WorkUnderWay } from "./loop-watch.js"
 import { UploadBudget } from "./upload-budget.js"
-import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
+import { RecordPushes, RecordSync, RecordsLinkRefusedError, type LinkForm, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
+import { LinkCredential } from "./link-credential.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
 import type { RecordRemote } from "@mako/protocol/records"
@@ -88,6 +89,8 @@ export type CatalogEvent =
   | { type: "added"; ref: ThreadRef }
   | { type: "updated"; ref: ThreadRef }
   | { type: "removed"; path: string }
+  /** A link's token is due, or the gateway refused it: its owner sends it again renewed (`LinkCredential`). */
+  | { type: "link-due"; form: LinkForm }
 
 /** One follow of a thread. `reload`, where the follower can take one, pages the session again instead of a whole read in this process. */
 interface FollowListener {
@@ -1697,8 +1700,8 @@ export class SessionCatalog {
     const store = this.recordWriter
     if (!link || !store || this.stopped) return
     const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Session records: ${message}`, JSON.stringify(fields))
-    const remote = { current: link }
-    const pushes = new RecordPushes(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => remote.current.authorization }), log)
+    const remote = new LinkCredential(link, () => this.emit({ type: "link-due", form: "records" }))
+    const pushes = new RecordPushes(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => remote.authorization(), renew: () => remote.renew() }), log)
     this.recordPushes = pushes
     this.recordLink = remote
     void pushes.catchUp(store.sessions()).catch((error: Error) => log("warn", "catching up stopped", { error: error.message }))
@@ -1730,8 +1733,8 @@ export class SessionCatalog {
     const store = this.recordWriter
     if (!link || !store || this.stopped) return
     const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Session originals: ${message}`, JSON.stringify(fields))
-    const current = { current: link }
-    const uploads = new ScopedUploads(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => current.current.authorization }), log, { bytesPerSecond: ORIGINALS_BYTES_PER_SECOND, budget: this.uploadBudget, ...this.work && { work: this.work } })
+    const current = new LinkCredential(link, () => this.emit({ type: "link-due", form: "originals" }))
+    const uploads = new ScopedUploads(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => current.authorization(), renew: () => current.renew() }), log, { bytesPerSecond: ORIGINALS_BYTES_PER_SECOND, budget: this.uploadBudget, ...this.work && { work: this.work } })
     const timer = setInterval(() => uploads.look(), ORIGINALS_LOOK_MS)
     timer.unref?.()
     this.originals = { uploads, link: current, timer }
@@ -1808,7 +1811,7 @@ export class SessionCatalog {
       view: (path) => this.served(path),
       stamp: (path) => this.stampOf(path),
       translator: () => (this.translator ??= translatorBuild()),
-    }, log, { budget: this.uploadBudget, ...this.work && { work: this.work } })
+    }, log, { budget: this.uploadBudget, ...this.work && { work: this.work }, linkDue: () => this.emit({ type: "link-due", form: "copies" }) })
     return this.readingCopies
   }
 

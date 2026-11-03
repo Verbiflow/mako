@@ -1,23 +1,25 @@
-import { QUIET_FOLDERS } from "../base/quiet-folders.js"
+import { quietFolder } from "../base/quiet-folders.js"
 
 /*
  * What the tracker never journals, and what a turn's footprint leaves out.
- * Inside a tracked root: dependencies and build output (unless Git tracks the
- * file, as an Electron app's `build/` icons), Git's own folder, and every
- * folder the caller names as noise (the harnesses' stores, Mako's own data).
- * Outside the roots: caches, shell histories and the system's own churn,
- * unless a turn's calls named the path.
+ * Inside a tracked root: dependencies, build output and copies of it kept
+ * beside it (`dist-old`), and tools' caches (unless Git tracks the file, as
+ * an Electron app's `build/` icons), whether or not `.gitignore` names them;
+ * Git's own folder, and every folder the caller names as noise (the
+ * harnesses' stores, Mako's own data). Outside the roots: caches, shell
+ * histories and the system's own churn, unless a turn's calls named the path.
  */
 
-const QUIET = new Set<string>(QUIET_FOLDERS)
 /** Folders that are never a project's content, wherever they are. */
 const NEVER = new Set(["node_modules", ".git", ".DS_Store", ".Trash"])
+/** Tools' own caches inside a project. */
+const CACHES = new Set([".cache", ".parcel-cache", ".svelte-kit", ".nuxt", ".vite", ".wrangler", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".gradle"])
 
 /** Whether `path` (relative to its root, `/`-separated) is never tracked; `tracked` says Git tracks it. */
 export function untrackable(path: string, tracked: boolean): boolean {
   const parts = path.split("/")
   if (parts.some((part) => NEVER.has(part))) return true
-  return !tracked && parts.some((part) => QUIET.has(part))
+  return !tracked && parts.some((part) => quietFolder(part) || CACHES.has(part))
 }
 
 /** Whether `path` is inside `folder` or is it. */

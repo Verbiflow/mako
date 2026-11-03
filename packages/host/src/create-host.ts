@@ -12,7 +12,7 @@ import { hostLog, hostWarn } from "./base/host-log.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostChannelDomain, hostChannels, type HostChannel } from "./contracts/host-call-inputs.js"
 import { isClientCall, socketCalls } from "./contracts/client-calls.js"
-import { hostSecretStore, type SecretKeyHandover } from "./base/host-secrets.js"
+import { hostSecretStore, secretKeyFile, type SecretKeyHandover } from "./base/host-secrets.js"
 import type { CrashReports } from "./base/crash.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases, removeRuntimeDirectory } from "./base/host-idle.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -94,7 +94,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   if (config.machineAgentFd !== undefined) foreground.awaitFirstStart(MACHINE_FIRST_START_CAP_MS)
   const subscribed = jobs.demand("a client is subscribed")
   const domains = new HostDomains(hostDomainOptions(), loop)
-  const secrets = hostSecretStore(environment)
+  const secrets = hostSecretStore(environment, { keyFile: secretKeyFile(environment.userRoot, { env: process.env, cloudMachine: config.machineAgentFd !== undefined }) })
   let web: Awaited<ReturnType<typeof startWebHost>> | undefined
   let machine: MachineRuntime | undefined
   let closing = false

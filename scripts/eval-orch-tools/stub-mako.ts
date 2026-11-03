@@ -29,7 +29,13 @@ const toolOf = (channel: AgentToolDefinition["channel"]) => AGENT_TOOLS.find((to
 
 /** What the stub answers a call, given the children it started for the same conversation. */
 const Named = z.object({ name: z.string().optional() }).catch({})
-const Sent = z.object({ to: z.string().optional() }).catch({})
+const Sent = z.object({ to: z.string().optional(), deliver: z.enum(["queue", "steer", "interrupt"]).optional() }).catch({})
+/** What a send answers for a working Fin on Claude, by how it was asked to go, as the host words it. */
+const SENT = {
+  queue: (name: string) => ({ delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message.` }),
+  steer: (name: string) => ({ delivery: "steer", hears: `${name} hears it at its next step, once the command or subagent it's running returns (Claude).` }),
+  interrupt: (name: string) => ({ delivery: "interrupt", hears: `Mako stopped ${name}'s turn; this message starts its next one, ahead of anything queued for it.` }),
+} satisfies Record<string, (name: string) => Pick<AgentsSent, "delivery" | "hears">>
 
 /** An Apex's Fins a case starts with, as the stub lists them. */
 export function startedAlready(names: readonly string[]): AgentsStarted[] {
@@ -52,8 +58,9 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
     return { ...listed }
   }
   if (tool === "agents_send") {
-    const to = Sent.parse(args).to ?? "child"
-    const sent: AgentsSent = { child: randomUUID(), name: to.replace(/^child:/, ""), request: randomUUID(), delivery: "turn" }
+    const { to = "child", deliver = "queue" } = Sent.parse(args)
+    const name = to.replace(/^(child|fin):/, "")
+    const sent: AgentsSent = { child: randomUUID(), name, request: randomUUID(), ...SENT[deliver](name) }
     return { ...sent }
   }
   if (tool === "agents_answer") {

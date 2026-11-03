@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net"
 import { createReadStream, createWriteStream } from "node:fs"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
+import { setTimeout as delay } from "node:timers/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
 import { ACCESS_CHOICES_PATH, AccessChoicesAnswerSchema, type AccessChoices as AccountAccessChoices, type AccessChoicesAnswer } from "@mako/protocol/access-choices"
@@ -39,6 +40,8 @@ import {
   subprotocols,
   PROBE_ANSWER_MS,
   SILENT_WHILE_WORKING_MS,
+  CLOUD_ENTITLEMENT,
+  servesDeviceRuntime,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -113,8 +116,11 @@ async function* countedFile(file: string, sent: (bytes: number) => void): AsyncG
 
 /** A call to the cloud slower than this is logged, though it succeeded. */
 const SLOW_REQUEST_MS = 2_000
-/** What an account may use beyond this Mac: with it, this Mac is reachable from the account's other devices and the cloud. */
-const CLOUD_ENTITLEMENT = "cloud"
+/** The public client a device with no browser signs in as (RFC 8628), which the cloud enrols as a runtime. */
+const DEVICE_CLIENT = "mako-runtime"
+const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+/** RFC 8628 §3.5: a poll answered `slow_down` waits this much longer from then on. */
+const SLOW_DOWN_SECONDS = 5
 const REMOVED: CloudSignedOutNotice = {
   kind: "removed",
   message: "This Mac was removed from your Mako account. Sign in to connect it again.",
@@ -135,6 +141,32 @@ const EnrollmentSchema = z.object({
 })
 /** `credential`: a successor to this Mac's credential, once it's due to rotate; the old one works until it's used. */
 const RefreshSchema = EnrollmentSchema.omit({ credential: true }).extend({ credential: z.string().regex(/^mako_dc_[\w-]{43}$/).optional() })
+/** RFC 8628 §3.2: the codes a device shows its person, and how often it may ask whether they confirmed. */
+const DeviceAuthorizationSchema = z.object({
+  device_code: z.string().min(1),
+  user_code: z.string().min(1),
+  verification_uri: z.url(),
+  verification_uri_complete: z.url().optional(),
+  expires_in: z.number().int().positive(),
+  interval: z.number().int().positive().optional(),
+})
+/** RFC 8628 §3.5's answer once the person confirmed: the refresh token is the device's credential, as a browser sign-in's is. */
+const DeviceTokenSchema = z.object({
+  access_token: z.string().min(1),
+  expires_in: z.number().int().nonnegative(),
+  refresh_token: z.string().regex(/^mako_dc_[\w-]{43}$/),
+  device: CloudDeviceSchema,
+  account: CloudPersonSchema,
+})
+const OAuthErrorSchema = z.object({ error: z.string(), error_description: z.string().optional() })
+/** What a device signing in with a code shows its person, who confirms it on another device. */
+export type DeviceCode = {
+  code: string
+  /** Where to confirm it; `verificationUriComplete` carries the code, so opening it is enough. */
+  verificationUri: string
+  verificationUriComplete: string
+  expiresAt: string
+}
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
 /** Where on GitHub its person gives the cloud access to a repository: a GitHub page, or nothing. */
 const InstallSchema = z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional().catch(undefined)
@@ -248,6 +280,11 @@ export type CloudAccountOptions = {
   /** A connection down this long shows as offline; a shorter blip isn't shown. For tests. */
   offlineAfterMs?: number
   /**
+   * False for a command that signs in, reads or signs out and exits (`mako-host join`): no link to the account or as
+   * its runtime opens, so it never stands beside a host's own.
+   */
+  links?: boolean
+  /**
    * Something happened to the account's devices (its stream, `account:<id>`): heard live, or on connecting again
    * after it happened. `mine`: about this Mac. A device that joined before this Mac did isn't news to it.
    */
@@ -311,6 +348,8 @@ export class CloudAccounts {
   #unfinished: UnfinishedSignOut | undefined
   #finishing: NodeJS.Timeout | undefined
   #signIn: SignIn | undefined
+  /** A sign-in with a code is under way (`join`). */
+  #joining = false
   #token: HeldToken | undefined
   #tokenRequest: Promise<string> | undefined
   #accountLink: CloudLink | undefined
@@ -355,6 +394,7 @@ export class CloudAccounts {
     const cloud = this.#require()
     await this.#ready
     if (this.#state.status === "signed-in") return this.account()
+    if (this.#joining) throw new CloudAccountError("A sign-in with a code is already under way.")
     if (this.#signIn) {
       await this.#options.openExternal(this.#signIn.url)
       return this.account()
@@ -433,6 +473,96 @@ export class CloudAccounts {
 
   cancelSignIn(): CloudAccount {
     if (this.#signIn) this.#endSignIn()
+    return this.account()
+  }
+
+  /**
+   * Signs in with a code, for a device with no browser of its own (RFC 8628's device grant, as `mako-runtime`, which
+   * the cloud enrols as a runtime): `show` is given the code and where to confirm it, then the cloud is asked at the
+   * interval it set, longer each time it says to slow down, until the person confirms, refuses, or the code expires.
+   * Confirmed, the device keeps the same sign-in as a browser's: its credential, rotating, and its links. Aborted, it
+   * stops asking and stays signed out.
+   */
+  async join(show: (code: DeviceCode) => void, signal?: AbortSignal): Promise<CloudAccount> {
+    const cloud = this.#require()
+    await this.#ready
+    if (this.#state.status === "signed-in") return this.account()
+    if (this.#signIn || this.#joining) throw new CloudAccountError("A sign-in is already under way.")
+    this.#joining = true
+    try {
+      const device = await this.#options.device()
+      const asked = await this.#fetch("devices.code", new URL("/oauth/device/code", cloud), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams({
+          client_id: DEVICE_CLIENT,
+          device_name: device.name.trim().slice(0, 80) || "Device",
+          platform: device.platform.slice(0, 40),
+          app_version: device.appVersion.slice(0, 40),
+        }).toString(),
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_MS),
+      })
+      if (!asked.ok) throw new CloudAccountError(await oauthProblem(asked, "The Mako cloud didn't give a sign-in code."))
+      const grant = DeviceAuthorizationSchema.parse(await asked.json())
+      const deadline = Date.now() + grant.expires_in * 1000
+      const shown: DeviceCode = {
+        code: grant.user_code,
+        verificationUri: grant.verification_uri,
+        verificationUriComplete: grant.verification_uri_complete ?? grant.verification_uri,
+        expiresAt: new Date(deadline).toISOString(),
+      }
+      this.#set({ status: "signing-in", url: shown.verificationUriComplete, startedAt: new Date().toISOString(), code: shown.code })
+      this.#options.log?.("cloud sign-in with a code started", { expiresIn: grant.expires_in })
+      show(shown)
+      let interval = grant.interval ?? SLOW_DOWN_SECONDS
+      for (;;) {
+        await delay(interval * 1000, undefined, { signal })
+        if (Date.now() >= deadline) return this.#joinEnded({ kind: "timed-out", message: "The code expired before it was confirmed. Join again for a new one." })
+        const polled = await this.#fetch("devices.code-token", new URL("/oauth/token", cloud), {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+          body: new URLSearchParams({ grant_type: DEVICE_CODE_GRANT, device_code: grant.device_code, client_id: DEVICE_CLIENT }).toString(),
+          redirect: "error",
+          signal: AbortSignal.timeout(REQUEST_MS),
+        }).catch((error: Error) => {
+          // The network, or the cloud not answering: the code still stands, so the next poll asks again.
+          this.#options.log?.("cloud sign-in code not checked; asking again", { error: errorMessage({ error }) })
+          return undefined
+        })
+        if (!polled) continue
+        if (polled.ok) {
+          const token = DeviceTokenSchema.parse(await polled.json())
+          await this.#signedIn({
+            credential: token.refresh_token,
+            device: token.device,
+            account: token.account,
+            connection: { token: token.access_token, expiresAt: Math.floor(Date.now() / 1000) + token.expires_in },
+          })
+          return this.account()
+        }
+        const refusal = OAuthErrorSchema.safeParse(await polled.json().catch(() => undefined))
+        const error = refusal.success ? refusal.data.error : undefined
+        if (error === "authorization_pending" || polled.status >= 500) continue
+        if (error === "slow_down") {
+          interval += SLOW_DOWN_SECONDS
+          continue
+        }
+        if (error === "access_denied") return this.#joinEnded({ kind: "failed", message: "The sign-in was refused on the other device." })
+        if (error === "expired_token") return this.#joinEnded({ kind: "timed-out", message: "The code expired before it was confirmed. Join again for a new one." })
+        return this.#joinEnded({ kind: "failed", message: refusal.data?.error_description ?? "The Mako cloud refused the sign-in." })
+      }
+    } catch (error) {
+      if (this.#state.status === "signing-in") this.#set({ status: "signed-out" })
+      throw error
+    } finally {
+      this.#joining = false
+    }
+  }
+
+  #joinEnded(notice: CloudSignedOutNotice): CloudAccount {
+    this.#options.log?.("cloud sign-in with a code ended", { kind: notice.kind })
+    this.#set({ status: "signed-out", notice })
     return this.account()
   }
 
@@ -733,7 +863,7 @@ export class CloudAccounts {
    */
   async deviceRecords(deviceId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/devices/${encodeURIComponent(deviceId)}/records`, this.#require()).toString()
-    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+    return this.#recordsLink(base)
   }
 
   /**
@@ -742,13 +872,20 @@ export class CloudAccounts {
    */
   async deviceOriginals(deviceId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/devices/${encodeURIComponent(deviceId)}/originals`, this.#require()).toString()
-    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+    return this.#recordsLink(base)
+  }
+
+  /** A records link at `base` under this Mac's connection token, with when the token is due for renewal (`renewAtMs`). */
+  async #recordsLink(base: string): Promise<RecordsLink> {
+    const token = await this.#connectionToken()
+    const renewAt = this.#token?.token === token ? this.#token.renewAt : undefined
+    return { id: base, base, authorization: `Bearer ${token}`, ...renewAt !== undefined && { renewAt } }
   }
 
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them, for sending a move's. */
   async threadRecords(threadId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/threads/${encodeURIComponent(threadId)}/records`, this.#require()).toString()
-    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+    return this.#recordsLink(base)
   }
 
   /**
@@ -975,14 +1112,18 @@ export class CloudAccounts {
       signal: AbortSignal.timeout(REQUEST_MS),
     })
     if (!response.ok) throw new CloudAccountError(await problemOf(response, "Mako couldn't finish signing in. Try again."))
-    const enrollment = EnrollmentSchema.parse(await response.json())
-    const stored: Stored = { version: 1, cloud: cloud.origin, credential: enrollment.credential, device: enrollment.device, account: enrollment.account }
+    await this.#signedIn(EnrollmentSchema.parse(await response.json()))
+  }
+
+  /** A device the cloud just enrolled, by a browser's sign-in or a code: its credential kept, and its links opened. */
+  async #signedIn(enrollment: z.infer<typeof EnrollmentSchema>): Promise<void> {
+    const stored: Stored = { version: 1, cloud: this.#require().origin, credential: enrollment.credential, device: enrollment.device, account: enrollment.account }
     this.#seen = undefined
     const saved = await this.#save(stored)
     const kept = this.#options.fixture ? "fixture" : saved ? "keychain" : "memory"
     this.#stored = stored
     this.#token = hold(enrollment.connection)
-    this.#set({ status: "signed-in", account: enrollment.account, device: enrollment.device, connection: "connecting", kept })
+    this.#set({ status: "signed-in", account: enrollment.account, device: enrollment.device, connection: "connecting", runtime: this.#runtimeWanted(stored) ? "connecting" : "off", kept })
     this.#options.log?.("cloud signed in", { device: enrollment.device.id, kept })
     this.#connect()
   }
@@ -1010,7 +1151,7 @@ export class CloudAccounts {
     if (!stored || this.#closed) return
     this.#stored = stored
     this.#seen = stored.seen
-    this.#set({ status: "signed-in", account: stored.account, device: stored.device, connection: "connecting", kept: "keychain" })
+    this.#set({ status: "signed-in", account: stored.account, device: stored.device, connection: "connecting", runtime: this.#runtimeWanted(stored) ? "connecting" : "off", kept: "keychain" })
     this.#connect()
   }
 
@@ -1234,19 +1375,22 @@ export class CloudAccounts {
 
   // The live connections.
 
-  /** The account's link, and the runtime's where the account has the cloud. */
+  /** The account's link, and the runtime's where the account includes it. */
   #connect(): void {
     const stored = this.#stored
-    if (this.#closed || !stored) return
+    if (this.#closed || !stored || this.#options.links === false) return
     this.#accountLink ??= this.#link("account", `/v1/accounts/${encodeURIComponent(stored.account.id)}/connect`, (socket, end) => this.#attachAccount(socket, end))
     this.#accountLink.start()
     this.#syncRuntime()
   }
 
-  /** The runtime's link runs while the account has the cloud, and only then: an account without it never sees any of it. */
+  /**
+   * The runtime's link runs while the account includes the device network (`devices`, or the cloud, from a gateway that
+   * grants no `devices` yet), and only then: an account without it never sees any of it.
+   */
   #syncRuntime(): void {
     const stored = this.#stored
-    const wanted = !this.#closed && stored !== undefined && this.#options.runtime !== undefined && stored.account.entitlements.includes(CLOUD_ENTITLEMENT)
+    const wanted = stored !== undefined && this.#runtimeWanted(stored)
     if (wanted && !this.#runtimeLink) {
       const runtimeId = `d-${stored.device.id}`
       this.#runtimeLink = this.#link("runtime", `/v1/runtimes/${runtimeId}/connect`, (socket, end) => this.#attachRuntime(runtimeId, socket, end))
@@ -1259,6 +1403,10 @@ export class CloudAccounts {
       this.#options.log?.("cloud runtime link stopped")
     }
     this.#reportConnection()
+  }
+
+  #runtimeWanted(stored: Stored): boolean {
+    return !this.#closed && this.#options.runtime !== undefined && this.#options.links !== false && servesDeviceRuntime(stored.account.entitlements)
   }
 
   #link(name: string, path: string, attach: CloudLinkOptions["attach"]): CloudLink {
@@ -1382,7 +1530,7 @@ export class CloudAccounts {
     const account = this.#accountLink?.state ?? "connecting"
     const runtime = this.#runtimeLink?.state
     const connection: CloudLinkState = account === "connected" && runtime === "offline" ? "offline" : account
-    this.#connection(connection)
+    this.#connection(connection, runtime ?? "off")
   }
 
   #disconnect(): void {
@@ -1397,8 +1545,8 @@ export class CloudAccounts {
 
   // State.
 
-  #connection(connection: "connecting" | "connected" | "offline"): void {
-    if (this.#state.status === "signed-in" && this.#state.connection !== connection) this.#set({ ...this.#state, connection })
+  #connection(connection: CloudLinkState, runtime: CloudLinkState | "off"): void {
+    if (this.#state.status === "signed-in" && (this.#state.connection !== connection || this.#state.runtime !== runtime)) this.#set({ ...this.#state, connection, runtime })
   }
 
   #set(state: CloudAccountState): void {
@@ -1447,6 +1595,12 @@ function parseCloud(value: string | undefined, fixture: boolean): CloudTarget {
 
 async function problemOf(response: CloudResponse, fallback: string): Promise<string> {
   return problemWords(ProblemSchema.safeParse(await response.json().catch(() => undefined)).data, fallback)
+}
+
+/** An OAuth refusal's words (RFC 6749 §5.2); `fallback` when the body wasn't one. */
+async function oauthProblem(response: CloudResponse, fallback: string): Promise<string> {
+  const refusal = OAuthErrorSchema.safeParse(await response.json().catch(() => undefined))
+  return refusal.success ? (refusal.data.error_description ?? refusal.data.error) : fallback
 }
 
 /** A problem document's words; `fallback` when the body wasn't one. */
