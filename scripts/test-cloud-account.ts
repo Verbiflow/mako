@@ -956,6 +956,7 @@ test("every call to the cloud goes under its own correlation ID, and is reported
   })
   await mac.accounts.devices()
   await assert.rejects(mac.accounts.removeDevice("not-a-device"), /No such device/)
+  assert.equal(await mac.accounts.moveAnswer("t-0123456789abcdef", "11111111-1111-4111-8111-111111111111"), undefined, "nobody answered the move yet")
 
   assert.deepEqual(
     reported.map(({ route, outcome, status }) => ({ route, outcome, status })),
@@ -963,6 +964,8 @@ test("every call to the cloud goes under its own correlation ID, and is reported
       { route: "devices.enroll", outcome: "ok", status: 201 },
       { route: "devices.list", outcome: "ok", status: 200 },
       { route: "devices.remove", outcome: "refused", status: 404 },
+      // An answer its caller asks for is no refusal: a move's answer not there yet is how every move begins.
+      { route: "moves.answer", outcome: "ok", status: 404 },
     ]
   )
   const sent = cloud.correlations.filter((id) => id !== undefined)
