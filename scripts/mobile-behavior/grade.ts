@@ -158,3 +158,27 @@ export function verdict(behavior: MobileCase, judged: readonly Judged[], sampled
   if (behavior.kind === "bad") return passed ? "fixed" : "expected-fail"
   return passed ? "pass" : "fail"
 }
+
+/** What a case's samples say together: its verdict, or `incomplete` when more samples threw than were graded. */
+export type CaseVerdict = Verdict | "incomplete"
+
+/**
+ * A case's samples on one form, each a verdict or an error, judged together as T3's suite does: errors are left out
+ * of the grade, and a case with more errors than graded samples is `incomplete`. Otherwise it fails when half or more
+ * of its graded samples fail (a `bad` case is then still `expected-fail`), so one noisy sample can't decide it either way.
+ * Samples that all proved nothing are `unproven`; one that proved nothing among others counts as failing.
+ */
+export function caseVerdict(behavior: MobileCase, samples: readonly (Verdict | "error")[]): CaseVerdict {
+  const graded = samples.filter((sample): sample is Verdict => sample !== "error")
+  if (graded.length === 0 || samples.length - graded.length > graded.length) return "incomplete"
+  if (graded.every((sample) => sample === "unproven")) return "unproven"
+  const failing = graded.filter((sample) => sample === "fail" || sample === "expected-fail" || sample === "unproven").length
+  const fails = failing * 2 >= graded.length
+  if (behavior.kind === "bad") return fails ? "expected-fail" : "fixed"
+  return fails ? "fail" : "pass"
+}
+
+/** Whether a case's verdict fails the run: a guard or control that fails, proves nothing or couldn't be graded. A bad case never does. */
+export function failsRun(behavior: MobileCase, outcome: CaseVerdict): boolean {
+  return behavior.kind !== "bad" && (outcome === "fail" || outcome === "incomplete" || outcome === "unproven")
+}

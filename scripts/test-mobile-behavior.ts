@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { BUDGETS, CASES, type MobileCase } from "./mobile-behavior/cases.ts"
-import { gradeFrames, gradeReadings, judge, ReadingSchema, verdict, type Frame } from "./mobile-behavior/grade.ts"
+import { caseVerdict, failsRun, gradeFrames, gradeReadings, judge, ReadingSchema, verdict, type Frame } from "./mobile-behavior/grade.ts"
 
 /**
  * The mobile-behavior grade, from frames and readings made here: a transcript that follows its end smoothly, one that
@@ -78,6 +78,27 @@ test("a case that streams while it samples, where nothing moved and the end didn
   const still = CASES.find((behavior) => behavior.id === "a-still-page-stays-still")
   assert.ok(still)
   assert.equal(verdict(still, judge(still, { shiftPx: 0, teleports: 0 }), { frames: 90, ms: 1500, travelPx: 0, endGrewPx: 0 }), "pass")
+})
+
+test("a case's samples are judged together: half failing fails it, errors are left out, and more errors than grades is incomplete", () => {
+  const guard: MobileCase = { id: "g", kind: "guard", forms: ["phone"], experience: "", steps: [], measures: ["backwardPx"] }
+  assert.equal(caseVerdict(guard, ["pass", "pass", "fail"]), "pass")
+  assert.equal(caseVerdict(guard, ["pass", "fail", "fail"]), "fail")
+  assert.equal(caseVerdict(guard, ["pass", "fail"]), "fail", "half is enough to fail")
+  assert.equal(caseVerdict(guard, ["pass", "error", "pass"]), "pass")
+  assert.equal(caseVerdict(guard, ["pass", "error", "error"]), "incomplete")
+  assert.equal(caseVerdict(guard, ["error"]), "incomplete")
+  assert.equal(caseVerdict(guard, ["unproven", "unproven"]), "unproven")
+  assert.equal(caseVerdict(guard, ["pass", "pass", "unproven"]), "pass")
+  const bad: MobileCase = { ...guard, kind: "bad" }
+  assert.equal(caseVerdict(bad, ["expected-fail", "fixed", "expected-fail"]), "expected-fail")
+  assert.equal(caseVerdict(bad, ["fixed", "fixed", "expected-fail"]), "fixed")
+
+  assert.equal(failsRun(guard, "incomplete"), true)
+  assert.equal(failsRun(guard, "unproven"), true)
+  assert.equal(failsRun(guard, "pass"), false)
+  assert.equal(failsRun(bad, "expected-fail"), false)
+  assert.equal(failsRun(bad, "incomplete"), false, "a bad case never fails the run")
 })
 
 test("every case is graded on measures with budgets, runs on a form, and has a distinct ID", () => {
