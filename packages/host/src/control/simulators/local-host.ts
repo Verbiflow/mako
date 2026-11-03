@@ -65,6 +65,10 @@ export class LocalSimulatorHost implements SimulatorHost {
     return this.#refuse()
   }
 
+  async release(): Promise<void> {}
+
+  async close(): Promise<void> {}
+
   async #refuse(): Promise<never> {
     const ios = iosAvailability(await this.#setup())
     throw new SimulatorUnsupported(ios.ready ? NOT_BUILT : ios.why)

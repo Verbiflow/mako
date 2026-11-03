@@ -36,6 +36,7 @@ import { SimulatorSetupFollower } from "./simulators/setup.js"
 import { Simulators } from "./simulators/simulators.js"
 import { LocalSimulatorHost } from "./simulators/local-host.js"
 import { declareSimulatorMethods } from "./simulators/methods.js"
+import type { SimulatorAgent } from "../contracts/simulators.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
@@ -99,7 +100,15 @@ export interface ControlConfig {
 }
 
 /** `updated`: the desktop's updater moved, or the desktop that had one left. */
-export function openControl(config: ControlConfig, machine: MachineCapability, jobs: HostJobs, emit: (event: HostEvent) => void, updated: () => void): Control {
+/** `simulatorAgent`: a Session's Thread, conversation, title and project folder, which simulators' claims and consent read. */
+export function openControl(
+  config: ControlConfig,
+  machine: MachineCapability,
+  jobs: HostJobs,
+  emit: (event: HostEvent) => void,
+  updated: () => void,
+  simulatorAgent: (session: string) => SimulatorAgent | undefined
+): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
   let activeDevServerUrl = configuredDevServerUrl
@@ -251,7 +260,14 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
   )
   const unsubscribe = browser.subscribe((browsers) => emit({ type: "browser-control", browsers }))
   const simulatorSetup = new SimulatorSetupFollower({ dataRoot: environment.dataRoot, jobs, emit: (setup) => emit({ type: "simulator-setup", setup }) })
-  const simulators = new Simulators({ hosts: [new LocalSimulatorHost(() => simulatorSetup.read())], consent: () => simulatorSetup.consent() })
+  const simulatorHeld = jobs.demand("A simulator is held")
+  const simulators = new Simulators({
+    hosts: [new LocalSimulatorHost(() => simulatorSetup.read())],
+    consent: () => simulatorSetup.consent(),
+    agent: simulatorAgent,
+    holding: (on) => simulatorHeld.set(on),
+  })
+  const stopSimulatorSweep = jobs.every("simulator-claims", 60_000, () => simulators.sweep(), { needs: [simulatorHeld] })
   let service: ControlService | undefined
   return {
     desktop,
@@ -300,6 +316,8 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
       machineBrowser?.close()
       unsubscribe?.()
       simulatorSetup.stop()
+      stopSimulatorSweep()
+      void simulators.close()
     },
   }
 }

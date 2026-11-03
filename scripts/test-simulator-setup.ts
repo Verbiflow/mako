@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { after, test } from "node:test"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { setupStep, type SetupStepId, type SimulatorSetup, XCODE_APP_STORE_URL } from "@mako/host/contracts/simulator-setup"
-import { CLAIM_IDLE_MS, type SimulatorCaller, type SimulatorSummary } from "@mako/host/contracts/simulators"
+import { CLAIM_IDLE_MS, type SimulatorAgent, type SimulatorCaller, type SimulatorSummary } from "@mako/host/contracts/simulators"
 import {
   chooseForms,
   chooseXcode,
@@ -322,79 +322,162 @@ test("consent is per project and revocable", async () => {
 })
 
 /** A host that does what it's told and remembers it, standing in for a Mac with Xcode. */
-function fakeHost(): SimulatorHost & { done: string[] } {
-  const simulator: SimulatorSummary = { hostId: "local", id: "MAKO-PHONE", name: "Mako iPhone 17 Pro", platform: "ios", runtime: "iOS 26.1", form: "phone", state: "shutdown" }
+function fakeHost(id = "local", options: { billed?: true } = {}): SimulatorHost & { done: string[] } {
+  const simulator: SimulatorSummary = { hostId: id, id: "MAKO-PHONE", name: "Mako iPhone 17 Pro", platform: "ios", runtime: "iOS 26.1", form: "phone", state: "shutdown" }
   const done: string[] = []
   return {
-    id: "local",
+    id,
     label: "This Mac",
     kind: "local",
     done,
-    summary: async () => ({ id: "local", label: "This Mac", kind: "local", platforms: { ios: { ready: true }, android: { ready: false, blocker: "not-built", why: "later" } } }),
+    summary: async () => ({ id, label: "This Mac", kind: "local", platforms: { ios: { ready: true }, android: { ready: false, blocker: "not-built", why: "later" } }, ...options }),
     list: async () => [simulator],
-    boot: async (id) => void done.push(`boot ${id}`),
-    act: async (id, action) => void done.push(`${action.kind} ${id}`),
+    boot: async (simulator) => void done.push(`boot ${simulator}`),
+    act: async (simulator, action) => void done.push(`${action.kind} ${simulator}`),
     read: async () => ({ state: { scrollTop: 0 } }),
     screenshot: async () => ({ path: "/tmp/shot.png", width: 402, height: 874 }),
     record: async () => {
       throw new SimulatorUnsupported("Recording comes later.")
     },
+    release: async (simulator) => void done.push(`release ${simulator}`),
+    close: async () => void done.push("close"),
   }
 }
+
+/** Sessions as the Thread store would place them: `s-<thread>` in Thread `<thread>`, working in the folder given. */
+function sessions(folders: Record<string, string>): (session: string) => SimulatorAgent | undefined {
+  return (session) => {
+    const thread = session.replace(/^s-/, "")
+    const folder = folders[thread]
+    return folder ? { thread, session, conversation: `c-${thread}`, folder, title: `Thread ${thread}` } : undefined
+  }
+}
+
+const agent = (thread: string): SimulatorCaller => ({ kind: "agent", session: `s-${thread}` })
+const PHONE = { host: "local", simulator: "MAKO-PHONE" }
 
 test("one Thread drives a simulator; others are refused, the person can take it, and the loser's late action is stale", async () => {
   let now = 1_000
   const consent = [{ folder: "/Users/ada/shop", allowed: true, at: 1 }]
   const host = fakeHost()
-  const simulators = new Simulators({ hosts: [host], consent: async () => consent, now: () => now })
-  const agent = (thread: string, folder = "/Users/ada/shop"): SimulatorCaller => ({ kind: "agent", thread, conversation: `c-${thread}`, folder, title: `Thread ${thread}` })
+  const held: boolean[] = []
+  const simulators = new Simulators({
+    hosts: [host],
+    consent: async () => consent,
+    agent: sessions({ x: "/Users/ada/bank", a: "/Users/ada/shop/packages/web", b: "/Users/ada/shop" }),
+    now: () => now,
+    holding: (on) => void held.push(on),
+  })
 
-  const refused = await simulators.open(agent("x", "/Users/ada/bank"), { simulator: "MAKO-PHONE" })
+  const refused = await simulators.open(agent("x"), PHONE)
   assert.equal("refused" in refused && refused.refused, "not-allowed")
 
-  const notOpen = await simulators.act(agent("a"), { simulator: "MAKO-PHONE", action: { kind: "home" } })
+  const notOpen = await simulators.act(agent("a"), { ...PHONE, action: { kind: "home" } })
   assert.equal("refused" in notOpen && notOpen.refused, "not-open")
 
-  const opened = await simulators.open(agent("a", "/Users/ada/shop/packages/web"), { simulator: "MAKO-PHONE", url: "https://example.com" })
+  const opened = await simulators.open(agent("a"), { ...PHONE, url: "https://example.com" })
   assert.ok("claim" in opened)
+  assert.equal(opened.claim.session, "s-a")
   assert.deepEqual(host.done, ["boot MAKO-PHONE", "open-url MAKO-PHONE"])
 
-  const held = await simulators.open(agent("b"), { simulator: "MAKO-PHONE" })
-  assert.equal("refused" in held && held.refused, "held")
-  assert.equal("refused" in held && held.holder?.title, "Thread a")
+  const heldBy = await simulators.open(agent("b"), PHONE)
+  assert.equal("refused" in heldBy && heldBy.refused, "held")
+  assert.equal("refused" in heldBy && heldBy.holder?.title, "Thread a")
 
-  const watched = await simulators.shot(agent("b"), { simulator: "MAKO-PHONE" })
+  const watched = await simulators.shot(agent("b"), PHONE)
   assert.deepEqual(watched, { path: "/tmp/shot.png", width: 402, height: 874 })
 
-  const acted = await simulators.act(agent("a"), { simulator: "MAKO-PHONE", action: { kind: "tap", at: { x: 10, y: 20 } } })
+  const acted = await simulators.act(agent("a"), { ...PHONE, action: { kind: "tap", at: { x: 10, y: 20 } } })
   assert.ok("ms" in acted)
 
-  const taken = await simulators.open({ kind: "person" }, { simulator: "MAKO-PHONE" })
-  assert.ok("claim" in taken && taken.claim.generation > ("claim" in opened ? opened.claim.generation : 0))
-  const late = await simulators.act(agent("a"), { simulator: "MAKO-PHONE", action: { kind: "home" } })
+  const taken = await simulators.open({ kind: "person" }, PHONE)
+  assert.ok("claim" in taken && taken.claim.generation > opened.claim.generation)
+  const late = await simulators.act(agent("a"), { ...PHONE, action: { kind: "home" } })
   assert.equal("refused" in late && late.refused, "stale")
+  assert.equal(host.done.includes("release MAKO-PHONE"), false, "a takeover hands it on; it doesn't end it")
 
-  assert.deepEqual(await simulators.release({ kind: "person" }, { simulator: "MAKO-PHONE" }), { released: true })
-  const reopened = await simulators.open(agent("b"), { simulator: "MAKO-PHONE" })
+  assert.deepEqual(await simulators.release({ kind: "person" }, PHONE), { released: true })
+  assert.equal(host.done.at(-1), "release MAKO-PHONE")
+  const reopened = await simulators.open(agent("b"), PHONE)
   assert.ok("claim" in reopened)
   now += CLAIM_IDLE_MS
+  simulators.sweep()
   const listed = await simulators.list({ kind: "person" })
+  assert.ok("simulators" in listed)
   assert.equal(listed.simulators[0]?.claim, undefined)
-  const idle = await simulators.act(agent("b"), { simulator: "MAKO-PHONE", action: { kind: "home" } })
+  const idle = await simulators.act(agent("b"), { ...PHONE, action: { kind: "home" } })
   assert.equal("refused" in idle && idle.refused, "stale")
+  assert.equal(held.at(-1), false, "nothing held, so the sweep stops")
 
-  await simulators.open(agent("b"), { simulator: "MAKO-PHONE" })
-  const unsupported = await simulators.record(agent("b"), { simulator: "MAKO-PHONE", recording: "start" })
+  await simulators.open(agent("b"), PHONE)
+  const unsupported = await simulators.record(agent("b"), { ...PHONE, recording: "start" })
   assert.deepEqual(unsupported, { refused: "unsupported", why: "Recording comes later." })
+})
+
+test("a caller names only its Session: the host finds its Thread and project, and an unknown Session is refused", async () => {
+  const simulators = new Simulators({ hosts: [fakeHost()], consent: async () => [{ folder: "/Users/ada/shop", allowed: true, at: 1 }], agent: sessions({ a: "/Users/ada/shop" }) })
+  const stranger = await simulators.open({ kind: "agent", session: "s-nobody" }, PHONE)
+  assert.equal("refused" in stranger && stranger.refused, "no-thread")
+  const listed = await simulators.list({ kind: "agent", session: "s-nobody" })
+  assert.equal("refused" in listed && listed.refused, "no-thread")
+  const known = await simulators.list(agent("a"))
+  assert.equal("consent" in known && known.consent, "allowed")
+})
+
+test("the most specific consent answers: a subfolder turned off stays off inside an allowed project", async () => {
+  const consent = [
+    { folder: "/Users/ada/shop", allowed: true, at: 1 },
+    { folder: "/Users/ada/shop/vendor", allowed: false, at: 2 },
+  ]
+  const simulators = new Simulators({ hosts: [fakeHost()], consent: async () => consent, agent: sessions({ a: "/Users/ada/shop/vendor/lib", b: "/Users/ada/shop/app" }) })
+  const off = await simulators.open(agent("a"), PHONE)
+  assert.equal("refused" in off && off.refused, "not-allowed")
+  assert.ok("claim" in (await simulators.open(agent("b"), PHONE)))
+})
+
+test("a simulator ID is its host's: the same UDID on two hosts is two simulators, each claimed and released on its own", async () => {
+  const here = fakeHost()
+  const there = fakeHost("mac:studio", { billed: true })
+  const simulators = new Simulators({ hosts: [here, there], consent: async () => [{ folder: "/Users/ada/shop", allowed: true, at: 1 }], agent: sessions({ a: "/Users/ada/shop", b: "/Users/ada/shop" }) })
+  assert.ok("claim" in (await simulators.open(agent("a"), PHONE)))
+  assert.ok("claim" in (await simulators.open(agent("b"), { host: "mac:studio", simulator: "MAKO-PHONE" })))
+  const listed = await simulators.list({ kind: "person" })
+  assert.ok("simulators" in listed)
+  assert.deepEqual(listed.simulators.map((simulator) => [simulator.hostId, simulator.claim?.thread]), [["local", "a"], ["mac:studio", "b"]])
+  assert.equal(listed.hosts[1]?.billed, true)
+  const wrong = await simulators.open(agent("a"), { host: "mac:nowhere", simulator: "MAKO-PHONE" })
+  assert.equal("refused" in wrong && wrong.refused, "not-found")
+
+  assert.deepEqual(await simulators.release(agent("b"), { host: "mac:studio", simulator: "MAKO-PHONE" }), { released: true })
+  assert.deepEqual(there.done.at(-1), "release MAKO-PHONE")
+  assert.equal(here.done.includes("release MAKO-PHONE"), false)
+  await simulators.close()
+  assert.equal(there.done.at(-1), "close")
+})
+
+test("archiving a Thread lets go of what it holds, by its conversation or its Session", async () => {
+  const host = fakeHost()
+  const simulators = new Simulators({ hosts: [host], consent: async () => [{ folder: "/Users/ada/shop", allowed: true, at: 1 }], agent: sessions({ a: "/Users/ada/shop", b: "/Users/ada/shop" }) })
+  await simulators.open(agent("a"), PHONE)
+  simulators.releaseThread({ conversation: "c-someone-else" })
+  const still = await simulators.list({ kind: "person" })
+  assert.equal("simulators" in still && still.simulators[0]?.claim?.thread, "a")
+  simulators.releaseThread({ conversation: "c-a" })
+  assert.equal(host.done.at(-1), "release MAKO-PHONE")
+  assert.ok("claim" in (await simulators.open(agent("b"), PHONE)))
+  simulators.releaseThread({ session: "s-b" })
+  const free = await simulators.list({ kind: "person" })
+  assert.equal("simulators" in free && free.simulators[0]?.claim, undefined)
 })
 
 test("on a Mac without Xcode, every door hears why, in the setup line's words", async () => {
   const setup = setupFromFacts(cltOnly)
-  const simulators = new Simulators({ hosts: [new LocalSimulatorHost(async () => setup)], consent: async () => [] })
+  const simulators = new Simulators({ hosts: [new LocalSimulatorHost(async () => setup)], consent: async () => [], agent: () => undefined })
   const listed = await simulators.list({ kind: "person" })
+  assert.ok("hosts" in listed)
   assert.deepEqual(listed.hosts[0]?.platforms.ios, { ready: false, blocker: "no-xcode", why: "This Mac has no Xcode, so no iOS Simulator.", fix: "Settings › Simulators" })
   assert.deepEqual(listed.simulators, [])
-  const opened = await simulators.open({ kind: "person" }, { simulator: "anything" })
+  const opened = await simulators.open({ kind: "person" }, { host: "local", simulator: "anything" })
   assert.deepEqual(opened, { refused: "unavailable", why: "This Mac has no Xcode, so no iOS Simulator." })
 
   const ready = new LocalSimulatorHost(async () => setupFromFacts(everythingDone))

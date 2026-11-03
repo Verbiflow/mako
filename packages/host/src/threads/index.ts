@@ -12,7 +12,7 @@ import { followOtherHosts } from "./groups-follow.js"
 import { threadCatalog, type ThreadCatalog, type ThreadCatalogDeps, type ThreadFileHomes } from "./catalog.js"
 import { WorktreeOrigins } from "./worktree-origins.js"
 import { ThreadArchives } from "./archives.js"
-import { ThreadLifecycle, followNativeArchives, type LiveThreads, type NativeQueue } from "./lifecycle.js"
+import { ThreadLifecycle, followNativeArchives, type LiveThreads, type NativeQueue, type TargetIdentity } from "./lifecycle.js"
 import { declareThreadLifecycleMethods } from "./lifecycle-methods.js"
 import { declareThreadGroupMethods } from "./group-methods.js"
 import { declareThreadTitleMethods } from "./title-methods.js"
@@ -175,10 +175,12 @@ export interface ThreadMethodsDeps {
   nativeStops: { token(path: string): string | null; abort(path: string, token: string): void }
   homes: ThreadFileHomes | null
   emit(event: HostEvent): void
+  /** A Thread was archived here: what it held (a simulator) lets go. */
+  archivedThread?(identity: TargetIdentity): void
 }
 
 /** Cross-harness threads: every agent's sessions on this machine, and what becomes of them. */
-export function declareThreadMethods(methods: MethodTable, { threads, live, native, nativeStops, homes, emit }: ThreadMethodsDeps): ThreadLifecycle {
+export function declareThreadMethods(methods: MethodTable, { threads, live, native, nativeStops, homes, emit, archivedThread }: ThreadMethodsDeps): ThreadLifecycle {
   const { catalog, store, archives } = threads
   methods.handle("mako:threads", (filter?: { cwd?: string; harness?: string }) => ({
     ready: catalog.ready(),
@@ -234,6 +236,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
     nativeToken: nativeStops.token,
     abortNative: nativeStops.abort,
     external: (path) => Boolean(catalog.activity()[path]),
+    ...(archivedThread && { archivedThread }),
   })
   declareThreadLifecycleMethods(methods, lifecycle, archives, emit)
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)

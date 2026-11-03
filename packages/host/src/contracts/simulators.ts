@@ -1,3 +1,4 @@
+import type { AgentCaller } from "./agents.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 
 /**
@@ -34,7 +35,10 @@ export type SimulatorBlocker =
 export type SimulatorAvailability = { ready: true } | { ready: false; blocker: SimulatorBlocker; why: string; fix?: string }
 
 export interface SimulatorHostSummary {
-  /** `local`, `stand-in`, and later `mac:<device>` for another of the person's Macs. */
+  /**
+   * `local`, `stand-in`, and later `mac:<device>` for another of the person's Macs. A simulator's ID is its host's
+   * own (a UDID), unique only on that host, so every call names both.
+   */
   id: string
   /** What the panel and an agent call it: "This Mac", "WebKit stand-in". */
   label: string
@@ -42,6 +46,8 @@ export interface SimulatorHostSummary {
   platforms: Record<SimulatorPlatform, SimulatorAvailability>
   /** What it found, for Diagnostics: the developer folder, and Xcode's version when there is one. */
   detail?: string
+  /** A simulator here costs money while it runs (a leased or per-minute Mac), so opening one starts a bill and releasing it ends it. */
+  billed?: true
 }
 
 export type SimulatorState = "shutdown" | "booting" | "booted" | "shutting-down"
@@ -69,6 +75,8 @@ export interface SimulatorSummary {
  */
 export interface SimulatorClaim {
   thread: string
+  /** The Session that opened it, for an agent's claim. */
+  session?: string
   conversation?: string
   /** The Thread's title, for whoever watches. */
   title?: string
@@ -89,11 +97,21 @@ export type SimulatorConsent = "unasked" | "allowed" | "refused"
 export const CLAIM_IDLE_MS = 30 * 60_000
 
 /**
- * Who calls: an agent, as its door stamps it (the Thread its Session belongs to and the project folder it works in,
- * which consent is per), or the person from the panel. The person may take any simulator over; an agent may act only
- * on one its Thread holds.
+ * Who calls, as orchestration's doors stamp it: an agent by its Session, or the person from the panel. The host finds
+ * the Session's Thread, conversation, title and project folder (which consent is per) itself, so a caller can't name
+ * another Thread or another project. The person may take any simulator over; an agent may act only on one its
+ * Thread holds.
  */
-export type SimulatorCaller = { kind: "agent"; thread: string; conversation: string; folder: string; title?: string } | { kind: "person" }
+export type SimulatorCaller = AgentCaller
+
+/** What the host knows of an agent caller's Session: the Thread a claim belongs to, and the folder consent is read for. */
+export interface SimulatorAgent {
+  thread: string
+  session: string
+  conversation?: string
+  folder: string
+  title?: string
+}
 
 /** A point on the screen in points, from its top left, as the simulator draws it now (rotation included). */
 export interface SimulatorPoint {
@@ -136,6 +154,8 @@ export type SimulatorRefusalReason =
   | "not-found"
   /** The person hasn't let agents use simulators in this project. */
   | "not-allowed"
+  /** The caller's Session belongs to no Thread on this host. */
+  | "no-thread"
   /** This host can't do that operation. */
   | "unsupported"
 
@@ -152,13 +172,13 @@ export interface SimulatorsListed {
   simulators: ListedSimulator[]
   consent: SimulatorConsent
 }
-export type SimulatorsListResult = SimulatorsListed
+export type SimulatorsListResult = SimulatorsListed | SimulatorRefused
 
 export interface SimulatorsOpenInput {
   /** Its ID from `simulator_list`. */
   simulator: string
-  /** Its host; `local` when absent. */
-  host?: string
+  /** Its host, from `simulator_list`: a simulator ID means nothing without it. */
+  host: string
   /** A page to open in Safari once it's up. */
   url?: string
 }
@@ -171,7 +191,7 @@ export type SimulatorsOpenResult = SimulatorsOpened | SimulatorRefused
 
 export interface SimulatorsActInput {
   simulator: string
-  host?: string
+  host: string
   action: SimulatorAction
 }
 export interface SimulatorsActed {
@@ -182,7 +202,7 @@ export type SimulatorsActResult = SimulatorsActed | SimulatorRefused
 
 export interface SimulatorsReadInput {
   simulator: string
-  host?: string
+  host: string
   what: SimulatorReadKind
   /** For `console`: the cursor an earlier read returned. */
   after?: number
@@ -197,7 +217,7 @@ export type SimulatorsReadResult = SimulatorsRead | SimulatorRefused
 
 export interface SimulatorsShotInput {
   simulator: string
-  host?: string
+  host: string
 }
 export interface SimulatorsShot {
   /** A PNG the host wrote, for `show`. */
@@ -209,7 +229,7 @@ export type SimulatorsShotResult = SimulatorsShot | SimulatorRefused
 
 export interface SimulatorsRecordInput {
   simulator: string
-  host?: string
+  host: string
   recording: "start" | "stop"
 }
 export interface SimulatorsRecorded {
@@ -220,7 +240,7 @@ export type SimulatorsRecordResult = SimulatorsRecorded | SimulatorRefused
 
 export interface SimulatorsReleaseInput {
   simulator: string
-  host?: string
+  host: string
 }
 export type SimulatorsReleaseResult = { released: boolean } | SimulatorRefused
 
@@ -240,7 +260,7 @@ export interface SimulatorToolDefinition {
 }
 
 const SIMULATOR = "Its ID from simulator_list."
-const HOST = "Its host's ID; this Mac (local) when absent."
+const HOST = "Its host's ID from simulator_list; simulator IDs are unique only on their host."
 
 export const SIMULATOR_TOOLS: readonly SimulatorToolDefinition[] = [
   {
@@ -315,7 +335,7 @@ export const SIMULATOR_TOOLS: readonly SimulatorToolDefinition[] = [
     replay: "replay",
     mcp: {
       name: "simulator_release",
-      description: "Let a simulator go so another Thread can drive it. It keeps running.",
+      description: "Let a simulator go so another Thread can drive it. It keeps running, unless its host is billed, which stops it.",
       fields: { simulator: SIMULATOR, host: HOST },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

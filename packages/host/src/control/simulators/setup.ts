@@ -335,7 +335,8 @@ export class SimulatorSetupFollower {
     if (/['"\\]/.test(developer)) throw new Error(`Mako won't pass ${developer} to an administrator's shell; rename the Xcode bundle without quotes or backslashes.`)
     const xcodebuild = `${developer}/usr/bin/xcodebuild`
     const command = `/usr/bin/xcode-select -s '${developer}' && '${xcodebuild}' -license accept && '${xcodebuild}' -runFirstLaunch`
-    const script = `do shell script "${command}" with prompt "Mako is finishing Xcode's setup so simulators can run: choosing Xcode ${xcode.version}, accepting its license and installing its components." with administrator privileges`
+    const version = /^[\w.]+$/.test(xcode.version) ? ` ${xcode.version}` : ""
+    const script = `do shell script "${command}" with prompt "Mako is finishing Xcode's setup so simulators can run: choosing Xcode${version}, accepting its license and installing its components." with administrator privileges`
     const result = await this.#run("/usr/bin/osascript", ["-e", script], { timeoutMs: 15 * 60_000 })
     if (result.code === 0) return
     if (/-128|User canceled/i.test(result.stderr)) throw new Error("The password prompt was closed, so Xcode's setup wasn't finished. Press Finish setup when you're ready.")
