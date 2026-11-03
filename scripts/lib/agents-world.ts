@@ -64,6 +64,8 @@ export interface WorldOptions {
   heard?: (heard: Heard) => void
   /** What a new conversation of each harness starts on, as its profile says. */
   defaults?: Partial<Record<string, SessionSettings>>
+  /** Whether a conversation asked to move into its worktree and hasn't yet. */
+  movePending?: (conversation: string) => boolean
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -143,6 +145,7 @@ export class AgentsWorld {
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
       modes: (harness) => drivers.get(harness)?.modes,
       defaultTuning: async (harness) => this.options.defaults?.[harness],
+      ...(this.options.movePending && { movePending: this.options.movePending }),
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.processes && { processes: this.options.processes }),
     }

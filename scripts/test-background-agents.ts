@@ -583,6 +583,71 @@ async function staleEndsStayOut(): Promise<void> {
   }
 }
 
+/**
+ * A Fin whose turn ends while its own Fins work, or while the move it asked for waits, hasn't finished: it reads as
+ * working on what it waits for, its Apex isn't woken, and its result is the turn after that work ends.
+ */
+async function waitingFins(): Promise<void> {
+  const helpers: string[] = []
+  let moving = false
+  const w = new AgentsWorld({
+    root: join(root, "waiting-fins"),
+    movePending: () => moving,
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:capy")) {
+        for (const name of ["one", "two"]) {
+          const started = await turn.world.agents.start(turn.caller, { brief: { objective: `Part ${name}` }, name, clientKey: name, cwd: turn.world.root })
+          if (!("refused" in started) && started.conversation) helpers.push(started.conversation)
+        }
+        return "Nothing is finished yet."
+      }
+      if (turn.text.includes("You're fin:one") || turn.text.includes("You're fin:two")) return turn.world.hold(turn.conversation).then(() => "My part is done.")
+      if (turn.text.includes("You're fin:mover")) {
+        moving = true
+        return "Moving to the worktree; I'll carry on there."
+      }
+      if (turn.text.includes("Carry on in the worktree.")) return "Moved and finished the work."
+      if (turn.text.includes(FROM_AGENTS) && turn.text.includes("My part is done")) return "Both parts are done: all good."
+      return "ok"
+    },
+  })
+  try {
+    const apex = await w.apex("claude")
+    const capy = await w.agents.start(apex.caller, { brief: { objective: "Split the UX review" }, name: "capy", clientKey: "capy", cwd: w.root })
+    assert.ok(!("refused" in capy), JSON.stringify(capy))
+    await waitFor(() => helpers.length === 2 && w.live.session(capy.conversation!)?.status === "ready" && w.live.held(capy.conversation!)?.requests.at(-1)?.status === "completed", "capy's turn to end")
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    const child = ThreadIdSchema.parse(capy.child!)
+    assert.deepEqual(w.store.reportsOf(child, 0), [], "a turn that ends on its own Fins' work isn't its result")
+    assert.equal(w.prompts.filter((prompt) => prompt.conversation === apex.conversation).length, 0, "and doesn't wake its Apex")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children[0]!.state, { kind: "working", step: "Waiting for its 2 Fins (one, two)" }, "it reads as working on what it waits for")
+    for (const helper of helpers) w.release(helper)
+    await w.settle()
+    assert.deepEqual(w.store.reportsOf(child, 0).map((told) => [told.status, told.summary]), [["done", "Both parts are done: all good."]], "its result is the turn after its Fins' work")
+    const wakes = w.prompts.filter((prompt) => prompt.conversation === apex.conversation)
+    assert.equal(wakes.length, 1)
+    assert.match(wakes[0]!.text, /Both parts are done/)
+    assert.doesNotMatch(wakes[0]!.text, /Nothing is finished yet/)
+
+    const mover = await w.agents.start(apex.caller, { brief: { objective: "Move and work" }, name: "mover", clientKey: "mover", cwd: w.root })
+    assert.ok(!("refused" in mover), JSON.stringify(mover))
+    await waitFor(() => w.live.held(mover.conversation!)?.requests.at(-1)?.status === "completed", "mover's turn to end")
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    assert.deepEqual(w.store.reportsOf(ThreadIdSchema.parse(mover.child!), 0), [], "a turn that ends on the move it asked for isn't its result")
+    const moved = await w.agents.list(apex.caller, {})
+    assert.ok("children" in moved)
+    assert.deepEqual(moved.children.find((strip) => strip.name === "mover")!.state, { kind: "working", step: "Waiting for its move into its own worktree" })
+    moving = false
+    w.say(mover.conversation!, "Carry on in the worktree.")
+    await w.settle()
+    assert.deepEqual(w.store.reportsOf(ThreadIdSchema.parse(mover.child!), 0).map((told) => [told.status, told.summary]), [["done", "Moved and finished the work."]])
+  } finally {
+    await w.close()
+  }
+}
+
 /** A Fin runs on the model its spawn names, else its Apex's own on the Apex's harness, else its harness's default; its strip shows it. */
 async function finModels(): Promise<void> {
   const w = new AgentsWorld({
@@ -669,6 +734,7 @@ try {
   await finModels()
   await apexStops()
   await staleEndsStayOut()
+  await waitingFins()
   await ownSessionIsNoChild()
   console.log("agents engine: ok")
 } finally {

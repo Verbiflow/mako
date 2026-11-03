@@ -232,7 +232,13 @@ written again after its end reads as working while that Session is still
 being written, and a digest drops the end the host inferred for it
 (`AgentWakes.current`). A stop closes the edge with
 its reason (`closedReason`) before it cancels the turn. The cut turn then reports
-nothing and wakes no one, and the Fin reads as stopped in those words. A message to it
+nothing and wakes no one, and the Fin reads as stopped in those words. A Fin
+that ends a turn without `agents_report` while its own Fins work, or while a
+`worktree_move` it asked for is pending (`movePending`), hasn't finished.
+Its turn's end writes no report, and it reads as working with "Waiting for
+…" (`waitsOn`). Its result is the turn after that work ends: the one its
+Fins' reports wake, or, with nothing to wake it, that turn's reply
+(`checkAwaiting`). A message to it
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
