@@ -18,7 +18,7 @@ import {
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
 import { declareStoreFormat, guardStoreWrites, inspectStoreFormat, NewerStoreError, readStoreFormat, storeAccess, writeStoreFormat, type StoreStanding } from "./store-format.js"
 import { STREAMS_ROOT } from "./record-streams.js"
-import { DROPPED, repackStore, type RepackOptions, type RepackReport } from "./record-repack.js"
+import { DROPPED, repackStore, VERSIONS_ADDED, type RepackOptions, type RepackReport } from "./record-repack.js"
 import { IntentOwner } from "./record-intents.js"
 import { EVIDENCE_RULES, givenVersion, mergeWriters, outdatedOf, restoreGate, STREAM_RUNTIME_SCAN, writersOf, type InstalledReading, type OutdatedRuntime, type RecordWriter, type RecordWriterRule, type SessionWriters, SessionWritersSchema, type WriterEvidence, type WriterScan, type WriterSource } from "./record-writers.js"
 import type { RecordRef } from "./entries.js"
@@ -2507,6 +2507,7 @@ export class RecordStore {
     this.prepared("INSERT INTO versions (unit, seq, kind, at, size, digest, tail, chunks, captured_at, detail, writer, writer_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(unit.id, seq, kind, at, size, digest, tail, chunks, Date.now(), detail ? JSON.stringify(detail) : null, writer?.versions.length ? writer.versions.join(" ") : null, writer?.versions.length ? writer.source : null)
     this.prepared("UPDATE units SET head = ? WHERE id = ?").run(seq, unit.id)
+    this.prepared(`INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`).run(VERSIONS_ADDED)
     unit.head = seq
   }
 

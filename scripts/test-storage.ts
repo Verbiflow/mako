@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, utimes } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -9,6 +9,7 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { STORAGE_LOW_BYTES, type StorageCollection } from "@mako/host/contracts/storage"
 import { CursorCheckpointCollector } from "@mako/host/harnesses/cursor/sdk/checkpoint-collector"
 import { MakoStorage, type HarnessStorage } from "@mako/host/usage/storage"
+import { LeftoverFiles, RecordRepacks } from "@mako/host/usage/storage-collectors"
 
 /**
  * Settings › Storage (`usage/storage.ts`): each folder at the top of Mako's roots, the small ones counted together; a
@@ -74,6 +75,46 @@ test("parts, the warning and the collectors", async () => {
 
   await storage.free()
   assert.deepEqual(triggers.at(-1), "person")
+})
+
+test("copies a process died before renaming go once it's gone and they're an hour old; nothing else does", async () => {
+  const root = join(scratch, "leftovers")
+  await mkdir(join(root, "folder.41.tmp"), { recursive: true })
+  const hourAgo = new Date(Date.now() - 61 * 60_000)
+  const write = async (name: string, old: boolean) => {
+    await writeFile(join(root, name), "x".repeat(1000))
+    if (old) await utimes(join(root, name), hourAgo, hourAgo)
+  }
+  await write("provider-profiles.json.41.tmp", true)
+  await write("runtime-updates.json.42.tmp", true)
+  await write("provider-profiles.json.43.tmp", false)
+  await write("settings.json.tmp", true)
+  await write("settings.json", true)
+  const collector = new LeftoverFiles([root, join(scratch, "no-such-root")], (pid) => pid === 42)
+  const pass = await collector.collect("scheduled")
+  assert.deepEqual(await readdir(root).then((names) => names.sort()), ["folder.41.tmp", "provider-profiles.json.43.tmp", "runtime-updates.json.42.tmp", "settings.json", "settings.json.tmp"],
+    "the dead writer's old copy went; a live writer's, a recent one, a folder and files not named for a pid stayed")
+  assert.deepEqual([pass.part, pass.collected, pass.skipped, pass.freedBytes], ["rest", 1, 2, 1000])
+  assert.equal(collector.last(), pass)
+
+  const measured = await new MakoStorage({ roots: [root], collectors: () => [collector], emit: () => {}, measure: async () => new Map([[join(root, "settings.json"), 1000]]), disk: async () => ({ freeBytes: 40 * GB, totalBytes: 926 * GB }) }).measure()
+  assert.deepEqual(measured.parts.map((part) => [part.id, part.collected]), [["rest", true]], "Settings › Storage says Mako collects the rest")
+})
+
+test("the records' repack shows as the daemon's last pass wrote it", async () => {
+  const folder = join(scratch, "records")
+  await mkdir(folder, { recursive: true })
+  const collector = new RecordRepacks(folder)
+  assert.equal((await collector.collect("person")).freedBytes, 0)
+  assert.equal(collector.last(), undefined, "nothing until a pass has repacked")
+  const pass = { reason: "again", pid: 1, startedAt: Date.parse("2026-11-02T10:00:00.000Z"), endedAt: Date.parse("2026-11-02T10:04:00.000Z"), sessions: 10, done: 10, held: 10, captured: 0, live: 0, gone: 0, refused: 0, failed: 0, newBytes: 0, storedBytes: 0, ms: 1, yieldedMs: 0, longestMs: 0, longestReadMs: 0 }
+  const repack = { dropped: 9, droppedBytes: 3 * GB, scrubbedBytes: 0, grouped: 0, alreadyGrouped: 0, copied: 4, copiedBytes: 2 * GB, packsWritten: 2, packsRemoved: 3, packBytesBefore: 20 * GB, packBytesAfter: 19 * GB, ms: 118_000, longestTurnMs: 20, skipped: { group: true, compact: false } }
+  await writeFile(join(folder, "backfill.json"), JSON.stringify({ ...pass, repack }))
+  const last = await collector.collect("person")
+  assert.deepEqual(last, { part: "records", at: "2026-11-02T10:04:00.000Z", trigger: "scheduled", freedBytes: GB, collected: 1, skipped: 0, ms: 118_000 }, "on the daemon's schedule, whoever asked")
+  assert.equal(collector.last(), last)
+  await writeFile(join(folder, "backfill.json"), JSON.stringify({ ...pass, endedAt: undefined, repack: undefined }))
+  assert.equal(await collector.collect("scheduled"), last, "a pass under way leaves the last one shown")
 })
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex")

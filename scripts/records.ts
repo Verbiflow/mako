@@ -339,6 +339,8 @@ try {
         if (trim.skipped) console.log(`The newest pack's tail: not trimmed while ${trim.skipped}`)
         else if (trim.bytes) console.log(`The newest pack's tail: ${mib(trim.bytes)} past its last indexed entry trimmed from ${String(trim.pack).padStart(8, "0")}.pack${trim.resumed ? ", finishing a trim cut short" : ""}`)
         else if (trim.resumed) console.log("The newest pack's tail: a trim cut short was already done; its record removed")
+        const settled = [report.skipped.group && "grouping", report.skipped.compact && "compaction"].filter(Boolean)
+        if (settled.length) console.log(`Nothing changed since the last repack settled: ${settled.join(" and ")} skipped`)
         console.log(`${report.dropped} chunks dropped (${mib(report.droppedBytes)}, ${mib(report.scrubbedBytes)} overwritten where they lay), ${report.grouped} sessions laid out together (${report.alreadyGrouped} were already), ${report.copied} chunks copied (${mib(report.copiedBytes)}), ${report.packsWritten} packs written, ${report.packsRemoved} removed, ${report.leftovers} leftovers of a repack cut short removed; packs ${mib(report.packBytesBefore)} → ${mib(report.packBytesAfter)} in ${report.ms} ms, the store's turn held at most ${report.longestTurnMs} ms`)
       }
       break
