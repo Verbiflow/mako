@@ -498,6 +498,14 @@ export class JournalStore {
     return row ? AttributionSchema.parse(JSON.parse(z.object({ author: z.string() }).parse(row).author)) : undefined
   }
 
+  /** Whether Git wrote the entry, and whether it was found after lost events (a rescan or a restart's catch-up). */
+  provenance(seq: number): { git: boolean; lost: boolean } | undefined {
+    const row = this.statement("SELECT git, gap FROM entries WHERE seq=?").get(seq)
+    if (!row) return undefined
+    const { git, gap } = z.object({ git: z.number().nullable(), gap: z.number().nullable() }).parse(row)
+    return { git: Boolean(git), lost: gap !== null }
+  }
+
   setMeta(key: string, value: string): void {
     this.statement("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, value)
   }
@@ -522,6 +530,12 @@ export class JournalStore {
   versions(root: string, path: string, after: number, since: number): StoredEntry[] {
     return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
       FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND changed_at > ?4 ORDER BY seq`).all(root, path, after, since).map((row) => this.entryOf(row))
+  }
+
+  /** The latest entry before `before` that wrote `ref` at this path, Git's put-backs aside: who made the version Git restored. */
+  madeVersion(root: string, path: string, ref: ContentRef | null, before: number): StoredEntry | undefined {
+    const row = this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE root=?1 AND path=?2 AND after IS ?3 AND seq < ?4 AND (git IS NULL OR git = 0) ORDER BY seq DESC LIMIT 1").get(root, path, ref, before)
+    return row ? this.entryOf(row) : undefined
   }
 
   /** A file's last entry after `after`, without its line map; a rename away from it counts. */
