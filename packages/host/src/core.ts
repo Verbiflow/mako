@@ -321,7 +321,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
   })
   const { catalog, store } = threads
-  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged())
+  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), (session) => {
+    const parsed = SessionIdSchema.safeParse(session)
+    const placed = parsed.success && store ? store.sessionPlacement(parsed.data) : undefined
+    if (!store || !placed) return undefined
+    const conversation = store.conversationsOf(placed.session).at(-1)
+    const live = conversation ? late.conversations?.live.session(conversation) : undefined
+    if (!live) return undefined
+    const title = store.thread(placed.thread)?.title ?? live.title
+    const project = projectFolder(store.worktrees(), live.cwd)
+    return { thread: placed.thread, session: placed.session, folder: live.cwd, ...(project && { project }), ...(conversation && { conversation }), ...(title && { title }) }
+  })
   const appUpdates = new Updates({
     environment,
     git,
@@ -1040,6 +1050,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     nativeStops: { token: (path) => runs.stopToken(path), abort: (path, token) => runs.abort(path, token) },
     homes: workspaces.environments,
     emit,
+    archivedThread: ({ conversationId, sessionId }) => control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) }),
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })
   /** Archives a cloud Thread, or brings an archived one back here, as its window asked. */
