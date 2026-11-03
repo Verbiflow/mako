@@ -8,7 +8,6 @@ import { Prose } from "../src/components/transcript/markdown"
 import type { SentProse } from "../src/lib/prompt-markdown"
 import { attachmentReference } from "../src/lib/attachment-references"
 import { writeDraft } from "../src/lib/context/draft"
-import { RetainedRequests } from "../src/components/viewer/acp-panel"
 import { continueTurnPrompt, makoPrompts, recoverableRequests, recoveriesByPlace, turnStops } from "../src/state/prompt-delivery"
 import { toExchanges, turnRequest } from "../src/lib/exchanges"
 import { FailedRequestsContext } from "../src/components/transcript/failed-requests"
@@ -44,7 +43,7 @@ import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
-import { LiveActionStatus } from "../src/components/viewer/live-action-status"
+import { useLiveActionNotice } from "../src/components/viewer/live-action-notice"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
 import { ProducedNotice } from "../src/components/composer/composer-notices"
 import { useApprovalStatusNotice } from "../src/components/viewer/approval-status-notice"
@@ -56,7 +55,8 @@ import { TooltipProvider } from "../src/components/ui/tooltip"
 import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 import { threadsStore } from "../src/state/threads"
 import { viewedThread } from "../src/state/thread-viewing"
-import { TransferStatus } from "../src/components/viewer/transfer-status"
+import { useTransferNotice } from "../src/components/viewer/transfer-notice"
+import type { ComposerNotice } from "../src/extend/notices"
 import { ConversationRelations } from "../src/components/viewer/conversation-relations"
 import { savedMessageDraft } from "../src/lib/saved-message-draft"
 
@@ -267,25 +267,22 @@ control.actions = [
   },
 ]
 publish()
-assert.equal(renderToStaticMarkup(<LiveActionStatus />), "")
-assert.match(
-  renderToStaticMarkup(<LiveActionStatus history />),
-  /Compaction completed/
-)
+/** A notice above the composer as words: its title, line, detail and actions; nothing when it doesn't stand. */
+function NoticeWords({ use }: { use: () => ComposerNotice | null }) {
+  const notice = use()
+  return notice ? <p>{[notice.title, notice.description, ...(notice.actions ?? []).map((action) => action.label)].filter(Boolean).join(" | ")}{notice.detail}</p> : null
+}
+assert.equal(renderToStaticMarkup(<NoticeWords use={useLiveActionNotice} />), "", "a finished compaction leaves no notice, and no menu keeps it")
 control.actions[0]!.state = { kind: "accepted" }
 publish()
-assert.match(renderToStaticMarkup(<LiveActionStatus />), /Compaction in progress/)
+assert.match(renderToStaticMarkup(<NoticeWords use={useLiveActionNotice} />), /Compaction in progress/)
 control.actions[0]!.state = {
   kind: "uncertain",
   reason: "Connection lost after dispatch",
 }
 publish()
-assert.match(
-  renderToStaticMarkup(<LiveActionStatus />),
-  /Disconnect and keep history/
-)
-assert.match(renderToStaticMarkup(<LiveActionStatus />), /aria-expanded="false"/)
-assert.doesNotMatch(renderToStaticMarkup(<LiveActionStatus />), /Connection lost after dispatch/, "details mount only when opened; interactive coverage lives in test-recovery-notice-ui")
+assert.match(renderToStaticMarkup(<NoticeWords use={useLiveActionNotice} />), /Disconnect and keep history/)
+assert.match(renderToStaticMarkup(<NoticeWords use={useLiveActionNotice} />), /Connection lost after dispatch/)
 control.transfers = [
   {
     input: { id, provider: "claude", text: "saved request", attachments: [] },
@@ -306,22 +303,14 @@ control.transfers = [
   },
 ]
 publish()
-assert.equal(renderToStaticMarkup(<TransferStatus />), "")
-assert.match(
-  renderToStaticMarkup(<TransferStatus history />),
-  /Inspect transferred context/
-)
+assert.equal(renderToStaticMarkup(<NoticeWords use={useTransferNotice} />), "", "an accepted switch leaves no notice")
 control.transfers[0]!.state = {
   kind: "uncertain",
   error: "Acceptance not confirmed",
 }
 publish()
-assert.match(
-  renderToStaticMarkup(<TransferStatus />),
-  /Acceptance not confirmed/
-)
-assert.match(renderToStaticMarkup(<TransferStatus />), /aria-expanded="true"/)
-assert.match(renderToStaticMarkup(<TransferStatus />), /saved request/)
+assert.match(renderToStaticMarkup(<NoticeWords use={useTransferNotice} />), /Acceptance not confirmed/)
+assert.match(renderToStaticMarkup(<NoticeWords use={useTransferNotice} />), /saved request/)
 control.ancestry = {
   kind: "fork",
   parentId: id,
@@ -548,7 +537,6 @@ console.log("Prompt Markdown: the reported bullet/bold case, normal paragraph fl
 conversation.blocks = [{type:"user",requestId:"stopped",text:"Keep this original question"}]
 conversation.requests = [{id:"stopped",text:"Keep this original question",attachments:[],status:"interrupted"}]
 publish()
-assert.equal(renderToStaticMarkup(<RetainedRequests />), "")
 assert.equal(recoverableRequests(conversation).length, 0)
 assert.equal(recoveriesByPlace(conversation).onTurns.size, 0, "a stopped turn says so in its own footer, not in a failure row")
 const stoppedMarkup = renderToStaticMarkup(<Exchange interrupted exchange={{id:"stopped",prompt:{id:"stopped",role:"user",requestId:"stopped",blocks:[{type:"text",text:"Keep this original question"}]},response:[],system:[]}} />)
@@ -658,10 +646,7 @@ assert.doesNotMatch(typedMarkup, /data-turn-continued/)
 conversation.requests.push({id:"unsent",text:"Do not lose a pre-dispatch stop",attachments:[],status:"interrupted"})
 conversation.requests.push({id:"failed",text:"Failed input remains recoverable",attachments:[],status:"failed"})
 publish()
-const recoveries = renderToStaticMarkup(<RetainedRequests />)
-assert.match(recoveries, /Saved messages \(2\)/)
-assert.doesNotMatch(recoveries, /Do not lose a pre-dispatch stop|Failed input remains recoverable|Keep this original question|Send again/, "the archive's rows mount only when opened")
-assert.deepEqual(recoverableRequests(conversation).map(request => request.id), ["unsent", "failed"], "both saved messages remain available behind the disclosure")
+assert.deepEqual(recoverableRequests(conversation).map(request => request.id), ["unsent", "failed"], "both saved messages remain recoverable, each as its row")
 // Neither reached the transcript, so both are drawn after its last turn, quoting their words.
 assert.deepEqual(recoveriesByPlace(conversation).apart.map((request) => request.id), ["unsent", "failed"])
 const apart = renderToStaticMarkup(<FailureRow conversationId={id} request={conversation.requests.find((request) => request.id === "failed")!} quoted />)

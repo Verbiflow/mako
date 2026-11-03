@@ -1202,12 +1202,12 @@ export function Composer() {
           ? `Start a ${harnessTitle(newHarness)} session in this Thread`
           : `Ask ${harnessTitle(newHarness)} for a change`
 
-  // The composer is a structural pane, not a floating card: it tiles the full
-  // width of the conversation under one hairline, like every other pane, so
-  // the queue, permissions and the input share one edge and the control row
-  // has the room it needs.
+  // The composer has no line over it. What waits on the person (asks, the
+  // queue, notices) sits flat on the conversation's surface, and the input
+  // with its routing row is one raised box inset from the pane's edges, so
+  // where you type reads at a glance without a divider.
   return (
-    <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline bg-surface", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
+    <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col bg-surface", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
       <div className="flex min-h-0 w-full flex-col">
         <GoalBar />
         <FinAsks />
@@ -1257,7 +1257,7 @@ export function Composer() {
             void attach([...event.dataTransfer.files])
           }}
           className={cn(
-            "relative flex min-h-0 flex-col",
+            "relative mx-3 mb-3 flex min-h-0 flex-col rounded-lg bg-raised",
             (dragging || referencing) && "ring-1 ring-foreground/40 ring-inset"
           )}
         >

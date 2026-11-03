@@ -1,11 +1,12 @@
 import { memo } from "react"
 import { isBrief, YOUR_APEX, YOUR_FINS, type AgentWords } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD } from "@mako/host/contracts/agents"
-import { ApexMark } from "@/components/ui/apex-mark"
+import { AgentAvatar } from "@/components/transcript/message-avatar"
 import { Prose } from "@/components/transcript/markdown"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { formatTime } from "@/lib/format"
-import { useApexTitle } from "@/state/apex-fins"
+import { useApexHarness, useApexTitle, useThreadChildren } from "@/state/apex-fins"
+import { useAcp } from "@/state/acp"
 
 /**
  * Words another Thread wrote into this one, where a prompt would stand: a
@@ -16,13 +17,16 @@ import { useApexTitle } from "@/state/apex-fins"
 export const AgentWordsCard = memo(function AgentWordsCard({ words, raw, timestamp }: { words: AgentWords; raw: string; timestamp?: number }) {
   const source = useTranscriptSource()
   const apexTitle = useApexTitle(source.liveId, source.threadPath)
+  const apexHarness = useApexHarness(source.liveId, source.threadPath)
   const { from, body, passedOn } = words
+  const fin = useFinHarness(source.liveId, from === YOUR_APEX || from === YOUR_FINS ? undefined : from)
+  const harness = from === YOUR_APEX ? apexHarness : fin
   const name = from === YOUR_APEX ? (apexTitle ?? `its ${APEX_WORD}`) : from === YOUR_FINS ? `its ${FIN_WORD}s` : from
   const kind = passedOn ? "Passed on" : from === YOUR_FINS ? "Reports" : isBrief(raw) ? "Brief" : "Message"
   return (
     <div data-agent-words={kind} className="rounded-lg bg-shell/55 px-4 py-3 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
       <div className="flex items-center gap-2 text-label text-faint">
-        <ApexMark className="size-3.5" />
+        <AgentAvatar harness={harness} label={name} className="bg-surface" />
         <span className="font-medium text-muted-foreground">{passedOn ? `Your message, passed on by ${name}` : `From ${name}`}</span>
         {passedOn ? null : <span>· {kind}</span>}
         {timestamp ? (
@@ -41,3 +45,10 @@ export const AgentWordsCard = memo(function AgentWordsCard({ words, raw, timesta
     </div>
   )
 })
+
+/** The harness of the Fin of this Thread named `name`, for its avatar on what it wrote. */
+function useFinHarness(liveId: string | undefined, name: string | undefined): string | undefined {
+  const thread = useAcp((state) => (liveId ? state.conversations[liveId]?.threadId : undefined))
+  const children = useThreadChildren(name ? thread : undefined)
+  return name ? children.find((agent) => agent.title === name || agent.child?.name === name)?.provider : undefined
+}

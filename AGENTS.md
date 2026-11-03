@@ -2025,9 +2025,21 @@ deliberate action and never rides along with a commit.
 ## Design rules
 
 - Tokens live in `src/index.css` and nowhere else. No literal colors in
-  components. Chrome (`--shell`) carries no shadow, ever. Structural workspace
-  panes tile edge-to-edge with square edges and 1px dividers; rounded `.card`
-  surfaces are reserved for content within a pane. Real shadows exist only on
+  components. Chrome (`--shell`) carries no shadow, ever. **No lines in the
+  chrome.** The title strip, the rail and each pane's tab strip sit on the
+  shell; a pane's body is the surface; panes side by side are parted by a 6px
+  gutter of the shell (`Divider`, whose bar shows only under the pointer), and
+  a pane's sections by tone and spacing, never a hairline. The composer's
+  input is one raised box inset from its pane. Hairlines stay for content
+  (a diff's file headers, a table) and controls (an input's or a button's
+  outline). Structural panes keep square edges; rounded `.card` surfaces are
+  reserved for content within a pane.
+- **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
+  the person's own face beside their prompt, an agent's tile (its harness's
+  glyph on the raised plane) on its reply's byline, and the sender's tile on
+  words another Thread wrote in (an Apex's brief, a Fin's report). Every
+  avatar is square with a corner just soft enough not to cut, the rail
+  footer's too. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
 - **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
   text — and stays that quiet.** The one accent is the brand's sea
@@ -2208,10 +2220,19 @@ in the command palette, not as an extra composer icon. Context usage is shown
 only with an exact, usable reading; unsupported providers do not get an empty
 ring. Chat activity uses one compact 20px mark and no redundant Responding row
 while answer text streams. Thought-process details remain available without a
-second animated status. The composer carries no Queue/Steer control, not in
-the footer and not in the conversation menu: the placeholder and the send
-button's icon say what Enter does, Cmd+Enter does the other, and the
-preference is a row in Settings > Conversation. The
+second animated status. The composer carries no Queue/Steer control: the
+placeholder and the send button's icon say what Enter does, Cmd+Enter does
+the other, and the preference is a row in Settings > Conversation. The
+composer bar has no overflow menu either. Its `···` once held a compaction
+control, saved messages, the history of switches, steering and approvals,
+and End live session, and showed a days-old "Steering message not accepted"
+to a person who had never opened it. Each has a home now or is gone:
+compaction is in the context meter beside the composer, a message that
+wasn't answered is its row in the transcript where it failed, a switch, a
+steering message or an approval is a notice above the composer only while it
+is under way or went wrong (`src/desk/notices.ts`), and an idle provider
+closes itself after ten minutes. A notice that no longer stands is not kept
+anywhere to be found later. The
 routing row gives way in a fixed order as the pane narrows (the centre can be
 450px), found by measuring rather than a width breakpoint
 (`use-compact-row.ts`): the access chip drops to its glyph first, the harness

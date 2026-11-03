@@ -24,7 +24,7 @@ export const ThreadStrip = memo(function ThreadStrip() {
     <div
       role="tablist"
       aria-label="Open threads"
-      className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-hairline bg-shell px-1.5"
+      className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto bg-shell px-1.5"
     >
       {tabs.map((path) => (
         <ThreadTab key={path} path={path} active={path === activePath} />

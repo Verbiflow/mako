@@ -79,7 +79,7 @@ export function TurnUndoDialog({ conversation, scope, prompt, open, onOpenChange
           {preview ? <Groups preview={preview} whose={whose} done={state.kind === "done"} /> : null}
           {state.kind === "done" && state.result.backup ? <Backup name={state.result.backup} /> : null}
         </div>
-        <div className="flex shrink-0 items-center gap-3 border-t border-hairline px-5 py-3">
+        <div className="flex shrink-0 items-center gap-3 px-5 py-3">
           <p className="min-w-0 flex-1 text-label text-faint">
             {state.kind === "done" ? "Nothing else in the checkout changed." : "The checkout is kept first, as a Git ref, for 14 days. Rewind puts the whole workspace back instead."}
           </p>

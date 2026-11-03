@@ -174,7 +174,7 @@ export function ProbeReport({ view }: { view: AppProbeView }) {
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
-    <section className="grid gap-1.5 border-t border-hairline px-2 pt-2 pb-1.5">
+    <section className="grid gap-1.5 px-2 pt-2 pb-1.5">
       <div>
         <h3 className="text-label font-medium text-foreground">{title}</h3>
         {note ? <p className="text-label text-faint">{note}</p> : null}
