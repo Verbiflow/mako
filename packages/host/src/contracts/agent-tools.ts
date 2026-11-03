@@ -73,6 +73,8 @@ export interface AgentsStarted {
   /** What it waits for, when queued. */
   why?: string
   tree: { running: number; started: number; of: { running: number; started: number } }
+  /** This Mac's room: Fins at work on it, every tree's, and how many it runs at once now, measured (`macSlots`). */
+  mac?: { working: number; slots: number; why: string }
   /** A repeat of an earlier spawn: this is that spawn's Fin. */
   deduped?: true
   /** A `wait` start's outcome; a repeat of one answers its result again. */

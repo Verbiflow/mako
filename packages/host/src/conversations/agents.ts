@@ -80,8 +80,11 @@ import { AgentWakes, FROM_AGENTS, fromAgent, type Notice, type ParentReady } fro
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
+import { macSlots, type MacReading, type MacSlots } from "./mac-capacity.js"
 
 const NONE: readonly NativeAgent[] = []
+/** How often Fins waiting for this Mac's room look for it. */
+const ROOM_EVERY_MS = 10_000
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
 const READ_ENTRIES = 40
 const READ_CHARS = 8_000
@@ -106,6 +109,8 @@ export interface AgentsDeps {
   /** The modes `harness`'s live driver declares, each with its access tier; undefined for one that declares none. */
   modes(harness: string): readonly LiveSessionMode[] | undefined
   budget?: TreeBudget
+  /** This Mac's cores, memory and load (`MacCapacity`): Fins past what it runs at once wait. Without it, only the tree's budget holds. */
+  capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
   now?(): number
 }
@@ -124,6 +129,8 @@ interface QueuedStart {
   input: AgentsStartInput
   tier: AccessTier
   harness: string
+  /** What held it: the tree's running budget, or this Mac's room (`place-full`). A record from before says neither. */
+  why?: Extract<QueueReason, "tree-running" | "place-full">
 }
 
 const QueuedStartSchema = z.object({
@@ -131,6 +138,7 @@ const QueuedStartSchema = z.object({
   input: hostCallSchema("mako:agents-start").def.items[1],
   tier: z.enum(ACCESS_TIER_NAMES),
   harness: z.string(),
+  why: z.enum(["tree-running", "place-full"]).optional(),
 }) satisfies z.ZodType<QueuedStart>
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
@@ -189,6 +197,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   private seen: unknown
   private draining = false
   private stopped = false
+  private readonly stopRoomWatch: () => void
+  /** This Mac's room as admission last read it, which every answer carries. */
+  private mac: MacSlots | undefined
 
   constructor(deps: AgentsDeps) {
     this.deps = deps
@@ -218,6 +229,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       counts: (conversation) => this.counts(conversation),
       now: deps.now,
     })
+    // The Mac frees up without a Fin ending, as the person's own build finishes: what waits for its room goes then.
+    this.stopRoomWatch = deps.capacity ? deps.jobs.every("start the Fins this Mac has room for", ROOM_EVERY_MS, () => {
+      if (this.waitingForRoom() > 0) void this.drain()
+    }) : () => {}
   }
 
   /** What the last host left: reports no Apex heard, sent again under their ids, Fins' messages its exit paused, and spawns the budget held. */
@@ -472,12 +487,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree).length
     if (counts.started + queued >= this.budget.started)
       return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
-    if (counts.running >= this.budget.running) {
-      const queued: QueuedStart = { lead: apex, input, tier, harness }
+    // Past the Mac's room it waits behind every Fin that waits for room already, whichever tree's.
+    const mac = await this.macSlots()
+    const why = counts.running >= this.budget.running ? "tree-running" : mac && (mac.working >= mac.slots || this.waitingForRoom() > 0) ? "place-full" : undefined
+    if (why) {
+      const queued: QueuedStart = { lead: apex, input, tier, harness, why }
       store.queueSpawn({ op, tree, record: JSON.stringify(queued), at: this.now() })
-      hostLog("agents", "start queued", { op, why: "tree-running", running: counts.running, budget: this.budget.running })
+      hostLog("agents", "start queued", { op, why, running: counts.running, budget: this.budget.running, ...mac && { working: mac.working, slots: mac.slots, mac: mac.why } })
       this.forget(apex.thread)
-      return this.queuedAnswer(op, apex, false)
+      const answer = this.queuedAnswer(op, apex, false)
+      if (why === "place-full") void this.drain()
+      return answer
     }
     return this.launch(op, { lead: apex, input, tier, harness })
   }
@@ -819,6 +839,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   dispose(): void {
     this.stopped = true
+    this.stopRoomWatch()
     this.runs.dispose()
     this.wakes.dispose()
     for (const wake of this.waiters) wake()
@@ -897,9 +918,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store || this.draining || this.stopped) return
     this.draining = true
     try {
+      const mac = store.queuedSpawns().length ? await this.macSlots() : undefined
+      let room = mac ? mac.slots - mac.working : Number.POSITIVE_INFINITY
       for (const spawn of store.queuedSpawns()) {
         const counts = this.treeCounts(spawn.tree)
         if (counts.running >= this.budget.running) continue
+        // First come, first started: once the Mac is full, a later spawn of another tree doesn't go ahead of this one.
+        if (room <= 0) break
+        room -= 1
         const queued = parseQueued(spawn.record)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
         if (queued && !store.edges().byOp(spawn.op)) {
@@ -925,6 +951,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(conversation && { conversation }),
       state: state.kind,
       tree: { ...counts, of: { ...this.budget } },
+      ...this.mac && { mac: { working: this.mac.working, slots: this.mac.slots, why: this.mac.why } },
       ...(deduped && { deduped: true as const }),
       next: afterStart(edge.asked.wake ?? "decisions"),
     }
@@ -935,13 +962,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     const tree = this.rootOf(apex.thread)
     const queue = store.queuedSpawns().filter((spawn) => spawn.tree === tree)
     const queued = parseQueued(queue.find((spawn) => spawn.op === op)?.record ?? "")
-    const ahead = queue.findIndex((spawn) => spawn.op === op)
     const counts = this.treeCounts(tree)
+    const mac = this.mac
+    const forRoom = queued?.why === "place-full"
+    const forTheMac = store.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full")
+    const ahead = (forRoom ? forTheMac : queue).findIndex((spawn) => spawn.op === op)
     return {
       name: queued?.input.name ?? queued?.input.title ?? "queued",
       state: "queued",
-      why: `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${Math.max(0, ahead)} ahead).`,
+      why: forRoom && mac
+        ? `This Mac is busy: it runs ${mac.slots} Fins at once now (${mac.why}) and ${mac.working} are at work; it starts when one ends or the Mac frees up (${Math.max(0, ahead)} ahead).`
+        : `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${Math.max(0, ahead)} ahead).`,
       tree: { ...counts, of: { ...this.budget } },
+      ...mac && { mac: { working: mac.working, slots: mac.slots, why: mac.why } },
       ...(deduped && { deduped: true as const }),
       next: afterStart(queued?.input.wake ?? "decisions"),
     }
@@ -1372,6 +1405,24 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** How a tree stands against its budgets: Threads at work now, and Threads it started. */
+  /** This Mac's room now, every tree's working Fins counted; undefined without a reading of it. */
+  private async macSlots(): Promise<MacSlots | undefined> {
+    const reading = await this.deps.capacity?.read().catch((error: Error) => {
+      hostWarn("agents", "this Mac's capacity couldn't be read; only the tree's budget holds", { error: errorMessage({ error }) })
+      return undefined
+    })
+    if (!reading) return undefined
+    const edges = this.store()?.edges().all ?? []
+    const working = edges.filter((edge) => ["working", "starting"].includes(this.stateOf(edge).kind)).length
+    this.mac = macSlots(reading, working)
+    return this.mac
+  }
+
+  /** Spawns waiting for this Mac's room, every tree's. */
+  private waitingForRoom(): number {
+    return this.store()?.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full").length ?? 0
+  }
+
   private treeCounts(root: string): TreeCounts {
     const store = this.store()
     if (!store) return { running: 0, started: 0 }
@@ -1419,10 +1470,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()
     if (!store) return []
     const spawns = store.queuedSpawns()
-    return spawns.flatMap((spawn) => {
+    return spawns.flatMap((spawn, at) => {
       const queued = parseQueued(spawn.record)
       if (queued?.lead.thread !== thread) return []
-      const ahead = spawns.filter((other) => other.tree === spawn.tree && other.at < spawn.at).length
+      const reason: QueueReason = queued.why ?? "tree-running"
+      const ahead = spawns.slice(0, at).filter((other) => (reason === "place-full" ? parseQueued(other.record)?.why === "place-full" : other.tree === spawn.tree)).length
       const placeholder: ThreadParent = {
         child: ThreadIdSchema.parse(namedUuid(spawn.op)),
         parent: ThreadIdSchema.parse(thread),
@@ -1435,7 +1487,6 @@ export class Agents implements AgentOperations, ConversationChildren {
         startedBy: { kind: "agent", session: SessionIdSchema.parse(queued.lead.session) },
         createdAt: spawn.at,
       }
-      const reason: QueueReason = "tree-running"
       return [childEntry(placeholder, { source: "live", queued: { reason, ahead } }, {})]
     })
   }

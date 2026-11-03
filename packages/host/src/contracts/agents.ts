@@ -196,7 +196,7 @@ export const ReportSchema = z.object({
 })
 export type Report = z.infer<typeof ReportSchema>
 
-/** Why a spawn waits: the tree's running budget, or (from 8.4) its place. */
+/** Why a spawn waits: the tree's running budget, this Mac's room (`macSlots`), or (from 8.4) another place. */
 export type QueueReason = "tree-running" | "place-full" | "device-offline"
 
 /**
@@ -347,7 +347,7 @@ const NOTE_LIMIT = 8192
 function entryState(state: ChildState): NativeAgent["state"] {
   switch (state.kind) {
     case "queued":
-      return { kind: "waiting", reason: state.reason === "tree-running" ? `Queued: ${state.ahead} ahead, the tree's running budget is in use` : `Queued: ${state.ahead} ahead` }
+      return { kind: "waiting", reason: state.reason === "tree-running" ? `Queued: ${state.ahead} ahead, the tree's running budget is in use` : state.reason === "place-full" ? `Queued: this Mac is busy, ${state.ahead} ahead` : `Queued: ${state.ahead} ahead` }
     case "starting":
       return { kind: "working", activity: "Starting" }
     case "working":

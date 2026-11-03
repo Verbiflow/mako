@@ -586,6 +586,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     const ticking = uploads
     shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
+    catalog.onLinkDue((form) => {
+      if (form === "copies" || form === "originals")
+        void ticking.renew().catch((error: Error) => hostWarn("sync", "this device's links couldn't be renewed", { error: error.message }))
+    })
   }
   declareSyncMethods(methods, uploads, syncReadings)
   // The person's access choice per harness, which a start from any surface reads: their account's, kept here too for

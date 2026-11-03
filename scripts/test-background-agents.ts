@@ -20,6 +20,7 @@ import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-ide
 import { lastStep } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
+import { FIN_LOAD, macSlots } from "@mako/host/conversations/mac-capacity"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
 import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
 import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
@@ -209,6 +210,59 @@ async function explicitReports(): Promise<void> {
     assert.ok("children" in listed && listed.children[0]!.state.kind === "blocked")
     const own = await w.agents.report(apex.caller, { status: "done", summary: "x", clientKey: "z" })
     assert.ok("refused" in own && own.refused === "no-parent", "a Thread nobody started has no apex to report to")
+  } finally {
+    await w.close()
+  }
+}
+
+async function macRoom(): Promise<void> {
+  const GB = 1024 ** 3
+  // The person's Mac as it stood when Fins took it over: 14 cores, 36 GB, 13 Fins at work and the load at 26.8.
+  assert.deepEqual(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 26.8 }, 13).slots, 5, "13 Fins at once is more than this Mac runs")
+  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0 }, 0).slots, 6, "an idle 14-core Mac runs six")
+  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).slots, 2, "the person's own work takes its cores first")
+  assert.equal(macSlots({ cores: 14, memoryBytes: 8 * GB, load: 0 }, 0).slots, 4, "memory bounds it too")
+  assert.equal(macSlots({ cores: 4, memoryBytes: 16 * GB, load: 6 }, 0).slots, 1, "a small, busy Mac still runs one at a time")
+  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).slots, 0, "a Mac out of swap takes none")
+  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).why, "14 cores, 36 GB, 8 cores of other work")
+
+  // A 6-core Mac: room for two Fins with nothing else at work. Each working Fin's load is FIN_LOAD.
+  let others = 0
+  let working = 0
+  const w = new AgentsWorld({
+    root: join(root, "mac-room"),
+    script: (turn) => turn.text.includes("You're fin:") ? (working++, turn.world.hold(turn.conversation).then(() => (working--, "stopped"))) : "ok",
+    capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, load: working * FIN_LOAD + others }) },
+  })
+  try {
+    const apex = await w.apex("opencode")
+    const other = await w.apex("claude")
+    const brief = { objective: "Hold" }
+    const one = await w.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
+    const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
+    assert.ok(!("refused" in one) && !("refused" in two) && one.mac?.slots === 2, JSON.stringify(one))
+    await waitFor(() => working === 2, "both Fins at work")
+    const three = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3", cwd: w.root })
+    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past this Mac's room a spawn queues, whatever the tree's budget")
+    assert.equal(three.why, "This Mac is busy: it runs 2 Fins at once now (6 cores, 16 GB) and 2 are at work; it starts when one ends or the Mac frees up (0 ahead).")
+    assert.deepEqual(three.mac, { working: 2, slots: 2, why: "6 cores, 16 GB" }, "the Apex sees the Mac's room in the answer")
+    const four = await w.agents.start(other.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
+    assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), `another tree's spawn waits behind it: the Mac's room is first come, first started: ${JSON.stringify(four)}`)
+    const waiting = (apexConversation: string) => w.agents.roster(apexConversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
+    assert.deepEqual(waiting(apex.conversation), ["Queued: this Mac is busy, 0 ahead"])
+    assert.deepEqual(waiting(other.conversation), ["Queued: this Mac is busy, 1 ahead"])
+    // The person starts a build of their own: it takes the cores a Fin that ends would have freed.
+    others = 2
+    await w.agents.stop(apex.caller, { child: "one" })
+    await waitFor(() => working === 1, "one ended")
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(w.store.queuedSpawns().length, 2, "a Mac busy with the person's own work starts nothing more")
+    others = 0
+    await w.agents.stop(apex.caller, { child: "two" })
+    await waitFor(() => w.store.queuedSpawns().length === 0 && working === 2, "both waiting spawns to start once the build ended and a Fin did")
+    assert.deepEqual(w.store.edges().all.map((edge) => edge.name).sort(), ["four", "one", "three", "two"], "first come, first started")
+    await w.agents.stop(apex.caller, { child: "all" })
+    await w.agents.stop(other.caller, { child: "all" })
   } finally {
     await w.close()
   }
@@ -442,6 +496,7 @@ try {
   await startsAndWakes()
   await explicitReports()
   await refusals()
+  await macRoom()
   await harnessLadders()
   await stopAllUnqueues()
   await followsShellRuns()

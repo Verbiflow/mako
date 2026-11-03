@@ -733,7 +733,7 @@ export class CloudAccounts {
    */
   async deviceRecords(deviceId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/devices/${encodeURIComponent(deviceId)}/records`, this.#require()).toString()
-    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+    return this.#recordsLink(base)
   }
 
   /**
@@ -742,13 +742,20 @@ export class CloudAccounts {
    */
   async deviceOriginals(deviceId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/devices/${encodeURIComponent(deviceId)}/originals`, this.#require()).toString()
-    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+    return this.#recordsLink(base)
+  }
+
+  /** A records link at `base` under this Mac's connection token, with when the token is due for renewal (`renewAtMs`). */
+  async #recordsLink(base: string): Promise<RecordsLink> {
+    const token = await this.#connectionToken()
+    const renewAt = this.#token?.token === token ? this.#token.renewAt : undefined
+    return { id: base, base, authorization: `Bearer ${token}`, ...renewAt !== undefined && { renewAt } }
   }
 
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them, for sending a move's. */
   async threadRecords(threadId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/threads/${encodeURIComponent(threadId)}/records`, this.#require()).toString()
-    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+    return this.#recordsLink(base)
   }
 
   /**

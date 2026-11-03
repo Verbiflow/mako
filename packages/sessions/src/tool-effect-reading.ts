@@ -376,7 +376,8 @@ function unifiedFiles(patch: string): UnifiedFile[] {
 
 /** A header's path: `/dev/null` is none, Git's `a/`/`b/` prefix and a trailing timestamp go. */
 function headerPath(header: string, prefix: string): string | undefined {
-  const path = header.replace(/\t.*$/, "").trim()
+  const tab = header.indexOf("\t")
+  const path = (tab < 0 ? header : header.slice(0, tab)).trim()
   if (path === "/dev/null") return undefined
   return path.startsWith(prefix) ? path.slice(prefix.length) : path
 }

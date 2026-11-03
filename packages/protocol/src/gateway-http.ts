@@ -13,6 +13,11 @@ export type GatewayHttpOptions = {
   id: string
   base: string
   authorization: () => string | Promise<string>
+  /**
+   * Renews what `authorization` gives: a call the gateway refused with a 401 renews once and goes again, so a token
+   * that ran out while its holder waited is never what a call fails on.
+   */
+  renew?: () => Promise<void>
   fetch?: typeof fetch
   /** Waits before each repeat, in ms; the last failure is thrown once they're spent. */
   backoff?: readonly number[]
@@ -82,6 +87,7 @@ export function gatewayCalls(options: GatewayHttpOptions): GatewayCall {
     // Every try of a call carries one correlation ID: a call sent twice shows in the gateway's log as two requests under it.
     const trace = init.trace ?? { tries: 0, failures: [] }
     const correlationId = (trace.correlationId = crypto.randomUUID())
+    let renewed = false
     for (let attempt = 0; ; attempt++) {
       trace.tries = attempt + 1
       const headers = new Headers({ authorization: await options.authorization(), [CORRELATION_HEADER]: correlationId })
@@ -96,6 +102,13 @@ export function gatewayCalls(options: GatewayHttpOptions): GatewayCall {
         failure = error
       }
       if (response && (response.ok || init.accept?.includes(response.status))) return response
+      if (response?.status === 401 && options.renew && !renewed) {
+        renewed = true
+        trace.failures.push(`401 after ${Math.round(performance.now() - began)} ms, renewed`)
+        await response.body?.cancel()
+        await options.renew()
+        continue
+      }
       const repeat = attempt < backoff.length && (!response || REPEATED.has(response.status))
       if (!repeat) {
         if (!response) throw failure
