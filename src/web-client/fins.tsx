@@ -14,6 +14,7 @@ import { places, startable, type Place } from "./places"
 import { Group, Row, Switch } from "./settings-rows"
 import { Sheet, SheetScroll } from "./sheet"
 import { macCall } from "./start"
+import { SEA_MARK } from "@/lib/sea-mark"
 
 type Mac = Extract<Place, { kind: "mac" }>
 
@@ -232,7 +233,7 @@ function RulesGroup({ policy, profiles, signedIn, onSave, opened }: {
         </button>
       ))}
       <button type="button" onClick={() => setOpen({ id: "otherwise" })} className="web-row flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left">
-        <span aria-hidden className="flex size-5 shrink-0 items-center justify-center bg-[var(--ember-soft)] text-label font-medium text-[var(--ember)]">∗</span>
+        <span aria-hidden style={SEA_MARK} className="flex size-5 shrink-0 items-center justify-center text-label font-medium">∗</span>
         <span className="min-w-0 flex-1">
           <span className="block text-ui text-muted-foreground">{policy.rules.length ? "When no rule fits" : "Every Fin, until you add a rule"}</span>
           <span className="block truncate text-label text-faint">{policy.otherwise ? targetWords(policy.otherwise, profiles) : "The Apex's own harness"}</span>
