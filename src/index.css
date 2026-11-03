@@ -1399,6 +1399,9 @@ diffs-container {
 .fin-pip[data-pip="queued"] {
   box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--foreground) 28%, transparent);
 }
+.fin-pip[data-pip="idle"] {
+  background: color-mix(in oklab, var(--foreground) 50%, transparent);
+}
 .fin-pip[data-pip="failed"] {
   background: var(--negative);
 }
@@ -1443,6 +1446,9 @@ diffs-container {
 [data-thread-row][data-active] .fin-pips {
   --pips-under: var(--raised);
   --pips-over: transparent;
+}
+
+/*
  * The crew card's header bar: a thin strip split by group, the working
  * stretch alone in motion. A crest of light slides across it, transform
  * only, so the compositor moves it and the gate

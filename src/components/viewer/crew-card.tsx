@@ -16,10 +16,12 @@ import {
   XIcon,
 } from "lucide-react"
 import {
+  CHILD_GROUPS,
   childGroup,
   childLine,
   childStateOf,
   rollup,
+  rollupLabel,
   rollupLine,
   type ChildGroup,
   type Rollup,
@@ -49,21 +51,17 @@ const HEADINGS = {
   needs: "Needs you",
   working: "Working",
   queued: "Queued",
+  idle: "Idle",
   failed: "Failed",
   done: "Done",
 } satisfies Record<ChildGroup, string>
 
-const BAR_GROUPS: readonly ChildGroup[] = [
-  "needs",
-  "working",
-  "queued",
-  "failed",
-  "done",
-]
+const BAR_GROUPS: readonly ChildGroup[] = CHILD_GROUPS
 const BAR_TONE = {
   needs: "bg-caution",
   working: "bg-muted-foreground",
   queued: "bg-faint/50",
+  idle: "bg-faint",
   failed: "bg-negative/80",
   done: "bg-positive/70",
 } satisfies Record<ChildGroup, string>
@@ -489,7 +487,7 @@ export function CrewCard({
         )}
       >
         <ApexMark className="size-4 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 text-ui font-medium whitespace-nowrap text-foreground">
+        <span data-fin-counts={rollupLabel(counts)} className="shrink-0 text-ui font-medium whitespace-nowrap text-foreground">
           {finsWord(counts.total)}
         </span>
         <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">

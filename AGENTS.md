@@ -2086,6 +2086,19 @@ deliberate action and never rides along with a commit.
   (a diff's file headers, a table) and controls (an input's or a button's
   outline). Structural panes keep square edges; rounded `.card` surfaces are
   reserved for content within a pane.
+- **One count and one vocabulary for an Apex's Fins.** Every surface (the
+  composer's chip, the crew card, the rail's pips, the Agents panel, the stop
+  card, the phone's row) counts from the Thread's one roster
+  (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
+  `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
+  (`packages/host/src/contracts/children.ts`). They are Fins, never agents,
+  and they stand as needs you, working, queued, idle, failed or done; an idle
+  Fin is open for its next message, so it is neither working nor done and is
+  never background work. A Fin's step reads as a phrase (`readableStep`:
+  "Running gh pr checks 340", "Reading desk.tsx"), never the raw command or a
+  home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
+  without this; `npm run test:fin-counts-ui` draws every surface from one
+  roster and requires the same numbers, and `test:fin-words` holds the words.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, an agent's tile (its harness's
   glyph on the raised plane) on its reply's byline, and the sender's tile on

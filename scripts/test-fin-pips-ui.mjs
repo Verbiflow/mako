@@ -49,7 +49,7 @@ if (process.versions.electron) {
   console.log(`UI evidence: ${root}`)
 }
 
-const LETTER = { needs: "n", queued: "q", failed: "f", done: "d" }
+const LETTER = { needs: "n", queued: "q", idle: "i", failed: "f", done: "d" }
 
 /** The pips a roster draws, as `FinPips` reads them: one letter per Fin in the shared order. */
 function expectedPips(children) {
@@ -64,7 +64,7 @@ function expectedPips(children) {
 
 /** The groups the pips stand in, in order: each group's pips together, in `CHILD_GROUPS`' order. */
 function groupsOf(pips) {
-  const group = { n: "needs", w: "working", l: "working", q: "queued", f: "failed", d: "done" }
+  const group = { n: "needs", w: "working", l: "working", q: "queued", i: "idle", f: "failed", d: "done" }
   return [...pips].map((letter) => group[letter])
 }
 
@@ -127,7 +127,7 @@ async function check() {
   assert.equal(rail.pips.length, counts.total, "one pip per Fin")
   assert.deepEqual(groupsOf(rail.pips), CHILD_GROUPS.flatMap((group) => Array(counts[group]).fill(group)), "the pips stand in the shared order, each group as `rollup` counts it")
   assert.equal(rail.label, rollupLabel(counts))
-  assert.equal(rail.label, "12 Fins: 2 need you, 5 working, 2 queued, 3 done")
+  assert.equal(rail.label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
   assert.match(rail.rail, /12 Fins/, "the row says how many Fins")
   assert.equal(rail.height, 44, "the Apex's row is two lines, 44 px")
   const asking = orderedChildren(roster).filter((agent) => childGroup(childStateOf(agent)) === "needs")

@@ -1,7 +1,7 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { ChevronRightIcon } from "lucide-react"
-import { childGroup, childLine, childStateOf, childWord, type ChildGroup } from "@mako/host/contracts/children"
+import { childGroup, childLine, childStateOf, childWord, rollup, rollupLabel, rollupLine, type ChildGroup } from "@mako/host/contracts/children"
 import { APEX_ROLE, APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { harnessLabel } from "@/components/rail/harness-meta"
@@ -17,6 +17,7 @@ const HEADINGS = {
   needs: "Needs you",
   working: "Working",
   queued: "Queued",
+  idle: "Idle",
   failed: "Failed",
   done: "Done",
 } satisfies Record<ChildGroup, string>
@@ -76,6 +77,7 @@ export function ApexFinsSection({
       return row?.kind === "heading" ? `heading:${row.group}` : row ? `child:${row.agent.nativeId}` : index
     },
   })
+  const counts = rollup(children)
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = () => {
     if (!conversation) return
@@ -83,11 +85,11 @@ export function ApexFinsSection({
     for (const agent of threadChildren(acpStore.get(), thread)) if (agent.stoppable) void acp.stopAgent(conversation, agent.nativeId)
   }
   return (
-    <section data-apex-fins={children.length} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-2">
+    <section data-apex-fins={children.length} data-fin-counts={rollupLabel(counts)} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-2">
       <div className="flex h-7 items-center gap-1.5 px-2.5 text-label text-faint">
         <ApexMark className="size-3" />
         <span className="min-w-0 truncate text-muted-foreground">{apexTitle}'s {FIN_WORD}s</span>
-        <span className="tabular shrink-0">· {children.length}</span>
+        <span className="tabular min-w-0 shrink truncate">· {finsWord(counts.total)} · {rollupLine(counts)}</span>
         {stoppable && conversation ? (
           <button
             type="button"

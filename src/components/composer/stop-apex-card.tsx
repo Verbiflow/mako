@@ -5,7 +5,8 @@ import { Action } from "@/components/ui/kit"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { cn } from "@/lib/utils"
 import { useAcp } from "@/state/acp"
-import { stopCounts, threadChildren } from "@/state/apex-fins"
+import { stopCounts, threadChildren, threadRollup } from "@/state/apex-fins"
+import { rollupLabel, rollupLine, sameRollup } from "@mako/host/contracts/children"
 import { shallowEqual } from "@/state/store"
 
 /** The phone card's margin each side: `w-[calc(100vw-24px)]`. */
@@ -19,6 +20,7 @@ const PHONE_MARGIN = 12
 export function StopApexCard({ thread, phone, onApex, onAll, onClose }: { thread: string | undefined; phone?: boolean; onApex: () => void; onAll: () => void; onClose: () => void }) {
   const { working, reached } = useAcp((state) => stopCounts(threadChildren(state, thread)), shallowEqual)
   const others = reached - working
+  const counts = useAcp((state) => threadRollup(state, thread), sameRollup)
   const card = useRef<HTMLDivElement>(null)
   // The last working one finished while the card was up: nothing is left to ask about.
   useEffect(() => {
@@ -52,13 +54,14 @@ export function StopApexCard({ thread, phone, onApex, onAll, onClose }: { thread
       document.removeEventListener("keydown", escape, true)
     }
   }, [onClose])
-  const words = `${finsWord(working)} working${others ? `, ${others} more waiting` : ""}`
+  const words = `${finsWord(counts.total)} · ${rollupLine(counts)}`
   return (
     <div
       ref={card}
       role="dialog"
       aria-label={`Stop the ${APEX_WORD}`}
       data-stop-apex
+      data-fin-counts={rollupLabel(counts)}
       className={cn(
         "card-floating absolute z-30 flex max-h-[120px] flex-col gap-1.5 p-1.5",
         phone ? "bottom-[calc(100%+8px)] w-[calc(100vw-24px)]" : "right-0 bottom-[calc(100%+6px)] w-[300px] max-w-[320px]"

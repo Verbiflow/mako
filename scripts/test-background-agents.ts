@@ -92,7 +92,7 @@ function rosterAndLists(): void {
   assert.equal(withChildren(roster, [child]), roster, "the same children keep the same roster")
   const closed = backgroundWork({ status: "ready", connection: "hibernated" }, roster)
   assert.equal(closed?.count, 1, "a hibernated conversation still waits on its children, which are Mako's")
-  assert.equal(backgroundWorkText(closed!), "an agent")
+  assert.equal(backgroundWorkText(closed!), "1 Fin", "a child is a Fin in every surface's words")
   const childRef: ThreadRef = { harness: "claude", nativeId: "h", path: "/h.jsonl", parent: { thread: randomUUID(), session: randomUUID() } }
   const own: ThreadRef = { harness: "claude", nativeId: "o", path: "/o.jsonl" }
   assert.equal(listedAsThread(childRef), false)
