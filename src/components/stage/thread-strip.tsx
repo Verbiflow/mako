@@ -4,7 +4,7 @@ import { activeAcp, useAcp } from "@/state/acp"
 import { threads, useThreads } from "@/state/threads"
 import { closeThreadTab, useThreadTabs } from "@/state/thread-tabs"
 import { sameThreadStatus, threadStatus } from "@/state/thread-status"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { ThreadMark } from "@/components/rail/thread-status"
 import { cn } from "@/lib/utils"
 
 /**
@@ -69,7 +69,7 @@ const ThreadTab = memo(function ThreadTab({
         onClick={() => void threads.view(ref)}
         className="pressable flex min-w-0 items-center gap-1.5"
       >
-        <ThreadStatusMark status={status} />
+        <ThreadMark status={status} harness={ref.harness} lit={active} />
         <span className="max-w-44 truncate">{title}</span>
       </button>
       <button

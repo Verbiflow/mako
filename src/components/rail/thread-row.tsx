@@ -2,20 +2,16 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ReadyBesideMark, ThreadStatusMark } from "@/components/rail/thread-status"
+import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
-import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { ThreadRollup } from "@/components/rail/rollup-badge"
-import { MarkStack } from "@/components/ui/mark-stack"
 import {
-  FOLD_GLYPHS,
   foldedThreadState,
   foldRowHarness,
   sameFoldedThreadState,
-  sessionRunning,
   sessionStateText,
   type FoldedThread,
   type FoldRow,
@@ -29,7 +25,6 @@ import { followCheckouts } from "@/state/checkout-heads"
 import { useLeavingWorktrees, useWorktrees, useWorktreeSummaries, workingFolder, worktreeAt } from "@/state/worktrees"
 import { worktreeTip } from "@/lib/worktree-marks"
 import { WorktreeMark } from "@/components/rail/worktree-mark"
-import { HarnessIcon } from "@/components/ui/provider-icon"
 import { threadReferenceId, threadToken } from "@/lib/mentions"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -37,51 +32,11 @@ import { checkoutOf, projectFolder } from "@mako/host/contracts/worktree-paths"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { togglePinned, usePrefs } from "@/state/prefs"
-import { actions, shallowEqual, useSession } from "@/state/session"
+import { actions, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
 import { acpForThread, activeAcp, useAcp } from "@/state/acp"
 import { keptSessionText } from "@/lib/kept-session"
 import { sameThreadStatus, threadStatus, threads, useThreads } from "@/state/threads"
-
-/**
- * The mark a session wears while it is attached — running in a background
- * tab of this window. The old tab strip carried these; the rail does now.
- * A leaf with its own narrow selector: a background tab's progress repaints
- * one dot, never the list. Detach appears on hover; the row itself keeps
- * meaning "bring this forward".
- */
-const Attached = memo(function Attached({ path }: { path: string }) {
-  const tab = useTabs(
-    useCallback(
-      (state: { tabs: TabInfo[]; activeId: string }) => {
-        const found = state.tabs.find((entry) => entry.sessionFile === path)
-        if (!found) return null
-        return {
-          id: found.id,
-          working: found.working,
-          unread: found.unread,
-          active: found.id === state.activeId,
-          only: state.tabs.length < 2,
-        }
-      },
-      [path]
-    ),
-    shallowEqual
-  )
-  if (!tab) return null
-  return (
-    <>
-      {tab.working ? (
-        <span
-          aria-label="Working"
-          className="animate-live size-1.5 shrink-0 rounded-full bg-ember"
-        />
-      ) : tab.unread && !tab.active ? (
-        <span aria-label="Finished while you were away" className="review-dot" />
-      ) : null}
-    </>
-  )
-})
 
 /** The detach control for an attached background tab; lives in the row's hover pill. */
 const Detach = memo(function Detach({ path }: { path: string }) {
@@ -111,18 +66,9 @@ const Detach = memo(function Detach({ path }: { path: string }) {
   )
 })
 
-/** Where a conversation lived before its current agent, as a row wears it: the one before, dimmed and tucked behind. */
-export function EarlierAgentMark({ lineage }: { lineage: readonly string[] }) {
-  const harness = lineage.at(-1)
-  return harness ? <HarnessIcon harness={harness} className="size-3 opacity-40" /> : null
-}
-
 /** A rail row's box and paint: hover, an open menu, and the one lit row (`data-active`). */
 export const ROW_SURFACE =
   "group relative isolate flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
-
-/** Where a row's controls float while its mark asks for you, so hovering the row doesn't cover it. */
-export const ROW_ACTIONS_BESIDE_MARK = "right-6"
 
 /**
  * A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open.
@@ -162,7 +108,6 @@ export const ThreadRow = memo(function ThreadRow({
   useHarnessIdentity()
   const override = usePrefs((prefs) => prefs.titleOverrides[ref.path])
   const [editing, setEditing] = useState<string | null>(null)
-  const [since] = useState(() => performance.now())
   // A thread whose CLI is being driven from here right now wears a pulse —
   // the same promise a tab's dot makes: something is working behind this row.
   const ownStatus = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
@@ -236,6 +181,10 @@ export const ThreadRow = memo(function ThreadRow({
       ? selectedPath === ref.path
       : selectedLive || (focusedPath ? focusedPath === ref.path : active))
   const title = override ?? named ?? ref.title ?? "Untitled session"
+  // A folded row wears the agent of the Session its status comes from; any other row, its own.
+  const markHarness = foldState
+    ? (foldState.sessions.find((session) => session.status.kind === status.kind)?.harness ?? (folded ? foldRowHarness(folded.members[0]!) : ref.harness))
+    : (liveProvider ?? ref.harness)
   const menu: ThreadMenuProps = {
     target,
     title,
@@ -312,26 +261,7 @@ export const ThreadRow = memo(function ThreadRow({
         data-thread-indent={indent || undefined}
         className={cn(ROW_SURFACE, indent ? "pl-2" : "pl-1.5")}
       >
-        {/* Where this conversation has lived: earlier harnesses dimmed and
-            tucked behind, the current one in front. One mark when it has
-            only ever been one place — which is most sessions. A Thread with
-            several Sessions shows the agent of each, first Session first. */}
-        <MarkStack>
-          {[
-            ...(folded || !ref.lineage?.length ? [] : [<EarlierAgentMark key="lineage" lineage={ref.lineage.map((origin) => origin.harness)} />]),
-            ...(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member, index) => {
-              const session = foldState?.sessions[index]
-              return (
-                <FoldGlyph
-                  key={member?.key ?? ref.path}
-                  harness={member && member.key !== ref.path ? foldRowHarness(member) : (liveProvider ?? ref.harness)}
-                  live={session ? sessionRunning(session.status) : working || activeElsewhere}
-                  rowSince={since}
-                />
-              )
-            }),
-          ]}
-        </MarkStack>
+        <ThreadMark status={status} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} />
         {editing !== null ? (
           <input
             autoFocus
@@ -381,7 +311,6 @@ export const ThreadRow = memo(function ThreadRow({
         {isPinned ? (
           <PinIcon className="size-3 shrink-0 fill-current text-foreground/60" aria-label="Pinned" />
         ) : null}
-        <Attached path={ref.path} />
         {ref.archived ? (
           <ArchiveIcon
             data-kept={ref.copyOnly ? "copy" : "records"}
@@ -396,7 +325,7 @@ export const ThreadRow = memo(function ThreadRow({
             labels. */}
         <span
           data-tip-quiet
-          className={cn("rail-row-actions", ROW_ACTIONS, (status.kind === "needs-permission" || status.kind === "failed") && ROW_ACTIONS_BESIDE_MARK)}
+          className={cn("rail-row-actions", ROW_ACTIONS)}
           onClick={(event) => event.stopPropagation()}
         >
           <button
@@ -415,7 +344,7 @@ export const ThreadRow = memo(function ThreadRow({
         </span>
         {checkout ? <AppMarkIcon checkout={checkout} /> : null}
         {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
-        <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
+        <ThreadStatusEnd status={status} updatedAt={ref.updatedAt} />
       </div>
     </ThreadContextMenu>
   )

@@ -145,12 +145,13 @@ async function checkWindow() {
   const failFolderChip = (state) => `document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(failFolder)}] [data-folder-activity="${state}"]')`
   await evaluate(`import('/src/state/threads.ts').then(({applyThreadRun}) => { applyThreadRun({path: ${JSON.stringify(failing)}, harness: ${JSON.stringify(victimRef.harness)}, status: 'running'}); applyThreadRun({path: ${JSON.stringify(failing)}, harness: ${JSON.stringify(victimRef.harness)}, status: 'failed', error: 'The provider exited'}) })`)
   const failingRow = `.thread-jump-scope [data-thread-row][data-flip-key=${JSON.stringify(failing)}]`
-  await until(`document.querySelector(${JSON.stringify(`${failingRow} .activity-mark[data-state="failed"]`)}) !== null`, "the failed row wears the failure")
+  await until(`document.querySelector(${JSON.stringify(`${failingRow} [data-live-mark="failed"]`)}) !== null`, "the failed row wears the failure")
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${failingRow} [data-status-end="failed"]`)})?.textContent`), "Failed", "and says so where its time stood")
   await until(`${failFolderChip("failed")}?.textContent === '1 failed'`, "the folder chip reports the unseen failure")
   assert.deepEqual(await folderOrder(), before, "a failure must not lift its folder")
   await capture("rail-failed.png")
   await click(failingRow)
-  await until(`document.querySelector(${JSON.stringify(`${failingRow} .activity-mark[data-state="failed"]`)}) === null`, "opening the failed thread stands its mark down")
+  await until(`document.querySelector(${JSON.stringify(`${failingRow} [data-live-mark="failed"]`)}) === null`, "opening the failed thread stands its mark down")
   await until(`${failFolderChip("failed")} === null`, "the folder chip stops reporting a failure you have seen")
   await evaluate(`import('/src/state/threads.ts').then(({threads}) => threads.closeViewer())`)
   await move(900, 500)

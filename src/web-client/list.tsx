@@ -5,7 +5,8 @@ import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, L
 import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
-import { MarkStack, StackedMark } from "@/components/ui/mark-stack"
+import { LiveMark } from "@/components/ui/live-mark"
+import type { LiveMarkState } from "@/lib/live-mark-state"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Spinner } from "@/components/ui/spinner"
 import { WebHarnessIcon } from "./harness-icon"
@@ -24,7 +25,7 @@ import { useRowGestures } from "./row-gestures"
 import { RowMenu } from "./row-menu"
 import { shownTitle } from "./renames"
 import { rowDetail, type RowContext } from "./rows"
-import { foldThreads, type WebThread } from "./threads"
+import { foldThreads, type ThreadStanding, type WebThread } from "./threads"
 import { webHarnessLabel } from "./labels"
 import { macCount } from "./places"
 import { followedWays, listedMove, useMoves } from "./moves"
@@ -274,20 +275,20 @@ function EmptyList({ answered, onNew }: { answered: boolean; onNew: () => void }
   )
 }
 
-/** Marks a stack draws in a row's mark column: one is read at a glance, three still fit side by side. */
-const STACK_SIZES = [18, 15, 11] as const
+const STANDING_MARK = { waiting: "needs", failed: "failed", working: "working", moving: "starting", idle: "idle" } satisfies Record<ThreadStanding, LiveMarkState>
 
-/** The harnesses of a Thread's Sessions, one mark each, as the rail stacks them. */
-export function HarnessMarks({ thread, size }: { thread: WebThread; size?: number }) {
-  const harnesses = [...new Set(thread.sessions.map((session) => session.row.harness))].slice(0, STACK_SIZES.length)
+/**
+ * A Thread's live mark, as the desk's rail draws it (`LiveMark`): the agent of the Session that speaks for it, and its
+ * standing round it; a run that finished unread wears the dot. Its size and the colour its dot is cut from come from
+ * the list it's in (`.web-row-mark`).
+ */
+export function WebThreadMark({ thread, unread }: { thread: WebThread; unread: boolean }) {
+  const speaking = thread.sessions.find((session) => session.row.state === thread.standing) ?? thread.sessions.at(-1)
+  const state = thread.standing === "idle" && unread ? "unread" : STANDING_MARK[thread.standing]
   return (
-    <MarkStack size={size ?? STACK_SIZES[harnesses.length - 1]}>
-      {harnesses.map((harness) => (
-        <StackedMark key={harness}>
-          <WebHarnessIcon harness={harness} />
-        </StackedMark>
-      ))}
-    </MarkStack>
+    <LiveMark state={state} fresh={state === "unread"}>
+      <WebHarnessIcon harness={speaking?.row.harness ?? "claude"} />
+    </LiveMark>
   )
 }
 
@@ -369,13 +370,12 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
         className={cn("web-row group relative flex w-full items-center text-left", thread.quietSince && "opacity-60")}
       >
         <span className="web-row-mark">
-          <HarnessMarks thread={thread} />
+          <WebThreadMark thread={thread} unread={unread} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-baseline gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
             <span className="flex shrink-0 items-center gap-1.5 self-center">
-              {unread ? <span aria-hidden data-unread-mark className="size-2 rounded-full bg-foreground" /> : null}
               <LeadOrTime thread={thread.id} activityAt={thread.activityAt} />
             </span>
           </span>
