@@ -54,6 +54,8 @@ jobs:
       - run: npx tsx scripts/test-host-liveness.ts
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
+      # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
+      - run: npm run test:device-join
       - run: npm run test:cloud-conversations
       - run: npx tsx scripts/test-cloud-returns.ts
 
