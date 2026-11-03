@@ -2245,9 +2245,10 @@ that starts working again retires its unseen items; four or more banners in
 600 ms become one summary. The app icon's badge counts distinct threads,
 never events, and it is the only standing count: the titlebar carried a pill
 reading "3 threads need you" over a list, which mirrored into the chrome what
-the rail's own marks and the Status view already say. The list is the Status
-view, the announcement is the toast, and Cmd+Shift+U opens the next thread
-that needs you. Banners and the badge are
+the rail's own marks and the Inbox already say. The list is the Inbox
+(`src/state/inbox.ts`, opened from the rail's top rows or Cmd+Shift+U, which
+pressed again opens the first item), the announcement is the toast, and the
+Inbox row's caution count is the rail's one count. Banners and the badge are
 answered by the client that owns the window (`electron/client-main.ts` or
 `src/dev/web-notifications.ts`), never by the shared host; one banner per thread is retained until it reports, and a click sends
 `notification-activated`. Preview windows record but never announce.
@@ -3380,14 +3381,14 @@ seen, so the pill and badge stop counting a thread you have put away. Before
 this, a session that failed once wore the red mark and its folder's "1
 failed" chip for as long as it existed, whatever you clicked or archived,
 and the pill kept the count after an archive. `test-stage-layout.ts` and
-`test-rail-ui.mjs` cover both marks. The Status view (`src/lib/thread-board.ts`) is the one place
-threads regroup by state, in a fixed section order; Archived is reached from
-the filter glyph. While the pointer is inside the rail the order caught at
+`test-rail-ui.mjs` cover both marks. Rows never regroup by state: what needs you is
+the Inbox, one list across Threads and Fins read from the records the marks
+read, answered in place; Archived is reached from the filter glyph. While the pointer is inside the rail the order caught at
 entry holds, so a click cannot land on a row that moved, and rows that do
 move glide there through `use-row-flip.ts` (transform only; nothing on first
 fill, view changes, offscreen, or under reduced motion). Every folder shows
 the same number of lead rows; selecting a project never resizes one.
-`test-stage-layout.ts` covers the ranks, held folders, and the board;
+`test-stage-layout.ts` covers the ranks and held folders;
 `node scripts/test-rail-ui.mjs` drives the production rail.
 A row's controls (pin, stop, actions, detach) live in a pill that appears over
 the row's meta on hover or focus; an invisible control must never reserve

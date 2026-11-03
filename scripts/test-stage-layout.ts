@@ -51,11 +51,6 @@ import {
   workedFolderRanks,
   type RailRanks,
 } from "../src/lib/thread-folders.ts"
-import {
-  boardBucketOf,
-  groupThreadBoard,
-  liveBoardBucket,
-} from "../src/lib/thread-board.ts"
 import { entriesToMessages, pendingThreadInput } from "../src/lib/entry-messages.ts"
 import { runningTerminalForWorkspace } from "../src/state/terminal.ts"
 import { workspaceFocusOf } from "../src/components/stage/workspace-focus-context.ts"
@@ -1081,24 +1076,6 @@ assert.deepEqual(
   "a pinned folder stays above a folder you just used"
 )
 
-// The status board: fixed sections, newest change first, empty ones absent.
-const board = groupThreadBoard([
-  { key: "d1", bucket: "done", at: "2026-09-11T10:00:00Z", item: 1 },
-  { key: "w1", bucket: "working", at: "2026-09-11T10:05:00Z", item: 2 },
-  { key: "n1", bucket: "needs-input", at: "2026-09-11T10:01:00Z", item: 3 },
-  { key: "n2", bucket: "needs-input", at: "2026-09-11T10:02:00Z", item: 4 },
-  { key: "r1", bucket: "review", at: "2026-09-11T10:03:00Z", item: 5 },
-])
-assert.deepEqual(
-  board.map((section) => [section.key, section.rows.map((row) => row.key)]),
-  [["needs-input", ["n2", "n1"]], ["review", ["r1"]], ["working", ["w1"]], ["done", ["d1"]]]
-)
-assert.deepEqual(boardBucketOf({ kind: "needs-permission", since: Date.parse("2026-09-11T10:01:00Z") }), { bucket: "needs-input", at: "2026-09-11T10:01:00.000Z" })
-assert.deepEqual(boardBucketOf({ kind: "review", at: 1, unread: false }), { bucket: "done" })
-assert.deepEqual(boardBucketOf({ kind: "external-active" }), { bucket: "working" })
-assert.deepEqual(boardBucketOf({ kind: "observed" }), { bucket: "done" })
-assert.equal(liveBoardBucket("needs-permission"), "needs-input")
-assert.equal(liveBoardBucket("starting"), "working")
 assert.ok(
   threadStatusPriority({ kind: "needs-permission", since: 1 }) >
     threadStatusPriority({ kind: "working", since: 1 })

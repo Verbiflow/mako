@@ -7,8 +7,8 @@ import { openItem, type NotificationItem } from "@/state/notifications"
 /**
  * One waiting thread as a row you click to go there. The titlebar once
  * carried a pill listing these; it put a standing count in the chrome that
- * the rail's own marks and its Status view already say. This is the
- * announcement now, and Cmd+Shift+U opens the next one.
+ * the rail's own marks and its Inbox already say. This is the
+ * announcement now, and Cmd+Shift+U opens the Inbox.
  */
 export function AttentionRow({
   item,

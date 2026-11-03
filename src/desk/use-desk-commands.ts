@@ -38,7 +38,8 @@ import { cycleComposerRole } from "@/state/composer-settings"
 import { togglePlanMode } from "@/state/plan-mode"
 import { applyLoadoutEntry } from "@/state/model-loadout"
 import { AGENT_TAB_ID, viewer, viewerStore } from "@/state/viewer"
-import { markAllSeen, nextUnseen, openItem } from "@/state/notifications"
+import { markAllSeen } from "@/state/notifications"
+import { inboxShortcut } from "@/components/inbox/inbox-view"
 import { terminalActions, terminalStore } from "@/state/terminal"
 import { terminalGroupFor } from "@/lib/terminal-layout"
 import { toast } from "sonner"
@@ -109,15 +110,12 @@ const DESK_COMMANDS: DeskCommand[] = [
   },
   {
     id: "attention.next",
-    title: "Open the next thread that needs you",
+    title: "Open the Inbox",
     section: "View",
     keys: "mod+shift+u",
-    hint: "Approvals first, then failures, then answers ready to read",
-    run: () => {
-      const item = nextUnseen()
-      if (item) openItem(item)
-      else toast("Nothing is waiting for you")
-    },
+    hint: "Everything that needs you, across Threads and Fins; again, or Enter, opens the first",
+    keywords: "inbox needs you approvals questions next attention",
+    run: inboxShortcut,
   },
   {
     id: "attention.clear",

@@ -8,6 +8,7 @@ import { ConversationScopeContext, TranscriptPaneContext, useConversationScope, 
 import { usePaneScope } from "@/state/session-panes"
 import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
+import { InboxView } from "@/components/inbox/inbox-view"
 import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
@@ -258,6 +259,7 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
         <>
           <Composer />
           <SearchView />
+          <InboxView />
         </>
       ) : null}
     </main>

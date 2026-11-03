@@ -115,8 +115,8 @@ async function check() {
   assert.equal(await evaluate("document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('title')"), label)
   await both("rail")
 
-  // Recent, Status and search list none of them either; the Apex is there in each.
-  for (const scope of ["Recent", "Status", "Projects"]) {
+  // Recent and search list none of them either; the Apex is there in each.
+  for (const scope of ["Recent", "Projects"]) {
     await evaluate(`[...document.querySelectorAll('[aria-label="Thread view"] button')].find((button) => button.innerText === ${JSON.stringify(scope)}).click(); true`)
     await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].find((button) => button.innerText === ${JSON.stringify(scope)})?.getAttribute('aria-pressed') === 'true'`, `the rail's ${scope}`)
     await settle()
@@ -124,7 +124,7 @@ async function check() {
     assert.match(listed, /Mobile polish/, `${scope} lists the Apex`)
     for (const title of children) assert.ok(!listed.includes(title), `${scope} lists no Fin: ${title}`)
   }
-  await click('[aria-label="Search threads"]')
+  await evaluate("window.dispatchEvent(new CustomEvent('mako:search-threads')); true")
   await until("Boolean(document.querySelector('[aria-label=\"Search every thread\"]'))", "the rail's search")
   for (const query of ["Sheet motion", "Mobile"]) {
     await evaluate(`(() => { const input = document.querySelector('[aria-label="Search every thread"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(query)}); input.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)

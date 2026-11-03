@@ -11,8 +11,8 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
  * The rail against the production components and the fixture catalogue:
  * position never carries status, a folder moves only when you work there,
  * the pointer holds the order, rows that move glide and scrolling moves
- * none of them, the status board regroups by state in a fixed order,
- * Archived lives behind the filter, and a Thread Mako started to set a
+ * none of them, rows never regroup by state (what needs you is the Inbox,
+ * opened from the rail's top rows), Archived lives behind the filter, and a Thread Mako started to set a
  * project up says so.
  * Screenshots of every view, dark and light, stay in the printed directory;
  * `--port` serves the page on that port (default: any free one).
@@ -107,9 +107,9 @@ async function checkWindow() {
   await frames()
 
   // The header fits at the default width: the view switcher never runs under the glyphs.
-  const header = await evaluate(`(() => { const view = document.querySelector('[aria-label="Thread view"]').getBoundingClientRect(); const search = document.querySelector('[aria-label="Search threads"]').getBoundingClientRect(); return {viewRight: view.right, searchLeft: search.left, pills: [...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent)} })()`)
-  assert.deepEqual(header.pills, ["Projects", "Recent", "Status"])
-  assert.ok(header.viewRight <= header.searchLeft, `The view switcher must fit beside the glyphs, received ${JSON.stringify(header)}`)
+  const header = await evaluate(`(() => { const view = document.querySelector('[aria-label="Thread view"]').getBoundingClientRect(); const glyph = document.querySelector('[aria-label="Filter and sort"]').getBoundingClientRect(); return {viewRight: view.right, glyphLeft: glyph.left, pills: [...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent)} })()`)
+  assert.deepEqual(header.pills, ["Projects", "Recent"])
+  assert.ok(header.viewRight <= header.glyphLeft, `The view switcher must fit beside the glyphs, received ${JSON.stringify(header)}`)
   await capture("rail-projects.png")
 
   const before = await folderOrder()
@@ -289,29 +289,23 @@ async function checkWindow() {
   await until(`document.querySelectorAll('.thread-jump-scope [data-thread-row]').length > 0 && document.querySelectorAll('.thread-jump-scope [data-flip-key^="folder:"]').length === 0`)
   await capture("rail-recent.png")
 
-  // 6. The status board: fixed sections, and the one place a thread regroups by state.
-  await click('[aria-label="Thread view"] button:nth-child(3)')
-  await until(`document.querySelector('[data-board-section]') !== null`, "board sections rendered")
-  const sections = await evaluate(`[...document.querySelectorAll('[data-board-section]')].map(node => node.dataset.boardSection)`)
-  const order = ["needs-input", "failed", "review", "working", "done"]
-  assert.deepEqual(sections, order.filter((key) => sections.includes(key)), "sections keep their fixed order")
-  assert.ok(sections.includes("review") && sections.includes("done"), `the unread reply and the idle threads have sections, received ${sections}`)
-  assert.equal(await evaluate(`document.querySelector('[data-board-section="review"]').closest('section').querySelector('[data-thread-row]')?.dataset.flipKey`), victim, "the unread thread sits under Ready to review")
-  await capture("rail-status.png")
+  // 6. Rows hold their place whatever their state; what needs you is the Inbox, opened from the rail's top rows.
+  assert.equal(await evaluate(`document.querySelector('[data-board-section]')`), null, "the rail has no status board")
+  await click('[data-rail-top-row="inbox"]')
+  await until(`document.querySelector('[data-inbox]') !== null`, "the Inbox opens")
+  await until(`[...document.querySelectorAll('[data-inbox-section="read"] [data-inbox-item]')].some(node => node.dataset.inboxItem === ${JSON.stringify(`read:${victim}`)})`, "the unread answer is To read")
+  await capture("rail-inbox.png")
+  const recentRows = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].map(node => node.dataset.flipKey).join()`)
   await evaluate(`import('/src/state/threads.ts').then(({setThreadAttention}) => setThreadAttention(${JSON.stringify(victim)}, {kind: 'needs-permission', since: Date.now(), detail: 'Run npm test?'}))`)
-  await until(`document.querySelector('[data-board-section]')?.dataset.boardSection === 'needs-input'`, "Needs input leads the board")
-  assert.equal(await evaluate(`document.querySelector('[data-board-section="needs-input"]').closest('section').querySelector('[data-thread-row]')?.dataset.flipKey`), victim)
-  assert.equal(await evaluate(`document.body.textContent.includes('Nothing needs you right now')`), false)
-  await capture("rail-status-needs-input.png")
+  await until(`[...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item]')].some(node => node.dataset.inboxItem === ${JSON.stringify(`waiting:${victim}`)})`, "the ask leads the Inbox")
+  assert.equal(await evaluate(`document.querySelector('[data-inbox-count]')?.textContent`), "1", "the Inbox row counts the ask")
+  assert.equal(await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].map(node => node.dataset.flipKey).join()`), recentRows, "an ask moves no row")
+  await capture("rail-inbox-needs.png")
   await evaluate(`import('/src/state/threads.ts').then(({setThreadAttention}) => setThreadAttention(${JSON.stringify(victim)}, null))`)
-  await until(`document.querySelector('[data-board-section="needs-input"]') === null`)
-  assert.equal(await evaluate(`document.body.textContent.includes('Nothing needs you right now')`), true, "a calm board says so")
-  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'light'}))`)
-  await until(`document.documentElement.classList.contains('light')`)
-  await capture("rail-status-light.png")
-  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
-  await until(`!document.documentElement.classList.contains('light')`)
-  console.log("PASS: the status board regroups by state in a fixed order")
+  await until(`document.querySelector('[data-inbox-section="needs"]') === null && document.querySelector('[data-inbox-count]') === null`)
+  await click('[data-rail-top-row="inbox"]')
+  await until(`document.querySelector('[data-inbox]') === null`, "the Inbox row closes it again")
+  console.log("PASS: rows hold their place; the Inbox holds what needs you")
 
   // 6. Archived lives behind the filter glyph and names itself while showing.
   await click('[aria-label="Filter and sort"]')
@@ -322,7 +316,7 @@ async function checkWindow() {
   await click('[data-rail-test="archived"]')
   await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent).join() === 'Archived'`, "the pressed pill names Archived")
   await click('[aria-label="Thread view"] button')
-  await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent).join() === 'Projects,Recent,Status'`)
+  await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent).join() === 'Projects,Recent'`)
   assert.equal(await evaluate(`document.querySelector('[aria-label="Thread view"] button[aria-pressed="true"]').textContent`), "Projects")
   console.log("PASS: Archived is reached from the filter and returns to Projects")
 
@@ -371,6 +365,6 @@ async function checkWindow() {
   console.log("PASS: a setup Thread is marked on its row, and only it")
 
   guard.done()
-  console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, status board, archived filter, reduced motion, setup Threads")
+  console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, the Inbox, archived filter, reduced motion, setup Threads")
   app.exit(0)
 }

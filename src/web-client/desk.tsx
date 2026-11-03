@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
+import { InboxView, inboxShortcut } from "@/components/inbox/inbox-view"
+import { inboxView } from "@/state/inbox"
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
@@ -36,7 +38,7 @@ import type { Started } from "./start"
 import { startingWhere } from "./started"
 import { archiveWithUndo } from "./archive-thread"
 import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
-import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, waitingRank, type WebThread } from "./threads"
+import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
@@ -58,7 +60,7 @@ const NEW_THREAD_KEYS = "mod+shift+o"
 /**
  * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
  * the left, without a window's traffic lights), its rail (`AgentThreads`: every Thread on the account by project, its
- * Sessions folded into one row, Projects, Recent and Status, search and the filter), the open Thread's Sessions as the
+ * Sessions folded into one row, its five top rows and the Inbox they open, Projects and Recent, search and the filter), the open Thread's Sessions as the
  * desktop's tabs over its own transcript and composer, its command palette, and its keys: ⌘K for everything, ⌘B for
  * the rail, arrows through the rail, ⌥↑/⌥↓ between Threads, ⌘L to the composer, ⌘⎋ to stop.
  *
@@ -105,6 +107,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
       }),
     []
   )
+  // The Inbox lies over whatever the desk shows; going anywhere puts it away.
+  useEffect(() => inboxView.close(), [route])
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
   // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
@@ -132,7 +136,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             />
           </>
         ) : null}
-        <main className="flex min-w-0 flex-1 flex-col bg-surface">
+        <main className="relative flex min-w-0 flex-1 flex-col bg-surface">
           {starting ? (
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
@@ -144,6 +148,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           ) : (
             <DeskEmpty onNew={() => newThread()} />
           )}
+          <InboxView />
         </main>
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
       </div>
@@ -224,16 +229,11 @@ function useDeskKeys({ threads, selected, open, newThread, settings }: { threads
     return registerCommands([
       {
         id: "attention.next",
-        title: "Open the next thread that needs you",
+        title: "Open the Inbox",
         section: "View",
         keys: "mod+shift+u",
-        hint: "Approvals first, then questions, then anything else waiting on you",
-        run: () => {
-          const waiting = latest.current.threads.filter((thread) => thread.standing === "waiting" && thread.id !== latest.current.selected).sort((left, right) => waitingRank(left) - waitingRank(right))
-          const next = waiting[0] ?? latest.current.threads.find((thread) => thread.standing === "failed" && thread.id !== latest.current.selected)
-          if (next) latest.current.open({ kind: "thread", thread: next.id })
-          else toast("Nothing is waiting for you")
-        },
+        hint: "Everything that needs you, across Threads and Fins; again, or Enter, opens the first",
+        run: inboxShortcut,
       },
       { id: "view.command-palette", title: "Open command palette", section: "View", keys: "mod+k", run: () => void window.dispatchEvent(new CustomEvent("mako:palette")) },
       { id: "view.toggle-rail", title: "Toggle the session list", section: "View", keys: "mod+b", run: () => togglePref("railOpen") },

@@ -2640,3 +2640,6 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .attachment-strip [data-slot="popover-content"] { border-radius: var(--radius-asset); }
 
 .mako-prose img.asset-surface { border-radius: var(--radius-asset); }
+
+/* While the Inbox fills the main pane it is the open place, so the Thread under it gives up its lit row. */
+[data-inbox-open] [data-thread-row][data-active]:not(:hover) { background-color: transparent; }
