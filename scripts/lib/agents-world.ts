@@ -158,7 +158,7 @@ export class AgentsWorld {
         return { models: this.options.catalogs?.[harness] ?? [], ...(recommended && { recommended }), ...(chosen && { chosen }), ...(used && { used }) }
       },
       catalogOf: (harness) => this.options.catalogs?.[harness],
-      limited: async (harness) => this.options.limits?.[harness],
+      ...(this.options.limits && { limited: async (harness: string) => this.options.limits?.[harness] }),
       ...(this.options.order && { harnessOrder: async () => this.options.order! }),
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.processes && { processes: this.options.processes }),

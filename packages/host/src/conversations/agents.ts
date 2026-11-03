@@ -512,7 +512,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const own = this.tierOf(apex)
     const allowed = childAccess(own, input.access)
     if (!allowed) return this.refuse(op, "access", `A ${FIN_WORD} runs at most at its ${APEX_WORD}'s access: this Thread is on ${own}, so ${input.access} is refused.`)
-    const placed = await this.roomFor(apex, asked, allowed, input)
+    // Without a limit reader there's nothing to wait for between these checks.
+    const placed = this.deps.limited ? await this.roomFor(apex, asked, allowed, input) : { harness: asked }
     if ("refused" in placed) return this.refuse(op, "limited", placed.refused)
     const { harness, rerouted } = placed
     const mode = childMode(this.deps.modes(harness), allowed)
