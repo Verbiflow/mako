@@ -1733,8 +1733,25 @@ const inputs = {
   "mako:simulators-act": () =>
     z.tuple([
       z.union([
-        z.object({ kind: z.literal("agent"), session: z.string() }),
-        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
       ]),
       z.object({
         simulator: z.string(),
@@ -1790,15 +1807,49 @@ const inputs = {
   "mako:simulators-list": () =>
     z.tuple([
       z.union([
-        z.object({ kind: z.literal("agent"), session: z.string() }),
-        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
       ]),
     ]),
   "mako:simulators-open": () =>
     z.tuple([
       z.union([
-        z.object({ kind: z.literal("agent"), session: z.string() }),
-        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
       ]),
       z.object({
         simulator: z.string(),
@@ -1809,8 +1860,25 @@ const inputs = {
   "mako:simulators-read": () =>
     z.tuple([
       z.union([
-        z.object({ kind: z.literal("agent"), session: z.string() }),
-        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
       ]),
       z.object({
         simulator: z.string(),
@@ -1826,8 +1894,25 @@ const inputs = {
   "mako:simulators-record": () =>
     z.tuple([
       z.union([
-        z.object({ kind: z.literal("agent"), session: z.string() }),
-        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
       ]),
       z.object({
         simulator: z.string(),
@@ -1838,18 +1923,87 @@ const inputs = {
   "mako:simulators-release": () =>
     z.tuple([
       z.union([
-        z.object({ kind: z.literal("agent"), session: z.string() }),
-        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
       ]),
       z.object({ simulator: z.string(), host: z.string() }),
     ]),
   "mako:simulators-shot": () =>
     z.tuple([
       z.union([
-        z.object({ kind: z.literal("agent"), session: z.string() }),
-        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
       ]),
-      z.object({ simulator: z.string(), host: z.string() }),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        inline: z.boolean().optional(),
+      }),
+    ]),
+  "mako:simulators-watch": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        viewer: z.string(),
+        box: z.object({ width: z.number(), height: z.number() }).optional(),
+        waitMs: z.number().optional(),
+      }),
     ]),
   "mako:skills-discover": () => z.tuple([]),
   "mako:skills-remove-preview": () =>
@@ -2472,6 +2626,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:simulators-record", "control"],
   ["mako:simulators-release", "control"],
   ["mako:simulators-shot", "control"],
+  ["mako:simulators-watch", "control"],
   ["mako:skills-discover", "tools"],
   ["mako:skills-remove-preview", "tools"],
   ["mako:skills-resolve", "tools"],
