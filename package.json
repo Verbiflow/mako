@@ -265,6 +265,7 @@
     "test:orch-answer": "tsx scripts/test-orch-answer.ts",
     "test:orch-deliver": "tsx scripts/test-orch-deliver.ts",
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
+    "test:crew-card-ui": "node scripts/test-crew-card-ui.mjs",
     "test:orch-ui": "node scripts/test-orch-ui.mjs",
     "test:animations-ui": "node scripts/test-animations-ui.mjs",
     "bench:live-marks": "node scripts/bench-live-marks.mjs",

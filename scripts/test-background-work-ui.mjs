@@ -70,7 +70,10 @@ async function check() {
   await evaluate("document.querySelector('[data-fixture=background]').click(); true")
   await until("Boolean(document.querySelector('[data-background-work]'))")
 
-  // The transcript's end: what runs, in words, then each piece with its time.
+  // The transcript's end: what runs, in words, then each piece with its time. A Thread with no Fins keeps this line;
+  // the crew card (`crew-card.tsx`) is for an Apex with Fins, and defers to it here (`test-crew-card-ui.mjs` covers
+  // an Apex's own: every Fin, needs-you first, answered in place).
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-crew]'))"), false, "no Fins here: the crew card draws nothing of its own")
   const line = await evaluate("document.querySelector('[data-background-work]').innerText")
   assert.match(line, /^Waiting on 3 background tasks/)
   assert.match(line, /Build the desktop app/)
