@@ -910,8 +910,10 @@ export class ThreadStore {
       if (!this.sql("SELECT id FROM threads WHERE id = ?").get(edge.parent) || !this.sql("SELECT id FROM threads WHERE id = ?").get(edge.child))
         throw new Error("A parent edge names a Thread that isn't in the Thread store")
       const run: FollowedRun | undefined = edge.run && previous?.run?.ended ? { ...edge.run, ended: previous.run.ended } : edge.run
+      const closedAt = previous?.closedAt ?? edge.closedAt
+      const closedReason = previous?.closedAt !== undefined ? previous.closedReason : edge.closedReason
       const next: ThreadParent = previous
-        ? { ...previous, ...(run && { run }), ...((previous.closedAt ?? edge.closedAt) !== undefined && { closedAt: previous.closedAt ?? edge.closedAt }) }
+        ? { ...previous, ...(run && { run }), ...(closedAt !== undefined && { closedAt, ...(closedReason && { closedReason }) }) }
         : { ...edge, ...(run && { run }) }
       this.sql(`INSERT INTO thread_parents (child_thread, parent_thread, name, op, run_harness, run_native_id, record, created_at, closed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

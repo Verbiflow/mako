@@ -149,6 +149,8 @@ export const ThreadParentSchema = z.object({
   createdAt: z.number(),
   /** The delegation is over; the child keeps existing as a Thread. */
   closedAt: z.number().optional(),
+  /** Why it was stopped, as whoever stopped it said: said once, with `closedAt`. */
+  closedReason: z.string().max(2000).optional(),
   /** Present while a process Mako didn't start runs the child's turns (`FollowedRun`). */
   run: FollowedRunSchema.optional(),
 })
@@ -158,7 +160,7 @@ export type ThreadParent = z.infer<typeof ThreadParentSchema>
  * What a start that makes a child says of its edge (`LiveStartOptions.parent`): all of it but the Thread the start makes.
  * It crosses the host call unbranded; the start parses it.
  */
-export const ChildStartSchema = ThreadParentSchema.omit({ child: true, createdAt: true, closedAt: true, run: true })
+export const ChildStartSchema = ThreadParentSchema.omit({ child: true, createdAt: true, closedAt: true, closedReason: true, run: true })
 export type ChildStart = z.input<typeof ChildStartSchema>
 
 /** A typed report from a child: explicit (`agents_report`), or implicit when its turn or run ended without one. */
@@ -270,6 +272,11 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
       on: latest.for !== "person" && reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person",
       ask: reportAsk(latest),
     }
+  // A stop after its last report is how it ended, in the words of whoever stopped it.
+  if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
+    const reason = edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
+    return { kind: "ended", outcome: "stopped", ...(reason && { reason }) }
+  }
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
   if (latest?.status === "done") return { kind: "ended", outcome: "done" }
