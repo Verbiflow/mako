@@ -11,8 +11,8 @@
  * that isn't a Fin, a browser outside Mako's control). A warn lets the call
  * run and tells the model the Mako tool once, for reads and habits that do
  * no harm. A route outside the Thread's checkouts, or one the agent marks
- * with `MAKO_NATIVE=1` after the Mako tool failed or the person asked for
- * the command itself, goes ahead.
+ * with `MAKO_NATIVE=1` after the Mako tool failed or couldn't do what was
+ * asked, goes ahead.
  */
 
 /** The families of work Mako has its own tools for. */
@@ -43,7 +43,7 @@ export const bareNames: ToolNames = (tool) => tool
 /** The prefix that lets a command the policy would deny run anyway. */
 export const NATIVE_OVERRIDE = "MAKO_NATIVE=1"
 
-const OVERRIDE_LINE = `If that tool failed, or the person asked for this exact command, run it again starting with ${NATIVE_OVERRIDE}.`
+const OVERRIDE_LINE = `Only if that tool failed or can't do what was asked, run the command again starting with ${NATIVE_OVERRIDE}.`
 
 /** One simple command of a shell line, as the policy reads it. */
 interface ShellSegment {
