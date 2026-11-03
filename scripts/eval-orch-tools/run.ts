@@ -92,7 +92,7 @@ async function summarize(results: CaseResult[]) {
     const name = `${result.harness} · ${result.model} · routing ${result.routing}`
     groups.set(name, [...groups.get(name) ?? [], result])
   }
-  const lines = ["| run | route | front door | don't spawn | no polling | stay native | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+  const lines = ["| run | route | front door | don't spawn | no polling | stay native | mako tools | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
   for (const [name, group] of groups) {
     const rates = budget(group)
     const cell = (line: string) => {
@@ -100,7 +100,7 @@ async function summarize(results: CaseResult[]) {
       return entry.rate === undefined ? "–" : `${Math.round(entry.rate * 100)}% (${entry.passed}/${entry.of})${entry.met ? "" : " ✗"}`
     }
     const usd = group.reduce((sum, result) => sum + (result.usd ?? 0), 0)
-    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
+    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${cell("mako tools")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
   }
   const failing = results.filter((result) => !result.error && result.passes.filter(Boolean).length * 2 <= result.passes.length)
   const errors = results.filter((result) => result.error)

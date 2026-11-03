@@ -26,6 +26,8 @@ export interface StubMako {
   grant(conversation: string): { token: string; computerUrl: string; makoUrl?: string }
   /** The Thread a conversation's hooks are answered for at the `/calls` gate, as routing reads it. */
   routes(conversation: string, thread: CallThread): void
+  /** A case's own answers to Mako's tools, over `FAMILY_ANSWERS`. */
+  answers(conversation: string, answers: Record<string, string>): void
   /** The `agents_*` calls so far, by bare tool name. */
   calls(conversation: string): Call[]
   /** What an agent reads first: the server's instructions and its tools. */
@@ -106,7 +108,7 @@ const FAMILY_ANSWERS = new Map<string, string>([
 ])
 
 /** Registers Mako's own tools as the host does, with each call recorded and answered from `FAMILY_ANSWERS`. */
-function familyTools(record: (conversation: string, tool: string, args: ToolArgs) => void): MakoTools[] {
+function familyTools(record: (conversation: string, tool: string, args: ToolArgs) => void, answers: (conversation: string) => Map<string, string> | undefined): MakoTools[] {
   const unused = new Proxy({}, { get: () => () => { throw new Error("The eval's stub answers before any tool runs") } })
   // Each request builds its own server, so its `registerTool` is replaced for that server alone.
   const recording = (server: McpServer, conversationId: () => string): McpServer => {
@@ -115,7 +117,7 @@ function familyTools(record: (conversation: string, tool: string, args: ToolArgs
     const register = server.registerTool.bind(server) as Register
     const stubbed = (name: string, config: Parameters<McpServer["registerTool"]>[1]) => register(name, config, async (args) => {
       record(conversationId(), name, ToolArgs.parse(args))
-      return { content: [{ type: "text" as const, text: FAMILY_ANSWERS.get(name) ?? "Done." }] }
+      return { content: [{ type: "text" as const, text: answers(conversationId())?.get(name) ?? FAMILY_ANSWERS.get(name) ?? "Done." }] }
     })
     // SAFETY: the register functions call `registerTool(name, config, handler)` only, which `stubbed` takes, dropping the handler.
     server.registerTool = stubbed as McpServer["registerTool"]
@@ -135,6 +137,7 @@ export async function startStubMako(): Promise<StubMako> {
   const calls = new Map<string, Call[]>()
   const started = new Map<string, AgentsStarted[]>()
   const threads = new Map<string, CallThread>()
+  const caseAnswers = new Map<string, Map<string, string>>()
   const record = (conversation: string, tool: string, args: ToolArgs) => calls.set(conversation, [...calls.get(conversation) ?? [], { tool, args }])
   const servers = await startConversationMcp(
     { authorizeAgent() {} },
@@ -142,7 +145,7 @@ export async function startStubMako(): Promise<StubMako> {
       record(bindingId.replace(/^eval-/, ""), "js", ToolArgs.parse(operation))
       return { ok: true, result: "The page loaded; the screenshot is in the result." }
     },
-    [...familyTools(record), (server, conversationId) => registerAgentTools(server, {
+    [...familyTools(record, (conversation) => caseAnswers.get(conversation)), (server, conversationId) => registerAgentTools(server, {
       invoke: async (channel, [, input]) => {
         const conversation = conversationId()
         const tool = toolOf(channel)
@@ -168,6 +171,7 @@ export async function startStubMako(): Promise<StubMako> {
       return grant
     },
     routes: (conversation, thread) => { threads.set(conversation, thread) },
+    answers: (conversation, answers) => { caseAnswers.set(conversation, new Map(Object.entries(answers))) },
     calls: (conversation) => calls.get(conversation) ?? [],
     async describe() {
       const conversation = `describe-${randomUUID()}`

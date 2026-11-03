@@ -89,6 +89,8 @@ export const OrchCase = z.object({
     /** Asks of those Fins that wake the Apex: the case's agent reads the wake the host sends, after the person's message (`prompt`) as an earlier turn. */
     asks: z.array(EvalAsk).optional(),
     /** Where the Thread works and its project's recipe: the note ahead of the prompt says so as the host does (`threadEnvironmentInstructions`), and routing reads it (`CallThread`). */
+    /** What the stub answers a Mako tool in this case, where its default (`FAMILY_ANSWERS`) would contradict the prompt. */
+    answers: z.record(z.string(), z.string()).optional(),
     thread: z.object({
       place: z.enum(["main", "worktree"]),
       recipe: z.enum(["ready", "none"]),

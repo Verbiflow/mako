@@ -90,6 +90,7 @@ export async function liveSample(input: {
     const mode = ASKING_MODE.get(harness)
     const grant = stub.grant(id)
     if (routing === "on") stub.routes(id, caseCallThread(orchCase, project))
+    if (orchCase.setup.answers) stub.answers(id, orchCase.setup.answers)
     await driver.start(project, admitted(harness, {
       conversationId: id, emit, ...mode && { modeId: mode }, ...input.model && { tuning: { model: input.model } },
       conversationTools: grant,
