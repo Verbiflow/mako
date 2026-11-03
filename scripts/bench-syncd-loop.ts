@@ -130,10 +130,11 @@ function sdkAgentOf(dir: string) {
   try {
     const all = (sql: string) => IndexRowSchema.array().parse(index.prepare(sql).all())
     const agent = all("SELECT * FROM agents")[0]
-    if (!agent || typeof agent["agent_id"] !== "string") throw new Error(`${dir}/index.db names no agent`)
+    const agentId = z.string().safeParse(agent?.["agent_id"])
+    if (!agent || !agentId.success) throw new Error(`${dir}/index.db names no agent`)
     return {
       ...rowsOf(join(dir, "store.db")),
-      agentId: agent["agent_id"],
+      agentId: agentId.data,
       schema: all("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL").map((row) => String(row["sql"])),
       agent,
       runs: all("SELECT * FROM runs ORDER BY turn_number"),
