@@ -323,6 +323,9 @@ const LONG_SLEEP_S = 60
 
 const BROWSERS = /chrome|chromium|safari|firefox|arc|brave|edge|comet|dia/i
 
+/** A URL on this machine: the Thread's own `*.thread.localhost` address, `localhost` or loopback. */
+const ownApp = (word: string) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\]|[a-z0-9-]+\.thread\.localhost)(:\d+)?(\/|$)/.test(word)
+
 interface Finding {
   kind: "warn" | "deny"
   family: CallFamily
@@ -401,6 +404,8 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     if (segment.background) return { kind: "warn", family: "background", rule: "background-server", message: `A server left running past your turn is nobody's to stop. ${n("app_start")} runs the project's app for this Thread.` }
     return undefined
   }
+  if ((program === "curl" || program === "wget") && thread.recipe?.kind === "ready" && argv.some(ownApp))
+    return { kind: "warn", family: "app", rule: "curl-own-app", message: `${n("app_probe")} reads this Thread's app at its own address with the status, timing and a body excerpt, and says when it isn't running; ${n("app_status")} and ${n("app_logs")} say why.` }
   if (program === "lsof" && argv.some((word) => word.startsWith("-i") || word.startsWith("-ti")))
     return { kind: "warn", family: "port", rule: "lsof-port", message: `${n("port_holder")} names who holds a port: which Thread's app, or which process outside Mako.` }
   if ((program === "kill" && argv.some((word) => word.includes("lsof"))) || program === "killall" || (program === "pkill" && argv.includes("-f")))

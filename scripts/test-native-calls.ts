@@ -68,6 +68,9 @@ const CASES: Case[] = [
   { name: "tests", thread: inWorktree, command: "npm test -- --run", cwd: worktree, route: "allow" },
   { name: "the escape hatch", thread: inWorktree, command: `${NATIVE_OVERRIDE} npm run dev`, cwd: worktree, route: "allow" },
   { name: "a dev server in another project", thread: inWorktree, command: "cd /Users/p/other && npm run dev", cwd: worktree, route: "allow" },
+  { name: "curling the Thread's own app", thread: inWorktree, command: "curl -sS -i http://fix-login.thread.localhost:20540/settings", cwd: worktree, route: "warn", rule: "curl-own-app" },
+  { name: "curling loopback", thread: inWorktree, command: "curl -s localhost:20540 | head", cwd: worktree, route: "warn", rule: "curl-own-app" },
+  { name: "curling an outside API", thread: inWorktree, command: "curl -s https://api.github.com/repos/x/y", cwd: worktree, route: "allow" },
   // ports
   { name: "who holds a port", thread: inMain, command: "lsof -i :3000", cwd: main, route: "warn", rule: "lsof-port" },
   { name: "killing a port's holder", thread: inMain, command: "kill -9 $(lsof -ti :3000)", cwd: main, route: "warn", rule: "lsof-port" },
@@ -92,7 +95,7 @@ const CASES: Case[] = [
   { name: "a sleep loop on CI", thread: inWorktree, command: "until gh pr checks | grep -q pass; do sleep 30; done", cwd: worktree, route: "warn", rule: "sleep-loop" },
   { name: "a sleep loop on a pid", thread: inMain, command: "while kill -0 1234 2>/dev/null; do sleep 10; done; echo done", cwd: main, route: "warn", rule: "sleep-loop" },
   { name: "a long sleep", thread: inMain, command: "sleep 300 && tail -5 /tmp/log", cwd: main, route: "warn", rule: "long-sleep" },
-  { name: "a short sleep", thread: inMain, command: "sleep 2 && curl -s localhost:20540", cwd: main, route: "allow" },
+  { name: "a short sleep", thread: inMain, command: "sleep 2 && tail -5 /tmp/build.log", cwd: main, route: "allow" },
   { name: "a deny wins over a warn on the same line", thread: inWorktree, command: "gh pr checks; gh pr merge --squash", cwd: worktree, route: "deny", rule: "gh-pr-merge" },
 ]
 
