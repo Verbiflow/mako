@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import {
+  checkoutAccount,
   closeCutOffCalls,
   pendingInterruption,
   recordCutOffCalls,
@@ -133,7 +134,28 @@ try {
     const quit = { ...interrupted, interruption: { ...interrupted.interruption!, reason: "host-quit" as const } }
     assert.doesNotMatch(pendingInterruption([quit, next], "n")!.account, /did not stop it/, "quitting Mako was the user's doing")
   }
-  console.log("interrupted turn: steps, closed rows, saved results, and the one-time account ok")
+  // When the first call the agent has no account of started: what moved in the checkout counts from there.
+  {
+    const steps = new TurnSteps()
+    const blocks = turn("r5", [
+      { kind: "tool", id: "read", title: "Read AGENTS.md", status: "running", at: 1_000 },
+      { kind: "tool-update", id: "read", status: "completed", output: "# Agents" },
+      { kind: "thinking", text: "Commit and push." },
+      { kind: "tool", id: "push", title: "git commit && git push", status: "running", at: 2_000 },
+      { kind: "tool", id: "check", title: "gh pr view", status: "running", at: 3_000 },
+    ], steps)
+    const record = recordCutOffCalls(blocks, "r5", steps, join(root, "r5"))
+    assert.deepEqual(record.calls?.map((call) => call.id), ["push", "check"])
+    assert.equal(record.since, 2_000, "from the first call the agent has no account of, not the turn's start")
+    const interrupted: LiveRequest = { id: "i5", attachments: [], text: "x", status: "interrupted", interruption: { reason: "connection-lost", at: 4_000, ...record } }
+    assert.equal(pendingInterruption([interrupted, { id: "n5", attachments: [], text: "y", status: "queued" }], "n5")?.since, 2_000, "the account carries it to the prompt that tells it")
+    assert.equal(checkoutAccount([]), "Nothing moved in the checkout since the first of those calls started: no commit, push or file change.")
+    assert.equal(
+      checkoutAccount([{ name: "mako", head: { from: "aaaaaaaa11", to: "bbbbbbbb22", moves: ["commit: Ship it"] }, commits: [{ sha: "bbbbbbbb22", subject: "Ship it" }], remotes: [{ ref: "origin/mako/fin", from: "aaaaaaaa11", to: "bbbbbbbb22", how: "update by push" }], files: ["mako/AGENTS.md"], moreFiles: 0 }]),
+      "In the checkout since the first of those calls started:\n- mako: HEAD moved aaaaaaaa → bbbbbbbb (commit: Ship it). New commit: bbbbbbbb Ship it. origin/mako/fin moved aaaaaaaa → bbbbbbbb (update by push). Files changed: mako/AGENTS.md.",
+    )
+  }
+  console.log("interrupted turn: steps, closed rows, saved results, the one-time account and the checkout since its first call ok")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

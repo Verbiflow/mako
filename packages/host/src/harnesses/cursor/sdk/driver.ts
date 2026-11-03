@@ -345,6 +345,12 @@ function received(engine: Engine, live: Live, event: SdkEvent): void {
     case "compaction":
       deliver(engine, live, live.decoder.archived(event))
       return
+    case "resumed":
+      if (!claimTurn(engine, live, event.turn)) return
+      hostWarn("cursor-sdk", "the SDK resumed the run from an older checkpoint and told the model of the calls it missed", { conversation: live.state.id, calls: event.calls })
+      // The words joined the running turn as a steer does, and the saved conversation keeps them as its message.
+      engine.emitUpdate(live, { kind: "user", text: event.text, steeringFor: live.state.nativeRunId })
+      return
     case "side-delta":
       live.sides.get(event.side)?.(event.text)
       return

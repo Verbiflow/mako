@@ -42,7 +42,8 @@ export interface TurnFold {
  */
 export function stillDrawn(section: PlacedSection): boolean {
   // What the agent showed the person, made for them, or where it sent their message is part of the answer wherever it stands.
-  if (section.kind === "shown" || section.kind === "made" || section.kind === "routed") return true
+  // What the person is told of a turn that went on past a dropped connection stays said, so its next steps read right.
+  if (section.kind === "shown" || section.kind === "made" || section.kind === "routed" || section.kind === "resumed") return true
   // A step the loss of a machine undid changes the person's files; where the turn picked it up again stays said.
   if (section.kind === "continued") return section.continued.reason === "machine-lost"
   if (section.kind !== "note") return false
@@ -54,7 +55,7 @@ export function stillDrawn(section: PlacedSection): boolean {
 }
 
 function messagesOf(section: PlacedSection): ChatMessage[] {
-  return section.kind === "work" ? section.messages : section.kind === "shown" || section.kind === "made" || section.kind === "routed" || section.kind === "continued" ? [] : [section.message]
+  return section.kind === "work" ? section.messages : section.kind === "shown" || section.kind === "made" || section.kind === "routed" || section.kind === "continued" || section.kind === "resumed" ? [] : [section.message]
 }
 
 /** The time `sections` worked from `from`: each part's start to its last message, a continuation starting the next part. */
