@@ -751,10 +751,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!words) return { refused: "conflict", why: "Its question needs an answer: one of its options by its label, or your own words." }
       const picked = ask.options?.find((option) => sameWords(option.label, words))
       const answer = answerText(state.question, picked?.label ?? words)
+      // After the question it closes, and just before the answer goes, so what the Fin reports once it has it is newer.
+      const at = Math.max(this.now() - 1, (this.latest.get(edge.child)?.at ?? 0) + 1)
       const sent = by.kind === "apex"
         ? await this.deliver(edge, namedUuid(op), `${fromAgent(YOUR_APEX)}\n${answer}`, [], { kind: "agent", session: SessionIdSchema.parse(by.apex.session) }, "steer")
         : await this.deliver(edge, namedUuid(op), answer, [], undefined, "steer")
-      return "refused" in sent ? sent : done("report", sent.delivery)
+      if ("refused" in sent) return sent
+      this.closeQuestion(edge, ask, picked?.label ?? words, at)
+      return done("report", sent.delivery)
     }
     const tier = by.kind === "apex" ? this.tierOf(by.apex) : "full"
     if (ask.kind === "approval" && tier !== "full")
@@ -786,9 +790,28 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(ask.recommended !== undefined && { recommended: ask.recommended }),
       ...(ask.action && { action: ask.action }),
       for: "person",
-      implicit: true,
+      // A report's question passed on is still the Fin's own words; a harness's ask is Mako's reading of it.
+      ...(ask.kind !== "report" && { implicit: true as const }),
       ownerGeneration: this.generation,
       at: this.now(),
+    })
+  }
+
+  /**
+   * An answer reached a Fin's report question: the question is closed, by a
+   * progress record that wakes no one, so it no longer reads as waiting, and
+   * the turn it answered reports how it ends. It's dated when the answer was
+   * sent (`at`), so what the Fin reported after taking it stays newer.
+   */
+  private closeQuestion(edge: ThreadParent, ask: FinAsk, answer: string, at: number): void {
+    this.keepReport(edge, {
+      id: answeredId(edge.child, ask.id),
+      child: ThreadIdSchema.parse(edge.child),
+      status: "progress",
+      summary: `Its question was answered: ${answer}`.slice(0, 16_000),
+      implicit: true,
+      ownerGeneration: this.generation,
+      at,
     })
   }
 
@@ -1120,7 +1143,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A turn Mako's exit cut short continues on the next host (`LeftTurn.always`); it hasn't ended.
     if (ended.status === "interrupted" && ended.interruption?.reason !== "stopped") return
     const store = this.store()!
-    if (store.reportsOf(edge.child, (ended.createdAt ?? 0) - 1).some((report) => !report.implicit)) return this.childMoved(edge, false)
+    // Its own report stands for the turn, unless what came last was an answer to the question it asked: then the turn went on.
+    const since = store.reportsOf(edge.child, (ended.createdAt ?? 0) - 1)
+    const answered = since.at(-1)?.id.startsWith(`report:${edge.child}:answered:`) ?? false
+    if (!answered && since.some((report) => !report.implicit)) return this.childMoved(edge, false)
     const waits = ended.status === "completed" ? this.waitsOn(edge, conversation) : undefined
     if (waits) {
       this.awaiting.set(edge.child, { conversation, request })
@@ -1203,7 +1229,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     if (kept.deduped) return kept
     hostLog("agents", "report", { op: edge.op, report: report.id, status: report.status, implicit: report.implicit ?? false })
-    this.latest.set(edge.child, kept.report)
+    // The newest by when it was reported, as the store reads it.
+    const current = this.latest.get(edge.child)
+    if (!current || kept.report.at >= current.at) this.latest.set(edge.child, kept.report)
     if (report.status === "progress") store.markReportsDelivered([report.id], this.now())
     else this.noticeOf(edge, kept.report)
     this.childMoved(edge, false)
@@ -1877,6 +1905,11 @@ type Answerer = { kind: "apex"; apex: Apex } | { kind: "person" }
 /** The report that leaves an ask to the person, one per ask. */
 function passedId(child: string, ask: string): string {
   return `report:${child}:person:${namedUuid(ask)}`
+}
+
+/** The record that closes a report's question once an answer reached the Fin, one per ask. */
+function answeredId(child: string, ask: string): string {
+  return `report:${child}:answered:${namedUuid(ask)}`
 }
 
 function sameWords(a: string, b: string): boolean {

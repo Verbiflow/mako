@@ -704,6 +704,63 @@ async function waitingFins(): Promise<void> {
   }
 }
 
+/**
+ * A question a Fin asks in its report is answerable from that report, whatever its turn does after: its Apex
+ * answers it, or leaves it to the person, whose ask then lists it with its options, and their tap reaches the Fin.
+ */
+async function reportedQuestions(): Promise<void> {
+  const w = world("reported-questions", async (turn) => {
+    if (turn.text.includes("You're fin:sims")) {
+      const told = await turn.world.agents.report(turn.caller, {
+        status: "needs-input",
+        summary: "Simulators need Xcode.",
+        question: "Install Xcode?",
+        options: [{ label: "Installing Xcode now" }, { label: "Not now" }],
+        recommended: 0,
+        clientKey: "xcode",
+      })
+      assert.ok(!("refused" in told), JSON.stringify(told))
+      // It goes on with what it can while the question waits.
+      await turn.world.hold(turn.conversation)
+      return "Set up what I could without Xcode."
+    }
+    return "ok"
+  })
+  try {
+    const apex = await w.apex("claude")
+    const sims = await w.agents.start(apex.caller, { brief: { objective: "Set up simulators" }, name: "sims", clientKey: "sims", cwd: w.root })
+    assert.ok(!("refused" in sims), JSON.stringify(sims))
+    const child = ThreadIdSchema.parse(sims.child!)
+    await waitFor(() => w.store.reportsOf(child, 0).some((told) => told.status === "needs-input"), "its question")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.equal(listed.children[0]!.state.kind, "blocked", "a Fin whose report asks reads as waiting on it while its turn goes on")
+    const passed = await w.agents.answer(apex.caller, { to: "sims", person: true, clientKey: "pass" })
+    assert.ok(!("refused" in passed), JSON.stringify(passed))
+    assert.equal(passed.answered, "person")
+    const ask = w.agents.personAsk(apex.conversation)
+    assert.ok(ask, "the person's ask lists it")
+    assert.deepEqual(ask.ask.options?.map((option) => option.label), ["Installing Xcode now", "Not now"], "with its options")
+    const tapped = await w.agents.respond(apex.conversation, { fin: "sims", ask: ask.ask.id, option: 0, request: randomUUID() })
+    assert.ok(!("refused" in tapped), JSON.stringify(tapped))
+    await waitFor(() => w.prompts.some((prompt) => prompt.conversation === sims.conversation && prompt.text.includes("Installing Xcode now")) || w.steers.some((steer) => steer.conversation === sims.conversation && steer.text.includes("Installing Xcode now")), "the person's answer to reach it")
+    assert.equal(w.agents.personAsk(apex.conversation), undefined, "once answered it's off the person's ask")
+    const after = await w.agents.list(apex.caller, {})
+    assert.ok("children" in after)
+    assert.equal(after.children[0]!.state.kind, "working", "and the Fin reads as at work again")
+    w.release(sims.conversation!)
+    await waitFor(() => w.store.reportsOf(child, 0).at(-1)?.status === "done", "the answered turn's end")
+    assert.equal(w.store.reportsOf(child, 0).at(-1)?.summary, "Set up what I could without Xcode.", "the turn the answer reached reports how it ended")
+    const again = await w.agents.start(apex.caller, { brief: { objective: "Set up simulators again" }, name: "sims-2", clientKey: "sims-2", cwd: w.root })
+    assert.ok(!("refused" in again))
+    await waitFor(() => w.store.reportsOf(ThreadIdSchema.parse(again.child!), 0).some((told) => told.status === "needs-input"), "the second one's question")
+    const answered = await w.agents.answer(apex.caller, { to: "sims-2", answer: "Not now", clientKey: "apex-answers" })
+    assert.ok(!("refused" in answered) && answered.answered === "report", JSON.stringify(answered))
+  } finally {
+    await w.close()
+  }
+}
+
 /** A Fin runs on the model its spawn names, else its Apex's own on the Apex's harness, else its harness's default; its strip shows it. */
 async function finModels(): Promise<void> {
   const w = new AgentsWorld({
@@ -792,6 +849,7 @@ try {
   await apexStops()
   await staleEndsStayOut()
   await waitingFins()
+  await reportedQuestions()
   await ownSessionIsNoChild()
   console.log("agents engine: ok")
 } finally {

@@ -266,14 +266,17 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }
   const latest = journal.latest
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
-  if (thread.working) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
-  if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
+  // A question its newest report asks is what it waits on, even while its turn goes on with what it can: the digest, an
+  // answer and the person's ask all read it from that report, until an answer or a newer report closes it. One Mako
+  // wrote for its harness's own ask (`implicit`) says nothing once that ask ended and the turn goes on.
+  if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt && (!latest.implicit || !thread.working))
     return {
       kind: "blocked",
       question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.",
       on: latest.for !== "person" && reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person",
       ask: reportAsk(latest),
     }
+  if (thread.working) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
   // A stop after its last report is how it ended, in the words of whoever stopped it.
   if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
     const reason = edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)

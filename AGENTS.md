@@ -249,7 +249,12 @@ that ends a turn without `agents_report` while its own Fins work, or while a
 Its turn's end writes no report, and it reads as working with "Waiting for
 …" (`waitsOn`). Its result is the turn after that work ends: the one its
 Fins' reports wake, or, with nothing to wake it, that turn's reply
-(`checkAwaiting`). A message to it
+(`checkAwaiting`). A question in a Fin's newest report is what it waits on,
+even while its turn goes on (`childState`). The digest, `agents_answer`
+(the Apex's answer or `person: true`), the person's ask and their tap all
+read it from that one record. An answer closes it with a progress record
+dated before what the Fin reports next (`closeQuestion`), and the turn it
+reached reports how it ends. A message to it
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
