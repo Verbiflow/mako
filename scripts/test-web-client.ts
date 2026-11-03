@@ -8,6 +8,7 @@ import { foldThreads, openingSession } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
+import { renewAtMs } from "@mako/protocol"
 import { rowDetail } from "../src/web-client/rows"
 import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places } from "../src/web-client/places"
 import { ROW, rubberband, SETTLE, springPath } from "../src/web-client/motion"
@@ -182,22 +183,38 @@ test("a repository typed in any of Git's shapes is the cloud's", () => {
   assert.equal(typedRepository("https://gitlab.com/a/b"), undefined)
 })
 
-test("a connection token is renewed before it runs out, never on every ask, however short it lives", async () => {
-  for (const lifeMs of [20_000, 5 * 60_000]) {
+/** A connection token as the gateway signs it: a JWT whose `exp` and `iat` are seconds on the gateway's clock. */
+function signedToken(asked: number, issuedAt: number, lifeSeconds: number): { token: string; expiresAt: number } {
+  const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url")
+  return { token: `${part({ alg: "EdDSA", typ: "JWT" })}.${part({ sub: uuid(2), did: uuid(1), iat: issuedAt, exp: issuedAt + lifeSeconds, n: asked })}.sig${asked}`, expiresAt: issuedAt + lifeSeconds }
+}
+
+test("a connection token is renewed before it runs out, never on every ask, however short it lives or wrong the phone's clock", async () => {
+  // The gateway's `expiresAt` is seconds since 1970. Read as milliseconds, every token looked due at once: a phone
+  // fetched a fresh one before every request and every second in each socket (72 a minute with two open).
+  for (const [lifeSeconds, skewMs] of [[20, 0], [300, 0], [300, 10 * 60_000], [300, -10 * 60_000]] as const) {
     let asked = 0
     const gateway = new Gateway({
       origin: "https://example.test",
       connect: async () => {
         asked++
-        return { token: `t${asked}`, expiresAt: Date.now() + lifeMs, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }
+        // The gateway's clock is the phone's off by `skewMs`.
+        const { token, expiresAt } = signedToken(asked, Math.floor((Date.now() - skewMs) / 1000), lifeSeconds)
+        return { token, expiresAt, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }
       },
     })
+    const label = `a ${lifeSeconds}s token, the phone's clock ${skewMs / 60_000} min off`
     const first = await gateway.connection()
     const again = await Promise.all([gateway.connection(), gateway.connection()])
-    assert.deepEqual([first.token, ...again.map((connection) => connection.token)], ["t1", "t1", "t1"], `a ${lifeMs / 1000}s token is kept while it's good`)
-    assert.equal(asked, 1)
+    assert.deepEqual([first.token, ...again.map((connection) => connection.token)], Array(3).fill(first.token), `${label}: kept while it's good`)
+    assert.equal(asked, 1, label)
+    const renewIn = renewAtMs(first.token, first.expiresAt) - Date.now()
+    const due = Math.max(lifeSeconds - 60, lifeSeconds / 2) * 1000
+    assert.ok(Math.abs(renewIn - due) < 1_000, `${label}: due in ${renewIn} ms, not ${due}`)
     gateway.close()
   }
+  // A token that doesn't say its own lifetime is measured against its expiry, still in seconds.
+  assert.ok(Math.abs(renewAtMs("opaque", Math.floor(Date.now() / 1000) + 300) - Date.now() - 240_000) < 1_000)
 })
 
 test("a row says one fact under its title: what it waits on, that it failed or works, else its project", () => {
@@ -318,7 +335,7 @@ test("a start runs in the access the person chose for its harness, the one their
     if (init.method === "PATCH") kept = { ...kept, ...AccessChoosingSchema.parse(body).choices }
     return new Response(JSON.stringify({ choices: kept, revision: sent.length }), { status: 200, headers: { "content-type": "application/json" } })
   }) as typeof fetch
-  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Date.now() + 60_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Math.floor(Date.now() / 1000) + 60, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
   try {
     assert.deepEqual(await readAccessChoices(gateway), { codex: { mode: "access:ask", access: "ask" } })
     assert.deepEqual(await chooseAccess(gateway, "claude", claude.modes[2]!), { codex: { mode: "access:ask", access: "ask" }, claude: { mode: "bypassPermissions", access: "full" } })
@@ -890,7 +907,7 @@ test("a read the network failed is asked once more; a change never is", async ()
     if (fetched.length % 2 === 1) throw new TypeError("Load failed")
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } })
   }) as typeof fetch
-  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Date.now() + 600_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Math.floor(Date.now() / 1000) + 600, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
   try {
     assert.deepEqual(await gateway.rest("GET", "/v1/devices"), { ok: true })
     assert.deepEqual(fetched, ["GET", "GET"])
@@ -916,7 +933,7 @@ test("a read the network failed and then refused as run out is still renewed onc
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } })
   }) as typeof fetch
   let asked = 0
-  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: `t${++asked}`, expiresAt: Date.now() + 600_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: `t${++asked}`, expiresAt: Math.floor(Date.now() / 1000) + 600, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
   try {
     assert.deepEqual(await gateway.rest("GET", "/v1/devices"), { ok: true })
     assert.deepEqual(seen, ["Bearer t1", "Bearer t1", "Bearer t2"], "asked again after the network, then renewed")
@@ -1375,7 +1392,7 @@ test("a browser reads a Mac's copy as a Mac's window does: its newest page from 
   }) as typeof fetch
   const before = accountListStore.get()
   accountListStore.set({ ...before, rows: [listed], devices: new Map([[mac, { id: mac, kind: "desktop", name: "Studio", platform: "macOS" }]]), quiet: new Map([[mac, at(-5)]]) })
-  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Date.now() + 600_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Math.floor(Date.now() / 1000) + 600, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
   const retold: string[] = []
   const copies = new WebCopies({ gateway, retold: (conversation) => retold.push(conversation) })
   /** A read's whole answer, its parts read in turn. */

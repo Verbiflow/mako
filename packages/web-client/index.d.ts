@@ -13,7 +13,7 @@ export interface WebAccount {
 /** A connection token for a browser's sign-in: good for minutes, renewed in each socket. */
 export interface WebConnection {
   token: string
-  /** When it runs out, in ms since the epoch. */
+  /** When it runs out, in seconds since 1970, as the gateway signs it (the token's `exp`). */
   expiresAt: number
   deviceId: string
   account: WebAccount
