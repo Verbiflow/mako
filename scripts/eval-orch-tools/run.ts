@@ -73,14 +73,14 @@ async function sampled(run: () => Promise<Sample & { seconds?: number; tokens?: 
   let seconds = 0
   while (passes.length < samplesWanted || needsThird(passes)) {
     const began = Date.now()
-    const { steps, shell, text, ended, ...measured } = await run()
+    const { steps, shell, ran, text, ended, ...measured } = await run()
     seconds += measured.seconds ?? Math.round((Date.now() - began) / 1000)
     tokens.input += measured.tokens?.input ?? 0
     tokens.output += measured.tokens?.output ?? 0
-    const failed = grade(orchCase, { steps, shell, text, ended })
+    const failed = grade(orchCase, { steps, shell, ...ran && { ran }, text, ended })
     passes.push(!failed.length)
     failures.push(failed)
-    samples.push({ steps, shell, text: text.slice(0, 2000), ended })
+    samples.push({ steps, shell, ...ran && { ran }, text: text.slice(0, 2000), ended })
     if (passes.length >= 3) break
   }
   return { passes, failures, seconds, tokens, samples }
