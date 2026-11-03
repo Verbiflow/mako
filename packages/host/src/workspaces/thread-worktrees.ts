@@ -385,7 +385,8 @@ export class ThreadWorktreeService {
   /** The checkout of the Thread this conversation's journal joined, on this device. */
   threadCheckout(conversationId: string): ThreadCheckout | undefined {
     const placed = this.threads.journalPlacement(conversationId)
-    const worktrees = placed ? this.threads.worktrees().filter((worktree) => worktree.thread === placed.thread) : []
+    const place = placed && this.threads.placeOf(placed.thread)
+    const worktrees = place ? this.threads.worktrees().filter((worktree) => worktree.thread === place) : []
     const first = worktrees[0]
     if (!first) return undefined
     const path = worktreeCheckout(first)

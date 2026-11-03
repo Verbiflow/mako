@@ -151,6 +151,11 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.link-bead[data-state="offline"]::before', { animation: "link-bead-breathe", reduced: "global" }],
   // A side question's mark pulses only while it's being answered.
   [".side-panel-glyph", { animation: "side-glyph", reduced: /\.side-panel-glyph\s*\{\s*animation:\s*none;/ }],
+  // The live mark: a comet while it works, a breath while it needs you, a drift while a Fin asks its Apex. Each rests
+  // on the gate (`observePhaseLockedAnimation`), which also stills it under reduced motion.
+  [".live-mark-comet", { animation: "live-mark-turn", reduced: "global" }],
+  ['.live-mark[data-live-mark="needs"] > .live-mark-ring', { animation: "live-mark-breathe", reduced: "global" }],
+  ['.live-mark[data-live-mark="lead"] > .live-mark-ring', { animation: "live-mark-turn", reduced: "global" }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]

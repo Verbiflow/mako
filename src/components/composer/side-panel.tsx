@@ -87,7 +87,7 @@ function SideConversationPanel({ conversation, harness, side }: { conversation: 
       aria-label="Side question"
       data-side-panel
       data-side-by={side?.by}
-      className="side-panel animate-enter shrink-0 border-b border-hairline"
+      className="side-panel animate-enter shrink-0"
     >
       <header className="flex h-8 items-center gap-2 px-3 text-label">
         <MessageCircleDashedIcon className={cn("size-3.5 shrink-0 text-faint", answering && "side-panel-glyph")} aria-hidden />

@@ -90,7 +90,7 @@ async function check() {
   // The marks: running, waiting on background work, and done are three different things.
   const marks = await evaluate("[...document.querySelectorAll('[data-fixture=status-marks] [role=img]')].map((mark) => mark.getAttribute('aria-label'))")
   assert.deepEqual(marks, ["Working in Mako", "Waiting on 3 background tasks", "Answer ready to review"])
-  assert.equal(await evaluate("document.querySelector('[data-background-mark] .activity-mark, [data-background-mark] canvas') === null"), true, "the waiting mark is not the running mark")
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-fixture=status-marks] [data-live-mark]')].map((mark) => mark.dataset.liveMark)"), ["working", "background", "unread"], "the waiting mark is not the running mark")
 
   await theme(false)
   await capture("background-dark.png")

@@ -53,7 +53,7 @@ export function CommitBox({ staged, total }: { staged: number; total: number }) 
   const resolving = Boolean(status?.operation || status?.files.some(file => file.status === "conflicted"))
   // Several repositories share one footer, so it names the one it commits to.
   const named = Boolean(status?.repositories?.length)
-  return <div data-git-footer className="shrink-0 border-t border-hairline">
+  return <div data-git-footer className="shrink-0">
     <CommitEditor staged={staged} total={total} />
     {root && status.branch ? <>
       {!resolving ? <GitRemoteNotice cwd={root} branch={status.branch} /> : null}

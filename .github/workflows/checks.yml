@@ -54,6 +54,8 @@ jobs:
       - run: npx tsx scripts/test-host-liveness.ts
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
+      # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
+      - run: npm run test:device-join
       - run: npm run test:cloud-conversations
       - run: npx tsx scripts/test-cloud-returns.ts
 
@@ -118,6 +120,9 @@ jobs:
       - run: npm run build:control-runtime
       - run: npm run test:background-agents
       - run: npm run test:agents-migrate
+      # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
+      # crash-safe, reversible, on a store of the person's shape (`docs/one-conversation.md`).
+      - run: npm run test:thread-split
       - run: npm run test:agents-wake
       - run: npm run test:orch-answer
       - run: npm run test:orch-front-door
