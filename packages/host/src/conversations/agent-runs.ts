@@ -95,8 +95,8 @@ interface Followed {
   again: boolean
   /** Its process's identity was checked against its start this host's life: after that, a signal says it runs. */
   checked: boolean
-  /** When its process was first seen gone, while its end waits to be confirmed by a quiet Session. */
-  goneAt?: number
+  /** When its process was first seen gone and when its Session was last written then, while its end waits to be confirmed by a quiet Session. */
+  gone?: { at: number; written: number }
 }
 
 /** What a link or a discovery takes in. */
@@ -262,7 +262,7 @@ export class AgentRuns {
     hostLog("agents", "run moved to a new process", { child: edge.child, from: followed.edge.run?.process?.pid ?? null, to: edge.run?.process?.pid ?? null, by })
     followed.edge = edge
     followed.checked = true
-    followed.goneAt = undefined
+    followed.gone = undefined
     followed.reading = { ...followed.reading, alive: true }
     this.wantChecks()
     this.deps.changed(edge, false)
@@ -412,7 +412,7 @@ export class AgentRuns {
       const run = followed.edge.run
       if (!run || run.ended || !run.process || run.device !== device) continue
       const alive = await this.alive(followed, run.process).catch(() => true)
-      if (alive) followed.goneAt = undefined
+      if (alive) followed.gone = undefined
       else if (!(await this.endConfirmed(followed))) continue
       if (alive !== followed.reading.alive) {
         followed.reading = { ...followed.reading, alive }
@@ -424,26 +424,27 @@ export class AgentRuns {
 
   /**
    * Its process went: whether the run has ended. One that exited under #286's
-   * wrapper says so. Otherwise a process its Apex's shell started that now
-   * holds its Session is the run, followed there; and a Session still being
-   * written runs under a process Mako can't name yet. Only a Session quiet for
-   * `END_CONFIRM_MS` after the process went has ended.
+   * wrapper says so. Otherwise a Session written since runs on: in a process
+   * of its Apex's shell that holds it, followed there, or one Mako can't name
+   * yet. Only a Session quiet for `END_CONFIRM_MS` after the process went has
+   * ended.
    */
   private async endConfirmed(followed: Followed): Promise<boolean> {
     const run = followed.edge.run!
     if (run.runDir) return true
-    const successor = await this.successor(followed).catch(() => undefined)
-    if (successor) {
-      const store = this.deps.store()
-      if (store) this.moved(followed, store.keepEdge({ ...followed.edge, run: { ...run, process: successor } }), "its session")
-      return false
-    }
     const now = this.now()
-    followed.goneAt ??= now
     const path = followed.reading.session?.path
-    const written = Date.parse((path && this.deps.catalog.ref(path)?.updatedAt) || "")
-    const quietSince = Number.isFinite(written) ? Math.max(followed.goneAt, written) : followed.goneAt
-    return now - quietSince >= END_CONFIRM_MS
+    const written = Date.parse((path && this.deps.catalog.ref(path)?.updatedAt) || "") || 0
+    followed.gone ??= { at: now, written }
+    if (written > followed.gone.written) {
+      const successor = await this.successor(followed).catch(() => undefined)
+      const store = this.deps.store()
+      if (successor && store) {
+        this.moved(followed, store.keepEdge({ ...followed.edge, run: { ...run, process: successor } }), "its session")
+        return false
+      }
+    }
+    return now - Math.max(followed.gone.at, written) >= END_CONFIRM_MS
   }
 
   /** Another process of its Apex's shell that holds its Session's file: the same chat, resumed. */

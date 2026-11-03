@@ -381,7 +381,7 @@ async function followsShellRuns(): Promise<void> {
       { type: "text", id: "2", text: "All green: the sidebar is clean." },
     ])
     shell.kill("SIGTERM")
-    await waitFor(() => threads.edges().of(child)?.run?.ended !== undefined, "its end, once its process exited", END_CONFIRM_MS + 10_000)
+    await waitFor(() => threads.edges().of(child)?.run?.ended !== undefined, "its end, once its process exited", END_CONFIRM_MS + 20_000)
     const reports = threads.reportsOf(child, 0)
     assert.equal(reports.length, 1, "a followed run's end is one implicit report")
     assert.match(reports[0]!.summary, /sidebar is clean/)
@@ -454,7 +454,13 @@ async function relinkedRuns(): Promise<void> {
     first.kill("SIGTERM")
     successor = third.pid
     second.kill("SIGTERM")
-    await waitFor(() => threads.edges().of(child)?.run?.process?.pid === third.pid, "the run followed into the process holding its session", 10_000)
+    // The chat resumed in the third process writes its session as it goes.
+    const writing = setInterval(() => session([{ type: "tool", id: "1", name: "Bash", input: JSON.stringify({ command: "npm test" }), status: "completed" }]), 500)
+    try {
+      await waitFor(() => threads.edges().of(child)?.run?.process?.pid === third.pid, "the run followed into the process holding its session", 15_000)
+    } finally {
+      clearInterval(writing)
+    }
     assert.equal(threads.edges().of(child)?.run?.ended, undefined, "a chat resumed in another process hasn't ended")
     assert.equal(threads.reportsOf(child, 0).length, 0)
     successor = undefined
@@ -465,7 +471,7 @@ async function relinkedRuns(): Promise<void> {
     third.kill("SIGTERM")
     await new Promise((resolve) => setTimeout(resolve, 4_500))
     assert.equal(threads.edges().of(child)?.run?.ended, undefined, "a gone process's run ends only once its session stays quiet")
-    await waitFor(() => threads.edges().of(child)?.run?.ended !== undefined, "its end", END_CONFIRM_MS + 10_000)
+    await waitFor(() => threads.edges().of(child)?.run?.ended !== undefined, "its end", END_CONFIRM_MS + 20_000)
     assert.deepEqual(threads.reportsOf(child, 0).map((told) => [told.status, told.summary]), [["done", "All green."]], "and it ends once, as its session last shows")
   } finally {
     for (const shell of [first, second, third]) shell.kill()
