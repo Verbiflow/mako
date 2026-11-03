@@ -1365,6 +1365,36 @@ diffs-container {
 }
 
 /*
+ * The crew card's header bar: a thin strip split by group, the working
+ * stretch alone in motion. A crest of light slides across it, transform
+ * only, so the compositor moves it and the gate
+ * (`src/lib/visible-animation.ts`) can stop it off screen or under reduced
+ * motion without ever touching layout or paint.
+ */
+.crew-bar-working {
+  position: relative;
+  overflow: hidden;
+}
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .crew-bar-working::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 50%;
+    background: linear-gradient(to right, transparent, color-mix(in oklab, var(--foreground) 35%, transparent), transparent);
+    transform: translateX(-180%);
+    animation: crew-bar-sweep 1.8s linear infinite;
+    animation-play-state: var(--visible-animation-state, running);
+    will-change: var(--visible-animation-will-change, auto);
+  }
+}
+@keyframes crew-bar-sweep {
+  to {
+    transform: translateX(280%);
+  }
+}
+
+/*
  * A rail row's controls float over its trailing edge instead of joining the
  * line, so a title never re-truncates as the pointer passes. Their backdrop
  * is the row's own paint, the translucent hover fill over the opaque rail
