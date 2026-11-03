@@ -1,5 +1,6 @@
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
+import type { SessionSettings } from "@mako/sessions/settings"
 import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
@@ -66,7 +67,7 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
@@ -105,6 +106,8 @@ export interface AgentsDeps {
   harnessLabel(harness: string): string
   /** The modes `harness`'s live driver declares, each with its access tier; undefined for one that declares none. */
   modes(harness: string): readonly LiveSessionMode[] | undefined
+  /** What a new conversation of `harness` in `cwd` starts on: Mako's choice for it, else the harness's own default. */
+  defaultTuning?(harness: string, cwd: string): Promise<SessionSettings | undefined>
   budget?: TreeBudget
   processes?: ProcessReads
   now?(): number
@@ -231,7 +234,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (edge && report.status !== "progress") this.noticeOf(edge, report, wake)
     }
     for (const edge of edges.all) {
-      if (edge.closedAt !== undefined || edge.run) continue
+      if (edge.closedAt !== undefined || (edge.run && !edge.run.ended)) continue
       const last = store.reportsOf(edge.child, 0).at(-1)
       const conversation = this.conversationOf(edge.child)
       // A Fin that finished is read in only when the last host left a message of it waiting, paused or running.
@@ -856,12 +859,13 @@ export class Agents implements AgentOperations, ConversationChildren {
       startedBy: { kind: "agent", session: SessionIdSchema.parse(apex.session) },
     }
     const workspace = input.workspace
+    const tuning = await this.tuningOf(apex, harness, cwd, input)
     const options: LiveStartOptions = {
       conversationId,
       initialRequest: { id: namedUuid(`${op}\nbrief`), text: briefText(input.brief, name), attachments: [] },
       title: input.title ?? name,
       modeId: childMode(this.deps.modes(harness), tier)?.id ?? accessModeId(tier),
-      ...((input.model || input.reasoning) && { tuning: { ...(input.model && { model: input.model }), ...(input.reasoning && { options: { effort: input.reasoning } }) } }),
+      ...(tuning && { tuning }),
       ...(workspace && {
         worktree: true,
         ...(workspace.branch ? { worktreeStart: { kind: "branch" as const, branch: workspace.branch } } : workspace.base ? { worktreeStart: { kind: "from" as const, ref: workspace.base } } : {}),
@@ -889,6 +893,32 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "start admitted", { op, child: edge.child, harness, access: tier, ms: Math.round(performance.now() - began) })
     this.childMoved(edge, false)
     return this.started(edge, apex, false)
+  }
+
+  /**
+   * What a Fin runs on: the model the spawn named, else its Apex's own model
+   * and options on the Apex's harness, else what a new conversation of that
+   * harness starts on. A reasoning level it named applies to any of them.
+   */
+  private async tuningOf(apex: Apex, harness: string, cwd: string, input: AgentsStartInput): Promise<SessionSettings | undefined> {
+    const effort = input.reasoning ? { effort: input.reasoning } : undefined
+    if (input.model) return { model: input.model, ...(effort && { options: effort }) }
+    const own = apex.conversation && this.deps.live.session(apex.conversation)?.harness === harness ? this.settingsOf(apex.conversation) : undefined
+    const settings = own ?? await this.deps.defaultTuning?.(harness, cwd).catch((error) => {
+      hostWarn("agents", "a Fin's harness default couldn't be read; it starts on the harness's own", { harness, error: errorMessage({ error }) })
+      return undefined
+    })
+    if (!settings?.model) return effort && { options: effort }
+    return { model: settings.model, ...((settings.options || effort) && { options: { ...settings.options, ...effort } }) }
+  }
+
+  /** The model a conversation runs on now: the person's last choice in it, else what its harness reported, else what it started with. */
+  private settingsOf(conversation: string): SessionSettings | undefined {
+    const snapshot = this.deps.live.snapshot(conversation)
+    if (!snapshot) return undefined
+    const chosen = snapshot.requests.filter((request) => request.tuning?.model).at(-1)?.tuning
+    const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
+    return chosen ?? snapshot.session.settings ?? binding?.tuning
   }
 
   /** Starts what the running budget held, oldest first, while each tree has room. */
@@ -1182,15 +1212,18 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A request sent and not yet answered is work, before its harness says it runs.
     const working = session.status === "running" || Boolean(held?.requests.some((request) => request.status === "queued" || request.status === "dispatching"))
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
+    const thread = this.store()?.thread(edge.child)
+    const title = thread?.title ?? session.title
+    const model = this.settingsOf(conversation)?.model
     return {
       source: "live",
       conversation,
-      session: this.store()?.thread(edge.child)?.sessions[0],
+      session: thread?.sessions[0],
       ...(session.nativeId && { nativeId: session.nativeId }),
       ...(session.nativePath && { path: session.nativePath }),
-      ...(session.title && { title: session.title }),
+      ...(title && { title }),
       harness: session.harness,
-      ...(session.settings?.model && { model: session.settings.model }),
+      ...(model && { model }),
       ...((session.status === "starting" || this.starting.has(edge.op)) && { starting: "launching" as const }),
       ...(working && { working }),
       ...(working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
@@ -1472,8 +1505,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   private async deliver(edge: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined): Promise<{ delivery: AgentsSent["delivery"]; deduped?: true } | AgentRefused> {
     if (edge.closedAt)
       return { refused: "conflict", why: `${edge.name} was stopped, and a stopped Thread's delegation stays over: start a new one with agents_start, or the person can open it and talk to it there.` }
-    if (edge.run && !edge.run.ended)
-      return { refused: "unavailable", why: `${edge.name} runs in a process Mako follows but didn't start, which takes no message until it exits: its report reaches you when it does.` }
+    const taken = edge.run && (!edge.run.ended || !this.conversationOf(edge.child)) ? await this.takeOver(edge) : undefined
+    if (taken && "refused" in taken) return taken
+    const message = taken?.cut ? `${text}\n\n${HANDED_OVER_NOTE}` : text
     const conversation = this.conversationOf(edge.child)
     const ready = conversation ? this.ready(conversation) : "gone"
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
@@ -1488,8 +1522,43 @@ export class Agents implements AgentOperations, ConversationChildren {
         hostWarn("agents", "a message could not join the running turn; it waits for the turn's end", { op: edge.op, error: errorMessage({ error }) })
       }
     }
-    this.deps.live.submit(conversation, request, text, attachments, undefined, undefined, undefined, actor)
-    return { delivery: ready === "idle" ? "turn" : "queued" }
+    this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor)
+    return { delivery: ready === "idle" || taken ? "turn" : "queued" }
+  }
+
+  /**
+   * A Fin whose turns a process Mako didn't start runs, or ran: a message goes
+   * on in its own Session on Mako's live driver, which drives it from then on.
+   * A run still going is stopped first, since a headless run takes nothing
+   * until it exits; its last step may be cut short (`cut`), which the message
+   * tells it. Later messages steer or queue as any Fin's do.
+   */
+  private async takeOver(edge: ThreadParent): Promise<{ cut: boolean } | AgentRefused> {
+    const run = edge.run!
+    const store = this.store()!
+    const path = run.nativeId ? this.deps.catalog.nativePath({ harness: run.harness, nativeId: run.nativeId }) : undefined
+    const ref = path ? this.deps.catalog.ref(path) : undefined
+    if (!run.nativeId || !path || !ref?.cwd) return { refused: "unavailable", why: `${edge.name}'s session isn't on this device yet, so no message can reach it.` }
+    if (!this.deps.harnesses().includes(run.harness))
+      return { refused: "unavailable", why: `${this.deps.harnessLabel(run.harness)} has no live driver here to resume ${edge.name}'s session with a message: its report reaches you when it ends.` }
+    let cut = false
+    if (!run.ended) {
+      if (run.device !== store.deviceId || !run.process) return { refused: "unavailable", why: `${edge.name} runs in a process on another device, which takes no message until it exits.` }
+      if (!(await this.runs.handOver(edge.child))) return { refused: "unavailable", why: `${edge.name}'s process didn't stop, so its session can't take a message yet.` }
+      cut = true
+    }
+    const conversationId = namedUuid(`resume:${edge.child}:${run.nativeId}`)
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    const mode = childMode(this.deps.modes(run.harness), (apex ? this.tierOfConversation(apex) : undefined) ?? "ask")
+    try {
+      await this.deps.startLive(run.harness, ref.cwd, { conversationId, resume: run.nativeId, threadPath: path, ...(mode && { modeId: mode.id }) })
+    } catch (error) {
+      return { refused: "unavailable", why: `${edge.name}'s session didn't open here${cut ? " after its run was stopped" : ""}: ${errorMessage({ error })}` }
+    }
+    this.conversations.set(edge.child, conversationId)
+    this.childOf.set(conversationId, edge.child)
+    hostLog("agents", "run taken over", { op: edge.op, child: edge.child, harness: run.harness, cut, conversation: conversationId })
+    return { cut }
   }
 
   /** The message the Apex's turn answers: its newest from the person, with what came with it. */

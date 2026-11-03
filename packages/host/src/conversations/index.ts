@@ -279,6 +279,10 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       runs: (harness) => host.nativeRunners.get(harness) !== undefined,
       harnessLabel: (harness) => harnessLabel(host, harness),
       modes: (harness) => host.liveDrivers.get(harness)?.modes,
+      defaultTuning: async (harness, cwd) => {
+        const profile = await harnesses.profiles.forSend(harness, cwd)
+        return profile.available ? profile.settings : undefined
+      },
     })
     agents.resume()
   }

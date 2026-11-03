@@ -223,7 +223,20 @@ budget it queues with why, past its started budget it is refused with the
 count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
-across the host), its end written once. A report (`agents_report`, else one
+across the host), its end written once. Linking it again with another pid
+follows it there, and the link's name is its Thread's title. When its
+process goes, a process of its Apex's shell holding its Session is the same
+run (a chat resumed to hand it a message), and otherwise its end waits until
+its Session has been quiet for `END_CONFIRM_MS`. A message to it
+(`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
+Thread on Mako's live driver at no more than its Apex's access, and arrives
+with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
+Mako drives it. A Fin started without a model runs on its Apex's model and
+options when it shares the Apex's harness, else on its harness profile's
+default (`defaultTuning`). The person's own choice in Settings › Models is
+kept in each window, so the host can't read it. A worktree in a project folder of several
+repositories can be on a branch it names, adopted in each repository that
+has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
 its next step where its harness steers there and at its turn's end where it

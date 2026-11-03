@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
+import type { SessionSettings } from "@mako/sessions/settings"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
@@ -61,6 +62,8 @@ export interface WorldOptions {
   starting?: (conversation: string, harness: string) => Promise<void> | void
   /** Hears each prompt and steer as its harness takes it, before its turn goes on: what a killed host's harnesses took stays known. */
   heard?: (heard: Heard) => void
+  /** What a new conversation of each harness starts on, as its profile says. */
+  defaults?: Partial<Record<string, SessionSettings>>
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -139,6 +142,7 @@ export class AgentsWorld {
       runs: () => this.options.catalog !== undefined,
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
       modes: (harness) => drivers.get(harness)?.modes,
+      defaultTuning: async (harness) => this.options.defaults?.[harness],
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.processes && { processes: this.options.processes }),
     }
@@ -163,11 +167,11 @@ export class AgentsWorld {
     this.open()
   }
 
-  /** A top-level conversation on `harness` at `access`: an Apex once it starts a child. */
-  async apex(harness: string, access: AccessTier = "auto"): Promise<{ conversation: string; caller: AgentCaller }> {
+  /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
+  async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
-    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId })
+    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId, ...(tuning && { tuning }) })
     return { conversation, caller: this.caller(conversation) }
   }
 

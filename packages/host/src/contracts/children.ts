@@ -36,6 +36,8 @@ export function answerText(question: string, answer: string): string {
 /** Between the person's words an Apex passed on and what it added. */
 export const PASSED_ON_NOTE = `[mako · what ${YOUR_APEX} adds]`
 const PASSED_ON_NOTES = [PASSED_ON_NOTE, `[mako · what your ${LEGACY_APEX_WORD} adds]`]
+/** Beneath a message that reached a Fin by stopping the headless run it was in and resuming its session in Mako. */
+export const HANDED_OVER_NOTE = "[mako · to deliver this, Mako stopped your run and resumed your session here: your last step may have been cut off mid-way. Check what you had in flight (a command half-finished, a file half-written), then carry on with this message taken into account.]"
 
 const AGENT_HEADER = /^\[mako · from (.+?)(?: \(agent\))?, not the person\]\n?/
 const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(agent\)\]\n?/

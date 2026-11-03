@@ -80,15 +80,22 @@ const ReceiptSchema = z.object({
    * each repository has its worktree here, at the same place inside, on
    * `branch`. `base` and `from` are each repository's own.
    */
-  members: z.array(z.object({ repoRoot: z.string(), path: z.string(), base: z.string(), from: z.string() })).min(1).optional(),
+  members: z.array(z.object({
+    repoRoot: z.string(),
+    path: z.string(),
+    base: z.string(),
+    from: z.string(),
+    /** The repository had the named branch before the Thread, as `adopted` says of a whole receipt. */
+    adopted: z.literal(true).optional(),
+  })).min(1).optional(),
 })
 type Receipt = z.infer<typeof ReceiptSchema>
 /** One repository's worktree in a Thread's checkout. */
-type Member = { repoRoot: string; path: string; base: string; from?: string }
+type Member = { repoRoot: string; path: string; base: string; from?: string; adopted?: true }
 
 /** The worktrees a receipt made: one, or one per repository of a project folder. */
 const membersOf = (receipt: Receipt): Member[] =>
-  receipt.members ?? [{ repoRoot: receipt.repoRoot, path: receipt.path, base: receipt.base, from: receipt.from }]
+  receipt.members ?? [{ repoRoot: receipt.repoRoot, path: receipt.path, base: receipt.base, from: receipt.from, ...(receipt.adopted && { adopted: true as const }) }]
 
 /** A Thread's checkout on this device: the folder it works in, the project folder it mirrors, and a worktree per repository. */
 export interface ThreadCheckout {
@@ -1085,9 +1092,9 @@ export class ThreadWorktreeService {
       const on = await this.git.output(path, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
       if (on !== receipt.branch || (await this.inUse(path)).length || await removalBlocker(this.git, path)) return
     }
-    for (const { repoRoot, path, base } of members) {
+    for (const { repoRoot, path, base, adopted } of members) {
       if (existsSync(path)) await this.spares.setAside(repoRoot, path)
-      const commits = receipt.adopted ? 1 : await this.git.output(repoRoot, ["rev-list", "--count", `${base}..${receipt.branch}`]).then(Number, () => 1)
+      const commits = receipt.adopted || adopted ? 1 : await this.git.output(repoRoot, ["rev-list", "--count", `${base}..${receipt.branch}`]).then(Number, () => 1)
       if (commits === 0) await this.git.output(repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
     }
     if (receipt.members) await this.trashFolder(receipt.path)
@@ -1226,17 +1233,25 @@ export class ThreadWorktreeService {
     if (!receipt) {
       const found = await projectRepositories(this.git, source)
       if ("refusal" in found) throw new Error(found.refusal)
-      if (from.kind !== "newest" && from.kind !== "head")
-        throw new Error(`${basename(source)} holds several repositories, so its Threads start each one on a new branch. Starting from a branch you choose is for a project of one repository.`)
-      const started = await Promise.all(found.roots.map(async (repoRoot) => {
+      if (from.kind !== "newest" && from.kind !== "head" && from.kind !== "branch")
+        throw new Error(`${basename(source)} holds several repositories, so its Threads start each one on a new branch, or on one branch you name in all of them. Starting from another branch or a pull request is for a project of one repository.`)
+      const started: { repoRoot: string; base: string; from: string; adopted?: true }[] = await Promise.all(found.roots.map(async (repoRoot) => {
         const head = await this.git.output(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]).catch(() => "")
         if (!head) throw new Error(`${relative(source, repoRoot)} has no commits yet, so its worktree has nothing to start from. Make a first commit there, or choose Project folder.`)
         if (from.kind === "head") return { repoRoot, base: head, from: await this.git.output(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => head.slice(0, 7)) }
+        // A repository that has the branch works on it; one that doesn't makes it from its newest start.
+        if (from.kind === "branch" && await this.hasBranch(repoRoot, from.branch)) {
+          const { branch, base } = await this.adopt(repoRoot, from)
+          return { repoRoot, base, from: branch, adopted: true as const }
+        }
         const point = await this.starts.point(repoRoot, false)
         return { repoRoot, base: point.commit, from: point.from }
       }))
       const parent = this.projectFolder(source)
-      const slug = await this.reserveProjectSlug(started, parent, worktreeSlug(name))
+      const named = from.kind === "branch" ? started.find((member) => member.adopted)?.from ?? from.branch : undefined
+      const slug = named
+        ? this.freeFolder(parent, worktreeSlug(named.replace(/[/_.]+/g, " ")))
+        : await this.reserveProjectSlug(started, parent, worktreeSlug(name))
       const path = join(parent, slug)
       receipt = {
         conversation: conversationId,
@@ -1244,11 +1259,12 @@ export class ThreadWorktreeService {
         repoRoot: source,
         path,
         cwd: path,
-        branch: `${BRANCH_PREFIX}${slug}`,
+        branch: named ?? `${BRANCH_PREFIX}${slug}`,
         base: "",
         state: "creating",
         members: started.map((member) => ({ ...member, path: join(path, relative(source, member.repoRoot)) })),
       }
+      if (started.every((member) => member.adopted)) receipt.adopted = true
       await this.save(receipt)
     }
     onStep?.("checkout")
@@ -1393,6 +1409,12 @@ export class ThreadWorktreeService {
     if (holder)
       throw new Error(`${branch} is checked out in ${holder === repoRoot ? "your project folder" : basename(holder)}. Git keeps a branch in one checkout at a time, so start a new branch from it instead.`)
     return { branch, base: await this.git.output(repoRoot, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]) }
+  }
+
+  /** Whether `adopt` finds `branch` in this repository: a local branch, or a remote's named with its remote. */
+  private async hasBranch(repoRoot: string, branch: string): Promise<boolean> {
+    return await this.git.succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]) ||
+      this.git.succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/remotes/${branch}`])
   }
 
   /** A folder name under `parent` nothing has yet, for a worktree on a branch that already has its name. */

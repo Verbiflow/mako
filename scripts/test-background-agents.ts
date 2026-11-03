@@ -17,7 +17,8 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import { lastStep } from "@mako/host/conversations/agent-runs"
+import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
+import { END_CONFIRM_MS, lastStep } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
@@ -380,7 +381,7 @@ async function followsShellRuns(): Promise<void> {
       { type: "text", id: "2", text: "All green: the sidebar is clean." },
     ])
     shell.kill("SIGTERM")
-    await waitFor(() => threads.edges().of(child)?.run?.ended !== undefined, "its end, once its process exited", 10_000)
+    await waitFor(() => threads.edges().of(child)?.run?.ended !== undefined, "its end, once its process exited", END_CONFIRM_MS + 10_000)
     const reports = threads.reportsOf(child, 0)
     assert.equal(reports.length, 1, "a followed run's end is one implicit report")
     assert.match(reports[0]!.summary, /sidebar is clean/)
@@ -389,6 +390,159 @@ async function followsShellRuns(): Promise<void> {
     agents.dispose()
     jobs.stop()
     threads.close()
+  }
+}
+
+function sleeper(cwd: string) {
+  return spawn("/bin/sh", ["-c", "sleep 60"], { cwd, stdio: "ignore" })
+}
+
+function runs(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A run its Apex linked, then linked again in the process that resumed its chat: followed there, so the first
+ * process's end isn't its end. One whose process goes is followed into the process of its Apex's shell that holds
+ * its Session, and is declared ended only once its Session stays quiet. Its link's name is its title.
+ */
+async function relinkedRuns(): Promise<void> {
+  const threads = new ThreadStore(join(root, "relinked.sqlite"), { now: () => Date.now() })
+  const apex = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "cursor", bindings: [] }, { kind: "service", name: "workspace" })
+  const fake = fakeCatalog()
+  const jobs = new HostJobs()
+  const folder = realpathSync(root)
+  let successor: number | undefined
+  const agents = new Agents({
+    store: () => threads,
+    catalog: fake.catalog,
+    jobs,
+    live: noConversations(() => {}),
+    startLive: () => Promise.reject(new Error("This test starts no conversation")),
+    harnesses: () => ["cursor"],
+    runs: () => true,
+    harnessLabel: () => "Cursor",
+    modes: () => undefined,
+    processes: {
+      marked: async () => (successor === undefined ? [] : [{ pid: successor, value: apex.session }]),
+      holding: async (_file, pids) => new Set(pids.filter((pid) => pid === successor)),
+      folders: async () => new Map(),
+      startedAt: async () => Date.now(),
+    },
+  })
+  const [first, second, third] = [sleeper(folder), sleeper(folder), sleeper(folder)]
+  try {
+    const nativeId = randomUUID()
+    const session = (entries: Entry[]) => fake.write({ harness: "cursor", nativeId, path: `/cursor/${nativeId}/store.db`, cwd: folder, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), title: "You are a headless worker started by the coordinator" }, entries)
+    session([{ type: "tool", id: "1", name: "Bash", input: JSON.stringify({ command: "npm test" }), status: "completed" }])
+    const caller = { kind: "agent" as const, session: apex.session }
+    const linked = await agents.link(caller, { harness: "cursor", session: nativeId, pid: first.pid!, name: "worker" })
+    assert.ok(!("refused" in linked), JSON.stringify(linked))
+    const child = ThreadIdSchema.parse(linked.child)
+    const listed = await agents.list(caller, {})
+    assert.ok("children" in listed)
+    assert.equal(listed.children[0]!.title, "worker", "a link's name is its Fin's title, not its first prompt's line")
+    assert.equal(threads.thread(child)?.title, "worker", "and its Thread's")
+    const again = await agents.link(caller, { harness: "cursor", session: nativeId, pid: second.pid! })
+    assert.ok(!("refused" in again) && again.deduped && again.child === linked.child, JSON.stringify(again))
+    assert.equal(threads.edges().of(child)?.run?.process?.pid, second.pid, "a re-link follows the run in the process it names")
+    first.kill("SIGTERM")
+    successor = third.pid
+    second.kill("SIGTERM")
+    await waitFor(() => threads.edges().of(child)?.run?.process?.pid === third.pid, "the run followed into the process holding its session", 10_000)
+    assert.equal(threads.edges().of(child)?.run?.ended, undefined, "a chat resumed in another process hasn't ended")
+    assert.equal(threads.reportsOf(child, 0).length, 0)
+    successor = undefined
+    session([
+      { type: "tool", id: "1", name: "Bash", input: JSON.stringify({ command: "npm test" }), status: "completed" },
+      { type: "text", id: "2", text: "All green." },
+    ])
+    third.kill("SIGTERM")
+    await new Promise((resolve) => setTimeout(resolve, 4_500))
+    assert.equal(threads.edges().of(child)?.run?.ended, undefined, "a gone process's run ends only once its session stays quiet")
+    await waitFor(() => threads.edges().of(child)?.run?.ended !== undefined, "its end", END_CONFIRM_MS + 10_000)
+    assert.deepEqual(threads.reportsOf(child, 0).map((told) => [told.status, told.summary]), [["done", "All green."]], "and it ends once, as its session last shows")
+  } finally {
+    for (const shell of [first, second, third]) shell.kill()
+    agents.dispose()
+    jobs.stop()
+    threads.close()
+  }
+}
+
+/**
+ * A message to a Fin a CLI its Apex's shell started runs: the run is stopped and its own Session resumed in the
+ * Fin's Thread on Mako's live driver, the message its next turn, saying its last step may have been cut short.
+ */
+async function messagesReachLinkedRuns(): Promise<void> {
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, "taken-over"),
+    script: (turn) => (turn.text.includes("fix the footer") ? "Footer fixed." : "ok"),
+    catalog: fake.catalog,
+    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: async () => Date.now() },
+  })
+  const run = sleeper(w.root)
+  try {
+    const apex = await w.apex("claude", "full")
+    const nativeId = randomUUID()
+    fake.write({ harness: "claude", nativeId, path: join(w.root, "cli", `${nativeId}.jsonl`), cwd: w.root, startedAt: new Date().toISOString(), title: "You are a headless worker" }, [
+      { type: "user", id: "1", text: "You are a headless worker. Fix the sidebar." },
+      { type: "tool", id: "2", name: "Bash", input: JSON.stringify({ command: "npm test" }), status: "completed" },
+    ])
+    const linked = await w.agents.link(apex.caller, { harness: "claude", session: nativeId, pid: run.pid!, name: "cli" })
+    assert.ok(!("refused" in linked), JSON.stringify(linked))
+    const sent = await w.agents.send(apex.caller, { to: "cli", text: "Also fix the footer.", clientKey: "m1" })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    assert.equal(sent.delivery, "turn")
+    assert.equal(runs(run.pid!), false, "its run was stopped first")
+    await w.settle()
+    const prompt = w.prompts.find((asked) => asked.text.includes("Also fix the footer."))
+    assert.ok(prompt, "the message reached its session")
+    assert.ok(prompt.text.includes(HANDED_OVER_NOTE), "saying its last step may have been cut short")
+    assert.equal(w.store.journalPlacement(prompt.conversation)?.thread, linked.child, "in the Fin's own Thread")
+    assert.equal(w.live.session(prompt.conversation)?.nativeId, nativeId, "resuming its own session")
+    assert.deepEqual(w.store.reportsOf(ThreadIdSchema.parse(linked.child), 0).map((told) => [told.status, told.summary]), [["done", "Footer fixed."]], "the stopped run reports nothing; the turn that took the message reports how it went")
+    const next = await w.agents.send(apex.caller, { to: "cli", text: "And the header.", clientKey: "m2" })
+    assert.ok(!("refused" in next) && next.delivery === "turn", JSON.stringify(next))
+    await w.settle()
+    assert.equal(w.prompts.find((asked) => asked.text.includes("And the header."))?.conversation, prompt.conversation, "Mako drives it from then on")
+  } finally {
+    run.kill()
+    await w.close()
+  }
+}
+
+/** A Fin runs on the model its spawn names, else its Apex's own on the Apex's harness, else its harness's default; its strip shows it. */
+async function finModels(): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, "models"),
+    script: (turn) => (turn.text.includes("You're fin:") ? "done" : "ok"),
+    defaults: { claude: { model: "claude-sonnet-5", options: { effort: "medium" } } },
+  })
+  try {
+    const apex = await w.apex("cursor", "full", { model: "claude-opus-5-5", options: { effort: "high" } })
+    const brief = { objective: "Look" }
+    const same = await w.agents.start(apex.caller, { brief, name: "same", clientKey: "s", cwd: w.root })
+    const other = await w.agents.start(apex.caller, { brief, harness: "claude", name: "other", clientKey: "o", cwd: w.root })
+    const named = await w.agents.start(apex.caller, { brief, harness: "cursor", model: "gpt-6", reasoning: "low", name: "named", clientKey: "n", cwd: w.root })
+    assert.ok(!("refused" in same) && !("refused" in other) && !("refused" in named), JSON.stringify([same, other, named]))
+    const asked = (answer: AgentsStarted) => w.live.snapshot(answer.conversation!)?.requests[0]?.tuning
+    assert.deepEqual(asked(same), { model: "claude-opus-5-5", options: { effort: "high" } }, "a Fin on its Apex's harness runs on the Apex's model and reasoning, not the harness's default")
+    assert.deepEqual(asked(other), { model: "claude-sonnet-5", options: { effort: "medium" } }, "one on another harness runs on that harness's default")
+    assert.deepEqual(asked(named), { model: "gpt-6", options: { effort: "low" } })
+    await w.settle()
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children.map((strip) => [strip.name, strip.model]), [["same", "claude-opus-5-5"], ["other", "claude-sonnet-5"], ["named", "gpt-6"]], "each strip shows its model")
+    assert.deepEqual(w.agents.roster(apex.conversation).map((entry) => entry.model), ["claude-opus-5-5", "claude-sonnet-5", "gpt-6"], "and so does each Fin's row")
+  } finally {
+    await w.close()
   }
 }
 
@@ -445,6 +599,9 @@ try {
   await harnessLadders()
   await stopAllUnqueues()
   await followsShellRuns()
+  await relinkedRuns()
+  await messagesReachLinkedRuns()
+  await finModels()
   await ownSessionIsNoChild()
   console.log("agents engine: ok")
 } finally {
