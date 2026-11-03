@@ -55,15 +55,15 @@ const MAKO_INSTRUCTIONS = [
 type Route = "computer" | "mako"
 
 /**
- * A harness's command hook posting one tool call (`/calls/<harness>/<pre|post>`):
+ * A harness's command hook posting one tool call (`/calls/<pre|post>`):
  * what it prints back, decided for the grant's conversation. A hook that gets
  * no answer goes on, so a failure here never stops a call.
  */
-export type CallGate = (conversationId: string, harness: string, event: "pre" | "post", body: unknown) => JsonValue
+export type CallGate = (conversationId: string, event: "pre" | "post", body: JsonValue) => JsonValue
 
-function gatePath(url: string | undefined): { harness: string; event: "pre" | "post" } | undefined {
-  const match = /^\/calls\/([a-z]+)\/(pre|post)$/.exec(url?.split("?", 1)[0] ?? "")
-  return match ? { harness: match[1]!, event: match[2] === "pre" ? "pre" : "post" } : undefined
+function gatePath(url: string | undefined): "pre" | "post" | undefined {
+  const path = url?.split("?", 1)[0]
+  return path === "/calls/pre" ? "pre" : path === "/calls/post" ? "post" : undefined
 }
 
 /** By path alone: OpenCode adds its own query (`?codemode=false`) to every server's address. */
@@ -116,9 +116,9 @@ export async function startConversationMcp(
           response.writeHead(405).end()
           return
         }
-        const body: unknown = JSON.parse(await readBody(request, 1024 * 1024))
+        const body = z.json().parse(JSON.parse(await readBody(request, 1024 * 1024)))
         owner.authorizeAgent(scope.conversationId, scope.bindingId)
-        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(gate(scope.conversationId, gated.harness, gated.event, body)))
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(gate(scope.conversationId, gated, body)))
         return
       }
       const route = routeOf(request.url)

@@ -22,7 +22,7 @@ import type { StubMako } from "./stub-mako.ts"
  */
 
 /** The harnesses whose driver routes each shell call (`NativeCallsCapability` per-call): a command routing denies there never ran. */
-const ROUTED_CALLS = new Set(["claude", "cursor"])
+const ROUTED_CALLS = new Set(["claude", "cursor", "grok", "devin"])
 
 /** Each harness's mode that asks before a command runs; Cursor has only full access. */
 export const ASKING_MODE = new Map([["claude", "default"], ["codex", "access:ask"], ["opencode", "access:ask"], ["grok", "access:ask"], ["devin", "accept-edits"]])
@@ -88,9 +88,11 @@ export async function liveSample(input: {
   const status = () => events.findLast((event) => event.type === "live-session")?.session.status
   try {
     const mode = ASKING_MODE.get(harness)
+    const grant = stub.grant(id)
+    if (routing === "on") stub.routes(id, caseCallThread(orchCase, project))
     await driver.start(project, admitted(harness, {
       conversationId: id, emit, ...mode && { modeId: mode }, ...input.model && { tuning: { model: input.model } },
-      conversationTools: stub.grant(id),
+      conversationTools: grant,
       mcpSnapshot: async () => ({ cwd: project, generatedAt: Date.now(), servers: [], providers: [] }),
       ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }), nativeCalls: () => caseCallThread(orchCase, project) },
     }, { env }))

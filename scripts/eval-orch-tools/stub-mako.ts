@@ -6,6 +6,8 @@ import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsListResult, t
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
 import { startConversationMcp, type MakoTools } from "@mako/host/tools/conversation-mcp"
+import type { CallThread } from "@mako/host/contracts/native-calls"
+import { callGateAnswer, HookCall } from "@mako/host/harnesses/call-gate"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { registerWorkspaceTools, type WorkspaceTools } from "@mako/host/workspaces/tools"
 import { registerEnvironmentTools, type EnvironmentTools } from "@mako/host/workspaces/environment-tools"
@@ -22,6 +24,8 @@ import { ToolArgs, type Call } from "./cases.ts"
 export interface StubMako {
   /** The grant one launch's agent gets (`ConversationTools`). */
   grant(conversation: string): { token: string; computerUrl: string; makoUrl?: string }
+  /** The Thread a conversation's hooks are answered for at the `/calls` gate, as routing reads it. */
+  routes(conversation: string, thread: CallThread): void
   /** The `agents_*` calls so far, by bare tool name. */
   calls(conversation: string): Call[]
   /** What an agent reads first: the server's instructions and its tools. */
@@ -103,21 +107,26 @@ const FAMILY_ANSWERS = new Map<string, string>([
 
 /** Registers Mako's own tools as the host does, with each call recorded and answered from `FAMILY_ANSWERS`. */
 function familyTools(record: (conversation: string, tool: string, args: ToolArgs) => void): MakoTools[] {
-  // SAFETY: every handler is replaced before it can run, so the tools' implementations are never read.
   const unused = new Proxy({}, { get: () => () => { throw new Error("The eval's stub answers before any tool runs") } })
-  const recording = (server: McpServer, conversationId: () => string): McpServer => new Proxy(server, {
-    get(target, key, receiver) {
-      if (key !== "registerTool") return Reflect.get(target, key, receiver)
-      const register = (name: string, config: Parameters<McpServer["registerTool"]>[1]) => target.registerTool(name, config, async (args: unknown) => {
-        record(conversationId(), name, ToolArgs.parse(args))
-        return { content: [{ type: "text" as const, text: FAMILY_ANSWERS.get(name) ?? "Done." }] }
-      })
-      return register
-    },
-  })
+  // Each request builds its own server, so its `registerTool` is replaced for that server alone.
+  const recording = (server: McpServer, conversationId: () => string): McpServer => {
+    type Register = (name: string, config: Parameters<McpServer["registerTool"]>[1], handler: (args: ToolArgs) => Promise<{ content: { type: "text"; text: string }[] }>) => ReturnType<McpServer["registerTool"]>
+    // SAFETY: every handler the stub registers takes the tool's arguments and returns text, which each overload accepts.
+    const register = server.registerTool.bind(server) as Register
+    const stubbed = (name: string, config: Parameters<McpServer["registerTool"]>[1]) => register(name, config, async (args) => {
+      record(conversationId(), name, ToolArgs.parse(args))
+      return { content: [{ type: "text" as const, text: FAMILY_ANSWERS.get(name) ?? "Done." }] }
+    })
+    // SAFETY: the register functions call `registerTool(name, config, handler)` only, which `stubbed` takes, dropping the handler.
+    server.registerTool = stubbed as McpServer["registerTool"]
+    return server
+  }
   return [
+    // SAFETY: every handler is replaced before it can run, so the tools' implementations are never read.
     (server, conversationId) => registerWorkspaceTools(recording(server, conversationId), unused as WorkspaceTools, conversationId),
+    // SAFETY: as above.
     (server, conversationId) => registerEnvironmentTools(recording(server, conversationId), unused as EnvironmentTools, conversationId),
+    // SAFETY: as above.
     (server, conversationId) => registerPullRequestTools(recording(server, conversationId), unused as PullRequestTools, conversationId, () => false),
   ]
 }
@@ -125,6 +134,7 @@ function familyTools(record: (conversation: string, tool: string, args: ToolArgs
 export async function startStubMako(): Promise<StubMako> {
   const calls = new Map<string, Call[]>()
   const started = new Map<string, AgentsStarted[]>()
+  const threads = new Map<string, CallThread>()
   const record = (conversation: string, tool: string, args: ToolArgs) => calls.set(conversation, [...calls.get(conversation) ?? [], { tool, args }])
   const servers = await startConversationMcp(
     { authorizeAgent() {} },
@@ -145,6 +155,10 @@ export async function startStubMako(): Promise<StubMako> {
       caller: () => ({ kind: "agent", session: conversationId() }),
       filled: () => ({}),
     })],
+    (conversation, event, body) => {
+      const thread = threads.get(conversation)
+      return thread ? callGateAnswer(event, HookCall.safeParse(body).data, thread, conversation) : {}
+    },
   )
   const grants = new Map<string, ReturnType<typeof servers.mint>>()
   return {
@@ -153,6 +167,7 @@ export async function startStubMako(): Promise<StubMako> {
       grants.set(conversation, grant)
       return grant
     },
+    routes: (conversation, thread) => { threads.set(conversation, thread) },
     calls: (conversation) => calls.get(conversation) ?? [],
     async describe() {
       const conversation = `describe-${randomUUID()}`

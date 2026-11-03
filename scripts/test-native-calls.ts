@@ -6,7 +6,7 @@ import { claudeRoutedCall } from "@mako/host/harnesses/claude/routing"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { callGateAnswer } from "@mako/host/harnesses/call-gate"
+import { callGateAnswer, HookCall } from "@mako/host/harnesses/call-gate"
 import { GROK_CALL_HOOKS } from "@mako/host/harnesses/grok/call-hooks"
 import { prepareDevinMcp } from "@mako/host/harnesses/devin/session-mcp"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
@@ -150,31 +150,32 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
 
 // The gate a command hook posts to: Devin's block, Codex's PreToolUse deny, a note after the call, argv read as its script.
 {
-  const devin = callGateAnswer("devin", "pre", { tool_name: "exec", tool_input: { command: "gh pr merge --squash", workdir: worktree } }, inWorktree, "c")
+  const gate = (event: "pre" | "post", body: JsonObject) => callGateAnswer(event, HookCall.parse(body), inWorktree, "c")
+  const devin = gate("pre", { tool_name: "exec", tool_input: { command: "gh pr merge --squash", workdir: worktree } })
   assert.equal(z.object({ decision: z.literal("block"), reason: z.string() }).parse(devin).decision, "block")
-  const codex = callGateAnswer("codex", "pre", { tool_name: "shell", tool_input: { command: ["bash", "-lc", "git worktree add ../x"] }, cwd: worktree }, inWorktree, "c")
+  const codex = gate("pre", { tool_name: "shell", tool_input: { command: ["bash", "-lc", "git worktree add ../x"] }, cwd: worktree })
   assert.match(z.object({ hookSpecificOutput: z.object({ permissionDecision: z.literal("deny"), permissionDecisionReason: z.string() }) }).parse(codex).hookSpecificOutput.permissionDecisionReason, /worktree_move/)
-  const note = callGateAnswer("devin", "post", { tool_name: "exec", tool_input: { command: "lsof -i :3000" } }, inWorktree, "c")
+  const note = gate("post", { tool_name: "exec", tool_input: { command: "lsof -i :3000" } })
   assert.match(z.object({ hookSpecificOutput: z.object({ additionalContext: z.string() }) }).parse(note).hookSpecificOutput.additionalContext, /port_holder/)
-  assert.deepEqual(callGateAnswer("devin", "pre", { tool_name: "exec", tool_input: { command: "npm test" } }, inWorktree, "c"), {})
-  assert.deepEqual(callGateAnswer("devin", "pre", "not json we know", inWorktree, "c"), {}, "an unreadable call goes on")
+  assert.deepEqual(gate("pre", { tool_name: "exec", tool_input: { command: "npm test" } }), {})
+  assert.deepEqual(callGateAnswer("pre", HookCall.safeParse("not json we know").data, inWorktree, "c"), {}, "an unreadable call goes on")
 }
 
 // The conversation server answers a hook's post for the grant's conversation, and refuses one without a grant.
 {
   const seen: string[] = []
-  const servers = await startConversationMcp({ authorizeAgent() {} }, async () => ({}), [() => {}], (conversation, harness, event, body) => {
-    seen.push(`${conversation} ${harness} ${event}`)
-    return callGateAnswer("devin", event, body, inWorktree, conversation)
+  const servers = await startConversationMcp({ authorizeAgent() {} }, async () => ({}), [() => {}], (conversation, event, body) => {
+    seen.push(`${conversation} ${event}`)
+    return callGateAnswer(event, HookCall.safeParse(body).data, inWorktree, conversation)
   })
   try {
     const grant = servers.mint("b", "conv")
-    const gate = grant.makoUrl!.replace(/\/mako$/, "/calls/devin/pre")
-    const post = (headers: Record<string, string>) => fetch(gate, { method: "POST", headers, body: JSON.stringify({ tool_name: "exec", tool_input: { command: "gh pr create" } }) })
+    const url = grant.makoUrl!.replace(/\/mako$/, "/calls/pre")
+    const post = (headers: Record<string, string>) => fetch(url, { method: "POST", headers, body: JSON.stringify({ tool_name: "exec", tool_input: { command: "gh pr create" } }) })
     const answered = await post({ authorization: `Bearer ${grant.token}` })
     assert.equal(answered.status, 200)
     assert.match(z.object({ reason: z.string() }).parse(await answered.json()).reason, /pull_request_open/)
-    assert.deepEqual(seen, ["conv devin pre"])
+    assert.deepEqual(seen, ["conv pre"])
     assert.equal((await post({})).status, 401)
   } finally {
     servers.close()
@@ -193,8 +194,8 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
     const written = z.object({ theme: z.string(), hooks: z.record(z.string(), z.array(z.object({ matcher: z.string(), hooks: z.array(z.object({ command: z.string() })) }))) }).parse(JSON.parse(await readFile(join(env.XDG_CONFIG_HOME!, "devin", "config.json"), "utf8")))
     assert.equal(written.theme, "dark")
     assert.equal(written.hooks.PreToolUse?.[0]?.hooks[0]?.command, "mine", "the person's hook stays first")
-    assert.match(written.hooks.PreToolUse?.[1]?.hooks[0]?.command ?? "", /curl .*'Authorization: Bearer t0k' 'http:\/\/127\.0\.0\.1:4100\/calls\/devin\/pre'/)
-    assert.match(written.hooks.PostToolUse?.[0]?.hooks[0]?.command ?? "", /\/calls\/devin\/post'$/)
+    assert.match(written.hooks.PreToolUse?.[1]?.hooks[0]?.command ?? "", /curl .*'Authorization: Bearer t0k' 'http:\/\/127\.0\.0\.1:4100\/calls\/pre'/)
+    assert.match(written.hooks.PostToolUse?.[0]?.hooks[0]?.command ?? "", /\/calls\/post'$/)
     await dispose()
     const plain: NodeJS.ProcessEnv = { XDG_CONFIG_HOME: root }
     const disposePlain = await prepareDevinMcp(servers, plain)

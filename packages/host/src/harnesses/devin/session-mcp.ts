@@ -119,7 +119,7 @@ function devinCallGate(servers: readonly McpServer[]): { url: string; authorizat
     if (!("type" in server) || server.type !== "http" || server.name !== MAKO_THREAD_SERVER) continue
     const authorization = server.headers.find(({ name }) => name.toLowerCase() === "authorization")?.value
     const url = new URL(server.url)
-    url.pathname = url.pathname.replace(/\/mako$/, "/calls/devin")
+    url.pathname = url.pathname.replace(/\/mako$/, "/calls")
     url.search = ""
     if (authorization) return { url: url.toString(), authorization }
   }
@@ -136,7 +136,7 @@ const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
  * so a warn is PostToolUse's `additionalContext`, the model's next message.
  * A gate that can't be reached prints nothing, and the call goes on.
  */
-function withDevinGate(hooks: z.infer<typeof DevinSettings>[string] | undefined, gate: { url: string; authorization: string }): Record<string, unknown[]> {
+function withDevinGate(hooks: z.infer<typeof DevinSettings>[string] | undefined, gate: { url: string; authorization: string }) {
   const own = z.record(z.string(), z.array(z.json())).catch({}).parse(hooks ?? {})
   const hook = (event: "pre" | "post") => ({
     matcher: `^${DEVIN_SHELL}$`,
