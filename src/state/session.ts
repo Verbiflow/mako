@@ -32,6 +32,7 @@ import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
 import { cloudTurnOn } from "@/state/cloud-turn-on"
+import { simulatorSetup } from "@/state/simulator-setup"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
@@ -393,6 +394,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "cloud-turn-on") {
     cloudTurnOn.heard(event.turnOn)
+    return
+  }
+  if (event.type === "simulator-setup") {
+    simulatorSetup.heard(event.setup)
     return
   }
   if (event.type === "handoff-settings") {

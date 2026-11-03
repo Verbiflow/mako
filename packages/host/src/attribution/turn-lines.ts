@@ -6,7 +6,7 @@ import type { KeptLines, TurnUndoFile, TurnUndoKept, TurnUndoLeft, TurnUndoScope
 import type { StoredEntry } from "./journal-store.js"
 import { diffLines } from "./line-diff.js"
 import { original, present, walkLines, type Walk, type WalkedLine } from "./line-walk.js"
-import { classOf, fileGroups, linesOf, rootsIn, side, turnChain, type JournalView, type TurnFile } from "./queries.js"
+import { entryClass, entrySide, fileGroups, linesOf, rootsIn, turnChain, type JournalView, type TurnFile } from "./queries.js"
 
 /*
  * A turn's lines, read from the journal for its review and its undo. Both
@@ -25,7 +25,7 @@ const UNKNOWN: Hand = { writer: "unknown" }
 
 /** A turn's own entries: the Thread's in that turn, and the ambiguous ones naming it there (`turnChanges`). */
 function turnEntries(view: JournalView, thread: string, turn: string): StoredEntry[] {
-  return view.store.entriesOfTurn(thread, turn).filter((entry) => side(view.author(entry.seq), thread) !== "other")
+  return view.store.entriesOfTurn(thread, turn).filter((entry) => entrySide(view, entry.seq, thread) !== "other")
 }
 
 /**
@@ -37,9 +37,10 @@ function turnEntries(view: JournalView, thread: string, turn: string): StoredEnt
 function handOf(view: JournalView, thread: string, scope: ReadonlySet<number>, entry: StoredEntry): Hand {
   const author = view.author(entry.seq)
   if (entry.git || author?.certainty === "mako") return UNKNOWN
-  if (scope.has(entry.seq)) return { writer: side(author, thread) === "thread" ? "turn" : "maybe" }
-  switch (classOf(author, thread)) {
+  if (scope.has(entry.seq)) return { writer: entrySide(view, entry.seq, thread) === "thread" ? "turn" : "maybe" }
+  switch (entryClass(view, entry.seq, thread)) {
     case "thread":
+    case "likely":
       return { writer: "thread" }
     case "uncertain":
       return { writer: "maybe" }
@@ -244,7 +245,7 @@ export function undoPlan(view: JournalView, thread: string, scope: TurnUndoScope
   const inside = new Map(rootsIn(view, checkout).map((root) => [root.root.id, root]))
   // Never what Git wrote: `entriesOfTurn` leaves it out already, and a Thread's entries may hold it.
   const entries = (scope.kind === "turn" ? view.store.entriesOfTurn(thread, scope.requestId) : view.store.entriesBy("thread", thread)).filter((entry) => inside.has(entry.root) && !entry.git)
-  const sides = new Map(entries.map((entry) => [entry.seq, side(view.author(entry.seq), thread)]))
+  const sides = new Map(entries.map((entry) => [entry.seq, entrySide(view, entry.seq, thread)]))
   const own = new Set(entries.filter((entry) => sides.get(entry.seq) === "thread").map((entry) => entry.seq))
   const plan: UndoPlan = { writes: [], undo: [], kept: [], left: [], token: "" }
   const named = (root: string, path: string) => relative(checkout, `${inside.get(root)!.root.path}/${path}`) || path

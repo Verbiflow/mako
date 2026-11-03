@@ -220,7 +220,18 @@ brief, the Apex's words, not the person's) together
 (`LiveStartOptions.parent`), at an access tier no higher than its Apex's,
 here only (`place` other than `here` is refused); past a tree's running
 budget it queues with why, past its started budget it is refused with the
-count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. One a
+count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
+this Mac's room it queues too, behind every Fin of any tree that waits for
+room ("Queued: this Mac is busy, 3 ahead"): `macSlots` gives the person a
+seventh of the cores and 4 GB, and each working Fin `FIN_LOAD` (2) cores of
+load and `FIN_MEMORY`, measured 2026-11-03 when 13 Fins at once held a 14-core
+Mac's load at 26.8 and its host and sync daemon timed out the person's
+requests; load the working Fins don't account for is the person's own work,
+a Mac always runs one, and one out of swap or short of disk runs none.
+`MAKO_FIN_SLOTS` sets the count instead, as a test's host does whatever
+machine runs it. The start's answer carries
+the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
+Mac frees up (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
 across the host), its end written once. Linking it again with another pid
@@ -1153,7 +1164,15 @@ Three rules hold this together, and each has a specific failure it prevents:
   follows again, and a scroll's end decides nothing. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
-  `test-phone-scroll-ui.mjs` holds both by touch and by wheel.
+  `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread
+  opened paints its newest turn at the end and nothing moves it after: its
+  entrance (`animate-thread`) only fades, since a 4 px rise read as the
+  transcript settling late, and a windowed one opened again places its rows
+  at the sizes they last measured (`measuredRows`), since the virtualizer's
+  own measurements land a frame after it paints and jumped the newest turn
+  48 px; `test-phone-open-ui.mjs` holds both. A Thread's transcript whose
+  code is here draws without a Suspense boundary (`chunks.ts`): React holds
+  a fallback it showed for 300 ms, and every cold open waited that long.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
   `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
   the first token of a burst at once, then at most every 50 ms, up to 90 ms
@@ -1913,9 +1932,9 @@ bench:mako-footprint` runs a scripted stretch of work against budgets
 
 Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
 
-A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
+A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`, and a `window` found only after lost events, `entrySide`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
 
-What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count or rewind writer counts it, and a version Git puts back keeps the writers it had. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
+What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
 
 Changes › Turn reviews any turn of the open conversation, live or reopened (`conversations/live-turn-review.ts`). Its files are the request's record; each diff is the turn's checkpoints when both were saved, else the journal's versions either side of the turn's entries, so Review on the turn line works without checkpoints, and a conversation nobody has open is read from its journal without loading it (`storedRequest`). Who wrote each changed line comes from the same walk the record counts with (`attribution/line-walk.ts`, `turn-lines.ts`), as runs per side (`mako:live-turn-writers`), drawn in the diff's annotation slot only where another writer shares a change block; "Only this thread's lines" redraws each diff with every other writer's change on both sides. "Undo this turn" (and "undo this thread") takes the scope's own lines back out of the files as they are now and puts back the lines it removed, keeping everyone else's; a stretch someone edited on top of since, or where a writer put back a line the scope removed, is left whole and named; what Git or Mako wrote is nobody's and stays. It's refused while a turn or background work runs in the checkout (the journal's open activity, on any host, and this host's own runs), and when the files changed after the preview (`token`). It writes with the move's writer (`rewriteInPlace` in `worktree-move.ts`): every version stored, the checkout kept under `refs/mako/moves/<id>` for 14 days, the plan saved in `<conversations>/undos`, each file checked and renamed into place, then read back; a failure puts every file back, and a host that dies mid-write finishes or undoes it on the next start (`resumeMove`). The index is left as it is. Rewind stays the whole-workspace restore. `scripts/test-turn-review.ts` covers it, and `scripts/turn-review-screenshots.mjs` draws it.
 
@@ -4237,10 +4256,19 @@ within `READ_MS` (25 ms). A Cursor chat's fold, a view's write, and a fold's
 comparison with what its listeners hold run as `Steps` `inSlices`, and a
 follow replaces from the first entry that changed, not from the start of its
 exchange: a headless agent's chat is one exchange, so each step it wrote sent
-the whole conversation again. `test/loop-holds.mjs` times each on a 25MB
-Cursor chat against a 50 ms budget. `npm run bench:syncd-loop` runs the real
-daemon on a large chat as it goes on (`--store <store.db>` for a copy of a
-real one, `--writer-holds-ms` to play a backfill pass's lock), with a window
+the whole conversation again. A Cursor SDK agent's run, which a Fin's
+checkpoints fold again from its prompt, replays as `Steps` too: its events
+read from `index.db` a page at a time and projected and reduced between
+yields (`cursorSdkRunEventSteps`, `cursorRunEntrySteps`); one replay in a
+step held the daemon 8 to 14 s on a loaded Mac. A push's export reads 500
+rows and passes at most 2,000 units a read (`RecordStore.exportSteps`), and
+what the account holds after it is noted 500 units a turn (`remoteHolds`).
+`test/loop-holds.mjs` times each on a 25MB Cursor chat, a push of 30,000
+versions and an SDK run of 23,400 events against a 50 ms budget. `npm run
+bench:syncd-loop` runs the real daemon on a large chat as it goes on
+(`--store <store.db>` for a copy of a real one, `--sdk <dir>` for copies of an
+SDK agent's `store.db` and of an `index.db` of its rows, `--writer-holds-ms`
+to play a backfill pass's lock), with a window
 reading it and the host asking its status, and fails when a ping waited past
 50 ms or a status read failed. A status read that fails changes nothing the
 rail shows: `SessionUploads` keeps the status the daemon last answered.
@@ -4272,6 +4300,18 @@ correlation ID one disclosure away. A refusal carries the gateway's `detail`
 (`GatewayHttpError.detail`: which chunk, and why). `test/record-refused-chunks.mjs`,
 `test/sync-not-synced.mjs`, `test/record-reconcile.mjs` and `npm run
 test:sync-status-ui` cover these.
+
+A Session is never "not synced" on a token of Mako's own that ran out. Only
+the host can renew the connection token the daemon's links carry, so a link
+says when its token is due (`renewAt`, the host's `renewAtMs`) and the
+daemon's `LinkCredential` asks the host for a fresh one (a `link-due` event,
+`ThreadCatalog.onLinkDue`) before a call goes on a due one; a call the gateway
+refuses with a 401 renews once and goes again (`GatewayHttpOptions.renew`).
+After the first scope the host gives its links before the scope and each on
+its own (`SessionUploads.#give`): a scope the held daemon didn't answer in 3 s
+once kept every renewed token from it, and six Fins' Sessions went "not
+synced" on "The connection token has expired". `test/link-renewal.mjs` and
+`test-account-threads.ts` cover these.
 
 The sync daemon and the backfill's process write one record store, the same
 newest pack in turn under its write lock. A process's buffer of pack entries

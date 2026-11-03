@@ -321,7 +321,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
   })
   const { catalog, store } = threads
-  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged())
+  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), (session) => {
+    const parsed = SessionIdSchema.safeParse(session)
+    const placed = parsed.success && store ? store.sessionPlacement(parsed.data) : undefined
+    if (!store || !placed) return undefined
+    const conversation = store.conversationsOf(placed.session).at(-1)
+    const live = conversation ? late.conversations?.live.session(conversation) : undefined
+    if (!live) return undefined
+    const title = store.thread(placed.thread)?.title ?? live.title
+    const project = projectFolder(store.worktrees(), live.cwd)
+    return { thread: placed.thread, session: placed.session, folder: live.cwd, ...(project && { project }), ...(conversation && { conversation }), ...(title && { title }) }
+  })
   const appUpdates = new Updates({
     environment,
     git,
@@ -576,6 +586,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     const ticking = uploads
     shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
+    catalog.onLinkDue((form) => {
+      if (form === "copies" || form === "originals")
+        void ticking.renew().catch((error: Error) => hostWarn("sync", "this device's links couldn't be renewed", { error: error.message }))
+    })
   }
   declareSyncMethods(methods, uploads, syncReadings)
   // The person's access choice per harness, which a start from any surface reads: their account's, kept here too for
@@ -1044,6 +1058,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     nativeStops: { token: (path) => runs.stopToken(path), abort: (path, token) => runs.abort(path, token) },
     homes: workspaces.environments,
     emit,
+    archivedThread: ({ conversationId, sessionId }) => control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) }),
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })
   /** Archives a cloud Thread, or brings an archived one back here, as its window asked. */

@@ -6,6 +6,7 @@ import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import { normalizeToolOutput } from "./tool-output.js"
 import type { Entry, RecordRef } from "./entries.js"
 import { joined } from "./entries.js"
+import { atOnce, type Steps } from "./slices.js"
 
 type ToolEntry = DecodedBlock & { type: "tool" }
 type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
@@ -129,12 +130,30 @@ export function liveTurnEntries(
   records?: readonly (RecordRef | undefined)[],
   recorded?: (item: DecodedEntry | DecodedBlock, record: RecordRef | undefined) => void
 ): DecodedEntry[] {
+  return atOnce(liveTurnEntrySteps(updates, at, records, recorded))
+}
+
+/** Updates reduced between yields: a replayed run's are counted in thousands, and a Fin's run is one turn. */
+const UPDATES_A_STEP = 256
+
+/** `liveTurnEntries` as `Steps`, `UPDATES_A_STEP` updates at a time: batches reduce to what one batch does. */
+export function* liveTurnEntrySteps(
+  updates: LiveUpdate[],
+  at: readonly (string | undefined)[],
+  records?: readonly (RecordRef | undefined)[],
+  recorded?: (item: DecodedEntry | DecodedBlock, record: RecordRef | undefined) => void
+): Steps<DecodedEntry[]> {
   const written = new WeakMap<Entry, string | undefined>()
   const sources = new WeakMap<Entry, RecordRef | undefined>()
-  const blocks = reduceLiveUpdates([], updates, (block, previous, update) => {
-    written.set(block, previous && block.type !== "plan" ? written.get(previous) : at[update])
-    if (records) sources.set(block, joined(previous && sources.get(previous), records[update]))
-  })
+  let blocks: Entry[] = []
+  for (let from = 0; from < updates.length; from += UPDATES_A_STEP) {
+    yield
+    blocks = reduceLiveUpdates(blocks, updates.slice(from, from + UPDATES_A_STEP), (block, previous, update) => {
+      written.set(block, previous && block.type !== "plan" ? written.get(previous) : at[from + update])
+      if (records) sources.set(block, joined(previous && sources.get(previous), records[from + update]))
+    })
+  }
+  yield
   return turnEntries(blocks, written, undefined, recorded && ((item, block) => recorded(item, sources.get(block))))
 }
 

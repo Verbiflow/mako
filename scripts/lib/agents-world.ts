@@ -46,6 +46,8 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
+  /** This Mac's capacity as admission reads it (`AgentsDeps.capacity`); none holds without it. */
+  capacity?: AgentsDeps["capacity"]
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
@@ -147,6 +149,7 @@ export class AgentsWorld {
       defaultTuning: async (harness) => this.options.defaults?.[harness],
       ...(this.options.movePending && { movePending: this.options.movePending }),
       ...(this.options.budget && { budget: this.options.budget }),
+      ...(this.options.capacity && { capacity: this.options.capacity }),
       ...(this.options.processes && { processes: this.options.processes }),
     }
     this.agents = new Agents(deps)

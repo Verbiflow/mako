@@ -1021,7 +1021,8 @@ export class ThreadStore {
   /** Spawns waiting on a tree's running budget, oldest first. */
   queuedSpawns(): QueuedSpawn[] {
     this.syncVersion()
-    return this.sql("SELECT op, tree, record, at FROM agent_spawns ORDER BY at, op").all().map((row) => QueuedSpawnRowSchema.parse(row))
+    // In the order they came: two spawns of one millisecond keep it.
+    return this.sql("SELECT op, tree, record, at FROM agent_spawns ORDER BY at, rowid").all().map((row) => QueuedSpawnRowSchema.parse(row))
   }
 
   /** Holds a spawn for its tree's budget; a repeat of one held keeps its place. */
