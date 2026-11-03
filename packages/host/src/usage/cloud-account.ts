@@ -525,7 +525,7 @@ export class CloudAccounts {
           body: new URLSearchParams({ grant_type: DEVICE_CODE_GRANT, device_code: grant.device_code, client_id: DEVICE_CLIENT }).toString(),
           redirect: "error",
           signal: AbortSignal.timeout(REQUEST_MS),
-        }).catch((error: unknown) => {
+        }).catch((error: Error) => {
           // The network, or the cloud not answering: the code still stands, so the next poll asks again.
           this.#options.log?.("cloud sign-in code not checked; asking again", { error: errorMessage({ error }) })
           return undefined

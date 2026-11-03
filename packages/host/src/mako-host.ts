@@ -9,7 +9,7 @@ import { enableMainCompileCache } from "./base/compile-cache.js"
  * is the package's executable. The host is configured by its environment
  * (`host-config.ts`), as `ensureRuntime` and a machine's agent start it.
  * `join`, `status` and `leave` make a machine with no browser a device of its
- * person's account (`device-cli.ts`).
+ * person's account (`usage/device-cli.ts`).
  */
 const USAGE = `Usage:
   mako-host            run the host; MAKO_DATA_ROOT for data outside the default, MAKO_WEB_SOCKET for its socket elsewhere
@@ -23,8 +23,8 @@ if (command === "inspect") {
   const { inspectHost } = await import("./inspect.js")
   process.exitCode = await inspectHost(args)
 } else if (command === "join" || command === "status" || command === "leave") {
-  const { deviceCommand } = await import("./device-cli.js")
-  process.exitCode = await deviceCommand(command, args)
+  const { loadDeviceCommands } = await import("./usage/index.js")
+  process.exitCode = await (await loadDeviceCommands()).deviceCommand(command, args)
 } else if (command === undefined) {
   // Children set Node mode themselves; a terminal's shell must not start Electron apps as Node.
   delete process.env.ELECTRON_RUN_AS_NODE
@@ -36,11 +36,11 @@ if (command === "inspect") {
   if (cache.startsWith("failed")) console.warn("[mako-host] compile cache", cache)
   // Started by hand, as on a server: on the socket `inspect` and `status` look for, against the cloud it joined.
   if (!process.env.MAKO_WEB_SOCKET) {
-    const { runtimeLocation } = await import("./transport/service.js")
+    const { runtimeLocation } = await import("./transport/index.js")
     process.env.MAKO_WEB_SOCKET = runtimeLocation(dataRoot).socket
   }
   if (!process.env.MAKO_CLOUD_URL) {
-    const { readJoinedCloud } = await import("./usage/joined-cloud.js")
+    const { readJoinedCloud } = await import("./base/joined-cloud.js")
     const joined = readJoinedCloud(dataRoot)
     if (joined) process.env.MAKO_CLOUD_URL = joined
   }

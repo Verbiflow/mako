@@ -31,6 +31,7 @@ import {
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime, type DeviceCode } from "@mako/host/usage/cloud-account"
 import type { CloudAccountState, CloudDevice } from "@mako/host/contracts/cloud-account"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { aesSealer, fileKey, fileSecrets, SecretLocked } from "@mako/host/base/secrets"
 import { openHostSecrets, secretKeyFile } from "@mako/host/base/host-secrets"
 import { linuxPlatform, onMac } from "@mako/host/base/platform"
@@ -41,6 +42,8 @@ after(() => rm(scratch, { recursive: true, force: true }))
 
 type Answer = "pending" | "slow_down" | "approved" | "access_denied" | "expired_token"
 type FakeDevice = CloudDevice & { credential: string; removed: boolean }
+/** What the next code's polls hear, in order, and the lifetime and interval it's given. */
+type Plan = { answers: Answer[]; expiresIn: number; interval: number }
 
 /** The gateway's device grant, device tokens and links, in memory. `answers`: what each poll of the next code hears, in order. */
 async function fakeGateway(entitlements: string[] = ["cloud"]) {
@@ -49,7 +52,7 @@ async function fakeGateway(entitlements: string[] = ["cloud"]) {
   const asked: Array<Record<string, string>> = []
   /** When each poll came, by this process's clock, and what it was answered. */
   const polls: Array<{ at: number; answer: string }> = []
-  const plan = { answers: [] as Answer[], expiresIn: 60, interval: 1 }
+  const plan: Plan = { answers: [], expiresIn: 60, interval: 1 }
   let pending: { deviceCode: string; userCode: string; form: Record<string, string> } | undefined
   const sockets = new Map<ServerSocket, "account" | "runtime">()
   const gateway = createFakeGateway({ renew: () => Math.floor(Date.now() / 1000) + 300 })
@@ -71,7 +74,7 @@ async function fakeGateway(entitlements: string[] = ["cloud"]) {
   }
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://gateway")
-    const send = (status: number, value?: unknown) => response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(value === undefined ? undefined : JSON.stringify(value))
+    const send = (status: number, value?: JsonValue) => response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(value === undefined ? undefined : JSON.stringify(value))
     const oauth = (error: string) => send(400, { error, error_description: `answered ${error}` })
     if (request.method === "POST" && url.pathname.startsWith("/oauth/")) {
       assert.equal(request.headers["content-type"], "application/x-www-form-urlencoded", "OAuth's requests are form-encoded")

@@ -1,15 +1,15 @@
 import { mkdir } from "node:fs/promises"
 import { parseArgs } from "node:util"
-import { cloudUrl } from "./base/build-identity.js"
-import { errorMessage } from "./base/error-message.js"
-import { processHostEnvironment, type HostEnvironment } from "./base/host-environment.js"
-import { acquireHostLock } from "./base/host-lock.js"
-import { hostSecretStore, secretKeyFile } from "./base/host-secrets.js"
-import { CloudAccountSchema, type CloudAccount, type CloudAccountState } from "./contracts/cloud-account.js"
-import { invokeRuntime, runtimeLocation } from "./transport/index.js"
-import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type DeviceCode } from "./usage/cloud-account.js"
-import { describeThisDevice } from "./usage/device-description.js"
-import { readJoinedCloud, writeJoinedCloud } from "./usage/joined-cloud.js"
+import { cloudUrl } from "../base/build-identity.js"
+import { errorMessage } from "../base/error-message.js"
+import { processHostEnvironment, type HostEnvironment } from "../base/host-environment.js"
+import { acquireHostLock } from "../base/host-lock.js"
+import { hostSecretStore, secretKeyFile } from "../base/host-secrets.js"
+import { CloudAccountSchema, type CloudAccount, type CloudAccountState } from "../contracts/cloud-account.js"
+import { invokeRuntime, runtimeLocation } from "../transport/index.js"
+import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type DeviceCode } from "./cloud-account.js"
+import { describeThisDevice } from "./device-description.js"
+import { readJoinedCloud, writeJoinedCloud } from "../base/joined-cloud.js"
 
 /**
  * `mako-host join`, `status` and `leave`: this machine as a device of its person's Mako account, signed in with a code
@@ -152,7 +152,7 @@ async function status(accounts: CloudAccounts, json: boolean, local: { host: str
     // The credential is this process's to use while it holds the lock: one answer from the cloud says it still works.
     checked = await accounts.devices().then(
       ({ devices }) => `the cloud lists ${devices.length} device${devices.length === 1 ? "" : "s"} on the account`,
-      (error: unknown) => `the cloud couldn't be asked: ${errorMessage({ error })}`
+      (error: Error) => `the cloud couldn't be asked: ${errorMessage({ error })}`
     )
   }
   return report(accounts.account(), json, { ...local, ...(checked && { checked }) })
