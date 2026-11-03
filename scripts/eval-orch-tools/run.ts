@@ -18,6 +18,8 @@ import "../lib/scratch-git.mjs"
 // `<out>/results.jsonl`, with the budget per harness, model and routing in
 // `<out>/summary.md`, each run's time and, where its tokens are priced, cost.
 import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { appendFile, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -64,6 +66,27 @@ async function record(result: CaseResult) {
   if (!out) return
   await mkdir(out, { recursive: true })
   await appendFile(join(out, "results.jsonl"), `${JSON.stringify(result)}\n`)
+}
+
+/**
+ * The scratch project as a real repository, as the cases describe it: `main`
+ * with the project, and the Thread's branch two commits ahead, unpushed, so an
+ * agent that looks finds the work a case talks about.
+ */
+const execFileAsync = promisify(execFile)
+
+async function gitHistory(project: string): Promise<void> {
+  const git = (...args: string[]) => execFileAsync("git", ["-C", project, "-c", "user.name=Eval", "-c", "user.email=eval@example.com", "-c", "commit.gpgsign=false", ...args])
+  await git("init", "-q", "-b", "main")
+  await git("add", "-A")
+  await git("commit", "-q", "-m", "acme-app")
+  await git("checkout", "-q", "-b", "mako/thread-work")
+  await writeFile(join(project, "src", "login.ts"), "export function redirectAfterLogin(next: string | undefined) {\n  return next?.startsWith(\"/\") ? next : \"/\"\n}\n")
+  await git("add", "-A")
+  await git("commit", "-q", "-m", "Fix login redirect")
+  await writeFile(join(project, "CHANGELOG.md"), "- The login redirect stays on this site.\n")
+  await git("add", "-A")
+  await git("commit", "-q", "-m", "Changelog for the login redirect")
 }
 
 /** Two samples, and a third when they disagree. */
@@ -242,7 +265,6 @@ try {
     // Devin's launch links the person's config folder, and fails where there is none.
     await mkdir(join(scratch.home, ".config"), { recursive: true })
     const project = join(root, "project")
-    await mkdir(join(project, ".git"), { recursive: true })
     await mkdir(join(project, "src"), { recursive: true })
     await writeFile(join(project, "README.md"), "# acme-app\n\nWhere the client and server recieve their config.\n")
     await writeFile(join(project, "src", "config.ts"), "export function parseConfig(text: string) {\n  return JSON.parse(text)\n}\n")
@@ -253,7 +275,8 @@ try {
     await writeFile(join(project, "src", "router.ts"), "export type Route = { path: string; handle: (request: { path: string }) => { status: number; body: string } }\nexport const routes: Route[] = []\n")
     await writeFile(join(project, "src", "parser.ts"), "export function parse(text: string) {\n  return text.split(\",\").map((part) => part.trim())\n}\n")
     await writeFile(join(project, "src", "logger.ts"), "export function log(message: string) {\n  console.log(new Date().toISOString(), message)\n}\n")
-    await writeFile(join(project, "package.json"), `${JSON.stringify({ name: "acme-app", private: true, scripts: { test: "node --test" } }, null, 2)}\n`)
+    await writeFile(join(project, "package.json"), `${JSON.stringify({ name: "acme-app", private: true, scripts: { test: "node --test", dev: "vite" } }, null, 2)}\n`)
+    await gitHistory(project)
     const results: CaseResult[] = []
     try {
       const installs = await Promise.all([
