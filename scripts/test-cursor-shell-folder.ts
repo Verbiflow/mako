@@ -9,6 +9,7 @@ import {
   shellCommandIndex,
 } from "@mako/host/harnesses/cursor/sdk/shell-folder"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
+import { Writable } from "node:stream"
 
 // The shapes SDK 1.0.31 starts its shell tool with; anything else is not one.
 assert.equal(shellCommandIndex("/bin/zsh", ["-c", "wrapper", "--", "ls"]), 3)
@@ -81,6 +82,29 @@ try {
     assert.ok(plain.stdout.includes("plain") && !plain.stderr.trim(), `${shell}: an ordinary command is untouched`)
   }
   assert.ok(routed.every((line) => line.startsWith(`${workspace}: `)), "the route reads the shell's folder")
+
+  // SDK 1.2.0's shape: the command arrives on descriptor 5, ended by a NUL, in one `end` after the shell starts.
+  const piped = async (text: string) => {
+    const script = `IFS= builtin read -r -d '' __cursor_command <&5 2>/dev/null || builtin exit 126; exec 5<&-; builtin eval "$__cursor_command"`
+    const child = childProcess.spawn("/bin/zsh", ["-c", script, "--"], { cwd: workspace, stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "pipe"] })
+    let stdout = ""
+    let stderr = ""
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString() })
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
+    const pipe = child.stdio.at(5)
+    assert.ok(pipe instanceof Writable)
+    pipe.end(`${text}\0`)
+    const code = await new Promise<number | null>((resolve) => child.once("close", resolve))
+    return { code, stdout, stderr }
+  }
+  const pipedDenied = await piped("echo SHOULD-NOT-RUN && gh pr create --fill")
+  assert.ok(!pipedDenied.stdout.includes("SHOULD-NOT-RUN"), "a piped command routing denies doesn't run")
+  assert.match(pipedDenied.stderr, /Call pull_request_open instead/)
+  assert.equal(pipedDenied.code, 1)
+  const pipedWarned = await piped("lsof -i :1 ; echo it-ran")
+  assert.ok(pipedWarned.stdout.includes("it-ran") && /port_holder/.test(pipedWarned.stderr), "a piped command routing warns of runs after its note")
+  const pipedPlain = await piped("echo plain-piped")
+  assert.ok(pipedPlain.stdout.includes("plain-piped") && !pipedPlain.stderr.trim(), "an ordinary piped command is untouched")
 
   const quoted = await run("/bin/zsh", ["-c", movedShellCommand("/tmp/it's gone", "/tmp/now")], root)
   assert.match(quoted.stderr, /\/tmp\/it's gone was deleted/, "a quote in a folder name cannot break the notice")
