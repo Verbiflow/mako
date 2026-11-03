@@ -1129,7 +1129,15 @@ Three rules hold this together, and each has a specific failure it prevents:
   follows again, and a scroll's end decides nothing. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
-  `test-phone-scroll-ui.mjs` holds both by touch and by wheel.
+  `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread
+  opened paints its newest turn at the end and nothing moves it after: its
+  entrance (`animate-thread`) only fades, since a 4 px rise read as the
+  transcript settling late, and a windowed one opened again places its rows
+  at the sizes they last measured (`measuredRows`), since the virtualizer's
+  own measurements land a frame after it paints and jumped the newest turn
+  48 px; `test-phone-open-ui.mjs` holds both. A Thread's transcript whose
+  code is here draws without a Suspense boundary (`chunks.ts`): React holds
+  a fallback it showed for 300 ms, and every cold open waited that long.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
   `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
   the first token of a burst at once, then at most every 50 ms, up to 90 ms
