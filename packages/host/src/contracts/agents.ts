@@ -437,8 +437,16 @@ export interface AgentsDiagnostics {
   answers: { apex: number; passed: number; refused: number; person: number }
 }
 
-/** How a message reached a Fin: as its next turn, a step of its running one, or queued behind it. */
-export type FinDelivery = "turn" | "steer" | "queued"
+/** How a message reached a Fin: as its next turn, a step of its running one, queued behind it, or after Mako stopped that turn. */
+export type FinDelivery = "turn" | "steer" | "queued" | "interrupt"
+
+/**
+ * How a message is to reach a working Fin: after its turn as its next message
+ * (`queue`), into the turn it's running at its harness's next step (`steer`),
+ * or by stopping that turn and starting the next with it (`interrupt`). An idle
+ * Fin takes any as its next turn.
+ */
+export type FinDeliver = "queue" | "steer" | "interrupt"
 
 /** The person moving a message their Apex passed on (`agents_send`) from the Fin it reached to the one it was for. */
 export interface AgentsRedirectInput {

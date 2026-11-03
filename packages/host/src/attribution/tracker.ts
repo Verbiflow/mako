@@ -28,7 +28,7 @@ import { join } from "node:path"
 import { HourCounts } from "../base/hour-counts.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
-import { attribute, authorOf, claim, Evidence, LEAD_MS, TRAIL_MS, type Interval, type ObservedChange } from "./evidence.js"
+import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
 import { WorkingSets } from "./working-set.js"
 import { JournalStore, wholeChange, type FileState, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
@@ -102,6 +102,9 @@ const GIT_LOOKBACK_MS = 2_000
 const RECENT_KEPT = 4096
 const LOG_EVERY_MS = 10_000
 const SLOW_FLUSH_MS = 50
+/** Attribution holds the host's one thread at most this long, give or take one change, before sockets and timers get a turn. */
+const SLICE_MS = 8
+const yieldTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
 const DAY_MS = 86_400_000
 /** A command's named paths the journal keeps, for the Thread's working set. */
 const STORED_NAMED = 64
@@ -266,7 +269,11 @@ export class LaptopTracker implements AttributionTracker {
   readonly evidence: Evidence
   private readonly pending = new Map<number, Pending>()
   private settleTimer?: ReturnType<typeof setTimeout>
-  private reattributing = false
+  /** The next slice of a backlog settling. */
+  private settleSlice?: ReturnType<typeof setImmediate>
+  private reattribution?: Promise<void>
+  /** The reaches the pass under way weighs, and the last seq it got to. */
+  private round?: { reaches: readonly Reach[]; done: number }
   /** Reads that may still name an open change's author. */
   private holds = 0
   /** Reads under way of what reported commands ran (`readScripts`). */
@@ -958,26 +965,38 @@ export class LaptopTracker implements AttributionTracker {
     let slowest = 0
     // Changes found after lost events could have happened any time in the gap, which memory may no longer hold.
     const gapEvidence = state.gap && prepared.some(({ how }) => how !== "event") ? evidenceOf(this.store.activityBetween(state.gap.from - TRAIL_MS, at), this.evidence.worked) : undefined
-    this.store.transaction(() => {
-      for (const { item, how, before } of prepared) {
-        const t = performance.now()
-        const from = renamed.get(item.path)
-        const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence)
-        if (seq) timing.entries++
-        const spent = performance.now() - t
-        if (spent > slowest) {
-          slowest = spent
-          timing.slowest = item.path
+    // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
+    for (let index = 0; ; ) {
+      const slice = performance.now()
+      this.store.transaction(() => {
+        for (; index < prepared.length && performance.now() - slice < SLICE_MS; index++) {
+          const { item, how, before } = prepared[index]!
+          const t = performance.now()
+          const from = renamed.get(item.path)
+          const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence)
+          if (seq) timing.entries++
+          const spent = performance.now() - t
+          if (spent > slowest) {
+            slowest = spent
+            timing.slowest = item.path
+          }
         }
-      }
-      state.root.seenAt = at
-      this.store.saveRoot(state.root)
-    })
-    timing.writeMs = performance.now() - started
+        if (index < prepared.length) return
+        state.root.seenAt = at
+        this.store.saveRoot(state.root)
+      })
+      if (index >= prepared.length) break
+      timing.writeMs += performance.now() - slice
+      await yieldTurn()
+      started = performance.now()
+    }
+    timing.writeMs += performance.now() - started
     timing.lagMs = this.now() - heardAt
     this.flushed(timing)
     this.scheduleMark(state)
     this.scheduleSettle()
+    // A change proved as it was recorded can make a later one there someone else's.
+    this.reattribute()
   }
 
   /** The paths not inside a repository nested in this root (a submodule): those are its files, not this root's. */
@@ -1469,9 +1488,10 @@ export class LaptopTracker implements AttributionTracker {
   mako(input: MakoWrite, at = this.now()): MakoWriting & { end(at?: number): void } {
     const write = MakoWriteSchema.parse(input)
     const interval = this.evidence.makoStart(write, at)
+    this.reattribute()
     return {
       end: (ended: number = this.now()) => {
-        interval.end = Math.max(at, ended)
+        this.evidence.makoEnd(interval, ended)
         this.reattribute()
       },
     }
@@ -1480,7 +1500,7 @@ export class LaptopTracker implements AttributionTracker {
   /** A write Mako reports once it's done, such as a Git command it ran. */
   makoWrote(input: MakoWrite, startedAt: number, endedAt: number): void {
     const write = MakoWriteSchema.parse(input)
-    this.evidence.makoStart(write, startedAt).end = Math.max(startedAt, endedAt)
+    this.evidence.makoStart(write, startedAt, endedAt)
     this.reattribute()
   }
 
@@ -1630,6 +1650,7 @@ export class LaptopTracker implements AttributionTracker {
       const entry = this.store.entry(seq)
       const state = entry && this.states.get(entry.root)
       if (entry && state) this.evidence.proved(author.author, join(state.root.path, entry.path), entry.changedAt)
+      this.reattribute()
     }
   }
 
@@ -1671,26 +1692,60 @@ export class LaptopTracker implements AttributionTracker {
     return this.pending.get(seq)?.author ?? this.store.author(seq) ?? null
   }
 
-  /** New evidence can change the author of a change not yet settled. */
+  /**
+   * New evidence can change the author of a change not yet settled: each
+   * change its reach takes in is attributed again, in seq order, a slice at
+   * a time. Evidence that comes during a pass is taken by the next one.
+   */
   private reattribute(): void {
-    if (this.reattributing || !this.pending.size) return
-    this.reattributing = true
-    queueMicrotask(() => {
-      this.reattributing = false
-      if (this.closed) return
-      for (const pending of this.pending.values()) {
-        const author = attribute(pending.change, this.evidence)
-        if (author.certainty === "exact") this.evidence.proved(author.author, pending.change.path, pending.change.changedAt)
-        if (JSON.stringify(author) === JSON.stringify(pending.author)) continue
-        pending.author = author
-        this.store.updateAuthor(pending.seq, author, false)
-        // A call that named the file ran the Git command that wrote it: its work, as `git checkout -- file` is.
-        if (pending.git && (author.certainty === "exact" || author.certainty === "named")) {
-          pending.git = false
-          this.store.markGit(pending.seq, false)
+    if (this.closed || this.reattribution) return
+    if (!this.pending.size) {
+      // Nothing open for it to change; a change heard later is attributed against all of it.
+      this.evidence.takeReaches()
+      return
+    }
+    if (!this.evidence.reaching().length) return
+    this.reattribution = (async () => {
+      // Evidence comes in bursts (a hook's bounds, then the stream's report of the same call): one pass takes the burst.
+      await yieldTurn()
+      for (let reaches = this.evidence.takeReaches(); reaches.length && !this.closed; reaches = this.evidence.takeReaches()) {
+        this.round = { reaches, done: 0 }
+        let started = performance.now()
+        for (const pending of this.pending.values()) {
+          if (performance.now() - started >= SLICE_MS) {
+            await yieldTurn()
+            if (this.closed) return
+            started = performance.now()
+          }
+          this.round.done = pending.seq
+          if (!this.pending.has(pending.seq) || !reaches.some((reach) => reachesChange(reach, pending.change, pending.author))) continue
+          const author = attribute(pending.change, this.evidence)
+          if (author.certainty === "exact") this.evidence.proved(author.author, pending.change.path, pending.change.changedAt)
+          if (JSON.stringify(author) === JSON.stringify(pending.author)) continue
+          pending.author = author
+          this.store.updateAuthor(pending.seq, author, false)
+          // A call that named the file ran the Git command that wrote it: its work, as `git checkout -- file` is.
+          if (pending.git && (author.certainty === "exact" || author.certainty === "named")) {
+            pending.git = false
+            this.store.markGit(pending.seq, false)
+          }
         }
       }
-    })
+    })()
+      .catch((error: Error) => this.log("reattribution failed", { error: error.message }))
+      .finally(() => {
+        this.reattribution = undefined
+        this.round = undefined
+        // Evidence that came as the last round ended, or a proof one made, is the next pass's.
+        this.reattribute()
+      })
+  }
+
+  /** Whether evidence not yet weighed may still change this change's author. */
+  private stale(pending: Pending): boolean {
+    const round = this.round
+    if (round && pending.seq > round.done && round.reaches.some((reach) => reachesChange(reach, pending.change, pending.author))) return true
+    return this.evidence.reaching().some((reach) => reachesChange(reach, pending.change, pending.author))
   }
 
   private scheduleSettle(): void {
@@ -1710,14 +1765,34 @@ export class LaptopTracker implements AttributionTracker {
 
   /** Close every change no new evidence can reach. */
   private settle(force = false): void {
-    if (this.holds && !force) return
+    if ((this.holds || this.closed) && !force) return
+    clearImmediate(this.settleSlice)
+    this.settleSlice = undefined
     const now = this.now()
-    for (const pending of this.pending.values()) {
-      if (!force && (now - pending.change.changedAt < SETTLE_MS || !this.evidence.quietSince(pending.change.changedAt, now))) continue
-      this.store.updateAuthor(pending.seq, pending.author, true)
-      this.pending.delete(pending.seq)
-    }
-    if (!this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
+    const live = this.evidence.liveSince(now)
+    const started = performance.now()
+    let stale = false
+    let more = false
+    this.store.transaction(() => {
+      for (const pending of this.pending.values()) {
+        if (!force && (now - pending.change.changedAt < SETTLE_MS || pending.change.changedAt + TRAIL_MS >= live)) continue
+        // Only a change whose author has weighed all the evidence settles: the rest wait for their pass, not for every pass to end.
+        if (!force && this.stale(pending)) {
+          stale = true
+          continue
+        }
+        this.store.updateAuthor(pending.seq, pending.author, true)
+        this.pending.delete(pending.seq)
+        if (!force && performance.now() - started >= SLICE_MS) {
+          more = true
+          break
+        }
+      }
+    })
+    // A backlog settles a slice at a time.
+    if (more) this.settleSlice = setImmediate(() => this.settle())
+    if (stale) this.reattribute()
+    if (!more && !this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
   }
 
   async settled(): Promise<void> {
@@ -1740,8 +1815,9 @@ export class LaptopTracker implements AttributionTracker {
         await Promise.all(states.map((state) => state.chain))
         await Promise.all(this.scriptReads)
         await this.footprints?.settled()
+        while (this.reattribution) await this.reattribution
         await new Promise((resolve) => setImmediate(resolve))
-        if (states.every((state) => !state.pending.size && !state.rescanTimer && !state.rescanQueued)) return
+        if (!this.reattribution && states.every((state) => !state.pending.size && !state.rescanTimer && !state.rescanQueued)) return
       }
     } finally {
       this.settling--

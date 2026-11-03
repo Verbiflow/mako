@@ -628,6 +628,7 @@ async function staleEndsStayOut(): Promise<void> {
     w.release(apex.conversation)
     await w.settle()
     assert.equal(w.prompts.filter((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(FROM_AGENTS)).length, 0, "no digest says it ended while its session is written")
+    session()
     const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed)
     assert.equal(listed.children[0]!.state.kind, "working", "it reads as working")

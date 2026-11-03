@@ -26,10 +26,14 @@ export class WorkingSets {
     this.history = history
   }
 
-  add(thread: string, activity: WorkedActivity): void {
+  /** Adds what `activity` reached to the Thread's set; returns the paths it held no part of before. */
+  add(thread: string, activity: WorkedActivity): string[] {
     const set = this.set(thread)
+    const added: string[] = []
     const keep = (path: string | undefined) => {
-      if (path && set.size < MAX_PATHS) set.add(path)
+      if (!path || set.size >= MAX_PATHS || set.has(path)) return
+      set.add(path)
+      added.push(path)
     }
     const touched = (path: string | undefined) => {
       if (!path) return
@@ -47,6 +51,7 @@ export class WorkingSets {
         touched(effect.to)
       } else touched(effect.path)
     }
+    return added
   }
 
   /**
