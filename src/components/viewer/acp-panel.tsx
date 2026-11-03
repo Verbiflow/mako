@@ -1,6 +1,6 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
-import { carriedHistories, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
+import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
 import { FailureRow } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
 import { agentActivity, startLabel } from "@/state/agent-activity"
@@ -17,9 +17,8 @@ import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
 import { useEffect, useMemo, useState } from "react"
-import { Disclosure } from "@/components/ui/notice"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
-import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
+import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 import { asksInSession, descriptorFor } from "@/state/descriptors"
@@ -739,28 +738,3 @@ function QuestionPermission({
   )
 }
 
-/**
- * Every message of the conversation that ended without an answer, newest
- * first, for the conversation menu: the archive behind the rows the
- * transcript draws where each one failed.
- */
-export function RetainedRequests() {
-  const requests = useAcp(
-    (state) => {
-      const current = activeAcp(state)
-      return current ? recoverableRequests(current) : EMPTY_QUEUE
-    },
-    (left, right) =>
-      left.length === right.length &&
-      left.every((request, index) => request === right[index])
-  )
-  const conversation = useAcp((state) => activeLiveAcp(state)?.key)
-  if (!conversation || !requests.length) return null
-  return (
-    <Disclosure summary={`Saved messages (${requests.length})`} className="px-2 py-2" bodyClassName="flex flex-col gap-3 pt-2">
-      {[...requests].reverse().map((request) => (
-        <FailureRow key={request.id} conversationId={conversation} request={request} quoted compact />
-      ))}
-    </Disclosure>
-  )
-}

@@ -30,14 +30,10 @@ export async function checkPackagedApprovals({ bridge, command, evaluate, waitFo
     assert.ok(point, `Native approval button missing: ${label}`)
     for (const type of ['mousePressed','mouseReleased']) await command('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
   }
+  /** A decision the agent confirmed is settled: its notice leaves the composer and nothing keeps it as history. */
   async function captureConfirmation(label) {
-    const point = await evaluate(`(()=>{const r=document.querySelector('button[aria-label="Conversation actions"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
-    for (const type of ['mousePressed','mouseReleased']) await command('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
-    await waitFor(() => evaluate("document.body.textContent.includes('Agent recorded your answer')"), Boolean, 'native answer confirmation visible')
-    await new Promise(resolve => setTimeout(resolve, 300))
+    await waitFor(() => evaluate("!document.querySelector('[data-approval-recovery]')"), Boolean, 'the confirmed answer leaves no notice')
     await capture(label+'-native-confirmation')
-    await command('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-    await command('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
   }
   const cases = []
   report.phases.push({ phase: 'native-approvals', mode, cases })

@@ -2208,10 +2208,19 @@ in the command palette, not as an extra composer icon. Context usage is shown
 only with an exact, usable reading; unsupported providers do not get an empty
 ring. Chat activity uses one compact 20px mark and no redundant Responding row
 while answer text streams. Thought-process details remain available without a
-second animated status. The composer carries no Queue/Steer control, not in
-the footer and not in the conversation menu: the placeholder and the send
-button's icon say what Enter does, Cmd+Enter does the other, and the
-preference is a row in Settings > Conversation. The
+second animated status. The composer carries no Queue/Steer control: the
+placeholder and the send button's icon say what Enter does, Cmd+Enter does
+the other, and the preference is a row in Settings > Conversation. The
+composer bar has no overflow menu either. Its `···` once held a compaction
+control, saved messages, the history of switches, steering and approvals,
+and End live session, and showed a days-old "Steering message not accepted"
+to a person who had never opened it. Each has a home now or is gone:
+compaction is in the context meter beside the composer, a message that
+wasn't answered is its row in the transcript where it failed, a switch, a
+steering message or an approval is a notice above the composer only while it
+is under way or went wrong (`src/desk/notices.ts`), and an idle provider
+closes itself after ten minutes. A notice that no longer stands is not kept
+anywhere to be found later. The
 routing row gives way in a fixed order as the pane narrows (the centre can be
 450px), found by measuring rather than a width breakpoint
 (`use-compact-row.ts`): the access chip drops to its glyph first, the harness
