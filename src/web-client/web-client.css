@@ -140,14 +140,14 @@
   .web-row-mark {
     @apply flex w-7 shrink-0 items-center justify-center;
   }
-  .web-row-mark > .live-mark {
-    --lm-size: 28px;
+  .web-row-mark {
+    --live-mark-size: 28px;
     --lm-cut: var(--shell);
   }
-  [data-list="rail"] .web-row-mark > .live-mark {
-    --lm-size: 20px;
+  [data-list="rail"] .web-row-mark {
+    --live-mark-size: 20px;
   }
-  [data-list="rail"] .web-row[aria-current="page"] .web-row-mark > .live-mark {
+  [data-list="rail"] .web-row[aria-current="page"] .web-row-mark {
     --lm-cut: var(--raised);
   }
   /* A row lights on touch-down and fades back after: the press is seen even on a quick tap. */
