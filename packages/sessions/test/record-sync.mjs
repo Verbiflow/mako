@@ -424,15 +424,16 @@ try {
     store.close()
   }
 
-  // Catching up is paced: each upload waits until the bytes before it would have gone at the rate.
+  // Catching up is paced: each upload waits until the bytes before it would have gone at the rate. That's an average,
+  // so an upload a busy event loop sent late leaves the next one less to wait.
   {
     const sent = []
-    const raw = { id: "paced", putChunks: async () => (sent.push(performance.now()), { taken: 1 }) }
+    const raw = { id: "paced", putChunks: async () => (sent.push(Date.now()), { taken: 1 }) }
     const paced = pacedRemote(raw, 100_000)
     const pack = [{ hash: "h", codec: 0, size: 10_000, body: new Uint8Array(10_000) }]
     for (let index = 0; index < 3; index++) await paced.putChunks(pack)
-    const gaps = [sent[1] - sent[0], sent[2] - sent[1]]
-    assert.ok(gaps.every((gap) => gap >= 90), `uploads paced at 100 kB/s: ${gaps.map(Math.round)} ms apart`)
+    const after = sent.map((at) => at - sent[0])
+    assert.ok(after.every((at, index) => at >= index * 90), `uploads paced at 100 kB/s: ${after} ms after the first`)
   }
 
   for (const store of [a, laptopStore]) store.close()
