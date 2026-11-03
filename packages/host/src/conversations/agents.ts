@@ -257,8 +257,19 @@ export class Agents implements AgentOperations, ConversationChildren {
       assign: (reports, request) => this.store()?.assignWake(reports, request),
       delivered: (reports, at) => this.store()?.markReportsDelivered(reports, at),
       counts: (conversation) => this.counts(conversation),
+      current: (notice) => this.current(notice),
       now: deps.now,
     })
+  }
+
+  /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
+  private current(notice: Notice): boolean {
+    const { report } = notice
+    if (!report.implicit || (report.status !== "done" && report.status !== "failed")) return true
+    const edge = this.store()?.edges().of(report.child)
+    if (!edge?.run || edge.closedAt !== undefined) return true
+    const reading = this.childReading(edge)
+    return !(reading.source === "followed" && reading.working)
   }
 
   /** What the last host left: reports no Apex heard, sent again under their ids, Fins' messages its exit paused, and spawns the budget held. */
@@ -1299,16 +1310,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
   }
 
-  /** Stops a Fin, once: its running turn, or its process group; the delegation closes either way. */
+  /**
+   * Stops a Fin, once: its running turn, or its process group. The delegation
+   * closes first, with why, so the turn the stop cuts short ends as stopped
+   * rather than as a failure that wakes the Apex, which asked for it.
+   */
   private async end(edge: ThreadParent, why: string): Promise<boolean> {
     if (edge.closedAt) return false
     const store = this.store()!
-    this.runs.stop(edge.child)
+    const closed = store.keepEdge({ ...edge, closedAt: this.now(), closedReason: why.slice(0, 2000) })
+    this.runs.stop(edge.child, why.slice(0, 2000))
     const conversation = this.conversationOf(edge.child)
     const status = conversation ? this.deps.live.session(conversation)?.status : undefined
     if (conversation && (status === "running" || status === "starting"))
       await this.deps.live.cancel(conversation).catch((error) => hostWarn("agents", "a Fin's turn could not be stopped", { op: edge.op, error: errorMessage({ error }) }))
-    const closed = store.keepEdge({ ...edge, closedAt: this.now() })
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why })
     this.childMoved(closed, false)
     void this.drain()
@@ -1665,6 +1680,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!run.nativeId || !path || !ref?.cwd) return { refused: "unavailable", why: `${edge.name}'s session isn't on this device yet, so no message can reach it.` }
     if (!this.deps.harnesses().includes(run.harness))
       return { refused: "unavailable", why: `${this.deps.harnessLabel(run.harness)} has no live driver here to resume ${edge.name}'s session with a message: its report reaches you when it ends.` }
+    if (run.ended && this.runs.reading(edge.child)?.working)
+      return { refused: "unavailable", why: `${edge.name}'s session is being written by a process Mako lost track of, so it can't be resumed here: link that process with agents_link, or try again once it's quiet.` }
     let cut = false
     if (!run.ended) {
       if (run.device !== store.deviceId || !run.process) return { refused: "unavailable", why: `${edge.name} runs in a process on another device, which takes no message until it exits.` }

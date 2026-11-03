@@ -525,6 +525,65 @@ async function messagesReachLinkedRuns(): Promise<void> {
   }
 }
 
+/** A Fin its Apex stops ends as stopped, in the Apex's words, and its cut turn reports nothing: the Apex asked, so it isn't woken. */
+async function apexStops(): Promise<void> {
+  const w = world("apex-stops", (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "Cut short.") : "ok"))
+  try {
+    const apex = await w.apex("cursor")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "slow", clientKey: "s", cwd: w.root })
+    assert.ok(!("refused" in started), JSON.stringify(started))
+    await waitFor(() => w.live.session(started.conversation!)?.status === "running", "the Fin to work")
+    const stopped = await w.agents.stop(apex.caller, { child: "slow", reason: "restarting on another model" })
+    assert.deepEqual("stopped" in stopped && stopped.stopped, ["slow"])
+    await w.settle()
+    assert.deepEqual(w.store.reportsOf(ThreadIdSchema.parse(started.child!), 0), [], "the turn the stop cut short reports nothing")
+    assert.equal(w.prompts.filter((prompt) => prompt.conversation === apex.conversation).length, 0, "and the Apex that stopped it isn't woken")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children[0]!.state, { kind: "ended", outcome: "stopped", reason: "restarting on another model" }, "it ended as stopped, with the Apex's reason")
+  } finally {
+    await w.close()
+  }
+}
+
+/** An end the host wrote for a followed run whose Session is written again since isn't in the digest: the Fin reads as working. */
+async function staleEndsStayOut(): Promise<void> {
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, "stale-ends"),
+    script: (turn) => (turn.text === "Hold on." ? turn.world.hold(turn.conversation).then(() => "Done holding.") : "ok"),
+    catalog: fake.catalog,
+    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: async () => Date.now() },
+  })
+  const run = sleeper(w.root)
+  try {
+    const apex = await w.apex("cursor")
+    w.say(apex.conversation, "Hold on.")
+    await waitFor(() => w.live.session(apex.conversation)?.status === "running", "the Apex's turn to run")
+    const nativeId = randomUUID()
+    const session = () => fake.write({ harness: "cursor", nativeId, path: join(w.root, "cli", nativeId), cwd: w.root, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, [
+      { type: "tool", id: "1", name: "Bash", input: JSON.stringify({ command: "npm test" }), status: "completed" },
+    ])
+    session()
+    const linked = await w.agents.link(apex.caller, { harness: "cursor", session: nativeId, pid: run.pid!, name: "cli" })
+    assert.ok(!("refused" in linked), JSON.stringify(linked))
+    const child = ThreadIdSchema.parse(linked.child)
+    run.kill("SIGTERM")
+    await waitFor(() => w.store.edges().of(child)?.run?.ended !== undefined, "its end", END_CONFIRM_MS + 20_000)
+    assert.equal(w.store.reportsOf(child, 0).at(-1)?.status, "failed")
+    session()
+    w.release(apex.conversation)
+    await w.settle()
+    assert.equal(w.prompts.filter((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(FROM_AGENTS)).length, 0, "no digest says it ended while its session is written")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.equal(listed.children[0]!.state.kind, "working", "it reads as working")
+  } finally {
+    run.kill()
+    await w.close()
+  }
+}
+
 /** A Fin runs on the model its spawn names, else its Apex's own on the Apex's harness, else its harness's default; its strip shows it. */
 /**
  * What a Fin runs on: its Apex's model on the Apex's harness, the person's own choices on another (Settings › Fins,
@@ -689,6 +748,8 @@ try {
   await messagesReachLinkedRuns()
   await finModels()
   await limitedHarnesses()
+  await apexStops()
+  await staleEndsStayOut()
   await ownSessionIsNoChild()
   console.log("agents engine: ok")
 } finally {

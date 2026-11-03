@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { performance } from "node:perf_hooks"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import { followHostLog } from "@mako/host/base/host-log"
+import { END_CONFIRM_MS } from "@mako/host/conversations/agent-runs"
 import type { AgentsDeps } from "@mako/host/conversations/agents"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
@@ -181,7 +182,8 @@ async function host(root: string, harness: string, point: Point | "none"): Promi
       const last = store.reportsOf(edge.child, 0).at(-1)
       return last?.status === "done" || last?.status === "failed"
     })
-    await until("the tree to settle", () => store.undeliveredReports().length === 0 && store.queuedSpawns().length === 0 && finished())
+    // A followed run's end waits for its session to stay quiet.
+    await until("the tree to settle", () => store.undeliveredReports().length === 0 && store.queuedSpawns().length === 0 && finished(), 20_000 + END_CONFIRM_MS)
     await world.settle()
     const settled: Settled = {
       edges: store.edges().all.map((edge) => ({

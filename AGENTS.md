@@ -227,7 +227,12 @@ across the host), its end written once. Linking it again with another pid
 follows it there, and the link's name is its Thread's title. When its
 process goes, a process of its Apex's shell holding its Session is the same
 run (a chat resumed to hand it a message), and otherwise its end waits until
-its Session has been quiet for `END_CONFIRM_MS`. A message to it
+its Session has been quiet for `END_CONFIRM_MS`. A run whose Session is
+written again after its end reads as working while that Session is still
+being written, and a digest drops the end the host inferred for it
+(`AgentWakes.current`). A stop closes the edge with
+its reason (`closedReason`) before it cancels the turn. The cut turn then reports
+nothing and wakes no one, and the Fin reads as stopped in those words. A message to it
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
