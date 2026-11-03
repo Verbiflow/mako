@@ -424,6 +424,7 @@ export function CrewCard({
   return (
     <section
       data-crew={counts.total}
+      data-compact={compact || undefined}
       aria-label={`${apexTitle}'s ${FIN_WORD}s`}
       className="mt-1 flex animate-in flex-col overflow-hidden rounded-xl bg-surface shadow-[inset_0_0_0_1px_var(--hairline)] duration-200 ease-[var(--ease-out)] fade-in-0"
     >
