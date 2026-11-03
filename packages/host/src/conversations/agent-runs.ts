@@ -194,7 +194,9 @@ export class AgentRuns {
     const kept = store.edges().byRun(ref.harness, ref.nativeId)
     const parent = store.sessionPlacement(SessionIdSchema.parse(input.parentSession))
     if (!parent) return { refused: "no-parent", why: "This Thread isn't in the Thread store yet." }
-    if (kept) return kept.parent === parent.thread ? this.relink(kept, input) : { refused: "conflict", why: "That session already works for another Thread." }
+    if (kept && kept.parent !== parent.thread) return { refused: "conflict", why: "That session already works for another Thread." }
+    // Discovery finds a run its link already named, maybe by another of its processes (a wrapper's child): that edge stands.
+    if (kept) return input.origin === "linked" ? this.relink(kept, input) : kept
     const child = store.place(ref, input.startedBy).thread
     if (child === parent.thread || store.ancestors(parent.thread).includes(child))
       return { refused: "cycle", why: "That session is this Thread or one of its Apexes." }
