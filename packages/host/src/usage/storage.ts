@@ -29,7 +29,7 @@ const KNOWN = new Map([
   }],
   ["records", {
     label: "Session records",
-    detail: "Every version of every session, compressed and shared between versions, so a conversation reads as it was at any turn and syncs. A pack is rewritten once half of it is no longer used.",
+    detail: "Every version of every session, compressed and shared between versions, so a conversation reads as it was at any turn and syncs. After each sync pass, what a deleted session alone used is removed, and a pack is rewritten once a fifth of it is no longer used.",
   }],
   ["worktrees", { label: "Thread worktrees", detail: "Checkouts of Threads on their own branch. Settings › Worktrees removes them." }],
   ["archive", { label: "Archived Threads", detail: "What an archived Thread kept, to bring it back." }],
@@ -172,7 +172,7 @@ export class MakoStorage {
       }
     }
     parts.sort((a, b) => b.bytes - a.bytes)
-    if (rest) parts.push({ id: "rest", label: "Everything else", detail: `Folders and files under ${SHOWN_BYTES / 1024 ** 2} MB each.`, path: "", bytes: rest, collected: false })
+    if (rest) parts.push({ id: "rest", label: "Everything else", detail: `Folders and files under ${SHOWN_BYTES / 1024 ** 2} MB each. Copies of a file a process stopped before saving are removed.`, path: "", bytes: rest, collected: collected.has("rest") })
     this.#parts = parts
     this.#at = new Date().toISOString()
     const [root] = this.#deps.roots

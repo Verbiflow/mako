@@ -46,6 +46,11 @@ import { declareStoreFormat } from "./store-format.js"
  * 5. **Trims** the newest pack's tail past its last indexed entry, once no
  *    capture anywhere may be writing (`trimNewest`).
  *
+ * Grouping reads every version and compacting every chunk's place, minutes
+ * on a large store, so each is skipped while what it decided on stands
+ * (`SETTLED`): no drop since, no unit or version added, no session gone
+ * quiet, no pack added below the newest, nothing copied last time.
+ *
  * Crash-safe at every step: copies go to `repack-*.tmp` files no reader
  * opens; switching the index is one transaction under the store's turn and
  * write lock, which renames each copy to the next pack number and moves the
@@ -63,8 +68,20 @@ import { declareStoreFormat } from "./store-format.js"
 
 /** The `meta` key a repack raises when it drops chunks. */
 export const DROPPED = "dropped"
+/** The `meta` key each version a capture adds raises, in the same transaction: telling new versions apart otherwise reads every unit. */
+export const VERSIONS_ADDED = "versions-added"
+/**
+ * The `meta` key holding what the last repack settled on: the drop
+ * generation it saw, the units' versions before it grouped, the packs
+ * before it compacted, the options, and when the next session it found
+ * busy goes quiet. Only a repack drops or moves a chunk and captures only
+ * append to the newest pack, so while these stand there is nothing new to
+ * group or compact.
+ */
+const SETTLED = "repack-settled"
 const QUIET_MS = 60 * 60_000
-const LIVE_RATIO = 0.5
+/** Rewriting a pack costs its live bytes: at four fifths, a fifth of it comes back for four times as much copied. */
+const LIVE_RATIO = 0.8
 /**
  * A session read in runs of this many chunks or more on average (about a
  * mebibyte) is laid out already, as is one in a few runs: chunks it shares
@@ -147,7 +164,12 @@ export interface RepackReport {
   orphans: OrphanCounts
   /** The newest pack's tail past its last indexed entry, truncated (`trimNewest`). */
   trim: { pack: number | null; bytes: number; resumed: boolean; skipped: string | null }
+  /** Steps that found nothing changed since the last repack settled (`SETTLED`), and didn't read the index. */
+  skipped: { group: boolean; compact: boolean }
 }
+
+const SettledSchema = z.object({ dropped: z.string(), units: z.string(), packs: z.string().nullable(), options: z.string(), quietAt: z.number().nullable() })
+type Settled = z.infer<typeof SettledSchema>
 
 /** How a session's chunks lie: how many there are, and in how many contiguous runs a read in order takes them. */
 interface Layout {
@@ -178,6 +200,7 @@ export async function repackStore(parts: RepackParts, options: RepackOptions = {
     packsWritten: 0, packsRemoved: 0, leftovers: 0, packBytesBefore: 0, packBytesAfter: 0, ms: 0, longestTurnMs: 0,
     orphans: { scanned: false, sweep: false, scanMs: 0, turnMs: 0, unnamed: 0, forgotten: 0, abandoned: 0, swept: 0, running: 0, waiting: 0, intentsCleared: 0 },
     trim: { pack: null, bytes: 0, resumed: false, skipped: null },
+    skipped: { group: false, compact: false },
   }
   const lock = await takeLock(join(parts.folder, "repack.lock"))
   if (!lock) return report
@@ -225,11 +248,46 @@ class Repack {
     `))
     await this.drop()
     await this.scrub()
-    await this.group()
-    await this.compact()
+    const last = this.settled()
+    const now: Settled = { dropped: this.meta(DROPPED) ?? "0", units: this.units(), packs: null, options: `${this.options.quietMs ?? QUIET_MS}:${this.options.liveRatio ?? LIVE_RATIO}`, quietAt: null }
+    const same = last?.dropped === now.dropped && last.options === now.options
+    const grouped = same && last.units === now.units && (last.quietAt === null || Date.now() < last.quietAt)
+    this.report.skipped.group = grouped
+    now.quietAt = grouped ? last.quietAt : await this.group()
+    const packs = this.parts.packs.numbers().join(",")
+    this.report.skipped.compact = same && last.packs === packs && !this.report.copied
+    if (!this.report.skipped.compact) await this.compact()
+    // A repack that copied changed the packs it would judge: the next one judges them again.
+    if (!this.report.copied) now.packs = packs
     await this.removeEmpty()
     await this.trimNewest()
+    if (JSON.stringify(now) !== JSON.stringify(last)) await this.locked(async () => this.setMeta(SETTLED, JSON.stringify(now)))
     this.report.packBytesAfter = this.packBytes()
+  }
+
+  private meta(key: string): string | undefined {
+    return ValueSchema.optional().parse(this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key))?.value
+  }
+
+  private setMeta(key: string, value: string): void {
+    this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(key, value)
+  }
+
+  private settled(): Settled | null {
+    const value = this.meta(SETTLED)
+    if (value === undefined) return null
+    const parsed = SettledSchema.safeParse(JSON.parse(value))
+    return parsed.success ? parsed.data : null
+  }
+
+  /**
+   * What changes whenever a version, a unit or a session is added, read
+   * before grouping so one added during it groups next time. Each is a
+   * single row: counting the units reads millions of them.
+   */
+  private units(): string {
+    const row = z.object({ units: z.number().nullable(), sessions: z.number().nullable() }).parse(this.db.prepare("SELECT (SELECT max(id) FROM units) AS units, (SELECT max(id) FROM sessions) AS sessions").get())
+    return `${this.meta(VERSIONS_ADDED) ?? "0"}:${row.units}:${row.sessions}`
   }
 
   async close(): Promise<void> {
@@ -291,8 +349,7 @@ class Repack {
     const grace = this.options.graceMs ?? GRACE_MS
     const standings = await intentStandings(this.db, this.parts.folder, now)
     const abandoned = [...standings.values()].filter((entry) => droppable(entry.standing)).map((entry) => entry.row.id)
-    const meta = (key: string) => ValueSchema.optional().parse(this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key))?.value
-    const swept = meta(SWEPT)
+    const swept = this.meta(SWEPT)
     const sweep = this.options.sweep ?? (swept === undefined || now - Number(swept) >= SWEEP_MS)
     const forgotten = Boolean(this.db.prepare("SELECT 1 FROM orphans LIMIT 1").get())
     const due = Boolean(this.db.prepare("SELECT 1 FROM unnamed WHERE since <= ? LIMIT 1").get(now - grace))
@@ -348,11 +405,10 @@ class Repack {
       const found = Number(this.db.prepare("INSERT OR IGNORE INTO unnamed (hash, since) SELECT hash, ? FROM orphan_new").run(now).changes)
       // A chunk dropped, or newly found unnamed: a capture that found it held in an earlier slice starts over, and stores or claims it again.
       if (tally.forgotten + tally.abandoned + tally.unnamed + found > 0) {
-        const generation = Number(meta(DROPPED) ?? "0")
-        this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(DROPPED, String(generation + 1))
+        this.setMeta(DROPPED, String(Number(this.meta(DROPPED) ?? "0") + 1))
       }
       // Only a look at every chunk counts as a sweep: one at the candidates alone leaves the next sweep due.
-      if (sweep) this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(SWEPT, String(now))
+      if (sweep) this.setMeta(SWEPT, String(now))
       counts.forgotten = tally.forgotten
       counts.abandoned = tally.abandoned
       counts.swept = tally.unnamed
@@ -388,9 +444,15 @@ class Repack {
     }
   }
 
-  /** 2. Each quiet session whose chunks are scattered, copied in the order a whole read takes them. */
-  private async group(): Promise<void> {
-    const quiet = Date.now() - (this.options.quietMs ?? QUIET_MS)
+  /**
+   * 2. Each quiet session whose chunks are scattered, copied in the order a
+   * whole read takes them. Returns when the soonest session still busy goes
+   * quiet, or null when none is.
+   */
+  private async group(): Promise<number | null> {
+    const quietMs = this.options.quietMs ?? QUIET_MS
+    const quiet = Date.now() - quietMs
+    let quietAt: number | null = null
     const sessions = SessionSchema.array().parse(this.db.prepare(`
       SELECT s.id, count(*) AS versions, max(v.captured_at) AS newest,
         (SELECT fingerprint FROM marks m WHERE m.session = s.id AND m.name = ?) AS grouped
@@ -398,7 +460,11 @@ class Repack {
       GROUP BY s.id`).all(GROUPED))
     for (const session of sessions) {
       const fingerprint = `${session.versions}:${session.newest}`
-      if (session.newest > quiet || session.grouped === fingerprint) continue
+      if (session.grouped === fingerprint) continue
+      if (session.newest > quiet) {
+        quietAt = Math.min(quietAt ?? Infinity, session.newest + quietMs)
+        continue
+      }
       this.db.exec("DELETE FROM repack_order")
       const order = this.db.prepare("INSERT INTO repack_order (hash) VALUES (?)")
       for (const row of this.db.prepare(`
@@ -418,6 +484,7 @@ class Repack {
       this.report.grouped += 1
     }
     await this.switchBatch()
+    return quietAt
   }
 
   /**
@@ -551,21 +618,28 @@ class Repack {
     })
   }
 
-  /** 4. Packs below the newest that no chunk names, checked and removed under the write lock. */
+  /**
+   * 4. Packs below the newest that no chunk names, each checked and renamed
+   * to a temporary name under the write lock, one turn apiece, then
+   * removed outside it: freeing a pack's gigabyte takes the file system a
+   * while, and a crash before it leaves a leftover the next repack removes.
+   */
   private async removeEmpty(): Promise<void> {
-    await this.locked(async () => {
-      const named = this.db.prepare("SELECT 1 AS n FROM chunks WHERE pack = ? LIMIT 1")
-      const numbers = this.parts.packs.numbers()
-      const newest = numbers.at(-1)
-      for (const pack of numbers) {
-        if (pack === newest || named.get(pack)) continue
+    const named = this.db.prepare("SELECT 1 AS n FROM chunks WHERE pack = ? LIMIT 1")
+    for (const pack of this.parts.packs.numbers()) {
+      const going = await this.locked(async () => {
+        if (pack === this.parts.packs.numbers().at(-1) || named.get(pack)) return null
         await this.sources.get(pack)?.close()
         this.sources.delete(pack)
         await this.parts.packs.drop(pack)
-        await rm(join(this.folder, packName(pack)), { force: true })
-        this.report.packsRemoved += 1
-      }
-    })
+        const path = join(this.folder, `repack-${process.pid}-${randomUUID()}.tmp`)
+        await rename(join(this.folder, packName(pack)), path)
+        return path
+      })
+      if (!going) continue
+      await rm(going, { force: true })
+      this.report.packsRemoved += 1
+    }
   }
 
   /**

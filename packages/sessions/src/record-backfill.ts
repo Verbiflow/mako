@@ -137,7 +137,8 @@ export const BackfillProgressSchema = z.object({
   prune: z.object({ files: z.number(), pruned: z.number(), prunedEnded: z.number(), restamped: z.number(), bytes: z.number(), live: z.number(), unnamed: z.number(), notHeld: z.number(), differs: z.number(), unbound: z.number(), ms: z.number() }).optional(),
   repack: z.object({ dropped: z.number(), droppedBytes: z.number(), scrubbedBytes: z.number(), grouped: z.number(), alreadyGrouped: z.number(), copied: z.number(), copiedBytes: z.number(), packsWritten: z.number(), packsRemoved: z.number(), packBytesBefore: z.number(), packBytesAfter: z.number(), ms: z.number(), longestTurnMs: z.number(),
     orphans: z.object({ scanned: z.boolean(), sweep: z.boolean(), scanMs: z.number(), turnMs: z.number(), unnamed: z.number(), forgotten: z.number(), abandoned: z.number(), swept: z.number(), running: z.number(), waiting: z.number(), intentsCleared: z.number() }).optional(),
-    trim: z.object({ pack: z.number().nullable(), bytes: z.number(), resumed: z.boolean(), skipped: z.string().nullable() }).optional() }).optional(),
+    trim: z.object({ pack: z.number().nullable(), bytes: z.number(), resumed: z.boolean(), skipped: z.string().nullable() }).optional(),
+    skipped: z.object({ group: z.boolean(), compact: z.boolean() }).optional() }).optional(),
   /** Views an earlier decoder build made, decoded again by this one, when the pass ran it. */
   views: ViewRebuildSchema.optional(),
   /** Writers read for sessions nothing named one for, when the pass ran it. */
@@ -556,6 +557,7 @@ function fields(progress: BackfillProgress) {
     ...views && { viewsStale: views.stale, viewsRebuilt: views.rebuilt, viewsGone: views.gone, viewsFailed: views.failed, viewsMs: views.ms },
     ...repack?.orphans?.scanned && { orphansForgotten: repack.orphans.forgotten, orphansAbandoned: repack.orphans.abandoned, orphansSwept: repack.orphans.swept, orphansRunning: repack.orphans.running, orphansWaiting: repack.orphans.waiting, orphansScanMs: repack.orphans.scanMs },
     ...repack?.trim && { tailTrimmedBytes: repack.trim.bytes, tailTrimSkipped: repack.trim.skipped },
+    ...repack?.skipped && { repackGroupSkipped: repack.skipped.group, repackCompactSkipped: repack.skipped.compact },
     ...repack && { chunksDropped: repack.dropped, sessionsGrouped: repack.grouped, chunksCopied: repack.copied, packsRemoved: repack.packsRemoved, packBytesBefore: repack.packBytesBefore, packBytesAfter: repack.packBytesAfter, repackMs: repack.ms, repackLongestTurnMs: repack.longestTurnMs },
   } satisfies BackfillFields
 }
