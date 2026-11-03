@@ -16,8 +16,10 @@ import { outsideFolders } from "@mako/host/attribution/index"
 import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribution/ports"
 import { readOnlyCommand } from "@mako/host/attribution/read-only"
 import { ranTexts, SCRIPT_LIMIT } from "@mako/host/attribution/scripts"
-import { partition, side, turnChanges, type JournalView } from "@mako/host/attribution/queries"
+import { partition, shares, side, storedView, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
+import { JournalStore } from "@mako/host/attribution/journal-store"
+import { contentRef } from "@mako/host/attribution/content"
 
 /*
  * Shapes of failures found by replaying real concurrent sessions through the
@@ -87,7 +89,7 @@ async function world(
   const report = (thread: string, call: string, effects: ReportedEffect[], startedAt: number) =>
     tracker.reported({ thread, session: `${thread}-session`, call, status: "completed", startedAt, endedAt: clock.now(), checkout: project, effects })
   const last = () => tracker.changes(0).at(-1)!
-  return { project, repo, clock, events, tracker, view, write, mark, report, last }
+  return { project, repo, storage, clock, events, tracker, view, write, mark, report, last }
 }
 
 const certainty = (author: Attribution) => ("author" in author ? `${author.certainty}:${author.author.thread}` : author.certainty)
@@ -681,6 +683,71 @@ test("what Git ignores is never read, by a rescan after lost events or by the li
   await w.tracker.settled()
   assert.ok(w.tracker.changes(0).some((entry) => entry.path === "ref/clone-0/src/new.ts"), "a file Git stopped ignoring is journaled")
   await w.tracker.close()
+})
+
+test("what a rescan finds after a long gap is put on a Thread only by when its file was written", async () => {
+  // Seen on a person's Mac: events were lost for 14 hours, and the rescan put a hundred screenshots, there
+  // for days in a folder Git ignored until a commit named them, on the one 76-second call running at its end.
+  const w = await world({ ".gitignore": "shots/\n", "src/a.ts": "export const a = 1\n" })
+  const image = (text: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]), Buffer.from(text)])
+  mkdirSync(join(w.repo, "shots"))
+  writeFileSync(join(w.repo, "shots/old.png"), image("days old"))
+  utimesSync(join(w.repo, "shots/old.png"), (w.clock.now() - 3 * 24 * 3_600_000) / 1000, (w.clock.now() - 3 * 24 * 3_600_000) / 1000)
+  w.write("src/a.ts", "export const a = 2\n")
+  await w.tracker.settled()
+  w.events.drop()
+  w.clock.advance(5 * 60_000)
+  // Nothing runs when this one is written.
+  writeFileSync(join(w.repo, "shots/new.png"), image("mid-gap"))
+  utimesSync(join(w.repo, "shots/new.png"), w.clock.now() / 1000, w.clock.now() / 1000)
+  w.clock.advance(5 * 60_000)
+  w.mark("turn", "T1", "t1", "start")
+  w.mark("call", "T1", "c1", "start", { turn: "t1" })
+  w.clock.advance(1_000)
+  w.write(".gitignore", "")
+  w.write("src/b.ts", "export const b = 1\n")
+  w.clock.advance(1_000)
+  w.events.restore()
+  await w.tracker.settled()
+  const found = new Map(w.tracker.changes(0).filter((entry) => entry.observed === "rescan").map((entry) => [entry.path, entry.author]))
+  assert.deepEqual(found.get("shots/old.png"), { certainty: "ambiguous", candidates: [], reason: "lost-events" }, "content older than the gap names nobody")
+  assert.deepEqual(found.get("shots/new.png"), { certainty: "person", via: "no-activity" }, "nothing ran when it was written")
+  assert.equal(found.get("src/b.ts")?.certainty, "window", "written while the call ran, it might be the call's")
+  const divided = shares(w.view, w.project, "T1")
+  assert.deepEqual(divided.thread.files, [], "worktree_status counts none of it as T1's for sure")
+  assert.ok(divided.uncertain.files.includes(join(w.repo, "src/b.ts")), "the change made while it ran only might be T1's")
+  assert.deepEqual(partition(w.view, w.project, "T1").files, [], "a move of T1 takes none of it unless the person brings it")
+  w.mark("call", "T1", "c1", "end", { turn: "t1" })
+  w.mark("turn", "T1", "t1", "end")
+  await w.tracker.close()
+})
+
+test("a file a commit took before the journal read it is clean on the next start, not a change of whoever ran", async () => {
+  // The person's journal held 75 committed screenshots as created after lost events, by an Apex's call: an
+  // older build's HEAD check never read files it had no row for, and only another HEAD move would clear them.
+  const w = await world({ "shots/a.png": "\u0089PNG\u0000 committed\n", "src/a.ts": "export const a = 1\n" })
+  await w.tracker.close()
+  const ref = contentRef(Buffer.from("\u0089PNG\u0000 committed\n"))
+  const stale = JournalStore.open(join(w.storage, "journal.sqlite"), { device: "regression" })
+  const row = stale.stats("repo").get("shots/a.png")!
+  stale.saveStat("repo", "shots/a.png", { ...row, ref })
+  const at = w.clock.now()
+  const gap = stale.openGap("repo", at - 14 * 3_600_000, "dropped")
+  stale.closeGap(gap, at)
+  const seq = stale.insertEntry({
+    at, changedAt: at, root: "repo", path: "shots/a.png", kind: "create", before: null, after: ref, size: 21, text: false, stored: false, observed: "rescan", gap,
+    author: { certainty: "window", author: { thread: "T1", session: "T1-session", call: "c1" }, during: "call", reached: "folder" }, settled: true,
+  })
+  stale.saveFile({ root: "repo", path: "shots/a.png", base: null, baseSeq: seq - 1, current: ref, text: false, map: [] })
+  assert.ok(shares(storedView(stale), w.project, "T1").uncertain.files.includes(join(w.repo, "shots/a.png")), "as the person's journal stood")
+  stale.close()
+  const reopened = await LaptopTracker.open({ fs: nodeFileSystem(), events: new FakeEventSource(), clock: w.clock, storage: w.storage, device: "regression" }, { repository: async (path) => gitRepository(runner, path) })
+  await reopened.settled()
+  const view: JournalView = { store: reopened.store, roots: () => reopened.rootStates().values(), author: (entry) => reopened.authorOf(entry) }
+  assert.equal(reopened.rootStates().get("repo")?.files.has("shots/a.png"), false, "HEAD has it as it is: it's clean")
+  const divided = shares(view, w.project, "T1")
+  assert.deepEqual([divided.thread.files, divided.uncertain.files], [[], []], "worktree_status lists it nowhere")
+  await reopened.close()
 })
 
 test("losses heard while a rescan waits are its own, and while they keep coming each next rescan waits longer", async () => {

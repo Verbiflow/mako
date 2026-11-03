@@ -433,6 +433,7 @@ export class LaptopTracker implements AttributionTracker {
       try {
         // HEAD first, so what a checkout or pull wrote while no host ran is read as the base it is.
         if (repo) state.moved = await this.headChecked(state)
+        await this.settleCommitted(state)
         if (history?.complete) {
           const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
           for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
@@ -658,6 +659,7 @@ export class LaptopTracker implements AttributionTracker {
     state.rescanning = true
     if (checking) state.moved = await this.headChecked(state)
     try {
+      await this.settleCommitted(state)
       // What Git ignores is never walked: a folder of reference clones or build output holds far more files than the checkout.
       const ignored = await this.gitIgnored(state, true)
       const carry = state.root.carry ?? []
@@ -684,6 +686,37 @@ export class LaptopTracker implements AttributionTracker {
         this.rescanSoon(state)
       }
     }
+  }
+
+  /**
+   * Files the journal holds as created though HEAD has them exactly as they
+   * are: a commit took them before the journal read them (a file Git ignored
+   * until the commit that named it, by a build whose HEAD check didn't read
+   * the disk). They're clean, and nobody's change.
+   */
+  private async settleCommitted(state: RootState): Promise<void> {
+    const { repo, root } = state
+    const head = root.head
+    if (!repo || !head) return
+    const created = [...state.files.values()].filter((file) => file.base === null && file.current !== null)
+    if (!created.length) return
+    const clean: string[] = []
+    await mapLimit(created, PARALLEL, async (file) => {
+      const bytes = await repo.read(head, file.path).catch(() => null)
+      if (bytes && contentRef(bytes) === file.current) clean.push(file.path)
+    })
+    if (!clean.length) return
+    this.store.transaction(() => {
+      for (const path of clean) {
+        state.files.delete(path)
+        this.store.deleteFile(root.id, path)
+        const row = state.stats.get(path)
+        if (!row) continue
+        state.stats.set(path, { ...row, ref: null })
+        this.store.saveStat(root.id, path, state.stats.get(path)!)
+      }
+    })
+    this.log("committed files settled", { root: root.path, files: clean.length })
   }
 
   /**
@@ -1086,13 +1119,16 @@ export class LaptopTracker implements AttributionTracker {
       ? { ...(file ?? fresh(null)), path, base: null, map: (file ?? fresh(null)).map.filter((run) => !run.del) }
       : (file ?? fresh(before.ref))
     const written = item.stat && !from ? millis(item.stat.mtimeNs) : undefined
+    const lost = state.gap && how !== "event" ? lostSpan(state.gap.from, at, written) : undefined
+    // Content already there before the gap began: written where the watch never read (a file Git ignored until a commit named it), so nothing running in the gap made it.
+    if (lost === "before") given ??= { certainty: "ambiguous", candidates: [], reason: "lost-events" }
     const change: ObservedChange = {
       path: join(root.path, path),
       from: from ? join(root.path, from) : undefined,
       kind,
       changedAt,
       refs: { before: before.ref, after: afterRef },
-      lost: state.gap && how !== "event" ? { from: state.gap.from, to: at } : undefined,
+      lost: lost === "before" ? { from: state.gap!.from, to: at } : lost,
       before: beforeText,
       after: afterText,
       root: root.path,
@@ -1904,6 +1940,20 @@ function withinCall(call: ReportedCall, at: number, now: number): boolean {
 
 function callAuthor(call: ReportedCall): Author {
   return authorOf(call, call.call)
+}
+
+/** A modification time this close is a write's own, give or take a file system that keeps whole seconds. */
+const MTIME_SLACK_MS = 1_000
+
+/**
+ * When a change found after lost events was made: any time in the gap, or
+ * when its file was written if its modification time says so, within the
+ * gap; `before` when that time is older than the gap.
+ */
+function lostSpan(from: number, at: number, written: number | undefined): { from: number; to: number } | "before" {
+  if (written === undefined || written > at + MTIME_SLACK_MS) return { from, to: at }
+  if (written < from - TRAIL_MS) return "before"
+  return { from: Math.max(from, written - MTIME_SLACK_MS), to: Math.min(at, written + MTIME_SLACK_MS) }
 }
 
 function deadBase(map: readonly Run[]): number {
