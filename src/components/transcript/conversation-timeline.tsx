@@ -523,6 +523,7 @@ export function ConversationTimeline({
   /** With `transcriptEnd` provided: room after the column that keeps a followed end from moving back (`pin`). */
   const steadyEnd = useRef<HTMLDivElement>(null)
   const highWater = useRef(0)
+  const highWaterWidth = useRef(0)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
    * Each turn's React key, for the turns that came back under another id. A
@@ -1062,12 +1063,17 @@ export function ConversationTimeline({
         if (pinned.current) {
           // A transcript followed at its end never moves back under the reader: a column that got shorter (a sending
           // row giving way to its turn's own) keeps its height as room at the end, which what it writes next fills.
+          // At another width every line has flowed again (a phone turned sideways, a pane resized), and a height from
+          // before says nothing of what's under the reader: kept, it would leave the end blank.
           const natural = column.offsetHeight
-          highWater.current = Math.max(highWater.current, natural)
+          const width = column.offsetWidth
+          highWater.current = width === highWaterWidth.current ? Math.max(highWater.current, natural) : natural
+          highWaterWidth.current = width
           spacer.style.height = `${highWater.current - natural}px`
         } else {
           // Away from the end, the room kept there goes: nothing the reader sees moves.
           highWater.current = column.offsetHeight
+          highWaterWidth.current = column.offsetWidth
           spacer.style.height = "0px"
         }
       }
