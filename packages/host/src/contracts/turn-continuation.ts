@@ -194,6 +194,25 @@ export function autoContinueCandidate(requests: readonly LiveRequest[], restarte
   return newest
 }
 
+/**
+ * A Fin's turn that a host that died cut short (`host-crashed`), for the next
+ * host to continue as Mako's exit's is (`LiveRestarts`): its Apex waits on it
+ * and judges what it did, and nobody would press Continue turn. It's the
+ * newest request that ran, nothing continued it yet, and fewer than
+ * `RESTART_CHAIN` of Mako's continuations in a row were cut short.
+ */
+export function crashedChildTurn(requests: readonly LiveRequest[], now = Date.now()): LiveRequest | undefined {
+  let ran: LiveRequest | undefined
+  for (let index = requests.length - 1; index >= 0 && !ran; index -= 1) {
+    const request = requests[index]!
+    if (request.status !== "canceled" && request.status !== "queued" && request.status !== "held") ran = request
+  }
+  if (ran?.interruption?.reason !== "host-crashed") return undefined
+  if (ran.continues?.auto && chainedContinuations(requests, ran, now) >= RESTART_CHAIN) return undefined
+  if (requests.some((request) => request.continues?.requestId === ran.id)) return undefined
+  return ran
+}
+
 /** How many of Mako's continuations lead in a row to `last`, it included, counting those cut short within `RESTART_CHAIN_MS` of `now`. */
 function chainedContinuations(requests: readonly LiveRequest[], last: LiveRequest, now: number): number {
   const byId = new Map(requests.map((request) => [request.id, request]))

@@ -73,9 +73,10 @@ import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
+import { crashedChildTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
-import { AgentWakes, digest, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
+import { AgentWakes, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
@@ -87,7 +88,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -170,8 +171,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly waiters = new Set<() => void>()
   /** `wait` starts holding now: while one holds a Fin, its reports answer the start rather than wake its Apex. */
   private readonly holds = new Set<Hold>()
-  /** Notices for a parent whose turns a followed process runs: they start its next turn once that process ends. */
-  private readonly held = new Map<string, Notice[]>()
+  /** Apexes whose turns a followed process ran, while their held reports start their next turn (`release`). */
+  private readonly releasing = new Set<string>()
   /** The decision a blocked Fin's Apex was told of, by Fin: told once per question. */
   private readonly asked = new Map<string, string>()
   /** What each `agents_send` key delivered, so a retry answers the same. */
@@ -207,6 +208,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
       wake: (conversation, request, text, actor) => {
+        // The conversation took this request already: a host that died before marking its reports heard sent it.
+        if (deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) return
         deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor)
       },
       steer: (conversation, id, text) => this.steer(conversation, id, text),
@@ -228,30 +231,65 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (edge && report.status !== "progress") this.noticeOf(edge, report, wake)
     }
     for (const edge of edges.all) {
+      if (edge.closedAt !== undefined || edge.run) continue
       const last = store.reportsOf(edge.child, 0).at(-1)
-      if (edge.closedAt === undefined && !edge.run && last?.status !== "done" && last?.status !== "failed") this.resumePaused(edge)
+      const conversation = this.conversationOf(edge.child)
+      // A Fin that finished is read in only when the last host left a message of it waiting, paused or running.
+      if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) this.resumePaused(edge)
     }
+    for (const apex of new Set(edges.all.map((edge) => edge.parent)))
+      for (const conversation of this.conversationsOfThread(apex)) if (this.deps.live.leftUnsettled(conversation)) this.resumeWakes(conversation)
     void this.drain()
   }
 
-  /** An exit pauses the messages waiting in each conversation for the person's Resume; a Fin's are its Apex's, and nobody would press it. */
+  /**
+   * An exit pauses the messages waiting in each conversation for the person's
+   * Resume, and a crash leaves the turn it cut for their Continue turn; a
+   * Fin's are its Apex's, and nobody would press either. A quit's cut turn
+   * the next host continues already (`LiveRestarts`).
+   */
   private resumePaused(edge: ThreadParent): void {
     const conversation = this.conversationOf(edge.child)
     const snapshot = conversation && this.deps.live.snapshot(conversation)
     if (!snapshot) return
+    const crashed = crashedChildTurn(snapshot.requests, this.now())
+    if (crashed) {
+      try {
+        this.deps.live.continueTurn(conversation, { requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, actor: { kind: "service", name: "auto-continue" } })
+        hostLog("agents", "resumed", { op: edge.op, request: crashed.id, crashed: true })
+      } catch (error) {
+        hostWarn("agents", "a Fin's turn a crash cut short waits for Continue turn", { op: edge.op, request: crashed.id, error: errorMessage({ error }) })
+      }
+    }
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
+    let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
       if (request.status !== "held" || request.signIn || request.wake || request.actor?.kind !== "agent") continue
+      const relaunched = !launched
       try {
-        if (binding?.nativeId) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
+        if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         else {
-          // Its harness never started: the exit cut its launch. It starts now, the brief its first message.
+          // Its harness never started: the exit cut its launch. It starts now, the brief its first message, and the rest wait behind it.
           this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "remove" } })
           this.deps.live.transfer(conversation, { id: namedUuid(`relaunch:${request.id}`), provider: snapshot.session.harness, text: request.text, attachments: request.attachments, ...(request.tuning && { tuning: request.tuning }), ...(binding?.modeId && { modeId: binding.modeId }) }, request.actor)
+          launched = true
         }
-        hostLog("agents", "resumed", { op: edge.op, request: request.id, relaunched: !binding?.nativeId })
+        hostLog("agents", "resumed", { op: edge.op, request: request.id, relaunched })
       } catch (error) {
         hostWarn("agents", "a Fin's paused message waits for Resume", { op: edge.op, request: request.id, error: errorMessage({ error }) })
+      }
+    }
+  }
+
+  /** An exit or a crash pauses the digests waiting for an Apex with the person's messages; they're Mako's, so they go on. */
+  private resumeWakes(conversation: string): void {
+    for (const request of this.deps.live.snapshot(conversation)?.requests ?? []) {
+      if (request.status !== "held" || request.signIn || request.wake || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
+      try {
+        this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
+        hostLog("agents", "resumed", { conversation, request: request.id, wake: true })
+      } catch (error) {
+        hostWarn("agents", "a digest an exit paused waits for Resume", { conversation, request: request.id, error: errorMessage({ error }) })
       }
     }
   }
@@ -862,11 +900,13 @@ export class Agents implements AgentOperations, ConversationChildren {
       for (const spawn of store.queuedSpawns()) {
         const counts = this.treeCounts(spawn.tree)
         if (counts.running >= this.budget.running) continue
-        store.unqueueSpawn(spawn.op)
         const queued = parseQueued(spawn.record)
-        if (!queued) continue
-        hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at })
-        await this.launch(spawn.op, queued)
+        // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
+        if (queued && !store.edges().byOp(spawn.op)) {
+          hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at })
+          await this.launch(spawn.op, queued)
+        }
+        store.unqueueSpawn(spawn.op)
       }
     } catch (error) {
       hostWarn("agents", "queued starts could not be released; they wait for the next end", { error: errorMessage({ error }) })
@@ -1044,14 +1084,27 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** `notice:{child}:{reportId}` to the Apex's owner: this host, which has the Apex's conversation; a report its spawn asked not to hear goes nowhere but its strip. */
   private noticeOf(edge: ThreadParent, report: Report, wake?: string): void {
+    const notice = this.noticeFor(edge, report, wake)
+    if (!notice) return
+    const conversation = this.frontOf(edge.parent, edge.parentSession)
+    if (conversation) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
+    // An Apex whose turns a process Mako didn't start runs: the report waits unheard in the store until that process ends.
+    const apex = this.store()!.edges().of(edge.parent)
+    if (!apex?.run) return
+    if (apex.run.ended) return void this.release(apex)
+    hostLog("agents", "message held", { notice: notice.id, until: "its process exits" })
+  }
+
+  /** What a report is to its Apex: a notice, or nothing, and heard, when its route sends it elsewhere. */
+  private noticeFor(edge: ThreadParent, report: Report, wake?: string): Notice | undefined {
     const store = this.store()!
     const route = report.for === "person" ? "person" : reportRoute(edge.asked, report.status)
     if (route !== "apex") {
       store.markReportsDelivered([report.id], this.now())
       hostLog("agents", "report kept", { op: edge.op, report: report.id, status: report.status, to: route, wake: edge.asked.wake ?? "decisions" })
-      return
+      return undefined
     }
-    const notice: Notice = {
+    return {
       id: `notice:${edge.child}:${report.id}`,
       report,
       label: `"${edge.name}" (${this.deps.harnessLabel(this.harnessOf(edge))})`,
@@ -1059,38 +1112,41 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(wake && { wake }),
       ...(edge.asked.mode === "wait" && (report.status === "done" || report.status === "failed") && { settledOnly: true as const }),
     }
-    const conversation = this.frontOf(edge.parent, edge.parentSession)
-    if (conversation) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
-    if (this.runs.running(edge.parent)) {
-      const held = this.held.get(edge.parent) ?? []
-      if (!held.some((waiting) => waiting.id === notice.id)) held.push(notice)
-      this.held.set(edge.parent, held)
-      hostLog("agents", "message held", { notice: notice.id, until: "its process exits" })
-    }
   }
 
-  /** A Fin that is an Apex of its own ended its process: what was held for it starts its next turn, on Mako's live driver. */
+  /**
+   * A Fin that is an Apex of its own ended its process: its conversation opens
+   * on Mako's live driver, and the reports its Fins left unheard wake it there
+   * as any Apex's do. They're read from the store, so a process that ended
+   * while no host ran is heard from the next one.
+   */
   private async release(edge: ThreadParent): Promise<void> {
-    const notices = this.held.get(edge.child)
     const run = edge.run
-    if (!notices?.length || !run?.nativeId) return
-    this.held.delete(edge.child)
+    const store = this.store()
+    if (!store || !run?.nativeId || this.releasing.has(edge.child)) return
+    const edges = store.edges()
+    const notices = store.undeliveredReports().flatMap(({ report, wake }) => {
+      const child = edges.of(report.child)
+      const notice = child?.parent === edge.child && report.status !== "progress" ? this.noticeFor(child, report, wake) : undefined
+      return notice ? [notice] : []
+    })
+    if (!notices.length) return
     const path = this.deps.catalog.nativePath({ harness: run.harness, nativeId: run.nativeId })
     const ref = path ? this.deps.catalog.ref(path) : undefined
-    if (!path || !ref?.cwd) return
+    if (!path || !ref?.cwd) {
+      hostWarn("agents", "a held message has no session to resume; it waits unheard", { child: edge.child, notices: notices.length })
+      return
+    }
     const conversationId = namedUuid(`resume:${edge.child}:${run.nativeId}`)
-    const request = namedUuid(`${conversationId}\n${notices.map((notice) => notice.report.id).join("\n")}`)
+    this.releasing.add(edge.child)
     try {
-      await this.deps.startLive(run.harness, ref.cwd, {
-        conversationId,
-        resume: run.nativeId,
-        threadPath: path,
-        initialRequest: { id: request, text: digest(notices, this.childCounts(edge.child)), attachments: [] },
-      })
-      this.store()?.markReportsDelivered(notices.map((notice) => notice.report.id), this.now())
+      await this.deps.startLive(run.harness, ref.cwd, { conversationId, resume: run.nativeId, threadPath: path })
       hostLog("agents", "held message released", { child: edge.child, notices: notices.length, conversation: conversationId })
+      for (const notice of notices) this.wakes.notice(conversationId, this.rootOf(edge.child), notice)
     } catch (error) {
       hostWarn("agents", "a held message could not start its turn; it waits for the next start", { child: edge.child, error: errorMessage({ error }) })
+    } finally {
+      this.releasing.delete(edge.child)
     }
   }
 
@@ -1558,10 +1614,10 @@ function waitedReport(report: Report): WaitedReport {
   return { status: report.status, summary: report.summary, ...(report.artifacts?.length && { artifacts: report.artifacts }), ...(report.question && { question: report.question }) }
 }
 
-/** The report that leaves an ask to the person, one per ask. */
 /** Who answers a Fin's ask: its Apex, within its access, or the person, whose ask it is. */
 type Answerer = { kind: "apex"; apex: Apex } | { kind: "person" }
 
+/** The report that leaves an ask to the person, one per ask. */
 function passedId(child: string, ask: string): string {
   return `report:${child}:person:${namedUuid(ask)}`
 }

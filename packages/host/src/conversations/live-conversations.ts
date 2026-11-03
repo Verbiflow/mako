@@ -1078,6 +1078,11 @@ export class LiveConversations {
     }
   }
 
+  /** Whether the host before this one left a message of `id` waiting, paused or running: an exit pauses them, a crash cuts the turn. */
+  leftUnsettled(id: string): boolean {
+    return this.records.leftUnsettled(id)
+  }
+
   /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. */
   continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor }): LiveSnapshot {
     this.autoContinue.continueNow(id, input)

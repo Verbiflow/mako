@@ -5,7 +5,7 @@ import { acpStore, activeLiveAcp } from "../src/state/acp-state"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
-import { autoContinueCandidate, savedContinuation } from "@mako/host/contracts/turn-continuation"
+import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
@@ -242,6 +242,20 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(autoContinueCandidate(chain, true, now + 5 * 60_000), chain[3], "continuations cut longer ago than five minutes no longer count")
   assert.equal(autoContinueCandidate([dropped, { ...droppedAgain }], true, now), undefined, "a dropped continuation stays the person's after a restart too")
   assert.equal(autoContinueCandidate(chain.slice(0, 2), false, now), undefined, "without the restart, Mako's exit is the person's")
+  // A Fin's turn a crash cut short is Mako's to continue: its Apex waits on it, nobody presses Continue turn.
+  const crashedAt = (id: string, at: number, continues?: string): LiveRequest => ({
+    ...cut(id, at), status: "uncertain", interruption: { reason: "host-crashed", at },
+    ...continues && { continues: { requestId: continues, reason: "host-crashed" as const, auto: true } },
+  })
+  const crashedFin = crashedAt("22222222-2222-4222-8222-000000000001", now - 1_000)
+  assert.equal(crashedChildTurn([crashedFin], now), crashedFin, "a Fin's turn a crash cut short is continued")
+  assert.equal(crashedChildTurn([crashedFin, { ...request, status: "held" }], now), crashedFin, "a message the crash held behind it doesn't hide it")
+  assert.equal(crashedChildTurn([quitAt], now), undefined, "Mako's exit is the restart setting's, not this")
+  assert.equal(crashedChildTurn([crashedFin, { ...continuation, continues: { requestId: crashedFin.id, reason: "host-crashed", auto: true } }], now), undefined, "a turn already continued is not continued again")
+  const crashes = [crashedFin]
+  for (let index = 2; index <= 4; index++) crashes.push(crashedAt(`22222222-2222-4222-8222-00000000000${index}`, now - 60_000 + index, crashes.at(-1)!.id))
+  assert.equal(crashedChildTurn(crashes.slice(0, 3), now), crashes[2], "a continuation the next crash cut goes on")
+  assert.equal(crashedChildTurn(crashes, now), undefined, "three in a row in five minutes is the loop guard")
   const exited: LiveRequest = { ...dropped, interruption: { reason: "provider-exited", at: 4 }, failure: "unknown", error: "Cursor's SDK process exited (code 70)" }
   assert.equal(autoContinueCandidate([exited]), exited, "a turn whose provider process died is Mako's to continue")
   assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")
