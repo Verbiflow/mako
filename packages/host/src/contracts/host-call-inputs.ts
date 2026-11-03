@@ -171,6 +171,13 @@ const inputs = {
         to: z.string(),
         forward: z.boolean().optional(),
         text: z.string().optional(),
+        deliver: z
+          .union([
+            z.literal("steer"),
+            z.literal("queue"),
+            z.literal("interrupt"),
+          ])
+          .optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -319,7 +326,6 @@ const inputs = {
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
   "mako:build-update": () => z.tuple([]),
-  "mako:measure-update-again": () => z.tuple([]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -1132,6 +1138,7 @@ const inputs = {
         scope: z.union([z.literal("workspace"), z.literal("user")]),
       }),
     ]),
+  "mako:measure-update-again": () => z.tuple([]),
   "mako:merge-pull": () =>
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
@@ -2095,7 +2102,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:browser-control-status", "control"],
   ["mako:browser-extension-setup", "control"],
   ["mako:build-update", "application"],
-  ["mako:measure-update-again", "application"],
   ["mako:capabilities", "workspaces"],
   ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
@@ -2254,6 +2260,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-discover", "tools"],
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
+  ["mako:measure-update-again", "application"],
   ["mako:merge-pull", "git"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],

@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import type { AskOption, FinAsk } from "./native-agents.js"
 
@@ -145,6 +145,8 @@ export interface AgentsSendInput {
   forward?: boolean
   /** The sender's own words: with `forward`, what it adds beneath the person's; without, the whole message. */
   text?: string
+  /** For a working Fin; `queue` when absent. */
+  deliver?: FinDeliver
   /** A repeat with the same key is the same message. */
   clientKey: string
 }
@@ -153,8 +155,13 @@ export interface AgentsSent {
   name: string
   /** The request the message is in the Fin's conversation: a redirect names it. */
   request: string
-  /** It started the Fin's next turn (an idle or finished Fin: the same Thread, a new task), joined its running turn at the next step, or waits for that turn to end. */
-  delivery: "turn" | "steer" | "queued"
+  /**
+   * It started the Fin's next turn (an idle or finished Fin: the same Thread, a new task), joined its running turn,
+   * waits for that turn to end, or started the next after Mako stopped it.
+   */
+  delivery: FinDelivery
+  /** When the Fin hears it, as its own harness takes a message: one sentence the sender reads. */
+  hears: string
   deduped?: true
 }
 export type AgentsSendResult = AgentsSent | AgentRefused
@@ -314,7 +321,7 @@ export function frontDoorNote(fins: readonly FrontDoorChild[], now: number): str
     `You're this Thread's ${APEX_WORD}: the person writes to you, and you decide who handles it. Your ${FIN_WORD}s now:`,
     ...listed.map((fin) => frontDoorLine(fin, now)),
     ...(more > 0 ? [`… and ${more} more (agents_list).`] : []),
-    "If the message is for one of them (its work, its branch, what it asked or reported), call agents_send {to, forward: true} first, adding text only for what it can't know, and end your turn. A finished one takes it as its next task, in its own Thread.",
+    "If the message is for one of them (its work, its branch, what it asked or reported), call agents_send {to, forward: true} first, adding text only for what it can't know, and end your turn. A finished one takes it as its next task, in its own Thread; a working one, after its turn unless the message corrects what it's doing now (deliver: steer).",
     "If it's for you, or about how they stand, answer from this list. If none fits and it's work worth a Thread, use agents_start; otherwise do it yourself.",
   ]
 }
@@ -483,13 +490,14 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       name: "agents_send",
       description: [
         `Give one of this Thread's ${FIN_WORD}s a message: the person's (forward: true passes on the one this turn answers, word for word, so don't retype it) or your own.`,
-        `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread; a working one hears it at its next step, or when its turn ends.`,
-        `It returns at once; what the ${FIN_WORD} does reports back as its work does.`,
+        `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread. A working one takes it as deliver says: queue (the default) after its turn, for more to do; steer, into the turn it's running, when the message changes what it's doing now; interrupt, stopping that turn first, when what it's running is wrong.`,
+        `It returns at once, saying when that ${FIN_WORD}'s harness lets it hear the message; what the ${FIN_WORD} does reports back as its work does.`,
       ].join(" "),
       fields: {
         to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID.`,
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
+        deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,
         clientKey: "Your own key for this message: a repeat with it is the same message.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
