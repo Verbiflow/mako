@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { CALM_POLL_MS } from "@mako/host/contracts/watcher-child"
 import { watchTree } from "@mako/host/workspaces/tree-watcher"
 import type { WatchBackend, WatchListener } from "@mako/host/workspaces/watch-backend"
 
@@ -29,8 +30,8 @@ function watched(folder: string) {
     watch,
     heard,
     counts,
-    async hears(path: string, what: string) {
-      for (const deadline = Date.now() + 8000; !heard.includes(path); await wait(25)) assert.ok(Date.now() < deadline, what)
+    async hears(path: string, what: string, withinMs = 8000) {
+      for (const deadline = Date.now() + withinMs; !heard.includes(path); await wait(25)) assert.ok(Date.now() < deadline, what)
       heard.length = 0
     },
   }
@@ -83,6 +84,24 @@ try {
   await c.hears("still.ts", "a watch lost while its folder stays keeps polling, whatever delivery says")
   c.watch.close()
 
+  // Late delivery: the stream may hold events back, so a calm poll looks too, and stops once events are on time.
+  const late = join(root, "late")
+  mkdirSync(late)
+  const e = watched(late)
+  await e.watch.ready
+  const lateEvents = listener
+  assert.ok(lateEvents)
+  lateEvents.late?.(true)
+  assert.equal(e.counts.dropped, 0, "late isn't lost")
+  await wait(400)
+  writeFileSync(join(late, "held-back.ts"), "")
+  await e.hears("held-back.ts", "a change the stream holds back is found by the calm poll", CALM_POLL_MS + 5000)
+  lateEvents.late?.(false)
+  writeFileSync(join(late, "on-time.ts"), "")
+  await wait(CALM_POLL_MS + 2000)
+  assert.equal(e.heard.includes("on-time.ts"), false, "and the calm poll has stopped")
+  e.watch.close()
+
   const deleted = join(root, "deleted")
   mkdirSync(deleted)
   const d = watched(deleted)
@@ -94,7 +113,7 @@ try {
   assert.equal(d.counts.errors, 1, "a folder that went away is an error")
   d.watch.close()
 
-  console.log("tree watcher fallback: muted polls and recovers with one re-read, a refused watch polls, a lost watch keeps polling, a deleted folder is an error")
+  console.log("tree watcher fallback: muted polls and recovers with one re-read, a late watch polls calmly beside its stream until it's on time, a refused watch polls, a lost watch keeps polling, a deleted folder is an error")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

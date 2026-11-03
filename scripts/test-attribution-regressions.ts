@@ -13,7 +13,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { Backfill } from "@mako/host/attribution/backfill"
 import { ChildCalls } from "@mako/host/attribution/child-calls"
 import { outsideFolders } from "@mako/host/attribution/index"
-import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
+import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribution/ports"
 import { readOnlyCommand } from "@mako/host/attribution/read-only"
 import { ranTexts, SCRIPT_LIMIT } from "@mako/host/attribution/scripts"
 import { partition, side, turnChanges, type JournalView } from "@mako/host/attribution/queries"
@@ -39,6 +39,7 @@ async function world(
     outsider?: (path: string, root: string) => string | undefined
     fs?: TrackerFileSystem
     log?: (message: string, facts: Readonly<Record<string, string | number | boolean>>) => void
+    deliveryLagMs?: () => number
   } = {},
 ) {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-regression-")))
@@ -70,7 +71,7 @@ async function world(
   const storage = mkdtempSync(join(tmpdir(), "mako-attribution-regression-journal-"))
   const tracker = await LaptopTracker.open(
     { fs: options.fs ?? nodeFileSystem(), events, clock, storage, device: "regression" },
-    { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider, log: options.log },
+    { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider, log: options.log, deliveryLagMs: options.deliveryLagMs },
   )
   await tracker.track({ id: "repo", path: repo, kind: "workspace" })
   const view: JournalView = { store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }
@@ -696,10 +697,122 @@ test("losses heard while a rescan waits are its own, and while they keep coming 
   await w.tracker.settled()
   assert.equal(rescans.length, 2, "the losses it waited through are its own")
   // After a quiet while a loss is rescanned at once.
-  w.clock.advance(10 * 60_000)
+  w.clock.advance(20 * 60_000)
   w.events.restore()
   await new Promise((resolve) => setTimeout(resolve, 200))
   assert.equal(rescans.length, 3)
+  await w.tracker.close()
+})
+
+test("while losses keep coming, a root is rescanned at most every ten minutes, and Diagnostics says so", async () => {
+  // An fseventsd that's behind says events were lost every minute or so, all day: each rescan walked and stat-ed every file.
+  const rescans: number[] = []
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { log: (message) => message === "rescan" && rescans.push(Date.now()) })
+  for (let index = 0; index < 10; index++) {
+    w.events.restore()
+    await w.tracker.settled()
+  }
+  assert.equal(rescans.length, 10)
+  w.clock.advance(2 * 60_000)
+  w.events.restore()
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(rescans.length, 10, "a loss two minutes after the last rescan waits")
+  const reading = w.tracker.rescanReading()
+  assert.deepEqual(reading.backedOff, [{ root: w.repo, everyMs: 10 * 60_000 }])
+  assert.equal(reading.lastHour, 10)
+  assert.equal(reading.lossesLastHour, 11)
+  await w.tracker.close()
+})
+
+test("a watch polling because delivery went quiet is rescanned once, when it listens again", async () => {
+  const heard: string[] = []
+  let says: ((why: "dropped" | "polling" | "listening") => void) | undefined
+  const events = watcherEvents((_root, _changed, _gone, dropped) => {
+    says = dropped
+    return { ready: Promise.resolve(), close() {} }
+  }, undefined)
+  await events.watch("/checkout", { changed: () => {}, lost: (reason) => heard.push(reason), heard: () => heard.push("heard") })
+  says!("polling")
+  says!("listening")
+  says!("dropped")
+  assert.deepEqual(heard, ["muted", "heard", "dropped"])
+})
+
+test("rescans of different roots take turns, each next one resting while it's been the disk's, and `settled` cuts the rest short", async () => {
+  const files = nodeFileSystem()
+  const walks: { start: number; end: number }[] = []
+  let walking = 0
+  let most = 0
+  const fs: TrackerFileSystem = {
+    ...files,
+    walk: async (path, skip) => {
+      walking++
+      most = Math.max(most, walking)
+      const walk = { start: Date.now(), end: 0 }
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        return await files.walk(path, skip)
+      } finally {
+        walking--
+        walk.end = Date.now()
+        walks.push(walk)
+      }
+    },
+  }
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { fs })
+  const other = join(w.project, "other")
+  mkdirSync(other)
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: other })
+  await w.tracker.track({ id: "other", path: other, kind: "workspace" })
+  await w.tracker.settled()
+  walks.length = 0
+  w.events.restore()
+  for (const deadline = Date.now() + 10_000; walks.length < 2; await new Promise((resolve) => setTimeout(resolve, 20))) assert.ok(Date.now() < deadline, "both roots are rescanned")
+  assert.equal(most, 1, "one root's walk at a time")
+  const [first, second] = walks.sort((a, b) => a.start - b.start)
+  assert.ok(second!.start - first!.end >= 15 * (first!.end - first!.start), `the second waited out a rest (${second!.start - first!.end} ms after a ${first!.end - first!.start} ms walk)`)
+  walks.length = 0
+  const settling = Date.now()
+  w.events.restore()
+  await w.tracker.settled()
+  assert.equal(walks.length, 2)
+  assert.ok(Date.now() - settling < 15 * 60, "settled rescans both without resting between them")
+  await w.tracker.close()
+})
+
+test("a write heard as late as the watcher now delivers is dated by when it was written, and stays its call's", async () => {
+  const w = await world({ "a.ts": "export const a = 1\n" }, { deliveryLagMs: () => 20_000 })
+  w.mark("turn", "T1", "t1", "start")
+  w.mark("call", "T1", "c1", "start", { turn: "t1" })
+  w.clock.advance(500)
+  const path = join(w.repo, "a.ts")
+  writeFileSync(path, "export const a = 2\n")
+  utimesSync(path, w.clock.now() / 1000, w.clock.now() / 1000)
+  const written = w.clock.now()
+  w.clock.advance(500)
+  w.mark("call", "T1", "c1", "end", { turn: "t1" })
+  w.mark("turn", "T1", "t1", "end")
+  // An fseventsd that delivers in batches: heard 16 s after the turn ended.
+  w.clock.advance(16_000)
+  w.events.changed(path)
+  await w.tracker.settled()
+  assert.ok(Math.abs(w.last().changedAt - written) <= 1, `dated when it was written (${w.last().changedAt - written} ms off)`)
+  assert.match(certainty(w.last().author), /^(exact|window):T1$/)
+  await w.tracker.close()
+})
+
+test("a root idle past retention is let go though its lost events aren't rescanned yet", async () => {
+  // Losses every few minutes kept a gap open on every root nearly always, so no idle root was ever let go.
+  const w = await world({ "a.ts": "export const a = 1\n" })
+  await w.tracker.settled()
+  w.clock.advance(15 * 86_400_000)
+  w.events.restore()
+  await w.tracker.settled()
+  w.events.restore()
+  w.clock.advance(1_000)
+  assert.deepEqual(await w.tracker.letGoIdle(), [w.repo])
+  // An open gap reads as ending where it began.
+  assert.ok(w.tracker.gaps().every((gap) => gap.to > gap.from), "its gap is closed: nothing is tracked there to lose")
   await w.tracker.close()
 })
 

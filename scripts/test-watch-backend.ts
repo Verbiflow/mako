@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { WatchEvent } from "@mako/host/contracts/watcher-child"
 import { childBackend, type WatchListener } from "@mako/host/workspaces/watch-backend"
+import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -15,6 +16,7 @@ async function until(what: string, done: () => boolean, ms = 90_000): Promise<vo
 function recorder() {
   const heard: string[] = []
   const mutes: boolean[] = []
+  const lates: boolean[] = []
   let dropped = 0
   let gone = 0
   const listener: WatchListener = {
@@ -22,8 +24,9 @@ function recorder() {
     dropped: () => { dropped += 1 },
     gone: () => { gone += 1 },
     muted: (muted) => { mutes.push(muted) },
+    late: (late) => { lates.push(late) },
   }
-  return { listener, heard, mutes, dropped: () => dropped, gone: () => gone }
+  return { listener, heard, mutes, lates, dropped: () => dropped, gone: () => gone }
 }
 
 /** Children of this process running the watcher, by pid. */
@@ -89,34 +92,67 @@ try {
   await assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/)
   assert.ok(Date.now() - started < 10_000, "within the backoff, not forever")
 
-  // A child whose own canary goes unheard: every watch is told, the child is
-  // restarted once, and the watches hear delivery come back.
+  // Late isn't silent: a canary heard 8 s late, as from an fseventsd that
+  // delivers in batches, mutes nothing and restarts nothing, and its lag is
+  // read and logged. The watch is told it's late.
   const deaf = join(root, "deaf")
-  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, withinMs: 1000, deafWhile: deaf })
-  const canaried = childBackend()
+  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, deafWhile: deaf })
+  const lines: string[] = []
+  const lateReadings = new WatchReadings((message) => lines.push(message))
+  const late = recorder()
+  const lateWatch = await childBackend(undefined, lateReadings)(kept, [], late.listener)
+  await wait(3000)
+  writeFileSync(deaf, "")
+  await wait(8000)
+  rmSync(deaf)
+  await until("the late canary's lag is read", () => (lateReadings.reading().delivery.lagMs ?? 0) >= 6000, 15_000)
+  await wait(2000)
+  assert.deepEqual(late.mutes, [], "a canary heard late doesn't mute the watch")
+  assert.equal(late.dropped(), 0, "or restart the child")
+  assert.deepEqual(lateReadings.reading().starts, { first: 1, crash: 0, silence: 0 })
+  assert.ok(lines.includes("file events arrive late"), lines.join(", "))
+  assert.equal(late.lates[0], true, "the watch hears it's late")
+  const earlier = [second, lateReadings.reading().child?.pid]
+  await lateWatch.unsubscribe()
+
+  // A child whose own canary goes unheard: every watch is told, the child is
+  // restarted once, and the watches hear delivery come back. The window is
+  // longer than a busy Mac's fseventsd takes to deliver at all, 15 s on one.
+  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, withinMs: 20_000, deafWhile: deaf })
+  const readings = new WatchReadings()
+  const canaried = childBackend(undefined, readings)
   const c = recorder()
   const quiet = await canaried(kept, [], c.listener)
-  const [healthy] = watcherChildren().filter((pid) => pid !== second)
+  const [healthy] = watcherChildren().filter((pid) => !earlier.includes(pid))
   assert.ok(healthy)
   await wait(3000)
   assert.deepEqual(c.mutes, [], "a canary that's heard says nothing")
   const deafAt = Date.now()
   writeFileSync(deaf, "")
-  await until("an unheard canary mutes the watch", () => c.mutes.length === 1, 15_000)
+  await until("an unheard canary mutes the watch", () => c.mutes.length === 1, 60_000)
   const detected = Date.now() - deafAt
   assert.equal(c.mutes[0], true)
-  await until("and restarts the child once, which re-reads", () => c.dropped() === 1, 15_000)
-  const [recycled] = watcherChildren().filter((pid) => pid !== second)
+  await until("and restarts the child once, which re-reads", () => c.dropped() === 1, 60_000)
+  const [recycled] = watcherChildren().filter((pid) => !earlier.includes(pid))
   assert.ok(recycled && recycled !== healthy, "in a new child")
   await wait(5000)
-  assert.deepEqual(watcherChildren().filter((pid) => pid !== second), [recycled], "a restart that doesn't help isn't repeated")
+  assert.deepEqual(watcherChildren().filter((pid) => !earlier.includes(pid)), [recycled], "a restart that doesn't help isn't repeated")
   assert.deepEqual(c.mutes, [true])
   rmSync(deaf)
-  await until("a canary heard again unmutes it", () => c.mutes.length === 2, 15_000)
+  await until("a canary heard again unmutes it", () => c.mutes.length === 2, 60_000)
   assert.equal(c.mutes[1], false)
+  // A silence soon after is fseventsd's, not a stuck child: no second restart.
+  writeFileSync(deaf, "")
+  await until("a second silence mutes the watch again", () => c.mutes.length === 3, 60_000)
+  await wait(3000)
+  assert.equal(c.dropped(), 1, "without restarting the child again")
+  assert.deepEqual(watcherChildren().filter((pid) => !earlier.includes(pid)), [recycled])
+  assert.deepEqual(readings.reading().starts, { first: 1, crash: 0, silence: 1 })
+  rmSync(deaf)
+  await until("and unmutes once heard", () => c.mutes.length === 4, 60_000)
   await quiet.unsubscribe()
   delete process.env.MAKO_WATCHER_CANARY_TEST
-  console.log(`watch backend canary: silence detected in ${detected} ms at a 1.2 s beat`)
+  console.log(`watch backend canary: silence detected in ${detected} ms at a 1.2 s beat and a 20 s window`)
 
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {

@@ -75,6 +75,7 @@
     "bench:attribution": "npm run -s build --workspace @mako/protocol && tsx scripts/bench-attribution.ts",
     "bench:attribution-rescan": "npm run -s build --workspace @mako/protocol && tsx scripts/bench-attribution-rescan.ts",
     "bench:footprint": "tsx scripts/bench-footprint.ts",
+    "bench:mako-footprint": "npm run -s build --workspace @mako/protocol && tsx scripts/bench-mako-footprint.ts",
     "bench:watcher": "tsx scripts/bench-watcher.ts",
     "bench:session-report": "tsx scripts/bench-session-report.ts",
     "test:scripted-model": "tsx scripts/test-scripted-model-pace.ts",

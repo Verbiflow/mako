@@ -79,21 +79,32 @@ export function rootLinks(): [link: string, target: string][] {
 }
 
 /** A watch of one folder, as the host's tree watcher gives it: paths relative to it. */
-export type TreeWatcher = (root: string, changed: (paths: string[]) => void, gone: () => void, dropped: () => void) => { readonly ready: Promise<void>; close(): void } | undefined
+export type TreeWatcher = (
+  root: string, changed: (paths: string[]) => void, gone: () => void, dropped: (why: "dropped" | "polling" | "listening") => void,
+) => { readonly ready: Promise<void>; close(): void } | undefined
 
 /** The system's history, as the host's watcher child reads it (FSEvents, macOS only). */
 export interface SystemHistory {
   mark(): Promise<{ id: string; at: string }>
-  since(mark: { id: string; at: string }, roots: readonly string[], options?: { ignore?: readonly string[] }): Promise<{ paths: string[]; lost: string[]; ignored: number[] }>
+  since(
+    mark: { id: string; at: string }, roots: readonly string[], options?: { ignore?: readonly string[]; exclude?: readonly string[] },
+  ): Promise<{ paths: string[]; lost: string[]; ignored: number[] }>
 }
 
 const Mark = z.string().regex(/^\d+:\d+$/)
 
-/** The host's watcher and history as the tracker's event source. */
-export function watcherEvents(watch: TreeWatcher, history: SystemHistory | undefined): TrackerEventSource {
+/**
+ * The host's watcher and history as the tracker's event source. A watch
+ * polling because delivery went silent is `muted` until it listens again,
+ * and rescanned once then, not on the way in as well. `own` names Mako's
+ * own folders, which no history read needs: fseventsd leaves them out
+ * before they're replayed.
+ */
+export function watcherEvents(watch: TreeWatcher, history: SystemHistory | undefined, own: () => readonly string[] = () => []): TrackerEventSource {
   return {
     async watch(root, listener: TrackerChangeListener) {
-      const watching = watch(root, (paths) => listener.changed(paths), () => listener.lost("gone"), () => listener.lost("dropped"))
+      const dropped = (why: "dropped" | "polling" | "listening") => (why === "listening" ? listener.heard() : listener.lost(why === "polling" ? "muted" : "dropped"))
+      const watching = watch(root, (paths) => listener.changed(paths), () => listener.lost("gone"), dropped)
       if (!watching) throw new Error(`${root} can't be watched.`)
       await watching.ready
       return watching
@@ -111,7 +122,7 @@ export function watcherEvents(watch: TreeWatcher, history: SystemHistory | undef
       if (!history || !Mark.safeParse(mark).success) return null
       const [id = "", at = ""] = mark.split(":")
       try {
-        const found = await history.since({ id, at }, [root], options)
+        const found = await history.since({ id, at }, [root], { ...options, exclude: own() })
         return { paths: found.paths, complete: found.lost.length === 0, ignored: found.ignored }
       } catch {
         return null

@@ -37,7 +37,7 @@ let walks = 0
 let losses = 0
 const ports: TrackerPorts = {
   fs: { ...files, walk: (path, skip) => (walks++, files.walk(path, skip)) },
-  events: watcherEvents((path, changed, gone, dropped) => watchTree(runner, backend, path, changed, gone, () => (losses++, dropped())), history),
+  events: watcherEvents((path, changed, gone, dropped) => watchTree(runner, backend, path, changed, gone, (why) => (losses++, dropped(why))), history),
   clock: { now: () => Date.now() },
   storage,
   device: "watcher-test",

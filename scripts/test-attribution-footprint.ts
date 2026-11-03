@@ -10,6 +10,7 @@ import { MAX_WEAK, type PathVerdict } from "@mako/host/attribution/footprint-rea
 import { NoiseBaseline, template, type NoiseRow, type NoiseStore } from "@mako/host/attribution/noise-baseline"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { childHistory } from "@mako/host/workspaces/watch-backend"
+import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 
 /*
  * The footprint outside the checkouts: each rule in its order, what a
@@ -462,6 +463,30 @@ test("the watcher child's history read leaves folders out and counts them (macOS
     assert.ok(found.ignored[0]! >= 5, `the ignore folder counts its paths (${found.ignored[0]})`)
     assert.equal(found.ignored[1], 0)
     assert.deepEqual(found.lost, [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Mako's own folders are left out of a history read before they're replayed, unless the read is of one of them (macOS)", { skip: process.platform !== "darwin" }, async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-footprint-exclude-")))
+  const own = join(root, "own")
+  const readings = new WatchReadings()
+  const history = childHistory(undefined, readings)
+  try {
+    const mark = await history.mark()
+    mkdirSync(join(own, "deep"), { recursive: true })
+    mkdirSync(join(root, "kept"))
+    for (let index = 0; index < 5; index++) writeFileSync(join(own, "deep", `f${index}`), "x")
+    writeFileSync(join(root, "kept/a.txt"), "x")
+    await new Promise((done) => setTimeout(done, 1_000))
+    const found = await history.since(mark, [root], { ignore: [own], exclude: [own] })
+    assert.ok(found.paths.includes(join(root, "kept/a.txt")))
+    assert.ok(!found.paths.some((path) => path.startsWith(own)), "nothing under an excluded folder crosses")
+    assert.equal(found.ignored[0], 0, "nor is it counted: fseventsd never sent it")
+    const inside = await history.since(mark, [own], { exclude: [own, root] })
+    assert.ok(inside.paths.includes(join(own, "deep/f0")), "a read of the folder itself, or inside one that holds it, reads it")
+    assert.equal(readings.reading().history.readsLastHour, 2)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

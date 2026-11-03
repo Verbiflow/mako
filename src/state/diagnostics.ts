@@ -4,6 +4,7 @@ import type { AgentsDiagnostics } from "@mako/host/contracts/agents"
 import type { NativeRoutingReading } from "@mako/host/contracts/native-routing"
 import type { SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { SyncReadings } from "@mako/host/contracts/sync-readings"
+import type { MakoFootprint } from "@mako/host/contracts/mako-footprint"
 import type { ContinueReading } from "@mako/host/contracts/cloud-continues"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { getMako } from "@/lib/bridge"
@@ -43,6 +44,11 @@ export const diagnostics = {
   /** How this Mac follows its other devices' work, and how long it takes to arrive. */
   syncReadings(): Promise<SyncReadings> {
     return getMako().syncReadings()
+  },
+
+  /** What Mako's own processes and file watching cost this Mac now. */
+  footprint(): Promise<MakoFootprint> {
+    return getMako().makoFootprint()
   },
 
   /** Each Continue in the cloud this Mac pressed or its account's list says, the latest first. */

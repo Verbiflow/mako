@@ -2,7 +2,7 @@ import parcel, { type AsyncSubscription } from "@parcel/watcher"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
-import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, WatcherRequestSchema, type CanaryTest, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
+import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
 
 /*
  * @parcel/watcher's FSEvents backend races its own callback thread on
@@ -25,7 +25,7 @@ process.on("message", (raw) => {
   const { id } = request.data
   if (request.data.t === "mark" || request.data.t === "since") {
     const asked = request.data
-    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots, asked.ignore)).catch((error) =>
+    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [])).catch((error) =>
       reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
     return
   }
@@ -41,7 +41,10 @@ process.on("message", (raw) => {
   const subscription = parcel
     .subscribe(request.data.root, (error, events) => {
       if (!subscriptions.has(id)) return
-      if (error) reply({ t: "dropped", id })
+      if (error) {
+        const reason = dropReason(error)
+        reply({ t: "dropped", id, ...(reason && { reason }) })
+      }
       else if (events.length) reply({ t: "events", id, events: events.map(({ path, type }) => ({ path, type })) })
     }, { ignore: request.data.ignore })
     .then((current) => {
@@ -60,6 +63,14 @@ process.on("message", (raw) => {
     })
   subscriptions.set(id, subscription)
 })
+
+/** Who dropped events, from parcel's messages for FSEvents' rescan flags; other backends' errors say nothing. */
+function dropReason(error: Error): DropReason | undefined {
+  if (error.message.includes("by the FSEvents client")) return "client"
+  if (error.message.includes("by the kernel")) return "kernel"
+  if (error.message.startsWith("Too many events")) return "coalesced"
+  return undefined
+}
 
 /*
  * The file system's history, read through parcel's snapshots. On FSEvents a
@@ -125,9 +136,11 @@ async function caughtUp(): Promise<boolean> {
   }
 }
 
-async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[]): Promise<void> {
+async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[], exclude: readonly string[]): Promise<void> {
   if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
+  const started = performance.now()
   const complete = await caughtUp()
+  const caughtUpMs = performance.now() - started
   const file = snapshotFile()
   writeFileSync(file, `${from.id}\n${from.at}`)
   const paths = new Set<string>()
@@ -137,8 +150,10 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
   try {
     for (const root of roots) {
       if (!existsSync(root)) continue
+      // Only folders inside the root: excluding one that holds it would leave the whole read out.
+      const excluded = exclude.filter((folder) => folder.startsWith(`${root}/`)).slice(0, MAX_EXCLUDED)
       try {
-        for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events" })) {
+        for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events", ignore: excluded })) {
           if (paths.has(event.path)) continue
           const at = folders.size ? ignoredBy(folders, event.path) : -1
           if (at < 0) paths.add(event.path)
@@ -152,7 +167,7 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
   } finally {
     rmSync(file, { force: true })
   }
-  reply({ t: "history", id, paths: [...paths], lost, ignored })
+  reply({ t: "history", id, paths: [...paths], lost, ignored, caughtUpMs, readMs: performance.now() - started - caughtUpMs })
 }
 
 /**
@@ -176,13 +191,23 @@ function ignoredBy(folders: ReadonlyMap<string, number>, path: string): number {
  * of its own and writes to it. Missing that twice running means nothing
  * here is being heard; the host restarts the child once and polls until the
  * canary is heard again.
+ *
+ * Late is not silent: an fseventsd with a backlog delivers in batches, 15 s
+ * apart on a Mac a month up, with nothing lost, and each silence costs every
+ * root a poll and a rescan and the child a restart. A beat is missed only
+ * when nothing is heard for `CANARY_WITHIN_MS`; how late beats arrive is
+ * reported instead.
  */
 const test = canaryTest()
 const CANARY_EVERY_MS = test?.everyMs ?? 10_000
-const CANARY_WITHIN_MS = test?.withinMs ?? 5_000
+const CANARY_WITHIN_MS = test?.withinMs ?? 30_000
 const CANARY_MISSES = 2
 /** Beats skipped for a settling subscription before the wait is itself a stall. */
 const SETTLE_BEATS = 12
+/** How many of the latest beats' lags the reported one is the slowest of. */
+const LAGS_KEPT = 6
+/** The lag is said again once it moves this far from what was said. */
+const LAG_STEP_MS = 1_000
 
 interface Canary {
   folder: string
@@ -192,6 +217,12 @@ interface Canary {
   misses: number
   waited: number
   delivering?: boolean
+  /** When the oldest beat not yet heard was written. */
+  unheardSince?: number
+  /** How late the latest beats were heard, oldest first. */
+  lags: number[]
+  /** The lag last reported. */
+  reported?: number
 }
 
 let canary: Canary | undefined
@@ -204,11 +235,13 @@ function startCanary(): void {
   } catch {
     return
   }
-  const current: Canary = { folder, heard: 0, misses: 0, waited: 0, subscription: Promise.resolve(undefined) }
+  const current: Canary = { folder, heard: 0, misses: 0, waited: 0, lags: [], subscription: Promise.resolve(undefined) }
   canary = current
   current.subscription = parcel
     .subscribe(folder, (error, events) => {
-      if (!error && events.length && !(test?.deafWhile && existsSync(test.deafWhile))) current.heard = Date.now()
+      if (error || !events.length || (test?.deafWhile && existsSync(test.deafWhile))) return
+      if (test?.lagMs) setTimeout(() => heard(current), test.lagMs)
+      else heard(current)
     })
     .then((subscription) => {
       if (canary === current) beat(current)
@@ -234,6 +267,7 @@ function beat(current: Canary): void {
   } catch {
     return
   }
+  current.unheardSince ??= sent
   setTimeout(() => {
     if (canary !== current) return
     if (current.heard >= sent) {
@@ -243,10 +277,26 @@ function beat(current: Canary): void {
   }, CANARY_WITHIN_MS)
 }
 
+/** A beat arrived: how late the oldest one waiting was, kept, and said when the slowest kept moves a step either way. */
+function heard(current: Canary): void {
+  if (canary !== current) return
+  const now = Date.now()
+  current.heard = now
+  if (current.unheardSince === undefined) return
+  current.lags.push(now - current.unheardSince)
+  current.unheardSince = undefined
+  if (current.lags.length > LAGS_KEPT) current.lags.shift()
+  const lagMs = Math.max(...current.lags)
+  if (current.reported !== undefined && Math.abs(lagMs - current.reported) < LAG_STEP_MS) return
+  current.reported = lagMs
+  // While unheard, the beat that ends it reports the lag along with delivery.
+  if (current.delivering !== false) reply({ t: "delivery", ok: true, lagMs })
+}
+
 function report(current: Canary, ok: boolean): void {
   if (current.delivering === ok) return
   current.delivering = ok
-  reply({ t: "delivery", ok })
+  reply({ t: "delivery", ok, ...(ok && current.lags.length && { lagMs: Math.max(...current.lags) }) })
 }
 
 function stopCanary(): void {

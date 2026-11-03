@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
 import { chatsRoot } from "../base/chats.js"
 import { QUIET_FOLDERS } from "../base/quiet-folders.js"
+import { CALM_POLL_MS } from "../contracts/watcher-child.js"
 import { pollTree, type TreePoll } from "./tree-poll.js"
 import type { WatchBackend, WatchSubscription } from "./watch-backend.js"
 import { onMac } from "../base/platform.js"
@@ -14,6 +15,13 @@ const MAX_EXCLUSIONS = 8
 /** Enough packages to find a monorepo's dependency folders without reading a large folder's listing. */
 const MAX_PACKAGES = 64
 const QUIET_GLOBS = [`**/{${QUIET_FOLDERS.join(",")}}`, `**/{${QUIET_FOLDERS.join(",")}}/**`]
+/**
+ * How long a replaced subscription keeps delivering. A new FSEvents stream
+ * starts from now, so what fseventsd had queued for the old one but not yet
+ * sent, seconds of it on a busy Mac, comes from the old one alone; a longer
+ * wait is a silence the watcher's canary answers by polling.
+ */
+const REPLACED_KEPT_MS = 30_000
 
 function isQuietFolder(path: string): boolean {
   const segments = path.split("/")
@@ -66,14 +74,19 @@ export function quietFoldersOf(root: string): string[] {
  * project's.
  *
  * When the system drops events (FSEvents under load says "must be
- * re-scanned"), the watch keeps going and `onDropped` says anything may have
- * changed. When nothing is delivered at all (a silent fseventsd, a stalled
- * watcher), or the watch can't start or stops while the folder is still
- * there (inotify out of watches, the watcher child giving up), changes are
- * found by polling instead (see `pollTree`), with `onDropped` on the way in
- * and on the way back out. `onError` means the folder went away.
+ * re-scanned"), the watch keeps going and `onDropped("dropped")` says
+ * anything may have changed. When nothing is delivered at all (a silent
+ * fseventsd, a stalled watcher), changes are found by polling instead (see
+ * `pollTree`), with `onDropped("polling")` on the way in and
+ * `onDropped("listening")` on the way back out. When the watch can't start
+ * or stops while the folder is still there (inotify out of watches, the
+ * watcher child giving up), it's polling for good, after
+ * `onDropped("dropped")`. `onError` means the folder went away.
  */
-export function watchTree(git: Git, backend: WatchBackend, root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
+export function watchTree(
+  git: Git, backend: WatchBackend, root: string, onChange: (paths: string[]) => void, onError: () => void,
+  onDropped?: (why: "dropped" | "polling" | "listening") => void,
+): TreeWatch | undefined {
   const target = resolve(root)
   if (target === sep || target === resolve(homedir()) || target === chatsRoot()) return undefined
   let real: string
@@ -89,44 +102,73 @@ export function watchTree(git: Git, backend: WatchBackend, root: string, onChang
   let poll: TreePoll | undefined
   /** The watch itself is gone, so polling is all there is. */
   let lost = false
+  /** Subscriptions replaced, delivering what was queued for them until `REPLACED_KEPT_MS` is up. */
+  const replaced = new Map<WatchSubscription, NodeJS.Timeout>()
+  const stop = (old: WatchSubscription) => {
+    clearTimeout(replaced.get(old))
+    replaced.delete(old)
+    void old.unsubscribe().catch(() => {})
+  }
 
-  const fallBack = () => {
+  /** Events come late, so the stream may be holding some back. */
+  let late = false
+  /** While `late`, a poll every `CALM_POLL_MS` beside the watch, unless `poll` already runs. */
+  let calm: TreePoll | undefined
+  const polled = (paths: string[]) => {
+    const heard = paths.filter((path) => !QUIET.test(path))
+    if (!closed && heard.length) onChange(heard)
+  }
+  const calmly = () => {
+    const wanted = late && !poll && !closed
+    if (wanted && !calm) calm = pollTree(git, real, QUIET, polled, CALM_POLL_MS)
+    else if (!wanted && calm) {
+      calm.close()
+      calm = undefined
+    }
+  }
+
+  const fallBack = (why: "dropped" | "polling") => {
     if (closed || poll) return
-    poll = pollTree(git, real, QUIET, (paths) => {
-      const heard = paths.filter((path) => !QUIET.test(path))
-      if (!closed && heard.length) onChange(heard)
-    })
-    onDropped?.()
+    poll = pollTree(git, real, QUIET, polled)
+    calmly()
+    onDropped?.(why)
   }
   const recover = () => {
     if (!poll || lost) return
     poll.close()
     poll = undefined
-    if (!closed) onDropped?.()
+    calmly()
+    if (!closed) onDropped?.("listening")
   }
   const failed = () => {
     if (closed) return
     if (!existsSync(real)) return onError()
     lost = true
-    fallBack()
+    if (poll) onDropped?.("dropped")
+    fallBack("dropped")
   }
 
-  // The next subscription starts before the previous one stops, so nothing
-  // written in between is missed; a change heard twice costs one more debounce.
+  // The next subscription starts before the previous one stops, which is
+  // `REPLACED_KEPT_MS` later, so nothing written in between is missed; a
+  // change heard twice costs one more debounce.
   const start = () => {
     excluded = quietFoldersOf(real)
     const previous = subscription
     const current = ++generation
     subscription = backend(real, [...excluded, ...QUIET_GLOBS], {
       dropped: () => {
-        if (!closed) onDropped?.()
+        if (!closed) onDropped?.("dropped")
       },
       gone: () => {
         if (current === generation) failed()
       },
       muted: (muted) => {
-        if (muted) fallBack()
+        if (muted) fallBack("polling")
         else recover()
+      },
+      late: (now) => {
+        late = now
+        calmly()
       },
       events: (events) => {
         if (closed) return
@@ -143,7 +185,12 @@ export function watchTree(git: Git, backend: WatchBackend, root: string, onChang
       },
     })
       .then(async (next) => {
-        await previous.then((old) => old?.unsubscribe()).catch(() => {})
+        const old = await previous.catch(() => undefined)
+        if (old && !closed) {
+          const timer = setTimeout(() => stop(old), REPLACED_KEPT_MS)
+          timer.unref()
+          replaced.set(old, timer)
+        } else if (old) stop(old)
         if (!closed) return next
         await next.unsubscribe()
         return undefined
@@ -160,6 +207,8 @@ export function watchTree(git: Git, backend: WatchBackend, root: string, onChang
       closed = true
       poll?.close()
       poll = undefined
+      calmly()
+      for (const old of replaced.keys()) stop(old)
       void subscription.then((current) => current?.unsubscribe()).catch(() => {})
     },
   }
