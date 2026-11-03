@@ -49,10 +49,10 @@ function finishedLines(): void {
   assert.equal(finishedLine(report("")), "it finished.")
   assert.equal(finishedLine(report("", { status: "failed" })), "it failed.")
   const long = `## Summary\n\nThe parser now   reads\nquoted fields.\n\n## Test plan\n- ${"x".repeat(300)}`
-  assert.equal(finishedLine(report(long)), `The parser now reads quoted fields. (+${(long.length - "The parser now reads quoted fields.".length).toLocaleString("en-US")} chars: agents_read)`, "its first paragraph past the heading, on one line, and how much more there is")
+  assert.equal(finishedLine(report(long)), `The parser now reads quoted fields. (+${(long.length - "The parser now reads quoted fields.".length).toLocaleString("en-US")} chars)`, "its first paragraph past the heading, on one line, and how much more there is")
   const wall = "word ".repeat(400).trim()
   const line = finishedLine(report(wall))
-  assert.ok(line.startsWith("word word") && line.includes("…") && line.endsWith("chars: agents_read)") && line.length < 560, "a paragraph past the line's room is cut")
+  assert.ok(line.startsWith("word word") && line.includes("…") && line.endsWith(" chars)") && line.length < 560, "a paragraph past the line's room is cut")
   const text = digest([notice("Opened the PR. Its CI is green.", {
     artifacts: [{ kind: "pull-request", ref: "https://example.com/acme/pull/7", label: "PR #7" }, { kind: "file", ref: "docs/report.md" }],
   })], "0 working, 1 ended.")

@@ -265,8 +265,9 @@ What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
 (`agentToolText`), every field kept. A finished Fin's digest line
 (`finishedLine`) is its report's first paragraph past any heading, on one
-line, at most `FINISHED_CHARS`, with how many more characters
-`agents_read` gives, and every artifact by its ref with its label beside it.
+line, at most `FINISHED_CHARS`, with how many more characters the
+report holds (`agents_read` gives them), and every artifact by its ref with
+its label beside it.
 A Fin reads its Apex and the other open Fins it started with `agents_list`
 `scope: crew` (`AgentsCrew`): the Apex's title, harness, whether it works and
 its last step, what it was asked when it is a Fin too, and each other Fin as

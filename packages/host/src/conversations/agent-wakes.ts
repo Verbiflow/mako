@@ -288,7 +288,7 @@ export function finishedLine(report: Report): string {
   const first = (paragraphs[0] ?? summary).replace(/\s+/g, " ")
   if (paragraphs.length <= 1 && first.length <= FINISHED_CHARS) return first
   const shown = first.length > FINISHED_CHARS ? `${first.slice(0, FINISHED_CHARS - 1).trimEnd()}…` : first
-  return `${shown} (+${Math.max(1, summary.length - shown.length).toLocaleString("en-US")} chars: agents_read)`
+  return `${shown} (+${Math.max(1, summary.length - shown.length).toLocaleString("en-US")} chars)`
 }
 /** The most of a finished report's first paragraph its digest line carries. */
 const FINISHED_CHARS = 480
