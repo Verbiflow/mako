@@ -352,7 +352,11 @@ test("a Thread on this Mac drives a simulator on another through the gateway, as
     id: hostId,
     label: "Ada's Studio",
     shots,
-    call: async (channel, args) => decodeRuntimeValue(await sendWithRepeats(channel, calls.call(channel, args), { runtime: otherRuntime })),
+    call: async (channel, args) => {
+      const value = decodeRuntimeValue(await sendWithRepeats(channel, calls.call(channel, args), { runtime: otherRuntime }))
+      // SAFETY: every mako:simulators-* reply is a JSON object once decoded.
+      return value as object
+    },
   })
   const here = new Simulators({
     hosts: [fakeHost({ frames: false })],

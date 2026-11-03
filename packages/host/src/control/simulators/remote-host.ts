@@ -28,10 +28,10 @@ import { hostWarn } from "../../base/host-log.js"
 import type { RemoteSimulatorHost } from "./host.js"
 
 /**
- * One host call to the other Mac, its value already decoded as the verb's result; it throws as `gatewayHostCalls`
- * does when the Mac isn't there.
+ * One host call to the other Mac, its value already decoded; the caller names the verb's result when it reads it.
+ * Throws as `gatewayHostCalls` does when the Mac isn't there.
  */
-export type SimulatorHostCall = <Result>(channel: `mako:simulators-${string}`, args: readonly unknown[]) => Promise<Result>
+export type SimulatorHostCall = (channel: `mako:simulators-${string}`, args: readonly unknown[]) => Promise<object>
 
 /** How long a list waits for another Mac before saying it didn't answer: one slow Mac never holds up the panel. */
 export const REMOTE_LIST_MS = 3_000
@@ -116,7 +116,7 @@ export class RemoteMacSimulators implements RemoteSimulatorHost {
   }
 
   /** A verb on one of that Mac's simulators, which it names as its own; a Mac that isn't there is refused as `unreachable`. */
-  async #verb<Result, Input extends { host?: string } = { host?: string }>(verb: string, caller: SimulatorCaller, input: Input): Promise<Result | SimulatorRefused> {
+  async #verb<Result extends object, Input extends { host?: string } = { host?: string }>(verb: string, caller: SimulatorCaller, input: Input): Promise<Result | SimulatorRefused> {
     try {
       return await this.#send<Result>(verb, [outgoing(caller), { ...input, host: LOCAL_HOST }], this.#callMs)
     } catch (error) {
@@ -124,13 +124,15 @@ export class RemoteMacSimulators implements RemoteSimulatorHost {
     }
   }
 
-  async #send<Result>(verb: string, args: readonly unknown[], ms: number): Promise<Result> {
+  async #send<Result extends object>(verb: string, args: readonly unknown[], ms: number): Promise<Result> {
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new RemoteTimeout(ms)), ms)
     })
     try {
-      return await Promise.race([this.#call<Result>(`mako:simulators-${verb}`, args), late])
+      const value = await Promise.race([this.#call(`mako:simulators-${verb}`, args), late])
+      // SAFETY: the channel is a simulators verb whose decoded host reply is Result; the gateway already parsed it.
+      return value as Result
     } finally {
       clearTimeout(timer)
     }
