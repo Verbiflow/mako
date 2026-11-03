@@ -5,7 +5,11 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
-import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
+import { startConversationMcp, type MakoTools } from "@mako/host/tools/conversation-mcp"
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { registerWorkspaceTools, type WorkspaceTools } from "@mako/host/workspaces/tools"
+import { registerEnvironmentTools, type EnvironmentTools } from "@mako/host/workspaces/environment-tools"
+import { registerPullRequestTools, type PullRequestTools } from "@mako/host/git/pull-request-tools"
 import { ToolArgs, type Call } from "./cases.ts"
 
 /**
@@ -20,7 +24,7 @@ export interface StubMako {
   grant(conversation: string): { token: string; computerUrl: string; makoUrl?: string }
   /** The `agents_*` calls so far, by bare tool name. */
   calls(conversation: string): Call[]
-  /** What an agent reads first: the server's instructions and its `agents_*` tools. */
+  /** What an agent reads first: the server's instructions and its tools. */
   describe(): Promise<{ instructions: string; tools: { name: string; description: string; inputSchema: JsonValue }[] }>
   close(): Promise<void>
 }
@@ -68,13 +72,67 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
   return { ok: true }
 }
 
+/**
+ * What the stub answers each of Mako's other tools: what a Thread hears when
+ * the call goes as it should, so the turn can go on from there.
+ */
+const FAMILY_ANSWERS = new Map<string, string>([
+  ["worktree_status", "checkout: main checkout\nfolder: the project\nbranch: main\nuncommitted: none\nworktree: none yet; worktree_move makes this Thread's own"],
+  ["worktree_move", "Asked to move this Thread into its own worktree on branch mako/thread-work. The user answers in the app; once your turn ends, the conversation goes on there with this Thread's changes."],
+  ["worktree_update", "Merged main into mako/thread-work: 3 commits, no conflicts."],
+  ["worktree_merge", "Merged mako/thread-work into main in the main checkout."],
+  ["worktree_bring", "Brought .env.local (copied)."],
+  ["worktree_remove", "The worktree is removed once your turn ends; the branch stays."],
+  ["pull_request_status", "pull request: #42 Fix login redirect (open)\nchecks: 4 passed, 1 failed\nfailed: lint (eslint: src/login.ts:12 no-unused-vars)\nreviews: none"],
+  ["pull_request_open", "Pushed mako/thread-work and opened https://github.com/acme/app/pull/42."],
+  ["pull_request_merge", "Merged #42 into main (squash)."],
+  ["app_status", "address: http://thread.localhost:20540\nprocesses: web stopped, api stopped\nrecipe: ready (web on 20540, api on 20541); checks quick, full"],
+  ["app_start", "Started web on 20540 and api on 20541: http://thread.localhost:20540 answers 200."],
+  ["app_stop", "Stopped web and api."],
+  ["app_restart", "Restarted web and api: http://thread.localhost:20540 answers 200."],
+  ["app_logs", "web: ready in 812 ms on http://thread.localhost:20540"],
+  ["app_probe", "GET http://thread.localhost:20540/ → 200 (1.2 kB, 34 ms)"],
+  ["app_check", "quick: passed in 41 s"],
+  ["app_own_packages", "node_modules is now this checkout's own copy."],
+  ["recipe_guide", "A recipe says how every Thread installs, starts and checks the app. Save a draft with recipe_save: processes (name, command, port), checks, carry."],
+  ["recipe_save", "Saved a draft recipe for this Thread."],
+  ["recipe_publish", "Published the recipe for every Thread."],
+  ["port_holder", "Port 3000 is held by pid 4121 (node vite), started by another Thread's app (Thread \"Settings polish\"). Don't stop it; this Thread's app runs on 20540-20549."],
+  ["thread_history", "No earlier turns match."],
+])
+
+/** Registers Mako's own tools as the host does, with each call recorded and answered from `FAMILY_ANSWERS`. */
+function familyTools(record: (conversation: string, tool: string, args: ToolArgs) => void): MakoTools[] {
+  // SAFETY: every handler is replaced before it can run, so the tools' implementations are never read.
+  const unused = new Proxy({}, { get: () => () => { throw new Error("The eval's stub answers before any tool runs") } })
+  const recording = (server: McpServer, conversationId: () => string): McpServer => new Proxy(server, {
+    get(target, key, receiver) {
+      if (key !== "registerTool") return Reflect.get(target, key, receiver)
+      const register = (name: string, config: Parameters<McpServer["registerTool"]>[1]) => target.registerTool(name, config, async (args: unknown) => {
+        record(conversationId(), name, ToolArgs.parse(args))
+        return { content: [{ type: "text" as const, text: FAMILY_ANSWERS.get(name) ?? "Done." }] }
+      })
+      return register
+    },
+  })
+  return [
+    (server, conversationId) => registerWorkspaceTools(recording(server, conversationId), unused as WorkspaceTools, conversationId),
+    (server, conversationId) => registerEnvironmentTools(recording(server, conversationId), unused as EnvironmentTools, conversationId),
+    (server, conversationId) => registerPullRequestTools(recording(server, conversationId), unused as PullRequestTools, conversationId, () => false),
+  ]
+}
+
 export async function startStubMako(): Promise<StubMako> {
   const calls = new Map<string, Call[]>()
   const started = new Map<string, AgentsStarted[]>()
+  const record = (conversation: string, tool: string, args: ToolArgs) => calls.set(conversation, [...calls.get(conversation) ?? [], { tool, args }])
   const servers = await startConversationMcp(
     { authorizeAgent() {} },
-    async () => { throw new Error("The eval's computer server answers nothing") },
-    [(server, conversationId) => registerAgentTools(server, {
+    async (bindingId, operation) => {
+      record(bindingId.replace(/^eval-/, ""), "js", ToolArgs.parse(operation))
+      return { ok: true, result: "The page loaded; the screenshot is in the result." }
+    },
+    [...familyTools(record), (server, conversationId) => registerAgentTools(server, {
       invoke: async (channel, [, input]) => {
         const conversation = conversationId()
         const tool = toolOf(channel)
@@ -105,7 +163,7 @@ export async function startStubMako(): Promise<StubMako> {
         const listed = await client.listTools()
         return {
           instructions: client.getInstructions() ?? "",
-          tools: listed.tools.filter((tool) => tool.name.startsWith("agents_")).map((tool) => ({ name: tool.name, description: tool.description ?? "", inputSchema: z.json().parse(tool.inputSchema) })),
+          tools: listed.tools.map((tool) => ({ name: tool.name, description: tool.description ?? "", inputSchema: z.json().parse(tool.inputSchema) })),
         }
       } finally {
         await client.close()

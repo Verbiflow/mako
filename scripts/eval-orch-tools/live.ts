@@ -5,7 +5,8 @@ import { setTimeout as delay } from "node:timers/promises"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
-import { priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
+import { routeShellCall } from "@mako/host/contracts/native-calls"
+import { caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
 import { bareName, isShell, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
@@ -19,6 +20,9 @@ import type { StubMako } from "./stub-mako.ts"
  * print and exit. Cursor has no asking mode; the stubs are what stands
  * between it and a real run.
  */
+
+/** The harnesses whose driver routes each shell call (`NativeCallsCapability` per-call): a command routing denies there never ran. */
+const ROUTED_CALLS = new Set(["claude", "cursor"])
 
 /** Each harness's mode that asks before a command runs; Cursor has only full access. */
 export const ASKING_MODE = new Map([["claude", "default"], ["codex", "access:ask"], ["opencode", "access:ask"], ["grok", "access:ask"], ["devin", "accept-edits"]])
@@ -88,7 +92,7 @@ export async function liveSample(input: {
       conversationId: id, emit, ...mode && { modeId: mode }, ...input.model && { tuning: { model: input.model } },
       conversationTools: stub.grant(id),
       mcpSnapshot: async () => ({ cwd: project, generatedAt: Date.now(), servers: [], providers: [] }),
-      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }) },
+      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }), nativeCalls: () => caseCallThread(orchCase, project) },
     }, { env }))
     await driver.prompt(id, prompt(orchCase), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     const deadline = Date.now() + 180_000
@@ -118,9 +122,12 @@ export async function liveSample(input: {
     const key = update.id ?? ""
     texts.set(key, update.replace ? update.text : (texts.get(key) ?? "") + update.text)
   }
+  const shell = [...tools.filter(({ raw }) => isShell(harness, raw)).map(({ args }) => shellCommand(args)), ...refused]
+  const routes = routing === "on" && ROUTED_CALLS.has(harness)
   return {
     steps,
-    shell: [...tools.filter(({ raw }) => isShell(harness, raw)).map(({ args }) => shellCommand(args)), ...refused],
+    shell,
+    ran: routes ? shell.filter((command) => routeShellCall(caseCallThread(orchCase, project), { command, cwd: project }).kind !== "deny") : shell,
     text: [...texts.values()].join("\n"),
     ended: status() !== "failed",
     seconds: Math.round((Date.now() - began) / 1000),
