@@ -109,7 +109,10 @@ export interface SimulatorAgent {
   thread: string
   session: string
   conversation?: string
+  /** Where it works. */
   folder: string
+  /** The project its worktree belongs to, when `folder` is a worktree: asked when `folder` itself has no answer. */
+  project?: string
   title?: string
 }
 

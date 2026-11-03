@@ -435,6 +435,22 @@ test("the most specific consent answers: a subfolder turned off stays off inside
   assert.ok("claim" in (await simulators.open(agent("b"), PHONE)))
 })
 
+test("a worktree's Thread asks under its own folder first, then its project's", async () => {
+  const consent = [
+    { folder: "/Users/ada/shop", allowed: true, at: 1 },
+    { folder: "/Users/ada/.mako/worktrees/shop-1/fix", allowed: false, at: 2 },
+  ]
+  const agents = (session: string): SimulatorAgent | undefined =>
+    session === "s-a" ? { thread: "a", session, folder: "/Users/ada/.mako/worktrees/shop-2/feature", project: "/Users/ada/shop" }
+    : session === "s-b" ? { thread: "b", session, folder: "/Users/ada/.mako/worktrees/shop-1/fix", project: "/Users/ada/shop" }
+    : undefined
+  const simulators = new Simulators({ hosts: [fakeHost()], consent: async () => consent, agent: agents })
+  const viaProject = await simulators.list(agent("a"))
+  assert.equal("consent" in viaProject && viaProject.consent, "allowed")
+  const own = await simulators.list(agent("b"))
+  assert.equal("consent" in own && own.consent, "refused")
+})
+
 test("a simulator ID is its host's: the same UDID on two hosts is two simulators, each claimed and released on its own", async () => {
   const here = fakeHost()
   const there = fakeHost("mac:studio", { billed: true })

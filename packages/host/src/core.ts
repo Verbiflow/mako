@@ -329,9 +329,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const live = conversation ? late.conversations?.live.session(conversation) : undefined
     if (!live) return undefined
     const title = store.thread(placed.thread)?.title ?? live.title
-    // A worktree's Thread asks under its project's consent, as the person gave it.
-    const folder = projectFolder(store.worktrees(), live.cwd) ?? live.cwd
-    return { thread: placed.thread, session: placed.session, folder, ...(conversation && { conversation }), ...(title && { title }) }
+    const project = projectFolder(store.worktrees(), live.cwd)
+    return { thread: placed.thread, session: placed.session, folder: live.cwd, ...(project && { project }), ...(conversation && { conversation }), ...(title && { title }) }
   })
   const appUpdates = new Updates({
     environment,

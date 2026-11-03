@@ -267,12 +267,13 @@ export class Simulators {
     this.#lost.set(id, lost)
   }
 
-  /** The most specific answer: a subfolder the person decided on overrides its project's. */
+  /** The most specific answer for where it works, else for its worktree's project: a subfolder decided on overrides its project's. */
   async #consentFor(who: Who): Promise<SimulatorConsent> {
     if (who.kind === "person") return "allowed"
-    const answer = (await this.#consent())
-      .filter((entry) => who.folder === entry.folder || who.folder.startsWith(`${entry.folder}/`))
-      .sort((left, right) => right.folder.length - left.folder.length)[0]
+    const consent = await this.#consent()
+    const answerFor = (folder: string) =>
+      consent.filter((entry) => folder === entry.folder || folder.startsWith(`${entry.folder}/`)).sort((left, right) => right.folder.length - left.folder.length)[0]
+    const answer = answerFor(who.folder) ?? (who.project ? answerFor(who.project) : undefined)
     return answer ? (answer.allowed ? "allowed" : "refused") : "unasked"
   }
 }
