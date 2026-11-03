@@ -16,7 +16,7 @@ import type { ThreadStatus } from "@/state/thread-status"
  */
 export type LiveMarkState = "working" | "background" | "starting" | "needs" | "lead" | "queued" | "open" | "failed" | "unread" | "idle"
 
-const WORDS: Record<LiveMarkState, string> = {
+const WORDS = {
   working: "Working",
   background: "Waiting on background work",
   starting: "Starting",
@@ -27,7 +27,7 @@ const WORDS: Record<LiveMarkState, string> = {
   failed: "Failed",
   unread: "Answer ready to review",
   idle: "Idle",
-}
+} satisfies Record<LiveMarkState, string>
 
 export function liveMarkWord(state: LiveMarkState): string {
   return WORDS[state]

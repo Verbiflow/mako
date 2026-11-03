@@ -2,20 +2,9 @@
 import { LiveMark } from "@/components/ui/live-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { liveMarkWord, type LiveMarkState } from "@/lib/live-mark-state"
+import { STATES } from "./live-marks-states"
 import { cn } from "@/lib/utils"
 
-const STATES: { state: LiveMarkState; harness: string; title: string; end?: string }[] = [
-  { state: "working", harness: "claude", title: "Mobile polish", end: "now" },
-  { state: "background", harness: "grok", title: "Phone dictation probe", end: "3m" },
-  { state: "starting", harness: "devin", title: "Wire the payments retry banner", end: "1m" },
-  { state: "needs", harness: "codex", title: "Thread environments and cloud", end: "Needs you" },
-  { state: "lead", harness: "opencode", title: "Sheet motion on iPad", end: "9m" },
-  { state: "queued", harness: "cursor", title: "Quiet-hours push wording", end: "next" },
-  { state: "open", harness: "devin", title: "Open in Devin", end: "40m" },
-  { state: "failed", harness: "claude", title: "Trace the flaky webhook test", end: "Failed" },
-  { state: "unread", harness: "codex", title: "Composer focus after paste", end: "14m" },
-  { state: "idle", harness: "grok", title: "Tighten the webhook types", end: "3h" },
-]
 
 function Row({ state, harness, title, end, lit, size }: { state: LiveMarkState; harness: string; title: string; end?: string; lit?: boolean; size?: number }) {
   return (

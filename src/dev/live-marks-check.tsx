@@ -1,9 +1,9 @@
 // Explicit isolated fixture for the live mark; never imported by the application entry point.
 import { createRoot } from "react-dom/client"
-import type { LiveMarkState } from "@/lib/live-mark-state"
 import { threadsStore } from "@/state/thread-store"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { Bench, Legend } from "./live-marks-fixture"
+import { MARK_STATES } from "./live-marks-states"
 import "../index.css"
 
 /*
@@ -28,7 +28,8 @@ Reflect.set(window, "liveMarkBench", () => {
 })
 
 const bench = Number(search.get("bench") ?? 0)
-createRoot(document.getElementById("root")!).render(<div className="min-h-dvh bg-shell text-foreground">{bench ? <Bench count={bench} only={(search.get("state") as LiveMarkState | null) ?? undefined} /> : <Legend />}</div>)
+const only = MARK_STATES.find((state) => state === search.get("state"))
+createRoot(document.getElementById("root")!).render(<div className="min-h-dvh bg-shell text-foreground">{bench ? <Bench count={bench} only={only} /> : <Legend />}</div>)
 
 const still = search.get("still")
 if (still !== null)

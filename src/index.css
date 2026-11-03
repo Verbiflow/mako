@@ -1263,13 +1263,6 @@ diffs-container {
   mask: radial-gradient(farthest-side, transparent calc(100% - var(--lm-stroke) - 0.5px), #000 calc(100% - var(--lm-stroke)));
   animation: live-mark-turn var(--lm-period) linear infinite;
 }
-/* After every shorthand above: the gate's play state must not be reset by one. */
-.live-mark-comet,
-.live-mark[data-live-mark="needs"] > .live-mark-ring,
-.live-mark[data-live-mark="lead"] > .live-mark-ring {
-  animation-play-state: var(--visible-animation-state, running);
-  will-change: var(--visible-animation-will-change, auto);
-}
 
 .live-mark[data-live-mark="working"] {
   --lm-track: color-mix(in oklab, var(--foreground) 11%, transparent);
@@ -1298,10 +1291,7 @@ diffs-container {
   --lm-track: var(--caution);
 }
 .live-mark[data-live-mark="needs"] > .live-mark-ring {
-  animation-name: live-mark-breathe;
-  animation-duration: 2.4s;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
+  animation: live-mark-breathe 2.4s ease-in-out infinite;
 }
 /* A Fin asking its Apex: a dotted ring that drifts. The Apex will answer, not the person. */
 .live-mark[data-live-mark="lead"] .live-mark-dots {
@@ -1310,10 +1300,7 @@ diffs-container {
   stroke-dasharray: 0.01 3.63;
 }
 .live-mark[data-live-mark="lead"] > .live-mark-ring {
-  animation-name: live-mark-turn;
-  animation-duration: 7s;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
+  animation: live-mark-turn 7s linear infinite;
 }
 .live-mark[data-live-mark="queued"] .live-mark-dots {
   stroke: color-mix(in oklab, var(--foreground) 30%, transparent);
@@ -1353,6 +1340,13 @@ diffs-container {
   justify-content: center;
   background: var(--lm-cut, var(--shell));
   box-shadow: none;
+}
+/* After every shorthand above, which would reset it: the gate's play state. */
+.live-mark-comet,
+.live-mark[data-live-mark="needs"] > .live-mark-ring,
+.live-mark[data-live-mark="lead"] > .live-mark-ring {
+  animation-play-state: var(--visible-animation-state, running);
+  will-change: var(--visible-animation-will-change, auto);
 }
 @keyframes live-mark-turn {
   to {
