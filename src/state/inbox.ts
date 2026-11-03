@@ -1,4 +1,5 @@
-import { useRef, useSyncExternalStore } from "react"
+import { useEffect, useRef, useSyncExternalStore } from "react"
+import { finsWord } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { LivePermissionRequest, ThreadRef } from "@/lib/types"
 import { workspaceName } from "@/lib/format"
@@ -7,6 +8,7 @@ import { selectAcpPresence } from "@/state/acp-presence"
 import { acpStore, type AcpConversation, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
 import { openFinInApex, threadChildren } from "@/state/apex-fins"
 import { answerLiveApproval } from "@/state/live-approvals"
+import { hydrateLive } from "@/state/live-recovery"
 import { threads } from "@/state/threads"
 import { openConversation, windowRoutesStore } from "@/state/window-routes"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
@@ -188,10 +190,22 @@ function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
   const coveredPaths = new Set<string>()
   const askingFins = new Set<string>()
   const apexes = new Set<string>()
+  // Apexes said by their count alone, their own approval or wait said by that item too.
+  const unread = new Set<string>()
   for (const conversation of conversations) {
     if (conversation.kind !== "live" || !conversation.threadId || apexes.has(conversation.threadId)) continue
     const children = threadChildren(acp, conversation.threadId)
-    if (!children.length) continue
+    if (!children.length) {
+      // An Apex whose roster this window doesn't hold yet says only how many of its Fins need the person; the roster
+      // is being read (`useInboxRosters`), and its asks take this item's place when it lands.
+      const needs = conversation.children?.needs ?? 0
+      if (!needs) continue
+      apexes.add(conversation.threadId)
+      unread.add(conversation.key)
+      asks.push({ kind: "waiting", key: `apex:${conversation.key}`, title: liveTitle(conversation), harness: conversation.harness, question: `${finsWord(needs)} ${needs === 1 ? "needs" : "need"} you`, since: conversation.updatedAt, open: { kind: "conversation", key: conversation.key } })
+      if (conversation.threadPath) coveredPaths.add(conversation.threadPath)
+      continue
+    }
     apexes.add(conversation.threadId)
     const items = finItemsOf(children, { thread: conversation.threadId, title: liveTitle(conversation), conversation: conversation.key })
     for (const item of items) askingFins.add(item.ask.fin)
@@ -203,7 +217,7 @@ function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
     return apex ? liveTitle(apex) : threadTitle(thread) ?? "Apex"
   }
   for (const conversation of conversations) {
-    if (conversation.kind !== "live") continue
+    if (conversation.kind !== "live" || unread.has(conversation.key)) continue
     if (conversation.threadId && askingFins.has(conversation.threadId)) {
       if (conversation.threadPath) coveredPaths.add(conversation.threadPath)
       continue
@@ -295,6 +309,28 @@ export function useInbox<S>(select: (model: InboxModel) => S, isEqual: (left: S,
 
 export function useInboxCount(): number {
   return useInbox(inboxCount)
+}
+
+const rostersAsked = new Set<string>()
+
+/** The conversations of the Apexes the Inbox knows only by their count, one line each, the same string while they are. */
+function unreadRosters(model: InboxModel): string {
+  return model.asks.flatMap((item) => (item.kind === "waiting" && item.key.startsWith("apex:") && item.open.kind === "conversation" ? [item.open.key] : [])).join("\n")
+}
+
+/**
+ * Reads the roster of every Apex whose Fins need the person but whose roster this window doesn't hold, once each, so
+ * the Inbox shows and answers their asks without the Apex being opened first. Mounted with the Inbox's row.
+ */
+export function useInboxRosters(): void {
+  const pending = useInbox(unreadRosters)
+  useEffect(() => {
+    for (const key of pending ? pending.split("\n") : []) {
+      if (rostersAsked.has(key)) continue
+      rostersAsked.add(key)
+      void hydrateLive(key, true)
+    }
+  }, [pending])
 }
 
 /** Opens an item's Thread, or the Fin inside its Apex, and leaves the Inbox for it. */

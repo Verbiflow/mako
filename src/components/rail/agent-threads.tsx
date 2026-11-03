@@ -707,17 +707,16 @@ function RailHeader({
   }
 
   return (
-    <div className="flex h-9 shrink-0 items-center px-2 pt-1.5">
-      <div className="flex items-center gap-0.5" role="group" aria-label="Thread view">
-        {/* Archived is reached from the filter glyph; while it is showing, the
-            one pressed pill names it and returns to Projects. */}
-        {(grouping === "archived"
-          ? ([["archived", "Archived"]] as const)
-          : ([["project", "Projects"], ["recent", "Recent"]] as const)
-        ).map(([value, label]) => (
-          <button key={value} type="button" aria-pressed={grouping === value} onClick={() => setPref("railGrouping", value === "archived" ? "project" : value)} className={cn("pressable h-6 rounded px-1.5 text-label transition-colors hover:bg-fill-hover", grouping === value ? "bg-fill-selected font-medium text-foreground" : "text-faint")}>{label}</button>
-        ))}
-      </div>
+    <div className="flex h-8 shrink-0 items-center pr-2 pl-3.5">
+      {grouping === "project" ? (
+        <h2 data-rail-threads-heading className="text-label font-medium text-faint">Threads</h2>
+      ) : (
+        // Recent and Archived are the filter menu's choices; the heading names the one showing and leads back.
+        <button type="button" data-rail-threads-heading onClick={() => setPref("railGrouping", "project")} title="Back to threads by project" className="pressable -ml-1.5 flex h-6 items-center gap-1 rounded px-1.5 text-label font-medium text-foreground transition-colors hover:bg-fill-hover">
+          {grouping === "archived" ? "Archived" : "Recent"}
+          <XIcon aria-hidden className="size-3 text-faint" />
+        </button>
+      )}
       <span className="flex-1" />
       <HarnessFilter counts={counts} filter={filter} />
       <IfCanChooseFolder>
@@ -753,8 +752,7 @@ function HarnessFilter({
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const scope = usePrefs((prefs) => prefs.railScope)
   const grouping = usePrefs((prefs) => prefs.railGrouping)
-  const archived = grouping === "archived"
-  const on = filter.length > 0 || scope === "workspace" || sortBy !== "recent" || archived
+  const on = filter.length > 0 || scope === "workspace" || sortBy !== "recent" || grouping !== "project"
 
   const section = "px-2 pt-2 pb-1 text-label font-medium text-faint/80"
   const row = (active: boolean) =>
@@ -782,7 +780,32 @@ function HarnessFilter({
           ) : null}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={6} className="w-56 p-1">
+      <PopoverContent align="end" sideOffset={6} collisionPadding={8} className="max-h-[var(--radix-popover-content-available-height)] w-56 overflow-y-auto overscroll-contain p-1">
+        <p className={section}>Show</p>
+        {(
+          [
+            ["project", "By project"],
+            ["recent", "Recent, newest first"],
+            ["archived", "Archived"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            data-rail-show={value}
+            onClick={() => {
+              setPref("railGrouping", value)
+              if (value !== "project") setOpen(false)
+            }}
+            className={row(grouping === value)}
+          >
+            <span className="flex-1">{label}</span>
+            {grouping === value ? (
+              <CheckIcon className="size-3 text-foreground" />
+            ) : null}
+          </button>
+        ))}
+
         <p className={section}>Agents</p>
         {[...counts.entries()]
           .filter(([harness]) => harness in harnessLabels())
@@ -858,30 +881,6 @@ function HarnessFilter({
           </button>
         ))}
 
-        <p className={section}>Show</p>
-        {(
-          [
-            [false, "Current threads"],
-            [true, "Archived threads"],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={label}
-            type="button"
-            data-rail-show={value ? "archived" : "current"}
-            onClick={() => {
-              if (value !== archived) setPref("railGrouping", value ? "archived" : "project")
-              if (value) setOpen(false)
-            }}
-            className={row(archived === value)}
-          >
-            <span className="flex-1">{label}</span>
-            {archived === value ? (
-              <CheckIcon className="size-3 text-foreground" />
-            ) : null}
-          </button>
-        ))}
-
         {on ? (
           <button
             type="button"
@@ -889,10 +888,10 @@ function HarnessFilter({
               setPref("agentHarnessFilter", [])
               setPref("railSortBy", "recent")
               setPref("railScope", "all")
-              if (archived) setPref("railGrouping", "project")
+              setPref("railGrouping", "project")
               setOpen(false)
             }}
-            className="mt-1 flex w-full items-center justify-center rounded-md border-t border-hairline px-2 py-1.5 text-label text-faint hover:text-foreground"
+            className="mt-1 flex w-full items-center justify-center rounded-md px-2 py-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Reset
           </button>
@@ -1142,9 +1141,7 @@ function FolderSection({
           closed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
         )}
       >
-        {/* The folder's rows hang from a hairline under its glyph; their
-            fills start past it, so the line never breaks. */}
-        <div className="ml-[13px] min-h-0 overflow-hidden border-l border-hairline pl-1">
+        <div className="min-h-0 overflow-hidden">
           {shownLive.map((presence) => <LiveAgentRow key={presence.key} presence={presence} folded={fold.byLead.get(presence.key)} indent />)}
           {visible.map((ref) => (
             <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />

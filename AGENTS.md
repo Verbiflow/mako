@@ -3356,8 +3356,18 @@ long generation cannot distinguish step delivery from turn-end delivery.
 Each renderer and web document owns its workspace pool and git target, selected
 through async request context. Provider conversations remain shared. A preview
 must never change another window's cwd, file target, or active workspace tab.
-The rail's Projects view keeps active sessions under their project; Recent is a
-bounded chronological list. Never gate provider names or the rail on model discovery.
+The rail opens with five fixed rows (`src/components/rail/rail-top.tsx`: New
+thread, Search, Inbox with its caution count, Pull requests with the open
+count, Automations with how many are on; a window that routes, the web desk,
+has no project of its own and shows the first three), then Pinned, then
+Threads by project. There is no view switch: Recent, a bounded chronological
+list, and Archived are choices in the Threads heading's filter menu, and the
+heading names the one showing and leads back. The phone's list
+(`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
+asking as a row of its own, "Mobile polish ·" before its question), Working
+and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
+asks answered through `answerFin`). The rail and the list carry no lines:
+spacing and type part them. Never gate provider names or the rail on model discovery.
 Position in the rail never carries status. `stableThreadRanks` in
 `src/lib/thread-folders.ts` gives a busy thread its rank when it starts, keeps
 it while the thread is working, observed, or externally active, and settles it

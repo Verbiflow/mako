@@ -115,10 +115,10 @@ async function check() {
   assert.equal(await evaluate("document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('title')"), label)
   await both("rail")
 
-  // Recent and search list none of them either; the Apex is there in each.
-  for (const scope of ["Recent", "Projects"]) {
-    await evaluate(`[...document.querySelectorAll('[aria-label="Thread view"] button')].find((button) => button.innerText === ${JSON.stringify(scope)}).click(); true`)
-    await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].find((button) => button.innerText === ${JSON.stringify(scope)})?.getAttribute('aria-pressed') === 'true'`, `the rail's ${scope}`)
+  // Recent (the filter menu's choice) and search list none of them either; the Apex is there in each.
+  for (const [scope, heading] of [["recent", "Recent"], ["project", "Threads"]]) {
+    await evaluate(`import('/src/state/prefs.ts').then(({setPref}) => setPref('railGrouping', ${JSON.stringify(scope)}))`)
+    await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === ${JSON.stringify(heading)}`, `the rail's ${heading}`)
     await settle()
     const listed = await evaluate("document.querySelector('.thread-jump-scope').innerText")
     assert.match(listed, /Mobile polish/, `${scope} lists the Apex`)
@@ -326,13 +326,15 @@ async function check() {
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true")
   await until("!document.querySelector('[data-agents-diagnostics]')", "Settings closing")
 
-  // The phone: the list shows the Apex as one row with the same badge; its screen's chips open a Fin, whose back
-  // reads the Apex's name; Stop asks first, full width.
+  // The phone: the list shows the Apex as one row with the same badge, and each Fin that needs the person as a row of
+  // its own under Needs you, no other; its screen's chips open a Fin, whose back reads the Apex's name; Stop asks
+  // first, full width.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await until("Boolean(document.querySelector('[data-thread] [data-rollup]'))", "the Apex's badge in the phone's list")
-  const list = await evaluate(`(() => ({ text: document.querySelector('[data-list]').innerText, rows: document.querySelectorAll('[data-thread]').length, label: document.querySelector('[data-thread] [data-rollup]').getAttribute('aria-label') }))()`)
-  for (const title of children) assert.ok(!list.text.includes(title), `the phone's list lists no Fin (${title})`)
+  const list = await evaluate(`(() => { const rows = document.querySelector('[data-list]').cloneNode(true); const asking = [...rows.querySelectorAll('[data-fin-row]')].map((node) => node.querySelector('.font-medium').textContent); rows.querySelectorAll('[data-fin-row]').forEach((node) => node.remove()); return { text: rows.innerText, asking, rows: document.querySelectorAll('[data-thread]').length, label: document.querySelector('[data-thread] [data-rollup]').getAttribute('aria-label') } })()`)
+  assert.deepEqual(list.asking.sort(), ["Quiet-hours push wording", "Sheet motion on iPad"], "the phone lists the Fins that need the person, each a row")
+  for (const title of children) assert.ok(!list.text.includes(title), `the phone's list lists no other Fin (${title})`)
   assert.equal(list.rows, 4)
   assert.equal(list.label, "12 Fins: 2 need you, 5 working, 2 queued, 3 done")
   await both("phone-list")
@@ -627,7 +629,7 @@ async function bench(BrowserWindow, base, root) {
     await until("document.querySelectorAll('.thread-jump-scope [data-flip-key]').length > 10", "the rail's rows")
     await wait(1500)
     const boot = counting ? await evaluate("window.__benchTally()") : undefined
-    await evaluate("[...document.querySelectorAll('.thread-jump-scope button, .thread-jump-scope [role=tab]')].find((node) => node.innerText.trim() === 'Recent')?.click(); true")
+    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('railGrouping', 'recent'))")
     await wait(500)
     const rows = await evaluate("document.querySelectorAll('.thread-jump-scope [data-flip-key]').length")
     await evaluate(FRAME_WATCH)

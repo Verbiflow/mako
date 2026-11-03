@@ -1,11 +1,11 @@
 import { memo, useEffect, type ReactNode } from "react"
 import { GitPullRequestIcon, InboxIcon, SearchIcon, SquarePenIcon, WorkflowIcon } from "lucide-react"
 import { formatChord, keysFor, runCommand, useCommands } from "@/extend/commands"
-import { openInbox } from "@/components/inbox/inbox-view"
+import { openInbox } from "@/components/inbox/open-inbox"
 import { Keys } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { useAutomations } from "@/state/automations"
-import { inboxView, useInboxCount, useInboxView } from "@/state/inbox"
+import { inboxView, useInboxCount, useInboxRosters, useInboxView } from "@/state/inbox"
 import { OPEN_PULLS_LISTED, openPullRequests, refreshOpenPulls, useOpenPulls } from "@/state/open-pulls"
 import { usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
@@ -87,6 +87,7 @@ function CommandRow({ command, icon, label }: { command: string; icon: ReactNode
 }
 
 function InboxRow() {
+  useInboxRosters()
   const count = useInboxCount()
   const open = useInboxView((state) => state.open)
   return (

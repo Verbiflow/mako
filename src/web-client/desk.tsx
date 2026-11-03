@@ -2,7 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
-import { InboxView, inboxShortcut } from "@/components/inbox/inbox-view"
+import { InboxView } from "@/components/inbox/inbox-view"
+import { inboxShortcut } from "@/components/inbox/open-inbox"
 import { inboxView } from "@/state/inbox"
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
@@ -60,7 +61,7 @@ const NEW_THREAD_KEYS = "mod+shift+o"
 /**
  * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
  * the left, without a window's traffic lights), its rail (`AgentThreads`: every Thread on the account by project, its
- * Sessions folded into one row, its five top rows and the Inbox they open, Projects and Recent, search and the filter), the open Thread's Sessions as the
+ * Sessions folded into one row, its top rows and the Inbox they open, its Threads by project, search and the filter), the open Thread's Sessions as the
  * desktop's tabs over its own transcript and composer, its command palette, and its keys: ⌘K for everything, ⌘B for
  * the rail, arrows through the rail, ⌥↑/⌥↓ between Threads, ⌘L to the composer, ⌘⎋ to stop.
  *
@@ -107,8 +108,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
       }),
     []
   )
-  // The Inbox lies over whatever the desk shows; going anywhere puts it away.
-  useEffect(() => inboxView.close(), [route])
+  // The Inbox lies over whatever the desk shows; its address opens it, and going anywhere else puts it away.
+  useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
   // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
@@ -168,14 +169,18 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
   const running = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
   const live = useAcp((state) => activeLiveAcp(state)?.key)
   const changes = useReviewOpen((state) => state.open !== null)
+  const railOpen = usePrefs((prefs) => prefs.railOpen)
   return (
     <TitleStrip
       leading={
         <>
           <RailToggle />
-          <IconAction label="New thread" keys={formatChord(NEW_THREAD_KEYS)} data-on={starting || undefined} onClick={onNew}>
-            <PlusIcon />
-          </IconAction>
+          {/* With the rail open, its New thread row is the doorway. */}
+          {railOpen ? null : (
+            <IconAction label="New thread" keys={formatChord(NEW_THREAD_KEYS)} data-on={starting || undefined} onClick={onNew}>
+              <PlusIcon />
+            </IconAction>
+          )}
         </>
       }
       trailing={

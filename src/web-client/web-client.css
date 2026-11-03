@@ -120,7 +120,7 @@
   }
 
   /*
-   * The list. A phone's: rows edge to edge, parted by hairlines under their words. The rail's: rows inset and rounded on
+   * The list. A phone's: rows edge to edge, parted by their own spacing, no lines. The rail's: rows inset and rounded on
    * the shell, the open one raised, as the desk's rail draws them.
    */
   .web-section {
@@ -159,14 +159,6 @@
     .web-row:hover {
       @apply bg-fill-hover;
     }
-  }
-  [data-list="screen"] li + li .web-row::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    left: 56px;
-    border-top: 1px solid var(--hairline);
   }
   /*
    * A row over its swipe action: the row slides left over Archive, ink on the page's ground, drawn only while it shows.
@@ -880,6 +872,15 @@
     0 0 0 1px var(--hairline),
     var(--elevation-floating);
   animation: web-rise 220ms var(--ease-out) both;
+}
+/* In the Inbox the card lies in the page: no float, no rise, as tall as it needs. */
+.web-ask[data-in-inbox] {
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  box-shadow: none;
+  animation: none;
 }
 .web-ask-body {
   display: flex;

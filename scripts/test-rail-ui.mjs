@@ -100,16 +100,17 @@ async function checkWindow() {
   const wheel = (deltaY) => evaluate(`(() => { const s = document.querySelector('.scroll-fade-scroller'); s.scrollTop += ${deltaY}; return s.scrollTop })()`)
 
   await window.loadURL(`${base}?mock`)
-  await until(`document.querySelector('[aria-label="Thread view"]') !== null`)
+  await until(`document.querySelector('[data-rail-threads-heading]') !== null`)
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark'}))`)
   await until(`document.querySelectorAll('.thread-jump-scope [data-flip-key^="folder:"]').length >= 2`, "folders rendered")
   await move(900, 500)
   await frames()
 
-  // The header fits at the default width: the view switcher never runs under the glyphs.
-  const header = await evaluate(`(() => { const view = document.querySelector('[aria-label="Thread view"]').getBoundingClientRect(); const glyph = document.querySelector('[aria-label="Filter and sort"]').getBoundingClientRect(); return {viewRight: view.right, glyphLeft: glyph.left, pills: [...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent)} })()`)
-  assert.deepEqual(header.pills, ["Projects", "Recent"])
-  assert.ok(header.viewRight <= header.glyphLeft, `The view switcher must fit beside the glyphs, received ${JSON.stringify(header)}`)
+  // No view switch: the Threads heading, then the glyphs, on one line that fits at the default width.
+  const header = await evaluate(`(() => { const heading = document.querySelector('[data-rail-threads-heading]'); const glyph = document.querySelector('[aria-label="Filter and sort"]').getBoundingClientRect(); return {headingRight: heading.getBoundingClientRect().right, glyphLeft: glyph.left, heading: heading.textContent, switcher: document.querySelector('[aria-label="Thread view"]') !== null} })()`)
+  assert.equal(header.heading, "Threads")
+  assert.equal(header.switcher, false, "the Projects / Recent / Status switch is gone")
+  assert.ok(header.headingRight <= header.glyphLeft, `The heading must fit beside the glyphs, received ${JSON.stringify(header)}`)
   await capture("rail-projects.png")
 
   const before = await folderOrder()
@@ -283,9 +284,11 @@ async function checkWindow() {
   await capture("rail-projects-lifted.png")
   console.log("PASS: a prompt sent in a folder, from any device, lifts it, with a glide")
 
-  // 5. Recent is the same rows in one list, held the same way.
-  await click('[aria-label="Thread view"] button:nth-child(2)')
-  await until(`document.querySelector('[aria-label="Thread view"] button[aria-pressed="true"]')?.textContent === 'Recent'`)
+  // 5. Recent, a choice in the filter menu, is the same rows in one list, held the same way.
+  await click('[aria-label="Filter and sort"]')
+  await until(`document.querySelector('[data-rail-show="recent"]') !== null`)
+  await click('[data-rail-show="recent"]')
+  await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === 'Recent'`)
   await until(`document.querySelectorAll('.thread-jump-scope [data-thread-row]').length > 0 && document.querySelectorAll('.thread-jump-scope [data-flip-key^="folder:"]').length === 0`)
   await capture("rail-recent.png")
 
@@ -309,16 +312,15 @@ async function checkWindow() {
 
   // 6. Archived lives behind the filter glyph and names itself while showing.
   await click('[aria-label="Filter and sort"]')
-  await until(`[...document.querySelectorAll('[data-slot="popover-content"] button')].some(button => button.textContent.includes('Archived threads'))`)
+  await until(`[...document.querySelectorAll('[data-slot="popover-content"] button')].some(button => button.dataset.railShow === 'archived')`)
   await capture("rail-filter.png")
-  const archivedButton = await evaluate(`(() => { const buttons = [...document.querySelectorAll('[data-slot="popover-content"] button')]; const index = buttons.findIndex(button => button.textContent.includes('Archived threads')); buttons[index].setAttribute('data-rail-test', 'archived'); return index })()`)
+  const archivedButton = await evaluate(`(() => { const buttons = [...document.querySelectorAll('[data-slot="popover-content"] button')]; const index = buttons.findIndex(button => button.dataset.railShow === 'archived'); buttons[index].setAttribute('data-rail-test', 'archived'); return index })()`)
   assert.ok(archivedButton >= 0)
   await click('[data-rail-test="archived"]')
-  await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent).join() === 'Archived'`, "the pressed pill names Archived")
-  await click('[aria-label="Thread view"] button')
-  await until(`[...document.querySelectorAll('[aria-label="Thread view"] button')].map(b => b.textContent).join() === 'Projects,Recent'`)
-  assert.equal(await evaluate(`document.querySelector('[aria-label="Thread view"] button[aria-pressed="true"]').textContent`), "Projects")
-  console.log("PASS: Archived is reached from the filter and returns to Projects")
+  await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === 'Archived'`, "the heading names Archived")
+  await click('[data-rail-threads-heading]')
+  await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === 'Threads'`)
+  console.log("PASS: Archived is reached from the filter and its heading returns to the projects")
 
   // 7. Reduced motion: rows still move, nothing glides.
   await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })

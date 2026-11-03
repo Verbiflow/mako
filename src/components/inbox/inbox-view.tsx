@@ -1,6 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
-import { toast } from "sonner"
 import { childStateOf } from "@mako/host/contracts/children"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -15,9 +14,7 @@ import { acpStore } from "@/state/acp-state"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import {
   answerApproval,
-  inboxModel,
   inboxView,
-  inboxViewStore,
   openInboxItem,
   sameItems,
   useInbox,
@@ -28,28 +25,7 @@ import {
   type InboxModel,
   type ReadInboxItem,
 } from "@/state/inbox"
-import { stage } from "@/state/stage"
 import { threadsStore } from "@/state/thread-store"
-import { viewer } from "@/state/viewer"
-
-/** The Inbox in the main pane, over the conversation, and the first item ready for Enter. */
-export function openInbox(): void {
-  viewer.showAgent()
-  stage.showChat()
-  inboxView.open()
-  requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-inbox-item]")?.focus())
-}
-
-/**
- * Cmd+Shift+U: the Inbox; pressed again with it open, the first thing in it,
- * which is what the chord did before the Inbox.
- */
-export function inboxShortcut(): void {
-  if (!inboxViewStore.get().open) return openInbox()
-  const first = inboxModel().asks[0] ?? inboxModel().toRead[0]
-  if (first) openInboxItem(first)
-  else toast("Nothing is waiting for you")
-}
 
 function sameModel(left: InboxModel, right: InboxModel): boolean {
   return sameItems(left.asks, right.asks) && sameItems(left.toRead, right.toRead)
@@ -185,9 +161,9 @@ function Crumb({ item }: { item: InboxAsk }) {
   )
 }
 
-const BUTTON = "pressable flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-label transition-colors disabled:opacity-50"
-const PRIMARY = "border-transparent bg-foreground text-background hover:opacity-90"
-const QUIET = "border-hairline text-foreground hover:bg-fill-hover"
+const BUTTON = "pressable flex h-7 items-center gap-1.5 rounded-md px-2.5 text-label transition-colors disabled:opacity-50"
+const PRIMARY = "bg-foreground text-background hover:opacity-90"
+const QUIET = "bg-fill-hover text-foreground hover:bg-fill-selected"
 
 /** One ask: where it is, its mark and age, the question, and its answers in place. */
 const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
@@ -213,7 +189,7 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
         event.preventDefault()
         openInboxItem(item)
       }}
-      className="flex flex-col gap-2 rounded-[10px] border border-hairline px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
+      className="flex flex-col gap-2 rounded-lg bg-raised px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
     >
       <div className="flex h-5 min-w-0 items-center gap-2">
         <AskMark item={item} />

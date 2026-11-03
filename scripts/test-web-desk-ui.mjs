@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url"
  * The web app in a laptop's browser (`src/dev/web-desk-check.tsx`: `Desk` through its production pieces, on the mock
  * bridge), at a laptop's size with a mouse:
  *
- * - The rail is the desktop's own (`AgentThreads`): the account's Threads under their projects, indented from a
- *   hairline, a Thread's four Sessions one row wearing their count, Projects and Recent; each project with what
+ * - The rail is the desktop's own (`AgentThreads`): its top rows (New thread, Search, the Inbox), then the account's
+ *   Threads under their projects, indented, a Thread's four Sessions one row wearing their count; each project with what
  *   its checkout has checked out, a row with the agent it ran in before, a Thread waiting on background work with
  *   the hourglass before it's opened, and a session another app holds with the hollow ring, all as the Mac's list
  *   says them.
@@ -127,7 +127,8 @@ async function checkDesk() {
     assert.ok((await evaluate("document.querySelectorAll('[data-thread-row][data-thread-indent]').length")) >= 4, "Threads are indented under their project")
     assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"4 sessions\"]').length"), 1, "the busy Thread is one row for its four Sessions")
     assert.equal(await evaluate("Boolean(document.querySelector('[data-thread-row][data-active]'))"), true, "the open Thread's row is lit")
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('[aria-label=\"Thread view\"] button')].map(node => node.textContent)"), ["Projects", "Recent"], "the rail's views")
+    assert.equal(await evaluate("document.querySelector('[data-rail-threads-heading]')?.textContent"), "Threads", "the rail's Threads, by project, with no view switch")
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-rail-top-row]')].map(node => node.dataset.railTopRow)"), ["session.new", "view.command-palette", "inbox"], "a browser's rail tops with New thread, Search and the Inbox")
     console.log(`Rail: ${folders.length} projects, the desktop's rows`)
 
     // 2. Nothing runs off the window: the page, the transcript's column, the background work, the composer's send.
