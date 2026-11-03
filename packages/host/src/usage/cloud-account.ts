@@ -1213,7 +1213,7 @@ export class CloudAccounts {
       init.headers["content-type"] = "application/json"
       init.body = JSON.stringify(body)
     }
-    const response = await this.#fetch(route, new URL(path, this.#require()), init, correlationId)
+    const response = await this.#fetch(route, new URL(path, this.#require()), init, correlationId, answers === "any" ? [] : answers)
     // The token can lapse between being handed out and arriving; one fresh one settles it.
     if (response.status === 401 && !retried) {
       if (this.#token?.token === token) this.#token = undefined
@@ -1223,8 +1223,11 @@ export class CloudAccounts {
     return response
   }
 
-  /** Every call to the cloud: sent under a fresh correlation ID, and reported when it ends. */
-  async #fetch(route: CloudRoute, url: URL, init: CloudRequest, correlationId: string = randomUUID()): Promise<CloudResponse> {
+  /**
+   * Every call to the cloud: sent under a fresh correlation ID, and reported when it ends. `expected`: the answers its
+   * caller asked for (a checkpoint the cloud doesn't have yet, a move nobody answered yet), reported as ok with their status.
+   */
+  async #fetch(route: CloudRoute, url: URL, init: CloudRequest, correlationId: string = randomUUID(), expected: readonly number[] = []): Promise<CloudResponse> {
     const started = performance.now()
     const report = (outcome: DiagnosticEvents["cloud.request"]["outcome"], status: number | undefined, how: { error?: string; reached: string }) => {
       const ms = Math.round(performance.now() - started)
@@ -1244,7 +1247,7 @@ export class CloudAccounts {
     } finally {
       trace.end()
     }
-    report(response.ok ? "ok" : response.status < 500 ? "refused" : "failed", response.status, { reached: trace.describe() })
+    report(response.ok || expected.includes(response.status) ? "ok" : response.status < 500 ? "refused" : "failed", response.status, { reached: trace.describe() })
     return response
   }
 
