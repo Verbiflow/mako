@@ -1,7 +1,9 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { FinOfApexNote } from "./apex-fins"
 import { FinAskCard } from "./fin-ask"
+import { FinsNeedYou } from "@/components/composer/fin-asks"
 import { sendDirect, useAddressee, useThreadAsks } from "@/state/apex-fins"
+import { useCrewCardVisible } from "@/state/crew-card-view"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -91,9 +93,11 @@ export interface SendElsewhere {
 
 export function WebDock({ conversation, harness, target, draftKey, away, jump, reconnect, elsewhere, sendsTo }: DockProps) {
   const ask = useAsk()
-  // Its own ask goes first; one of its Fins' waits behind it.
-  const finAsks = useThreadAsks(useAcp((state) => state.conversations[conversation]?.threadId))
-  const fin = ask ? undefined : finAsks[0]
+  // Its own ask goes first. While the crew card is drawn, a Fin's ask lives there; the dock keeps only this Thread's own asks, plus one line when the card has scrolled away.
+  const threadId = useAcp((state) => state.conversations[conversation]?.threadId)
+  const card = useCrewCardVisible(threadId)
+  const finAsks = useThreadAsks(threadId)
+  const fin = ask || card !== null ? undefined : finAsks[0]
   const typedFin = fin !== undefined && fin.ask.kind !== "approval"
   const running = useAcp((state) => {
     const live = activeLiveAcp(state)
@@ -142,6 +146,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
       <div aria-hidden className="web-dock-fade" />
       <StatusCapsule conversation={conversation} cloudThread={target.cloudThread} asking={Boolean(ask ?? fin)} away={away} jump={jump} reconnect={reconnect} />
       {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
+      {card !== null ? <FinsNeedYou thread={threadId} compact /> : null}
       {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
       {unsent.length ? (
         <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-3 pb-1">

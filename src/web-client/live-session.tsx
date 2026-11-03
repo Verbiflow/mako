@@ -116,7 +116,7 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
           <CompactPresentationContext value={compact}>
           <ShowAgentsContext value={showAgents}>
           <div ref={live} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-            {active ? <AcpPanel asks={false} /> : <div className="flex-1" />}
+            {active ? <AcpPanel asks={false} compact /> : <div className="flex-1" />}
             <WebDock
               conversation={conversation}
               harness={harness}
