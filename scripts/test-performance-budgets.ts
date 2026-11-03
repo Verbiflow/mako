@@ -14,6 +14,7 @@
  *   npm run test:performance                                                   check every budget
  *   npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --update         record what this machine measures now, at HEAD
  *   npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --measure-only   print what it measures and check nothing
+ *   npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --reference <commit>   every row beside another commit, as CI does
  */
 import assert from "node:assert/strict"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
@@ -128,6 +129,9 @@ const budgets = {
 const update = process.argv.includes("--update")
 // What a run beside a reference build reads (`perf-reference.ts`): each budget's line, with no verdict.
 const measureOnly = process.argv.includes("--measure-only")
+// Every row measured beside this commit, over its budget or not: a change against the code it goes onto.
+const reference = process.argv.includes("--reference") ? process.argv[process.argv.indexOf("--reference") + 1] : undefined
+if (process.argv.includes("--reference") && !reference) throw new Error("--reference takes a commit")
 const recorded: z.infer<typeof BaselinesSchema> = update || measureOnly ? { budgets: {} } : BaselinesSchema.parse(JSON.parse(await readFile(BUDGETS, "utf8")))
 const measured: Record<string, number> = {}
 const failures: string[] = []
@@ -141,8 +145,10 @@ for (const [name, run] of Object.entries(budgets)) {
   measured[name] = Number(value.toFixed(3))
   const ratio = baseline === undefined ? "" : ` (${((value / baseline) * 100).toFixed(0)}% of baseline)`
   console.log(`${name}: ${value.toFixed(3)} calibration units${ratio}`)
-  if (baseline !== undefined && value > baseline * ALLOWED_REGRESSION)
-    suspects.push({ key: name, at: recorded.at, over: `${name}: ${value.toFixed(3)} is more than ${Math.round((ALLOWED_REGRESSION - 1) * 100)}% over its baseline ${baseline}` })
+  const over = baseline !== undefined && value > baseline * ALLOWED_REGRESSION
+    ? `${name}: ${value.toFixed(3)} is more than ${Math.round((ALLOWED_REGRESSION - 1) * 100)}% over its baseline ${baseline}`
+    : undefined
+  if (over || reference) suspects.push({ key: name, at: reference ?? recorded.at, over })
 }
 for (const name of Object.keys(recorded.budgets))
   if (!(name in budgets)) failures.push(`${name}: a baseline with no budget; run with --update`)
@@ -153,7 +159,7 @@ if (update) {
   if (!at) console.warn("This tree has uncommitted changes, so these baselines name no commit to measure beside when one goes over budget. Commit the code, then run --update again.")
 } else if (!measureOnly) {
   if (suspects.length) {
-    const settled = await settle(suspects, { allowed: ALLOWED_REGRESSION, rounds: ROUNDS, say: console.log, measurer: budgetRuns })
+    const settled = await settle(suspects, { allowed: ALLOWED_REGRESSION, rounds: ROUNDS, ...reference && { beside: reference }, say: console.log, measurer: budgetRuns })
     failures.push(...await concluded("performance budgets", settled, ALLOWED_REGRESSION))
   }
   assert.deepEqual(failures, [], failures.join("\n"))

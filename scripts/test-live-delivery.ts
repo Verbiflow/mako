@@ -9,7 +9,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { deliverLiveUpdates, liveUpdateWeight, mergeLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import { changedEntryStart, continues, deliverLiveUpdates, liveUpdateWeight, mergeLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedFields, sharedSession, type LiveRequest } from "@mako/host/contracts/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import type { ModelOption } from "@mako/sessions/settings"
@@ -87,6 +87,31 @@ for (const [report, batches] of Object.entries(reports)) {
   const whole = deliverLiveUpdates(opened, [{ kind: "tool-update", id: "call", output: long + "end" }])
   assert.equal(tool(whole.blocks).output, long + "end")
   assert.equal(whole.updates[0]?.kind === "tool-update" && whole.updates[0].outputAppend, long + "end", "a whole value that continues the output travels as its new end")
+}
+
+// A value continues another only when it begins with all of it.
+{
+  const cases: [string, string, boolean][] = [
+    ["abc", "", true], ["abc", "ab", true], ["abc", "abc", true], ["ab", "abc", false], ["abd", "abc", false],
+    ["x".repeat(4_000) + "y", "x".repeat(4_000), true], ["x".repeat(3_999) + "zx", "x".repeat(4_000), false],
+  ]
+  for (const [text, start, expected] of cases) {
+    assert.equal(continues(text, start), expected, `${text.slice(-4)} continues ${start.slice(-4)}`)
+    assert.equal(continues(text, start), text.startsWith(start))
+  }
+}
+
+// What a reduction changed is read from the blocks it began with, and from no other.
+{
+  let blocks = opened
+  for (const batch of reports["whole output sent again (ACP, OpenCode)"]) {
+    const previous = blocks
+    blocks = deliverLiveUpdates(blocks, batch).blocks
+    assert.equal(changedEntryStart(previous, blocks), 1, "the call is the first block it changed")
+  }
+  const other = reduceLiveUpdates([], [{ kind: "user", text: "Run the suite" }])
+  assert.equal(changedEntryStart(other, blocks), 0, "blocks it didn't begin with are compared as they are")
+  assert.equal(changedEntryStart(blocks, blocks), blocks.length)
 }
 
 // Merging two updates is applying them in turn, for every mix of whole values and appends.

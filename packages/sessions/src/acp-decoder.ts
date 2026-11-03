@@ -2,7 +2,7 @@ import type { SessionNotification, SessionUpdate } from "@agentclientprotocol/sd
 import { z } from "zod"
 import { AcpToolCalls, acpAttachment, acpShownDetails, acpToolFields, AcpToolUpdateSchema, type AcpToolFields, type AcpToolReading, type AcpToolUpdate } from "./acp-tool-details.js"
 import { agentTitleFrom } from "./format.js"
-import { liveToolFinished, type LiveUpdate } from "./live-content.js"
+import { continues, liveToolFinished, type LiveUpdate } from "./live-content.js"
 import { normalizeAcpOptions, type AcpConfigOptionInput } from "./model-catalog.js"
 import type { ModelOption, SessionSettings } from "./settings.js"
 import { reportedEffects, type ReportedCall } from "./tool-effect-reading.js"
@@ -296,7 +296,7 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
     const echo = this.echo
     if (!echo) return false
     const seen = update.content.type === "text" ? echo.seen + update.content.text : undefined
-    if (seen !== undefined && echo.text.startsWith(seen)) echo.seen = seen
+    if (seen !== undefined && continues(echo.text, seen)) echo.seen = seen
     else if (seen === undefined && echo.seen === echo.text && echo.attachments > 0) echo.attachments -= 1
     else {
       this.echo = undefined

@@ -23,7 +23,7 @@ import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
 import { DecodedEntrySchema, entriesFromMessages, ThreadRefSchema, type DecodedEntry, type ThreadPage } from "@mako/sessions"
-import { ToolGrowthSchema, changedEntryStart, growTool, type ToolGrowth } from "@mako/sessions/live-content"
+import { ToolGrowthSchema, changedEntryStart, continues, growTool, type ToolGrowth } from "@mako/sessions/live-content"
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
 import { TurnUndoneSchema } from "../contracts/turn-review.js"
@@ -881,7 +881,7 @@ export class LiveJournal {
           before?.type === block.type &&
           before.id === block.id &&
           block.text.length > before.text.length &&
-          block.text.startsWith(before.text)
+          continues(block.text, before.text)
         ) {
           this.pager.detach("blocks", index)
           append.run(
