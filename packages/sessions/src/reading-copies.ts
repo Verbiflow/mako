@@ -15,6 +15,7 @@ import type { SessionView } from "./view-cache.js"
 import { ZstdFrames } from "./zstd-frames.js"
 import { COPY_FORMAT, CopyHeaderSchema, CopyManifestSchema, CopyReader, type CopyHeader, type CopyManifest, type CopyPage, type CopyReaderOptions, type CopyStore, type HeldCopy, type ReadCopy } from "./copy-reader.js"
 import type { UploadBudget } from "./upload-budget.js"
+import { LinkCredential } from "./link-credential.js"
 
 /**
  * A device's reading copies: each Session its account lists, as Mako draws it (its view's entries, one JSON line
@@ -104,10 +105,12 @@ export class ReadingCopies {
   readonly #views: CopyViews
   readonly #log: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void
   readonly #now: () => number
-  readonly #remote: (link: { current: RecordsLink }) => RecordRemote
+  readonly #remote: (link: LinkCredential) => RecordRemote
+  /** Asks the host for this link renewed (`LinkCredential`). */
+  readonly #linkDue: (() => void) | undefined
   #store: RecordStore | null = null
   #uploads: ScopedUploads | null = null
-  #link: { current: RecordsLink } | null = null
+  #link: LinkCredential | null = null
   #scope: SyncScope | null = null
   /** The scope's Sessions by `<harness>\n<native id>`, which a capture names. */
   #inScope = new Map<string, Wanted>()
@@ -135,15 +138,16 @@ export class ReadingCopies {
     folder: string,
     views: CopyViews,
     log: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void,
-    options: { now?: () => number; remote?: (link: { current: RecordsLink }) => RecordRemote; work?: WorkUnderWay; budget?: UploadBudget } = {}
+    options: { now?: () => number; remote?: (link: LinkCredential) => RecordRemote; work?: WorkUnderWay; budget?: UploadBudget; linkDue?: () => void } = {}
   ) {
     this.#work = options.work
+    this.#linkDue = options.linkDue
     this.#budget = options.budget
     this.#folder = folder
     this.#views = views
     this.#log = log
     this.#now = options.now ?? Date.now
-    this.#remote = options.remote ?? ((link) => recordsOverHttp({ id: link.current.id, base: link.current.base, authorization: () => link.current.authorization }))
+    this.#remote = options.remote ?? ((link) => recordsOverHttp({ id: link.current.id, base: link.current.base, authorization: () => link.authorization(), renew: () => link.renew() }))
   }
 
   /** The Sessions to keep copies of, most wanted first; said again as the list changes. */
@@ -170,7 +174,7 @@ export class ReadingCopies {
     this.#wake = undefined
     if (!link || this.#stopped) return
     const store = this.#open()
-    const remote = { current: link }
+    const remote = new LinkCredential(link, this.#linkDue)
     this.#uploads = new ScopedUploads(store, this.#remote(remote), this.#log, { bytesPerSecond: COPIES_BYTES_PER_SECOND, ...this.#work && { work: this.#work }, ...this.#budget && { budget: this.#budget } })
     this.#link = remote
     if (this.#scope) this.#uploads.scope(this.#scope)

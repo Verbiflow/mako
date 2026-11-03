@@ -604,9 +604,16 @@ function sumCalls(first: NonNullable<SyncReport["calls"]>, second: NonNullable<S
   return sum
 }
 
-/** Where a store's records go: a remote's routes and the header its calls carry. */
-export const RecordsLinkSchema = z.object({ id: z.string().min(1).max(2_048), base: z.url(), authorization: z.string().min(1).max(4_096) })
+/**
+ * Where a store's records go: a remote's routes and the header its calls carry, with when the header's token is due
+ * for renewal on this Mac's clock (`renewAtMs`), which a link handed to the catalog's process carries (`LinkCredential`).
+ */
+export const RecordsLinkSchema = z.object({ id: z.string().min(1).max(2_048), base: z.url(), authorization: z.string().min(1).max(4_096), renewAt: z.number().optional() })
 export type RecordsLink = z.infer<typeof RecordsLinkSchema>
+
+/** Which of a catalog's links (`SessionCatalog.syncRecords`, `syncCopies`, `syncOriginals`). */
+export const LinkFormSchema = z.enum(["records", "copies", "originals"])
+export type LinkForm = z.infer<typeof LinkFormSchema>
 
 /**
  * How a send or receive over a link says the remote refused its credential, which lapses: a link carries a
