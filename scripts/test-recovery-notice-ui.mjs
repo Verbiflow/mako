@@ -62,7 +62,7 @@ async function checkWindow() {
         await until("!document.querySelector('[data-approval-recovery]')")
         assert.equal(await evaluate('window.__nativeCalls'),0,'native evidence must not resend an answer')
       }
-      console.log('PASS: all-six native confirmation/history, differing verdict, persistent dismissal and no answer replay')
+      console.log('PASS: all-six native confirmation, differing verdict, persistent dismissal and no answer replay')
       console.log('Visual evidence: '+evidence)
       return
     }
@@ -216,7 +216,7 @@ async function checkWindow() {
           }
         }
       }
-      console.log('PASS: all-six approval pending/unknown/refusal/submitted UI, preserved structured drafts, dismissal and history; one answer call')
+      console.log('PASS: all-six approval pending/unknown/refusal/submitted UI, preserved structured drafts and dismissal; one answer call')
       console.log('Visual evidence: '+evidence)
       return
     }
@@ -346,7 +346,7 @@ async function checkWindow() {
       await evaluate("document.querySelector('aside[aria-label=\"Agents companion\"]').style.display='none'")
       w.setSize(430,800)
       await capture('narrow-action-recovery.png')
-      console.log('PASS: all-six operation guidance, acceptance distinct from completion, correlated transfer prompt receipt updates in menu, explicit action acknowledgement')
+      console.log('PASS: all-six operation guidance, acceptance distinct from completion, explicit action acknowledgement, and a settled operation leaves the composer')
       console.log('Visual evidence: '+evidence)
       return
     }
