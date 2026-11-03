@@ -120,7 +120,7 @@ export const DirectRouteSchema = z.object({
   fin: z.string().uuid(),
   request: z.string().min(1).max(512),
   received: z.string().min(1).max(512),
-  delivery: z.enum(["turn", "steer", "queued"]),
+  delivery: z.enum(["turn", "steer", "queued", "interrupt"]),
   /** Epoch milliseconds. */
   at: z.number().int().nonnegative(),
 })

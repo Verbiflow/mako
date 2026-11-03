@@ -1,6 +1,3 @@
-import { execFile } from "node:child_process"
-import { hostname } from "node:os"
-import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
@@ -29,7 +26,8 @@ import type { MethodTable } from "../base/methods.js"
 import { type GatewayHostOptions, type HostMethods, PortRelay, serveHostThroughGateway } from "../transport/index.js"
 import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
-import { onMac, systemName, systemVersion } from "../base/platform.js"
+import { onMac } from "../base/platform.js"
+import { describeThisDevice } from "./device-description.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
 /** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
@@ -255,7 +253,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       if (machine.kind === "absent") return hostLog("cloud", "no browser here; the sign-in page waits in the account's state", { reason: machine.reason })
       await presentMachine(machine).openUrl(url)
     },
-    device: () => (described ??= describeThisMac(environment.version)),
+    device: () => (described ??= describeThisDevice(environment.version)),
     fixture,
     onChange: (account) => {
       if (status === "signing-in" && account.state.status === "signed-in") signedIn?.()
@@ -408,17 +406,4 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       cloud.close()
     },
   }
-}
-
-/** The name people gave this Mac in System Settings, as the account's device list shows it. */
-async function describeThisMac(appVersion: string) {
-  const fallback = hostname().replace(/\.local$/, "")
-  const name =
-    onMac()
-      ? await promisify(execFile)("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 }).then(
-          ({ stdout }) => stdout.trim() || fallback,
-          () => fallback
-        )
-      : fallback
-  return { name, platform: `${systemName()} ${systemVersion()}`.trim(), appVersion }
 }

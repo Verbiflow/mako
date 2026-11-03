@@ -65,6 +65,9 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     steering: {
       kind: "supported",
       lands: "step",
+      // Seen with Codex 0.164.0 on gpt-6.1-sol (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command,
+      // the code-mode cell yielded at once ("Script running with cell ID 1") and the model heard the message then.
+      hears: "at once: a command it's running yields to the model and carries on in the background",
       via: "`turn/steer` adds the message to the running turn, read at its next step.",
       steer: async (...args) => (await engine()).steer(...args),
     },

@@ -235,7 +235,7 @@ function AgentRoster({
   const finished = agents.filter((agent) => !isActiveNativeAgent(agent)).length
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-label text-faint">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label text-faint">
         {waiting ? (
           <span data-background-summary className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             <HourglassIcon aria-hidden className="size-3 shrink-0" />

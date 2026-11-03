@@ -131,7 +131,7 @@ async function repeatsStopsAndOwnWords(): Promise<void> {
   }
 }
 
-/** A running child hears it at its next step where its harness steers there (Claude), after its turn where it doesn't (Cursor). */
+/** Steered, a running child hears it at its next step where its harness steers (Claude), after its turn where it takes no steer (Cursor here). */
 async function steerOrQueue(): Promise<void> {
   let kids: string[] = []
   let busy = false
@@ -147,11 +147,13 @@ async function steerOrQueue(): Promise<void> {
     await until("both children at work", () => [android, ios].every((child) => world.live.snapshot(child)?.session.status === "running"))
     world.say(apex.conversation, "Also bump the target SDK.")
     await until("the Apex's turn", () => promptsOf(world, apex.conversation).some((prompt) => prompt.text.endsWith("Also bump the target SDK.")))
-    const steered = await world.agents.send(apex.caller, { to: "android", forward: true, clientKey: "s1" })
-    const queued = await world.agents.send(apex.caller, { to: "ios", forward: true, clientKey: "s2" })
+    const steered = await world.agents.send(apex.caller, { to: "android", forward: true, deliver: "steer", clientKey: "s1" })
+    const queued = await world.agents.send(apex.caller, { to: "ios", forward: true, deliver: "steer", clientKey: "s2" })
     assert.ok(!("refused" in steered) && !("refused" in queued))
     assert.equal(steered.delivery, "steer")
+    assert.equal(steered.hears, "android hears it at its next step, once what it's running now returns (Claude).")
     assert.equal(queued.delivery, "queued")
+    assert.equal(queued.hears, "ios hears it when its current turn ends, as its next message: Cursor takes no message into a running turn.")
     await until("the steer", () => world.steers.some((steer) => steer.conversation === android))
     assert.equal(agentWords(world.steers.find((steer) => steer.conversation === android)!.text)?.body, "Also bump the target SDK.")
     const before = promptsOf(world, ios).length

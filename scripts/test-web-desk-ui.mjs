@@ -111,9 +111,9 @@ async function checkDesk() {
     assert.ok(heads.some((head) => head.startsWith("site") && head.includes("Rebasing pricing-table")), `the site project mid-rebase: ${JSON.stringify(heads)}`)
     const busy = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Thread Environments'))"
     assert.equal(await evaluate(`${busy}.getAttribute('aria-label').includes('background task')`), true, "the busy Thread waits on its background work, before it's opened")
-    assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).querySelectorAll('.mark-stack > *').length"), 2, "a row wears the agent it ran in before, beside its own")
+    assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).querySelectorAll('.live-mark').length"), 1, "a row wears one mark, its current agent's, whatever it ran in before")
     const held = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Wire the payments retry queue'))"
-    assert.equal(await evaluate(`Boolean(${held}.querySelector('[aria-label^="Open in Devin"] .ring-1'))`), true, "a session Devin's own app holds wears the Mac's hollow ring")
+    assert.equal(await evaluate(`Boolean(${held}.querySelector('[data-live-mark="open"][aria-label^="Open in Devin"]'))`), true, "a session Devin's own app holds wears the Mac's hollow ring")
     await capture("list-1280-dark.png")
     console.log("Rail: checkouts, earlier agents, background work and another app's ring from the Mac's list")
 

@@ -40,7 +40,7 @@ export function ChildBreadcrumb() {
     if (apex && agent) void acp.stopAgent(apex.key, agent.nativeId)
   }
   return (
-    <nav aria-label="Thread" data-child-breadcrumb className="flex h-9 shrink-0 items-center gap-2 border-b border-hairline px-3 text-label whitespace-nowrap text-faint">
+    <nav aria-label="Thread" data-child-breadcrumb className="flex h-9 shrink-0 items-center gap-2 px-3 text-label whitespace-nowrap text-faint">
       <button
         type="button"
         onClick={backToApex}

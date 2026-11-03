@@ -357,7 +357,7 @@ assert.deepEqual(before.map(([prompt]) => prompt), ["Run the suite"], "and leave
 const reopened = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, ...signIn.map(marker), { kind: "user", text: "And QA?" }, { kind: "text", id: "b", text: "QA too." }])
 assert.deepEqual(where(reopened), [["Run the suite", []], ["And QA?", signIn.map((note) => `${note.label}@0`)]],
   "a session that opens again (a fork, a reconnect) reports under the next prompt, not at the end of the answer before it")
-assert.match(text(draw(reopened)), /And QA\? Copy question Reuse 3 MCP servers need sign-in wisprflow, todoist, axiom Claude Code QA too/)
+assert.match(text(draw(reopened)), /And QA\? Y Copy question Reuse 3 MCP servers need sign-in wisprflow, todoist, axiom Claude Code QA too/)
 const midTurn = streamed([go, { kind: "text", id: "a", text: "Reading." }, marker(signIn[0]!), { kind: "text", id: "b", text: "Going ahead." }, { kind: "user", text: "And QA?" }])
 assert.deepEqual(where(midTurn)[0], ["Run the suite", [`${signIn[0]!.label}@1`]], "one inside an answer keeps its place")
 const unanswered = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, marker(signIn[0]!)])
@@ -493,7 +493,7 @@ assert.match(draw(saved([{ kind: "user", text: `${goalContinuePrompt("Ship the e
 // A live prompt carries the moment the host sent it, so it shows its time as a saved one does.
 const sentLive = streamed([{ kind: "user", text: "Refactor the store", requestId: "r1", at: Date.parse(at(44)) }, { kind: "text", id: "t", text: "Picking up." }], "cursor")
 assert.equal(sentLive[0]!.prompt?.timestamp, Date.parse(at(44)))
-assert.match(text(draw(sentLive)), /Refactor the store Copy question \d{1,2}:44 [AP]M/)
+assert.match(text(draw(sentLive)), /Refactor the store Y Copy question \d{1,2}:44 [AP]M/)
 
 const yours = draw([prompted("s", "Refactor the store")], { stops: { s: { reason: "stopped", continuable: false, automatic: false } } })
 assert.match(yours, /data-turn-stopped="stopped"[^>]*>[^]*?lucide-circle-stop/)

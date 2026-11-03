@@ -42,6 +42,33 @@ export function systemVersion(): string {
   return electron || (onMac() ? macProductVersion() : undefined) || release()
 }
 
+/**
+ * The system as a device list shows it: "macOS 26.0" on a Mac; on Linux its architecture and distribution, such as
+ * "Linux x64 · Ubuntu 24.04" (`/etc/os-release`), else its kernel's release.
+ */
+export function devicePlatform(): string {
+  if (!onLinux()) return `${systemName()} ${systemVersion()}`.trim()
+  let osRelease: string | undefined
+  try {
+    osRelease = readFileSync("/etc/os-release", "utf8")
+  } catch {
+    osRelease = undefined
+  }
+  return linuxPlatform(process.arch, osRelease, release())
+}
+
+/** `devicePlatform` on Linux, from `/etc/os-release`'s text (none when it can't be read) and the kernel's release. */
+export function linuxPlatform(arch: string, osRelease: string | undefined, kernel: string): string {
+  return `Linux ${arch} · ${(osRelease && linuxDistribution(osRelease)) || kernel}`
+}
+
+function linuxDistribution(text: string): string | undefined {
+  const field = (name: string) => new RegExp(`^${name}=(?:"([^"\\n]*)"|(\\S*))$`, "m").exec(text)?.slice(1).find((value) => value !== undefined)
+  const name = field("NAME")
+  const version = field("VERSION_ID")
+  return name ? (version ? `${name} ${version}` : name) : field("PRETTY_NAME")
+}
+
 function macProductVersion(): string | undefined {
   try {
     return /<key>ProductVersion<\/key>\s*<string>([^<]{1,32})<\/string>/.exec(readFileSync("/System/Library/CoreServices/SystemVersion.plist", "utf8"))?.[1]

@@ -448,7 +448,7 @@ function SessionSwitcher({ thread, current, wide, onSession, onAdd }: { thread: 
           <span className="shrink-0 text-faint">· {sessionBrief(current.facts, now, label, wide ? parent : undefined)}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-caution" : "bg-ember")} /> : null}
+          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-caution" : "bg-sea")} /> : null}
           {thread.sessions.length}
           <ChevronsUpDownIcon aria-hidden className="size-3.5" />
         </span>

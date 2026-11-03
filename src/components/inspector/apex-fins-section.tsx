@@ -5,8 +5,7 @@ import { childGroup, childLine, childStateOf, childWord, type ChildGroup } from 
 import { APEX_ROLE, APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ChildStatusMark } from "@/components/stage/child-tabs"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { FinMark } from "@/components/stage/child-tabs"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
@@ -152,7 +151,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
         className={cn("pressable flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", lit && "bg-fill-selected")}
       >
         <span className="flex h-5 shrink-0 items-center">
-          <HarnessIcon harness={agent.provider} className="size-3.5" />
+          <FinMark agent={agent} state={state} read cut={lit ? "var(--raised)" : undefined} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex h-5 min-w-0 items-center gap-2">
@@ -161,7 +160,6 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
               {childWord(state)}
               <Elapsed agent={agent} />
             </span>
-            <ChildStatusMark state={state} read />
           </span>
           {line && state.kind !== "queued" && state.kind !== "starting" ? <span className="line-clamp-2 text-ui leading-snug text-muted-foreground">{line}</span> : null}
           <span className="mt-0.5 flex flex-wrap gap-x-1.5 text-label text-faint">

@@ -1,8 +1,9 @@
 import { use, useState } from "react"
-import { childGroup, childStateOf } from "@mako/host/contracts/children"
+import { childGroup, childStateOf, childWord } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import { XIcon } from "lucide-react"
-import { ChildStatusMark } from "@/components/stage/child-tabs"
+import { LiveMark } from "@/components/ui/live-mark"
+import { finMarkState } from "@/lib/live-mark-state"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { useAcp } from "@/state/acp"
 import { unaddress, useAddressee, useThreadChildren, useThreadRollup } from "@/state/apex-fins"
@@ -79,9 +80,10 @@ export function PhoneChildChips({ thread, conversation }: { thread: string; conv
           onClick={() => onOpen?.(agent)}
           className="pressable flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-full bg-raised pr-2 pl-2.5 text-label text-foreground disabled:opacity-60"
         >
-          <WebHarnessIcon harness={agent.provider} className="size-3.5" />
+          <LiveMark state={finMarkState(childStateOf(agent))} cut="var(--raised)" label={childWord(childStateOf(agent))}>
+            <WebHarnessIcon harness={agent.provider} />
+          </LiveMark>
           <span className="min-w-0 truncate">{agent.title}</span>
-          <ChildStatusMark state={childStateOf(agent)} read />
         </button>
       ))}
     </div>
