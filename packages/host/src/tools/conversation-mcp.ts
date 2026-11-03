@@ -1,3 +1,4 @@
+import { NATIVE_OVERRIDE } from "../contracts/native-calls.js"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { JsonValue } from "@mako/control"
 import { randomBytes } from "node:crypto"
@@ -47,6 +48,7 @@ const MAKO_INSTRUCTIONS = [
   "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
   "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save saves a draft only this Thread runs, and recipe_publish proves it and publishes it to every Thread. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
+  `Mako refuses the shell routes around these tools, \`git worktree add\`, a new branch in the main checkout, \`gh pr create\` and \`gh pr merge\`, a dev server when the project has a recipe, an agent CLI such as \`claude -p\` or \`codex exec\`, and harness browser or screen tools beside mako-computer, and the refusal names the tool to call. ${NATIVE_OVERRIDE} before a command runs it anyway: only when the Mako tool failed or the person asked for that exact command.`,
   `show: ${SHOW_MEDIA_LINE}`,
   "thread_history: this Thread's earlier turns, every session and harness of it, and the threads its messages referenced, read whole: list, read, search, and any tool output in full. Use it instead of guessing what was said or done before, and when a transcript points to it.",
   ORCHESTRATION_INSTRUCTIONS,
