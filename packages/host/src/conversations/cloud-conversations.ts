@@ -11,7 +11,7 @@ import { CLOUD_FOLDER_WHERE, listedContinueChoice, listedOwner, listedPromptedAt
 import { laterPrompt, promptedAfter } from "../contracts/worked-at.js"
 import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
 import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
-import { hostHistoryPaging } from "../base/host-client.js"
+import { hostClient, hostHistoryPaging, withHostClient } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { bootFolder, CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
 import { deferredWhenAsleep } from "../contracts/host-call-policy.js"
@@ -1566,7 +1566,8 @@ export class CloudConversations {
         }
       }
     }
-    void run().finally(() => {
+    // Followed for as long as the Thread lives, not for the call that began it (a move, a start): its lines name no caller.
+    void withHostClient(hostClient(), run, hostHistoryPaging()).finally(() => {
       this.#following.delete(entry.threadId)
       this.#fromHead.delete(entry.threadId)
     })
