@@ -121,7 +121,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
           <>
             <ListPhase list={list} />
             <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
-              <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} className="rounded-full" />
+              <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} />
             </button>
           </>
         )}
@@ -192,7 +192,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
       {wide ? (
         <footer className="shrink-0 border-t border-hairline p-2">
           <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
-            <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} className="rounded-full" />
+            <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} />
             <span className="min-w-0 flex-1 truncate text-left">{client.account.name || client.account.email}</span>
           </button>
         </footer>

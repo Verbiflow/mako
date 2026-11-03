@@ -311,7 +311,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
         onClick={onSettings}
         className={cn("pressable flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", settings && "bg-fill-selected")}
       >
-        <Avatar name={client.account.name} src={client.account.image ?? undefined} size={5} className="rounded-full" />
+        <Avatar name={client.account.name} src={client.account.image ?? undefined} size={5} />
         <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">{client.account.name || client.account.email}</span>
       </button>
     </div>

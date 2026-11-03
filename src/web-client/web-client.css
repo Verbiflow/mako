@@ -615,7 +615,7 @@
    * the prose size, and one routing row under it, where, model and access as quiet text with their glyphs.
    */
   .web-composer[data-desk] {
-    @apply max-w-none border-t border-hairline bg-surface p-0;
+    @apply max-w-none bg-surface p-0;
   }
   .web-composer[data-desk] .web-composer-field {
     @apply flex flex-col rounded-none bg-transparent p-0;

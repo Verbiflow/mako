@@ -623,7 +623,7 @@ function CommitsSection({
   const named = useSession((state) => Boolean(state.git?.repositories?.length))
   if (!hasRepo) return null
   return (
-    <div className="flex min-h-0 shrink-0 flex-col border-t border-hairline">
+    <div className="flex min-h-0 shrink-0 flex-col">
       <button
         type="button"
         aria-expanded={open}
