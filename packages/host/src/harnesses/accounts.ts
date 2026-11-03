@@ -56,7 +56,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { AccountHolds, type AccountHold, type AccountHolder } from "./account-holds.js"
 import { AccountUsageReadings } from "./account-usage-readings.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
-import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, windowsAt, type AccountLimitOffer } from "../contracts/account-usage.js"
+import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, spentUntil, windowsAt, type AccountLimitOffer, type HarnessLimit } from "../contracts/account-usage.js"
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
 export interface AccountLaunch {
@@ -489,6 +489,26 @@ export class HarnessAccounts {
     const offer = limitOffer(harness, readings, Date.now(), refused)
     if (offer && !refused) this.suggestedAt.set(harness, Date.now())
     return offer
+  }
+
+  /**
+   * The harness's account in use when it's at its limit now, with when it resets and another of the harness's
+   * accounts with room, or null: what a Fin's start reads before it runs there. A harness Mako reads no limits for,
+   * or an account whose reading failed, reads as having room.
+   */
+  async limited(harness: string): Promise<HarnessLimit | null> {
+    const accounts = (await this.harnessAccounts(harness)).filter((account) => !account.missing && !account.removing)
+    const active = accounts.find((account) => account.active) ?? (accounts.length === 1 ? accounts[0] : undefined)
+    if (!active) return null
+    const now = Date.now()
+    const usage = await this.usage.read(harness, active.name)
+    const spent = spentUntil(usage, now)
+    if (!spent) return null
+    const readings = []
+    for (const account of accounts)
+      readings.push({ ...account, active: account === active, usage: account === active ? usage : await this.usage.read(harness, account.name) })
+    const offer = accounts.length > 1 ? limitOffer(harness, readings, now, true) : null
+    return { account: active.email ?? active.name, until: spent.until, ...(offer && { instead: offer.to.email ?? offer.to.name }) }
   }
 
   /**

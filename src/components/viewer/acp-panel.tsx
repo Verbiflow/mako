@@ -16,6 +16,7 @@ import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
+import { CrewCard } from "./crew-card"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
@@ -58,9 +59,10 @@ const NO_RECOVERIES = { onTurns: new Map<string, LiveRequest>(), apart: EMPTY_QU
 
 /**
  * `asks`: whether the panel draws the agent's approval and question under the transcript. The phone pins them in its
- * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`.
+ * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`. `compact`: the phone's crew
+ * card in reach of a thumb, where the panel has one.
  */
-export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
+export function AcpPanel({ asks = true, compact = false }: { asks?: boolean; compact?: boolean } = {}) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
   const starting = useAcp((state) => scopedAcp(state, scope)?.kind === "starting")
@@ -79,7 +81,7 @@ export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
   if (starting) {
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-surface">
-        <Blocks starting continued={continued} />
+        <Blocks starting continued={continued} compact={compact} />
       </div>
     )
   }
@@ -87,7 +89,7 @@ export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
 
   return (
     <div data-live-conversation={session.id} className="flex min-h-0 flex-1 flex-col bg-surface">
-      <Blocks continued={continued} />
+      <Blocks continued={continued} compact={compact} />
       {scope ? (
         <PaneWaiting />
       ) : !asks ? null : (
@@ -148,7 +150,7 @@ function HistoryReadNote({ state }: { state: "reading" | { failed: string } }) {
   )
 }
 
-function Blocks({ starting = false, continued = false }: { starting?: boolean; continued?: boolean }) {
+function Blocks({ starting = false, continued = false, compact = false }: { starting?: boolean; continued?: boolean; compact?: boolean }) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
   const projection = useAcp((state) => scopedAcp(state, scope)?.projection)
@@ -271,7 +273,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
             preparing={preparing && session?.status !== "running"}
             hosted={exchanges.length > 0}
           />
-          {running ? null : <BackgroundWorkLine />}
+          {running ? null : <CrewCard compact={compact} fallback={<BackgroundWorkLine />} />}
         </>
       }
     />

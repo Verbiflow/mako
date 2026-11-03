@@ -234,7 +234,54 @@ the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
 Mac frees up (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
-across the host), its end written once. A report (`agents_report`, else one
+across the host), its end written once. Linking it again with another pid
+follows it there, and the link's name is its Thread's title. When its
+process goes, a process of its Apex's shell holding its Session is the same
+run (a chat resumed to hand it a message), and otherwise its end waits until
+its Session has been quiet for `END_CONFIRM_MS`. A run whose Session is
+written again after its end reads as working while that Session is still
+being written, and a digest drops the end the host inferred for it
+(`AgentWakes.current`). A stop closes the edge with
+its reason (`closedReason`) before it cancels the turn. The cut turn then reports
+nothing and wakes no one, and the Fin reads as stopped in those words. A Fin
+that ends a turn without `agents_report` while its own Fins work, or while a
+`worktree_move` it asked for is pending (`movePending`), hasn't finished.
+Its turn's end writes no report, and it reads as working with "Waiting for
+…" (`waitsOn`). Its result is the turn after that work ends: the one its
+Fins' reports wake, or, with nothing to wake it, that turn's reply
+(`checkAwaiting`). A message to it
+(`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
+Thread on Mako's live driver at no more than its Apex's access, and arrives
+with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
+Mako drives it. What a Fin runs on is decided once, at admission
+(`resolveFinTuning`, `contracts/fin-tuning.ts`): a `model`, `reasoning` or
+`fast` the spawn names is held to its harness's catalog, read leniently, and
+refused (`unknown-model`) with the choices it offers; left out, the person's
+Settings › Fins choice for that harness, else its Apex's model and options on
+the Apex's harness (never its plan mode), else the model the person last
+started or sent with there, else Mako's pick (`HarnessDefaults.work`), else
+the harness's own. A layer whose model the harness stopped listing is passed
+over in a note its Apex and its row both show (`ThreadParent.tuned`). Fast is
+the model's speed option, or its fast sibling where the harness lists one as
+a model (Grok, Devin). The host keeps the choices and what the person used in
+`<user root>/fin-defaults.json` (`mako:fin-defaults`), so the web app reads
+them through the Mac, and a Fin's row says its model, reasoning and fast lane
+(`NativeAgent.runsOn`). A harness whose account in use is at its limit
+(`HarnessAccounts.limited`, read for at most `LIMIT_READ_MS`) takes no Fin:
+one whose Apex named no harness or model starts on the person's next harness
+with room (`harnessOrder`), its answer's `limited` and its row's note saying
+until when and which other account of that harness has room; a named one,
+or one with nowhere to go, is refused (`limited`) with the same. The person's rules for Fins (`FinPolicy`,
+Settings › Fins: their own words, each to a harness and maybe a model, first
+fit wins, and where the rest go) reach every Thread's agent ahead of the
+person's next message once they change (`finPolicyNote`, `rulesNote`), and
+an Apex of its own with its brief. `agents_start`'s `rule` names the one a
+Fin follows: its harness and model apply unless the spawn names them (a
+model only on the rule's own harness), a spawn with no rule, harness or
+model goes to `otherwise`, a missing rule is refused (`unknown-rule`), and
+the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). A worktree in a project folder of several
+repositories can be on a branch it names, adopted in each repository that
+has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
 its next step where its harness steers there and at its turn's end where it
