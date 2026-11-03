@@ -61,7 +61,7 @@ try {
     )
   const shot = async (name, query, expected, page = pages.settings, size = "768,1080") => {
     const { stdout } = await chromium(page, size, query, "--dump-dom")
-    const text = stdout.replace(/<(style|script)\b[\s\S]*?<\/\1>/g, " ").replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ")
+    const text = stdout.replace(/<(style|script)\b[\s\S]*?<\/\1>/g, " ").replace(/<[^>]*>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ")
     for (const pattern of expected) assert.match(text, pattern, `${name} says ${pattern}`)
     await chromium(page, size, query, "--force-device-scale-factor=2", `--screenshot=${join(out, name)}`)
     assert.ok(existsSync(join(out, name)), `${name} was written`)
