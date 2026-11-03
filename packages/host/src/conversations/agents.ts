@@ -27,6 +27,7 @@ import {
   type AgentsRespondInput,
   type Brief,
   type ChildStart,
+  type FinDeliver,
   type FinDelivery,
   type ChildState,
   type ChildThread,
@@ -85,13 +86,24 @@ import { macSlots, type MacReading, type MacSlots } from "./mac-capacity.js"
 const NONE: readonly NativeAgent[] = []
 /** How often Fins waiting for this Mac's room look for it. */
 const ROOM_EVERY_MS = 10_000
+
+/** What a message into a child's Thread became, and when the child hears it. */
+interface Delivered {
+  delivery: FinDelivery
+  hears: string
+  deduped?: true
+}
+
+/** How long a steer waits for its child's turn to start, and then for its harness's answer, before the call answers without it. */
+const STEER_WAIT_MS = 3_000
+const STEER_ANSWER_MS = 2_000
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
 const READ_ENTRIES = 40
 const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -362,15 +374,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!from) return unknownFin(input.from)
     if (!to) return unknownFin(input.to)
     const was = this.conversationOf(from.child)
-    const queued = was ? this.deps.live.held(was)?.requests.find((request) => request.id === input.request) : undefined
-    const passed = queued ?? this.steered.get(input.request)
+    const steeredIn = this.steered.get(input.request)
+    const queued = was && !steeredIn ? this.deps.live.held(was)?.requests.find((request) => request.id === input.request) : undefined
+    const passed = queued ?? steeredIn
     if (!was || !passed) return { refused: "unknown-child", why: `${from.name} has no such message.` }
     const words = agentWords(passed.text)
     const text = words?.passedOn ? words.body : passed.text
     if (queued && (queued.status === "queued" || queued.status === "held"))
       this.deps.live.editQueued(was, { requestId: queued.id, expectedText: queued.text, change: { kind: "remove" } })
     const withdrawn = queued !== undefined && ["queued", "held", "canceled"].includes(queued.status)
-    const sent = await this.deliver(to, namedUuid(`redirect:${input.request}:${to.child}`), text, passed.attachments, undefined)
+    const sent = await this.deliver(to, namedUuid(`redirect:${input.request}:${to.child}`), text, passed.attachments, undefined, "steer")
     if ("refused" in sent) return sent
     if (!sent.deduped) this.routes.redirected += 1
     hostLog("agents", "redirect", { from: from.op, to: to.op, request: input.request, withdrawn, delivery: sent.delivery })
@@ -407,7 +420,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (edge.closedAt) return { refused: "conflict", why: `${edge.name} was stopped. Open it to talk to it there.` }
     const received = namedUuid(`direct:${input.request}`)
     const attachments = input.attachments ?? []
-    const sent = await this.deliver(edge, received, input.text, attachments, undefined)
+    const sent = await this.deliver(edge, received, input.text, attachments, undefined, "steer")
     if ("refused" in sent) return sent
     if (sent.delivery === "steer") this.steered.set(received, { text: input.text, attachments })
     const kept = this.deps.live.recordDirect(conversation, { to: edge.name, fin: edge.child, request: input.request, received, delivery: sent.delivery, at: Date.now() }, input.text)
@@ -603,14 +616,15 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!own) return this.refuse(op, "conflict", "A message needs text, or forward: true to pass on the person's.")
       text = `${fromAgent(YOUR_APEX)}\n${own}`
     }
-    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) })
+    const deliver = input.deliver ?? "queue"
+    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver)
     if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
-    const answer: AgentsSent = { child: edge.child, name: edge.name, request, delivery: sent.delivery, ...(sent.deduped && { deduped: true as const }) }
+    const answer: AgentsSent = { child: edge.child, name: edge.name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
     this.sent.set(op, answer)
     if (sent.delivery === "steer") this.steered.set(request, { text, attachments })
     if (input.forward) this.routes.forwarded += 1
     else this.routes.sent += 1
-    hostLog("agents", "send", { op, child: edge.child, request, delivery: sent.delivery, forward: input.forward ?? false, ms: Math.round(performance.now() - began) })
+    hostLog("agents", "send", { op, child: edge.child, request, deliver, delivery: sent.delivery, forward: input.forward ?? false, ms: Math.round(performance.now() - began) })
     return answer
   }
 
@@ -718,8 +732,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       const picked = ask.options?.find((option) => sameWords(option.label, words))
       const answer = answerText(state.question, picked?.label ?? words)
       const sent = by.kind === "apex"
-        ? await this.deliver(edge, namedUuid(op), `${fromAgent(YOUR_APEX)}\n${answer}`, [], { kind: "agent", session: SessionIdSchema.parse(by.apex.session) })
-        : await this.deliver(edge, namedUuid(op), answer, [], undefined)
+        ? await this.deliver(edge, namedUuid(op), `${fromAgent(YOUR_APEX)}\n${answer}`, [], { kind: "agent", session: SessionIdSchema.parse(by.apex.session) }, "steer")
+        : await this.deliver(edge, namedUuid(op), answer, [], undefined, "steer")
       return "refused" in sent ? sent : done("report", sent.delivery)
     }
     const tier = by.kind === "apex" ? this.tierOf(by.apex) : "full"
@@ -1516,11 +1530,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * A message into a child's Thread, as its next turn, a step of its running
-   * one, or queued behind it: the same Thread whether it's at work, idle or
-   * done, so a finished child takes a follow-up where its work is.
+   * A message into a child's Thread: an idle one takes it as its next turn, and a working one as `want` says, after its
+   * turn, into it, or by stopping it first. The same Thread whether it's at work, idle or done, so a finished child
+   * takes a follow-up where its work is. `hears` says when the child hears it, as the child's own harness takes a
+   * message, whatever harness the sender runs on.
    */
-  private async deliver(edge: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined): Promise<{ delivery: AgentsSent["delivery"]; deduped?: true } | AgentRefused> {
+  private async deliver(edge: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver): Promise<Delivered | AgentRefused> {
     if (edge.closedAt)
       return { refused: "conflict", why: `${edge.name} was stopped, and a stopped Thread's delegation stays over: start a new one with agents_start, or the person can open it and talk to it there.` }
     if (edge.run && !edge.run.ended)
@@ -1528,19 +1543,62 @@ export class Agents implements AgentOperations, ConversationChildren {
     const conversation = this.conversationOf(edge.child)
     const ready = conversation ? this.ready(conversation) : "gone"
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
+    const name = edge.name
     const held = this.deps.live.held(conversation)?.requests.find((asked) => asked.id === request)
-    if (held) return { delivery: held.status === "queued" || held.status === "held" ? "queued" : "turn", deduped: true }
-    const running = ready === "steer" ? this.deps.live.held(conversation)?.requests.find((asked) => asked.status === "dispatching") : undefined
-    if (running?.nativeRun) {
-      try {
-        await this.deps.live.act(conversation, { kind: "steer", id: request, requestId: running.id, text, attachments })
-        return { delivery: "steer" }
-      } catch (error) {
-        hostWarn("agents", "a message could not join the running turn; it waits for the turn's end", { op: edge.op, error: errorMessage({ error }) })
-      }
+    if (held)
+      return held.status === "queued" || held.status === "held"
+        ? { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message.`, deduped: true }
+        : { delivery: "turn", hears: `${name} already has it.`, deduped: true }
+    const queue = (why?: string): Delivered => {
+      this.deps.live.submit(conversation, request, text, attachments, undefined, undefined, undefined, actor)
+      return ready === "idle"
+        ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
+        : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message${why ? `: ${why}` : "."}` }
     }
-    this.deps.live.submit(conversation, request, text, attachments, undefined, undefined, undefined, actor)
-    return { delivery: ready === "idle" ? "turn" : "queued" }
+    if (ready === "idle") return queue()
+    if (want === "interrupt")
+      return this.deps.live.interrupt(conversation, request, text, attachments, actor)
+        ? { delivery: "interrupt", hears: `Mako stopped ${name}'s turn; this message starts its next one, ahead of anything queued for it.` }
+        : queue(`it had no turn running to stop, and something was already queued ahead of this.`)
+    if (want === "queue") return queue()
+    const queued = queue()
+    const steered = await this.steerInto(conversation, name, request, text, attachments)
+    return "why" in steered ? { ...queued, hears: `${name} hears it when its current turn ends, as its next message: ${steered.why}` } : steered
+  }
+
+  /**
+   * Steers a message already queued for a working child (`steer-queued`, as the window steers a queued message) into
+   * its running turn. Refused, then or later, it stays where it was queued, so what was sent after it still comes
+   * after; taken, it leaves the queue; never confirmed, it isn't sent again. A harness can hold a steer until what runs
+   * returns (Cursor, its subagent): the call answers after `STEER_WAIT_MS` and `STEER_ANSWER_MS` at most, before that.
+   * `why` when it never went into the turn, so it waits for the turn's end.
+   */
+  private async steerInto(conversation: string, name: string, request: string, text: string, attachments: PromptAttachment[]): Promise<Delivered | { why: string }> {
+    const steering = this.deps.live.steering(conversation)
+    const harness = this.deps.harnessLabel(this.deps.live.session(conversation)?.harness ?? "unknown")
+    if (!steering) return { why: `${harness} takes no message into a running turn.` }
+    const deadline = Date.now() + STEER_WAIT_MS
+    const turn = () => this.deps.live.held(conversation)?.requests.find((asked) => asked.status === "dispatching" && asked.nativeRun)
+    while (!turn() && Date.now() < deadline && this.deps.live.session(conversation)?.status !== "ready") await new Promise((resolve) => setTimeout(resolve, 50))
+    const running = turn()
+    if (!running) return { why: "its turn hadn't started yet." }
+    const action = Promise.resolve().then(() => this.deps.live.act(conversation, { kind: "steer-queued", id: namedUuid(`steer:${request}`), requestId: running.id, queuedRequestId: request, text, attachments }))
+    const answered = await Promise.race([
+      action.then((taken) => taken.state, (error) => ({ kind: "refused" as const, reason: errorMessage({ error }) })),
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now()) + STEER_ANSWER_MS)),
+    ])
+    const unconfirmed = (reason: string): Delivered => ({ delivery: "steer", hears: `${harness} didn't confirm ${name} took it (${reason}); Mako won't send it again, so look for it in ${name}'s next report before sending it once more.` })
+    if (!answered)
+      return { delivery: "steer", hears: `${harness} holds it until what ${name} is running now returns, then ${name} hears it${steering.answersOnEnd ? "; if its turn ends first, it goes as its next message" : ""}.` }
+    if (answered.kind === "refused") {
+      // Refused before its harness heard it, it's still queued; one whose action took it from the queue has an unknown outcome.
+      const status = this.deps.live.held(conversation)?.requests.find((asked) => asked.id === request)?.status
+      return status === "queued" || status === "held" ? { why: `it couldn't go into its running turn (${answered.reason})` } : unconfirmed(answered.reason)
+    }
+    if (answered.kind === "not-accepted")
+      return { delivery: "queued", hears: `${harness} didn't take it into ${name}'s running turn, so ${name} hears it when that turn ends, as its next message.` }
+    if (answered.kind === "uncertain" || answered.kind === "failed") return unconfirmed(answered.reason)
+    return { delivery: "steer", hears: `${name} hears it ${steering.hears} (${harness}).` }
   }
 
   /** The message the Apex's turn answers: its newest from the person, with what came with it. */
