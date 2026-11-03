@@ -227,7 +227,9 @@ seventh of the cores and 4 GB, and each working Fin `FIN_LOAD` (2) cores of
 load and `FIN_MEMORY`, measured 2026-11-03 when 13 Fins at once held a 14-core
 Mac's load at 26.8 and its host and sync daemon timed out the person's
 requests; load the working Fins don't account for is the person's own work,
-and a Mac out of swap or short of disk takes none. The start's answer carries
+a Mac always runs one, and one out of swap or short of disk runs none.
+`MAKO_FIN_SLOTS` sets the count instead, as a test's host does whatever
+machine runs it. The start's answer carries
 the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
 Mac frees up (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and

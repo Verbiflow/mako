@@ -28,7 +28,7 @@ import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
-import { MacCapacity } from "./mac-capacity.js"
+import { MacCapacity, finSlots } from "./mac-capacity.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
@@ -280,7 +280,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       runs: (harness) => host.nativeRunners.get(harness) !== undefined,
       harnessLabel: (harness) => harnessLabel(host, harness),
       modes: (harness) => host.liveDrivers.get(harness)?.modes,
-      capacity: new MacCapacity(),
+      capacity: new MacCapacity({ ...finSlots() !== undefined && { fixed: finSlots() } }),
     })
     agents.resume()
   }

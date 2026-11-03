@@ -222,6 +222,7 @@ async function macRoom(): Promise<void> {
   assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0 }, 0).slots, 6, "an idle 14-core Mac runs six")
   assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).slots, 2, "the person's own work takes its cores first")
   assert.equal(macSlots({ cores: 14, memoryBytes: 8 * GB, load: 0 }, 0).slots, 4, "memory bounds it too")
+  assert.equal(macSlots({ cores: 4, memoryBytes: 16 * GB, load: 6 }, 0).slots, 1, "a small, busy Mac still runs one at a time")
   assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).slots, 0, "a Mac out of swap takes none")
   assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).why, "14 cores, 36 GB, 8 cores of other work")
 
@@ -246,7 +247,7 @@ async function macRoom(): Promise<void> {
     assert.equal(three.why, "This Mac is busy: it runs 2 Fins at once now (6 cores, 16 GB) and 2 are at work; it starts when one ends or the Mac frees up (0 ahead).")
     assert.deepEqual(three.mac, { working: 2, slots: 2, why: "6 cores, 16 GB" }, "the Apex sees the Mac's room in the answer")
     const four = await w.agents.start(other.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
-    assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), "another tree's spawn waits behind it: the Mac's room is first come, first started")
+    assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), `another tree's spawn waits behind it: the Mac's room is first come, first started: ${JSON.stringify(four)}`)
     const waiting = (apexConversation: string) => w.agents.roster(apexConversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
     assert.deepEqual(waiting(apex.conversation), ["Queued: this Mac is busy, 0 ahead"])
     assert.deepEqual(waiting(other.conversation), ["Queued: this Mac is busy, 1 ahead"])

@@ -965,7 +965,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const counts = this.treeCounts(tree)
     const mac = this.mac
     const forRoom = queued?.why === "place-full"
-    const ahead = forRoom ? store.queuedSpawns().findIndex((spawn) => spawn.op === op) : queue.findIndex((spawn) => spawn.op === op)
+    const forTheMac = store.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full")
+    const ahead = (forRoom ? forTheMac : queue).findIndex((spawn) => spawn.op === op)
     return {
       name: queued?.input.name ?? queued?.input.title ?? "queued",
       state: "queued",
@@ -1469,11 +1470,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()
     if (!store) return []
     const spawns = store.queuedSpawns()
-    return spawns.flatMap((spawn) => {
+    return spawns.flatMap((spawn, at) => {
       const queued = parseQueued(spawn.record)
       if (queued?.lead.thread !== thread) return []
       const reason: QueueReason = queued.why ?? "tree-running"
-      const ahead = spawns.filter((other) => other.at < spawn.at && (reason === "place-full" ? parseQueued(other.record)?.why === "place-full" : other.tree === spawn.tree)).length
+      const ahead = spawns.slice(0, at).filter((other) => (reason === "place-full" ? parseQueued(other.record)?.why === "place-full" : other.tree === spawn.tree)).length
       const placeholder: ThreadParent = {
         child: ThreadIdSchema.parse(namedUuid(spawn.op)),
         parent: ThreadIdSchema.parse(thread),
