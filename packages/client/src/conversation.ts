@@ -1,7 +1,7 @@
 import type { LiveBatch, LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { LivePermissionRequest } from "@mako/host/contracts/providers-acp"
 import type { Entry } from "@mako/sessions/entries"
-import { liveToolFinished, reduceLiveUpdates, toolTitle } from "@mako/sessions/live-content"
+import { continues, liveToolFinished, reduceLiveUpdates, toolTitle } from "@mako/sessions/live-content"
 
 /**
  * One conversation as a client holds it: its blocks, its requests and its open questions, kept current from the
@@ -92,7 +92,7 @@ function changeOf(block: Entry, previous: Entry | undefined, key: string): Conve
     case "text":
     case "thinking": {
       const before = previous?.type === block.type ? previous.text : ""
-      const text = block.text.startsWith(before) ? block.text.slice(before.length) : `\n${block.text}`
+      const text = continues(block.text, before) ? block.text.slice(before.length) : `\n${block.text}`
       return text ? [{ kind: block.type, block: key, text, started: !previous }] : []
     }
     case "tool": {

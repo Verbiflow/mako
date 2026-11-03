@@ -149,6 +149,8 @@ jobs:
       # The rows read `@mako/*` from the packages' builds.
       - run: npm run build:control-runtime
       - run: npm run perf:decoders -- --reference HEAD^1
+      # The host's live delivery, the window's reduction, usage and tool identity (`test-performance-budgets.ts`), the same way.
+      - run: npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --reference HEAD^1
 
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,

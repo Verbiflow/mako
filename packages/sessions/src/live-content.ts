@@ -172,10 +172,14 @@ export function isTurnStart(block: Entry | undefined): boolean {
   )
 }
 
-const changes = new WeakMap<
-  Entry[],
-  { source: WeakRef<Entry[]>; from: number }
->()
+/**
+ * Each reduction's result: the blocks it began from, by the token `sources`
+ * gives them, and the first index it changed. A `WeakRef` would keep each
+ * array it names, and every block only that array held, alive until the job
+ * ends, so a reader folding a conversation's batches in one go held them all.
+ */
+const changes = new WeakMap<Entry[], { source: object; from: number }>()
+const sources = new WeakMap<Entry[], object>()
 
 export function changedEntryStart(
   previous: Entry[],
@@ -183,7 +187,7 @@ export function changedEntryStart(
 ): number {
   if (previous === next) return next.length
   const change = changes.get(next)
-  if (change?.source.deref() === previous) return change.from
+  if (change !== undefined && change.source === sources.get(previous)) return change.from
   let index = 0
   while (
     index < previous.length &&
@@ -268,6 +272,16 @@ function streamed(current: string | undefined, whole: string | undefined, append
 }
 
 /**
+ * Whether `text` begins with `start`: what a streamed value sent whole again
+ * is checked by, against all it held before. V8's `startsWith` compares one
+ * character at a time, and equal-length strings compare in blocks, about 40
+ * times faster on a command's output resent with every line.
+ */
+export function continues(text: string, start: string): boolean {
+  return text.length >= start.length && text.slice(0, start.length) === start
+}
+
+/**
  * How a field travels when its whole value is sent again: nothing when it
  * is unchanged, the new end when it continues the current value, the whole
  * value otherwise.
@@ -275,7 +289,7 @@ function streamed(current: string | undefined, whole: string | undefined, append
 function streamForm(current: string | undefined, whole: string | undefined): { whole?: string; append?: string } | undefined {
   if (whole === undefined || current === undefined) return undefined
   if (whole === current) return {}
-  if (whole.length > current.length && whole.startsWith(current)) return { append: whole.slice(current.length) }
+  if (whole.length > current.length && continues(whole, current)) return { append: whole.slice(current.length) }
   return undefined
 }
 
@@ -706,32 +720,35 @@ function reduce(
   reindex()
   const findCurrent = (key: string) => named.get(key) ?? -1
   for (; current < updates.length; current++) {
-    let update = updates[current]!
+    const update = updates[current]!
     const last = next.at(-1)
+    // What travels is `sent`; these blocks take `update`, the same values, so a value sent whole again stays the one
+    // string the harness sent rather than the old value joined to its new end.
+    let sent: LiveUpdate = update
     if (update.kind === "tool-update" && delivering) {
       const index = tools.get(update.id) ?? -1
       const block = next[index]
       if (block?.type === "tool") {
-        const sent = toolDelivery(block, update)
-        update = sent.update
-        if (!sent.grows || delivering.shifted || delivering.rewritten.has(index)) rewrite(index)
+        const delivered = toolDelivery(block, update)
+        sent = delivered.update
+        if (!delivered.grows || delivering.shifted || delivering.rewritten.has(index)) rewrite(index)
         else if (index < blocks.length) {
           const growth = delivering.delivery.grown.get(index) ?? {}
-          if (update.inputAppend !== undefined) growth.input = (growth.input ?? "") + update.inputAppend
-          if (update.outputAppend !== undefined)
-            growth.output = (growth.output ?? "") + update.outputAppend
+          if (delivered.update.inputAppend !== undefined) growth.input = (growth.input ?? "") + delivered.update.inputAppend
+          if (delivered.update.outputAppend !== undefined)
+            growth.output = (growth.output ?? "") + delivered.update.outputAppend
           delivering.delivery.grown.set(index, growth)
         }
       }
     } else if ((update.kind === "text" || update.kind === "thinking") && update.replace && delivering) {
       const index = update.id ? findCurrent(`${update.kind}:${update.id}`) : last?.type === update.kind ? next.length - 1 : -1
-      update = textDelivery(next[index], update)
+      sent = textDelivery(next[index], update)
     } else if (update.kind === "tool" && delivering) rewrite(tools.get(update.id) ?? next.length)
     else if (update.kind === "retract" && delivering) {
       delivering.shifted = true
       delivering.delivery.grown.clear()
     }
-    delivering?.delivery.updates.push(update)
+    delivering?.delivery.updates.push(sent)
     switch (update.kind) {
       case "user": {
         const previous = next.at(-1)
@@ -915,6 +932,8 @@ function reduce(
     }
   }
   if (from === blocks.length && next.length === blocks.length) return blocks
-  changes.set(next, { source: new WeakRef(blocks), from })
+  let source = sources.get(blocks)
+  if (source === undefined) sources.set(blocks, (source = {}))
+  changes.set(next, { source, from })
   return next
 }
