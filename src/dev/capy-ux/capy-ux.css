@@ -1,0 +1,181 @@
+/* The prototype's own motion: one live mark for every Thread and Fin, and the crew's pips. Tokens come from index.css. */
+
+.lm {
+  position: relative;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.lm-glyph {
+  width: 12px;
+  height: 12px;
+  transition: opacity 200ms var(--ease-out), filter 200ms var(--ease-out);
+}
+.lm-ring {
+  position: absolute;
+  inset: 0;
+  width: 20px;
+  height: 20px;
+  overflow: visible;
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+}
+.lm-track,
+.lm-arc {
+  transform-origin: 10px 10px;
+}
+.lm-track { stroke: transparent; }
+.lm-arc { stroke: transparent; }
+
+/* Working: a comet that runs around the agent's own mark, its tail breathing. */
+.lm[data-state="working"] .lm-track { stroke: color-mix(in oklab, var(--foreground) 11%, transparent); }
+.lm[data-state="working"] .lm-arc {
+  stroke: color-mix(in oklab, var(--foreground) 82%, transparent);
+  stroke-dasharray: 14 44.2;
+  animation: lm-turn 1.15s linear infinite, lm-tail 2.3s ease-in-out infinite;
+  animation-delay: var(--sync-turn, 0ms), var(--sync-tail, 0ms);
+}
+/* The one Thread on screen wears ember: the live dot's colour, once per pane. */
+.lm[data-state="working"][data-lit] .lm-arc { stroke: var(--ember); }
+
+/* Background: the turn ended and its Fins or a watcher still run. The same comet at half speed, quieter. */
+.lm[data-state="background"] .lm-track { stroke: color-mix(in oklab, var(--foreground) 9%, transparent); }
+.lm[data-state="background"] .lm-arc {
+  stroke: color-mix(in oklab, var(--foreground) 48%, transparent);
+  stroke-dasharray: 10 48.2;
+  animation: lm-turn 2.3s linear infinite;
+  animation-delay: var(--sync-slow, 0ms);
+}
+
+/* Starting: the ring draws itself in. */
+.lm[data-state="starting"] .lm-track { stroke: color-mix(in oklab, var(--foreground) 9%, transparent); }
+.lm[data-state="starting"] .lm-arc {
+  stroke: color-mix(in oklab, var(--foreground) 55%, transparent);
+  stroke-dasharray: 58.2;
+  animation: lm-draw 1.6s var(--ease-out) infinite;
+}
+.lm[data-state="starting"] .lm-glyph { opacity: 0.6; }
+
+/* Needs you: a whole ring in caution that breathes, slowly enough to read as waiting, not as work. */
+.lm[data-state="needs"] .lm-track {
+  stroke: var(--caution);
+  animation: lm-breathe 2.4s ease-in-out infinite;
+  animation-delay: var(--sync-breathe, 0ms);
+}
+
+/* Asking its Apex: a dotted ring that drifts; the Apex will answer, not you. */
+.lm[data-state="lead"] .lm-track {
+  stroke: color-mix(in oklab, var(--foreground) 50%, transparent);
+  stroke-dasharray: 0.01 3.63;
+  stroke-width: 1.6;
+  animation: lm-turn 7s linear infinite;
+}
+
+/* Queued: a still, dashed ring and a dimmed mark. */
+.lm[data-state="queued"] .lm-track {
+  stroke: color-mix(in oklab, var(--foreground) 26%, transparent);
+  stroke-dasharray: 2.4 2.45;
+  stroke-width: 1.2;
+}
+.lm[data-state="queued"] .lm-glyph { opacity: 0.45; filter: grayscale(1); }
+
+.lm[data-state="idle"] .lm-glyph,
+.lm[data-state="done"] .lm-glyph { opacity: 0.9; }
+
+.lm-badge {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--lm-cut, var(--shell));
+}
+.lm[data-state="failed"] .lm-badge { background: var(--negative); }
+.lm[data-state="unread"] .lm-badge {
+  top: -1px;
+  bottom: auto;
+  background: var(--foreground);
+  animation: review-dot-arrive 220ms var(--ease-out) both;
+}
+
+@keyframes lm-turn { to { transform: rotate(360deg); } }
+@keyframes lm-tail {
+  0%, 100% { stroke-dasharray: 9 49.2; }
+  50% { stroke-dasharray: 24 34.2; }
+}
+@keyframes lm-draw {
+  0% { stroke-dashoffset: 58.2; opacity: 1; }
+  70% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+@keyframes lm-breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* An Apex's crew, one pip per Fin, in the order every surface lists them. */
+.pips { display: inline-flex; align-items: center; gap: 3px; }
+.pip {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.pip[data-group="needs"] { background: var(--caution); }
+.pip[data-group="working"] {
+  background: color-mix(in oklab, var(--foreground) 80%, transparent);
+  animation: pip-wave 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 140ms);
+}
+.pip[data-group="lead"] { box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--foreground) 62%, transparent); animation: pip-wave 1.8s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 140ms); }
+.pip[data-group="queued"] { box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--foreground) 28%, transparent); }
+.pip[data-group="done"] { background: color-mix(in oklab, var(--foreground) 30%, transparent); }
+.pip[data-group="failed"] { background: var(--negative); }
+@keyframes pip-wave {
+  0%, 100% { opacity: 0.35; transform: scale(0.82); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* The crew's bar: how the Fins split, its working stretch sweeping. */
+.crew-bar { display: flex; height: 4px; gap: 2px; border-radius: 999px; overflow: hidden; }
+.crew-bar > span { border-radius: 999px; min-width: 4px; }
+.crew-bar > [data-group="needs"] { background: var(--caution); }
+.crew-bar > [data-group="working"] {
+  background: linear-gradient(90deg, color-mix(in oklab, var(--foreground) 55%, transparent) 0%, color-mix(in oklab, var(--foreground) 85%, transparent) 50%, color-mix(in oklab, var(--foreground) 55%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: crew-sweep 2.2s linear infinite;
+}
+.crew-bar > [data-group="queued"] { background: color-mix(in oklab, var(--foreground) 14%, transparent); }
+.crew-bar > [data-group="done"] { background: color-mix(in oklab, var(--foreground) 30%, transparent); }
+.crew-bar > [data-group="failed"] { background: var(--negative); }
+@keyframes crew-sweep { to { background-position: -200% 0; } }
+
+.capy-kbd {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  font-size: var(--text-label);
+  line-height: 1;
+  color: var(--faint);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+/* Screenshots stop the clock at a frame that shows each motion mid-way. */
+html[data-still] .lm-arc { animation-play-state: paused; }
+html[data-still] .lm-track,
+html[data-still] .pip,
+html[data-still] .crew-bar > span { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-arc, .lm-track, .pip, .crew-bar > span { animation: none !important; }
+  .lm[data-state="working"] .lm-arc { stroke-dasharray: 18 40.2; transform: rotate(-90deg); }
+}
