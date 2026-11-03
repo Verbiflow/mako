@@ -5,14 +5,15 @@ import { childGroup, childLine, childStateOf, childWord, type ChildGroup } from 
 import { APEX_ROLE, APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ChildStatusMark } from "@/components/stage/child-tabs"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { FinMark } from "@/components/stage/child-tabs"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acp, acpStore } from "@/state/acp"
 import { threadChildren, useThreadChildren } from "@/state/apex-fins"
 import { Elapsed } from "@/components/inspector/elapsed"
+import { finTuningLine } from "@mako/host/contracts/fin-tuning"
+import { SignpostIcon } from "lucide-react"
 
 const HEADINGS = {
   needs: "Needs you",
@@ -135,7 +136,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
   const line = childLine(state)
   const facts = [
     harnessLabel(agent.provider),
-    agent.model,
+    agent.runsOn ? finTuningLine(agent.runsOn) : agent.model,
     agent.role === APEX_ROLE ? APEX_WORD : undefined,
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
   ].filter(Boolean)
@@ -150,7 +151,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
         className={cn("pressable flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", lit && "bg-fill-selected")}
       >
         <span className="flex h-5 shrink-0 items-center">
-          <HarnessIcon harness={agent.provider} className="size-3.5" />
+          <FinMark agent={agent} state={state} read cut={lit ? "var(--raised)" : undefined} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex h-5 min-w-0 items-center gap-2">
@@ -159,7 +160,6 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
               {childWord(state)}
               <Elapsed agent={agent} />
             </span>
-            <ChildStatusMark state={state} read />
           </span>
           {line && state.kind !== "queued" && state.kind !== "starting" ? <span className="line-clamp-2 text-ui leading-snug text-muted-foreground">{line}</span> : null}
           <span className="mt-0.5 flex flex-wrap gap-x-1.5 text-label text-faint">
@@ -170,6 +170,17 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
               </span>
             ))}
           </span>
+          {agent.runsOn?.rule ? (
+            <span data-fin-rule-applied className="flex min-w-0 items-center gap-1 text-label text-faint" title={`Started by your rule: ${agent.runsOn.rule}`}>
+              <SignpostIcon aria-hidden className="size-3 shrink-0" />
+              <span className="truncate">{agent.runsOn.rule}</span>
+            </span>
+          ) : null}
+          {agent.runsOn?.note ? (
+            <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
+              {agent.runsOn.note}
+            </span>
+          ) : null}
         </span>
       </button>
       {agent.role === APEX_ROLE && agent.child ? <SubApexFold thread={agent.child.thread} onOpen={onOpen} /> : null}

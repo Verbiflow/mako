@@ -382,11 +382,6 @@ export function openSubjectId(id: string): void {
   if (item) openItem(item)
 }
 
-/** The next thread needing you, most urgent first; null when there is none. */
-export function nextUnseen(): NotificationItem | null {
-  return unseenItems(notificationsStore.get().items)[0] ?? null
-}
-
 /* ------------------------------------------------------------------ */
 /* Badge                                                                */
 /* ------------------------------------------------------------------ */

@@ -15,6 +15,12 @@
  * reads the gate with `running` as its fallback, so an element nobody
  * observes keeps moving rather than standing still. (The orbs, painted on a
  * canvas by their worker, pause the same way in `orb-client.ts`.)
+ *
+ * A phase-locked element (`observePhaseLockedAnimation`) also runs on the
+ * document's one clock: each time it starts moving, its animations' start is
+ * set to the timeline's origin, so every such mark on screen is at the same
+ * point of its loop however late it mounted, re-sorted or came back into
+ * view.
  */
 
 type Animated = HTMLElement | SVGElement
@@ -22,6 +28,7 @@ type Animated = HTMLElement | SVGElement
 interface Observed {
   element: Animated
   intersecting: boolean
+  phaseLocked?: boolean
 }
 
 const observed = new Map<Element, Observed>()
@@ -31,6 +38,9 @@ let reducedMotion: MediaQueryList | null = null
 function apply(entry: Observed, running: boolean) {
   entry.element.style.setProperty("--visible-animation-state", running ? "running" : "paused")
   entry.element.style.setProperty("--visible-animation-will-change", running ? "transform" : "auto")
+  // Reading the animations flushes the style just set, so each is already playing when its start moves.
+  if (running && entry.phaseLocked)
+    for (const animation of entry.element.getAnimations({ subtree: true })) animation.startTime = 0
 }
 
 function update(entry: Observed) {
@@ -46,9 +56,9 @@ function updateAll() {
  * window hidden, or motion reduced. Usable as a React ref callback: the
  * returned function stops observing and leaves the element paused.
  */
-export function observeVisibleAnimation(element: Animated | null): (() => void) | undefined {
+export function observeVisibleAnimation(element: Animated | null, phaseLocked = false): (() => void) | undefined {
   if (element === null) return undefined
-  const entry: Observed = { element, intersecting: false }
+  const entry: Observed = { element, intersecting: false, phaseLocked }
   apply(entry, false)
   if (observer === null) {
     reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -78,4 +88,9 @@ export function observeVisibleAnimation(element: Animated | null): (() => void) 
     reducedMotion = null
     document.removeEventListener("visibilitychange", updateAll)
   }
+}
+
+/** `observeVisibleAnimation` on the shared clock: usable as a ref callback. */
+export function observePhaseLockedAnimation(element: Animated | null): (() => void) | undefined {
+  return observeVisibleAnimation(element, true)
 }

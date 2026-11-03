@@ -1,4 +1,28 @@
-import type { SimulatorAction, SimulatorHostKind, SimulatorHostSummary, SimulatorReadKind, SimulatorsShot, SimulatorSummary } from "../../contracts/simulators.js"
+import type { ControlVideoPacket } from "@mako/control-runtime/contracts"
+import type {
+  SimulatorAction,
+  SimulatorCaller,
+  SimulatorHostKind,
+  SimulatorHostSummary,
+  SimulatorReadKind,
+  SimulatorsActInput,
+  SimulatorsActResult,
+  SimulatorsOpenInput,
+  SimulatorsOpenResult,
+  SimulatorsReadInput,
+  SimulatorsReadResult,
+  SimulatorsRecordInput,
+  SimulatorsRecordResult,
+  SimulatorsReleaseInput,
+  SimulatorsReleaseResult,
+  SimulatorsShot,
+  SimulatorsShotInput,
+  SimulatorsShotResult,
+  SimulatorSummary,
+  SimulatorsWatchInput,
+  SimulatorsWatchResult,
+  ListedSimulator,
+} from "../../contracts/simulators.js"
 
 /**
  * Everything one kind of host does with its simulators, so `Simulators` (claims, consent, refusals, the log) is the
@@ -36,6 +60,44 @@ export interface SimulatorHost {
    * folder so the next host stops any this one left running; sessions others started on the account are never touched.
    */
   close(): Promise<void>
+  /**
+   * The screen as it changes, for `SimulatorStreams` to share among every viewer: started for the first viewer and
+   * stopped after the last. A host without it can't be watched, only shot.
+   */
+  frames?(simulator: string, sink: SimulatorFrameSink): Promise<SimulatorFrameSource>
+}
+
+/** Where a host sends its screen: each packet as it's made, and the end with why. */
+export interface SimulatorFrameSink {
+  packet(packet: ControlVideoPacket): void
+  ended(reason: string): void
+}
+
+/** A host's running stream of one screen. */
+export interface SimulatorFrameSource {
+  /** A viewer joined or fell behind and needs a key frame to start from; the host sends one soon. */
+  keyFrame(): void
+  /** The largest box any viewer draws in, so the host encodes no more than that. */
+  resize(box: { width: number; height: number }): void
+  stop(): Promise<void>
+}
+
+/**
+ * Another Mako host's simulators, reached by their verbs, not their host operations: its claims, its consent and its
+ * log are its own, so whatever drives one of them is decided once, where it runs. `Simulators` checks this Mac's
+ * project consent for its own agents, then hands the call on with the Thread this Mac already resolved.
+ */
+export interface RemoteSimulatorHost {
+  readonly id: string
+  readonly label: string
+  list(caller: SimulatorCaller): Promise<{ hosts: SimulatorHostSummary[]; simulators: ListedSimulator[] }>
+  open(caller: SimulatorCaller, input: SimulatorsOpenInput): Promise<SimulatorsOpenResult>
+  act(caller: SimulatorCaller, input: SimulatorsActInput): Promise<SimulatorsActResult>
+  read(caller: SimulatorCaller, input: SimulatorsReadInput): Promise<SimulatorsReadResult>
+  shot(caller: SimulatorCaller, input: SimulatorsShotInput): Promise<SimulatorsShotResult>
+  record(caller: SimulatorCaller, input: SimulatorsRecordInput): Promise<SimulatorsRecordResult>
+  release(caller: SimulatorCaller, input: SimulatorsReleaseInput): Promise<SimulatorsReleaseResult>
+  watch(caller: SimulatorCaller, input: SimulatorsWatchInput): Promise<SimulatorsWatchResult>
 }
 
 /** A host that can't do this operation: its words go to the caller as the refusal's reason. */

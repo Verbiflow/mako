@@ -792,6 +792,17 @@ git(app, "worktree", "add", "-q", "-b", "feature", join(suite, "app-feature"))
 assert.deepEqual(await projectRepositories(gitRunner, suite), { roots: [api, app] })
 git(app, "worktree", "remove", join(suite, "app-feature"))
 await assert.rejects(worktrees.prepare(randomUUID(), suite, "x", { kind: "from", ref: "main" }), /holds several repositories/)
+// A branch it names is every repository's: worked on where it exists, made from the newest start where it doesn't.
+git(api, "branch", "fix/shared", "HEAD")
+const apiShared = git(api, "rev-parse", "fix/shared")
+const sharedId = randomUUID()
+const shared = await worktrees.prepare(sharedId, suite, "Shared branch", { kind: "branch", branch: "fix/shared" })
+assert.equal(shared.branch, "fix/shared")
+assert.deepEqual([git(join(shared.path, "app"), "rev-parse", "--abbrev-ref", "HEAD"), git(join(shared.path, "api"), "rev-parse", "--abbrev-ref", "HEAD")], ["fix/shared", "fix/shared"], "each repository's worktree is on the branch it names")
+assert.equal(git(join(shared.path, "api"), "rev-parse", "HEAD"), apiShared, "a repository that had it works on it as it was")
+await worktrees.abandon(sharedId)
+assert.deepEqual([git(app, "branch", "--list", "fix/shared"), git(api, "branch", "--list", "fix/shared").trim()], ["", "fix/shared"], "giving it back deletes only the empty branch it made, never one that was there")
+git(api, "branch", "-D", "fix/shared")
 recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
 
 // Folders that can't have one say what to do instead.
@@ -804,4 +815,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, spares mirroring it taken whole and caught up per repository, spares replaced when its repositories change, a linked worktree beside its repository left out, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole), refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, spares mirroring it taken whole and caught up per repository, spares replaced when its repositories change, a linked worktree beside its repository left out, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole, on one branch it names), refusals")

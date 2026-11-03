@@ -52,6 +52,7 @@ import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../cont
 import { ReportSchema, ThreadParentSchema, type FollowedRun, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
+import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
 
 /**
  * The per-user Thread store: which Session every journal and native session
@@ -86,8 +87,10 @@ export const THREAD_STORE_READS = 1
  * ignore. The schema number rises only for a change an older writer would
  * break; an older host then reads the store and changes nothing in it, and
  * only one older than `THREAD_STORE_READS` leaves it.
+ *
+ * Migration 7 adds `thread_places` and `thread_splits` (`thread-split.ts`), which older builds ignore.
  */
-export const THREAD_STORE_MIGRATION = 6
+export const THREAD_STORE_MIGRATION = 7
 
 /**
  * The store is synchronous on the host's main thread. Opening waits as long
@@ -268,6 +271,14 @@ export interface ThreadStoreOptions {
   writer?: string
   /** The format this build writes; the constants unless a test plays a newer build. */
   format?: { writableBy: number; readableBy: number }
+  /**
+   * A Thread is one conversation (`docs/one-conversation.md`): each open splits every Thread holding several Sessions
+   * (`splitThreads`), having kept a copy of the store first, and a fork or a `+` makes a Thread of its own in its
+   * source's place. Off until the windows draw one conversation per Thread.
+   */
+  oneConversation?: boolean
+  /** A test's hook after each Thread the split finishes, inside its transaction. */
+  afterSplitThread?: (done: number) => void
 }
 
 export interface MoveStatus {
@@ -672,11 +683,16 @@ export class ThreadStore {
   private readonly reported = new Set<string>()
   private readonly statements = new Map<string, StatementSync>()
   readonly conflicts: StoreConflict[] = []
+  /** Whether a Thread is one conversation here (`ThreadStoreOptions.oneConversation`). */
+  readonly oneConversation: boolean
+  private readonly afterSplitThread: ((done: number) => void) | undefined
 
   constructor(path: string, options: ThreadStoreOptions = {}) {
     this.path = path
     this.now = options.now ?? Date.now
     this.realPath = options.realPath ?? realNativePath
+    this.oneConversation = options.oneConversation === true
+    this.afterSplitThread = options.afterSplitThread
     this.build = options.format ?? { writableBy: THREAD_STORE_SCHEMA, readableBy: THREAD_STORE_READS }
     if (options.readOnly) {
       this.reader = new ReadOnlyConnection(path, { timeout: WRITE_WAIT_MS })
@@ -716,6 +732,10 @@ export class ThreadStore {
     enableSharedWal(this.db, OPEN_WAIT_MS)
     this.db.exec(`PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
+    if (this.oneConversation && storeAccess(readStoreFormat(this.db, "store_meta"), this.build.writableBy) === "write") {
+      const kept = keepPreSplitCopy(this.db, this.path)
+      if (kept) hostLog("threads", "kept a copy of the Thread store before splitting its Threads", { kept })
+    }
     // Lock before reading the version so two hosts creating the store at
     // once cannot both mint a device and a principal.
     this.db.exec("BEGIN IMMEDIATE")
@@ -910,8 +930,10 @@ export class ThreadStore {
       if (!this.sql("SELECT id FROM threads WHERE id = ?").get(edge.parent) || !this.sql("SELECT id FROM threads WHERE id = ?").get(edge.child))
         throw new Error("A parent edge names a Thread that isn't in the Thread store")
       const run: FollowedRun | undefined = edge.run && previous?.run?.ended ? { ...edge.run, ended: previous.run.ended } : edge.run
+      const closedAt = previous?.closedAt ?? edge.closedAt
+      const closedReason = previous?.closedAt !== undefined ? previous.closedReason : edge.closedReason
       const next: ThreadParent = previous
-        ? { ...previous, ...(run && { run }), ...((previous.closedAt ?? edge.closedAt) !== undefined && { closedAt: previous.closedAt ?? edge.closedAt }) }
+        ? { ...previous, ...(run && { run }), ...(closedAt !== undefined && { closedAt, ...(closedReason && { closedReason }) }) }
         : { ...edge, ...(run && { run }) }
       this.sql(`INSERT INTO thread_parents (child_thread, parent_thread, name, op, run_harness, run_native_id, record, created_at, closed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1186,6 +1208,41 @@ export class ThreadStore {
       })
   }
 
+  /**
+   * The Thread whose place `thread` works in: the owner of the worktree it shares (`thread_places`), following
+   * merges, or itself. A worktree's row stays with its owner; every Thread in the place finds it here.
+   */
+  placeOf(thread: ThreadId): ThreadId {
+    let current = this.thread(thread)?.id ?? thread
+    for (let hops = 0; hops < 16; hops += 1) {
+      const found = this.sql("SELECT place_thread FROM thread_places WHERE thread_id = ?").get(current)
+      if (!found) return current
+      const next = this.thread(ThreadIdSchema.parse(z.object({ place_thread: z.string() }).parse(found).place_thread))?.id
+      if (!next || next === current) return current
+      current = next
+    }
+    return current
+  }
+
+  /** The Threads a split made, each with the Thread and Session it came from, for a window carrying what it kept by Thread. */
+  threadSplits(): { thread: ThreadId; from: ThreadId; session: SessionId; fromTitle?: string }[] {
+    return this.sql("SELECT thread_id, from_thread, session_id, from_title FROM thread_splits ORDER BY from_thread, position").all().map((row) => {
+      const found = z.object({ thread_id: z.string(), from_thread: z.string(), session_id: z.string(), from_title: z.string().nullable() }).parse(row)
+      return { thread: ThreadIdSchema.parse(found.thread_id), from: ThreadIdSchema.parse(found.from_thread), session: SessionIdSchema.parse(found.session_id), ...(found.from_title !== null && { fromTitle: found.from_title }) }
+    })
+  }
+
+  /** A Thread of its own for a fork or a second conversation, in `source`'s place. */
+  private mintBeside(source: string, why: "fork" | "new", origin: SessionOrigin, parent: string | null, actor: Actor, owner: ExecutionOwner = this.self, id?: SessionId): string {
+    const session = this.mintSession(origin, parent, actor, owner, id)
+    const thread = randomUUID()
+    this.sql("INSERT INTO threads (id, owner_id, created_at, created_by) VALUES (?, ?, ?, ?)").run(thread, this.localPrincipal, this.now(), JSON.stringify(actor))
+    this.addMember(ThreadIdSchema.parse(thread), session, actor)
+    this.sql("INSERT OR REPLACE INTO thread_places (thread_id, place_thread, why, created_at) VALUES (?, ?, ?, ?)")
+      .run(thread, this.placeOf(ThreadIdSchema.parse(source)), why, this.now())
+    return session
+  }
+
   /** Record what Mako started a Thread for; the first purpose recorded for it stays. */
   markPurpose(thread: ThreadId, kind: ThreadPurposeKind, project: string): void {
     const current = this.thread(thread)
@@ -1277,7 +1334,11 @@ export class ThreadStore {
       this.sql("DELETE FROM thread_worktree_repositories WHERE path = ?").run(path)
       if (checkout !== path && this.sql("SELECT 1 AS found FROM thread_worktree_repositories WHERE checkout = ? LIMIT 1").get(checkout)) return
       this.sql("DELETE FROM thread_worktree_repositories WHERE checkout = ?").run(checkout)
+      const owner = this.sql("SELECT thread_id FROM thread_worktrees WHERE path = ? AND device_id = ?").get(checkout, this.deviceId)
       this.sql("DELETE FROM thread_worktrees WHERE path = ? AND device_id = ?").run(checkout, this.deviceId)
+      // The place is gone: a Thread that shared it doesn't inherit the owner's next worktree.
+      if (owner && !this.sql("SELECT 1 AS found FROM thread_worktrees WHERE thread_id = ?").get(MembershipRowSchema.parse(owner).thread_id))
+        this.sql("DELETE FROM thread_places WHERE place_thread = ?").run(MembershipRowSchema.parse(owner).thread_id)
     })
   }
 
@@ -1431,6 +1492,11 @@ export class ThreadStore {
       // A Thread that runs elsewhere (moved to the cloud) gains its new Session there, under the same owner; one that is
       // moving gains none until the move ends.
       const away = this.awayOwner(thread.sessions)
+      if (this.oneConversation) {
+        // A second conversation is a Thread of its own, beside this one.
+        const session = this.mintBeside(thread.id, "new", "new", null, input.actor, away, input.session)
+        return this.placeSession(session)
+      }
       const session = this.mintSession("new", null, input.actor, away, input.session)
       this.addMember(thread.id, session, input.actor)
       this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(thread.id)
@@ -2044,6 +2110,7 @@ export class ThreadStore {
     const parent = ref.parentNativeId ? this.nativeSession(ref.harness, ref.parentNativeId) : undefined
     if (!parent) return this.mintSingleton("imported", null, actor)
     const home = this.placeSession(parent).thread
+    if (this.oneConversation) return this.mintBeside(home, "fork", "imported", parent, actor)
     const here = this.thread(home)?.sessions.every((member) => this.executionState(member).state === "here")
     if (!here) return this.mintSingleton("imported", parent, actor)
     const session = this.mintSession("imported", parent, actor)
@@ -2059,7 +2126,7 @@ export class ThreadStore {
    * untitled Thread, and no Mako conversation of its own.
    */
   private adoptFork(session: string, ref: SourceRef, actor: Actor): void {
-    if (!ref.parentNativeId) return
+    if (!ref.parentNativeId || this.oneConversation) return
     const current = this.canonical(session)
     if (!current) return
     const row = this.sessionRow(current)
@@ -2206,6 +2273,7 @@ export class ThreadStore {
   private mintDescendant(ancestry: NonNullable<JournalFacts["ancestry"]>, actor: Actor): string {
     const found = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(ancestry.parentId)
     const parent = found ? this.canonical(SessionRowSchema.parse(found).session_id) ?? null : null
+    if (this.oneConversation && parent) return this.mintBeside(this.placeSession(parent).thread, "fork", "fork", parent, actor, this.self, ancestry.session)
     const home = parent && ancestry.placement === "parent-thread" ? this.forkHome(parent) : undefined
     if (!home) return this.mintSingleton("fork", parent, actor, ancestry.session)
     const session = this.mintSession("fork", parent, actor, this.self, ancestry.session)
@@ -2369,6 +2437,12 @@ export class ThreadStore {
       SELECT id, ?, ?, 1, NULL, ?, ? FROM sessions
       WHERE merged_into IS NULL AND NOT EXISTS (SELECT 1 FROM executions WHERE session_id = sessions.id)`)
       .run(kind, id, this.now(), JSON.stringify(actor))
+    this.db.exec(SPLIT_TABLES)
+    if (this.oneConversation) {
+      const self = ExecutionOwnerSchema.parse(JSON.parse(z.string().parse(this.meta("self"))))
+      const counts = splitThreads(this.db, { self, now: this.now(), actor, ...(this.afterSplitThread && { afterThread: this.afterSplitThread }) })
+      if (counts.threads || counts.deferred) hostLog("threads", "split Threads into one conversation each", { ...counts })
+    }
     this.db.prepare("INSERT OR IGNORE INTO store_migrations (version, applied_at) VALUES (?, ?)").run(THREAD_STORE_MIGRATION, this.now())
   }
 

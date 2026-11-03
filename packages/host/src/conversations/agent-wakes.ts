@@ -46,6 +46,8 @@ export interface AgentWakesDeps {
   delivered(reports: readonly string[], at: number): void
   /** The digest's last line: how the Apex's Fins stand now. */
   counts(conversation: string): string
+  /** Whether a notice still says how its Fin stands: an end the host inferred for a Fin that works again doesn't. */
+  current?(notice: Notice): boolean
   now?(): number
 }
 
@@ -126,6 +128,11 @@ export class AgentWakes {
     return waiting.notices.length < before
   }
 
+  /** Whether notices wait for this Apex's conversation: a turn of its own is coming. */
+  waits(conversation: string): boolean {
+    return Boolean(this.waiting.get(conversation)?.notices.length)
+  }
+
   /** How many notices wait, across every Apex: Diagnostics shows it. */
   pending(): number {
     let count = this.steering.size
@@ -154,6 +161,17 @@ export class AgentWakes {
   private flush(conversation: string): void {
     const waiting = this.waiting.get(conversation)
     if (!waiting?.notices.length || this.stopped) return
+    const stale = this.deps.current ? waiting.notices.filter((notice) => !this.deps.current!(notice)) : []
+    if (stale.length) {
+      this.deps.delivered(stale.map((notice) => notice.report.id), this.now())
+      for (const notice of stale) this.heard.add(notice.id)
+      waiting.notices = waiting.notices.filter((notice) => !stale.includes(notice))
+      hostLog("agents", "stale end not reported", { conversation, reports: stale.map((notice) => notice.report.id).join(" ") })
+      if (!waiting.notices.length) {
+        this.waiting.delete(conversation)
+        return
+      }
+    }
     const ready = this.deps.ready(conversation)
     if (ready === "gone") {
       // Kept unheard in the store: the host that has the Apex sends them on its start.

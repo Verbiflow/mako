@@ -8,9 +8,10 @@ import { noteAnswered } from "./install"
 /**
  * In an Apex's dock, where its own ask would be: what one of its Fins asks the person. Its options are rows a thumb's
  * size, the one it recommends filled; words typed in the composer answer it too, so a word from the phone is enough.
- * The answer is the person's own, and reaches the Fin as its next step.
+ * The answer is the person's own, and reaches the Fin as its next step. In the Inbox (`from`, its Apex's name) the same
+ * card sits in the page, the Apex named before the Fin.
  */
-export function FinAskCard({ apex, ask, more, answerTyped }: { apex: string; ask: PersonAsk; more: number; answerTyped: (answer: ((text: string) => boolean) | null) => void }) {
+export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: string; ask: PersonAsk; more: number; answerTyped: (answer: ((text: string) => boolean) | null) => void; from?: string }) {
   const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
   const send = (answer: FinAnswer) => {
     if (sent) return
@@ -32,11 +33,11 @@ export function FinAskCard({ apex, ask, more, answerTyped }: { apex: string; ask
   })
   const options = ask.ask.options ?? []
   return (
-    <div className="web-ask" data-ask="fin" data-fin-ask={ask.ask.kind} data-fin={ask.fin}>
+    <div className="web-ask" data-ask="fin" data-fin-ask={ask.ask.kind} data-fin={ask.fin} data-in-inbox={from ? true : undefined}>
       <div className="web-ask-body" aria-busy={sent ? true : undefined} data-busy={sent ? true : undefined}>
         <p className="web-ask-asker flex items-center gap-1.5">
           <WebHarnessIcon harness={ask.harness} className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate">{`${ask.title} asks`}</span>
+          <span className="min-w-0 truncate">{from ? `${from} › ${ask.title}` : `${ask.title} asks`}</span>
           {more ? <span className="shrink-0 text-faint">· {more === 1 ? `1 more ${FIN_WORD} asks` : `${more} more ${FIN_WORD}s ask`}</span> : null}
         </p>
         <p className="web-ask-title">

@@ -37,6 +37,12 @@ const DISCOVER_MS = 10 * 60_000
 const DISCOVER_START_MS = 60_000
 /** A stopped run gets this long before its process group is killed. */
 export const STOP_GRACE_MS = 5_000
+/**
+ * How long a run's Session stays quiet after its process went before the run
+ * is declared ended: a chat resumed in a new process (to hand it a message)
+ * writes the same Session, and isn't over.
+ */
+export const END_CONFIRM_MS = 10_000
 
 export type RunEnd = NonNullable<FollowedRun["ended"]>
 
@@ -89,6 +95,8 @@ interface Followed {
   again: boolean
   /** Its process's identity was checked against its start this host's life: after that, a signal says it runs. */
   checked: boolean
+  /** When its process was first seen gone and when its Session was last written then, while its end waits to be confirmed by a quiet Session. */
+  gone?: { at: number; written: number }
 }
 
 /** What a link or a discovery takes in. */
@@ -147,14 +155,19 @@ export class AgentRuns {
     if (!followed) return undefined
     const { edge, reading } = followed
     const run = edge.run!
-    const ended = run.ended
+    // An end is written once, but a Session written since, and lately, says the run goes on in a process Mako lost.
+    const written = Date.parse((reading.session && this.deps.catalog.ref(reading.session.path)?.updatedAt) || "")
+    const revived = run.ended !== undefined && run.ended.kind !== "stopped" && written > run.ended.at && this.now() - written < END_CONFIRM_MS
+    const ended = revived ? undefined : run.ended
+    // The Thread's own name (a link's) before its Session's, which is its first prompt's line.
+    const title = this.deps.store()?.thread(edge.child)?.title ?? reading.session?.title
     return {
       source: "followed",
       ...(run.nativeId && { nativeId: run.nativeId }),
       ...(reading.session && { path: reading.session.path }),
-      ...(reading.session?.title && { title: reading.session.title }),
+      ...(title && { title }),
       harness: run.harness,
-      ...(!ended && { working: reading.alive !== false || reading.activity === "active" }),
+      ...(!ended && { working: revived || reading.alive !== false || reading.activity === "active" }),
       ...(!ended && reading.step && { step: reading.step }),
       ...(!ended && reading.activity === "needs-input" && { waiting: { question: "It waits for an answer in its own terminal.", on: "person" as const } }),
       ...(ended && { ended: { outcome: ended.kind === "unknown" ? "unknown" : ended.kind, ...(ended.detail && { reason: ended.detail }), at: ended.at } }),
@@ -184,7 +197,9 @@ export class AgentRuns {
     const kept = store.edges().byRun(ref.harness, ref.nativeId)
     const parent = store.sessionPlacement(SessionIdSchema.parse(input.parentSession))
     if (!parent) return { refused: "no-parent", why: "This Thread isn't in the Thread store yet." }
-    if (kept) return kept.parent === parent.thread ? kept : { refused: "conflict", why: "That session already works for another Thread." }
+    if (kept && kept.parent !== parent.thread) return { refused: "conflict", why: "That session already works for another Thread." }
+    // Discovery finds a run its link already named, maybe by another of its processes (a wrapper's child): that edge stands.
+    if (kept) return input.origin === "linked" ? this.relink(kept, input) : kept
     const child = store.place(ref, input.startedBy).thread
     if (child === parent.thread || store.ancestors(parent.thread).includes(child))
       return { refused: "cycle", why: "That session is this Thread or one of its Apexes." }
@@ -211,6 +226,7 @@ export class AgentRuns {
         startedAt,
       },
     })
+    if (input.name) store.keepThreadTitle(edge.child, input.name)
     hostLog("agents", "edge written", { op: edge.op, child: edge.child, parent: edge.parent, origin: input.origin, harness: ref.harness })
     this.sync()
     const followed = this.followed.get(edge.child) ?? this.follow(edge)
@@ -226,6 +242,37 @@ export class AgentRuns {
     return followed.edge
   }
 
+  /**
+   * A run linked again: the same Fin, now followed through the process the
+   * link names, since a chat resumed in a new process (to hand it a message)
+   * is the same run. An end already written stands: a new process of an
+   * ended run is refused, and a message (`agents_send`) resumes it instead.
+   */
+  private relink(kept: ThreadParent, input: RunAdoption): ThreadParent | AgentRefused {
+    const store = this.requireStore()
+    if (input.name) store.keepThreadTitle(kept.child, input.name)
+    const run = kept.run
+    const process = input.process
+    if (!run || !process || (run.process?.pid === process.pid && run.process.startedAt === process.startedAt)) return kept
+    if (run.ended)
+      return { refused: "conflict", why: `That run already ended (${run.ended.kind}); Mako doesn't follow a new process of it. agents_send gives it a message, which resumes its session here.` }
+    const edge = store.keepEdge({ ...kept, run: { ...run, process } })
+    const followed = this.followed.get(edge.child) ?? this.follow(edge)
+    this.moved(followed, edge, "a new link")
+    return edge
+  }
+
+  /** A run now runs in another process: followed there, and its end no longer awaited. */
+  private moved(followed: Followed, edge: ThreadParent, by: string): void {
+    hostLog("agents", "run moved to a new process", { child: edge.child, from: followed.edge.run?.process?.pid ?? null, to: edge.run?.process?.pid ?? null, by })
+    followed.edge = edge
+    followed.checked = true
+    followed.gone = undefined
+    followed.reading = { ...followed.reading, alive: true }
+    this.wantChecks()
+    this.deps.changed(edge, false)
+  }
+
   /** The pid a link names, checked to run on this device now. */
   async processOf(pid: number): Promise<FollowedRun["process"] | undefined> {
     const startedAt = await processStartedAt(pid, this.abort.signal).catch(() => undefined)
@@ -233,16 +280,33 @@ export class AgentRuns {
   }
 
   /** Stops a followed run on this device: its whole process group, killed after `STOP_GRACE_MS`. */
-  stop(child: string): boolean {
+  stop(child: string, detail?: string): boolean {
     this.sync()
     const followed = this.followed.get(child)
     const run = followed?.edge.run
     const store = this.deps.store()
     if (!followed || !run || !store || run.ended || !run.process || run.device !== store.deviceId) return false
     const { pid } = run.process
-    this.end(followed, { at: this.now(), kind: "stopped", ...(followed.reading.toolUses && { toolUses: followed.reading.toolUses }) })
+    this.end(followed, { at: this.now(), kind: "stopped", ...(detail && { detail }), ...(followed.reading.toolUses && { toolUses: followed.reading.toolUses }) })
     signalGroup(pid, "SIGTERM")
     setTimeout(() => signalGroup(pid, "SIGKILL"), STOP_GRACE_MS).unref()
+    return true
+  }
+
+  /**
+   * Stops a followed run so its Session can go on in a conversation Mako
+   * drives: its end written as `stopped` (which reports nothing), and settled
+   * once its process has exited, so two processes never write the Session.
+   * False when Mako can't stop it here or it outlived its kill.
+   */
+  async handOver(child: string): Promise<boolean> {
+    const pid = this.followed.get(child)?.edge.run?.process?.pid
+    if (pid === undefined || !this.stop(child, "Mako stopped it to hand it a message; its session goes on in a conversation here.")) return false
+    const deadline = Date.now() + STOP_GRACE_MS + 2_000
+    while (signalable(pid)) {
+      if (Date.now() > deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
     return true
   }
 
@@ -353,12 +417,55 @@ export class AgentRuns {
       const run = followed.edge.run
       if (!run || run.ended || !run.process || run.device !== device) continue
       const alive = await this.alive(followed, run.process).catch(() => true)
+      if (alive) followed.gone = undefined
+      else if (!(await this.endConfirmed(followed))) continue
       if (alive !== followed.reading.alive) {
         followed.reading = { ...followed.reading, alive }
         this.deps.changed(followed.edge, false)
       }
       if (!alive) await this.settle(followed)
     }
+  }
+
+  /**
+   * Its process went: whether the run has ended. One that exited under #286's
+   * wrapper says so. Otherwise a Session written since runs on: in a process
+   * of its Apex's shell that holds it, followed there, or one Mako can't name
+   * yet. Only a Session quiet for `END_CONFIRM_MS` after the process went has
+   * ended.
+   */
+  private async endConfirmed(followed: Followed): Promise<boolean> {
+    const run = followed.edge.run!
+    if (run.runDir) return true
+    const now = this.now()
+    const path = followed.reading.session?.path
+    const written = Date.parse((path && this.deps.catalog.ref(path)?.updatedAt) || "") || 0
+    followed.gone ??= { at: now, written }
+    if (written > followed.gone.written) {
+      const successor = await this.successor(followed).catch(() => undefined)
+      const store = this.deps.store()
+      if (successor && store) {
+        this.moved(followed, store.keepEdge({ ...followed.edge, run: { ...run, process: successor } }), "its session")
+        return false
+      }
+    }
+    return now - Math.max(followed.gone.at, written) >= END_CONFIRM_MS
+  }
+
+  /** Another process of its Apex's shell that holds its Session's file: the same chat, resumed. */
+  private async successor(followed: Followed): Promise<FollowedRun["process"] | undefined> {
+    const path = followed.reading.session?.path
+    const gone = followed.edge.run?.process?.pid
+    if (!path) return undefined
+    const reads = this.deps.processes ?? PROCESS_READS
+    const marked = (await reads.marked(SESSION_VARIABLE, this.abort.signal))
+      .filter((process) => process.value === followed.edge.parentSession && process.pid !== gone)
+    if (!marked.length) return undefined
+    const holding = await reads.holding(path, marked.map((process) => process.pid), this.abort.signal)
+    const found = marked.find((process) => holding.has(process.pid))
+    if (!found) return undefined
+    const startedAt = await reads.startedAt(found.pid, this.abort.signal).catch(() => undefined)
+    return { pid: found.pid, ...(startedAt !== undefined && { startedAt }) }
   }
 
   private async alive(followed: Followed, process: NonNullable<FollowedRun["process"]>): Promise<boolean> {

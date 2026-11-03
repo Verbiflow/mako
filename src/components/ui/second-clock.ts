@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react"
+import { useCallback, useSyncExternalStore } from "react"
 
 /**
  * One clock for every elapsed time on screen. A row counting up subscribes
@@ -41,4 +41,20 @@ const still = () => () => {}
  */
 export function useSecondClock(live: boolean): number {
   return useSyncExternalStore(live ? subscribe : still, read, read)
+}
+
+/**
+ * A label drawn from the shared clock. Subscribes only while `live`, and
+ * re-renders only when `label` returns a different string, so a minute
+ * ("18m") doesn't repaint every second the clock ticks.
+ */
+export function useTickingText(
+  live: boolean,
+  label: (now: number) => string
+): string {
+  const get = useCallback(
+    () => (live ? label(read()) : label(0)),
+    [live, label]
+  )
+  return useSyncExternalStore(live ? subscribe : still, get, get)
 }

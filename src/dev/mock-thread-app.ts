@@ -14,7 +14,7 @@
 // asleep (a cloud Thread's machine asleep, its app paused running; Run or Open wakes it),
 // asleep-stopped (the same, the app stopped when it fell asleep), waking (asleep, a call waking it), and
 // rail (running, with four of the api project's Threads in worktrees whose
-// apps run, start, crash and wait, for the sidebar's marks and the Status view's Room).
+// apps run, start, crash and wait, for the sidebar's marks and the Inbox's Room).
 import { toast } from "sonner"
 import { setPref } from "@/state/prefs"
 import { threadsStore } from "@/state/thread-store"

@@ -8,6 +8,7 @@ import { ConversationScopeContext, TranscriptPaneContext, useConversationScope, 
 import { usePaneScope } from "@/state/session-panes"
 import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
+import { InboxView } from "@/components/inbox/inbox-view"
 import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
@@ -182,7 +183,7 @@ export function Stage() {
             )}
           >
             {covered ? (
-              <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-2.5 text-label text-faint">
+              <div className="flex h-8 shrink-0 items-center gap-2 px-2.5 text-label text-faint">
                 <span className="min-w-0 flex-1 truncate">
                   {sideSurface.label}
                 </span>
@@ -258,6 +259,7 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
         <>
           <Composer />
           <SearchView />
+          <InboxView />
         </>
       ) : null}
     </main>
@@ -286,7 +288,7 @@ function RightSidebarTabs({
     <nav
       role="tablist"
       aria-label="Right sidebar"
-      className="flex h-10 shrink-0 items-stretch overflow-hidden bg-shell shadow-[inset_0_-1px_0_var(--hairline)]"
+      className="flex h-10 shrink-0 items-stretch overflow-hidden gap-0.5 bg-shell px-1"
     >
       {surfaces.map((surface) => {
         const active = surface.id === activeId
@@ -333,9 +335,9 @@ function RightSidebarTabs({
               })
             }}
             className={cn(
-              "flex min-w-0 flex-1 items-center justify-center gap-1.5 border-r border-hairline px-1.5 text-ui font-medium transition-[background-color,color] duration-150 ease-(--ease-out) last:border-r-0",
+              "my-1.5 flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-1.5 text-ui font-medium transition-[background-color,color] duration-150 ease-(--ease-out)",
               active
-                ? "bg-surface text-foreground"
+                ? "bg-raised text-foreground"
                 : "text-faint hover:bg-fill-hover hover:text-muted-foreground"
             )}
           >

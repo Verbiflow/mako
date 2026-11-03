@@ -18,7 +18,7 @@ import { ActivityMark } from "@/components/ui/activity-mark"
 import { Spinner } from "@/components/ui/spinner"
 import { MODE_DRAWS, resolvePreset } from "thinking-orbs"
 import { AgentsPanel } from "@/components/inspector/agents-panel"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { ThreadMark } from "@/components/rail/thread-status"
 import type { ThreadStatus } from "@/state/thread-status"
 import { WorkspaceFocusContext } from "@/components/stage/workspace-focus-context"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -610,7 +610,7 @@ export function Fixture() {
               {statusMarks.map(({ label, status }) => (
                 <span key={label} className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
                   {label}
-                  <ThreadStatusMark status={status} />
+                  <ThreadMark status={status} harness="claude" />
                 </span>
               ))}
             </span>

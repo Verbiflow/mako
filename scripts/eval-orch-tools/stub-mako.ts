@@ -94,7 +94,8 @@ export async function startStubMako(): Promise<StubMako> {
       invoke: async (channel, [, input]) => {
         const conversation = conversationId()
         const tool = toolOf(channel)
-        const args = ToolArgs.parse(input)
+        // A door's filled field it has no value for (`cwd`) is undefined, which isn't JSON: it's no argument.
+        const args = ToolArgs.parse(JSON.parse(JSON.stringify(input ?? {})))
         calls.set(conversation, [...calls.get(conversation) ?? [], { tool, args }])
         const children = started.get(conversation) ?? []
         started.set(conversation, children)

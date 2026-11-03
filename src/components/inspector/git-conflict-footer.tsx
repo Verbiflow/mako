@@ -19,7 +19,7 @@ export function CopyGitContextButton({ busy = false }: { busy?: boolean }) {
 }
 
 export function GitConflictFooter({ count, operation, busy, detail }: { count: number; operation?: string; busy: boolean; detail?: string }) {
-  return <div data-commit-box data-git-remote-notice={count ? "" : undefined} className="shrink-0 border-t border-hairline px-3 py-1.5 text-label">
+  return <div data-commit-box data-git-remote-notice={count ? "" : undefined} className="shrink-0 px-3 py-1.5 text-label">
     <div className="flex items-center justify-between gap-3">
       <span className="flex min-w-0 items-center gap-2 font-medium">
         {count ? <GitMergeIcon className="size-3.5 shrink-0 text-muted-foreground" /> : <CheckIcon className="size-3.5 shrink-0 text-muted-foreground" />}

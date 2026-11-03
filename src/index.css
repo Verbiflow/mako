@@ -139,8 +139,8 @@
  *
  * Deep neutral greys on a tiled workspace: shadowless structural panes,
  * with elevation reserved for controls and floating content. Hue appears where
- * it carries meaning (diff, error, warning) plus one ember accent used
- * strictly as punctuation.
+ * it carries meaning (diff, error, warning) plus the brand's one sea accent
+ * used strictly as punctuation.
  * ------------------------------------------------------------------ */
 
 @theme inline {
@@ -185,8 +185,8 @@
   --color-faint: var(--faint);
   --color-fill-hover: var(--fill-hover);
   --color-fill-selected: var(--fill-selected);
-  --color-ember: var(--ember);
-  --color-ember-soft: var(--ember-soft);
+  --color-sea: var(--sea);
+  --color-sea-soft: var(--sea-soft);
   --color-positive: var(--positive);
   --color-negative: var(--negative);
   --color-caution: var(--caution);
@@ -287,7 +287,7 @@
 
   /*
    * OpenCode OC-2 uses #080808 / #161616 / #242424 with warm #f1ece8 text.
-   * Mako keeps that depth ladder but adds a restrained ember-brown cast so
+   * Mako keeps that depth ladder but adds a restrained warm cast so
    * recessed chrome does not read as featureless black. Four planes, not a
    * continuous ramp:
    *
@@ -327,13 +327,15 @@
   --skeleton-glint: color-mix(in oklab, var(--foreground) 13%, transparent);
 
   /*
-   * Ember is punctuation, not brand. It may appear on: the live/working
+   * Sea is the brand's one hue: the steel blue of the fin's lit face in the
+   * icon kit (`mako-icons/_masters`, #415f81 to #6386a6) and the site's
+   * `--sea`. It is punctuation: the open Thread's working comet, the live
    * dot, the composer caret, at most one badge. Never on links, borders,
    * focus, selection, hover fills, icons at rest, or any fill larger than
-   * a badge. If two ember moments are visible in one pane, one is wrong.
+   * a badge. If two sea moments are visible in one pane, one is wrong.
    */
-  --ember: oklch(0.682 0.14 41);
-  --ember-soft: color-mix(in oklab, var(--ember) 14%, transparent);
+  --sea: oklch(0.74 0.08 245);
+  --sea-soft: color-mix(in oklab, var(--sea) 14%, transparent);
 
   /*
    * The unread mark is a small sphere in the text colour: a specular point
@@ -442,8 +444,8 @@
   --skeleton: color-mix(in oklab, var(--foreground) 6%, transparent);
   --skeleton-glint: oklch(1 0 0 / 65%);
 
-  --ember: oklch(0.59 0.135 41);
-  --ember-soft: color-mix(in oklab, var(--ember) 12%, transparent);
+  --sea: oklch(0.5 0.09 248);
+  --sea-soft: color-mix(in oklab, var(--sea) 12%, transparent);
 
   /* A dark sphere in daylight: the highlight is a grey sheen, the rim near black. */
   --mark-highlight: oklch(0.5 0.004 45);
@@ -1188,9 +1190,8 @@ diffs-container {
 
 /*
  * A Session joining its Thread while you watch: the tab slides out of the
- * `+` beside it, and the rail row's glyph stack takes the new mark the way
- * an unread answer arrives. Neither plays when a Thread comes on screen or
- * a row scrolls into view, only when something was added.
+ * `+` beside it. It doesn't play when a Thread comes on screen, only when
+ * something was added.
  */
 @keyframes session-tab-arrive {
   from {
@@ -1205,26 +1206,198 @@ diffs-container {
 .session-tab[data-new] {
   animation: session-tab-arrive var(--duration-menu) var(--ease-out) both;
 }
-.thread-glyph[data-new] {
-  animation: review-dot-arrive 220ms var(--ease-out) both;
-}
 /*
- * A Thread's harness marks (`MarkStack`), each `--mark` wide and whole, side by
- * side a hairline apart. Overlapped, each cut where the next sat over it, a
- * mark read as some other shape at a glance (OpenCode's square as a bracket
- * beside Claude's), on the rail and more so on a phone.
+ * The live mark (`LiveMark`): the agent's glyph at 60% of the box, and round
+ * it a ring that carries the state. Every moving part turns or fades a layer
+ * of its own (`transform`, `opacity`), so the compositor runs it and a frame
+ * costs the main thread nothing. The comet is a conic gradient masked to the
+ * ring, its tail fading in to a bright head; the dotted and dashed rings are
+ * one static SVG circle each. Each moving layer starts on the shared clock
+ * and rests off screen through the gate (`observePhaseLockedAnimation`);
+ * paused there, under reduced motion, it stands as a still arc.
  */
-.mark-stack {
-  --mark: 12px;
-  display: flex;
+/* A container sizes the marks in it with `--live-mark-size`, inherited, so it can from any cascade layer. */
+.live-mark {
+  --lm-size: var(--live-mark-size, 20px);
+  --lm-stroke: calc(var(--lm-size) * 0.075);
+  --lm-ink: color-mix(in oklab, var(--foreground) 82%, transparent);
+  --lm-track: transparent;
+  --lm-period: 1.15s;
+  position: relative;
+  display: inline-flex;
+  width: var(--lm-size);
+  height: var(--lm-size);
   flex-shrink: 0;
   align-items: center;
-  gap: max(2px, calc(var(--mark) / 8));
+  justify-content: center;
 }
-.mark-stack > .thread-glyph > svg,
-.mark-stack > .thread-glyph > span {
-  width: var(--mark);
-  height: var(--mark);
+.live-mark-glyph {
+  display: flex;
+  width: calc(var(--lm-size) * 0.6);
+  height: calc(var(--lm-size) * 0.6);
+  transition: opacity 200ms var(--ease-out), filter 200ms var(--ease-out);
+}
+.live-mark-glyph > svg,
+.live-mark-glyph > span {
+  width: 100%;
+  height: 100%;
+}
+.live-mark-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 var(--lm-stroke) var(--lm-track);
+}
+.live-mark-dots {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke-linecap: round;
+}
+.live-mark-comet {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: conic-gradient(transparent 0turn 0.5turn, color-mix(in oklab, var(--lm-ink) 18%, transparent) 0.62turn, var(--lm-ink) 0.995turn, transparent 1turn);
+  mask: radial-gradient(farthest-side, transparent calc(100% - var(--lm-stroke) - 0.5px), #000 calc(100% - var(--lm-stroke)));
+  animation: live-mark-turn var(--lm-period) linear infinite;
+}
+
+.live-mark[data-live-mark="working"] {
+  --lm-track: color-mix(in oklab, var(--foreground) 11%, transparent);
+}
+/* The open Thread's comet: the pane's one accent moment. */
+.live-mark[data-live-mark="working"][data-lit] {
+  --lm-ink: var(--sea);
+  --lm-track: color-mix(in oklab, var(--sea) 18%, transparent);
+}
+/* The turn ended and its Fins or a watcher still run: the same comet, quieter and at half speed. */
+.live-mark[data-live-mark="background"] {
+  --lm-ink: color-mix(in oklab, var(--foreground) 48%, transparent);
+  --lm-track: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --lm-period: 2.3s;
+}
+.live-mark[data-live-mark="starting"] {
+  --lm-ink: color-mix(in oklab, var(--foreground) 45%, transparent);
+  --lm-track: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --lm-period: 1.6s;
+}
+.live-mark[data-live-mark="starting"] .live-mark-glyph {
+  opacity: 0.6;
+}
+/* Needs you: the whole ring in caution, breathing slowly enough to read as waiting, never below 40%. */
+.live-mark[data-live-mark="needs"] {
+  --lm-track: var(--caution);
+}
+.live-mark[data-live-mark="needs"] > .live-mark-ring {
+  animation: live-mark-breathe 2.4s ease-in-out infinite;
+}
+/* A Fin asking its Apex: a dotted ring that drifts. The Apex will answer, not the person. */
+.live-mark[data-live-mark="lead"] .live-mark-dots {
+  stroke: color-mix(in oklab, var(--foreground) 55%, transparent);
+  stroke-width: 1.6;
+  stroke-dasharray: 0.01 3.63;
+}
+.live-mark[data-live-mark="lead"] > .live-mark-ring {
+  animation: live-mark-turn 7s linear infinite;
+}
+.live-mark[data-live-mark="queued"] .live-mark-dots {
+  stroke: color-mix(in oklab, var(--foreground) 30%, transparent);
+  stroke-width: 1.2;
+  stroke-dasharray: 2.4 2.45;
+}
+.live-mark[data-live-mark="queued"] .live-mark-glyph {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+/* Open in another app with no turn there: a still hairline ring. */
+.live-mark[data-live-mark="open"] {
+  --lm-stroke: 1px;
+  --lm-track: color-mix(in oklab, var(--foreground) 30%, transparent);
+}
+/* A failure or an answer to read: a dot cut out of the mark. */
+.live-mark-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--negative);
+  box-shadow: 0 0 0 2px var(--lm-cut, var(--shell));
+}
+.live-mark-dot > .review-dot {
+  display: block;
+}
+.live-mark[data-live-mark="unread"] > .live-mark-dot {
+  top: -1px;
+  bottom: auto;
+  display: flex;
+  width: 9px;
+  height: 9px;
+  align-items: center;
+  justify-content: center;
+  background: var(--lm-cut, var(--shell));
+  box-shadow: none;
+}
+/* After every shorthand above, which would reset it: the gate's play state. */
+.live-mark-comet,
+.live-mark[data-live-mark="needs"] > .live-mark-ring,
+.live-mark[data-live-mark="lead"] > .live-mark-ring {
+  animation-play-state: var(--visible-animation-state, running);
+  will-change: var(--visible-animation-will-change, auto);
+}
+@keyframes live-mark-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+@keyframes live-mark-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/*
+ * The crew card's header bar: a thin strip split by group, the working
+ * stretch alone in motion. A crest of light slides across it, transform
+ * only, so the compositor moves it and the gate
+ * (`src/lib/visible-animation.ts`) can stop it off screen or under reduced
+ * motion without ever touching layout or paint.
+ */
+.crew-bar-working {
+  position: relative;
+  overflow: hidden;
+}
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .crew-bar-working::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 50%;
+    background: linear-gradient(to right, transparent, color-mix(in oklab, var(--foreground) 35%, transparent), transparent);
+    transform: translateX(-180%);
+    animation: crew-bar-sweep 1.8s linear infinite;
+    animation-play-state: var(--visible-animation-state, running);
+    will-change: var(--visible-animation-will-change, auto);
+  }
+}
+@keyframes crew-bar-sweep {
+  to {
+    transform: translateX(280%);
+  }
+}
+
+/* The phone's card, and the phone's line back to it, size marks the way a phone row does: 28px, inherited. */
+[data-crew][data-compact],
+[data-crew-away][data-compact] {
+  --live-mark-size: 28px;
 }
 
 /*
@@ -1403,8 +1576,8 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
  * streams; the panel's edge carries the accent the transcript never uses.
  */
 .side-panel {
-  background: color-mix(in oklab, var(--ember) 3.5%, var(--surface));
-  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--ember) 50%, transparent);
+  background: color-mix(in oklab, var(--sea) 3.5%, var(--surface));
+  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--sea) 50%, transparent);
 }
 
 .side-exchange {
@@ -1435,12 +1608,12 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   height: 7px;
   border-radius: 999px;
   background: var(--surface);
-  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--ember) 75%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--sea) 75%, transparent);
   transition: background-color 240ms var(--ease-out);
 }
 
 .side-exchange[data-side-exchange="answering"] .side-question::before {
-  background: var(--ember);
+  background: var(--sea);
 }
 
 .side-exchange[data-side-exchange="failed"] .side-question::before {
@@ -1462,7 +1635,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 }
 
 .side-panel-field:focus-within {
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ember) 28%, var(--hairline));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--sea) 28%, var(--hairline));
 }
 
 /* Earlier exchanges slide under the header rather than stopping at a hard edge. */
@@ -1471,7 +1644,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 }
 
 .side-panel-glyph {
-  color: var(--ember);
+  color: var(--sea);
   animation: side-glyph 1.4s ease-in-out infinite;
 }
 
@@ -2503,3 +2676,6 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .attachment-strip [data-slot="popover-content"] { border-radius: var(--radius-asset); }
 
 .mako-prose img.asset-surface { border-radius: var(--radius-asset); }
+
+/* While the Inbox fills the main pane it is the open place, so the Thread under it gives up its lit row. */
+[data-inbox-open] [data-thread-row][data-active]:not(:hover) { background-color: transparent; }
