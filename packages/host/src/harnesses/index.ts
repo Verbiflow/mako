@@ -25,6 +25,7 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 
 export type { PrefetchOutcome } from "./start-prefetch.js"
 export { createHarnessHost, detachedHarnessContext } from "./harness-host.js"
+export { callGateAnswer, GATED_HARNESSES } from "./call-gate.js"
 export type { HarnessContext, ProviderHost } from "./host.js"
 export type { AccountLaunch, HarnessAccounts } from "./accounts.js"
 export { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.js"

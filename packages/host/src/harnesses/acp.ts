@@ -109,6 +109,8 @@ interface Live {
   id: string
   harness: string
   cwd: string
+  /** Mako's call hooks for `session/resume`, where the launch routes calls (`AcpCallHooks.meta`). */
+  callHooks?: JsonObject
   emit(event: LiveDriverEvent): void
   child: ChildProcessWithoutNullStreams
   connection: Connection | null
@@ -172,14 +174,23 @@ interface Live {
 }
 
 
+/** A session request's `_meta`: the source's own for the launch's settings, and Mako's call hooks where the launch routes calls. */
+function sessionMeta(source: ProviderAcpSource, tuning: AcpTuning | undefined, routesCalls: boolean): NewSessionRequest["_meta"] {
+  const own = tuning ? source.sessionMetadata?.(tuning) : undefined
+  const hooks = routesCalls ? source.callHooks?.meta : undefined
+  return hooks ? { ...own, ...hooks } : own
+}
+
 function newSessionRequest(
   cwd: string,
   source: ProviderAcpSource,
   tuning: AcpTuning | undefined,
-  mcpServers: NewSessionRequest["mcpServers"]
+  mcpServers: NewSessionRequest["mcpServers"],
+  routesCalls: boolean
 ): NewSessionRequest {
   const request: NewSessionRequest = { cwd, mcpServers }
-  if (tuning) request._meta = source.sessionMetadata?.(tuning)
+  const meta = sessionMeta(source, tuning, routesCalls)
+  if (meta) request._meta = meta
   return request
 }
 
@@ -188,10 +199,12 @@ function loadSessionRequest(
   cwd: string,
   source: ProviderAcpSource,
   tuning: AcpTuning | undefined,
-  mcpServers: LoadSessionRequest["mcpServers"]
+  mcpServers: LoadSessionRequest["mcpServers"],
+  routesCalls: boolean
 ): LoadSessionRequest {
   const request: LoadSessionRequest = { sessionId, cwd, mcpServers }
-  if (tuning) request._meta = source.sessionMetadata?.(tuning)
+  const meta = sessionMeta(source, tuning, routesCalls)
+  if (meta) request._meta = meta
   return request
 }
 
@@ -338,6 +351,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       tuning: options.tuning,
     }
     if (launchAccess) launchOptions.access = launchAccess
+    if (options.nativeCalls) launchOptions.routesCalls = true
     if (source.nativeRouting.kind !== "words" && launchSpawnsOff(harness, source.nativeRouting.via, options.conversationId, options.nativeRouting))
       launchOptions.nativeSpawnsOff = true
     const spec = await trace.step("runtime-discovery", () => source.launch(launchOptions))
@@ -392,6 +406,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       id,
       harness,
       cwd: workingDir,
+      ...options.nativeCalls && source.callHooks && { callHooks: source.callHooks.meta },
       child,
       connection: null,
       sessionId: null,
@@ -503,6 +518,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         return { outcome: { outcome: "selected" as const, optionId: chosen } }
       },
       async extMethod(method: string, params: JsonObject) {
+        // A call hook answers at once and records nothing: it's Mako's, not the transcript's.
+        if (source.callHooks?.method === method && options.nativeCalls) return source.callHooks.answer(params, options.nativeCalls())
         const frame = record({ request: method, params })
         const vendor = decoder.request(method, params)
         // Grok asks about folder trust from a task it starts with the session, so the request can land before session/new's reply.
@@ -757,7 +774,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         open: async () => {
           if (!resume) {
             const created = await trace.step("session-open", () => watch.step("session/new", connection.newSession(
-              newSessionRequest(workingDir, source, options.tuning, live.mcpServers)
+              newSessionRequest(workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
             )))
             record({ response: "session/new", result: created })
             return parseNewAcpSession(created)
@@ -767,7 +784,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
           if (resuming?.kind === "native" && resuming.beforeLoad)
             await trace.step("session-resume", () => resuming.beforeLoad!({ nativeId: resume, cwd: workingDir, env }))
           const reply = await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
-            loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers)
+            loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
           )))
           record({ response: "session/load", result: reply })
           stream?.opened()
@@ -1154,7 +1171,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         reopen: () => {
           const reopening = (async () => {
             await connection.closeSession({ sessionId })
-            await connection.resumeSession({ sessionId, cwd: live.cwd, mcpServers: live.mcpServers })
+            await connection.resumeSession({ sessionId, cwd: live.cwd, mcpServers: live.mcpServers, ...live.callHooks && { _meta: live.callHooks } })
             live.providerTurnCause = undefined
           })().finally(() => {
             if (live.reopening === reopening) live.reopening = undefined

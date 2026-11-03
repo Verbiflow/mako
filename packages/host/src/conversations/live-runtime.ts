@@ -179,19 +179,21 @@ export function launchRouting(dependencies: Pick<Dependencies, "agents">, sessio
  */
 export function launchCalls(dependencies: Pick<Dependencies, "threads">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
   if (!tools?.makoUrl) return undefined
+  return () => callThreadOf(dependencies.threads, conversation, cwd, environment)
+}
+
+/** The Thread a conversation's calls run in, as routing reads it now: its folder, its worktree and main checkout, its recipe. */
+export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined): CallThread {
   const recipe = environment?.recipe
-  const known: CallThread["recipe"] = recipe?.kind === "ready" ? { kind: "ready", processes: recipe.processes.map((process) => process.name) } : recipe?.kind === "none" ? { kind: "none" } : undefined
-  return () => {
-    const store = dependencies.threads
-    const thread = store?.journalPlacement(conversation)?.thread
-    const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
-    const checkout = found && checkoutOf(found.worktree)
-    return {
-      folder: cwd,
-      ...found && checkout && { worktree: checkout, main: checkout === found.worktree.path ? found.worktree.repoRoot : found.worktree.project },
-      ...known && { recipe: known },
-      computer: Boolean(tools.computerUrl),
-    }
+  const thread = store?.journalPlacement(conversation)?.thread
+  const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
+  const checkout = found && checkoutOf(found.worktree)
+  return {
+    folder: cwd,
+    ...found && checkout && { worktree: checkout, main: checkout === found.worktree.path ? found.worktree.repoRoot : found.worktree.project },
+    ...recipe?.kind === "ready" && { recipe: { kind: "ready" as const, processes: recipe.processes.map((process) => process.name) } },
+    ...recipe?.kind === "none" && { recipe: { kind: "none" as const } },
+    computer: true,
   }
 }
 
