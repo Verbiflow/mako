@@ -1,9 +1,7 @@
-import { ApprovalStatus } from "@/components/viewer/approval-status"
-import { CompactionControl } from "./compaction-control"
 import { AgentsToggle } from "@/components/inspector/agents-panel"
 import { useState } from "react"
 import { RadioGroup } from "radix-ui"
-import { CheckIcon, MoreHorizontalIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
+import { CheckIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
 import { ACCESS_TIERS, accessTierInfo } from "@mako/host/contracts/access"
 import type { LiveSessionMode } from "@/lib/types"
 import { useAccessChoices } from "@/state/access-choices"
@@ -21,20 +19,18 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { ConversationRelations } from "@/components/viewer/conversation-relations"
-import { TransferStatus } from "@/components/viewer/transfer-status"
-import { LiveActionStatus } from "@/components/viewer/live-action-status"
-import { RetainedRequests } from "@/components/viewer/acp-panel"
-import { CaptureNotice } from "@/components/viewer/capture-notice"
-import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { acp, useAcp } from "@/state/acp"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 
+/**
+ * What the composer bar carries for a live conversation: its access, its Fins, and the conversations it relates to.
+ * Nothing else: compaction is in the context meter beside it, a message that wasn't answered is its own row in the
+ * transcript, a switch or a steering message that is under way or went wrong is a notice above the composer while it
+ * stands, and an idle provider closes on its own after ten minutes.
+ */
 export function LiveComposerControls() {
   const scope = useConversationScope()
-  const connection = useAcp(
-    (state) => activeLiveAcp(state)?.session.connection
-  )
   const conversationId = useAcp((state) => state.activeKey)
-  const [open, setOpen] = useState(false)
   // A pane without focus shows its Session's access; the rest act on the active conversation.
   if (scope) return <ModePicker />
   return (
@@ -42,49 +38,6 @@ export function LiveComposerControls() {
       <ModePicker />
       <AgentsToggle />
       <ConversationRelations key={conversationId} />
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label="Conversation actions"
-            title="Conversation actions"
-            className="pressable flex size-7 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground"
-          >
-            <MoreHorizontalIcon className="size-4" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          side="top"
-          align="end"
-          sideOffset={8}
-          className="max-h-[60vh] w-80 overflow-y-auto p-1"
-        >
-          <CompactionControl onStart={() => setOpen(false)} />
-          <RetainedRequests />
-          <TransferStatus history />
-          <LiveActionStatus history />
-          <ApprovalStatus history />
-          {connection === "disconnected" ? <CaptureNotice /> : null}
-          {connection === "hibernated" ? (
-            <p className="px-2 py-2 text-label text-faint">
-              The provider reconnects to this session when you send.
-            </p>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false)
-              acp.close()
-            }}
-            className="pressable flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-hover"
-          >
-            <span className="text-ui">End live session</span>
-            <span className="text-label text-faint">
-              Keep this conversation in Threads
-            </span>
-          </button>
-        </PopoverContent>
-      </Popover>
     </>
   )
 }
