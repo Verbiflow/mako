@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -28,7 +29,7 @@ import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { FinMark } from "@/components/stage/child-tabs"
 import { Shimmer } from "@/components/ui/shimmer"
-import { Elapsed } from "@/components/inspector/elapsed"
+import { useTickingText } from "@/components/ui/second-clock"
 import { observeVisibleAnimation } from "@/lib/visible-animation"
 import { useHarnessIdentity, harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
@@ -42,6 +43,7 @@ import {
   useThreadChildren,
 } from "@/state/apex-fins"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
+import { mountCrewCard, unmountCrewCard } from "@/state/crew-card-view"
 
 const HEADINGS = {
   needs: "Needs you",
@@ -208,7 +210,7 @@ const NeedsRow = memo(function NeedsRow({
           </span>
         ) : null}
         <span className="flex-1" />
-        <Elapsed agent={agent} className="text-label text-faint" />
+        <CrewElapsed agent={agent} className="text-label text-faint" />
       </div>
       <p className="mt-1.5 pl-7 text-ui text-foreground/90">{state.question}</p>
       {ask ? (
@@ -294,6 +296,41 @@ const NeedsRow = memo(function NeedsRow({
   )
 })
 
+/** How long a Fin has run, one unit: "25s", "18m", "1h 4m". Nothing under a second. */
+function took(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 1) return ""
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `${hours}h ${rest}m` : `${hours}h`
+}
+
+/**
+ * The time on a row. The shared clock ticks once a second only while the Fin
+ * works; a minute or an hour is the same string for that whole stretch, so
+ * the row's label doesn't repaint on the seconds in between.
+ */
+const CrewElapsed = memo(function CrewElapsed({
+  agent,
+  className,
+}: {
+  agent: NativeAgent
+  className?: string
+}) {
+  const state = childStateOf(agent)
+  const working = state.kind === "working" || state.kind === "starting"
+  const start = agent.startedAt ?? agent.observedAt
+  const frozen = (agent.settledAt ?? agent.observedAt) - start
+  const text = useTickingText(working, (now) =>
+    took(working ? now - start : frozen)
+  )
+  if (!text) return null
+  return <span className={cn("tabular shrink-0", className)}>{text}</span>
+})
+
 /** Working, queued, failed or done: one line, its mark, title, current line and time. */
 const CrewLineRow = memo(function CrewLineRow({
   agent,
@@ -358,7 +395,7 @@ const CrewLineRow = memo(function CrewLineRow({
           )}
         </span>
       </span>
-      <Elapsed
+      <CrewElapsed
         agent={agent}
         className="min-w-8 shrink-0 text-right text-label text-faint"
       />
@@ -388,6 +425,22 @@ export function CrewCard({
   const apexTitle = useApexCardTitle(thread)
   const children = useThreadChildren(thread)
   const scroller = useRef<HTMLDivElement>(null)
+  const card = useRef<HTMLElement>(null)
+  // In view until the observer says otherwise, so the dock doesn't also draw the asks for the frame before it reports.
+  useLayoutEffect(() => {
+    const element = card.current
+    if (!thread || !element) return
+    mountCrewCard(thread, true)
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (entry) mountCrewCard(thread, entry.isIntersecting)
+    })
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      unmountCrewCard(thread)
+    }
+  }, [thread, children.length])
   const rows = useMemo(() => buildRows(children), [children])
   const counts = useMemo(() => rollup(children), [children])
   const virtualizer = useVirtualizer({
@@ -423,6 +476,7 @@ export function CrewCard({
   if (!children.length || !conversation) return <>{fallback}</>
   return (
     <section
+      ref={card}
       data-crew={counts.total}
       data-compact={compact || undefined}
       aria-label={`${apexTitle}'s ${FIN_WORD}s`}
@@ -474,7 +528,10 @@ export function CrewCard({
                 style={{ transform: `translateY(${item.start}px)` }}
               >
                 {row.kind === "heading" ? (
-                  <h4 className="flex items-center gap-1.5 px-1.5 pb-1 text-label text-faint">
+                  <h4
+                    data-crew-needs={row.group === "needs" || undefined}
+                    className="flex items-center gap-1.5 px-1.5 pb-1 text-label text-faint"
+                  >
                     <span
                       className={
                         row.group === "needs"

@@ -279,6 +279,68 @@ async function check() {
     "the recommended option comes first and is labelled"
   )
   assert.match(approval.text, /Approve: npm ci.*Allow once Refuse/)
+  assert.doesNotMatch(
+    wording.text,
+    /\d+m \d+s/,
+    "a minute is one unit: 18m, not 18m 01s"
+  )
+  assert.match(wording.text, /\d+m\b/)
+  const starting = rows12.find((row) =>
+    row.text.includes("Review screen hunks")
+  )
+  assert.match(starting?.text ?? "", /\d+s\b/, "under a minute stays seconds")
+
+  // One place for an ask. While the card is in view the dock draws none of it; scrolled away, one line, and that
+  // line brings Needs you back.
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('[data-fin-answer=allow]').length"
+    ),
+    1,
+    "the approval is drawn once, in the card"
+  )
+  assert.equal(
+    await evaluate("document.querySelectorAll('[data-fin-asks]').length"),
+    0,
+    "the dock's ask list stays out while the card is in view"
+  )
+  // The transcript follows its end until the reader wheels upward. The card sits at that end, so leaving it
+  // puts the card below the fold and the dock's line takes the asks' place.
+  const hideCrew = `(() => {
+    const card = document.querySelector('[data-crew]')
+    let scroller = card && card.parentElement
+    while (scroller && scroller.scrollHeight <= scroller.clientHeight + 1) scroller = scroller.parentElement
+    if (!scroller) return false
+    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, bubbles: true }))
+    scroller.scrollTop = 0
+    return true
+  })()`
+  await evaluate(hideCrew)
+  await until(
+    "Boolean(document.querySelector('[data-crew-away]'))",
+    "the dock's line while the card is scrolled away"
+  )
+  const away = await evaluate(
+    "document.querySelector('[data-crew-away]').innerText.replace(/\\s+/g, ' ')"
+  )
+  console.log("AWAY", away)
+  assert.match(away, /2 Fins need you/)
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('[data-fin-answer=allow]').length"
+    ),
+    1,
+    "the ask is still only in the card"
+  )
+  await evaluate(
+    "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
+  )
+  await both("away")
+  await click("[data-crew-away]")
+  await until(
+    "!document.querySelector('[data-crew-away]')",
+    "the line leaves once Needs you is back in view"
+  )
 
   // Working: the current step, time run; the Fin asking its own Apex says so with a turned-back arrow.
   const working = rows12.filter((row) => row.group === "working")
@@ -535,11 +597,25 @@ async function check() {
   })()`)
   console.log("PHONE", JSON.stringify(phone))
   assert.equal(phone.total, "12")
-  assert.equal(phone.mark, "28px", "the phone's card inherits the phone's 28px mark")
+  assert.equal(
+    phone.mark,
+    "28px",
+    "the phone's card inherits the phone's 28px mark"
+  )
   assert.doesNotMatch(
     phone.text,
     /Codex · gpt-5\.6-sol/,
     "the compact card drops the harness and model line"
+  )
+  assert.doesNotMatch(
+    phone.text,
+    /\d+m \d+s/,
+    "the phone's times are one unit too"
+  )
+  assert.equal(
+    await evaluate("document.querySelector('.web-dock [data-ask=fin]')"),
+    null,
+    "the phone's dock doesn't repeat the ask while the card is in view"
   )
   for (const height of phone.buttonHeights)
     assert.ok(
@@ -547,6 +623,32 @@ async function check() {
       `an answer button is a thumb's reach tall (${height}px)`
     )
   await both("phone")
+  await evaluate(hideCrew)
+  await until(
+    "Boolean(document.querySelector('[data-crew-away]'))",
+    "the phone's line while the card is scrolled away"
+  )
+  const phoneAway = await evaluate(`(() => {
+    const line = document.querySelector('[data-crew-away]')
+    return { text: line.innerText.replace(/\\s+/g, ' '), height: Math.round(line.getBoundingClientRect().height) }
+  })()`)
+  console.log("PHONE AWAY", JSON.stringify(phoneAway))
+  assert.match(phoneAway.text, /2 Fins need you/)
+  assert.ok(
+    phoneAway.height >= 36,
+    `the phone's line is a thumb's reach tall (${phoneAway.height}px)`
+  )
+  assert.equal(
+    await evaluate("document.querySelector('.web-dock [data-ask=fin]')"),
+    null,
+    "the phone's dock still doesn't draw the ask itself"
+  )
+  await both("phone-away")
+  await click("[data-crew-away]")
+  await until(
+    "!document.querySelector('[data-crew-away]')",
+    "the phone's line leaves once the card is back"
+  )
 
   assert.deepEqual(
     errors.filter(
