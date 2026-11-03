@@ -1,5 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { memo, useCallback, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
@@ -7,7 +7,8 @@ import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
-import { ThreadRollup } from "@/components/rail/rollup-badge"
+import { ApexCrewLine, useIsApex } from "@/components/rail/fin-pips"
+import { ApexAsks } from "@/components/rail/apex-asks"
 import {
   foldedThreadState,
   foldRowHarness,
@@ -77,6 +78,17 @@ export const ROW_SURFACE =
 export const ROW_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
+/** An Apex's row is two lines, its crew's pips under its title (`ApexCrewLine`). */
+export const APEX_SURFACE = "h-11 flex-col items-stretch justify-center gap-[3px]"
+
+/**
+ * A row's first line: the row's own flex line for a Thread, a line of its own over an Apex's pips, which holds the
+ * row's controls too. The same element either way, so a Thread that starts its first Fin keeps its mark mounted.
+ */
+export function RowLine({ apex, children }: { apex: boolean; children: ReactNode }) {
+  return <span className={apex ? "relative -mr-1 flex h-5 w-auto min-w-0 items-center gap-2 pr-1" : "contents"}>{children}</span>
+}
+
 /** How many Sessions a folded row stands for. */
 export function SessionCount({ count }: { count: number }) {
   return (
@@ -130,6 +142,7 @@ export const ThreadRow = memo(function ThreadRow({
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(ref, state.threadOf))
   const named = useThreadTitles((state) => (thread ? state.byThread[thread]?.title : undefined))
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
+  const apex = useIsApex(thread)
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
@@ -202,6 +215,7 @@ export const ThreadRow = memo(function ThreadRow({
   }
 
   return (
+    <>
     <ThreadContextMenu {...menu}>
       <div
         role="button"
@@ -259,8 +273,10 @@ export const ThreadRow = memo(function ThreadRow({
         data-flip-key={ref.path}
         data-conversation-id={target.kind === "live" ? target.id : undefined}
         data-thread-indent={indent || undefined}
-        className={cn(ROW_SURFACE, indent ? "pl-2" : "pl-1.5")}
+        data-apex-row={apex || undefined}
+        className={cn(ROW_SURFACE, apex && APEX_SURFACE, indent ? "pl-2" : "pl-1.5")}
       >
+        <RowLine apex={apex}>
         <ThreadMark status={status} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} />
         {editing !== null ? (
           <input
@@ -295,7 +311,6 @@ export const ThreadRow = memo(function ThreadRow({
         )}
         <ThreadPurposeChip thread={thread} />
         {folded ? <SessionCount count={folded.members.length} /> : null}
-        <ThreadRollup thread={thread} />
         {/* The branch itself is in the tip and on the chat's strip; the row
             spends its width on the title. */}
         {made ? (
@@ -345,7 +360,11 @@ export const ThreadRow = memo(function ThreadRow({
         {checkout ? <AppMarkIcon checkout={checkout} /> : null}
         {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
         <ThreadStatusEnd status={status} updatedAt={ref.updatedAt} />
+        </RowLine>
+        {apex ? <ApexCrewLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
+    {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
+    </>
   )
 })

@@ -56,6 +56,34 @@ export function threadRollup(state: AcpState, thread: string | undefined): Rollu
   return children.length || !thread ? rollup(children) : (listedRollup(state, thread) ?? rollup(children))
 }
 
+const listedAskingByThread = new WeakMap<AcpState["conversations"], Map<string, readonly NativeAgent[]>>()
+const askingOf = new WeakMap<readonly NativeAgent[], readonly NativeAgent[]>()
+
+/**
+ * A Thread's Fins that wait on the person, in `orderedChildren`' order: from its roster, else as its host listed them
+ * (`LiveSummary.asking`) before this window holds the roster. The same array while they are unchanged.
+ */
+export function threadAsking(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
+  const children = threadChildren(state, thread)
+  if (!children.length) {
+    if (!thread) return NO_CHILDREN
+    let index = listedAskingByThread.get(state.conversations)
+    if (!index) {
+      index = new Map()
+      for (const conversation of Object.values(state.conversations))
+        if (conversation.kind === "live" && conversation.threadId && conversation.asking?.length && !index.has(conversation.threadId)) index.set(conversation.threadId, conversation.asking)
+      listedAskingByThread.set(state.conversations, index)
+    }
+    return index.get(thread) ?? NO_CHILDREN
+  }
+  let held = askingOf.get(children)
+  if (!held) {
+    held = children.some((agent) => childGroup(childStateOf(agent)) === "needs") ? children.filter((agent) => childGroup(childStateOf(agent)) === "needs") : NO_CHILDREN
+    askingOf.set(children, held)
+  }
+  return held
+}
+
 export function useThreadRollup(thread: string | undefined): Rollup {
   return useAcp((state) => threadRollup(state, thread), sameRollup)
 }

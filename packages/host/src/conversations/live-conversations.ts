@@ -33,7 +33,7 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { rollup } from "../contracts/children.js"
+import { childGroup, childStateOf, orderedChildren, rollup } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -376,8 +376,10 @@ export class LiveConversations {
   summaries(): LiveSummary[] {
     const agents = this.dependencies.agents?.()
     return this.records.listing().map((summary) => {
-      const children = agents ? rollup(agents.roster(summary.session.id)) : undefined
-      return { ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id), ...(children?.total && { children }) }
+      const roster = agents?.roster(summary.session.id)
+      const children = roster ? rollup(roster) : undefined
+      const asking = children?.needs ? orderedChildren(roster!.filter((agent) => childGroup(childStateOf(agent)) === "needs")) : undefined
+      return { ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id), ...(children?.total && { children }), ...(asking && { asking }) }
     })
   }
 

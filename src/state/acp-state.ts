@@ -67,6 +67,8 @@ interface AcpConversationBase {
   parent?: LiveSnapshot["parent"]
   /** `LiveSummary.children`: an Apex's Fins counted, until its roster arrives. */
   children?: LiveSnapshot["children"]
+  /** `LiveSummary.asking`: an Apex's Fins that wait on the person, until its roster arrives. */
+  asking?: LiveSnapshot["asking"]
   control?: LiveSnapshot["control"]
   requests?: LiveSnapshot["requests"]
   harnessTurns?: LiveSnapshot["harnessTurns"]

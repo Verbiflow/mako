@@ -41,7 +41,7 @@ import { QuietStrip } from "./quiet-strip"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
-import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
+import { FinOfApexContext, OpenChildContext, childSession, finToOpen, takeFinToOpen, useFinToOpen } from "./fin-of-apex"
 import { PhoneChildChips } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
 import { ApexMark } from "@/components/ui/apex-mark"
@@ -59,8 +59,15 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   // waiting or working doesn't hand the screen to another tab under the person's thumb.
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
   // One of its Fins opened from a chip under its bar, back to it by the bar's back button.
-  const [child, setChild] = useState<{ apex: string; agent: NativeAgent } | null>(null)
+  const [child, setChild] = useState<{ apex: string; agent: NativeAgent } | null>(() => finToOpen(threadId))
   if (child && child.apex !== threadId) setChild(null)
+  // Or from the list's row for that Fin, as this screen opens or while it shows (a tablet's rail beside it).
+  const finAsked = useFinToOpen((state) => state.next?.apex === threadId)
+  useEffect(() => {
+    if (!finAsked) return
+    const next = takeFinToOpen(threadId)
+    if (next) setChild((shown) => (shown?.agent === next.agent ? shown : next))
+  }, [finAsked, threadId])
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
   // A branch made from a reply here opens as this Thread's new tab once its owner lists it.

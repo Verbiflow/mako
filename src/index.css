@@ -1370,6 +1370,102 @@ diffs-container {
 }
 
 /*
+ * An Apex's crew (`FinPips`): a 6 px pip per Fin. The working stretch moves as
+ * one: a veil in the row's own paint (`--pips-under`, and `--pips-over` for a
+ * translucent hover fill over it) dims the pips under it and has a clear hole
+ * that sweeps across them on `transform` alone, so a row's wave is one
+ * compositor animation however many Fins work. Paused by the gate off screen;
+ * under reduced motion the veil is gone and the pips stand at full ink.
+ */
+.fin-pips {
+  --pips-under: var(--shell);
+  --pips-over: transparent;
+  --pips-veil: 52%;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+}
+.fin-pip {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+.fin-pip[data-pip="needs"] {
+  background: var(--caution);
+}
+.fin-pip[data-pip="working"] {
+  background: color-mix(in oklab, var(--foreground) 85%, transparent);
+}
+.fin-pip[data-pip="lead"] {
+  box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--foreground) 70%, transparent);
+}
+.fin-pip[data-pip="queued"] {
+  box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--foreground) 28%, transparent);
+}
+.fin-pip[data-pip="failed"] {
+  background: var(--negative);
+}
+.fin-pip[data-pip="done"] {
+  background: color-mix(in oklab, var(--foreground) 28%, transparent);
+}
+.fin-pips-wave {
+  position: relative;
+  display: flex;
+  gap: 3px;
+  overflow: hidden;
+}
+.fin-pips-veil {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 300%;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, color-mix(in oklab, var(--pips-over) var(--pips-veil), transparent) 36%, transparent 50%, color-mix(in oklab, var(--pips-over) var(--pips-veil), transparent) 64%),
+    linear-gradient(to right, color-mix(in oklab, var(--pips-under) var(--pips-veil), transparent) 36%, transparent 50%, color-mix(in oklab, var(--pips-under) var(--pips-veil), transparent) 64%);
+  animation: fin-pips-wave 2.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  animation-play-state: var(--visible-animation-state, running);
+  will-change: var(--visible-animation-will-change, auto);
+}
+@keyframes fin-pips-wave {
+  from {
+    transform: translateX(-62%);
+  }
+  to {
+    transform: translateX(-4.5%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fin-pips-veil {
+    display: none;
+  }
+}
+[data-thread-row]:hover .fin-pips,
+[data-thread-row][data-state="open"] .fin-pips {
+  --pips-over: var(--fill-hover);
+}
+[data-thread-row][data-active] .fin-pips {
+  --pips-under: var(--raised);
+  --pips-over: transparent;
+}
+
+/* A Fin that needs you, hung under its Apex's row: a hairline from the Apex's mark that turns into the Fin's. */
+.apex-ask-branch {
+  position: absolute;
+  top: -17px;
+  bottom: 50%;
+  width: 8px;
+  border-bottom: 1px solid var(--hairline);
+  border-left: 1px solid var(--hairline);
+  border-bottom-left-radius: 6px;
+  pointer-events: none;
+}
+.apex-ask + .apex-ask > .apex-ask-branch {
+  top: -20px;
+}
+
+/*
  * A rail row's controls float over its trailing edge instead of joining the
  * line, so a title never re-truncates as the pointer passes. Their backdrop
  * is the row's own paint, the translucent hover fill over the opaque rail
@@ -1383,7 +1479,8 @@ diffs-container {
     linear-gradient(to right, transparent, var(--row-over) 14px),
     linear-gradient(to right, transparent, var(--row-under) 14px);
 }
-[data-active] > .rail-row-actions {
+[data-active] > .rail-row-actions,
+[data-active] > * > .rail-row-actions {
   --row-under: var(--raised);
   --row-over: transparent;
 }

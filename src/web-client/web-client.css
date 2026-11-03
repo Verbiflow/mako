@@ -227,6 +227,60 @@
   [data-list="rail"] .web-row-mark {
     @apply w-6;
   }
+  /* An Apex's pips veil in the paint of the row they sit on (`.fin-pips`). */
+  [data-list="screen"] .fin-pips {
+    --pips-under: var(--surface);
+  }
+  [data-list="rail"] .web-row[aria-current="page"] .fin-pips {
+    --pips-under: var(--raised);
+  }
+  @media (hover: hover) {
+    .web-row:hover .fin-pips {
+      --pips-over: var(--fill-hover);
+    }
+  }
+  .web-row:active .fin-pips {
+    --pips-over: var(--fill-selected);
+  }
+  /* A Fin that needs you, a row of its own under its Apex's, hung from the Apex's mark by a hairline. */
+  .web-asking-fin {
+    @apply py-2 pr-4;
+    min-height: 52px;
+    padding-left: 44px;
+    transition: background-color 220ms ease;
+  }
+  .web-asking-fin:active {
+    @apply bg-fill-selected;
+    transition-duration: 0ms;
+  }
+  @media (hover: hover) {
+    .web-asking-fin:hover {
+      @apply bg-fill-hover;
+    }
+  }
+  .web-asking-fin-branch {
+    position: absolute;
+    top: -14px;
+    bottom: 50%;
+    left: 29.5px;
+    width: 10px;
+    border-bottom: 1px solid var(--hairline);
+    border-left: 1px solid var(--hairline);
+    border-bottom-left-radius: 7px;
+    pointer-events: none;
+  }
+  li + li > .web-asking-fin > .web-asking-fin-branch {
+    top: -32px;
+  }
+  [data-list="rail"] .web-asking-fin {
+    @apply rounded-lg pr-2.5;
+    min-height: 0;
+    padding-left: 34px;
+  }
+  [data-list="rail"] .web-asking-fin-branch {
+    left: 19.5px;
+    width: 9px;
+  }
   .web-account {
     @apply flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-ui text-muted-foreground;
   }

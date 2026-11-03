@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { RollupBadge } from "@/components/rail/rollup-badge"
-import { useThreadRollup } from "@/state/apex-fins"
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { childLine, childStateOf, rollupLabel, rollupLine } from "@mako/host/contracts/children"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
+import { apexPips, FinPips, pipsCounts, useNeedsYouFins } from "@/components/rail/fin-pips"
+import { useAcp } from "@/state/acp"
+import { finMarkState } from "@/lib/live-mark-state"
+import { openFinNext } from "./fin-of-apex"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
 import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
@@ -143,6 +147,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
                     {section.threads.map((thread) => (
                       <li key={thread.id} data-flip-key={thread.id}>
                         <ThreadRow {...rowProps(thread)} />
+                        {thread.archived ? null : <PhoneAsks apex={thread.id} onOpen={(agent) => { openFinNext(thread.id, agent); onOpen(thread) }} />}
                       </li>
                     ))}
                   </ul>
@@ -376,9 +381,10 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
           <span className="flex min-w-0 items-baseline gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
             <span className="flex shrink-0 items-center gap-1.5 self-center">
-              <LeadOrTime thread={thread.id} activityAt={thread.activityAt} />
+              <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
             </span>
           </span>
+          <ApexLineOr thread={thread.id}>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
             {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
             {detail.tone === "working" ? (
@@ -400,6 +406,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
               </span>
             )}
           </span>
+          </ApexLineOr>
         </span>
       </button>
     </div>
@@ -439,8 +446,56 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
   return away
 }
 
-/** An Apex's row wears its Fins' badge where the time stands, from the snapshot this page holds of it (`rollup`). */
-function LeadOrTime({ thread, activityAt }: { thread: string; activityAt: WebThread["activityAt"] }) {
-  const counts = useThreadRollup(thread)
-  return counts.total ? <RollupBadge counts={counts} size="phone" /> : <span className="tabular text-label text-faint">{formatRelative(activityAt)}</span>
+/**
+ * An Apex's second line: its crew's pips and its rollup line ("5 Fins working · 2 need you") where another row says
+ * what it's doing, from the snapshot this page holds of it. Repaints when a pip changes, never the list.
+ */
+function ApexLineOr({ thread, children }: { thread: string; children: ReactNode }) {
+  const pips = useAcp((state) => apexPips(state, thread))
+  if (!pips) return children
+  const counts = pipsCounts(pips)
+  return (
+    <span role="img" aria-label={rollupLabel(counts)} data-fin-pips={pips} className="flex h-4 min-w-0 items-center gap-2 text-label">
+      <FinPips pips={pips} />
+      <span className="min-w-0 truncate text-faint">{rollupLine(counts)}</span>
+    </span>
+  )
 }
+
+/** Under an Apex's row, each of its Fins that waits on you, a row of its own: tapped, its Apex opens on it. */
+const PhoneAsks = memo(function PhoneAsks({ apex, onOpen }: { apex: string; onOpen: (agent: NativeAgent) => void }) {
+  const fins = useNeedsYouFins(apex)
+  if (!fins.length) return null
+  return (
+    <ul role="list" data-asking-fins={apex}>
+      {fins.map((agent) => {
+        const state = childStateOf(agent)
+        const question = childLine(state)
+        return (
+          <li key={agent.nativeId}>
+            <button
+              type="button"
+              data-asking-fin={agent.child?.thread}
+              disabled={!agent.child?.conversation}
+              aria-label={`${agent.title}. Needs you${question ? `: ${question}` : ""}`}
+              onClick={() => onOpen(agent)}
+              className="web-asking-fin pressable relative flex w-full items-center gap-2.5 text-left disabled:opacity-60"
+            >
+              <span aria-hidden className="web-asking-fin-branch" />
+              <LiveMark state={finMarkState(state)}>
+                <WebHarnessIcon harness={agent.provider} />
+              </LiveMark>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex min-w-0 items-baseline gap-2">
+                  <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">{agent.title}</span>
+                  <span className="shrink-0 text-label font-medium text-caution">Needs you</span>
+                </span>
+                {question ? <span className="min-w-0 truncate text-label text-muted-foreground">{question}</span> : null}
+              </span>
+            </button>
+          </li>
+        )
+      })}
+    </ul>
+  )
+})

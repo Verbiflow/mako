@@ -1,6 +1,6 @@
 import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { childEntry, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
-import { BRIEF_CLOSE, briefIntro, fromAgent, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
+import { BRIEF_CLOSE, briefIntro, childGroup, childStateOf, fromAgent, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "@/lib/types"
@@ -147,6 +147,11 @@ export function benchChild(index: number, state: ChildState): NativeAgent {
   return { ...base, nativeId: `mako-child:${thread}`, title: `${base.title} ${index + 1}`, child: { ...base.child!, thread } }
 }
 
+/** What the host's summary lists of an Apex's Fins that wait on the person (`LiveSummary.asking`). */
+function askingOf(children: readonly NativeAgent[]): NativeAgent[] {
+  return children.filter((agent) => childGroup(childStateOf(agent)) === "needs")
+}
+
 /** The bench's rail: `count` Apexes over ten folders, each with `children` Fins not yet started, in every state. */
 interface BenchApexes {
   snapshots: LiveSnapshot[]
@@ -188,7 +193,8 @@ export function benchApexes(count: number, children: number): BenchApexes {
     }
     snapshots.push(snapshot)
     const rolled = rollup(rosterChildren(snapshot.nativeAgents))
-    summaries.push({ session: snapshot.session, revision: 1, createdAt: STARTED, threadPath: snapshot.threadPath, threadId: thread, sessionId: session, children: rolled })
+    const asking = askingOf(rosterChildren(snapshot.nativeAgents))
+    summaries.push({ session: snapshot.session, revision: 1, createdAt: STARTED, threadPath: snapshot.threadPath, threadId: thread, sessionId: session, children: rolled, ...(asking.length && { asking }) })
     refs.push({ harness: "claude", nativeId: `bench-apex-${apex}`, path: snapshot.threadPath!, cwd, title, updatedAt: new Date(Date.now() - apex * 60_000).toISOString(), threadId: thread, sessionId: session, bytes: 4_000 })
   }
   return { snapshots, summaries, refs }
@@ -322,7 +328,8 @@ export function apexSnapshots(): LiveSnapshot[] {
 export function apexSummaries(): LiveSummary[] {
   return apexSnapshots().map(({ session, revision, createdAt, threadPath, threadId, sessionId, parent, nativeAgents }) => {
     const children = rollup(rosterChildren(nativeAgents))
-    return { session, revision, createdAt, threadPath, threadId, sessionId, ...(parent && { parent }), ...(children.total && { children }) }
+    const asking = askingOf(rosterChildren(nativeAgents))
+    return { session, revision, createdAt, threadPath, threadId, sessionId, ...(parent && { parent }), ...(children.total && { children }), ...(asking.length && { asking }) }
   })
 }
 

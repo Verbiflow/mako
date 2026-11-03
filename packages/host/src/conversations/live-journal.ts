@@ -413,9 +413,10 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
  * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`,
  * `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `cloudContinue`, `movedAt`, `rail` and `copy` are a cloud
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
- * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
+ * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count and `asking`
+ * those waiting on the person, read from them.
  */
-type UnstoredMetadata = "parent" | "children" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
+type UnstoredMetadata = "parent" | "children" | "asking" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by

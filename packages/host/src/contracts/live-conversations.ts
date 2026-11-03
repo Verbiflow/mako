@@ -4,6 +4,7 @@ import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
 import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
 import type {
+  NativeAgent,
   NativeAgentObservation,
   NativeAgentRoster,
 } from "./native-agents.js"
@@ -433,6 +434,11 @@ export interface LiveSummary {
    * batch brings it, says the same. Absent from a conversation with no Fins.
    */
   children?: Rollup
+  /**
+   * Its Fins that wait on the person (`childGroup` "needs"), their roster entries in `orderedChildren`' order: what a
+   * window's rail hangs under the Apex's row before it holds the roster. Absent when none waits.
+   */
+  asking?: NativeAgent[]
   /**
    * Its Thread's name, for a conversation listed from another device: the name the person or Mako gave the Thread
    * there, which titles the Thread's row as this Mac's own Threads' names title theirs.
