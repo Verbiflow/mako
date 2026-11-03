@@ -150,6 +150,7 @@ jobs:
       # Native routing's policy, each harness's control and Diagnostics' reading of them; then every
       # eval:orch-tools case's first request for Claude and Codex, built and its grading checked, at $0.
       - run: npm run test:native-routing
+      - run: npm run test:native-calls
       - run: npm run eval:orch-tools -- --dry-run
       - run: npm run test:decoders
       - run: npm run test:usage

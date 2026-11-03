@@ -700,7 +700,13 @@ export function createClaudeSdkDriver(
       const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
         hostWarn(CLAUDE_AUTH_LOG, "Native authentication failure", { conversation: conversationId, ...fields }),
       dependencies.inspectCredentials)
-      const routing = options.nativeRouting && { thread: options.nativeRouting, teams: (config.env ?? process.env).CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === "1", conversation: conversationId }
+      const teams = (config.env ?? process.env).CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === "1"
+      const routing = (options.nativeRouting || options.nativeCalls) && {
+        ...options.nativeRouting && { thread: options.nativeRouting },
+        ...options.nativeCalls && { calls: options.nativeCalls },
+        teams,
+        conversation: conversationId,
+      }
       const callHooks = claudeCallHooks(new CallBounds(conversationId), routing)
       let query: ClaudeQuery
       try { query = await dependencies.query({
@@ -721,7 +727,7 @@ export function createClaudeSdkDriver(
             PreToolUse: [...(config.hooks?.PreToolUse ?? []), { hooks: [callHooks.pre] }],
             PostToolUse: [...(config.hooks?.PostToolUse ?? []), { hooks: [callHooks.post] }],
             PostToolUseFailure: [...(config.hooks?.PostToolUseFailure ?? []), { hooks: [callHooks.post] }],
-            ...routing && { SubagentStart: [...(config.hooks?.SubagentStart ?? []), { hooks: [claudeSubagentStart] }] },
+            ...routing?.thread && { SubagentStart: [...(config.hooks?.SubagentStart ?? []), { hooks: [claudeSubagentStart] }] },
           },
           spawnClaudeCodeProcess: (options) => {
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))

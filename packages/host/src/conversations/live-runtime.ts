@@ -41,6 +41,8 @@ import type { LiveMoves } from "./live-moves.js"
 import type { NativeSourceIdentity, SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { RoutedThread } from "../contracts/native-routing.js"
+import type { CallThread } from "../contracts/native-calls.js"
+import { checkoutOf, worktreeAt } from "../contracts/worktree-paths.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { WorkspaceSnapshots } from "../workspaces/index.js"
@@ -168,6 +170,29 @@ export function launchRouting(dependencies: Pick<Dependencies, "agents">, sessio
   const agents = dependencies.agents
   if (!tools || !agents) return undefined
   return () => ({ role: agents()?.isApex(session) ? "apex" : "thread" })
+}
+
+/**
+ * A launch's native calls (`ProviderStartOptions.nativeCalls`): only a Thread
+ * given Mako's tools has them to route to. Read at each call, so a
+ * worktree_move or a recipe published mid-session counts from then on.
+ */
+export function launchCalls(dependencies: Pick<Dependencies, "threads">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
+  if (!tools?.makoUrl) return undefined
+  const recipe = environment?.recipe
+  const known: CallThread["recipe"] = recipe?.kind === "ready" ? { kind: "ready", processes: recipe.processes.map((process) => process.name) } : recipe?.kind === "none" ? { kind: "none" } : undefined
+  return () => {
+    const store = dependencies.threads
+    const thread = store?.journalPlacement(conversation)?.thread
+    const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
+    const checkout = found && checkoutOf(found.worktree)
+    return {
+      folder: cwd,
+      ...found && checkout && { worktree: checkout, main: checkout === found.worktree.path ? found.worktree.repoRoot : found.worktree.project },
+      ...known && { recipe: known },
+      computer: Boolean(tools.computerUrl),
+    }
+  }
 }
 
 /** What a conversation's Fins are to its turns and its roster (`Agents`). */

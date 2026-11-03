@@ -8,6 +8,7 @@ import {
   movedShellCommand,
   shellCommandIndex,
 } from "@mako/host/harnesses/cursor/sdk/shell-folder"
+import { routeShellCall } from "@mako/host/contracts/native-calls"
 
 // The shapes SDK 1.0.31 starts its shell tool with; anything else is not one.
 assert.equal(shellCommandIndex("/bin/zsh", ["-c", "wrapper", "--", "ls"]), 3)
@@ -22,7 +23,12 @@ const workspace = join(root, "it's the workspace")
 const gone = join(root, "deleted")
 mkdirSync(workspace)
 const warnings: string[] = []
-guardShellFolder(() => workspace, (message) => warnings.push(message))
+const routed: string[] = []
+guardShellFolder(() => workspace, (message) => warnings.push(message), (command, cwd) => {
+  routed.push(`${cwd}: ${command}`)
+  const thread = { folder: workspace, recipe: { kind: "ready" as const, processes: ["web"] } }
+  return routeShellCall(thread, { command, cwd })
+})
 
 function run(command: string, args: string[], cwd: string) {
   // The namespace the SDK imports sees the guard, not only `require`.
@@ -59,9 +65,26 @@ try {
   assert.equal(other.error?.code, "ENOENT", "other processes fail as they would")
   assert.equal(warnings.length, 2)
 
+  // Routing: a deny runs its notice instead of the command and fails; a warn prints its note and runs the command.
+  for (const [shell, args] of [
+    ["/bin/zsh", ["-c", wrapper, "--"]],
+    ["/bin/bash", ["-O", "extglob", "-c", wrapper, "--"]],
+  ] as const) {
+    const denied = await run(shell, [...args, "echo SHOULD-NOT-RUN && gh pr create --fill"], workspace)
+    assert.ok(!denied.stdout.includes("SHOULD-NOT-RUN"), `${shell}: nothing on a denied line runs`)
+    assert.match(denied.stderr, /Call pull_request_open instead/, `${shell}: the agent reads the redirect`)
+    assert.equal(denied.code, 1, `${shell}: a denied command fails`)
+    const warned = await run(shell, [...args, "lsof -i :1 ; echo it-ran"], workspace)
+    assert.ok(warned.stdout.includes("it-ran"), `${shell}: a warned command runs`)
+    assert.match(warned.stderr, /port_holder names who holds a port/, `${shell}: and the agent reads the note`)
+    const plain = await run(shell, [...args, "echo plain"], workspace)
+    assert.ok(plain.stdout.includes("plain") && !plain.stderr.trim(), `${shell}: an ordinary command is untouched`)
+  }
+  assert.ok(routed.every((line) => line.startsWith(`${workspace}: `)), "the route reads the shell's folder")
+
   const quoted = await run("/bin/zsh", ["-c", movedShellCommand("/tmp/it's gone", "/tmp/now")], root)
   assert.match(quoted.stderr, /\/tmp\/it's gone was deleted/, "a quote in a folder name cannot break the notice")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
-console.log("Cursor shell folder: a shell whose folder was deleted refuses its command, names both folders and moves to the workspace; other spawns are untouched")
+console.log("Cursor shell folder: a shell whose folder was deleted refuses its command, names both folders and moves to the workspace; a routed command is refused or noted; other spawns are untouched")

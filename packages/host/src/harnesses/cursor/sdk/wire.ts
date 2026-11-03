@@ -187,6 +187,15 @@ export const SdkImportSourceSchema = z.object({
 })
 export type SdkImportSource = z.infer<typeof SdkImportSourceSchema>
 
+/** `CallThread` on the wire. */
+const SdkCallThreadSchema = z.object({
+  folder: z.string().optional(),
+  worktree: z.string().optional(),
+  main: z.string().optional(),
+  recipe: z.discriminatedUnion("kind", [z.object({ kind: z.literal("ready"), processes: z.array(z.string()) }), z.object({ kind: z.literal("none") })]).optional(),
+  computer: z.boolean().optional(),
+})
+
 export const SdkOpenParamsSchema = z.object({
   cwd: z.string(),
   /** Mako's own state root; the SDK's default would scatter stores under `~/.cursor/projects`. */
@@ -199,6 +208,8 @@ export const SdkOpenParamsSchema = z.object({
   mcpServers: z.record(z.string(), SdkMcpServerSchema).optional(),
   /** Leave out Cursor's `task` tool: the Thread's background and parallel work goes through Mako (`nativeSpawnsOff`). */
   noTask: z.boolean().optional(),
+  /** The Thread as its shell commands are routed (`routeShellCall`); absent where Mako serves no tools. */
+  calls: SdkCallThreadSchema.optional(),
   /** HTTP/1.1 with SSE for the agent stream; the child's default. `false` uses the SDK's HTTP/2. */
   http1: z.boolean().optional(),
   /**
@@ -234,6 +245,8 @@ export type SdkHeadlessSpec = z.infer<typeof SdkHeadlessSpecSchema>
 export const SdkSendParamsSchema = z.object({
   /** Mako's id for the turn; every message, delta and result of the run carries it back. */
   turn: z.string(),
+  /** The Thread as its shell commands are routed from this send on (`SdkOpenParams.calls`). */
+  calls: SdkCallThreadSchema.optional(),
   text: z.string(),
   images: z.array(SdkImageSchema).optional(),
   model: CursorSdkModelSelectionSchema.optional(),

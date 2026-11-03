@@ -12,6 +12,7 @@
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "./errors.js"
 import { guardShellFolder } from "./shell-folder.js"
+import { routeShellCall, type CallThread } from "../../../contracts/native-calls.js"
 import { CURSOR_SDK_LOG_EVENT, CursorSdkLogEntry, cursorRunLogLine } from "./run-log.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
@@ -83,6 +84,8 @@ interface OpenAgent {
   name: string | undefined
   /** `OpenParams.noTask`; the SDK keeps no tool exclusion on the agent, so every create and resume passes it. */
   noTask: boolean
+  /** `OpenParams.calls`, as the latest open or send gave it. */
+  calls?: CallThread
   /** Exact origin revision admitted by this child, checked again before send. */
   sourceImport?: { path: string; nativeId: string; revision: string }
   /** How this agent's host opens Cursor's stores (`OpenParams.strictStores`). */
@@ -438,6 +441,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     mcpServers: mcpConfig(params.mcpServers),
     name: params.name,
     noTask: params.noTask === true,
+    ...params.calls && { calls: params.calls },
     stores,
     reported: {},
   }
@@ -775,6 +779,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
   if (active || sending) throw new AgentBusyError("A turn is already running in this session")
   if (closing) throw new ConfigurationError("This session is closing")
   if (params.model) open.model = params.model
+  if (params.calls) open.calls = params.calls
   const message = { text: params.text, images: params.images }
   let turnEnded = false
   const onDelta = ({ update }: { update: { type: string; text?: string; event?: unknown } }) => {
@@ -1244,7 +1249,13 @@ function main(): void {
   process.on("uncaughtException", (cause) => fatal("exception", cause))
   process.on("unhandledRejection", (cause) => fatal("rejection", cause))
   configureRipgrep()
-  guardShellFolder(() => agent?.cwd, (message) => log("warn", message))
+  guardShellFolder(() => agent?.cwd, (message) => log("warn", message), (command, cwd) => {
+    const calls = agent?.calls
+    if (!calls) return undefined
+    const route = routeShellCall(calls, { command, cwd })
+    if (route.kind !== "allow") log("info", `native call ${route.kind === "deny" ? "denied" : "warned"}: ${route.family} ${route.rule}`)
+    return route
+  })
 }
 
 main()
