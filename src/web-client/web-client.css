@@ -140,6 +140,16 @@
   .web-row-mark {
     @apply flex w-7 shrink-0 items-center justify-center;
   }
+  .web-row-mark > .live-mark {
+    --lm-size: 28px;
+    --lm-cut: var(--shell);
+  }
+  [data-list="rail"] .web-row-mark > .live-mark {
+    --lm-size: 20px;
+  }
+  [data-list="rail"] .web-row[aria-current="page"] .web-row-mark > .live-mark {
+    --lm-cut: var(--raised);
+  }
   /* A row lights on touch-down and fades back after: the press is seen even on a quick tap. */
   .web-row:active {
     @apply bg-fill-selected;
@@ -199,16 +209,6 @@
   }
   .web-swipe[data-armed] .web-swipe-archive > svg {
     scale: 1.18;
-  }
-  /* "Done" and a hand's "unread": a dot in the row's ink beside its time, never the accent. */
-  .web-row[data-unread] [data-unread-mark] {
-    animation: web-unread-in 220ms var(--ease-out);
-  }
-  @keyframes web-unread-in {
-    from {
-      opacity: 0;
-      scale: 0.4;
-    }
   }
 
   [data-list="rail"] .web-rows {
@@ -557,7 +557,7 @@
     @apply size-9 text-muted-foreground;
   }
   .web-composer-input {
-    @apply min-w-0 resize-none bg-transparent px-2 py-[7px] text-foreground caret-ember outline-none placeholder:text-faint;
+    @apply min-w-0 resize-none bg-transparent px-2 py-[7px] text-foreground caret-sea outline-none placeholder:text-faint;
     font-size: max(16px, var(--text-ui));
     line-height: 22px;
     max-height: 180px;
@@ -836,9 +836,9 @@
   opacity: 1;
   transition: opacity 160ms var(--ease-out) 80ms;
 }
-/* The working dot: the one ember on the screen while a turn runs. */
+/* The working dot: the one sea accent on the screen while a turn runs. */
 .web-capsule-dot {
-  @apply size-1.5 shrink-0 rounded-full bg-ember;
+  @apply size-1.5 shrink-0 rounded-full bg-sea;
   animation: web-breathe 1.6s ease-in-out infinite;
 }
 .web-jump {
@@ -1625,7 +1625,7 @@
 
   /*
    * The capsule's app: a segment that opens it. Its dot is the text's own colour: hue is for diff, error and warning,
-   * and ember for the turn at work beside it.
+   * and sea for the turn at work beside it.
    */
   .web-capsule-app {
     @apply text-foreground;

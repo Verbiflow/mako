@@ -1384,7 +1384,7 @@ export function Composer() {
                 "font-sans text-prose leading-[1.6] placeholder:text-faint focus:outline-none",
                 // Transparent glyphs let the overlay show through; the caret
                 // and selection stay native and visible.
-                "text-transparent caret-ember selection:bg-fill-selected selection:text-transparent"
+                "text-transparent caret-sea selection:bg-fill-selected selection:text-transparent"
               )}
             />
           </div>

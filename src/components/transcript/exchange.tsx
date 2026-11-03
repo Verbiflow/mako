@@ -1335,7 +1335,7 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
         // Mako is about to send the continuation itself: the live mark says
         // the thread is not finished, and there is nothing to press.
         <span data-turn-continuing className="flex items-center gap-1.5">
-          <span className="animate-live size-1.5 rounded-full bg-ember" />
+          <span className="animate-live size-1.5 rounded-full bg-sea" />
           <span>{AUTO_CONTINUE_NOTE}</span>
         </span>
       ) : null}

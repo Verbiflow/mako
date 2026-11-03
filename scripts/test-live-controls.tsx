@@ -18,7 +18,7 @@ import { agentActivity, startLabel } from "../src/state/agent-activity"
 import { cn } from "../src/lib/utils"
 import { ActivityMark } from "../src/components/ui/activity-mark"
 import { FolderActivity } from "../src/components/rail/rail-activity"
-import { ThreadStatusMark } from "../src/components/rail/thread-status"
+import { ThreadMark, ThreadStatusEnd } from "../src/components/rail/thread-status"
 import type { ThreadFolder } from "../src/lib/thread-folders"
 import { AttachmentStrip, InlineAttachment } from "../src/components/composer/attachments"
 import { MentionMenu } from "../src/components/composer/mention-menu"
@@ -774,11 +774,17 @@ assert.doesNotMatch(folderMarkup, /1 active|animate-spin|lucide-loader/)
 assert.match(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,running:2}} />), /3 running/)
 assert.equal(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,active:0}} />), "")
 assert.doesNotMatch(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,failed:1}} />), /<canvas/)
-assert.match(renderToStaticMarkup(<ThreadStatusMark status={{kind:"external-active"}} />), /data-size="20"/)
-const openMarkup = renderToStaticMarkup(<ThreadStatusMark status={{kind:"external-open", app:"codex"}} updatedAt={new Date(Date.now() - 5 * 60_000).toISOString()} />)
+const activeMarkup = renderToStaticMarkup(<ThreadMark status={{kind:"external-active"}} harness="codex" />)
+assert.match(activeMarkup, /data-live-mark="working"/, "work in another app wears the comet")
+assert.doesNotMatch(activeMarkup, /<canvas/, "the row's mark is no orb")
+const openStatus = {kind:"external-open", app:"codex"} as const
+const openMarkup = renderToStaticMarkup(<>{[<ThreadMark key="mark" status={openStatus} harness="codex" />, <ThreadStatusEnd key="end" status={openStatus} updatedAt={new Date(Date.now() - 5 * 60_000).toISOString()} />]}</>)
 assert.doesNotMatch(openMarkup, /<canvas/)
+assert.match(openMarkup, /data-live-mark="open"/)
 assert.match(openMarkup, /Open in Codex/)
 assert.match(openMarkup, />5m</, "the open state keeps the time")
+assert.match(renderToStaticMarkup(<ThreadStatusEnd status={{kind:"needs-permission", since:0}} />), />Needs you</, "a row that needs the person says so where its time stood")
+assert.match(renderToStaticMarkup(<ThreadStatusEnd status={{kind:"failed", at:0}} />), />Failed</)
 
 // Commands the provider advertised lead the slash menu, in its own words
 // and named by provider — nothing the session did not report is shown.

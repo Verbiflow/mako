@@ -2029,14 +2029,38 @@ deliberate action and never rides along with a commit.
   panes tile edge-to-edge with square edges and 1px dividers; rounded `.card`
   surfaces are reserved for content within a pane. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
-- **The ramp is warm ember neutrals — red-shifted near-blacks, warm
-  off-white text — and stays that quiet.** Ember (`--ember`) is punctuation,
-  not brand: the live/working dot, the composer caret, at most one badge.
-  Never on links, borders, focus, selection, hover fills, icons at rest, or
-  any fill larger than a badge; if two ember moments are visible in one
-  pane, one is wrong. Selection and hover are tints of the text colour
-  (`--fill-hover` / `--fill-selected`), never the accent. Beyond ember, hue
-  appears only where it carries meaning: diff add/remove, error, warning.
+- **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
+  text — and stays that quiet.** The one accent is the brand's sea
+  (`--sea`): the steel blue of the fin's lit face in the icon kit
+  (`mako-icons/_masters`, #415f81 to #6386a6) and the marketing site's own
+  `--sea` (mako-cloud `apps/site`), hue 245. Until November 2026 the accent
+  was an orange "ember" that appeared nowhere in the brand. It is
+  punctuation: the open Thread's working comet, the live dot, the composer
+  caret, at most one badge. Never on links, borders, focus, selection, hover
+  fills, icons at rest, or any fill larger than a badge; if two sea moments
+  are visible in one pane, one is wrong. Selection and hover are tints of the
+  text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
+  sea, hue appears only where it carries meaning: diff add/remove, error,
+  warning.
+- **Every Thread and Fin wears one live mark** (`LiveMark`,
+  `src/components/ui/live-mark.tsx`; states in `src/lib/live-mark-state.ts`):
+  its agent's glyph, and round it a ring that carries the state. A comet
+  runs round it while it works (in sea on the open Thread, in the text
+  colour elsewhere), the same comet slower and quieter while its turn is done
+  and background work runs, a caution ring breathes while it needs the
+  person, a dotted ring drifts while a Fin asks its Apex, a dashed ring holds
+  while it's queued, and a dot is cut out of it for a failure (negative, low
+  right) or an answer to read (the unread sphere, high right). The rail, the
+  tabs, the Agents panel, the crew card and the phone draw this one mark,
+  and a row's one trailing slot says "Needs you", "Failed" or its age. Its
+  motion is `transform` and `opacity` on HTML boxes only (an SVG element's
+  own transform runs on the main thread: a drifting dotted ring once cost
+  588 ms in 3 s for 22 marks), every moving layer runs on the shared clock
+  and rests off screen (`observePhaseLockedAnimation`), and no React state
+  moves it. `npm run bench:live-marks` holds 500 moving marks and the desk
+  at 500 more Apexes to no React commit, no layout and no style pass per
+  frame, the marks scrolled away paused, and every running mark in phase;
+  `scripts/live-marks.html` draws every state.
 - **Three UI type sizes only** — `text-label` (12), `text-ui` (14),
   `text-title` (16) — plus prose (16) and code (12). Weights come off
   Geist's variable axis as 440/530/640 through the standard `font-normal`/
@@ -2084,8 +2108,8 @@ duplicates a doorway that already exists: the palette is Cmd+K and search is
 the one control there with no other way in. The rail is the vertical thread
 list; horizontal tabs inside the central workbench hold that thread's
 sessions, then its files and diffs. The rail never nests sessions: a Thread
-with several is one row wearing each Session's agent mark and the most
-demanding status among them (`src/lib/thread-fold.ts`), and clicking it
+with several is one row wearing the live mark of the Session its most
+demanding status comes from (`src/lib/thread-fold.ts`), and clicking it
 opens the Session you last had open there. `+` and Cmd+T open the Thread's
 new tab; nothing is created until its first message is sent, an empty new
 tab disappears when you leave it, and one holding unsent text stays as a

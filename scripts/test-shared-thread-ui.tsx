@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import { ThreadStatusMark } from "../src/components/rail/thread-status"
+import { ThreadMark } from "../src/components/rail/thread-status"
 import { threadStatus } from "../src/state/thread-status"
 import { threadsStore } from "../src/state/thread-store"
 
@@ -51,9 +51,9 @@ const status = threadStatus({
   heldBy: "Mako's dev3 host",
 })
 const markup = renderToStaticMarkup(
-  <ThreadStatusMark status={status} updatedAt={new Date().toISOString()} />
+  <ThreadMark status={status} harness="codex" />
 )
-assert.doesNotMatch(markup, /Open in|ring-current/)
+assert.doesNotMatch(markup, /Open in|data-live-mark="open"/)
 console.log(
   "Shared thread UI: all six providers preserve real external ownership and omit the ring for Mako-owned sessions"
 )
