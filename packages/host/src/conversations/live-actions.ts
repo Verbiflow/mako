@@ -16,7 +16,7 @@ import {
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog } from "../base/host-log.js"
-import { STEER_LANDS_MS } from "../harnesses/live-driver.js"
+import { STEER_LANDS_MS } from "../harnesses/index.js"
 
 export type SteerInput = Extract<LiveActionInput, { kind: "steer" | "steer-queued" }>
 
