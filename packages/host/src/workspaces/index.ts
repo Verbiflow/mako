@@ -60,6 +60,8 @@ export { projectRecipe, readProjectRecipe, type ProjectRecipeRead } from "./thre
 export { answeredElsewhere, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"
 export { readSignedFile, readWindowFile } from "./file-readers.js"
+export type { FileOwner } from "./file-previews.js"
+export { OwnedFiles, ownerFileRead } from "./owned-files.js"
 export { MediaRenditions } from "./media-renditions.js"
 export { ConversationFiles } from "./files.js"
 export type { AgentHost, TabServices } from "./agent-host.js"
