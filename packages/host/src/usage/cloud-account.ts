@@ -71,6 +71,15 @@ import { clipReason, CloudRepositorySchema, type CloudRepository } from "../cont
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import { GitHubTokenAnswerSchema, GitHubTokenListingSchema, type GitHubTokenListing } from "../contracts/github-person.js"
+import {
+  CloudAccessGrantSchema,
+  CloudAccessGrantsAnswerSchema,
+  CloudAccessRepositorySchema,
+  CloudAccessUsesAnswerSchema,
+  type CloudAccessGrant,
+  type CloudAccessService,
+  type CloudAccessUse,
+} from "../contracts/cloud-access.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
@@ -705,6 +714,37 @@ export class CloudAccounts {
   /** Turns it off: the account removes the token, and each cloud machine its copy before its next pull request. */
   async removeGitHubToken(): Promise<void> {
     await this.#call("github-token.remove", "DELETE", `${this.#accountPath()}/github-token`)
+  }
+
+  /** A project's cloud access grants (`repository`, its GitHub URL): what each service's token acts in, never the token. */
+  async cloudAccess(repository: string): Promise<CloudAccessGrant[]> {
+    const response = await this.#call("cloud-access.list", "GET", this.#cloudAccessPath("", repository))
+    return CloudAccessGrantsAnswerSchema.parse(await response.json()).grants
+  }
+
+  /**
+   * Connects a service for a project, or replaces its token: the cloud checks it with the service (and which account
+   * it acts in, `account` where it reaches several) and keeps it sealed for the project's cloud Threads. This Mac keeps
+   * nothing of it. A refusal is the service's reason in words.
+   */
+  async saveCloudAccess(repository: string, service: CloudAccessService, token: string, account?: string): Promise<CloudAccessGrant> {
+    const response = await this.#call("cloud-access.save", "PUT", this.#cloudAccessPath(`/${service}`, repository), { token, ...account && { account } })
+    return CloudAccessGrantSchema.parse(await response.json())
+  }
+
+  /** Removes a project's grant: running cloud Threads lose it within a minute, and no new shell gets it. */
+  async removeCloudAccess(repository: string, service: CloudAccessService): Promise<void> {
+    await this.#call("cloud-access.remove", "DELETE", this.#cloudAccessPath(`/${service}`, repository))
+  }
+
+  /** The latest hand-overs of a project's grants to cloud Threads' machines, newest first. */
+  async cloudAccessUses(repository: string): Promise<CloudAccessUse[]> {
+    const response = await this.#call("cloud-access.uses", "GET", this.#cloudAccessPath("/uses", repository))
+    return CloudAccessUsesAnswerSchema.parse(await response.json()).uses
+  }
+
+  #cloudAccessPath(rest: string, repository: string): string {
+    return `${this.#accountPath()}/cloud-access${rest}?repository=${encodeURIComponent(CloudAccessRepositorySchema.parse(repository))}`
   }
 
   /** A project's carried files the account's store keeps (`?repository=`), listed without their values. */

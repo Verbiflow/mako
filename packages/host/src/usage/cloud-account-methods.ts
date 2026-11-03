@@ -12,6 +12,7 @@ import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudCarriedFile } from "../contracts/cloud-carried-files.js"
+import type { CloudAccessService } from "../contracts/cloud-access.js"
 import type { CloudAccount as CloudAccountView } from "../contracts/cloud-account.js"
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
@@ -334,6 +335,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:github-token", () => cloud.githubToken())
   methods.handle("mako:github-token-save", (token: string, repository?: string) => cloud.saveGitHubToken(token, repository))
   methods.handle("mako:github-token-remove", () => cloud.removeGitHubToken())
+  // Cloud access: a project's tokens for outside services, checked and kept by the cloud for its cloud Threads; this Mac keeps none.
+  methods.handle("mako:cloud-access", (repository: string) => cloud.cloudAccess(repository))
+  methods.handle("mako:cloud-access-save", (repository: string, service: CloudAccessService, token: string, account?: string) => cloud.saveCloudAccess(repository, service, token, account))
+  methods.handle("mako:cloud-access-remove", (repository: string, service: CloudAccessService) => cloud.removeCloudAccess(repository, service))
+  methods.handle("mako:cloud-access-uses", (repository: string) => cloud.cloudAccessUses(repository))
 
   sync?.start()
   const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))

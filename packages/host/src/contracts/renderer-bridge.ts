@@ -74,6 +74,7 @@ import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, Simulat
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
+import type { CloudAccessGrant, CloudAccessService, CloudAccessUse } from "./cloud-access.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { ContinueReading } from "./cloud-continues.js"
@@ -512,6 +513,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     githubToken: () => invokeTrustedHost<GitHubTokenListing | null>("mako:github-token"),
     githubTokenSave: (token: string, repository?: string) => invokeTrustedHost<GitHubTokenListing>("mako:github-token-save", token, repository),
     githubTokenRemove: () => invokeTrustedHost<void>("mako:github-token-remove"),
+    /* A project's cloud access grants (`repository`, its GitHub URL): listing them, connecting a service (checked by the cloud first), removing one, and who used them. */
+    cloudAccess: (repository: string) => invokeTrustedHost<CloudAccessGrant[]>("mako:cloud-access", repository),
+    cloudAccessSave: (repository: string, service: CloudAccessService, token: string, account?: string) => invokeTrustedHost<CloudAccessGrant>("mako:cloud-access-save", repository, service, token, account),
+    cloudAccessRemove: (repository: string, service: CloudAccessService) => invokeTrustedHost<void>("mako:cloud-access-remove", repository, service),
+    cloudAccessUses: (repository: string) => invokeTrustedHost<CloudAccessUse[]>("mako:cloud-access-uses", repository),
     /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),

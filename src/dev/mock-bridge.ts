@@ -54,6 +54,7 @@ import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockCarriedFiles } from "./mock-carried-files"
 import { mockSimulators } from "./mock-simulators"
 import { mockGitHubToken } from "./mock-github-token"
+import { CLOUD_ACCESS_THREADS, mockCloudAccess } from "./mock-cloud-access"
 import { matchPullRequests, pullSearchLimit, type PullRequestListing } from "@mako/host/contracts/pull-request-search"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
@@ -621,6 +622,8 @@ export function installMockBridge() {
   const titles = new Map<string, ThreadTitleEntry>()
   if (scene === "busy") titles.set(BUSY_THREAD, { thread: BUSY_THREAD, title: BUSY_TITLE, source: "user" })
   if (scene === "apex") titles.set(APEX_THREAD, { thread: APEX_THREAD, title: APEX_TITLE, source: "user" })
+  // The cloud Threads Settings › Apps' "Recent use" names.
+  for (const [thread, title] of Object.entries(CLOUD_ACCESS_THREADS)) titles.set(thread, { thread, title, source: "frozen" })
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false
   // The host gives every profile Mako's default for new conversations.
@@ -1626,6 +1629,7 @@ export function installMockBridge() {
     ...mockSimulators(emit),
     ...mockCarriedFiles(),
     ...mockGitHubToken(),
+    ...mockCloudAccess(),
     providerConnections: async () => [],
     providerConnectionAction: async () => {
       throw new Error("Fixture providers keep no sign-in")

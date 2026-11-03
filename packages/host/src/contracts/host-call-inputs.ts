@@ -350,6 +350,20 @@ const inputs = {
   "mako:clear-crashes": () => z.tuple([]),
   "mako:clear-queue": () => z.tuple([]),
   "mako:close-tab": () => z.tuple([z.string()]),
+  "mako:cloud-access": () => z.tuple([z.string()]),
+  "mako:cloud-access-remove": () =>
+    z.tuple([
+      z.string(),
+      z.union([z.literal("cloudflare"), z.literal("vercel")]),
+    ]),
+  "mako:cloud-access-save": () =>
+    z.tuple([
+      z.string(),
+      z.union([z.literal("cloudflare"), z.literal("vercel")]),
+      z.string(),
+      z.string().optional(),
+    ]),
+  "mako:cloud-access-uses": () => z.tuple([z.string()]),
   "mako:cloud-account": () => z.tuple([]),
   "mako:cloud-browser-session-end": () => z.tuple([z.string()]),
   "mako:cloud-browser-sessions": () => z.tuple([]),
@@ -2406,6 +2420,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:clear-crashes", "application"],
   ["mako:clear-queue", "workspaces"],
   ["mako:close-tab", "workspaces"],
+  ["mako:cloud-access", "usage"],
+  ["mako:cloud-access-remove", "usage"],
+  ["mako:cloud-access-save", "usage"],
+  ["mako:cloud-access-uses", "usage"],
   ["mako:cloud-account", "usage"],
   ["mako:cloud-browser-session-end", "usage"],
   ["mako:cloud-browser-sessions", "usage"],

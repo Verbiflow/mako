@@ -4,7 +4,11 @@ import { describeFollow, describeList } from "@mako/host/contracts/sync-readings
 import { webContinues } from "./continue-actions"
 import { readingWords, useReadings } from "./probe"
 import { webSync } from "./sync-readings"
-import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
+import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
+import { CLOUD_ACCESS_CATALOG, CLOUD_ACCESS_HINT, CLOUD_ACCESS_SERVICES, type CloudAccessGrant, type CloudAccessService } from "@mako/host/contracts/cloud-access"
+import { CloudAccess } from "@/components/settings/cloud-access"
+import { grantAccount, lastUsedWords, useCloudAccess, usedByName, type CloudAccessBusy, type CloudAccessTransport, type CloudAccessUsesPhase } from "@/state/cloud-access"
+import { listedRepositories, webCloudAccess } from "./cloud-access"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
@@ -53,6 +57,7 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
           <Notifications />
           <Conversation />
           <PullRequests />
+          <CloudAccessSettings />
           <Appearance />
           <ThisBrowser />
           <Diagnostics />
@@ -204,6 +209,247 @@ export function TouchPullRequests({ tokens }: { tokens: GitHubTokens }) {
       ) : null}
       {!asking && error ? <p className="px-4 py-3 text-label text-negative">{error}</p> : null}
     </Group>
+  )
+}
+
+/**
+ * Each project's cloud access: the accounts its cloud Threads can use. In a laptop's browser it's the desktop's own
+ * part (`CloudAccess`); on a phone or tablet, the same part in the touch layout here. The projects are the account's
+ * repositories its listed Sessions work in, the one prompted in latest first. Neither keeps a token.
+ */
+function CloudAccessSettings() {
+  const client = useWebClient()
+  const transport = useMemo(() => webCloudAccess(client.gateway, client.account.id), [client])
+  const rows = useAccountList((state) => state.rows)
+  const repositories = useMemo(() => listedRepositories(rows), [rows])
+  return <CloudAccessProjects transport={transport} repositories={repositories} touch={useForm() !== "desk"} />
+}
+
+const repositoryName = (url: string) => url.replace(/^https:\/\/github\.com\//, "")
+
+export function CloudAccessProjects({ transport, repositories, touch }: { transport: CloudAccessTransport; repositories: string[]; touch: boolean }) {
+  const [chosen, setChosen] = useState<string | undefined>(undefined)
+  const repository = chosen && repositories.includes(chosen) ? chosen : repositories[0]
+  if (!repository) return null
+  const picker = repositories.length > 1 ? (
+    <select aria-label="Project" value={repository} onChange={(event) => setChosen(event.target.value)} className={touch ? "web-field w-auto max-w-[60%] truncate" : "h-8 max-w-[50%] truncate rounded-md bg-raised px-2 text-ui text-foreground ring-1 ring-hairline focus:outline-none focus-visible:ring-border"}>
+      {repositories.map((url) => <option key={url} value={url}>{repositoryName(url)}</option>)}
+    </select>
+  ) : (
+    <span className="truncate text-ui text-muted-foreground">{repositoryName(repository)}</span>
+  )
+  if (touch) return <TouchCloudAccess key={repository} transport={transport} repository={repository} picker={picker} />
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-ui font-medium">In Mako Cloud</h3>
+          <p className="mt-0.5 text-label text-muted-foreground">For a project's Threads in the cloud.</p>
+        </div>
+        {picker}
+      </div>
+      <CloudAccess key={repository} transport={transport} repository={repository} />
+    </section>
+  )
+}
+
+function TouchCloudAccess({ transport, repository, picker }: { transport: CloudAccessTransport; repository: string; picker: ReactNode }) {
+  const access = useCloudAccess(transport, repository)
+  const { phase } = access
+  const grants = phase.kind === "ready" ? phase.grants : []
+  return (
+    <Group title="Cloud access" footer={CLOUD_ACCESS_HINT}>
+      <Row label="Project" end={picker} />
+      {phase.kind === "loading" ? <p className="px-4 py-3.5 text-ui text-faint">Reading…</p> : null}
+      {phase.kind === "failed" ? (
+        <>
+          <p className="px-4 py-3 text-label text-negative">{phase.message}</p>
+          <button type="button" onClick={access.read} className="web-row flex h-12 w-full items-center px-4 text-left text-ui">Try again</button>
+        </>
+      ) : null}
+      {phase.kind === "ready"
+        ? CLOUD_ACCESS_SERVICES.map((service) => (
+            <TouchService
+              key={service}
+              service={service}
+              grant={grants.find((grant) => grant.service === service)}
+              busy={access.busy}
+              error={access.errors[service]}
+              onOpen={(url) => transport.openUrl(url)}
+              onSave={(token, account) => access.save(service, token, account)}
+              onRemove={() => access.remove(service)}
+              onEdit={() => access.clearError(service)}
+            />
+          ))
+        : null}
+      {grants.length ? <TouchRecentUse uses={access.uses} transport={transport} onOpen={access.readUses} /> : null}
+    </Group>
+  )
+}
+
+function TouchService({ service, grant, busy, error, onOpen, onSave, onRemove, onEdit }: {
+  service: CloudAccessService
+  grant: CloudAccessGrant | undefined
+  busy: CloudAccessBusy | undefined
+  error: string | undefined
+  onOpen: (url: string) => void
+  onSave: (token: string, account?: string) => Promise<boolean>
+  onRemove: () => Promise<boolean>
+  onEdit: () => void
+}) {
+  const info = CLOUD_ACCESS_CATALOG[service]
+  const [connecting, setConnecting] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [token, setToken] = useState("")
+  const [account, setAccount] = useState("")
+  const mine = busy?.service === service ? busy.doing : undefined
+  const looksRight = token.trim().length >= info.minLength
+  const cancel = () => {
+    setConnecting(false)
+    setToken("")
+    setAccount("")
+    onEdit()
+  }
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!looksRight || busy) return
+    void onSave(token, account).then((saved) => {
+      if (!saved) return
+      setConnecting(false)
+      setToken("")
+      setAccount("")
+    })
+  }
+  if (connecting)
+    return (
+      <form onSubmit={submit} className="flex flex-col gap-3 px-4 py-3.5" data-cloud-access-form={service}>
+        <p className="text-ui font-medium">1. Make a token on {info.name}</p>
+        <p className="text-label text-faint">{info.choose}</p>
+        <button type="button" className="web-quiet-button flex h-10 items-center justify-center gap-1.5" onClick={() => onOpen(info.tokenPage)}>
+          {info.name} tokens
+          <ArrowUpRightIcon className="size-4" />
+        </button>
+        <p className="pt-1 text-ui font-medium">2. Paste it here</p>
+        <input
+          type="password"
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          maxLength={500}
+          value={token}
+          disabled={mine === "saving"}
+          placeholder={`${info.name} token`}
+          aria-label={`${info.name} token`}
+          aria-invalid={error ? true : undefined}
+          onChange={(event) => {
+            setToken(event.target.value)
+            onEdit()
+          }}
+          className="web-field h-11 w-full font-mono placeholder:font-sans"
+        />
+        <input
+          type="text"
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          maxLength={200}
+          value={account}
+          disabled={mine === "saving"}
+          placeholder={info.account.placeholder}
+          aria-label={info.account.label}
+          onChange={(event) => {
+            setAccount(event.target.value)
+            onEdit()
+          }}
+          className="web-field h-11 w-full"
+        />
+        <p className="text-label text-faint">{info.account.hint}</p>
+        {error ? <p role="alert" className="text-label text-negative">{error}</p> : null}
+        <p className="text-label text-faint">Mako Cloud checks it with {info.name}, keeps it sealed, and gives it only to this project's cloud Threads. It isn't kept on this phone.</p>
+        <div className="flex justify-end gap-2">
+          <button type="button" className="web-quiet-button h-10 px-4" disabled={mine === "saving"} onClick={cancel}>Cancel</button>
+          <button type="submit" className="web-button h-10 px-4" disabled={!looksRight || mine === "saving"}>
+            {mine === "saving" ? `Checking with ${info.name}…` : grant ? "Replace" : "Save"}
+          </button>
+        </div>
+      </form>
+    )
+  if (!grant)
+    return (
+      <>
+        <Row label={info.name} detail={info.gives} end={<button type="button" className="web-quiet-button h-9 px-3" disabled={busy !== undefined} data-cloud-access-action="connect" onClick={() => setConnecting(true)}>Connect</button>} />
+        {error ? <p className="px-4 py-3 text-label text-negative">{error}</p> : null}
+      </>
+    )
+  const expiry = expiryWords(grant.expiresAt)
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3" data-cloud-access-service={service}>
+      <div className="min-w-0">
+        <p className="truncate text-ui"><span className="font-medium">{info.name}</span><span className="text-muted-foreground"> · {grantAccount(grant)}</span></p>
+        <p className={cn("text-label", expiry.lapsed ? "text-negative" : "text-faint")}>{expiry.lapsed ? `${expiry.text}. Replace it to use ${info.name} again.` : expiry.text}</p>
+        <p className="text-label text-faint">{lastUsedWords(grant)}</p>
+      </div>
+      {removing ? (
+        <div className="flex flex-col gap-2 pt-1">
+          <p className="text-label text-faint">Remove {info.name} from this project? Running cloud Threads lose it within a minute, and no new shell gets it.</p>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="web-quiet-button h-9 px-3" disabled={mine === "removing"} onClick={() => setRemoving(false)}>Cancel</button>
+            <button type="button" className="web-button web-button-negative h-9 px-3" disabled={busy !== undefined} onClick={() => void onRemove().then((removed) => removed && setRemoving(false))}>
+              {mine === "removing" ? "Removing…" : "Remove"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex justify-end gap-2">
+          <button type="button" className="web-quiet-button h-9 px-3" disabled={busy !== undefined} onClick={() => setConnecting(true)}>Replace token</button>
+          <button type="button" className="web-quiet-button h-9 px-3 text-negative" disabled={busy !== undefined} onClick={() => setRemoving(true)}>Remove</button>
+        </div>
+      )}
+      {error ? <p role="alert" className="text-label text-negative">{error}</p> : null}
+    </div>
+  )
+}
+
+function TouchRecentUse({ uses, transport, onOpen }: { uses: CloudAccessUsesPhase; transport: CloudAccessTransport; onOpen: () => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open && uses.kind !== "loading") onOpen()
+          setOpen(!open)
+        }}
+        className="web-row flex h-12 w-full items-center gap-2 px-4 text-left text-ui"
+      >
+        <ChevronRightIcon className={cn("size-4 text-muted-foreground transition-transform duration-150", open && "rotate-90")} />
+        Recent use
+      </button>
+      {open ? (
+        <div className="px-4 pb-3">
+          {uses.kind === "loading" || uses.kind === "unread" ? (
+            <p className="text-label text-faint">Reading…</p>
+          ) : uses.kind === "failed" ? (
+            <p className="text-label text-negative">{uses.message}</p>
+          ) : uses.uses.length ? (
+            <ul className="flex flex-col gap-2">
+              {uses.uses.map((use) => (
+                <li key={`${use.service}-${use.threadId}-${use.at}`} className="flex items-baseline gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-ui">{usedByName(transport, use)}</p>
+                    <p className="text-label text-faint">{CLOUD_ACCESS_CATALOG[use.service].name}</p>
+                  </div>
+                  <span className="shrink-0 text-label text-faint tabular-nums">{copyAge(Date.parse(use.at))}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-label text-faint">No cloud Thread has used these yet.</p>
+          )}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
