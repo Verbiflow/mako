@@ -1394,8 +1394,9 @@ diffs-container {
   }
 }
 
-/* The phone's card sizes its marks the way a phone row does: 28px, inherited, so a layered rule never has to fight `.live-mark`. */
-[data-crew][data-compact] {
+/* The phone's card, and the phone's line back to it, size marks the way a phone row does: 28px, inherited. */
+[data-crew][data-compact],
+[data-crew-away][data-compact] {
   --live-mark-size: 28px;
 }
 
