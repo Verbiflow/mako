@@ -68,7 +68,7 @@ export function ControlPreviewPanel() {
       className="flex h-full min-h-0 flex-col"
       aria-label="Control preview"
     >
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-label">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label">
         {browser ? (
           <GlobeIcon className="size-3.5 shrink-0 text-faint" />
         ) : (

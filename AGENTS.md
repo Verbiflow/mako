@@ -2025,9 +2025,21 @@ deliberate action and never rides along with a commit.
 ## Design rules
 
 - Tokens live in `src/index.css` and nowhere else. No literal colors in
-  components. Chrome (`--shell`) carries no shadow, ever. Structural workspace
-  panes tile edge-to-edge with square edges and 1px dividers; rounded `.card`
-  surfaces are reserved for content within a pane. Real shadows exist only on
+  components. Chrome (`--shell`) carries no shadow, ever. **No lines in the
+  chrome.** The title strip, the rail and each pane's tab strip sit on the
+  shell; a pane's body is the surface; panes side by side are parted by a 6px
+  gutter of the shell (`Divider`, whose bar shows only under the pointer), and
+  a pane's sections by tone and spacing, never a hairline. The composer's
+  input is one raised box inset from its pane. Hairlines stay for content
+  (a diff's file headers, a table) and controls (an input's or a button's
+  outline). Structural panes keep square edges; rounded `.card` surfaces are
+  reserved for content within a pane.
+- **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
+  the person's own face beside their prompt, an agent's tile (its harness's
+  glyph on the raised plane) on its reply's byline, and the sender's tile on
+  words another Thread wrote in (an Apex's brief, a Fin's report). Every
+  avatar is square with a corner just soft enough not to cut, the rail
+  footer's too. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
 - **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
   text — and stays that quiet.** The one accent is the brand's sea

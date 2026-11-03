@@ -19,7 +19,7 @@ export function FinAsks() {
   const asks = useThreadAsks(thread)
   if (!key || !asks.length) return null
   return (
-    <div data-fin-asks={asks.length} className="flex shrink-0 flex-col gap-2.5 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-fin-asks={asks.length} className="flex shrink-0 flex-col gap-2.5 bg-surface/60 px-4 py-2.5">
       {asks.map((ask) => (
         <FinAskRow key={`${ask.fin}:${ask.ask.id}`} apex={key} ask={ask} />
       ))}

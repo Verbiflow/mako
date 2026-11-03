@@ -20,12 +20,13 @@ function hueFor(name: string): number {
   return HUES[Math.abs(hash) % HUES.length]
 }
 
+/** Square, as every mark of Mako's is: a corner just soft enough not to cut. */
 const SIZES = {
-  4: "size-4 rounded-[4px]",
-  5: "size-5 rounded-[5px]",
-  6: "size-6 rounded-md",
-  8: "size-8 rounded-lg",
-  14: "size-14 rounded-xl",
+  4: "size-4 rounded-[2px]",
+  5: "size-5 rounded-[2px]",
+  6: "size-6 rounded-[3px]",
+  8: "size-8 rounded-[4px]",
+  14: "size-14 rounded-md",
 } as const
 
 /** Monogram glyph sizes — drawn marks scaled to the tile, not type. */

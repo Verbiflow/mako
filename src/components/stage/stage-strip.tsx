@@ -249,7 +249,7 @@ export function StageStrip({
  */
 export function WorkbenchStrip({ children, end }: { children: ReactNode; end?: ReactNode }) {
   return (
-    <div className="flex h-10 shrink-0 items-center border-b border-hairline bg-shell">
+    <div className="flex h-10 shrink-0 items-center bg-shell">
       <div
         role="tablist"
         className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2"

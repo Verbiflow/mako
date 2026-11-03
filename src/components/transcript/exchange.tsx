@@ -81,6 +81,7 @@ import type { WokeAfterRest } from "@/lib/woke-after-rest"
 import { AnswerRequestContext, AnswerTimeContext, HarnessContext, TurnRunningContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { AgentAvatar, PersonAvatar } from "@/components/transcript/message-avatar"
 import {
   Popover,
   PopoverContent,
@@ -349,8 +350,8 @@ const NOTHING_RUNNING: LiveStepData = { calls: [], thinking: false }
 function AgentByline({ provider, workingSince }: { provider?: string; workingSince?: number }) {
   useHarnessIdentity()
   return (
-    <div className="flex min-h-3.5 items-center gap-1.5 text-label text-faint">
-      {provider ? <HarnessIcon harness={provider} className="size-3.5" /> : null}
+    <div className="flex min-h-6 items-center gap-2 text-label text-faint">
+      {provider ? <AgentAvatar harness={provider} /> : null}
       {provider ? <span>{harnessLabels()[provider] ?? provider}</span> : null}
       {workingSince !== undefined ? <TurnClock since={workingSince} bare={!provider} /> : null}
     </div>
@@ -619,6 +620,7 @@ function Prompt({ message }: { message: ChatMessage }) {
       {/* The user's words are a bubble, not a slab: right-aligned and capped
           at a reading measure, unmistakably theirs without a ring. The
           assistant's reply below stays full-width and chrome-free. */}
+      <div className="flex w-full items-start justify-end gap-2.5">
       <div onCopy={event => copyPromptSelection(event, reused.records)} className="max-w-[min(82%,64ch)] rounded-xl rounded-br-md bg-raised px-3.5 py-2.5">
         <Prose text={sent.body} sent={prose} className="prompt-prose whitespace-normal" />
         <PlanContextChips plans={reused.plans} />
@@ -636,8 +638,10 @@ function Prompt({ message }: { message: ChatMessage }) {
           </div>
         ) : null}
       </div>
+      <PersonAvatar className="mt-0.5" />
+      </div>
 
-      <div className="mt-1 flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-muted-foreground">
+      <div className="mt-1 mr-[34px] flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-muted-foreground">
         {note?.(message.requestId)}
         <button type="button" aria-label="Copy question" onClick={() => void copy()} className="pressable flex h-6 items-center gap-1 rounded px-1 hover:bg-fill-hover hover:text-foreground">
           {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}

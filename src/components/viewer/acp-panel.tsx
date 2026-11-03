@@ -120,7 +120,7 @@ function PaneWaiting() {
   })
   if (!waiting) return null
   return (
-    <p className="flex shrink-0 items-center gap-1.5 border-t border-hairline px-4 py-2 text-label text-caution">
+    <p className="flex shrink-0 items-center gap-1.5 px-4 py-2 text-label text-caution">
       <ShieldQuestionIcon className="size-3.5 shrink-0" />
       Waiting for your answer. Click here to answer.
     </p>
@@ -482,7 +482,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission-gone={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission-gone={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         <CircleAlertIcon aria-hidden className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0 truncate">{provider} stopped before you answered</span>
@@ -524,7 +524,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         {permission.kind ? (
           <ToolGlyph
@@ -626,7 +626,7 @@ function QuestionPermission({
       answers[question.id]?.some((answer) => answer.trim().length > 0)
   )
   return (
-    <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-3">
+    <div className="shrink-0 bg-surface/60 px-4 py-3">
       <p className="flex items-center gap-1.5 pb-2 text-ui text-foreground/90">
         <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
         <span className="min-w-0 truncate">{permission.title}</span>
