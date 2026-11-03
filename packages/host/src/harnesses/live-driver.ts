@@ -153,11 +153,18 @@ export type NativeFork =
  * Adding a message to the running turn. `lands` says what the harness does
  * with it. `answersOnEnd`: the harness answers every steer it still holds
  * when its turn ends, so a turn that ends, even stopped or failed, leaves no
- * steer whose fate is unknown: its answer is on its way.
+ * steer whose fate is unknown: its answer is on its way. `hears`: when the
+ * agent hears a steer it took, as another agent reads it in `agents_send`'s
+ * result ("hears it …"), seen on a real run of the harness.
  */
 export type SteerCapability =
-  | { kind: "supported"; lands: LiveSteering; answersOnEnd?: true; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
+  | { kind: "supported"; lands: LiveSteering; answersOnEnd?: true; hears?: string; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
   | DriverAbsent
+
+/** When an agent hears a steer its harness took, as `hears` says, or as `lands` implies for one that doesn't. */
+export function steerHeard(steering: Extract<SteerCapability, { kind: "supported" }>): string {
+  return steering.hears ?? (steering.lands === "step" ? "at its next step, once what it's running now returns" : "at once, cutting what it's running now short")
+}
 
 /**
  * How the agent asks the user a question. `request`: a blocking native

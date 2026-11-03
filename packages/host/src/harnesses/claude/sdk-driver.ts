@@ -914,7 +914,9 @@ export function createClaudeSdkDriver(
       engine.emitUpdate(live, { kind: "user", text })
       dispatch.report({ kind: "submitted", source: "sdk-input", correlationId: uuid })
     },
-    steering: { kind: "supported", lands: "step", via: "A message sent while a turn runs joins the running query and is read at its next step.", async steer(id, input) {
+    // Seen with the Agent SDK 0.3.314 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model
+    // heard it in the request after the command returned, and a Stop ended the turn in 0.2 s.
+    steering: { kind: "supported", lands: "step", hears: "at its next step, once the command or subagent it's running returns", via: "A message sent while a turn runs joins the running query and is read at its next step.", async steer(id, input) {
       const live = requireLive(id)
       const content = await claudeInputContent(input.text, input.attachments)
       if (

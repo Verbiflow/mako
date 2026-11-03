@@ -1014,7 +1014,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       }
       await live.interactions.respond(requestId, response, dispatch)
     },
-    steering: { kind: "supported", lands: "step", via: "A prompt sent while the session is busy is read at its next step.", async steer(id, input) {
+    steering: { kind: "supported", lands: "step", hears: "at its next step, once the command it's running returns", via: "A prompt sent while the session is busy is read at its next step.", async steer(id, input) {
       const live = sessions.get(id)
       const turn = live?.turn
       if (!live?.root || live.closed || live.state.status !== "running" || !turn || turn.kind === "compaction" || live.state.nativeRunId !== input.expectedRunId)

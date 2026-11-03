@@ -97,7 +97,7 @@ function ConnectGitHubRow({ status }: { status: GitHubStatus }) {
     toast.success("Copied gh auth login")
   }
   return (
-    <div className="shrink-0 border-t border-hairline px-2.5 py-2">
+    <div className="shrink-0 px-2.5 py-2">
       <button
         type="button"
         onClick={status.installed && !status.authenticated ? copy : undefined}
@@ -131,7 +131,7 @@ function GitHubSetup({ status }: { status: GitHubStatus }) {
       : "Push this repository to GitHub, then refresh the Changes panel."
 
   return (
-    <div className="flex shrink-0 items-start gap-2 border-t border-hairline px-3 py-2.5">
+    <div className="flex shrink-0 items-start gap-2 px-3 py-2.5">
       <GitPullRequestIcon className="mt-px size-3.5 shrink-0 text-faint" />
       <span className="min-w-0 flex-1 text-label leading-snug">
         <span className="block text-muted-foreground">{title}</span>
@@ -150,7 +150,7 @@ function BehindBranch({ behind, upstream }: { behind: number; upstream?: string 
     toast.success("Copied git pull --rebase")
   }
   return (
-    <div className="shrink-0 border-t border-hairline px-2.5 py-2">
+    <div className="shrink-0 px-2.5 py-2">
       <div className="flex items-center gap-2 rounded-md bg-caution/10 px-2 py-1.5 ring-1 ring-caution/20">
         <GitPullRequestIcon className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0 flex-1 text-label leading-relaxed text-muted-foreground">
@@ -270,7 +270,7 @@ export function ComposePull({
   const newSession = Boolean(onScreen.thread) && !onScreen.draft
 
   return (
-    <section aria-label="Open a pull request" className={cn("shrink-0 border-t border-hairline px-2.5 py-2", className)}>
+    <section aria-label="Open a pull request" className={cn("shrink-0 px-2.5 py-2", className)}>
       <div className="mb-1.5 flex items-center gap-2">
         <GitPullRequestIcon className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 truncate text-ui text-faint">
@@ -361,7 +361,7 @@ function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; ro
   const checks = useMemo(() => summarizeChecks(pull.checks), [pull.checks])
 
   return (
-    <div className="shrink-0 border-t border-hairline px-2.5 py-2">
+    <div className="shrink-0 px-2.5 py-2">
       <div className="flex items-center gap-2">
         <GitPullRequestIcon
           className={cn(

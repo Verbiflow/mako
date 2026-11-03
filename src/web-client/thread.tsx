@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
@@ -43,11 +43,9 @@ import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
 import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
 import { PhoneChildChips } from "./apex-fins"
+import { transcriptChunk } from "./chunks"
 import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-
-/** The renderer's live conversation: its transcript, approvals and questions, the desktop's own code. Its own chunk. */
-const LiveSession = lazy(() => import("./live-session"))
 
 export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: { threadId: string; sessionId?: string; onBack: () => void; onSession: (session: string) => void; wide: boolean }) {
   const thread = useThread(threadId)
@@ -173,6 +171,11 @@ export function ThreadBody({ thread, session, desk = false, openedBy = "person",
   const live = !thread.archived && !session.quietSince && !moving
   const noCopy = useCopyMissing((state) => (session.quietSince ? state.missing.get(session.row.conversation) : undefined))
   useThreadApp(client, session.row.conversation, owner, session.row.folder, live)
+  // The renderer's live conversation (its transcript, approvals and questions, the desktop's own code), its own chunk.
+  const transcript = transcriptChunk.use()
+  useEffect(() => {
+    if (!transcript) void transcriptChunk.read().catch(() => undefined)
+  }, [transcript])
   // Its Mac off, what would carry the Thread on: said after why it can't be reached, as the remedy to it.
   const offered = session.quietSince && !moving && cloudOn(client.account.entitlements) ? <ContinueOffer thread={thread} session={session} /> : null
   // A link to the app's own address (`localhost:5173/login`) opens the app here, through its owner, not this phone's own.
@@ -200,9 +203,7 @@ export function ThreadBody({ thread, session, desk = false, openedBy = "person",
             <>
               {moving || session.quietSince ? null : <ServerCards session={session} />}
               <MoveDividersContext value>
-                <Suspense fallback={<TranscriptLoading />}>
-                  <LiveSession key={session.row.conversation} session={session} desk={desk} thread={thread} openedBy={openedBy} onSession={onSession} />
-                </Suspense>
+                {transcript ? <transcript.default key={session.row.conversation} session={session} desk={desk} thread={thread} openedBy={openedBy} onSession={onSession} /> : <TranscriptLoading />}
               </MoveDividersContext>
             </>
           )}
@@ -447,7 +448,7 @@ function SessionSwitcher({ thread, current, wide, onSession, onAdd }: { thread: 
           <span className="shrink-0 text-faint">· {sessionBrief(current.facts, now, label, wide ? parent : undefined)}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-caution" : "bg-ember")} /> : null}
+          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-caution" : "bg-sea")} /> : null}
           {thread.sessions.length}
           <ChevronsUpDownIcon aria-hidden className="size-3.5" />
         </span>

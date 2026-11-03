@@ -395,6 +395,58 @@ export function wrappedKey(
   }
 }
 
+/**
+ * A data key kept in a file of its own, mode 0600, for a machine with no
+ * keychain and no desktop to hand one over, such as a Linux server: the file
+ * is the key, as an SSH host key is, so whoever can read it can open the
+ * store. Its text is the key's 32 bytes in base64 (or base64url), so one made
+ * elsewhere (`head -c 32 /dev/urandom | base64`) works too. Made on first use;
+ * two hosts racing to make it read the winner's.
+ */
+export function fileKey(path: string): SecretKey {
+  let known: Buffer | undefined
+  const read = async (): Promise<Buffer | null> => {
+    let text: string
+    try {
+      text = await readFile(path, "utf8")
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
+      throw new SecretLocked("unavailable")
+    }
+    const key = Buffer.from(text.trim(), "base64")
+    if (key.length !== 32) throw new SecretLocked("unreadable")
+    return key
+  }
+  const make = async (): Promise<Buffer> => {
+    const key = randomBytes(32)
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    const temporary = `${path}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, `${key.toString("base64")}\n`, { mode: 0o600, flag: "wx" })
+      await link(temporary, path)
+      return key
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+        const theirs = await read()
+        if (theirs) return theirs
+      }
+      throw error
+    } finally {
+      await rm(temporary, { force: true })
+    }
+  }
+  return {
+    available: async () => true,
+    async key(create) {
+      if (known) return known
+      const found = await read()
+      if (found) return (known = found)
+      if (!create) return null
+      return (known = await make())
+    },
+  }
+}
+
 export interface HandedKey extends SecretKey {
   held(): boolean
   /** Whether the key is held, waiting up to `ms` for it to be handed over. */

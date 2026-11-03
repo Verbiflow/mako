@@ -131,7 +131,7 @@ export default defineConfig([
         {
           selector: "Literal[value=/(?:bg|text|ring|border)-brand/]",
           message:
-            "The brand tokens were deleted; use primary, foreground, ember, or the fill tokens.",
+            "The brand tokens were deleted; use primary, foreground, sea, or the fill tokens.",
         },
         {
           selector: "Literal[value=/text-\\[[0-9.]+px\\]/]",

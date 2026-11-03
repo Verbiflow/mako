@@ -15,6 +15,8 @@ export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-m
 export type { CloudThreadMaking } from "./cloud-account.js"
 export type { MachineRuntime, MachineGatewayLink } from "./machine-runtime.js"
 export { MachineWorkspace, WORKSPACE_RETRY_MS, type MachineWorkspaceOutcome } from "./machine-workspace.js"
+/** `mako-host join`, `status` and `leave`, loaded only for those commands. */
+export const loadDeviceCommands = () => import("./device-cli.js")
 /** A cloud machine's runtime, loaded only by a host its machine's agent started. */
 export const loadMachineRuntime = () => import("./machine-runtime.js")
 export type { HostTelemetry } from "./host-telemetry.js"

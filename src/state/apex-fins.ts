@@ -184,6 +184,16 @@ export function useApexTitle(liveId: string | undefined, threadPath: string | un
   return opened ?? listed ?? live
 }
 
+/** The harness the Apex of a Fin's Thread runs on, from what this window holds of it, for its avatar. */
+export function useApexHarness(liveId: string | undefined, threadPath: string | undefined): string | undefined {
+  const apex = useAcp((state) => (liveId ? state.conversations[liveId]?.parent?.thread : undefined))
+  const savedApex = useThreads((state) => (threadPath && !apex ? state.threads.find((ref) => ref.path === threadPath)?.parent?.thread : undefined))
+  const thread = apex ?? savedApex
+  const live = useAcp((state) => (thread ? Object.values(state.conversations).find((conversation) => conversation.threadId === thread)?.harness : undefined))
+  const listed = useThreads((state) => (thread && !live ? state.threads.find((ref) => ref.threadId === thread)?.harness : undefined))
+  return live ?? listed
+}
+
 /**
  * Moves a message the Apex passed on to one of its Fins to another, as
  * the person's own words there (`mako:agents-redirect`). Undefined when it

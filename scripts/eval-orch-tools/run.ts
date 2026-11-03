@@ -152,6 +152,7 @@ try {
     const sample = (steps: Sample["steps"], shell: string[] = [], ended = true): Sample => ({ steps, shell, text: "", ended })
     const start = (args: ToolArgs = {}) => ({ tool: "agents_start", args })
     const send = (to: string, forward = true) => ({ tool: "agents_send", args: { to, forward, clientKey: "k" } })
+    const sendAs = (to: string, deliver: "queue" | "steer" | "interrupt") => ({ tool: "agents_send", args: { to, forward: true, deliver, clientKey: "k" } })
     const graded: [string, Sample, boolean][] = [
       ["route-parallel-reviewers", sample([[start(), start(), start()]]), true],
       ["route-parallel-reviewers", sample([[{ tool: "native_spawn", args: {} }, start(), start()]]), false],
@@ -174,6 +175,18 @@ try {
       ["fd-direct-not-resent", sample([[send("android")]]), false],
       ["fd-after-direct-by-content", sample([[send("ios")]]), true],
       ["fd-after-direct-by-content", sample([[send("android")]]), false],
+      ["deliver-correction-steers", sample([[sendAs("payments", "steer")]]), true],
+      ["deliver-correction-steers", sample([[send("payments")]]), false],
+      ["deliver-correction-steers", sample([[sendAs("payments", "queue")]]), false],
+      ["deliver-harmful-command-interrupts", sample([[sendAs("payments", "interrupt")]]), true],
+      ["deliver-harmful-command-interrupts", sample([[sendAs("payments", "steer")]]), false],
+      ["deliver-harmful-command-interrupts", sample([[{ tool: "agents_stop", args: { child: "payments" } }, sendAs("payments", "interrupt")]]), false],
+      ["deliver-more-scope-queues", sample([[send("widget")]]), true],
+      ["deliver-more-scope-queues", sample([[sendAs("widget", "queue")]]), true],
+      ["deliver-more-scope-queues", sample([[sendAs("widget", "steer")]]), false],
+      ["deliver-finished-no-interrupt", sample([[sendAs("docs", "interrupt")]]), false],
+      ["deliver-already-steered-answers", { ...sample([]), text: "Yes: it hears it at its next step, once the migration command returns." }, true],
+      ["deliver-already-steered-answers", sample([[sendAs("payments", "steer")]]), false],
     ]
     for (const [id, synthetic, passes] of graded) {
       const orchCase = byId.get(id)

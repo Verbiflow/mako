@@ -96,7 +96,7 @@ export type AcpResume =
  * that queues it behind the turn declares it unavailable.
  */
 export type AcpSteering =
-  | { kind: "supported"; via: string; wire: "concurrent-prompt" | "interrupting-prompt" | { extension: string; taken: z.ZodType } }
+  | { kind: "supported"; via: string; hears?: string; wire: "concurrent-prompt" | "interrupting-prompt" | { extension: string; taken: z.ZodType } }
   | DriverAbsent
 
 /** Subagents, observed by the provider's own child evidence; shared ACP owns only binding lifetime and delivery. */

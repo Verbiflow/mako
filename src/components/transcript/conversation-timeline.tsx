@@ -1,5 +1,5 @@
 import { Slot } from "@/extend/slot"
-import { elementScroll, useVirtualizer } from "@tanstack/react-virtual"
+import { elementScroll, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
 import { registerCommands } from "@/extend/commands"
 import {
   TranscriptSourceContext,
@@ -73,6 +73,32 @@ const MORE_TURNS = 30
  */
 const WINDOWED_TURNS = 200
 const WINDOWED_ITEMS = 400
+
+/**
+ * What each windowed transcript's rows measured, by row key, at the window's width, for the few read last. Opened
+ * again, its rows are placed at those sizes in the first frame: the virtualizer's own measurements arrive a frame
+ * after it paints, and placed at the estimate the newest turn painted, then jumped as they landed.
+ */
+type RowSizes = Virtualizer<HTMLDivElement, Element>["itemSizeCache"]
+type Key = RowSizes extends Map<infer Key, number> ? Key : never
+const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
+const MEASURED_KEPT = 8
+const ESTIMATED_ROW = 360
+
+function keepMeasured(source: string, sizes: RowSizes): void {
+  if (!sizes.size) return
+  measuredRows.delete(source)
+  measuredRows.set(source, { width: innerWidth, sizes })
+  for (const oldest of measuredRows.keys()) {
+    if (measuredRows.size <= MEASURED_KEPT) break
+    measuredRows.delete(oldest)
+  }
+}
+
+function measuredSize(source: string, key: Key): number {
+  const kept = measuredRows.get(source)
+  return (kept?.width === innerWidth ? kept.sizes.get(key) : undefined) ?? ESTIMATED_ROW
+}
 
 const NO_KEYS: ReadonlyMap<string, string> = new Map()
 const NO_RENAMES: ReadonlyMap<string, string> = new Map()
@@ -592,12 +618,13 @@ export function ConversationTimeline({
     : more
       ? "more"
       : "start"
+  const rowKey = (index: number) => keys.get(exchanges[index]!.id) ?? exchanges[index]!.id
   const rows = useVirtualizer({
     count: exchanges.length,
     enabled: windowed,
     getScrollElement: () => viewport.current,
-    estimateSize: () => 360,
-    getItemKey: (index) => keys.get(exchanges[index]!.id) ?? exchanges[index]!.id,
+    estimateSize: (index) => measuredSize(readingSource, rowKey(index)),
+    getItemKey: (index) => rowKey(index),
     overscan: 6,
     scrollMargin: edge ? 80 : 24,
     useAnimationFrameWithResizeObserver: true,
@@ -946,6 +973,7 @@ export function ConversationTimeline({
       // A collapsed/covered pane hasn't proved a new reading location. The
       // lease remains conservative until the actual transcript is painted.
       if (!node.clientHeight || !node.clientWidth || !node.isConnected) return
+      if (windowed) keepMeasured(readingSource, rows.itemSizeCache)
       const elements = Array.from(node.querySelectorAll<HTMLElement>("[data-exchange]"))
       const visible = elements.filter(element => {
         const rect = element.getBoundingClientRect()
@@ -1008,7 +1036,7 @@ export function ConversationTimeline({
       node.removeEventListener("focusin", schedule)
       node.removeEventListener("focusout", schedule)
     }
-  }, [readingSource, exchanges, mountedKeys, paneKey, historyBlocks, historyBase])
+  }, [readingSource, exchanges, mountedKeys, paneKey, historyBlocks, historyBase, windowed, rows])
 
   useEffect(() => {
     const pane = readerPane.current

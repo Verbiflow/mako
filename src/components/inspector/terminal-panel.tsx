@@ -189,13 +189,13 @@ export function TerminalPanel() {
       {phase === "connecting" && active ? (
         <div
           role="status"
-          className="flex h-8 shrink-0 items-center border-t border-hairline bg-shell px-3 text-ui text-muted-foreground"
+          className="flex h-8 shrink-0 items-center bg-shell px-3 text-ui text-muted-foreground"
         >
           Reconnecting to shell…
         </div>
       ) : null}
       {(fault || phase === "error") && active ? (
-        <div className="dock-alert flex h-10 shrink-0 items-center gap-3 border-t border-hairline bg-shell pr-1.5 pl-3 text-ui">
+        <div className="dock-alert flex h-10 shrink-0 items-center gap-3 bg-shell pr-1.5 pl-3 text-ui">
           <span className="min-w-0 flex-1 truncate text-negative">
             {fault ?? "Terminal connection lost. Reconnecting…"}
           </span>

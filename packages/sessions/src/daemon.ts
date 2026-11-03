@@ -310,11 +310,9 @@ function catalogService(
   }
 
   const stopEvents = catalog.onEvent((event) => {
-    if (event.type === "removed") {
-      broadcast({ event: "removed", path: event.path })
-      return
-    }
-    broadcast({ event: event.type, ref: event.ref })
+    if (event.type === "removed") broadcast({ event: "removed", path: event.path })
+    else if (event.type === "link-due") broadcast({ event: "link-due", form: event.form })
+    else broadcast({ event: event.type, ref: event.ref })
   })
 
   let retiring = false

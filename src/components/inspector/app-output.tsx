@@ -130,7 +130,7 @@ function Failure({ cwd, failure }: { cwd: string; failure: ShownFailure }) {
     return () => clearTimeout(timer)
   }, [copied])
   return (
-    <div role="alert" className="dock-alert flex h-11 shrink-0 items-center gap-2 border-b border-hairline bg-terminal pr-2 pl-3">
+    <div role="alert" className="dock-alert flex h-11 shrink-0 items-center gap-2 bg-terminal pr-2 pl-3">
       <p className="mr-2 min-w-0 flex-1 truncate text-ui">
         <span className="font-medium text-negative">{failure.title}</span>
         <span className="text-muted-foreground"> {failure.detail}</span>

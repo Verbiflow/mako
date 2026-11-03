@@ -1,6 +1,6 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
-import { carriedHistories, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
+import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
 import { FailureRow } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
 import { agentActivity, startLabel } from "@/state/agent-activity"
@@ -17,9 +17,8 @@ import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
 import { useEffect, useMemo, useState } from "react"
-import { Disclosure } from "@/components/ui/notice"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
-import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
+import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 import { asksInSession, descriptorFor } from "@/state/descriptors"
@@ -121,7 +120,7 @@ function PaneWaiting() {
   })
   if (!waiting) return null
   return (
-    <p className="flex shrink-0 items-center gap-1.5 border-t border-hairline px-4 py-2 text-label text-caution">
+    <p className="flex shrink-0 items-center gap-1.5 px-4 py-2 text-label text-caution">
       <ShieldQuestionIcon className="size-3.5 shrink-0" />
       Waiting for your answer. Click here to answer.
     </p>
@@ -483,7 +482,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission-gone={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission-gone={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         <CircleAlertIcon aria-hidden className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0 truncate">{provider} stopped before you answered</span>
@@ -525,7 +524,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         {permission.kind ? (
           <ToolGlyph
@@ -627,7 +626,7 @@ function QuestionPermission({
       answers[question.id]?.some((answer) => answer.trim().length > 0)
   )
   return (
-    <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-3">
+    <div className="shrink-0 bg-surface/60 px-4 py-3">
       <p className="flex items-center gap-1.5 pb-2 text-ui text-foreground/90">
         <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
         <span className="min-w-0 truncate">{permission.title}</span>
@@ -739,28 +738,3 @@ function QuestionPermission({
   )
 }
 
-/**
- * Every message of the conversation that ended without an answer, newest
- * first, for the conversation menu: the archive behind the rows the
- * transcript draws where each one failed.
- */
-export function RetainedRequests() {
-  const requests = useAcp(
-    (state) => {
-      const current = activeAcp(state)
-      return current ? recoverableRequests(current) : EMPTY_QUEUE
-    },
-    (left, right) =>
-      left.length === right.length &&
-      left.every((request, index) => request === right[index])
-  )
-  const conversation = useAcp((state) => activeLiveAcp(state)?.key)
-  if (!conversation || !requests.length) return null
-  return (
-    <Disclosure summary={`Saved messages (${requests.length})`} className="px-2 py-2" bodyClassName="flex flex-col gap-3 pt-2">
-      {[...requests].reverse().map((request) => (
-        <FailureRow key={request.id} conversationId={conversation} request={request} quoted compact />
-      ))}
-    </Disclosure>
-  )
-}

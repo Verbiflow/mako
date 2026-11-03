@@ -54,6 +54,8 @@ jobs:
       - run: npx tsx scripts/test-host-liveness.ts
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
+      # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
+      - run: npm run test:device-join
       - run: npm run test:cloud-conversations
       - run: npx tsx scripts/test-cloud-returns.ts
 
@@ -98,7 +100,7 @@ jobs:
       - run: npm run test:workspace-snapshots
 
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
-  # answered and routed, through the engine's three doors; across an update, where a Fin's launch cut before its brief
+  # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief
   # still sends the brief once (`test:orch-update`); and with the host killed at thirteen points on all six harnesses
   # (`test:orch-crash`), each run ending with every brief, report and message delivered once.
   orchestration:
@@ -118,9 +120,13 @@ jobs:
       - run: npm run build:control-runtime
       - run: npm run test:background-agents
       - run: npm run test:agents-migrate
+      # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
+      # crash-safe, reversible, on a store of the person's shape (`docs/one-conversation.md`).
+      - run: npm run test:thread-split
       - run: npm run test:agents-wake
       - run: npm run test:orch-answer
       - run: npm run test:orch-front-door
+      - run: npm run test:orch-deliver
       - run: npm run test:agents-doors
       - run: npm run test:agents-cli
       - run: npm run test:orch-update
