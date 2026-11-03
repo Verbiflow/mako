@@ -25,6 +25,8 @@ import {
   type TrackerPorts,
 } from "@mako/protocol"
 import { join } from "node:path"
+import { HourCounts } from "../base/hour-counts.js"
+import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, TRAIL_MS, type Interval, type ObservedChange } from "./evidence.js"
 import { WorkingSets } from "./working-set.js"
@@ -70,6 +72,12 @@ export interface TrackerOptions {
   outsider?(path: string, root: string): string | undefined
   /** One line per flush, at most every `LOG_EVERY_MS`, and every slow one. Paths, never content. */
   log?(message: string, facts: Readonly<Record<string, string | number | boolean>>): void
+  /**
+   * How late the watcher delivers now. A change heard that late is still
+   * dated by its modification time, and what ran is kept that much longer
+   * for it to reach.
+   */
+  deliveryLagMs?(): number
 }
 
 /** Events for a root are gathered this long before they're read, so a burst is one flush. */
@@ -99,9 +107,13 @@ const DAY_MS = 86_400_000
 const STORED_NAMED = 64
 /** While losses keep coming, each rescan waits at least this long after the last, doubling per loss up to `RESCAN_MAX_MS`. */
 const RESCAN_MIN_MS = 2_000
-const RESCAN_MAX_MS = 60_000
+const RESCAN_MAX_MS = 10 * 60_000
 /** A loss this long after the last rescan is rescanned at once. */
-const RESCAN_QUIET_MS = 5 * 60_000
+const RESCAN_QUIET_MS = 15 * 60_000
+/** After each rescan, any root's next waits this many times as long as it ran: rescans take at most a twentieth of the time. */
+const RESCAN_REST = 19
+/** Spacing past which a root is reported as rescanned less often because its losses keep coming. */
+const BACKED_OFF_MS = 60_000
 
 interface Flush {
   at: number
@@ -147,6 +159,7 @@ interface RootState {
   /** When the last rescan ended, and the spacing the next one keeps after it. */
   rescannedAt: number
   rescanEvery: number
+  losses: HourCounts
   headTimer?: ReturnType<typeof setTimeout>
   /**
    * When Git's own files (HEAD, the index, a branch) began moving, until the
@@ -264,6 +277,11 @@ export class LaptopTracker implements AttributionTracker {
   private logged = 0
   private unlogged: Flush[] = []
   private closed = false
+  /** The rescans for lost events, each root's in turn (`rescanTurn`), and the rests between them that `settled` wakes. */
+  private rescanTurns: Promise<void> = Promise.resolve()
+  private readonly waking = new Set<() => void>()
+  private settling = 0
+  private readonly rescans = { done: new HourCounts(), files: new HourCounts(), ms: new HourCounts() }
   /** The last entry's number. */
   private seq: number
 
@@ -332,6 +350,10 @@ export class LaptopTracker implements AttributionTracker {
     return this.ports.clock.now()
   }
 
+  private lateMs(): number {
+    return Math.max(0, this.options.deliveryLagMs?.() ?? 0)
+  }
+
   /**
    * Track a root. Calls for one folder while one is under way wait for it,
    * since the root is stored only once its baseline is: two would each watch
@@ -368,13 +390,15 @@ export class LaptopTracker implements AttributionTracker {
     this.states.delete(id)
     this.unlisten(state)
     await state.chain
+    // Nothing is tracked here after this, so nothing more can be lost.
+    if (state.gap) this.store.closeGap(state.gap.id, this.now())
     this.store.forgetRoot(id)
   }
 
   private state(root: StoredRoot, repo: TrackerRepository | null, stats: Map<string, StatRow>, files: Map<string, FileState>): RootState {
     const state: RootState = {
       root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
-      ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0,
+      ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0, losses: new HourCounts(),
     }
     const replaced = this.states.get(root.id)
     if (replaced) this.unlisten(replaced)
@@ -483,6 +507,7 @@ export class LaptopTracker implements AttributionTracker {
       })
       return
     }
+    state.losses.add(1, this.now())
     if (reason === "muted") state.muted = true
     if (!state.gap) {
       const from = state.root.seenAt
@@ -494,10 +519,10 @@ export class LaptopTracker implements AttributionTracker {
   /**
    * Rescan for lost events, one at a time: losses heard while one waits are
    * its own, one heard while it runs gets one more after it. While losses
-   * keep coming (an overloaded fseventsd says so every few seconds) each
-   * next rescan waits twice as long after the last, up to a minute; a loss
-   * after a quiet while is rescanned at once. The gap stays open meanwhile,
-   * so what changed in it is attributed as found in it.
+   * keep coming (an overloaded fseventsd) each next rescan waits twice as
+   * long after the last, up to ten minutes; a loss after a quiet while is
+   * rescanned at once. The gap stays open meanwhile, so what changed in it
+   * is attributed as found in it. Roots take turns (see `rescanTurn`).
    */
   private rescanSoon(state: RootState): void {
     if (this.closed || this.states.get(state.root.id) !== state) return
@@ -517,10 +542,43 @@ export class LaptopTracker implements AttributionTracker {
     clearTimeout(state.rescanTimer)
     state.rescanTimer = undefined
     state.rescanQueued = true
-    void this.queue(state, () => {
-      state.rescanQueued = false
-      return this.rescan(state)
+    void this.rescanTurn(() => {
+      if (this.closed || this.states.get(state.root.id) !== state) {
+        state.rescanQueued = false
+        return Promise.resolve()
+      }
+      return this.queue(state, () => {
+        state.rescanQueued = false
+        return this.rescan(state)
+      })
     })
+  }
+
+  /**
+   * Rescans for lost events across roots, one at a time, each followed by a
+   * rest `RESCAN_REST` times its length: when every root loses events at
+   * once, as when fseventsd falls behind, the walks and stats come one root
+   * after another instead of all together, at a bounded share of the disk.
+   * `settled` cuts the rest short.
+   */
+  private rescanTurn(run: () => Promise<void>): Promise<void> {
+    const turn = this.rescanTurns.then(async () => {
+      const started = performance.now()
+      await run()
+      const rest = Math.min(RESCAN_MAX_MS, (performance.now() - started) * RESCAN_REST)
+      if (this.settling || rest < 1) return
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          clearTimeout(timer)
+          this.waking.delete(wake)
+          resolve()
+        }
+        const timer = setTimeout(wake, rest)
+        this.waking.add(wake)
+      })
+    })
+    this.rescanTurns = turn.catch(() => {})
+    return turn
   }
 
   private headMoved(state: RootState): void {
@@ -612,7 +670,11 @@ export class LaptopTracker implements AttributionTracker {
         this.store.closeGap(state.gap.id, this.now())
         state.gap = undefined
       }
-      this.log("rescan", { root: state.root.path, files: paths.length, ms: this.now() - started })
+      const ms = this.now() - started
+      this.rescans.done.add(1, this.now())
+      this.rescans.files.add(paths.length, this.now())
+      this.rescans.ms.add(ms, this.now())
+      this.log("rescan", { root: state.root.path, files: paths.length, ms, everyMs: state.rescanEvery })
     } finally {
       if (checking) state.moved = undefined
       state.rescanning = false
@@ -1004,7 +1066,8 @@ export class LaptopTracker implements AttributionTracker {
     const beforeText = text && before.bytes ? decodeText(before.bytes) : before.ref === null ? "" : undefined
     const afterText = text && afterBytes ? decodeText(afterBytes) : item.kind === "gone" ? "" : undefined
     // A write's own time is its modification time; a rename keeps the old one, so it's when it was heard.
-    const changedAt = item.stat && !from ? Math.min(at, Math.max(at - SETTLE_MS, millis(item.stat.mtimeNs))) : at
+    const late = this.lateMs()
+    const changedAt = item.stat && !from ? Math.min(at, Math.max(at - SETTLE_MS - late, millis(item.stat.mtimeNs))) : at
     // The chain starts at the file's first change since its base: keep the base's content.
     if (before.ref && before.bytes && !secret && before.bytes.byteLength <= STORE_LIMIT) this.store.putBlob(before.ref, before.bytes, at)
     const baseSeq = this.seq
@@ -1035,7 +1098,7 @@ export class LaptopTracker implements AttributionTracker {
       root: root.path,
     }
     // Its modification time isn't when it was written: a copy that kept an old one, one ahead of the clock, or one rounded to the second.
-    if (written === undefined || written > at || at - written > TRAIL_MS || item.stat!.mtimeNs % 1_000_000_000n === 0n) change.heard = at
+    if (written === undefined || written > at || at - written > TRAIL_MS + late || item.stat!.mtimeNs % 1_000_000_000n === 0n) change.heard = at
     const outsider = how === "event" && !given ? this.options.outsider?.(change.path, root.path) : undefined
     if (outsider) change.outsider = outsider
     const author = given ?? attribute(change, evidence)
@@ -1618,27 +1681,49 @@ export class LaptopTracker implements AttributionTracker {
       this.store.updateAuthor(pending.seq, pending.author, true)
       this.pending.delete(pending.seq)
     }
-    if (!this.pending.size) this.evidence.prune(now - SETTLE_MS)
+    if (!this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
   }
 
   async settled(): Promise<void> {
     await this.resuming
-    for (;;) {
-      const states = [...this.states.values()]
-      for (const state of states) {
-        clearTimeout(state.timer)
-        clearTimeout(state.headTimer)
-        if (state.headTimer || state.gitSince !== undefined) void this.queue(state, () => this.gitMoved(state))
-        else if (state.pending.size) void this.queue(state, () => this.flush(state))
-        state.headTimer = undefined
-        // A rescan waiting out its spacing runs now.
-        if (state.rescanTimer) this.rescanNow(state)
+    this.settling++
+    try {
+      for (;;) {
+        const states = [...this.states.values()]
+        for (const state of states) {
+          clearTimeout(state.timer)
+          clearTimeout(state.headTimer)
+          if (state.headTimer || state.gitSince !== undefined) void this.queue(state, () => this.gitMoved(state))
+          else if (state.pending.size) void this.queue(state, () => this.flush(state))
+          state.headTimer = undefined
+          // A rescan waiting out its spacing, or its turn behind another root's rest, runs now.
+          if (state.rescanTimer) this.rescanNow(state)
+        }
+        for (const wake of this.waking) wake()
+        await this.rescanTurns
+        await Promise.all(states.map((state) => state.chain))
+        await Promise.all(this.scriptReads)
+        await this.footprints?.settled()
+        await new Promise((resolve) => setImmediate(resolve))
+        if (states.every((state) => !state.pending.size && !state.rescanTimer && !state.rescanQueued)) return
       }
-      await Promise.all(states.map((state) => state.chain))
-      await Promise.all(this.scriptReads)
-      await this.footprints?.settled()
-      await new Promise((resolve) => setImmediate(resolve))
-      if (states.every((state) => !state.pending.size && !state.rescanTimer)) return
+    } finally {
+      this.settling--
+    }
+  }
+
+  /** How often roots were rescanned for lost events in the last hour, and which are rescanned less often because their losses keep coming. */
+  rescanReading(): RescanFootprint {
+    const now = this.now()
+    const states = [...this.states.values()]
+    return {
+      roots: states.length,
+      lastHour: this.rescans.done.lastHour(now),
+      filesLastHour: this.rescans.files.lastHour(now),
+      msLastHour: this.rescans.ms.lastHour(now),
+      lossesLastHour: states.reduce((sum, state) => sum + state.losses.lastHour(now), 0),
+      backedOff: states.filter((state) => state.rescanEvery >= BACKED_OFF_MS && now - state.rescannedAt <= RESCAN_QUIET_MS)
+        .map((state) => ({ root: state.root.path, everyMs: state.rescanEvery })),
     }
   }
 
@@ -1719,14 +1804,16 @@ export class LaptopTracker implements AttributionTracker {
    * nothing journaled there since, and no Thread working in or around them.
    * Their watches close and their stat cache goes; their entries stay until
    * collected. A turn or a move there tracks the root again, from a fresh
-   * baseline. Returns the paths let go.
+   * baseline. A root with lost events not yet rescanned is let go too: on a
+   * Mac where they're lost every few minutes, one always has some. Returns
+   * the paths let go.
    */
   async letGoIdle(): Promise<string[]> {
     const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
     const changed = this.store.lastChanged()
     const worked = this.store.lastWorked(this.now()).filter(({ at }) => at >= before)
-    const idle = [...this.states.values()].filter(({ root, pending, gap }) =>
-      root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size && !gap &&
+    const idle = [...this.states.values()].filter(({ root, pending }) =>
+      root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size &&
       !worked.some(({ folder }) => within(root.path, folder) || within(folder, root.path)))
     for (const { root } of idle) await this.untrack(root.id)
     const paths = idle.map(({ root }) => root.path)

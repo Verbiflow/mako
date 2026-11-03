@@ -1857,6 +1857,34 @@ builds and `update:local` refuse to start when the disk lacks room
 (`ensureBuildSpace`). A new script that writes a build or a copy removes it on
 every exit path.
 
+## File watching
+
+Everything the host watches goes through one watcher child
+(`workspaces/watch-backend.ts`): one FSEvents stream per distinct folder and
+ignore list, which parcel shares, plus the child's canary. The canary calls
+delivery silent only after 30 s with nothing heard, and reports how late beats
+arrive otherwise: an fseventsd with a backlog delivers in batches, 15 s apart
+on a Mac a month up, with nothing lost. A silence makes every watch poll
+(`pollTree`) and restarts the child, at most once every 10 minutes. The
+tracker rescans a root for lost events at once after a quiet while, then 2 s
+after the last, doubling to 10 minutes while losses keep coming; roots take
+turns, and each next rescan rests 19 times as long as the last ran. A watch
+polling because delivery went silent is rescanned once, when it listens
+again. A canary later than 5 s tells every watch it's `late`, and each also
+polls every 15 s (`CALM_POLL_MS`): an fseventsd that far behind was seen
+holding one stream's events back for minutes. A change heard as late as the
+canary measures is still dated by its
+modification time, and calls are kept that much longer for it to reach
+(`TrackerOptions.deliveryLagMs`). History reads leave Mako's own folders to fseventsd (`exclude`, at most
+eight inside a root). `WatchReadings` counts all of it and logs each change of
+state under `watch`; Settings › Diagnostics shows it as Mako's footprint
+(`mako:mako-footprint`, `FootprintReadout`), with Mako's own processes apart
+from the agents it started. Once a 5 s canary deadline on such a Mac muted
+every watch, restarted the child and rescanned every root about once a
+minute, all day: 45 million files stat-ed in two days. `npm run
+bench:mako-footprint` runs a scripted stretch of work against budgets
+(`--drops <s>`, `--slow-delivery`).
+
 ## Git
 
 Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.

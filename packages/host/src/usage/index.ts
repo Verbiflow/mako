@@ -8,6 +8,7 @@ import { classifyProviderFailure, type ProviderFailureKind } from "../contracts/
 
 export { declareTelemetryMethods } from "./telemetry-methods.js"
 export { declareStorageMethods } from "./storage-methods.js"
+export { declareFootprintMethods } from "./mako-footprint.js"
 export { MakoStorage, type HarnessStorage } from "./storage.js"
 export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
 export type { CloudThreadMaking } from "./cloud-account.js"

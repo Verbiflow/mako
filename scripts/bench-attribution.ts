@@ -10,7 +10,7 @@ import { Git } from "@mako/git"
 import type { TrackerPorts } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { JournalStore } from "@mako/host/attribution/journal-store"
-import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribution/ports"
+import { gitRepository, nodeFileSystem, watcherEvents, type TreeWatcher } from "@mako/host/attribution/ports"
 import { partition, type JournalView } from "@mako/host/attribution/queries"
 import { threadTrees } from "@mako/host/attribution/thread-tree"
 import { ThreadFiles } from "@mako/host/attribution/thread-files"
@@ -41,7 +41,7 @@ const only = onlyAt > 0 ? process.argv[onlyAt + 1] : undefined
 const runner = new Git()
 const backend = childBackend()
 const history = process.platform === "darwin" ? childHistory() : undefined
-const watch = (path: string, changed: (paths: string[]) => void, gone: () => void, dropped: () => void) => watchTree(runner, backend, path, changed, gone, dropped)
+const watch: TreeWatcher = (path, changed, gone, dropped) => watchTree(runner, backend, path, changed, gone, dropped)
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const temporary: string[] = []
 const scratch = (name: string) => {
@@ -194,9 +194,15 @@ try {
     writeFileSync(big, lines.join(""))
     await wait(60)
   }
-  await wait(1_000)
-  await tracker.settled()
+  // An fseventsd that delivers in batches hears the edits seconds later: wait until they've come and stopped.
+  for (let heard = before, still = 0, until = Date.now() + 60_000; Date.now() < until && still < 4; await wait(500)) {
+    await tracker.settled()
+    const now = tracker.recent().length
+    still = now > before && now === heard ? still + 1 : 0
+    heard = now
+  }
   const flushes = tracker.recent().slice(before)
+  assert.ok(flushes.length, `the edits were heard within a minute (${tracker.recent().length} flushes, ${before} before them)`)
   const lags = flushes.map((flush) => flush.lagMs)
   const work = flushes.map((flush) => flush.statMs + flush.hashMs + flush.diffMs + flush.writeMs)
   say(`5,000-line file, 100 edits on the real watcher: heard to journaled p50 ${percentile(lags, 0.5)} ms, p95 ${percentile(lags, 0.95)} ms, max ${Math.max(...lags)} ms; stat+hash+line map+write per flush p50 ${percentile(work, 0.5).toFixed(2)} ms, max ${Math.max(...work).toFixed(2)} ms`)

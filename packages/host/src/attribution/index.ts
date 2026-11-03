@@ -36,6 +36,7 @@ import { lostVersions, restoreVersion } from "./recovery.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
 import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
 import type { TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
+import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { LaptopTracker, SETTLE_MS } from "./tracker.js"
 import { TRAIL_MS } from "./evidence.js"
 
@@ -175,6 +176,8 @@ export interface AttributionDeps {
   watch: TreeWatcher
   /** The system's history, where it keeps one (FSEvents). */
   history?: SystemHistory
+  /** How late the tree watch delivers now (`TrackerOptions.deliveryLagMs`). */
+  deliveryLagMs?(): number
   /** HEAD moving in a Git folder outside the checkout (a linked worktree's). */
   watchGitDir?(folder: string, moved: () => void): { close(): void }
   jobs: HostJobs
@@ -290,6 +293,8 @@ export interface Attribution {
   /** Write a kept version back, keeping what the file holds now as a version too. The person asked, so it's theirs. */
   restore(root: string, entry: number): Promise<{ path: string }>
   status(): AttributionStatus & { sharing: SharingStatus }
+  /** The rescans for lost events this host's tracker made lately; null where another host owns the journal. */
+  rescans(): RescanFootprint | null
   close(): Promise<void>
 }
 
@@ -405,6 +410,12 @@ function temporaryFolders(): string[] {
   return [...new Set([own, onMac() ? "/private/tmp" : "/tmp"])]
 }
 
+/** `folders` less any inside another of them. */
+function outermost(folders: readonly string[]): string[] {
+  const unique = [...new Set(folders)]
+  return unique.filter((folder) => !unique.some((other) => other !== folder && within(other, folder)))
+}
+
 /** A turn re-asks the owner to track its checkout at most this often: the owner may have let it go as idle. */
 const RETRACK_MS = 10 * 60_000
 
@@ -514,6 +525,8 @@ const liveView = (tracker: LaptopTracker): JournalView => ({ store: tracker.stor
 export async function openAttribution(deps: AttributionDeps): Promise<Attribution> {
   const home = homedir()
   const temporary = temporaryFolders()
+  /** Mako's own folders: never a Thread's footprint, and its busiest writers, so history reads leave them to fseventsd. */
+  const own = outermost([deps.dataRoot, deps.userRoot, join(home, ".mako"), join(temporary[0]!, HISTORY_SCRATCH)])
   const folder = sharedJournalFolder(deps.userRoot)
   const journalFile = join(folder, "journal.sqlite")
   const sharing: Sharing = {}
@@ -568,7 +581,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     const tracker = await LaptopTracker.open(
       {
         fs: nodeFileSystem(),
-        events: watcherEvents(deps.watch, deps.history),
+        events: watcherEvents(deps.watch, deps.history, () => own),
         clock: { now: () => Date.now() },
         storage,
         device: hostname(),
@@ -581,13 +594,14 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
           home,
           roots: [home, ...temporary],
           live: temporary,
-          stores: () => [...deps.stores(), ...harnessScratch(home), deps.dataRoot, deps.userRoot, join(home, ".mako"), join(temporary[0]!, HISTORY_SCRATCH), ...(sharing.journal?.followers() ?? []).map((follower) => follower.host.dataRoot)],
+          stores: () => [...deps.stores(), ...harnessScratch(home), ...own, ...(sharing.journal?.followers() ?? []).map((follower) => follower.host.dataRoot)],
           others: (thread, since) => sessionFolders(catalogued(), running(), thread, since),
           sessions: (thread) => sessionIds(catalogued(), thread),
         },
         uncertain: (sessions) => children?.uncertain(sessions),
         outsider: deps.running && outsider,
         log: (message, facts) => hostLog("attribution", message, facts),
+        deliveryLagMs: deps.deliveryLagMs,
       },
     )
     const backfill = deps.children && deps.catalogued && new Backfill({
@@ -852,6 +866,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       ...attributionStatus(local ? storedView(local.tracker.store) : view(), { recent: local?.tracker.recent(), live: Boolean(local) }),
       sharing: journal.status(),
     }),
+    rescans: () => local?.tracker.rescanReading() ?? null,
     async close() {
       unwatch()
       await journal.close()

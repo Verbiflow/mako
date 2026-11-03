@@ -27,9 +27,9 @@ type Snapshot = Map<string, string>
  * index and reflog for commits and checkouts; anything else is walked, up to
  * `WALK_LIMIT` entries. Paths come relative to `root`; `quiet` ones are
  * never walked. The next poll waits twenty times as long as this one took,
- * between 1.5 and 30 seconds.
+ * between 1.5 and 30 seconds, or at least `minMs`.
  */
-export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths: string[]) => void): TreePoll {
+export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths: string[]) => void, minMs = MIN_MS): TreePoll {
   let closed = false
   let timer: NodeJS.Timeout | undefined
   let previous: Snapshot | undefined
@@ -46,7 +46,7 @@ export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths
       if (changed.length) onChange(changed)
     }
     previous = next ?? previous
-    timer = setTimeout(run, Math.min(MAX_MS, Math.max(MIN_MS, (performance.now() - began) * DUTY)))
+    timer = setTimeout(run, Math.min(Math.max(MAX_MS, minMs), Math.max(minMs, (performance.now() - began) * DUTY)))
     timer.unref()
   }
   void run()

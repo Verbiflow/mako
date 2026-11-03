@@ -134,6 +134,8 @@ const reads = [
   "mako:sync-status",
   /** How this device's sync goes, from memory. */
   "mako:sync-readings",
+  /** Mako's processes from `ps`, and its file watching from memory. */
+  "mako:mako-footprint",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */
   "mako:continue-readings",
   /** Asks the account what a continue would take now; asked twice, it's asked twice. */

@@ -67,6 +67,7 @@ import type { ProviderConnection, ProviderConnectionAction } from "./provider-co
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { SyncStatus } from "./sync-status.js"
 import type { SyncReadings } from "./sync-readings.js"
+import type { MakoFootprint } from "./mako-footprint.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
@@ -478,6 +479,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     /* How this device's Sessions stand in the account: what's there, what's catching up, and what failed. */
     syncStatus: () => invokeTrustedHost<SyncStatus>("mako:sync-status"),
     syncReadings: () => invokeTrustedHost<SyncReadings>("mako:sync-readings"),
+    /** What Mako itself costs this Mac now: its processes, its file watching and its rescans, for Diagnostics. */
+    makoFootprint: () => invokeTrustedHost<MakoFootprint>("mako:mako-footprint"),
     /** Each continue in the cloud this Mac pressed or its list says, latest first, for Diagnostics. */
     continueReadings: () => invokeTrustedHost<ContinueReading[]>("mako:continue-readings"),
     cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),
