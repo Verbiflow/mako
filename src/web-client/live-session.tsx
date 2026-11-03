@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { ShowAgentsContext } from "@/components/viewer/show-agents"
 import { Composer as DeskComposer } from "@/components/composer/composer"
@@ -6,8 +6,11 @@ import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcrip
 import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/transcript-notes"
 import { CompactPresentationContext, type CompactPresentation } from "@/components/transcript/compact-presentation"
 import { activeLiveAcp, useAcp } from "@/state/acp"
+import { acpStore } from "@/state/acp-state"
 import { AgentsSheet } from "./agents"
 import { useWebClient } from "./client"
+import { openingThread } from "./diagnostics"
+import { useSyncing } from "./syncing"
 import { sameSwitches, switchesOf, useAnswered } from "./answered"
 import { AnsweredLine, WebDock, type SendElsewhere } from "./dock"
 import { readDraft, threadDraftKey, writeDraft } from "./drafts"
@@ -55,6 +58,8 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   useEffect(() => {
     if (hydrated) resumeOutbox(conversation)
   }, [hydrated, conversation])
+  const live = useRef<HTMLDivElement>(null)
+  useOpenReading(conversation, live, hydrated)
   const [away, setAway] = useState(false)
   const [jump, setJump] = useState<{ to: (() => void) | null }>({ to: null })
   const end = useMemo<TranscriptEnd>(() => ({ away: setAway, bind: (to) => setJump({ to }) }), [])
@@ -90,7 +95,6 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   // Under a finger: replies offer Copy and Branch; on a phone's width a run of steps is one line that opens them.
   const wide = useWide()
   const compact = useMemo<CompactPresentation>(() => ({ reply: (reply) => <PhoneReply reply={reply} />, ...(!wide && { steps: (run) => <PhoneSteps key={run.id} run={run} />, navigator: false }) }), [wide])
-  const live = useRef<HTMLDivElement>(null)
   const hold = useReplyHold(live)
   const [agents, setAgents] = useState(false)
   const showAgents = useCallback(() => setAgents(true), [])
@@ -132,6 +136,33 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
       </ExchangeNoteContext>
     </PromptNoteContext>
   )
+}
+
+/**
+ * How long opening the conversation took to show its newest turn, and to catch up with it, for the page's readings:
+ * from what this page already held of it, or from the network.
+ */
+function useOpenReading(conversation: string, live: RefObject<HTMLDivElement | null>, hydrated: boolean): void {
+  const reading = useRef<{ opened: ReturnType<typeof openingThread>; kept: boolean } | null>(null)
+  useEffect(() => {
+    const held = acpStore.get().conversations[conversation]
+    const opened = openingThread()
+    reading.current = { opened, kept: held?.kind === "live" && held.hydrated !== false && held.requests !== undefined }
+    return () => opened.close()
+  }, [conversation])
+  const syncing = useSyncing((state) => state.conversation === conversation)
+  useEffect(() => {
+    const held = reading.current
+    if (!held || !hydrated) return
+    // Two frames on: the turns this render committed are painted.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        held.opened.painted(held.kept ? "kept" : "network", live.current?.querySelectorAll("[data-exchange]").length ?? 0)
+        if (!syncing) held.opened.caughtUp()
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [hydrated, syncing, live])
 }
 
 /**

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { noteDictation } from "./diagnostics"
 
 /** The browser's speech recognition, as Chrome and Safari name it: only what the composer uses. */
 export interface Recognition extends EventTarget {
@@ -48,6 +49,13 @@ const NO_METER_KEY = "mako.dictation.meter"
 /** Restarts after silence that come this close together, with nothing heard, are a recognizer that won't listen. */
 const RESTART_WINDOW_MS = 4_000
 const RESTARTS_ALLOWED = 4
+/**
+ * After a stop, how long the recognizer has to settle its last words. Listening is over at the press whatever the
+ * recognizer does; past this, what it was still hearing is taken as said and it's let go, ended or not.
+ */
+export const STOP_GRACE_MS = 1_000
+/** When the meter's loudest reading so far is reported: long enough to have heard a word. */
+const LEVELS_REPORT_MS = 2_000
 
 /**
  * A loudness reading of 0 to 1 from decibels: nothing at the −60 dB floor or under it, 1 at 0 dB, and the amplitude
@@ -136,11 +144,26 @@ export interface Dictation {
   /** Heard but not settled: drawn after the draft, never written into it. */
   hearing: string
   start: () => void
-  /** Stops listening once what's being heard settles: it goes to the draft. */
+  /** Stops listening at once; what's still being heard settles into the draft within `STOP_GRACE_MS`. */
   stop: () => void
   /** Stops listening now, dropping what's still being heard (a send took it already). */
   cancel: () => void
 }
+
+/** How a stretch of dictation went, for the device's diagnostics: never a word of what was heard. */
+export type DictationStep =
+  | { step: "started" }
+  /** The meter's loudest reading in its first seconds, 0 to 1, and what drew the bars: the microphone or the words. */
+  | { step: "levels"; peak: number; meter: "analyser" | "words" }
+  | { step: "stop-pressed"; ms: number }
+  /** The recognizer ended `ms` after the stop was pressed, or after it began for one it ended itself. */
+  | { step: "stopped"; ms: number; restarts: number }
+  | { step: "failed"; error: string; ms: number; restarts: number }
+  /** The recognizer hadn't ended `STOP_GRACE_MS` after the stop: it was let go. */
+  | { step: "stop-overdue"; ms: number }
+
+/** `stop`: listening ends now and the recognizer settles its last words. `settle`: they're taken as heard, now. `drop`: they're dropped. */
+export type DictationEnd = "stop" | "settle" | "drop"
 
 /**
  * Dictation into the composer by the platform's own recognizer, the one its keyboard's dictation uses: no sound goes
@@ -164,11 +187,24 @@ export function useDictation(onSettled: (words: string) => void): Dictation {
     settled.current = onSettled
   }, [onSettled])
   const session = useRef<DictationSession | null>(null)
-  useEffect(() => () => session.current?.end(true), [])
+  useEffect(() => {
+    // A page put away is a recognizer the platform may end without a word: what it heard is kept, and it's over.
+    const away = () => session.current?.end("settle")
+    const hidden = () => document.visibilityState === "hidden" && away()
+    addEventListener("pagehide", away)
+    document.addEventListener("visibilitychange", hidden)
+    return () => {
+      removeEventListener("pagehide", away)
+      document.removeEventListener("visibilitychange", hidden)
+      session.current?.end("drop")
+    }
+  }, [])
 
   const start = useCallback(() => {
     const Class = recognitionClass()
-    if (!Class || session.current) return
+    if (!Class || session.current?.listening) return
+    // One still settling its last words after a stop takes them as heard, so the new one starts clean.
+    session.current?.end("settle")
     setFailure(undefined)
     setHearing("")
     levels.set(QUIET)
@@ -178,21 +214,23 @@ export function useDictation(onSettled: (words: string) => void): Dictation {
       hearing: setHearing,
       levels: (sampled) => levels.set(sampled),
       ended: (why) => {
-        session.current = null
         setListening(false)
         setSince(undefined)
-        setHearing("")
         levels.set(QUIET)
         if (why) setFailure(why)
       },
+      done: () => {
+        if (session.current === current) session.current = null
+      },
+      report: noteDictation,
     })
     session.current = current
     setListening(true)
     setSince(started)
     current.begin()
   }, [levels])
-  const stop = useCallback(() => session.current?.end(false), [])
-  const cancel = useCallback(() => session.current?.end(true), [])
+  const stop = useCallback(() => session.current?.end("stop"), [])
+  const cancel = useCallback(() => session.current?.end("drop"), [])
   const offered = dictationOffered()
   const state: Dictation = { offered, listening, levels, hearing, start, stop, cancel }
   if (since !== undefined) state.since = since
@@ -204,48 +242,74 @@ export interface SessionEvents {
   settled: (words: string) => void
   hearing: (words: string) => void
   levels: (levels: readonly number[]) => void
+  /** Listening is over, as the person sees it: the microphone is let go. Words still settling may follow. */
   ended: (why: string | undefined) => void
+  /** Nothing more comes: the recognizer has ended or been let go. */
+  done?: () => void
+  report?: (step: DictationStep) => void
 }
 
-/** One stretch of dictation, from the press to the stop: its recognizers, one after another, and its meter. */
+/**
+ * One stretch of dictation, from the press to the stop: its recognizers, one after another, and its meter. Listening
+ * ends when the person says so, at once, whatever the recognizer does: it may never end, as Safari's sometimes doesn't.
+ */
 export class DictationSession {
   readonly #Class: RecognitionClass
   readonly #events: SessionEvents
   #recognizer: Recognition | null = null
-  #stopping = false
-  #ended = false
+  /** `settling`: stopped, the recognizer given `STOP_GRACE_MS` to settle its last words. */
+  #phase: "listening" | "settling" | "over" = "listening"
   #interim = ""
   #restarts: number[] = []
+  #restarted = 0
   #levels: number[] = [...QUIET]
   #timer: ReturnType<typeof setInterval> | undefined
+  #released = false
+  #grace: ReturnType<typeof setTimeout> | undefined
   #meter: Meter | null = null
   /** The bars' reading when they move with the words: a pulse on each result that falls away. */
   #pulse = 0
   #heardWhileSilent = 0
-  /** Why it stopped, when a failure stopped it: said once it has ended. */
-  #failure: string | undefined
+  #began = 0
+  #stopPressed = 0
+  #peak = 0
+  #levelsReported = false
 
   constructor(Class: RecognitionClass, events: SessionEvents) {
     this.#Class = Class
     this.#events = events
   }
 
+  get listening(): boolean {
+    return this.#phase === "listening"
+  }
+
   begin(): void {
+    this.#began = performance.now()
+    this.#events.report?.({ step: "started" })
     this.#listen()
+    if (this.#phase === "over") return
     // Asked in the same press: Safari opens audio only from a gesture.
     if (meterAllowed()) this.#meter = Meter.open(() => this.#dropMeter())
     this.#timer = setInterval(() => this.#sample(), METER_MS)
   }
 
-  /** Stops listening. `now` drops what's still being heard; otherwise the recognizer settles it first. */
-  end(now: boolean): void {
-    if (this.#ended) return
-    this.#stopping = true
-    if (now || !this.#recognizer) return this.#finish(undefined)
+  end(how: DictationEnd): void {
+    if (this.#phase === "over") return
+    const recognizer = this.#recognizer
+    if (how !== "stop" || this.#phase === "settling" || !recognizer) return this.#finish(how === "drop" ? "drop" : "settle", undefined)
+    this.#phase = "settling"
+    this.#stopPressed = performance.now()
+    this.#events.report?.({ step: "stop-pressed", ms: Math.round(this.#stopPressed - this.#began) })
+    this.#release(undefined)
+    this.#grace = setTimeout(() => {
+      this.#events.report?.({ step: "stop-overdue", ms: Math.round(performance.now() - this.#stopPressed) })
+      this.#finish("settle", undefined)
+    }, STOP_GRACE_MS)
     try {
-      this.#recognizer.stop()
+      recognizer.stop()
     } catch {
-      this.#finish(undefined)
+      this.#finish("settle", undefined)
     }
   }
 
@@ -280,19 +344,20 @@ export class DictationSession {
         this.#dropMeter()
         return
       }
-      this.#stopping = true
-      this.#failure = event.error === "not-allowed" || event.error === "service-not-allowed" ? "Allow the microphone to dictate." : "Dictation stopped. What it heard is kept."
+      // Over now, not at the recognizer's end, which may never come.
+      this.#fail(event.error, event.error === "not-allowed" || event.error === "service-not-allowed" ? "Allow the microphone to dictate." : "Dictation stopped. What it heard is kept.")
     }
     listener.onend = () => {
       if (this.#recognizer !== listener) return
       this.#recognizer = null
       // What it was still hearing is its best guess: kept, never lost to a restart or a stop.
       this.#settleInterim()
-      if (this.#stopping || this.#ended) return this.#finish(this.#failure)
+      if (this.#phase !== "listening") return this.#finish("settle", undefined)
       const now = Date.now()
       this.#restarts = [...this.#restarts.filter((at) => now - at < RESTART_WINDOW_MS), now]
-      if (this.#restarts.length > RESTARTS_ALLOWED) return this.#finish("Dictation stopped. What it heard is kept.")
+      if (this.#restarts.length > RESTARTS_ALLOWED) return this.#fail("restarts", "Dictation stopped. What it heard is kept.")
       // Ended on silence, as the platform decides: it listens on.
+      this.#restarted += 1
       this.#listen()
     }
     this.#recognizer = listener
@@ -300,8 +365,14 @@ export class DictationSession {
       listener.start()
     } catch {
       this.#recognizer = null
-      this.#finish("Dictation isn't available right now.")
+      this.#fail("start", "Dictation isn't available right now.")
     }
+  }
+
+  #fail(error: string, why: string): void {
+    if (this.#phase === "over") return
+    this.#events.report?.({ step: "failed", error, ms: Math.round(performance.now() - this.#began), restarts: this.#restarted })
+    this.#finish("settle", why)
   }
 
   #settleInterim(): void {
@@ -315,6 +386,13 @@ export class DictationSession {
     this.#pulse *= 0.55
     this.#levels = [...this.#levels.slice(1), reading]
     this.#events.levels(this.#levels)
+    this.#peak = Math.max(this.#peak, reading)
+    if (!this.#levelsReported && performance.now() - this.#began >= LEVELS_REPORT_MS) this.#reportLevels()
+  }
+
+  #reportLevels(): void {
+    this.#levelsReported = true
+    this.#events.report?.({ step: "levels", peak: Math.round(this.#peak * 100) / 100, meter: this.#meter ? "analyser" : "words" })
   }
 
   #dropMeter(): void {
@@ -323,7 +401,7 @@ export class DictationSession {
     this.#meter = null
     rememberNoMeter()
     // The recognizer may have lost the microphone to it: listen again, keeping what was heard.
-    if (!this.#stopping && this.#recognizer) {
+    if (this.#phase === "listening" && this.#recognizer) {
       const stale = this.#recognizer
       this.#recognizer = null
       this.#settleInterim()
@@ -339,12 +417,23 @@ export class DictationSession {
     }
   }
 
-  #finish(why: string | undefined): void {
-    if (this.#ended) return
-    this.#ended = true
+  /** Listening over, as the person sees it: the meter and the microphone let go, said once. */
+  #release(why: string | undefined): void {
+    if (this.#released) return
+    this.#released = true
     clearInterval(this.#timer)
+    this.#timer = undefined
     this.#meter?.close()
     this.#meter = null
+    if (!this.#levelsReported) this.#reportLevels()
+    this.#events.ended(why)
+  }
+
+  #finish(words: "settle" | "drop", why: string | undefined): void {
+    if (this.#phase === "over") return
+    const stopped = this.#phase === "settling"
+    this.#phase = "over"
+    clearTimeout(this.#grace)
     const recognizer = this.#recognizer
     this.#recognizer = null
     if (recognizer) {
@@ -357,7 +446,14 @@ export class DictationSession {
         // Already ended.
       }
     }
-    this.#events.ended(why)
+    if (words === "settle") this.#settleInterim()
+    else {
+      this.#interim = ""
+      this.#events.hearing("")
+    }
+    if (why === undefined) this.#events.report?.({ step: "stopped", ms: Math.round(performance.now() - (stopped ? this.#stopPressed : this.#began)), restarts: this.#restarted })
+    this.#release(why)
+    this.#events.done?.()
   }
 }
 

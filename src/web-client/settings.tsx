@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { continueReadings, describeContinue } from "@mako/host/contracts/cloud-continues"
 import { describeFollow, describeList } from "@mako/host/contracts/sync-readings"
 import { webContinues } from "./continue-actions"
+import { readingWords, useReadings } from "./diagnostics"
 import { webSync } from "./sync-readings"
 import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
@@ -22,6 +23,8 @@ import { useTheme, type WebTheme } from "./theme"
 import { setPref, usePrefs } from "@/state/prefs"
 
 const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
+/** The device's latest readings Diagnostics lists; Copy takes every one kept. */
+const READINGS_SHOWN = 8
 
 /** Settings: a screen of its own on a phone, Back to the list; wide, the pane beside the rail, opened from its foot. */
 export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
@@ -374,6 +377,7 @@ function Appearance() {
 function Diagnostics() {
   const client = useWebClient()
   const list = useAccountList((state) => state)
+  const readings = useReadings((state) => state.readings)
   const lines: Array<[string, string]> = [
     ["Device", client.deviceId],
     ["Account", client.account.id],
@@ -389,7 +393,10 @@ function Diagnostics() {
   // Each continue in the cloud this browser pressed or the list says, latest first, as a move's steps would read.
   for (const reading of continueReadings(webContinues.readings(), list.rows).slice(0, 3)) lines.push([reading.title ? `Continue · ${reading.title}` : "Continue", describeContinue(reading)])
   if (client.options.build) lines.push(["Build", client.options.build])
-  const text = lines.map(([label, value]) => `${label}: ${value}`).join("\n")
+  // How the app ran on this device lately, newest first: a few here, every one kept in what Copy takes.
+  const said = readings.toReversed().map((reading): [string, string] => [new Date(reading.at).toLocaleTimeString([], { hour12: false }), readingWords(reading)])
+  lines.push(...said.slice(0, READINGS_SHOWN))
+  const text = [...lines, ...said.slice(READINGS_SHOWN)].map(([label, value]) => `${label}: ${value}`).join("\n")
   return (
     <Group title="Diagnostics">
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-4 py-3 font-mono text-label">

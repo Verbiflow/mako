@@ -37,7 +37,7 @@ import { loadReleasedLiveTurn } from "@/state/live-history"
 import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
-import { TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
+import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 import { CompactPresentationContext } from "./compact-presentation"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
 
@@ -487,6 +487,7 @@ export function ConversationTimeline({
   const owned = useCallback((node: HTMLDivElement) => {
     lastScrollTop.current = node.scrollTop
     ownScrollTop.current = node.scrollTop
+    if (touching.current) node.dispatchEvent(new Event(SCROLL_WRITE_EVENT, { bubbles: true }))
   }, [])
   const restore = useRef<ScrollAnchor | null>(null)
   const readingAnchor = useRef<ScrollAnchor | null>(null)

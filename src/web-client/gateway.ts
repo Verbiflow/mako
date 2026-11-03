@@ -1,5 +1,6 @@
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
+import { watchSocket } from "./diagnostics"
 import { answered, CLOUD, unanswered } from "./reach"
 import { LIVE_FORM, clientEndpointPath, clientSessionOverSockets, problemType, renewAtMs, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
 
@@ -95,6 +96,12 @@ export class Gateway {
     })
   }
 
+  /** The token held now, if it's still good: never asks for one. */
+  held(): string | undefined {
+    const held = this.#current
+    return held && held.renewAt > Date.now() ? held.connection.token : undefined
+  }
+
   /** A token good for a minute at least: the one held, or a new one, one ask at a time. */
   async connection(): Promise<WebConnection> {
     const held = this.#current
@@ -179,8 +186,10 @@ export class Gateway {
 
   async #open(endpoint: ClientEndpoint): Promise<MessageSocket> {
     const { token } = await this.connection()
-    const socket = new WebSocket(new URL(clientEndpointPath(endpoint, LIVE_FORM), this.origin.replace(/^http/, "ws")), subprotocols(token))
+    const path = clientEndpointPath(endpoint, LIVE_FORM)
+    const socket = new WebSocket(new URL(path, this.origin.replace(/^http/, "ws")), subprotocols(token))
     socket.binaryType = "arraybuffer"
+    watchSocket(path, socket)
     return socket
   }
 
