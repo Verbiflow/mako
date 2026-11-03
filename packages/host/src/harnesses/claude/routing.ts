@@ -3,7 +3,7 @@ import type { HookCallback, PreToolUseHookInput, SyncHookJSONOutput } from "@ant
 import { hostLog } from "../../base/host-log.js"
 import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
 import { NATIVE_CHILD_INSTRUCTIONS, routeNativeSpawn, type NativeSpawn, type RoutedThread } from "../../contracts/native-routing.js"
-import { routeNativeTool, routeShellCall, type CallRoute, type CallThread } from "../../contracts/native-calls.js"
+import { mcpToolName, routeNativeTool, routeShellCall, type CallRoute, type CallThread } from "../../contracts/native-calls.js"
 
 /** Claude's tools that start subagents: `Agent` (`Task` before Claude Code 2.1) and `Workflow`, which runs a script of them. */
 const SPAWN_TOOLS = new Set(["Agent", "Task", "Workflow"])
@@ -59,8 +59,8 @@ function claudeCallRoute(thread: CallThread, input: PreToolUseHookInput): CallRo
     const command = BashInput.parse(input.tool_input).command
     return command ? routeShellCall(thread, { command, cwd: input.cwd }, claudeNames) : { kind: "allow" }
   }
-  const mcp = /^mcp__(.+?)__(.+)$/.exec(input.tool_name)
-  return routeNativeTool(thread, { tool: input.tool_name, ...mcp && { server: mcp[1] } }, claudeNames)
+  const mcp = mcpToolName(input.tool_name)
+  return routeNativeTool(thread, { tool: input.tool_name, ...mcp && { server: mcp.server } }, claudeNames)
 }
 
 /** PreToolUse's answer to a native call the Thread's calls deny or warn of, or undefined to let it go on unremarked. */

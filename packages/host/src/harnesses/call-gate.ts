@@ -1,13 +1,13 @@
 import { z } from "zod"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject } from "../contracts/json.js"
-import { routeNativeTool, routeShellCall, type CallRoute, type CallThread } from "../contracts/native-calls.js"
+import { mcpToolName, routeNativeTool, routeShellCall, scriptFlag, type CallRoute, type CallThread } from "../contracts/native-calls.js"
 
 /** A shell tool's command as one line: argv (`["bash", "-lc", "…"]`) reads as its script. */
 const CommandLine = z.union([
   z.string(),
   z.array(z.string()).transform((argv) => {
-    const script = argv.findIndex((word) => /^-[a-z]*c$/.test(word))
+    const script = argv.findIndex(scriptFlag)
     return script >= 0 && argv[script + 1] !== undefined ? argv[script + 1]! : argv.join(" ")
   }),
 ])
@@ -31,8 +31,8 @@ function hookRoute(call: HookCall, thread: CallThread): CallRoute {
     const cwd = call.tool_input?.workdir ?? call.cwd ?? thread.folder
     return routeShellCall(thread, { command, ...cwd && { cwd } })
   }
-  const mcp = /^mcp__(.+?)__(.+)$/.exec(call.tool_name ?? "")
-  return mcp ? routeNativeTool(thread, { tool: call.tool_name!, server: mcp[1]! }) : { kind: "allow" }
+  const mcp = mcpToolName(call.tool_name ?? "")
+  return mcp ? routeNativeTool(thread, { tool: call.tool_name!, server: mcp.server }) : { kind: "allow" }
 }
 
 /**

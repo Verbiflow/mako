@@ -141,6 +141,17 @@ export function shellWords(line: string): string[] {
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 
+/** A shell's flags that take the next word as its script: `-c`, `-lc`, `-ec`. */
+export const scriptFlag = (word: string) => /^-[a-z]+$/.test(word) && word.includes("c")
+
+/** An MCP tool's server and tool, from the `mcp__<server>__<tool>` name harnesses give it. */
+export function mcpToolName(name: string): { server: string; tool: string } | undefined {
+  if (!name.startsWith("mcp__")) return undefined
+  const rest = name.slice("mcp__".length)
+  const split = rest.indexOf("__")
+  return split > 0 && split + 2 < rest.length ? { server: rest.slice(0, split), tool: rest.slice(split + 2) } : undefined
+}
+
 /** A shell line as simple commands, each with the folder `cd` left it in; `bash -c '…'` is read inside. */
 export function shellLine(line: string, cwd?: string, depth = 0): ShellLine {
   const words = shellWords(line)
@@ -179,7 +190,7 @@ export function shellLine(line: string, cwd?: string, depth = 0): ShellLine {
       return
     }
     const program = basename(argv[0]!)
-    const inner = SHELLS.has(program) ? argv.findIndex((word, index) => index > 0 && /^-[a-z]*c[a-z]*$/.test(word)) : -1
+    const inner = SHELLS.has(program) ? argv.findIndex((word, index) => index > 0 && scriptFlag(word)) : -1
     if (inner > 0 && argv[inner + 1] !== undefined && depth < 3) {
       const nested = shellLine(argv[inner + 1]!, folder, depth + 1)
       loop ||= nested.loop
