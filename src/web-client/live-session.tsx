@@ -59,7 +59,8 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
     if (hydrated) resumeOutbox(conversation)
   }, [hydrated, conversation])
   const live = useRef<HTMLDivElement>(null)
-  useOpenReading(conversation, live, hydrated)
+  const deskLive = useRef<HTMLDivElement>(null)
+  useOpenReading(conversation, desk ? deskLive : live, hydrated)
   const [away, setAway] = useState(false)
   const [jump, setJump] = useState<{ to: (() => void) | null }>({ to: null })
   const end = useMemo<TranscriptEnd>(() => ({ away: setAway, bind: (to) => setJump({ to }) }), [])
@@ -102,7 +103,7 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   if (desk)
     return (
       <PromptNoteContext value={note}>
-        <div className="desk-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
+        <div ref={deskLive} className="desk-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
           {active ? <AcpPanel /> : <div className="flex-1" />}
           {active ? <DeskComposer /> : null}
         </div>
@@ -145,24 +146,25 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
 function useOpenReading(conversation: string, live: RefObject<HTMLDivElement | null>, hydrated: boolean): void {
   const reading = useRef<{ opened: ReturnType<typeof openingThread>; kept: boolean } | null>(null)
   useEffect(() => {
-    const held = acpStore.get().conversations[conversation]
     const opened = openingThread()
-    reading.current = { opened, kept: held?.kind === "live" && held.hydrated !== false && held.requests !== undefined }
+    reading.current = { opened, kept: (acpStore.get().conversations[conversation]?.projection?.exchanges.length ?? 0) > 0 }
     return () => opened.close()
   }, [conversation])
+  // What it held paints before it's read again: a conversation listed anew is no longer `hydrated`, but keeps its turns.
+  const drawn = useAcp((state) => state.activeKey === conversation && (state.conversations[conversation]?.projection?.exchanges.length ?? 0) > 0)
   const syncing = useSyncing((state) => state.conversation === conversation)
   useEffect(() => {
     const held = reading.current
-    if (!held || !hydrated) return
+    if (!held || !(drawn || hydrated)) return
     // Two frames on: the turns this render committed are painted.
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         held.opened.painted(held.kept ? "kept" : "network", live.current?.querySelectorAll("[data-exchange]").length ?? 0)
-        if (!syncing) held.opened.caughtUp()
+        if (hydrated && !syncing) held.opened.caughtUp()
       })
     })
     return () => cancelAnimationFrame(frame)
-  }, [hydrated, syncing, live])
+  }, [drawn, hydrated, syncing, live])
 }
 
 /**

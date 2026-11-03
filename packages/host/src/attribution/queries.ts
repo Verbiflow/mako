@@ -77,6 +77,31 @@ export function likely(author: Attribution | null, thread: string): boolean {
   return author?.certainty === "window" && author.author.thread === thread && author.during !== "turn" && !author.trailing && !author.standing && author.reached !== undefined
 }
 
+/**
+ * Where a journaled change stands for one Thread: as its author says
+ * (`side`), except that what Git wrote is nobody's, and a `window` found
+ * only after lost events might be the Thread's at most: a rescan finds what
+ * changed in a gap of minutes or hours, and timing alone can't put it on
+ * the one call that ran during part of it.
+ */
+export function entrySide(view: JournalView, seq: number, thread: string): Side {
+  const author = view.author(seq)
+  const at = side(author, thread)
+  if (at === "other") return at
+  const provenance = view.store.provenance(seq)
+  if (provenance?.git) return "other"
+  return at === "thread" && provenance?.lost && author?.certainty === "window" ? "uncertain" : at
+}
+
+/** `classOf` for a journaled change, with `likely` told apart: what Git wrote is nobody's, made for the person as Mako's writes are. */
+export function entryClass(view: JournalView, seq: number, thread: string): ChangeClass | "likely" {
+  const author = seq > 0 ? view.author(seq) : null
+  if (seq > 0 && view.store.provenance(seq)?.git) return "person"
+  const at = seq > 0 ? entrySide(view, seq, thread) : "other"
+  if (at === "uncertain") return "uncertain"
+  return likely(author, thread) ? "likely" : classOf(author, thread)
+}
+
 /** Nobody can be named for it: it was there when tracking began, or found after lost events with nothing running. */
 export function unattributed(author: Attribution | null): boolean {
   return author?.certainty === "ambiguous" && author.candidates.length === 0
@@ -183,9 +208,15 @@ export function hunks(view: JournalView, checkout: string): CheckoutHunk[] {
   return out
 }
 
-/** Who made the file what it is now. A file created, deleted or binary that a commit left out keeps its writer from before the base moved. */
+/**
+ * Who made the file what it is now. A file created, deleted or binary that a
+ * commit left out keeps its writer from before the base moved, and one Git
+ * put back (a stash popped) the writer of the version it put back.
+ */
 function lastEntry(view: JournalView, file: FileState): StoredEntry | undefined {
-  return view.store.last(file.root, file.path, wholeChange(file) ? 0 : file.baseSeq)
+  const last = view.store.last(file.root, file.path, wholeChange(file) ? 0 : file.baseSeq)
+  if (!last?.git || last.kind === "rename") return last
+  return view.store.madeVersion(file.root, file.path, last.after, last.seq) ?? last
 }
 
 /** Old paths of files renamed since their base, to their new paths. */
@@ -278,7 +309,7 @@ export function partition(view: JournalView, checkout: string, thread: string, o
     let found = sides.get(seq)
     if (!found) {
       const author = view.author(seq)
-      found = side(author, thread)
+      found = entrySide(view, seq, thread)
       if (found === "other" && unattributed(author)) found = "uncertain"
       if (found === "uncertain" && options.bring) found = "thread"
       sides.set(seq, found)
@@ -434,10 +465,7 @@ export function shares(view: JournalView, checkout: string, thread: string): Che
   /** A change's class, with the Thread's on timing alone told apart; they count as the Thread's too. */
   const classAt = (seq: number): ChangeClass | "likely" => {
     let found = classes.get(seq)
-    if (!found) {
-      const author = seq > 0 ? view.author(seq) : null
-      classes.set(seq, (found = likely(author, thread) ? "likely" : classOf(author, thread)))
-    }
+    if (!found) classes.set(seq, (found = entryClass(view, seq, thread)))
     return found
   }
   for (const { root, files } of rootsIn(view, checkout)) {
@@ -511,7 +539,7 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
     if (entry.git) continue
     result.certainty[entry.author.certainty] = (result.certainty[entry.author.certainty] ?? 0) + 1
     // Only its own: a window only its turn spans is a maybe, as an ambiguous change naming it is.
-    if (side(view.author(entry.seq), thread) !== "thread") {
+    if (entrySide(view, entry.seq, thread) !== "thread") {
       uncertain++
       continue
     }
@@ -616,7 +644,7 @@ export function turnChanges(view: JournalView, thread: string, turn: string, sta
   const tags = new Map<number, Tag>()
   const entries: StoredEntry[] = []
   for (const entry of store.entriesOfTurn(thread, turn)) {
-    const at = side(view.author(entry.seq), thread)
+    const at = entrySide(view, entry.seq, thread)
     if (at === "other") continue
     tags.set(entry.seq, at === "thread" ? "own" : "maybe")
     entries.push(entry)

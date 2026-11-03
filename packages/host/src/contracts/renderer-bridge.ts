@@ -70,6 +70,8 @@ import type { SyncStatus } from "./sync-status.js"
 import type { SyncReadings } from "./sync-readings.js"
 import type { MakoFootprint } from "./mako-footprint.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
+import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
+import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult } from "./simulators.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
@@ -493,6 +495,14 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),
     cloudTurnOnCheck: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-check"),
     cloudTurnOnRetryBases: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-retry-bases"),
+    /** Settings › Simulators' setup line; `refresh` reads it again from Xcode's tools. */
+    simulatorSetup: (refresh?: boolean) => invokeTrustedHost<SimulatorSetup>("mako:simulator-setup", refresh),
+    simulatorSetupPress: (fix: SetupFix, input?: { folder?: string; allowed?: boolean }) => invokeTrustedHost<SimulatorSetup>("mako:simulator-setup-press", fix, input),
+    simulatorsList: () => invokeTrustedHost<SimulatorsListed>("mako:simulators-list", { kind: "person" }),
+    /** The person, from the panel: opening one takes it over from whichever Thread drives it. */
+    simulatorsOpen: (input: SimulatorsOpenInput) => invokeTrustedHost<SimulatorsOpenResult>("mako:simulators-open", { kind: "person" }, input),
+    simulatorsAct: (input: SimulatorsActInput) => invokeTrustedHost<SimulatorsActResult>("mako:simulators-act", { kind: "person" }, input),
+    simulatorsRelease: (input: SimulatorsReleaseInput) => invokeTrustedHost<SimulatorsReleaseResult>("mako:simulators-release", { kind: "person" }, input),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),

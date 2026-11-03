@@ -52,6 +52,8 @@ exit 2
     MAKO_WEB_SOCKET: location.socket,
     MAKO_PROFILE: "agents-cli-test",
     MAKO_TELEMETRY: "off",
+    // Whatever machine runs it: the Mac's capacity is test-background-agents' to prove.
+    MAKO_FIN_SLOTS: "8",
     MAKO_PROD: "1",
     PATH: [standIn, process.env.PATH].filter(Boolean).join(delimiter),
     MEASURE_STREAM_MS: "1200",

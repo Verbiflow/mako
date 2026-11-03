@@ -119,6 +119,12 @@ const reads = [
   "mako:agents-list",
   "mako:agents-read",
   "mako:agents-wait",
+  /** Simulators' setup line as it stands, re-read when asked; changes nothing on this Mac. */
+  "mako:simulator-setup",
+  /** What the hosts run, who holds each simulator, a page or console read, and a screenshot (`contracts/simulators.ts`). */
+  "mako:simulators-list",
+  "mako:simulators-read",
+  "mako:simulators-shot",
   "mako:live-context-breakdown",
   "mako:live-read",
   "mako:live-attach",
@@ -347,6 +353,12 @@ const replays = [
   "mako:element-pick-start",
   /** Cancelling a pick that has ended cancels nothing. */
   "mako:element-pick-cancel",
+  /** `Simulators.open`: the Thread that holds it opens it again; a booted simulator boots as it is. */
+  "mako:simulators-open",
+  /** `Simulators.record`: a recording started or stopped already answers as it stands. */
+  "mako:simulators-record",
+  /** `Simulators.release`: a released simulator releases nothing. */
+  "mako:simulators-release",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

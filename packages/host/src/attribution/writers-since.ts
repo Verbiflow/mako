@@ -1,6 +1,6 @@
 import type { FileWriters, RewindWriter } from "../contracts/workspace-snapshots.js"
 import { within } from "./paths.js"
-import { side, type JournalView } from "./queries.js"
+import { entrySide, type JournalView } from "./queries.js"
 
 /**
  * Who changed each of `paths` (absolute) since `since`, from the journal:
@@ -29,7 +29,7 @@ export function writersSince(view: JournalView, paths: readonly string[], since:
         case "ambiguous": {
           const named = author.certainty === "ambiguous" ? author.candidates.map((candidate) => candidate.thread) : [author.author.thread]
           if (!named.length) unknown = true
-          for (const thread of named) threads.set(thread, (threads.get(thread) ?? false) || side(author, thread) === "thread")
+          for (const thread of named) threads.set(thread, (threads.get(thread) ?? false) || entrySide(view, entry.seq, thread) === "thread")
           break
         }
         case "person":

@@ -128,6 +128,11 @@ export class AgentWakes {
     return waiting.notices.length < before
   }
 
+  /** Whether notices wait for this Apex's conversation: a turn of its own is coming. */
+  waits(conversation: string): boolean {
+    return Boolean(this.waiting.get(conversation)?.notices.length)
+  }
+
   /** How many notices wait, across every Apex: Diagnostics shows it. */
   pending(): number {
     let count = this.steering.size

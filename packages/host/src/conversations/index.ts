@@ -28,6 +28,7 @@ import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
+import { MacCapacity, finSlots } from "./mac-capacity.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
@@ -135,6 +136,8 @@ export interface ConversationsDeps {
   controlInstructions: NonNullable<LiveDependencies["controlInstructions"]>
   /** A waiting move may go ahead; the moves are made after the conversations. */
   settled(conversationId: string): void
+  /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet. */
+  movePending?(conversationId: string): boolean
   /** The attribution journal, for counting each turn's changes; undefined until it opens. */
   turnLedger?: LiveDependencies["turnLedger"]
   /** The attribution journal, for reviewing and undoing a turn; undefined until it opens. */
@@ -283,6 +286,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       runs: (harness) => host.nativeRunners.get(harness) !== undefined,
       harnessLabel: (harness) => harnessLabel(host, harness),
       modes: (harness) => host.liveDrivers.get(harness)?.modes,
+      ...(deps.movePending && { movePending: deps.movePending }),
       finChoices: async (harness, cwd) => {
         const profile = await harnesses.profiles.forSend(harness, cwd)
         const reading = deps.finDefaults?.reading()
@@ -302,6 +306,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
       },
+      capacity: new MacCapacity({ ...finSlots() !== undefined && { fixed: finSlots() } }),
     })
     agents.resume()
   }

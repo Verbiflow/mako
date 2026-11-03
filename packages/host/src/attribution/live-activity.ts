@@ -132,7 +132,8 @@ export class LiveActivity {
       this.turnEnded(batch.id, conversation)
     if (status === "running" && !conversation.turn) this.turnStarted(batch.id, conversation)
     for (const update of batch.updates) this.update(batch.id, conversation, update)
-    if (batch.nativeAgents !== undefined || status === "closed") this.work(batch.id, conversation, status === "closed" ? [] : activeWork(batch.nativeAgents))
+    // A Fin is a Thread of its own, in its own checkout: its Sessions mark their own work, never its Apex's.
+    if (batch.nativeAgents !== undefined || status === "closed") this.work(batch.id, conversation, status === "closed" ? [] : activeWork(batch.nativeAgents).filter((agent) => !agent.child))
     if (status !== undefined && status !== "running" && conversation.turn) this.turnEnded(batch.id, conversation)
     if (status === "closed") this.conversations.delete(batch.id)
     conversation.status = status ?? conversation.status

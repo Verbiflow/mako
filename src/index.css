@@ -1001,20 +1001,20 @@ diffs-container {
  * Occasional rather than constant — tens of times a day, not hundreds — so it
  * earns a transition where the palette does not. Short and ease-out: the new
  * conversation should look like it arrived, not like it is being presented.
- * Transform and opacity only, so a switch costs the compositor a frame and the
- * main thread nothing while tokens are landing next door. It never starts
- * from invisible: the frame that mounts a long transcript can take a while to
+ * Opacity only, so a switch costs the compositor a frame and the main thread
+ * nothing while tokens are landing next door. Nothing in it moves: the newest
+ * message is where the reader looks first, and a 4px rise after it painted
+ * read on a phone as the transcript settling late. It never starts from
+ * invisible: the frame that mounts a long transcript can take a while to
  * commit, and every frame painted before the animation advances shows its
  * first keyframe, so a fade from zero read as the column blinking out.
  */
 @keyframes mako-thread {
   from {
     opacity: 0.7;
-    transform: translate3d(0, 4px, 0);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
   }
 }
 

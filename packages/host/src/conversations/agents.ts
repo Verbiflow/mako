@@ -84,10 +84,15 @@ import { AgentWakes, FROM_AGENTS, fromAgent, type Notice, type ParentReady } fro
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
+import { macSlots, type MacReading, type MacSlots } from "./mac-capacity.js"
 
 const NONE: readonly NativeAgent[] = []
 /** How long a start waits to read whether a harness's account is at its limit before taking it as having room. */
 const LIMIT_READ_MS = 3_000
+/** A Fin's own Fins in these states are work it still waits on. */
+const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
+/** How often Fins waiting for this Mac's room look for it. */
+const ROOM_EVERY_MS = 10_000
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
 const READ_ENTRIES = 40
 const READ_CHARS = 8_000
@@ -111,6 +116,8 @@ export interface AgentsDeps {
   harnessLabel(harness: string): string
   /** The modes `harness`'s live driver declares, each with its access tier; undefined for one that declares none. */
   modes(harness: string): readonly LiveSessionMode[] | undefined
+  /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet: it carries on there. */
+  movePending?(conversation: string): boolean
   /** What a Fin of `harness` in `cwd` may run on: the harness's catalog, Mako's pick for it, and the person's own choices there. */
   finChoices?(harness: string, cwd: string): Promise<FinChoices>
   /** `harness`'s catalog as this host last read it, for a Fin's row; undefined before it's read. */
@@ -122,6 +129,8 @@ export interface AgentsDeps {
   /** The person's rules for which work goes to which harness and model (Settings › Fins). */
   finPolicy?(): FinPolicy | undefined
   budget?: TreeBudget
+  /** This Mac's cores, memory and load (`MacCapacity`): Fins past what it runs at once wait. Without it, only the tree's budget holds. */
+  capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
   now?(): number
 }
@@ -170,6 +179,8 @@ interface QueuedStart {
   harness: string
   /** Absent from a build before models were decided at admission: decided at its start. */
   tuned?: Tuned
+  /** What held it: the tree's running budget, or this Mac's room (`place-full`). A record from before says neither. */
+  why?: Extract<QueueReason, "tree-running" | "place-full">
 }
 
 const QueuedStartSchema = z.object({
@@ -184,6 +195,7 @@ const QueuedStartSchema = z.object({
     rerouted: z.object({ from: z.string(), until: z.number().optional(), instead: z.string().optional() }).optional(),
     rule: z.object({ n: z.number().optional(), when: z.string() }).optional(),
   }).optional(),
+  why: z.enum(["tree-running", "place-full"]).optional(),
 }) satisfies z.ZodType<QueuedStart>
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
@@ -228,6 +240,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly holds = new Set<Hold>()
   /** Apexes whose turns a followed process ran, while their held reports start their next turn (`release`). */
   private readonly releasing = new Set<string>()
+  /** Fins whose turn ended while their own work went on, with that turn: its reply is their report once nothing is left. */
+  private readonly awaiting = new Map<string, { conversation: string; request: string }>()
   /** The decision a blocked Fin's Apex was told of, by Fin: told once per question. */
   private readonly asked = new Map<string, string>()
   /** What each `agents_send` key delivered, so a retry answers the same. */
@@ -244,6 +258,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   private seen: unknown
   private draining = false
   private stopped = false
+  private readonly stopRoomWatch: () => void
+  /** This Mac's room as admission last read it, which every answer carries. */
+  private mac: MacSlots | undefined
 
   constructor(deps: AgentsDeps) {
     this.deps = deps
@@ -274,6 +291,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       current: (notice) => this.current(notice),
       now: deps.now,
     })
+    // The Mac frees up without a Fin ending, as the person's own build finishes: what waits for its room goes then.
+    this.stopRoomWatch = deps.capacity ? deps.jobs.every("start the Fins this Mac has room for", ROOM_EVERY_MS, () => {
+      if (this.waitingForRoom() > 0) void this.drain()
+    }) : () => {}
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
@@ -583,12 +604,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree).length
     if (counts.started + queued >= this.budget.started)
       return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
-    if (counts.running >= this.budget.running) {
-      const queued: QueuedStart = { lead: apex, input, tier, harness, tuned }
+    // Past the Mac's room it waits behind every Fin that waits for room already, whichever tree's.
+    const mac = await this.macSlots()
+    const why = counts.running >= this.budget.running ? "tree-running" : mac && (mac.working >= mac.slots || this.waitingForRoom() > 0) ? "place-full" : undefined
+    if (why) {
+      const queued: QueuedStart = { lead: apex, input, tier, harness, tuned, why }
       store.queueSpawn({ op, tree, record: JSON.stringify(queued), at: this.now() })
-      hostLog("agents", "start queued", { op, why: "tree-running", running: counts.running, budget: this.budget.running })
+      hostLog("agents", "start queued", { op, why, running: counts.running, budget: this.budget.running, ...mac && { working: mac.working, slots: mac.slots, mac: mac.why } })
       this.forget(apex.thread)
-      return this.queuedAnswer(op, apex, false)
+      const answer = this.queuedAnswer(op, apex, false)
+      if (why === "place-full") void this.drain()
+      return answer
     }
     return this.launch(op, { lead: apex, input, tier, harness, tuned })
   }
@@ -930,6 +956,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   dispose(): void {
     this.stopped = true
+    this.stopRoomWatch()
     this.runs.dispose()
     this.wakes.dispose()
     for (const wake of this.waiters) wake()
@@ -1109,9 +1136,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store || this.draining || this.stopped) return
     this.draining = true
     try {
+      const mac = store.queuedSpawns().length ? await this.macSlots() : undefined
+      let room = mac ? mac.slots - mac.working : Number.POSITIVE_INFINITY
       for (const spawn of store.queuedSpawns()) {
         const counts = this.treeCounts(spawn.tree)
         if (counts.running >= this.budget.running) continue
+        // First come, first started: once the Mac is full, a later spawn of another tree doesn't go ahead of this one.
+        if (room <= 0) break
+        room -= 1
         const queued = parseQueued(spawn.record)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
         if (queued && !store.edges().byOp(spawn.op)) {
@@ -1143,6 +1175,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(edge.tuned?.rule && { rule: ruleWords(edge.tuned.rule) }),
       ...(edge.tuned?.rerouted && { limited: { harness: edge.tuned.rerouted.from, ...(edge.tuned.rerouted.until !== undefined && { until: edge.tuned.rerouted.until }), ...(edge.tuned.rerouted.instead && { instead: edge.tuned.rerouted.instead }) } }),
       tree: { ...counts, of: { ...this.budget } },
+      ...this.mac && { mac: { working: this.mac.working, slots: this.mac.slots, why: this.mac.why } },
       ...(deduped && { deduped: true as const }),
       next: afterStart(edge.asked.wake ?? "decisions"),
     }
@@ -1153,13 +1186,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     const tree = this.rootOf(apex.thread)
     const queue = store.queuedSpawns().filter((spawn) => spawn.tree === tree)
     const queued = parseQueued(queue.find((spawn) => spawn.op === op)?.record ?? "")
-    const ahead = queue.findIndex((spawn) => spawn.op === op)
     const counts = this.treeCounts(tree)
+    const mac = this.mac
+    const forRoom = queued?.why === "place-full"
+    const forTheMac = store.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full")
+    const ahead = (forRoom ? forTheMac : queue).findIndex((spawn) => spawn.op === op)
     return {
       name: queued?.input.name ?? queued?.input.title ?? "queued",
       state: "queued",
-      why: `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${Math.max(0, ahead)} ahead).`,
+      why: forRoom && mac
+        ? `This Mac is busy: it runs ${mac.slots} Fins at once now (${mac.why}) and ${mac.working} are at work; it starts when one ends or the Mac frees up (${Math.max(0, ahead)} ahead).`
+        : `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${Math.max(0, ahead)} ahead).`,
       tree: { ...counts, of: { ...this.budget } },
+      ...mac && { mac: { working: mac.working, slots: mac.slots, why: mac.why } },
       ...(deduped && { deduped: true as const }),
       next: afterStart(queued?.input.wake ?? "decisions"),
     }
@@ -1245,6 +1284,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (ended.status === "interrupted" && ended.interruption?.reason !== "stopped") return
     const store = this.store()!
     if (store.reportsOf(edge.child, (ended.createdAt ?? 0) - 1).some((report) => !report.implicit)) return this.childMoved(edge, false)
+    const waits = ended.status === "completed" ? this.waitsOn(edge, conversation) : undefined
+    if (waits) {
+      this.awaiting.set(edge.child, { conversation, request })
+      hostLog("agents", "turn ended waiting", { op: edge.op, child: edge.child, on: waits })
+      return this.childMoved(edge, false)
+    }
+    this.awaiting.delete(edge.child)
     const done = ended.status === "completed"
     const text = reply.text.trim()
     this.keepReport(edge, {
@@ -1256,6 +1302,33 @@ export class Agents implements AgentOperations, ConversationChildren {
       ownerGeneration: this.generation,
       at: this.now(),
     })
+  }
+
+  /**
+   * What a Fin whose turn ended still waits on, in words: its own Fins at
+   * work or waiting, or the move into its worktree it asked for, after which
+   * it carries on there. Its turn's end isn't its result while either holds.
+   */
+  private waitsOn(edge: ThreadParent, conversation: string): string | undefined {
+    const own = this.store()!.edges().children(edge.child).filter((child) => !child.closedAt && WAITED_ON.has(this.stateOf(child).kind))
+    const parts: string[] = []
+    if (own.length === 1) parts.push(`its ${FIN_WORD} ${own[0]!.name}`)
+    else if (own.length) parts.push(`its ${own.length} ${FIN_WORD}s (${own.map((child) => child.name).join(", ")})`)
+    if (this.deps.movePending?.(conversation)) parts.push("its move into its own worktree")
+    return parts.length ? parts.join(" and ") : undefined
+  }
+
+  /**
+   * A Fin whose turn ended waiting: once it waits on nothing, isn't at work
+   * and has no digest coming, that turn's reply is its result. One its Fins'
+   * reports wake reports when that turn ends instead.
+   */
+  private checkAwaiting(edge: ThreadParent): void {
+    const held = this.awaiting.get(edge.child)
+    if (!held || edge.closedAt !== undefined) return
+    if (this.ready(held.conversation) !== "idle" || this.wakes.waits(held.conversation) || this.waitsOn(edge, held.conversation)) return
+    this.awaiting.delete(edge.child)
+    this.turnEnded(edge, held.conversation, held.request)
   }
 
   /** A followed run ended: its end is its last report, unless it reported while it ran; held notices go to its next turn. */
@@ -1402,8 +1475,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const held = live.held(conversation)
     const waiting = live.waitingOn(conversation)
     // A request sent and not yet answered is work, before its harness says it runs.
-    const working = session.status === "running" || Boolean(held?.requests.some((request) => request.status === "queued" || request.status === "dispatching"))
+    const busy = session.status === "running" || Boolean(held?.requests.some((request) => request.status === "queued" || request.status === "dispatching"))
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
+    // A turn that ended on its own Fins' work or its move is still at work, on that.
+    const waits = !busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined
+    const working = busy || waits !== undefined
     const thread = this.store()?.thread(edge.child)
     const title = thread?.title ?? session.title
     const settings = this.settingsOf(conversation)
@@ -1422,7 +1498,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(runsOn && { runsOn }),
       ...((session.status === "starting" || this.starting.has(edge.op)) && { starting: "launching" as const }),
       ...(working && { working }),
-      ...(working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
+      ...(waits ? { step: `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
       ...(waiting && { waiting: this.waitingOf(edge, waiting.line, live.pendingAsk(conversation)) }),
       ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: last.createdAt ?? edge.createdAt } }),
       ...(!working && last?.status === "interrupted" && last.interruption?.reason === "stopped" && { ended: { outcome: "stopped" as const, at: last.interruption.at } }),
@@ -1481,7 +1557,15 @@ export class Agents implements AgentOperations, ConversationChildren {
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
     for (const conversation of this.conversationsOfThread(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
     this.askApex(edge)
-    if (kindChanged) this.checkHolds(edge.child)
+    if (kindChanged) {
+      this.checkHolds(edge.child)
+      // A Fin waiting on its own Fins reads from them: its entry follows, and its result may be in.
+      const above = this.store()?.edges().of(edge.parent)
+      if (above) {
+        this.childMoved(above, false)
+        this.checkAwaiting(above)
+      }
+    }
     if (before && before.state.kind === "working" && entry.state.kind !== "working") void this.drain()
   }
 
@@ -1603,6 +1687,30 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** How a tree stands against its budgets: Threads at work now, and Threads it started. */
+  /** This Mac's room now, every tree's working Fins counted; undefined without a reading of it. */
+  private async macSlots(): Promise<MacSlots | undefined> {
+    const reading = await this.deps.capacity?.read().catch((error: Error) => {
+      hostWarn("agents", "this Mac's capacity couldn't be read; only the tree's budget holds", { error: errorMessage({ error }) })
+      return undefined
+    })
+    if (!reading) return undefined
+    const edges = this.store()?.edges().all ?? []
+    const working = edges.filter((edge) => this.occupies(edge)).length
+    this.mac = macSlots(reading, working)
+    return this.mac
+  }
+
+  /** A Fin at work holds a place against the budgets; one only waiting for its own Fins or its move holds none, or they'd wait for it. */
+  private occupies(edge: ThreadParent): boolean {
+    const kind = this.stateOf(edge).kind
+    return (kind === "working" || kind === "starting") && this.childReading(edge).awaiting === undefined
+  }
+
+  /** Spawns waiting for this Mac's room, every tree's. */
+  private waitingForRoom(): number {
+    return this.store()?.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full").length ?? 0
+  }
+
   private treeCounts(root: string): TreeCounts {
     const store = this.store()
     if (!store) return { running: 0, started: 0 }
@@ -1612,8 +1720,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (depth > 10_000) return
       for (const edge of store.edges().children(parent)) {
         started += 1
-        const kind = this.stateOf(edge).kind
-        if (kind === "working" || kind === "starting") running += 1
+        if (this.occupies(edge)) running += 1
         visit(edge.child, depth + 1)
       }
     }
@@ -1650,10 +1757,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()
     if (!store) return []
     const spawns = store.queuedSpawns()
-    return spawns.flatMap((spawn) => {
+    return spawns.flatMap((spawn, at) => {
       const queued = parseQueued(spawn.record)
       if (queued?.lead.thread !== thread) return []
-      const ahead = spawns.filter((other) => other.tree === spawn.tree && other.at < spawn.at).length
+      const reason: QueueReason = queued.why ?? "tree-running"
+      const ahead = spawns.slice(0, at).filter((other) => (reason === "place-full" ? parseQueued(other.record)?.why === "place-full" : other.tree === spawn.tree)).length
       const placeholder: ThreadParent = {
         child: ThreadIdSchema.parse(namedUuid(spawn.op)),
         parent: ThreadIdSchema.parse(thread),
@@ -1666,7 +1774,6 @@ export class Agents implements AgentOperations, ConversationChildren {
         startedBy: { kind: "agent", session: SessionIdSchema.parse(queued.lead.session) },
         createdAt: spawn.at,
       }
-      const reason: QueueReason = "tree-running"
       return [childEntry(placeholder, { source: "live", queued: { reason, ahead } }, {})]
     })
   }

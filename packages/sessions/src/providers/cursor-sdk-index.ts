@@ -6,6 +6,7 @@ import { cursorToolResults, parseBlobDataRow, parseRoot, parseRootContext, type 
 import { cursorSdkIndexPath, cursorSdkStorePath } from "./cursor-sdk-paths.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
+import { atOnce, type Steps } from "../slices.js"
 
 export type { CursorRootContext, CursorToolResult }
 export { parseRootContext }
@@ -253,33 +254,51 @@ const RunRequestSchema = z.object({ message: z.object({ type: z.literal("request
  * vocabulary doesn't describe is skipped, as the live decoder skips it.
  */
 export function readCursorSdkRunEvents(stores: NativeStores, indexPath: string, runId: string): CursorSdkRunEvent[] {
+  return atOnce(cursorSdkRunEventSteps(stores, indexPath, runId))
+}
+
+/** Rows of a run's events read at once: each page is a read of its own, so no snapshot of the index outlasts a slice. */
+const RUN_EVENTS_A_PAGE = 256
+
+/**
+ * `readCursorSdkRunEvents` as `Steps`, a page of rows at a time, yielding between rows: every checkpoint of a running
+ * Fin replays its run, and its thousands of events read in one stretch held the sync daemon's loop for seconds.
+ */
+export function* cursorSdkRunEventSteps(stores: NativeStores, indexPath: string, runId: string): Steps<CursorSdkRunEvent[]> {
   const database = openReadOnly(stores, indexPath)
   if (!database) return []
   const events: CursorSdkRunEvent[] = []
   try {
-    const statement = database.prepare("SELECT payload_json, created_at, seq FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' ORDER BY seq")
+    const statement = database.prepare("SELECT payload_json, created_at, seq FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' AND seq > ? ORDER BY seq LIMIT ?")
     // A long agent keeps hundreds of thousands of these: rows as arrays skip an object each.
     statement.setReturnArrays(true)
     let streamed = 0
-    for (const row of statement.iterate(runId)) {
-      const columns = RunEventRow.safeParse(row)
-      if (!columns.success) continue
-      const [raw, created, seq] = columns.data
-      let payload: unknown
-      try {
-        payload = JSON.parse(raw ?? "")
-      } catch {
-        streamed++
-        continue
+    let after = Number.MIN_SAFE_INTEGER
+    for (;;) {
+      const rows = statement.all(runId, after, RUN_EVENTS_A_PAGE)
+      const from = after
+      for (const row of rows) {
+        yield
+        const columns = RunEventRow.safeParse(row)
+        if (!columns.success) continue
+        const [raw, created, seq] = columns.data
+        after = seq
+        let payload: unknown
+        try {
+          payload = JSON.parse(raw ?? "")
+        } catch {
+          streamed++
+          continue
+        }
+        // A failed parse builds its issues, so the rare request row is told from the parsed message, not by a check every row fails.
+        const event = RunEventSchema.safeParse(payload)
+        if (event.success ? event.data.message.type === "request" : RunRequestSchema.safeParse(payload).success) continue
+        const index = streamed++
+        if (!event.success) continue
+        events.push(created ? { message: event.data.message, index, at: created, seq } : { message: event.data.message, index, seq })
       }
-      // A failed parse builds its issues, so the rare request row is told from the parsed message, not by a check every row fails.
-      const event = RunEventSchema.safeParse(payload)
-      if (event.success ? event.data.message.type === "request" : RunRequestSchema.safeParse(payload).success) continue
-      const index = streamed++
-      if (!event.success) continue
-      events.push(created ? { message: event.data.message, index, at: created, seq } : { message: event.data.message, index, seq })
+      if (rows.length < RUN_EVENTS_A_PAGE || after === from) return events
     }
-    return events
   } catch {
     return []
   } finally {
