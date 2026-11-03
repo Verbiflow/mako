@@ -157,6 +157,7 @@ export type HostEventBody =
   | { type: "cloud-sign-ins"; signIns: CloudSignInsState }
   /** Turning Mako Cloud on moved: a step done, stuck or under way (`CloudTurnOn`). */
   | { type: "cloud-turn-on"; turnOn: import("./cloud-turn-on.js").CloudTurnOn }
+  | { type: "simulator-setup"; setup: import("./simulator-setup.js").SimulatorSetup }
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
   /** The person's conversation settings changed (`ConversationSettings`). */

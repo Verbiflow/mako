@@ -19,6 +19,7 @@ import { section as conversation } from "@/components/settings/sections/conversa
 import { section as editor } from "@/components/settings/sections/editor"
 import { section as keyboard } from "@/components/settings/sections/keyboard"
 import { section as appshots } from "@/components/settings/sections/appshots"
+import { section as simulators } from "@/components/settings/sections/simulators"
 import { section as automations } from "@/components/settings/sections/automations"
 import { section as apps } from "@/components/settings/sections/apps"
 import { section as git } from "@/components/settings/sections/git"
@@ -53,6 +54,7 @@ const SECTIONS: readonly SettingsSection[] = [
   skills,
   nativeAuthoring,
   plugins,
+  simulators,
   account,
   updates,
   storage,

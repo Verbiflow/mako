@@ -32,6 +32,8 @@ interface ThreadLifecycleDependencies {
   nativeToken(path: string): string | null
   abortNative(path: string, token: string): void
   external(path: string): boolean
+  /** A Thread was archived here, by the conversation and Session it's known by. */
+  archivedThread?(identity: TargetIdentity): void
 }
 
 export class ThreadLifecycle {
@@ -103,6 +105,7 @@ export class ThreadLifecycle {
         owner.session.id,
         keys.some((key) => receipt.keys.includes(key))
       )
+    if (command.archived) this.dependencies.archivedThread?.(this.identity(command.target))
     return receipt
   }
 
