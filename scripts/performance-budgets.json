@@ -1,11 +1,11 @@
 {
-  "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a",
+  "at": "002b6be1e04d73c2493907b1a9843dffb3ae1646",
   "budgets": {
-    "host queues a streamed answer x20": 0.24,
-    "host delivers streamed output": 0.724,
-    "host delivers resent output": 1.128,
-    "renderer reduces a streamed answer": 0.503,
-    "usage folds 20,000 observations x10": 0.473,
-    "tool identity resolves every declared name": 0.403
+    "host queues a streamed answer x20": 0.248,
+    "host delivers streamed output": 0.457,
+    "host delivers resent output": 0.114,
+    "renderer reduces a streamed answer": 0.269,
+    "usage folds 20,000 observations x10": 0.442,
+    "tool identity resolves every declared name": 0.396
   }
 }
