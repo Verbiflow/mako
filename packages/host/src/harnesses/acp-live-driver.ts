@@ -111,6 +111,7 @@ export function createAcpLiveDriver(
       ? {
           kind: "supported",
           lands: source.steering.wire === "interrupting-prompt" ? "interrupt" : "step",
+          ...source.steering.hears && { hears: source.steering.hears },
           via: source.steering.via,
           steer: async (...args) => (await engine()).steer(...args),
         }

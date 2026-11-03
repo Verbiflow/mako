@@ -15,6 +15,7 @@ const DELIVERY = {
   turn: "",
   steer: "at its next step",
   queued: "after its current turn",
+  interrupt: "after stopping its turn",
 } satisfies Record<RoutedAnswer["delivery"], string>
 
 /**

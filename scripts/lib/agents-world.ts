@@ -12,7 +12,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 
@@ -63,6 +63,11 @@ export interface WorldOptions {
   starting?: (conversation: string, harness: string) => Promise<void> | void
   /** Hears each prompt and steer as its harness takes it, before its turn goes on: what a killed host's harnesses took stays known. */
   heard?: (heard: Heard) => void
+  /**
+   * A harness's steering as its real driver declares it, in place of the world's (Claude and OpenCode at the next
+   * step, the rest none). `holds`: each steer waits for `answerSteer`, as Cursor holds one while its subagent runs.
+   */
+  steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -98,6 +103,7 @@ export class AgentsWorld {
   jobs!: HostJobs
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
+  private heldSteers = new Map<string, (answer: ProviderSteerResult) => void>()
 
   constructor(options: WorldOptions) {
     this.root = options.root
@@ -206,6 +212,14 @@ export class AgentsWorld {
     this.holds.get(conversation)?.()
   }
 
+  /** Answers the steer a holding harness (`steering.holds`) keeps for a conversation; false when it keeps none. */
+  answerSteer(conversation: string, answer: ProviderSteerResult): boolean {
+    const held = this.heldSteers.get(conversation)
+    this.heldSteers.delete(conversation)
+    held?.(answer)
+    return Boolean(held)
+  }
+
   /** Holds a conversation's current turn until `release`: a script awaits this to stay running. */
   hold(conversation: string): Promise<void> {
     return new Promise((resolve) => this.holds.set(conversation, () => {
@@ -248,13 +262,18 @@ export class AgentsWorld {
       backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
       resume: fixtureResume(),
-      ...(STEERS_AT_STEP.has(harness) && {
+      ...((STEERS_AT_STEP.has(harness) || this.options.steering?.[harness]) && {
         steering: {
           kind: "supported" as const,
           lands: "step" as const,
+          ...this.options.steering?.[harness],
           via: "Scripted model",
-          steer: async (id: string, input: { text: string }) => {
+          steer: async (id: string, input: { text: string }): Promise<ProviderSteerResult> => {
             if (this.options.refuseSteers) return { kind: "not-accepted" as const, reason: "The turn moved on" }
+            if (this.options.steering?.[harness]?.holds) {
+              const answer = await new Promise<ProviderSteerResult>((resolve) => this.heldSteers.set(id, resolve))
+              if (answer.kind !== "accepted") return answer
+            }
             this.steers.push({ conversation: id, text: input.text, at: Date.now() })
             this.options.heard?.({ kind: "steer", conversation: id, harness, text: input.text })
             return { kind: "accepted" as const }
@@ -310,7 +329,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, snapshot: () => null, editQueued: none, transfer: none, submit: none,
-    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false,
+    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
 }

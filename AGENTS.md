@@ -277,6 +277,23 @@ its host takes direct messages; one without it offers no Reply or `@`.
 turn, dedupe, steer and queue, refusals), and `bench:orch-route` times a
 message in a Fin's tab, addressed, and routed through a scripted Apex.
 
+How a message reaches a working Fin is its sender's choice, `agents_send`'s
+`deliver`: `queue` (the default) after its turn, for more to do; `steer` into
+the turn it runs, for a correction to what it's doing now; `interrupt`, which
+stops that turn (`LiveConversations.interrupt`) and starts the next with the
+message, ahead of what was queued, which still follows in order. An idle Fin
+takes any as its next turn. A direct message, a redirect and an answer steer.
+A steer queues the message first and steers that request (`steer-queued`), so
+one the harness refuses, then or when its turn ends (Cursor's `answersOnEnd`),
+stays where it was queued and nothing sent after it overtakes it; the call
+waits `STEER_WAIT_MS` and `STEER_ANSWER_MS` at most, so a steer Cursor holds
+while its subagent runs answers before it's taken. The result's `hears` says,
+in one sentence, when the Fin hears it on its own harness, never the
+sender's: the driver's `SteerCapability.hears`, seen on a real run
+(`scripts/probe-steer-semantics.ts`). `test:orch-deliver` covers each choice
+across harnesses, and `eval:orch-tools`' `deliver` cases
+(`cases-deliver.ndjson`) whether an agent picks the right one.
+
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a
 goal's objective) and what the work left to read as its `body` (an agent's
@@ -3311,10 +3328,15 @@ driver (`--live` a real turn, `--live-compaction` a real summary), and
 `packages/sessions/test/cursor-server-summary.mjs` the saved marker.
 
 Steering is a capability with a kind, not a command. `step` folds the message
-into the running turn at the agent's next step (Claude, Codex, Devin);
-`interrupt` cancels the current step and continues with the message (Cursor).
-Grok queues a concurrent prompt behind the whole turn, so it advertises no
-steering and messages queue honestly. Enter steers a steerable running turn and
+into the running turn at the agent's next step (Claude, Codex, Grok through
+`_x.ai/interject`, OpenCode, Devin); `interrupt` cancels the current step and
+continues with the message (Cursor). `hears` says when the agent hears one, as
+`npx tsx scripts/probe-steer-semantics.ts [<harness>...] [--cursor]` reads it on
+each real harness against the scripted model (Cursor on its own): a 15 s
+command steered 4 s in. Claude, OpenCode and Grok hear it once the command
+returns; Codex's command yields to the model at once and carries on; Devin
+hears it when its command hands back, which it does by itself after about 10 s;
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.

@@ -146,7 +146,7 @@ const RoutedCallSchema = z.union([RoutedArgsSchema, JsonObjectText.pipe(RoutedAr
 export function routedAnswer(text: string): RoutedAnswer | undefined {
   return JsonObjectText.pipe(RoutedAnswerSchema).safeParse(text).data
 }
-const RoutedAnswerSchema = z.object({ child: z.string(), request: z.string(), delivery: z.enum(["turn", "steer", "queued"]) })
+const RoutedAnswerSchema = z.object({ child: z.string(), request: z.string(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) })
 export type RoutedAnswer = z.infer<typeof RoutedAnswerSchema>
 
 /** What the person is shown a child as: the one reading `rollup`, the strip, the panel and the phone group it by. */
