@@ -1425,7 +1425,7 @@ function endingOf(problem: Problem | undefined): CloudLinkEnding {
 }
 
 function hold(connection: { token: string; expiresAt: number }): HeldToken {
-  return { token: connection.token, renewAt: renewAtMs(connection.token, connection.expiresAt) }
+  return { token: connection.token, renewAt: renewAtMs(connection.token, connection.expiresAt * 1000) }
 }
 
 type CloudTarget = { url: URL; problem?: never } | { url?: never; problem: string }

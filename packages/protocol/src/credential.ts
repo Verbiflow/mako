@@ -55,12 +55,12 @@ const TokenClaimsSchema = z.object({ iat: z.number(), exp: z.number() })
 /**
  * When a token just received is due, in ms on this device's clock. Its lifetime is read from its own `iat` and `exp`,
  * both the gateway's clock, so this device's clock only measures the interval and a skewed one renews on time all the
- * same; a token that doesn't say is measured against `expiresAt`, in seconds since 1970 as the gateway gives it.
- * Read in milliseconds instead, every token looks due at once: a browser once fetched a fresh one before every call and
- * every second in each socket.
+ * same; a token that doesn't say is measured against `expiresAtMs`. A device token's `expiresAt` is in seconds and the
+ * web connection's in ms: given in the wrong unit, every token looks due at once, as a browser once fetched a fresh one
+ * before every call and every second in each socket.
  */
-export function renewAtMs(token: string, expiresAt: number, now = Date.now()): number {
-  const lifetime = tokenLifetime(token) ?? expiresAt - now / 1000
+export function renewAtMs(token: string, expiresAtMs: number, now = Date.now()): number {
+  const lifetime = tokenLifetime(token) ?? (expiresAtMs - now) / 1000
   return now + Math.max(lifetime - RENEW_BEFORE_SECONDS, lifetime / 2, 1) * 1000
 }
 

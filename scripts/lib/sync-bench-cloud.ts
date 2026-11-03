@@ -349,7 +349,7 @@ export async function fakeCloud(): Promise<BenchCloud> {
     async phone() {
       const browser = [...devices.values()].find((entry) => entry.kind === "browser") ?? device("browser", "Phone", "iOS", null)
       const { token: value, expiresAt } = token(browser.id)
-      return { token: value, expiresAt, deviceId: browser.id, account }
+      return { token: value, expiresAt: expiresAt * 1000, deviceId: browser.id, account }
     },
     async cloudThread() {
       const threadId = `t-${randomUUID().replaceAll("-", "").slice(0, 16)}`
