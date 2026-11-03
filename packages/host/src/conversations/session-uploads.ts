@@ -128,6 +128,9 @@ export class SessionUploads {
     }
     const rows = this.#sources.rows()
     if (!rows) return
+    // Once a scope was given, the links go first, whatever the scope does: a scope the catalog's process was too busy
+    // to take in time once kept every renewed token from it, and its pushes went with an expired one.
+    if (this.#scopeKey !== undefined) await this.#give(links)
     const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), (session) => this.#sources.agents?.(session) ?? [])
     const scopeKey = JSON.stringify(scope)
     if (scopeKey !== this.#scopeKey) {
@@ -138,15 +141,28 @@ export class SessionUploads {
         hostLog("sync", scope.paused ? "catching up waits: on a low battery or in Low Power Mode" : "catching up goes on", { sessions: scope.sessions.length })
       }
     }
-    const linksKey = JSON.stringify([links.copies.id, links.copies.authorization, links.originals.id, links.originals.authorization])
-    if (linksKey !== this.#links) {
-      const first = this.#links === undefined
-      await this.#sources.copies(links.copies)
-      await this.#sources.originals(links.originals)
-      this.#links = linksKey
-      if (first) hostLog("sync", "this device's Sessions go to the account", { sessions: scope.sessions.length, paused: String(scope.paused) })
-    }
+    await this.#give(links)
     await this.#read(scope, rows)
+  }
+
+  /** The catalog's process says a link is due or was refused (`ThreadCatalog.onLinkDue`): the links go now, renewed. */
+  async renew(): Promise<void> {
+    if (this.#scopeKey === undefined) return
+    const links = await this.#sources.links()
+    if (links.state === "on") await this.#give(links)
+  }
+
+  /** Gives the catalog the links where they changed: each on its own, so one it was too slow to take holds back neither. */
+  async #give(links: Extract<UploadLinks, { state: "on" }>): Promise<void> {
+    const linksKey = JSON.stringify([links.copies.id, links.copies.authorization, links.originals.id, links.originals.authorization])
+    if (linksKey === this.#links) return
+    const first = this.#links === undefined
+    const given = await Promise.allSettled([this.#sources.copies(links.copies), this.#sources.originals(links.originals)])
+    const failed = given.flatMap((result) => (result.status === "rejected" ? [result.reason instanceof Error ? result.reason.message : String(result.reason)] : []))
+    // Asked again at the next tick; a link given late is still taken, since the catalog's process reads every request.
+    if (failed.length) return hostWarn("sync", "the catalog didn't take this device's links in time", { error: failed.join("; ") })
+    this.#links = linksKey
+    if (first) hostLog("sync", "this device's Sessions go to the account")
   }
 
   async #read(scope: SyncScope, rows: readonly ReportedSession[]): Promise<void> {

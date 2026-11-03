@@ -1,0 +1,29 @@
+# Mako's host as a user service on a Linux machine of your own, as a device of
+# your Mako account (docs/linux-device.md). Join once first, as the same user:
+#
+#   mako-host join --cloud https://api.runmako.co
+#
+# then install and start this unit:
+#
+#   cp runtime/host/mako-host.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now mako-host
+#   loginctl enable-linger "$USER"    # keep it running while you're logged out
+[Unit]
+Description=Mako host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Behaves as an installed host: its data in ~/.config/mako, its sign-in in ~/.mako.
+Environment=MAKO_PROD=1
+# Harnesses install into ~/.local, as Mako's Settings installs them.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env mako-host
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

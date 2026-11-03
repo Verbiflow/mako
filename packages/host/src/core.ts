@@ -38,7 +38,7 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -321,7 +321,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
   })
   const { catalog, store } = threads
-  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged())
+  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), (session) => {
+    const parsed = SessionIdSchema.safeParse(session)
+    const placed = parsed.success && store ? store.sessionPlacement(parsed.data) : undefined
+    if (!store || !placed) return undefined
+    const conversation = store.conversationsOf(placed.session).at(-1)
+    const live = conversation ? late.conversations?.live.session(conversation) : undefined
+    if (!live) return undefined
+    const title = store.thread(placed.thread)?.title ?? live.title
+    const project = projectFolder(store.worktrees(), live.cwd)
+    return { thread: placed.thread, session: placed.session, folder: live.cwd, ...(project && { project }), ...(conversation && { conversation }), ...(title && { title }) }
+  })
   const appUpdates = new Updates({
     environment,
     git,
@@ -576,6 +586,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     const ticking = uploads
     shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
+    catalog.onLinkDue((form) => {
+      if (form === "copies" || form === "originals")
+        void ticking.renew().catch((error: Error) => hostWarn("sync", "this device's links couldn't be renewed", { error: error.message }))
+    })
   }
   declareSyncMethods(methods, uploads, syncReadings)
   // The person's access choice per harness, which a start from any surface reads: their account's, kept here too for
@@ -604,6 +618,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     log: (message, fields) => hostLog("access", message, fields),
   })
   declareAccessChoiceMethods(methods, accessChoices)
+  // What the person's Fins run on, by harness, and what they use there themselves: read by every window and the web app.
+  const finDefaults = new FinDefaultsStore(join(environment.userRoot, "fin-defaults.json"))
+  declareFinDefaultMethods(methods, finDefaults)
   late.cloud = declareCloudAccountMethods(methods, {
     accessChoices: {
       heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
@@ -767,6 +784,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const opened = await openConversations({
     streams,
+    finDefaults,
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     // A new conversation is on the account's list before its harness has started.
     opened: () => late.sessions?.showsChanged(),
@@ -802,6 +820,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     settled: (id) => {
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
+    },
+    movePending: (id) => {
+      const answer = late.movers?.moves.answerFor(id)
+      return answer === "asking" || answer === "allowed" || answer === "moving"
     },
     // Each turn's changes, counted by the attribution journal once it opens.
     turnLedger: () => {
@@ -1040,6 +1062,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     nativeStops: { token: (path) => runs.stopToken(path), abort: (path, token) => runs.abort(path, token) },
     homes: workspaces.environments,
     emit,
+    archivedThread: ({ conversationId, sessionId }) => control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) }),
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })
   /** Archives a cloud Thread, or brings an archived one back here, as its window asked. */
@@ -1225,6 +1248,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     workspace,
     emit,
     accessMode: (harness) => accessChoices.mode(harness),
+    used: (harness, settings) => {
+      try {
+        finDefaults.use(harness, settings)
+      } catch (error) {
+        hostWarn("agents", "the model the person used couldn't be kept for their Fins", { harness, error: error instanceof Error ? error.message : String(error) })
+      }
+    },
     ...(arrival && {
       arrival,
       departure: {

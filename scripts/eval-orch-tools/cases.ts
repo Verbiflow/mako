@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
 import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import type { Report } from "@mako/host/contracts/agents"
 import { apexAsk } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -27,12 +28,12 @@ const PriorTurn = z.object({
   toolCalls: z.array(z.object({ tool: z.string(), input: z.json(), result: z.json() })).optional(),
 })
 
-export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer"] as const
+export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver"] as const
 
 /** The budget each area counts toward, per harness and model: route ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%. */
 export const BUDGET = {
   route: { areas: ["route", "headless-shell", "place"], floor: 0.9 },
-  "front door": { areas: ["front-door", "answer"], floor: 0.9 },
+  "front door": { areas: ["front-door", "answer", "deliver"], floor: 0.9 },
   "don't spawn": { areas: ["dont-spawn", "native-child"], floor: 0.95 },
   "no polling": { areas: ["no-polling"], floor: 0.95 },
   "stay native": { areas: ["stay-native"], floor: 0.85 },
@@ -78,6 +79,10 @@ export const OrchCase = z.object({
     priorTurns: z.array(PriorTurn).optional(),
     /** Facts the shell's answers keep to. */
     world: z.record(z.string(), z.json()).optional(),
+    /** The person's rules for Fins, each "<their words> → <where it goes>", as the note ahead of their message lists them (`finPolicyNote`). */
+    rules: z.array(z.object({ when: z.string(), to: z.string() })).optional(),
+    /** Where work no rule fits goes, in the note's words. */
+    otherwise: z.string().optional(),
     /** Regexes on a shell command, answered with `output` instead of the default. */
     shellMocks: z.array(z.object({ match: z.string(), output: z.string() })).optional(),
     /** An Apex's Fins as they stand: the front-door note the host sends ahead of the person's message (`frontDoorNote`). */
@@ -108,16 +113,18 @@ export const OrchCase = z.object({
 export type OrchCase = z.infer<typeof OrchCase>
 
 export const CASES_FILE = join(import.meta.dirname, "cases.ndjson")
+/** How a message reaches a working Fin (`agents_send`'s `deliver`): its own file, read after `CASES_FILE`. */
+export const DELIVER_CASES_FILE = join(import.meta.dirname, "cases-deliver.ndjson")
 
-export function loadCases(file = CASES_FILE): OrchCase[] {
-  const cases = readFileSync(file, "utf8").split("\n").filter((line) => line.trim()).map((line, index) => {
+export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE]): OrchCase[] {
+  const cases = files.flatMap((file) => readFileSync(file, "utf8").split("\n").filter((line) => line.trim()).map((line, index) => {
     const parsed = OrchCase.safeParse(JSON.parse(line))
     if (!parsed.success) throw new Error(`${file}:${index + 1}: ${parsed.error.message}`)
     return parsed.data
-  })
+  }))
   const ids = new Set<string>()
   for (const { id } of cases) {
-    if (ids.has(id)) throw new Error(`${file}: case ${id} twice`)
+    if (ids.has(id)) throw new Error(`case ${id} twice`)
     ids.add(id)
   }
   return cases
@@ -142,7 +149,11 @@ function frontDoorChild(child: EvalChild): FrontDoorChild {
 
 /** What a case's agent reads ahead of the person's message: the note an Apex with these Fins hears, as the host writes it. */
 export function frontDoorText(orchCase: OrchCase): string | undefined {
-  return orchCase.setup.children?.length ? controlNote(frontDoorNote(orchCase.setup.children.map(frontDoorChild), NOW)) : undefined
+  const { rules, otherwise, children } = orchCase.setup
+  // The note's targets are words already, so each rule's `to` stands for its target.
+  const policy = rules?.length || otherwise ? finPolicyNote({ rules: (rules ?? []).map((rule, index) => ({ id: `r${index}`, when: rule.when, target: { harness: rule.to } })), ...(otherwise && { otherwise: { harness: otherwise } }) }, (target) => target.harness) : []
+  const lines = [...policy, ...(children?.length ? frontDoorNote(children.map(frontDoorChild), NOW) : [])]
+  return lines.length ? controlNote(lines) : undefined
 }
 
 function askReport(ask: EvalAsk, child: EvalChild): Report {

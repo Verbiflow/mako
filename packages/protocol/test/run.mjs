@@ -1920,6 +1920,29 @@ describe("a call to a gateway over HTTP", () => {
     await assert.rejects(call("/sessions"), (error) => error instanceof GatewayHttpError && error.call?.correlationId === sent && error.described.includes(`correlation ${sent}`))
   })
 
+  test("a call refused with a 401 renews its token once and goes again with the renewed one; refused again, it fails", async () => {
+    const tokens = []
+    let current = "Bearer stale"
+    let renewals = 0
+    const fetch = async (_url, init) => {
+      tokens.push(init.headers.get("authorization"))
+      return init.headers.get("authorization") === "Bearer fresh"
+        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        : new Response(JSON.stringify({ title: "The connection token has expired" }), { status: 401 })
+    }
+    const renew = async () => {
+      renewals += 1
+      current = renewals === 1 ? "Bearer fresh" : current
+    }
+    const call = gatewayCalls({ id: "t", base: "https://gw", authorization: () => current, renew, fetch })
+    assert.equal((await call("/sessions/with-chunks", { method: "POST" })).status, 200)
+    assert.deepEqual([tokens, renewals], [["Bearer stale", "Bearer fresh"], 1])
+    current = "Bearer revoked"
+    tokens.length = 0
+    await assert.rejects(call("/sessions/with-chunks", { method: "POST" }), (error) => error instanceof GatewayHttpError && error.status === 401)
+    assert.deepEqual([tokens, renewals], [["Bearer revoked", "Bearer revoked"], 2], "renewed once a call, then the refusal is the call's")
+  })
+
   test("a refusal keeps its problem's detail, so its log line says why", async () => {
     const fetch = async () => new Response(JSON.stringify({ title: "The pack was refused", detail: "The chunk 9032b81c isn't the chunk its hash names", correlationId: "c-1" }), { status: 400 })
     const call = gatewayCalls({ id: "t", base: "https://gw", authorization: () => "t", fetch })

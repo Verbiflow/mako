@@ -151,6 +151,8 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   [".live-mark-comet", { animation: "live-mark-turn", reduced: "global" }],
   ['.live-mark[data-live-mark="needs"] > .live-mark-ring', { animation: "live-mark-breathe", reduced: "global" }],
   ['.live-mark[data-live-mark="lead"] > .live-mark-ring', { animation: "live-mark-turn", reduced: "global" }],
+  // The crew card's bar: the working stretch alone sweeps, only while it is on screen (`observeVisibleAnimation`) and motion is allowed.
+  [".crew-bar-working::after", { animation: "crew-bar-sweep", reduced: "global" }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]

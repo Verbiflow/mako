@@ -12,6 +12,7 @@ import {
 import type { HarnessDescriptor } from "@/lib/types"
 import { section as agents } from "@/components/settings/sections/agents"
 import { section as models } from "@/components/settings/sections/models"
+import { section as fins } from "@/components/settings/sections/fins"
 import { section as usage } from "@/components/settings/sections/usage"
 import { section as appearance } from "@/components/settings/sections/appearance"
 import { section as notifications } from "@/components/settings/sections/notifications"
@@ -19,6 +20,7 @@ import { section as conversation } from "@/components/settings/sections/conversa
 import { section as editor } from "@/components/settings/sections/editor"
 import { section as keyboard } from "@/components/settings/sections/keyboard"
 import { section as appshots } from "@/components/settings/sections/appshots"
+import { section as simulators } from "@/components/settings/sections/simulators"
 import { section as automations } from "@/components/settings/sections/automations"
 import { section as apps } from "@/components/settings/sections/apps"
 import { section as git } from "@/components/settings/sections/git"
@@ -38,6 +40,7 @@ import { Keys } from "@/components/ui/kit"
 const SECTIONS: readonly SettingsSection[] = [
   agents,
   models,
+  fins,
   usage,
   appearance,
   notifications,
@@ -53,6 +56,7 @@ const SECTIONS: readonly SettingsSection[] = [
   skills,
   nativeAuthoring,
   plugins,
+  simulators,
   account,
   updates,
   storage,

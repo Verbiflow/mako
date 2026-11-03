@@ -3,6 +3,7 @@ import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, type ChildStateReading, type FinAsk, type NativeAgent } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
+import { FinTuningSourceSchema, type FinTuningWords } from "./fin-tuning.js"
 
 export { CHILDREN_BINDING }
 
@@ -75,6 +76,8 @@ export const ChildSpecSchema = z.object({
   harness: z.string().min(1).max(64).optional(),
   model: z.string().min(1).max(256).optional(),
   reasoning: z.string().min(1).max(64).optional(),
+  fast: z.boolean().optional(),
+  rule: z.number().int().positive().optional(),
   /** At most the parent's tier (`childAccess`); absent means the parent's. */
   access: z.enum(ACCESS_TIER_NAMES).optional(),
   /** A `Place`, kept as the text it was asked as: a start's options carry it through the host call's generated schema. */
@@ -149,8 +152,21 @@ export const ThreadParentSchema = z.object({
   createdAt: z.number(),
   /** The delegation is over; the child keeps existing as a Thread. */
   closedAt: z.number().optional(),
+  /** Why it was stopped, as whoever stopped it said: said once, with `closedAt`. */
+  closedReason: z.string().max(2000).optional(),
   /** Present while a process Mako didn't start runs the child's turns (`FollowedRun`). */
   run: FollowedRunSchema.optional(),
+  /** Where its model came from as it started (`resolveFinTuning`), and the choice passed over for one it no longer lists. */
+  tuned: z
+    .object({
+      source: FinTuningSourceSchema,
+      note: z.string().max(2_000).optional(),
+      /** It was meant for its Apex's harness, whose account was at its limit, and started on the person's next one. */
+      rerouted: z.object({ from: z.string().min(1).max(64), until: z.number().optional(), instead: z.string().max(320).optional() }).optional(),
+      /** The person's rule it was started by, as it read then (`n` absent: their choice for work no rule fits). */
+      rule: z.object({ n: z.number().int().positive().optional(), when: z.string().max(400) }).optional(),
+    })
+    .optional(),
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
 
@@ -158,7 +174,7 @@ export type ThreadParent = z.infer<typeof ThreadParentSchema>
  * What a start that makes a child says of its edge (`LiveStartOptions.parent`): all of it but the Thread the start makes.
  * It crosses the host call unbranded; the start parses it.
  */
-export const ChildStartSchema = ThreadParentSchema.omit({ child: true, createdAt: true, closedAt: true, run: true })
+export const ChildStartSchema = ThreadParentSchema.omit({ child: true, createdAt: true, closedAt: true, closedReason: true, run: true })
 export type ChildStart = z.input<typeof ChildStartSchema>
 
 /** A typed report from a child: explicit (`agents_report`), or implicit when its turn or run ended without one. */
@@ -196,7 +212,7 @@ export const ReportSchema = z.object({
 })
 export type Report = z.infer<typeof ReportSchema>
 
-/** Why a spawn waits: the tree's running budget, or (from 8.4) its place. */
+/** Why a spawn waits: the tree's running budget, this Mac's room (`macSlots`), or (from 8.4) another place. */
 export type QueueReason = "tree-running" | "place-full" | "device-offline"
 
 /**
@@ -222,6 +238,8 @@ export interface ChildThread {
   title?: string
   harness?: string
   model?: string
+  /** Its model, reasoning and fast lane in words, from its harness's catalog. */
+  runsOn?: FinTuningWords
   /** The admission queue holds it. */
   queued?: { reason: QueueReason; ahead: number }
   starting?: "placing" | "preparing" | "booting" | "launching"
@@ -229,6 +247,8 @@ export interface ChildThread {
   working?: boolean
   /** The last thing its transcript shows it doing (`lastStep`). */
   step?: string
+  /** Its turn ended on work of its own Fins or its move, which it waits for: at work, but holding no room its Fins need. */
+  awaiting?: string
   /** An approval or question in it waits, on whom, and what answers it. */
   waiting?: { question: string; on: "lead" | "person" | "approval"; ask?: FinAsk }
   /** How its last turn or run ended; absent while one runs or before any ended. */
@@ -270,6 +290,11 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
       on: latest.for !== "person" && reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person",
       ask: reportAsk(latest),
     }
+  // A stop after its last report is how it ended, in the words of whoever stopped it.
+  if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
+    const reason = edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
+    return { kind: "ended", outcome: "stopped", ...(reason && { reason }) }
+  }
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
   if (latest?.status === "done") return { kind: "ended", outcome: "done" }
@@ -322,10 +347,17 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
   if (model) entry.model = model
+  const rule = edge.tuned?.rule && ruleWords(edge.tuned.rule)
+  if (thread.runsOn) entry.runsOn = { ...thread.runsOn, ...(edge.tuned?.note && { note: edge.tuned.note }), ...(rule && { rule }) }
   if (edge.role !== "worker") entry.role = edge.role
   if (thread.toolUses) entry.usage = { toolUses: thread.toolUses }
   if (state.kind === "ended") entry.settledAt = thread.ended?.at ?? journal.latest?.at ?? edge.closedAt ?? edge.createdAt
   return entry
+}
+
+/** A Fin's rule as its row and strip say it: "Rule 2 · Anything that isn't frontend", or "No rule fit". */
+export function ruleWords(rule: { n?: number; when: string }): string {
+  return rule.n === undefined ? "No rule fit" : `Rule ${rule.n} · ${rule.when.replace(/\s+/g, " ").trim()}`
 }
 
 /** `state` within the entry's limits: its words are a roster note's at most. */
@@ -347,7 +379,7 @@ const NOTE_LIMIT = 8192
 function entryState(state: ChildState): NativeAgent["state"] {
   switch (state.kind) {
     case "queued":
-      return { kind: "waiting", reason: state.reason === "tree-running" ? `Queued: ${state.ahead} ahead, the tree's running budget is in use` : `Queued: ${state.ahead} ahead` }
+      return { kind: "waiting", reason: state.reason === "tree-running" ? `Queued: ${state.ahead} ahead, the tree's running budget is in use` : state.reason === "place-full" ? `Queued: this Mac is busy, ${state.ahead} ahead` : `Queued: ${state.ahead} ahead` }
     case "starting":
       return { kind: "working", activity: "Starting" }
     case "working":
@@ -428,8 +460,16 @@ export interface AgentsDiagnostics {
   answers: { apex: number; passed: number; refused: number; person: number }
 }
 
-/** How a message reached a Fin: as its next turn, a step of its running one, or queued behind it. */
-export type FinDelivery = "turn" | "steer" | "queued"
+/** How a message reached a Fin: as its next turn, a step of its running one, queued behind it, or after Mako stopped that turn. */
+export type FinDelivery = "turn" | "steer" | "queued" | "interrupt"
+
+/**
+ * How a message is to reach a working Fin: after its turn as its next message
+ * (`queue`), into the turn it's running at its harness's next step (`steer`),
+ * or by stopping that turn and starting the next with it (`interrupt`). An idle
+ * Fin takes any as its next turn.
+ */
+export type FinDeliver = "queue" | "steer" | "interrupt"
 
 /** The person moving a message their Apex passed on (`agents_send`) from the Fin it reached to the one it was for. */
 export interface AgentsRedirectInput {
@@ -499,6 +539,9 @@ export type AgentRefusalReason =
   | "cycle"
   | "unknown-child"
   | "unknown-harness"
+  | "unknown-model"
+  | "limited"
+  | "unknown-rule"
   | "no-parent"
   | "conflict"
   | "stale-owner"

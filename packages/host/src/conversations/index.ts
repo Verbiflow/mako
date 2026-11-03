@@ -20,14 +20,15 @@ import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "../contracts/live-history.js"
 import { createContinuationPlanner, type ContinuationPlanner } from "./continuation.js"
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "../workspaces/index.js"
-import { harnessLabel, nativeRoutingReadings, resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
+import { harnessLabel, nativeRoutingReadings, resumes, type FinDefaultsStore, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
-import { EncodedAnswer } from "../contracts/runtime-value.js"
+import { decodeRuntimeValue, EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
+import { MacCapacity, finSlots } from "./mac-capacity.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
@@ -54,6 +55,8 @@ import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
+import { z } from "zod"
+import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { ListedRepositories } from "./listed-repositories.js"
@@ -133,6 +136,8 @@ export interface ConversationsDeps {
   controlInstructions: NonNullable<LiveDependencies["controlInstructions"]>
   /** A waiting move may go ahead; the moves are made after the conversations. */
   settled(conversationId: string): void
+  /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet. */
+  movePending?(conversationId: string): boolean
   /** The attribution journal, for counting each turn's changes; undefined until it opens. */
   turnLedger?: LiveDependencies["turnLedger"]
   /** The attribution journal, for reviewing and undoing a turn; undefined until it opens. */
@@ -150,6 +155,8 @@ export interface ConversationsDeps {
   jobs: HostJobs
   /** Calls this host's own methods, as a client would: a child starts through `mako:live-start`. */
   invoke: HostMethods["invoke"]
+  /** The person's model choices for Fins (Settings › Fins) and what they use on each harness. */
+  finDefaults?: Pick<FinDefaultsStore, "reading">
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -279,6 +286,27 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       runs: (harness) => host.nativeRunners.get(harness) !== undefined,
       harnessLabel: (harness) => harnessLabel(host, harness),
       modes: (harness) => host.liveDrivers.get(harness)?.modes,
+      ...(deps.movePending && { movePending: deps.movePending }),
+      finChoices: async (harness, cwd) => {
+        const profile = await harnesses.profiles.forSend(harness, cwd)
+        const reading = deps.finDefaults?.reading()
+        const chosen = reading?.chosen[harness]
+        const used = reading?.used[harness]
+        return {
+          models: profile.available ? profile.models : [],
+          ...(profile.available && profile.settings && { recommended: profile.settings }),
+          ...(chosen && { chosen }),
+          ...(used && { used }),
+        }
+      },
+      catalogOf: (harness) => harnesses.profiles.held(harness)?.models,
+      limited: async (harness) => (await harnesses.accounts.limited(harness)) ?? undefined,
+      finPolicy: () => deps.finDefaults?.reading().policy,
+      harnessOrder: async () => {
+        const saved = await deps.invoke("mako:harness-order-saved", [])
+        return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
+      },
+      capacity: new MacCapacity({ ...finSlots() !== undefined && { fixed: finSlots() } }),
     })
     agents.resume()
   }
@@ -372,6 +400,8 @@ export interface ConversationMethodsDeps {
    * names none, whoever asked for it: a window, the web app or a phone through this Mac's link.
    */
   accessMode?(harness: string): string | undefined
+  /** The person started or sent on `harness` with `settings`: what their Fins there run on until they choose otherwise. */
+  used?(harness: string, settings: SessionSettings | undefined): void
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`). */
   arrival?: MoveArrivalDeps
   /** On a cloud machine: what a Thread going back to its device needs (`mako:move-depart`). */
@@ -461,6 +491,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     // A conversation already open (a move's, opened as it arrived) answers as it stands: its start reads nothing again.
     const tuning = live.snapshot(options.conversationId) ? options.tuning : await profiles.resolveLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
     trace("profile")
+    // A Fin's start is its Apex's choice, and a resume names no new one: neither says what the person uses.
+    if (!options.parent && !options.resume) deps.used?.(harness, options.tuning)
     // A resume goes on in the mode its session ran in; a new session starts in the person's, unless its start said one.
     const modeId = options.modeId ?? (options.resume ? undefined : deps.accessMode?.(harness))
     try {
@@ -563,6 +595,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-prompt", async (id: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) => {
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")
+    deps.used?.(session.harness, tuning)
     return live.admitInOrder(id, profiles.resolveLaunch(session.harness, session.cwd, tuning),
       (selected) => live.submit(id, requestId, text, attachments, selected))
   })

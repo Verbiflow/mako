@@ -36,6 +36,8 @@ export function answerText(question: string, answer: string): string {
 /** Between the person's words an Apex passed on and what it added. */
 export const PASSED_ON_NOTE = `[mako · what ${YOUR_APEX} adds]`
 const PASSED_ON_NOTES = [PASSED_ON_NOTE, `[mako · what your ${LEGACY_APEX_WORD} adds]`]
+/** Beneath a message that reached a Fin by stopping the headless run it was in and resuming its session in Mako. */
+export const HANDED_OVER_NOTE = "[mako · to deliver this, Mako stopped your run and resumed your session here: your last step may have been cut off mid-way. Check what you had in flight (a command half-finished, a file half-written), then carry on with this message taken into account.]"
 
 const AGENT_HEADER = /^\[mako · from (.+?)(?: \(agent\))?, not the person\]\n?/
 const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(agent\)\]\n?/
@@ -146,7 +148,7 @@ const RoutedCallSchema = z.union([RoutedArgsSchema, JsonObjectText.pipe(RoutedAr
 export function routedAnswer(text: string): RoutedAnswer | undefined {
   return JsonObjectText.pipe(RoutedAnswerSchema).safeParse(text).data
 }
-const RoutedAnswerSchema = z.object({ child: z.string(), request: z.string(), delivery: z.enum(["turn", "steer", "queued"]) })
+const RoutedAnswerSchema = z.object({ child: z.string(), request: z.string(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) })
 export type RoutedAnswer = z.infer<typeof RoutedAnswerSchema>
 
 /** What the person is shown a child as: the one reading `rollup`, the strip, the panel and the phone group it by. */

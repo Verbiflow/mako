@@ -74,13 +74,21 @@ export const CloudAccountStateSchema = z.discriminatedUnion("status", [
    * sealed, only to remove this device there, and the host keeps asking until it has.
    */
   z.object({ status: z.literal("signed-out"), notice: CloudSignedOutNoticeSchema.optional(), finishing: z.literal(true).optional() }),
-  /** The browser is open at `url`; the host finishes by itself when it returns. */
-  z.object({ status: z.literal("signing-in"), url: z.string(), startedAt: z.string() }),
+  /**
+   * The browser is open at `url`; the host finishes by itself when it returns. `code`: a device with no browser of its
+   * own signs in with a code (RFC 8628) that its person confirms at `url` on another device.
+   */
+  z.object({ status: z.literal("signing-in"), url: z.string(), startedAt: z.string(), code: z.string().optional() }),
   z.object({
     status: z.literal("signed-in"),
     account: CloudPersonSchema,
     device: CloudDeviceSchema,
     connection: z.enum(["connecting", "connected", "offline"]),
+    /**
+     * The runtime's link (`d-<device>`), by which the account's other devices reach this one: `off` while the account
+     * doesn't include it or this host serves none. Absent from older hosts.
+     */
+    runtime: z.enum(["connecting", "connected", "offline", "off"]).optional(),
     /** False when the system keychain was unavailable: the sign-in lasts until Mako quits. */
     /** Where the sign-in is kept: the keychain, or memory until Mako quits (no keychain, or a fixture desk that writes nothing). */
     kept: z.enum(["keychain", "memory", "fixture"]),

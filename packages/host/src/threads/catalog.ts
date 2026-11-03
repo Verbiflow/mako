@@ -16,7 +16,7 @@ import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRest
 import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
-import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "@mako/sessions/record-sync"
+import type { LinkForm, ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "@mako/sessions/record-sync"
 import type { CopyPage } from "@mako/sessions/reading-copies"
 import type { CatalogSyncStatus, SyncScope } from "@mako/sessions/scoped-uploads"
 import { isReplyEntry } from "@mako/sessions/entries"
@@ -316,6 +316,8 @@ export interface ThreadCatalog {
   syncCopies(link: RecordsLink | null): Promise<void>
   syncOriginals(link: RecordsLink | null): Promise<void>
   scopeSync(scope: SyncScope): Promise<void>
+  /** The catalog's reader says a link's token is due or was refused (`LinkCredential`): its owner sends it renewed. */
+  onLinkDue(listener: (form: LinkForm) => void): () => void
   /** How that stands, as the catalog's stores know the account holds them (`SessionCatalog.syncStatus`). */
   syncStatus(): Promise<CatalogSyncStatus>
   /**
@@ -556,6 +558,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     if (!old || threadIdentity(old) !== threadIdentity(ref)) activityIndex = null
   }
   const threadEventSubscribers = new Set<(event: HostEvent) => void>()
+  const linkDueListeners = new Set<(form: LinkForm) => void>()
+  const linkDue = (form: LinkForm) => {
+    for (const listener of linkDueListeners) listener(form)
+  }
   let recoveringDaemon: Promise<void> | null = null
   let catalogStartup: Promise<void> | null = null
   let catalogLifetime: AbortController | null = null
@@ -899,6 +905,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     let hydrated = false
     const stopEvents = client.onEvent((event) => {
       if (signal.aborted || daemon !== client) return
+      if (event.event === "link-due") return linkDue(event.form)
       // A known-path follow may already be live while the catalog list loads.
       if (event.event === "entries" || event.event === "reload") {
         applyDaemonEvent(event, true)
@@ -1196,6 +1203,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       if (originalsLink) source.syncOriginals(originalsLink)
       source.onEvent((event) => {
         if (signal.aborted || catalog !== source) return
+        if (event.type === "link-due") return linkDue(event.form)
         if (event.type === "removed") {
           forgetStore(event.path)
           emit({ type: "thread-removed", path: event.path })
@@ -1754,6 +1762,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     syncRecords,
     syncCopies,
     syncOriginals,
+    onLinkDue: (listener) => {
+      linkDueListeners.add(listener)
+      return () => linkDueListeners.delete(listener)
+    },
     scopeSync,
     syncStatus,
     recent: recentThreads,

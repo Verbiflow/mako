@@ -23,6 +23,7 @@ import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { AccessChoices } from "./access-choices.js"
+import type { FinChoicesReading, FinPolicy } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -69,6 +70,8 @@ import type { SyncStatus } from "./sync-status.js"
 import type { SyncReadings } from "./sync-readings.js"
 import type { MakoFootprint } from "./mako-footprint.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
+import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
+import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult } from "./simulators.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
@@ -219,6 +222,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseAccess: (harness: string, mode: string) => invokeTrustedHost<AccessChoices>("mako:access-choose", harness, mode),
     /** A window's own copy from before the host kept them, handed over once: taken only where no choice is made. */
     adoptAccessChoices: (modes: Record<string, string>) => invokeTrustedHost<AccessChoices>("mako:access-adopt", modes),
+    /** Settings › Fins by harness, and the model the person last used on each (`contracts/fin-tuning.ts`). */
+    finDefaults: () => invokeTrustedHost<FinChoicesReading>("mako:fin-defaults"),
+    /** Fins on `harness` run on `settings`, or with null, on what the person uses there. */
+    chooseFinDefault: (harness: string, settings: SessionSettings | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-default-choose", harness, settings),
+    /** The person's rules for which work goes to which harness and model, saved whole. */
+    saveFinPolicy: (policy: FinPolicy) => invokeTrustedHost<FinChoicesReading>("mako:fin-policy-save", policy),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
@@ -486,6 +495,14 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),
     cloudTurnOnCheck: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-check"),
     cloudTurnOnRetryBases: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-retry-bases"),
+    /** Settings › Simulators' setup line; `refresh` reads it again from Xcode's tools. */
+    simulatorSetup: (refresh?: boolean) => invokeTrustedHost<SimulatorSetup>("mako:simulator-setup", refresh),
+    simulatorSetupPress: (fix: SetupFix, input?: { folder?: string; allowed?: boolean }) => invokeTrustedHost<SimulatorSetup>("mako:simulator-setup-press", fix, input),
+    simulatorsList: () => invokeTrustedHost<SimulatorsListed>("mako:simulators-list", { kind: "person" }),
+    /** The person, from the panel: opening one takes it over from whichever Thread drives it. */
+    simulatorsOpen: (input: SimulatorsOpenInput) => invokeTrustedHost<SimulatorsOpenResult>("mako:simulators-open", { kind: "person" }, input),
+    simulatorsAct: (input: SimulatorsActInput) => invokeTrustedHost<SimulatorsActResult>("mako:simulators-act", { kind: "person" }, input),
+    simulatorsRelease: (input: SimulatorsReleaseInput) => invokeTrustedHost<SimulatorsReleaseResult>("mako:simulators-release", { kind: "person" }, input),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),

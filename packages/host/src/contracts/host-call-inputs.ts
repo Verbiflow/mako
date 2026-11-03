@@ -171,6 +171,13 @@ const inputs = {
         to: z.string(),
         forward: z.boolean().optional(),
         text: z.string().optional(),
+        deliver: z
+          .union([
+            z.literal("steer"),
+            z.literal("queue"),
+            z.literal("interrupt"),
+          ])
+          .optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -191,6 +198,8 @@ const inputs = {
         harness: z.string().optional(),
         model: z.string().optional(),
         reasoning: z.string().optional(),
+        fast: z.boolean().optional(),
+        rule: z.number().optional(),
         access: z
           .union([
             z.literal("ask"),
@@ -319,7 +328,6 @@ const inputs = {
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
   "mako:build-update": () => z.tuple([]),
-  "mako:measure-update-again": () => z.tuple([]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -441,6 +449,55 @@ const inputs = {
   "mako:element-pick-targets": () => z.tuple([]),
   "mako:element-pick-wait": () => z.tuple([z.string(), z.number()]),
   "mako:external-editors": () => z.tuple([]),
+  "mako:fin-default-choose": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.null(),
+        z.object({
+          model: z.string().optional(),
+          options: z
+            .record(z.string(), z.union([z.boolean(), z.string()]))
+            .optional(),
+        }),
+      ]),
+    ]),
+  "mako:fin-defaults": () => z.tuple([]),
+  "mako:fin-policy-save": () =>
+    z.tuple([
+      z.object({
+        rules: z.array(
+          z.object({
+            id: z.string(),
+            when: z.string(),
+            target: z.object({
+              harness: z.string(),
+              settings: z
+                .object({
+                  model: z.string().optional(),
+                  options: z
+                    .record(z.string(), z.union([z.boolean(), z.string()]))
+                    .optional(),
+                })
+                .optional(),
+            }),
+          })
+        ),
+        otherwise: z
+          .object({
+            harness: z.string(),
+            settings: z
+              .object({
+                model: z.string().optional(),
+                options: z
+                  .record(z.string(), z.union([z.boolean(), z.string()]))
+                  .optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+      }),
+    ]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
@@ -964,6 +1021,8 @@ const inputs = {
               harness: z.string().optional(),
               model: z.string().optional(),
               reasoning: z.string().optional(),
+              fast: z.boolean().optional(),
+              rule: z.number().optional(),
               access: z
                 .union([
                   z.literal("ask"),
@@ -1011,6 +1070,30 @@ const inputs = {
               }),
             ]),
             op: z.string(),
+            tuned: z
+              .object({
+                source: z.union([
+                  z.literal("harness"),
+                  z.literal("rule"),
+                  z.literal("asked"),
+                  z.literal("mako"),
+                  z.literal("fins"),
+                  z.literal("apex"),
+                  z.literal("used"),
+                ]),
+                note: z.string().optional(),
+                rerouted: z
+                  .object({
+                    from: z.string(),
+                    until: z.number().optional(),
+                    instead: z.string().optional(),
+                  })
+                  .optional(),
+                rule: z
+                  .object({ when: z.string(), n: z.number().optional() })
+                  .optional(),
+              })
+              .optional(),
           })
           .optional(),
       }),
@@ -1132,6 +1215,7 @@ const inputs = {
         scope: z.union([z.literal("workspace"), z.literal("user")]),
       }),
     ]),
+  "mako:measure-update-again": () => z.tuple([]),
   "mako:merge-pull": () =>
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
@@ -1704,6 +1788,300 @@ const inputs = {
       ]),
     ]),
   "mako:shutdown-ack": () => z.tuple([z.string()]),
+  "mako:simulator-setup": () => z.tuple([z.boolean().optional()]),
+  "mako:simulator-setup-press": () =>
+    z.tuple([
+      z.union([
+        z.literal("get-xcode"),
+        z.literal("finish-xcode"),
+        z.literal("download-runtime"),
+        z.literal("create-simulators"),
+        z.literal("install-tools"),
+        z.literal("allow-agents"),
+        z.literal("try"),
+      ]),
+      z
+        .object({
+          folder: z.string().optional(),
+          allowed: z.boolean().optional(),
+        })
+        .optional(),
+    ]),
+  "mako:simulators-act": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        action: z.union([
+          z.object({ kind: z.literal("open-url"), url: z.string() }),
+          z.object({
+            kind: z.literal("tap"),
+            at: z.object({ x: z.number(), y: z.number() }),
+          }),
+          z.object({
+            kind: z.literal("swipe"),
+            from: z.object({ x: z.number(), y: z.number() }),
+            to: z.object({ x: z.number(), y: z.number() }),
+            ms: z.number().optional(),
+          }),
+          z.object({
+            kind: z.literal("pinch"),
+            at: z.object({ x: z.number(), y: z.number() }),
+            scale: z.number(),
+            ms: z.number().optional(),
+          }),
+          z.object({ kind: z.literal("type"), text: z.string() }),
+          z.object({
+            kind: z.literal("key"),
+            key: z.union([
+              z.literal("tab"),
+              z.literal("return"),
+              z.literal("backspace"),
+              z.literal("escape"),
+              z.literal("space"),
+              z.literal("up"),
+              z.literal("down"),
+              z.literal("left"),
+              z.literal("right"),
+            ]),
+          }),
+          z.object({
+            kind: z.literal("rotate"),
+            to: z.union([
+              z.literal("portrait"),
+              z.literal("landscape-left"),
+              z.literal("landscape-right"),
+              z.literal("portrait-upside-down"),
+            ]),
+          }),
+          z.object({ kind: z.literal("keyboard"), shown: z.boolean() }),
+          z.object({ kind: z.literal("home") }),
+          z.object({ kind: z.literal("add-to-home-screen") }),
+        ]),
+      }),
+    ]),
+  "mako:simulators-list": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+    ]),
+  "mako:simulators-open": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        url: z.string().optional(),
+      }),
+    ]),
+  "mako:simulators-read": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        what: z.union([
+          z.literal("page"),
+          z.literal("console"),
+          z.literal("accessibility"),
+        ]),
+        after: z.number().optional(),
+      }),
+    ]),
+  "mako:simulators-record": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        recording: z.union([z.literal("stop"), z.literal("start")]),
+      }),
+    ]),
+  "mako:simulators-release": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({ simulator: z.string(), host: z.string() }),
+    ]),
+  "mako:simulators-shot": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        inline: z.boolean().optional(),
+      }),
+    ]),
+  "mako:simulators-watch": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          kind: z.literal("agent"),
+          session: z.string(),
+          via: z.object({ from: z.string() }).optional(),
+          agent: z
+            .object({
+              thread: z.string(),
+              session: z.string(),
+              conversation: z.string().optional(),
+              folder: z.string(),
+              project: z.string().optional(),
+              title: z.string().optional(),
+            })
+            .optional(),
+        }),
+        z.object({
+          kind: z.literal("person"),
+          via: z.object({ from: z.string() }).optional(),
+        }),
+      ]),
+      z.object({
+        simulator: z.string(),
+        host: z.string(),
+        viewer: z.string(),
+        box: z.object({ width: z.number(), height: z.number() }).optional(),
+        waitMs: z.number().optional(),
+      }),
+    ]),
   "mako:skills-discover": () => z.tuple([]),
   "mako:skills-remove-preview": () =>
     z.tuple([
@@ -2095,7 +2473,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:browser-control-status", "control"],
   ["mako:browser-extension-setup", "control"],
   ["mako:build-update", "application"],
-  ["mako:measure-update-again", "application"],
   ["mako:capabilities", "workspaces"],
   ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
@@ -2152,6 +2529,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:element-pick-targets", "control"],
   ["mako:element-pick-wait", "control"],
   ["mako:external-editors", "workspaces"],
+  ["mako:fin-default-choose", "harnesses"],
+  ["mako:fin-defaults", "harnesses"],
+  ["mako:fin-policy-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
   ["mako:git-changed-since", "git"],
@@ -2254,6 +2634,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-discover", "tools"],
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
+  ["mako:measure-update-again", "application"],
   ["mako:merge-pull", "git"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],
@@ -2316,6 +2697,16 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
   ["mako:shutdown-ack", "application"],
+  ["mako:simulator-setup", "control"],
+  ["mako:simulator-setup-press", "control"],
+  ["mako:simulators-act", "control"],
+  ["mako:simulators-list", "control"],
+  ["mako:simulators-open", "control"],
+  ["mako:simulators-read", "control"],
+  ["mako:simulators-record", "control"],
+  ["mako:simulators-release", "control"],
+  ["mako:simulators-shot", "control"],
+  ["mako:simulators-watch", "control"],
   ["mako:skills-discover", "tools"],
   ["mako:skills-remove-preview", "tools"],
   ["mako:skills-resolve", "tools"],

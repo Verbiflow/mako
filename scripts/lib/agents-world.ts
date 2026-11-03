@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
+import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
+import type { HarnessLimit } from "@mako/host/contracts/account-usage"
+import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
@@ -12,7 +15,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 
@@ -45,6 +48,8 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
+  /** This Mac's capacity as admission reads it (`AgentsDeps.capacity`); none holds without it. */
+  capacity?: AgentsDeps["capacity"]
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
@@ -61,6 +66,25 @@ export interface WorldOptions {
   starting?: (conversation: string, harness: string) => Promise<void> | void
   /** Hears each prompt and steer as its harness takes it, before its turn goes on: what a killed host's harnesses took stays known. */
   heard?: (heard: Heard) => void
+  /** What a new conversation of each harness starts on, as its profile says (Mako's pick). */
+  defaults?: Partial<Record<string, SessionSettings>>
+  /** Each harness's catalog, as its profile lists it; a harness without one has none read. */
+  catalogs?: Partial<Record<string, readonly SessionModel[]>>
+  /** The person's Settings › Fins and what they last used, by harness. */
+  fins?: { chosen?: Partial<Record<string, SessionSettings>>; used?: Partial<Record<string, SessionSettings>> }
+  /** Harnesses whose account in use is at its limit, as `HarnessAccounts.limited` reads them. */
+  limits?: Partial<Record<string, HarnessLimit>>
+  /** The person's harness order. */
+  order?: readonly string[]
+  /** The person's rules for Fins, as they stand when read. */
+  policy?: () => FinPolicy
+  /** Whether a conversation asked to move into its worktree and hasn't yet. */
+  movePending?: (conversation: string) => boolean
+  /**
+   * A harness's steering as its real driver declares it, in place of the world's (Claude and OpenCode at the next
+   * step, the rest none). `holds`: each steer waits for `answerSteer`, as Cursor holds one while its subagent runs.
+   */
+  steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -96,6 +120,7 @@ export class AgentsWorld {
   jobs!: HostJobs
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
+  private heldSteers = new Map<string, (answer: ProviderSteerResult) => void>()
 
   constructor(options: WorldOptions) {
     this.root = options.root
@@ -139,7 +164,19 @@ export class AgentsWorld {
       runs: () => this.options.catalog !== undefined,
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
       modes: (harness) => drivers.get(harness)?.modes,
+      finChoices: async (harness) => {
+        const recommended = this.options.defaults?.[harness]
+        const chosen = this.options.fins?.chosen?.[harness]
+        const used = this.options.fins?.used?.[harness]
+        return { models: this.options.catalogs?.[harness] ?? [], ...(recommended && { recommended }), ...(chosen && { chosen }), ...(used && { used }) }
+      },
+      catalogOf: (harness) => this.options.catalogs?.[harness],
+      ...(this.options.limits && { limited: async (harness: string) => this.options.limits?.[harness] }),
+      ...(this.options.order && { harnessOrder: async () => this.options.order! }),
+      ...(this.options.policy && { finPolicy: this.options.policy }),
+      ...(this.options.movePending && { movePending: this.options.movePending }),
       ...(this.options.budget && { budget: this.options.budget }),
+      ...(this.options.capacity && { capacity: this.options.capacity }),
       ...(this.options.processes && { processes: this.options.processes }),
     }
     this.agents = new Agents(deps)
@@ -163,11 +200,11 @@ export class AgentsWorld {
     this.open()
   }
 
-  /** A top-level conversation on `harness` at `access`: an Apex once it starts a child. */
-  async apex(harness: string, access: AccessTier = "auto"): Promise<{ conversation: string; caller: AgentCaller }> {
+  /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
+  async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
-    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId })
+    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId, ...(tuning && { tuning }) })
     return { conversation, caller: this.caller(conversation) }
   }
 
@@ -201,6 +238,14 @@ export class AgentsWorld {
   /** Lets a held turn end (`hold`). */
   release(conversation: string): void {
     this.holds.get(conversation)?.()
+  }
+
+  /** Answers the steer a holding harness (`steering.holds`) keeps for a conversation; false when it keeps none. */
+  answerSteer(conversation: string, answer: ProviderSteerResult): boolean {
+    const held = this.heldSteers.get(conversation)
+    this.heldSteers.delete(conversation)
+    held?.(answer)
+    return Boolean(held)
   }
 
   /** Holds a conversation's current turn until `release`: a script awaits this to stay running. */
@@ -245,13 +290,18 @@ export class AgentsWorld {
       backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
       resume: fixtureResume(),
-      ...(STEERS_AT_STEP.has(harness) && {
+      ...((STEERS_AT_STEP.has(harness) || this.options.steering?.[harness]) && {
         steering: {
           kind: "supported" as const,
           lands: "step" as const,
+          ...this.options.steering?.[harness],
           via: "Scripted model",
-          steer: async (id: string, input: { text: string }) => {
+          steer: async (id: string, input: { text: string }): Promise<ProviderSteerResult> => {
             if (this.options.refuseSteers) return { kind: "not-accepted" as const, reason: "The turn moved on" }
+            if (this.options.steering?.[harness]?.holds) {
+              const answer = await new Promise<ProviderSteerResult>((resolve) => this.heldSteers.set(id, resolve))
+              if (answer.kind !== "accepted") return answer
+            }
             this.steers.push({ conversation: id, text: input.text, at: Date.now() })
             this.options.heard?.({ kind: "steer", conversation: id, harness, text: input.text })
             return { kind: "accepted" as const }
@@ -307,7 +357,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, snapshot: () => null, editQueued: none, transfer: none, submit: none,
-    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false,
+    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
 }

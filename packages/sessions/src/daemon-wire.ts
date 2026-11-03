@@ -1,4 +1,4 @@
-import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, StagedRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
+import { LinkFormSchema, ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, type LinkForm, SentRecordsSchema, StagedRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
 import { CopyPageSchema, type CopyPage } from "./reading-copies.js"
 import { CatalogSyncStatusSchema, SYNC_SCOPE_MOST, SyncScopeSchema, SyncScopeSessionSchema, SyncTierSchema, emptyTier, type CatalogSyncStatus, type SyncScope, type SyncTier, type TierCount } from "./scoped-uploads.js"
 import { StringDecoder } from "node:string_decoder"
@@ -179,6 +179,8 @@ export type DaemonEvent =
     }
   /** A follow that asked for `reloads` ended: page the session again and follow it from there. */
   | { event: "reload"; path: string }
+  /** A link's token is due or was refused (`LinkCredential`): send that link again, renewed. */
+  | { event: "link-due"; form: LinkForm }
 
 type DaemonServerFrame = DaemonResponseFrame | DaemonEvent
 
@@ -556,6 +558,10 @@ export function parseDaemonEvent(record: JsonRecord): DaemonEvent | null {
       const replaceFrom = readNumber(record, "replaceFrom")
       if (replaceFrom !== undefined) frame.replaceFrom = replaceFrom
       return frame
+    }
+    case "link-due": {
+      const form = LinkFormSchema.safeParse(record.form)
+      return form.success ? { event, form: form.data } : null
     }
     default:
       return null

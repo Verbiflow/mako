@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import type { AskOption, FinAsk } from "./native-agents.js"
 
@@ -26,6 +26,10 @@ export interface AgentsStartInput extends DoorFilled {
   harness?: string
   model?: string
   reasoning?: string
+  /** True for the model's fast lane (or its harness's fast sibling of it), false for its standard one. */
+  fast?: boolean
+  /** The number of the person's rule this Fin follows (`finPolicyNote`): its harness and model unless the spawn names them. */
+  rule?: number
   /** At most the caller's tier; absent means the caller's. */
   access?: AccessTier
   /** `here`, `device:<name>` or `cloud`, from what the person said; absent means where the caller runs. */
@@ -73,10 +77,19 @@ export interface AgentsStarted {
   /** What it waits for, when queued. */
   why?: string
   tree: { running: number; started: number; of: { running: number; started: number } }
+  /** This Mac's room: Fins at work on it, every tree's, and how many it runs at once now, measured (`macSlots`). */
+  mac?: { working: number; slots: number; why: string }
   /** A repeat of an earlier spawn: this is that spawn's Fin. */
   deduped?: true
   /** A `wait` start's outcome; a repeat of one answers its result again. */
   waited?: StartWaited
+  /** What it runs on, in words, and the choice passed over for one its harness no longer lists, or its harness at its limit. */
+  runsOn?: string
+  note?: string
+  /** Its Apex's harness was at its limit (until `until`), so it started on the person's next harness; `instead` is another account of that harness with room. */
+  limited?: { harness: string; until?: number; instead?: string }
+  /** The person's rule it follows, as its row says it. */
+  rule?: string
   next: string
 }
 export type AgentsStartResult = AgentsStarted | AgentRefused
@@ -103,6 +116,10 @@ export interface AgentStrip {
   under?: string
   harness: string
   model?: string
+  /** Its model, reasoning and fast lane in words: "Opus 5.5 · High · Fast". */
+  runsOn?: string
+  /** The person's rule it was started by: "Rule 2 · Anything that isn't frontend". */
+  rule?: string
   origin: ChildOrigin
   state: ChildState
   title?: string
@@ -145,6 +162,8 @@ export interface AgentsSendInput {
   forward?: boolean
   /** The sender's own words: with `forward`, what it adds beneath the person's; without, the whole message. */
   text?: string
+  /** For a working Fin; `queue` when absent. */
+  deliver?: FinDeliver
   /** A repeat with the same key is the same message. */
   clientKey: string
 }
@@ -153,8 +172,13 @@ export interface AgentsSent {
   name: string
   /** The request the message is in the Fin's conversation: a redirect names it. */
   request: string
-  /** It started the Fin's next turn (an idle or finished Fin: the same Thread, a new task), joined its running turn at the next step, or waits for that turn to end. */
-  delivery: "turn" | "steer" | "queued"
+  /**
+   * It started the Fin's next turn (an idle or finished Fin: the same Thread, a new task), joined its running turn,
+   * waits for that turn to end, or started the next after Mako stopped it.
+   */
+  delivery: FinDelivery
+  /** When the Fin hears it, as its own harness takes a message: one sentence the sender reads. */
+  hears: string
   deduped?: true
 }
 export type AgentsSendResult = AgentsSent | AgentRefused
@@ -276,7 +300,8 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   "Background, parallel, cross-harness or remote work goes through `agents_start` (from a shell, `mako agents start` is the same tool).",
   "Use `agents_start` for parallel or background work even when your harness has its own subagent tool; keep that tool for a quick look you wait for.",
   "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
-  `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report, ask or take messages.`,
+  `Pass \`model\`, \`reasoning\` or \`fast\` only as the person said them ("Codex on high", "the fast one"); left out, a ${FIN_WORD} runs on what the person uses.`,
+  `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report or ask, and a message to it has to stop its run.`,
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
   `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide.`,
@@ -314,7 +339,7 @@ export function frontDoorNote(fins: readonly FrontDoorChild[], now: number): str
     `You're this Thread's ${APEX_WORD}: the person writes to you, and you decide who handles it. Your ${FIN_WORD}s now:`,
     ...listed.map((fin) => frontDoorLine(fin, now)),
     ...(more > 0 ? [`… and ${more} more (agents_list).`] : []),
-    "If the message is for one of them (its work, its branch, what it asked or reported), call agents_send {to, forward: true} first, adding text only for what it can't know, and end your turn. A finished one takes it as its next task, in its own Thread.",
+    "If the message is for one of them (its work, its branch, what it asked or reported), call agents_send {to, forward: true} first, adding text only for what it can't know, and end your turn. A finished one takes it as its next task, in its own Thread; a working one, after its turn unless the message corrects what it's doing now (deliver: steer).",
     "If it's for you, or about how they stand, answer from this list. If none fits and it's work worth a Thread, use agents_start; otherwise do it yourself.",
   ]
 }
@@ -379,12 +404,14 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       fields: {
         brief: "objective: what to do and why, with everything it needs; doneWhen: the checks that say it's done; boundaries: what not to touch; output: what its report must carry.",
         name: `A short name, unique among this Thread's ${FIN_WORD}s (made from the brief when absent).`,
-        harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent.",
-        model: "A model the harness lists; its default when absent.",
-        reasoning: "A reasoning level the model takes.",
+        harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent. When that one's account is at its limit, the person's next harness with room, and the answer says so; one you name at its limit is refused with when it resets and what the person can use instead.",
+        model: "Only when the person named one: a model the harness lists, by id or name (\"opus 5.5\", \"gpt-6.1-sol\"). Absent: what the person uses: their Fins default for the harness, else this Thread's own model on this Thread's harness, else their last model there. A model it doesn't list is refused with the ones it does.",
+        reasoning: "Only when the person said one (\"on high\"): a level the model takes, such as low, medium, high, xhigh or max. Absent: the level of the model's choice above.",
+        rule: "The number of the person's rule that fits this work, from their rules in Mako's note. Its harness and model apply; leave harness, model, reasoning and fast out unless the person named them. Absent: their choice for work no rule fits.",
+        fast: "Only when the person asked for it: true for the fast lane (\"the fast one\", quicker and pricier), false for the standard one. A harness whose fast model is a model of its own switches to it.",
         access: "plan, chat, ask, edits, auto, full or deny: at most this Thread's own; this Thread's when absent. A harness without that level runs the Fin on its nearest one below, and one whose every level is above it is refused.",
         place: "Only when the person said where: here, device:<name> or cloud. Absent: where this Thread runs.",
-        workspace: "Its own worktree: on branch if it exists, else a new branch from base. Absent: this Thread's folder, for reading or one writer.",
+        workspace: "Its own worktree: on branch if it exists, else a new branch from base; in a project folder of several repositories, branch is every repository's. Absent: this Thread's folder, for reading or one writer.",
         title: "A few words the person sees for it.",
         role: `worker (default), reviewer, verifier, researcher, or lead: an ${APEX_WORD} of its own, which starts its own ${FIN_WORD}s.`,
         mode: "background (default): returns at once; work on or end your turn. wait: only when your next step needs its result; you get it here if it's quick, else your turn ends and the result starts your next turn. Never wait on work that can run while you do other things.",
@@ -402,8 +429,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_link",
-      description: `Make an agent CLI run that this Thread's shell started one of its ${FIN_WORD}s, as agents_start's are: its harness and session ID, and its pid while it runs (leave pid out for one that ended). Runs a shell started are usually found on their own. Refused for this Thread itself or an ${APEX_WORD} above it.`,
-      fields: { session: "Its harness's ID for its session.", harness: "Its harness.", pid: "Its process, while it runs.", name: "A short name for it.", role: "What it is to this Thread." },
+      description: `Make an agent CLI run that this Thread's shell started one of its ${FIN_WORD}s, as agents_start's are: its harness and session ID, and its pid while it runs (leave pid out for one that ended). Linking it again with another pid follows it there. Runs a shell started are usually found on their own. Refused for this Thread itself or an ${APEX_WORD} above it.`,
+      fields: { session: "Its harness's ID for its session.", harness: "Its harness.", pid: "Its process, while it runs.", name: `A short name for it: its name and title as a ${FIN_WORD}.`, role: "What it is to this Thread." },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
@@ -483,13 +510,15 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       name: "agents_send",
       description: [
         `Give one of this Thread's ${FIN_WORD}s a message: the person's (forward: true passes on the one this turn answers, word for word, so don't retype it) or your own.`,
-        `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread; a working one hears it at its next step, or when its turn ends.`,
-        `It returns at once; what the ${FIN_WORD} does reports back as its work does.`,
+        `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread. A working one takes it as deliver says: queue (the default) after its turn, for more to do; steer, into the turn it's running, when the message changes what it's doing now; interrupt, stopping that turn first, when what it's running is wrong.`,
+        `One running in an agent CLI your shell started is stopped and its session resumed here with the message, its last step maybe cut short.`,
+        `It returns at once, saying when that ${FIN_WORD}'s harness lets it hear the message; what the ${FIN_WORD} does reports back as its work does.`,
       ].join(" "),
       fields: {
         to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID.`,
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
+        deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,
         clientKey: "Your own key for this message: a repeat with it is the same message.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -502,7 +531,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_stop",
-      description: `Stop one of this Thread's ${FIN_WORD}s (its running turn, or its process and everything it started), or all of them.`,
+      description: `Stop one of this Thread's ${FIN_WORD}s for good (its running turn, or its process and everything it started), or all of them: it takes no more messages. To stop its turn and redirect it, agents_send with deliver: interrupt.`,
       fields: { child: "Its name or Thread ID, or all.", reason: "Why, for its transcript and your digest." },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },

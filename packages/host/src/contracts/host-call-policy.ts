@@ -119,6 +119,14 @@ const reads = [
   "mako:agents-list",
   "mako:agents-read",
   "mako:agents-wait",
+  /** Simulators' setup line as it stands, re-read when asked; changes nothing on this Mac. */
+  "mako:simulator-setup",
+  /** What the hosts run, who holds each simulator, a page or console read, and a screenshot (`contracts/simulators.ts`). */
+  "mako:simulators-list",
+  "mako:simulators-read",
+  "mako:simulators-shot",
+  /** A viewer's next packets of a simulator's screen: a repeat answered with the first answer loses nothing it can't redraw from the next key frame. */
+  "mako:simulators-watch",
   "mako:live-context-breakdown",
   "mako:live-read",
   "mako:live-attach",
@@ -174,6 +182,8 @@ const reads = [
   "mako:daemon-login",
   "mako:utility-model-settings",
   "mako:harness-order-saved",
+  /** Reads Settings › Fins and what the person used on each harness from one small file. */
+  "mako:fin-defaults",
   "mako:integrations",
   "mako:skills-discover",
   "mako:skills-resolve",
@@ -305,6 +315,10 @@ const replays = [
   "mako:utility-choice",
   /** Saving the same harness order again leaves the same order. */
   "mako:harness-order",
+  /** `FinDefaultsStore.choose`: the same choice for a harness saved twice is one choice. */
+  "mako:fin-default-choose",
+  /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
+  "mako:fin-policy-save",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
@@ -341,6 +355,12 @@ const replays = [
   "mako:element-pick-start",
   /** Cancelling a pick that has ended cancels nothing. */
   "mako:element-pick-cancel",
+  /** `Simulators.open`: the Thread that holds it opens it again; a booted simulator boots as it is. */
+  "mako:simulators-open",
+  /** `Simulators.record`: a recording started or stopped already answers as it stands. */
+  "mako:simulators-record",
+  /** `Simulators.release`: a released simulator releases nothing. */
+  "mako:simulators-release",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)
