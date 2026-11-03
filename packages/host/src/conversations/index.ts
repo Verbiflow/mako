@@ -22,7 +22,7 @@ import { createContinuationPlanner, type ContinuationPlanner } from "./continuat
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "../workspaces/index.js"
 import { harnessLabel, nativeRoutingReadings, resumes, type FinDefaultsStore, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
-import { EncodedAnswer } from "../contracts/runtime-value.js"
+import { decodeRuntimeValue, EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
@@ -54,6 +54,8 @@ import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
+import { z } from "zod"
+import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { ListedRepositories } from "./listed-repositories.js"
@@ -294,6 +296,11 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         }
       },
       catalogOf: (harness) => harnesses.profiles.held(harness)?.models,
+      limited: async (harness) => (await harnesses.accounts.limited(harness)) ?? undefined,
+      harnessOrder: async () => {
+        const saved = await deps.invoke("mako:harness-order-saved", [])
+        return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
+      },
     })
     agents.resume()
   }

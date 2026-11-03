@@ -578,6 +578,61 @@ async function finModels(): Promise<void> {
 }
 
 /**
+ * A Fin never starts on a harness whose account is at its limit without saying so. Its Apex named no harness: it
+ * starts on the person's next harness with room, and the answer and its row say why. Named, or with nowhere to go:
+ * refused with the reset and the person's fallbacks. On the code before this, all five started on Claude and stopped.
+ */
+async function limitedHarnesses(): Promise<void> {
+  const until = Date.now() + 3 * 3_600_000
+  const claude = recordedCatalog("claude")!.models
+  const codex = recordedCatalog("codex")!.models
+  const cursor = recordedCatalog("cursor")!.models
+  const limit = { account: "ada@example.com", until, instead: "ada-team@example.com" }
+  const w = new AgentsWorld({
+    root: join(root, "limited"),
+    script: (turn) => (turn.text.includes("You're fin:") ? "done" : "ok"),
+    defaults: { codex: { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } } },
+    catalogs: { claude, codex, cursor },
+    limits: { claude: limit, cursor: { account: "ada", until: null } },
+    order: ["claude", "cursor", "codex", "grok"],
+  })
+  try {
+    const apex = await w.apex("claude", "full", { model: "claude-opus-5-5", options: { effort: "high" } })
+    const brief = { objective: "Look" }
+    const moved = await w.agents.start(apex.caller, { brief, name: "moved", clientKey: "m", cwd: w.root })
+    assert.ok(!("refused" in moved), JSON.stringify(moved))
+    assert.equal(w.live.session(moved.conversation!)?.harness, "codex", "past Claude and Cursor, both at their limit, to the person's next harness with room (Grok has no catalog here)")
+    assert.deepEqual(moved.limited, { harness: "claude", until, instead: "ada-team@example.com" })
+    assert.match(moved.note ?? "", /^Claude is at its limit on ada@example\.com until \S.*, so it runs on Codex, the person's next harness\. ada-team@example\.com, another Claude account, has room: the person can switch to it in Settings › Agents\.$/)
+    await w.settle()
+    assert.match(w.agents.roster(apex.conversation)[0]?.runsOn?.note ?? "", /at its limit on ada@example\.com/, "its row says why it isn't on Claude")
+    const named = await w.agents.start(apex.caller, { brief, harness: "claude", name: "named", clientKey: "n", cwd: w.root })
+    assert.ok("refused" in named && named.refused === "limited", JSON.stringify(named))
+    assert.match(named.why, /Claude is at its limit on ada@example\.com until .*, so a Fin there would stop at once\. ada-team@example\.com, another Claude account, has room.*Leave harness and model out to start it on Codex, the person's next harness, or name another\. Or wait for the reset/)
+    const model = await w.agents.start(apex.caller, { brief, model: "opus 5.5", name: "model", clientKey: "o", cwd: w.root })
+    assert.ok("refused" in model && model.refused === "limited", "a model the Apex named is Claude's: it isn't moved to another harness's")
+    const fine = await w.agents.start(apex.caller, { brief, harness: "codex", name: "fine", clientKey: "f", cwd: w.root })
+    assert.ok(!("refused" in fine) && fine.limited === undefined && !fine.note, "a harness with room starts as asked, saying nothing")
+  } finally {
+    await w.close()
+  }
+  const nowhere = new AgentsWorld({
+    root: join(root, "limited-nowhere"),
+    script: () => "ok",
+    catalogs: { claude: recordedCatalog("claude")!.models },
+    limits: { claude: { account: "ada", until } },
+    order: ["claude"],
+  })
+  try {
+    const apex = await nowhere.apex("claude", "full")
+    const refused = await nowhere.agents.start(apex.caller, { brief: { objective: "Look" }, name: "stuck", clientKey: "s", cwd: nowhere.root })
+    assert.ok("refused" in refused && refused.refused === "limited" && /No other harness here has room either/.test(refused.why), JSON.stringify(refused))
+  } finally {
+    await nowhere.close()
+  }
+}
+
+/**
  * An Apex's own harness carries `MAKO_SESSION_ID` and writes its new session before its driver names it: that
  * session is the Apex's, never a run its shell started, or each of its turns would end as a report that wakes it.
  * A session its shell starts once it runs is one.
@@ -633,6 +688,7 @@ try {
   await relinkedRuns()
   await messagesReachLinkedRuns()
   await finModels()
+  await limitedHarnesses()
   await ownSessionIsNoChild()
   console.log("agents engine: ok")
 } finally {

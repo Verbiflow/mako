@@ -69,6 +69,7 @@ import {
 } from "../contracts/agent-tools.js"
 import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
+import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
@@ -84,6 +85,8 @@ import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
 
 const NONE: readonly NativeAgent[] = []
+/** How long a start waits to read whether a harness's account is at its limit before taking it as having room. */
+const LIMIT_READ_MS = 3_000
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
 const READ_ENTRIES = 40
 const READ_CHARS = 8_000
@@ -111,6 +114,10 @@ export interface AgentsDeps {
   finChoices?(harness: string, cwd: string): Promise<FinChoices>
   /** `harness`'s catalog as this host last read it, for a Fin's row; undefined before it's read. */
   catalogOf?(harness: string): readonly SessionModel[] | undefined
+  /** `harness`'s account in use when it's at its limit (`HarnessAccounts.limited`); undefined while it has room. */
+  limited?(harness: string): Promise<HarnessLimit | undefined>
+  /** The harnesses in the person's order (Settings › Models), most preferred first: where a Fin goes when its Apex's harness is at its limit. */
+  harnessOrder?(): Promise<readonly string[]>
   budget?: TreeBudget
   processes?: ProcessReads
   now?(): number
@@ -133,6 +140,7 @@ interface Tuned {
   settings?: SessionSettings
   source: FinTuningSource
   note?: string
+  rerouted?: { from: string; until?: number; instead?: string }
 }
 
 /** An Apex resolved in the store: its Session, its Thread, and its conversation here. */
@@ -158,7 +166,12 @@ const QueuedStartSchema = z.object({
   input: hostCallSchema("mako:agents-start").def.items[1],
   tier: z.enum(ACCESS_TIER_NAMES),
   harness: z.string(),
-  tuned: z.object({ settings: SessionSettingsSchema.optional(), source: FinTuningSourceSchema, note: z.string().optional() }).optional(),
+  tuned: z.object({
+    settings: SessionSettingsSchema.optional(),
+    source: FinTuningSourceSchema,
+    note: z.string().optional(),
+    rerouted: z.object({ from: z.string(), until: z.number().optional(), instead: z.string().optional() }).optional(),
+  }).optional(),
 }) satisfies z.ZodType<QueuedStart>
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
@@ -482,20 +495,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     const kept = store.edges().byOp(op)
     if (kept) return this.started(kept, apex, true)
     if (store.queuedSpawns().some((spawn) => spawn.op === op)) return this.queuedAnswer(op, apex, true)
-    const harness = input.harness ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.harness : undefined)
-    if (!harness || !this.deps.harnesses().includes(harness))
-      return this.refuse(op, "unknown-harness", `No harness named ${harness ?? "(none)"} runs here: ${this.deps.harnesses().join(", ")}.`)
+    const asked = input.harness ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.harness : undefined)
+    if (!asked || !this.deps.harnesses().includes(asked))
+      return this.refuse(op, "unknown-harness", `No harness named ${asked ?? "(none)"} runs here: ${this.deps.harnesses().join(", ")}.`)
     const own = this.tierOf(apex)
     const allowed = childAccess(own, input.access)
     if (!allowed) return this.refuse(op, "access", `A ${FIN_WORD} runs at most at its ${APEX_WORD}'s access: this Thread is on ${own}, so ${input.access} is refused.`)
+    const placed = await this.roomFor(apex, asked, allowed, input)
+    if ("refused" in placed) return this.refuse(op, "limited", placed.refused)
+    const { harness, rerouted } = placed
     const mode = childMode(this.deps.modes(harness), allowed)
     if (!mode) {
       const offers = (this.deps.modes(harness) ?? []).flatMap((offered) => offered.access ? [offered.access] : []).join(", ")
       return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offers}, each above ${allowed}, the most this ${FIN_WORD} may have. Start it on another harness.`)
     }
     const tier = mode.tier
-    const tuned = await this.tuningOf(apex, harness, input)
-    if ("refused" in tuned) return this.refuse(op, "unknown-model", tuned.refused)
+    const decided = await this.tuningOf(apex, harness, input)
+    if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
+    const tuned: Tuned = rerouted ? { ...decided, note: [rerouted.note, decided.note].filter(Boolean).join(" "), rerouted: rerouted.on } : decided
     const tree = this.rootOf(apex.thread)
     const counts = this.treeCounts(tree)
     // A queued spawn is one the tree has started: once the budget would refuse it, it never waits.
@@ -888,7 +905,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const decided = queued.tuned ?? await this.tuningOf(apex, harness, input)
     if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
-    parent.tuned = { source: decided.source, ...(decided.note && { note: decided.note }) }
+    parent.tuned = { source: decided.source, ...(decided.note && { note: decided.note }), ...(decided.rerouted && { rerouted: decided.rerouted }) }
     const tuning = decided.settings
     const workspace = input.workspace
     const options: LiveStartOptions = {
@@ -954,6 +971,61 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { ...(decided.settings && { settings: decided.settings }), source: decided.source, ...(note && { note }) }
   }
 
+  /**
+   * Where a Fin can run when `asked`'s account is at its limit: a start that named no harness or model goes to the
+   * person's next harness (`harnessOrder`) that runs here at this access, is signed in and has room, and says so; one
+   * that named it, or with nowhere to go, is refused with when the limit resets and what the person can do instead.
+   * A limit that can't be read in `LIMIT_READ_MS` reads as room.
+   */
+  private async roomFor(apex: Apex, asked: string, tier: AccessTier, input: AgentsStartInput): Promise<{ harness: string; rerouted?: { note: string; on: NonNullable<Tuned["rerouted"]> } } | { refused: string }> {
+    const limit = await this.limitOf(asked)
+    if (!limit) return { harness: asked }
+    const label = this.deps.harnessLabel(asked)
+    const until = limit.until ?? undefined
+    const now = this.now()
+    const spent = `${label} is at its limit on ${limit.account}${until === undefined ? "" : ` until ${resetWords(until, now)}`}`
+    const switchTo = limit.instead ? `${limit.instead}, another ${label} account, has room: the person can switch to it in Settings › Agents.` : ""
+    const next = await this.nextHarness(asked, tier, input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined))
+    if (input.harness !== undefined || input.model !== undefined || !next) {
+      const elsewhere = next ? `Leave harness and model out to start it on ${this.deps.harnessLabel(next)}, the person's next harness, or name another.` : "No other harness here has room either."
+      return { refused: [`${spent}, so a ${FIN_WORD} there would stop at once.`, switchTo, elsewhere, until === undefined ? "" : "Or wait for the reset and start it then."].filter(Boolean).join(" ") }
+    }
+    hostLog("agents", "a Fin's harness is at its limit; it starts on the next", { from: asked, to: next, ...(until !== undefined && { until }) })
+    return {
+      harness: next,
+      rerouted: {
+        note: [`${spent}, so it runs on ${this.deps.harnessLabel(next)}, the person's next harness.`, switchTo].filter(Boolean).join(" "),
+        on: { from: asked, ...(until !== undefined && { until }), ...(limit.instead && { instead: limit.instead }) },
+      },
+    }
+  }
+
+  /** The first harness after `from` in the person's order that a Fin at `tier` can run on now. */
+  private async nextHarness(from: string, tier: AccessTier, cwd: string | undefined): Promise<string | undefined> {
+    const live = this.deps.harnesses()
+    const order = (await this.deps.harnessOrder?.().catch(() => undefined)) ?? live
+    for (const harness of [...order, ...live]) {
+      if (harness === from || !live.includes(harness) || !childMode(this.deps.modes(harness), tier)) continue
+      const signedIn = cwd ? ((await this.deps.finChoices?.(harness, cwd).catch(() => undefined))?.models.length ?? 0) > 0 : true
+      if (signedIn && !(await this.limitOf(harness))) return harness
+    }
+    return undefined
+  }
+
+  private async limitOf(harness: string): Promise<HarnessLimit | undefined> {
+    if (!this.deps.limited) return undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<undefined>((done) => { timer = setTimeout(() => done(undefined), LIMIT_READ_MS) })
+    try {
+      return await Promise.race([this.deps.limited(harness).catch((error) => {
+        hostWarn("agents", "a harness's limit couldn't be read; it's taken as having room", { harness, error: errorMessage({ error }) })
+        return undefined
+      }), late])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** The model a conversation runs on now: the person's last choice in it, else what its harness reported, else what it started with. */
   private settingsOf(conversation: string): SessionSettings | undefined {
     const snapshot = this.deps.live.snapshot(conversation)
@@ -1000,6 +1072,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       state: state.kind,
       ...(runsOn && { runsOn }),
       ...(edge.tuned?.note && { note: edge.tuned.note }),
+      ...(edge.tuned?.rerouted && { limited: { harness: edge.tuned.rerouted.from, ...(edge.tuned.rerouted.until !== undefined && { until: edge.tuned.rerouted.until }), ...(edge.tuned.rerouted.instead && { instead: edge.tuned.rerouted.instead }) } }),
       tree: { ...counts, of: { ...this.budget } },
       ...(deduped && { deduped: true as const }),
       next: afterStart(edge.asked.wake ?? "decisions"),

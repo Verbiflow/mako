@@ -6,6 +6,7 @@ import type { SessionModel } from "@mako/sessions/settings"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuning, type FinTuningInput } from "@mako/host/contracts/fin-tuning"
 import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
+import { resetWords, spentUntil } from "@mako/host/contracts/account-usage"
 import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
@@ -187,6 +188,20 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }
+}
+
+// ── An account at its limit: a spent window not yet reset, until the latest such reset.
+{
+  const now = Date.UTC(2026, 10, 3, 18)
+  const at = (hours: number) => now + hours * 3_600_000
+  const reading = (windows: { usedPercent: number; resetsAt: number | null }[]) => ({ status: "ok" as const, windows: windows.map((window) => ({ ...window, windowMinutes: 300 })) })
+  assert.equal(spentUntil(reading([{ usedPercent: 99, resetsAt: at(1) }]), now), undefined, "room left is room")
+  assert.deepEqual(spentUntil(reading([{ usedPercent: 100, resetsAt: at(1) }, { usedPercent: 100, resetsAt: at(3) }]), now), { until: at(3) }, "every spent window must reset")
+  assert.equal(spentUntil(reading([{ usedPercent: 100, resetsAt: at(-1) }]), now), undefined, "a window past its reset has emptied")
+  assert.deepEqual(spentUntil(reading([{ usedPercent: 100, resetsAt: null }]), now), { until: null })
+  assert.equal(spentUntil({ status: "error" }, now), undefined, "an unread account reads as room, never as a limit")
+  assert.match(resetWords(at(2), now), /^\d{1,2}:\d{2} [AP]M \S+$/, "a reset today is its time")
+  assert.match(resetWords(at(30), now), /^[A-Z][a-z]{2},? \d{1,2}:\d{2} [AP]M \S+$/, "a later one names its day")
 }
 
 console.log("fin tuning: the rule holds on Claude, Codex, Cursor, Devin, Grok and OpenCode")

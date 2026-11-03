@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
+import type { HarnessLimit } from "@mako/host/contracts/account-usage"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
@@ -68,6 +69,10 @@ export interface WorldOptions {
   catalogs?: Partial<Record<string, readonly SessionModel[]>>
   /** The person's Settings › Fins and what they last used, by harness. */
   fins?: { chosen?: Partial<Record<string, SessionSettings>>; used?: Partial<Record<string, SessionSettings>> }
+  /** Harnesses whose account in use is at its limit, as `HarnessAccounts.limited` reads them. */
+  limits?: Partial<Record<string, HarnessLimit>>
+  /** The person's harness order. */
+  order?: readonly string[]
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -153,6 +158,8 @@ export class AgentsWorld {
         return { models: this.options.catalogs?.[harness] ?? [], ...(recommended && { recommended }), ...(chosen && { chosen }), ...(used && { used }) }
       },
       catalogOf: (harness) => this.options.catalogs?.[harness],
+      limited: async (harness) => this.options.limits?.[harness],
+      ...(this.options.order && { harnessOrder: async () => this.options.order! }),
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.processes && { processes: this.options.processes }),
     }

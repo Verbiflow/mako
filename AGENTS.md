@@ -244,7 +244,12 @@ the model's speed option, or its fast sibling where the harness lists one as
 a model (Grok, Devin). The host keeps the choices and what the person used in
 `<user root>/fin-defaults.json` (`mako:fin-defaults`), so the web app reads
 them through the Mac, and a Fin's row says its model, reasoning and fast lane
-(`NativeAgent.runsOn`). A worktree in a project folder of several
+(`NativeAgent.runsOn`). A harness whose account in use is at its limit
+(`HarnessAccounts.limited`, read for at most `LIMIT_READ_MS`) takes no Fin:
+one whose Apex named no harness or model starts on the person's next harness
+with room (`harnessOrder`), its answer's `limited` and its row's note saying
+until when and which other account of that harness has room; a named one,
+or one with nowhere to go, is refused (`limited`) with the same. A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits

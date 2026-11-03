@@ -1037,6 +1037,13 @@ const inputs = {
                   z.literal("used"),
                 ]),
                 note: z.string().optional(),
+                rerouted: z
+                  .object({
+                    from: z.string(),
+                    until: z.number().optional(),
+                    instead: z.string().optional(),
+                  })
+                  .optional(),
               })
               .optional(),
           })

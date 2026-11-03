@@ -79,9 +79,11 @@ export interface AgentsStarted {
   deduped?: true
   /** A `wait` start's outcome; a repeat of one answers its result again. */
   waited?: StartWaited
-  /** What it runs on, in words, and the choice passed over for one its harness no longer lists. */
+  /** What it runs on, in words, and the choice passed over for one its harness no longer lists, or its harness at its limit. */
   runsOn?: string
   note?: string
+  /** Its Apex's harness was at its limit (until `until`), so it started on the person's next harness; `instead` is another account of that harness with room. */
+  limited?: { harness: string; until?: number; instead?: string }
   next: string
 }
 export type AgentsStartResult = AgentsStarted | AgentRefused
@@ -387,7 +389,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       fields: {
         brief: "objective: what to do and why, with everything it needs; doneWhen: the checks that say it's done; boundaries: what not to touch; output: what its report must carry.",
         name: `A short name, unique among this Thread's ${FIN_WORD}s (made from the brief when absent).`,
-        harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent.",
+        harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent. When that one's account is at its limit, the person's next harness with room, and the answer says so; one you name at its limit is refused with when it resets and what the person can use instead.",
         model: "Only when the person named one: a model the harness lists, by id or name (\"opus 5.5\", \"gpt-6.1-sol\"). Absent: what the person uses: their Fins default for the harness, else this Thread's own model on this Thread's harness, else their last model there. A model it doesn't list is refused with the ones it does.",
         reasoning: "Only when the person said one (\"on high\"): a level the model takes, such as low, medium, high, xhigh or max. Absent: the level of the model's choice above.",
         fast: "Only when the person asked for it: true for the fast lane (\"the fast one\", quicker and pricier), false for the standard one. A harness whose fast model is a model of its own switches to it.",

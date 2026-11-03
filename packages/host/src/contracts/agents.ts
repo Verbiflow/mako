@@ -154,7 +154,14 @@ export const ThreadParentSchema = z.object({
   /** Present while a process Mako didn't start runs the child's turns (`FollowedRun`). */
   run: FollowedRunSchema.optional(),
   /** Where its model came from as it started (`resolveFinTuning`), and the choice passed over for one it no longer lists. */
-  tuned: z.object({ source: FinTuningSourceSchema, note: z.string().max(2_000).optional() }).optional(),
+  tuned: z
+    .object({
+      source: FinTuningSourceSchema,
+      note: z.string().max(2_000).optional(),
+      /** It was meant for its Apex's harness, whose account was at its limit, and started on the person's next one. */
+      rerouted: z.object({ from: z.string().min(1).max(64), until: z.number().optional(), instead: z.string().max(320).optional() }).optional(),
+    })
+    .optional(),
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
 
@@ -507,6 +514,7 @@ export type AgentRefusalReason =
   | "unknown-child"
   | "unknown-harness"
   | "unknown-model"
+  | "limited"
   | "no-parent"
   | "conflict"
   | "stale-owner"
