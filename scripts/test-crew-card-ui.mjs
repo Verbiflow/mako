@@ -219,10 +219,12 @@ async function check() {
       total: card.dataset.crew,
       text: card.innerText.replace(/\\s+/g, ' '),
       groups: [...card.querySelectorAll('[data-group]')].map((bar) => bar.dataset.group),
+      mark: getComputedStyle(card.querySelector('.live-mark')).width,
     }
   })()`)
   console.log("HEADER", JSON.stringify(header))
   assert.equal(header.total, "12", "the header counts every Fin, not SHOWN = 3")
+  assert.equal(header.mark, "20px", "the desk's marks stay the default 20px")
   assert.match(header.text, /^12 Fins/)
   assert.match(
     header.text,
@@ -528,10 +530,12 @@ async function check() {
       total: card.dataset.crew,
       text: card.innerText.replace(/\\s+/g, ' '),
       buttonHeights: buttons.map((button) => Math.round(button.getBoundingClientRect().height)),
+      mark: getComputedStyle(card.querySelector('.live-mark')).width,
     }
   })()`)
   console.log("PHONE", JSON.stringify(phone))
   assert.equal(phone.total, "12")
+  assert.equal(phone.mark, "28px", "the phone's card inherits the phone's 28px mark")
   assert.doesNotMatch(
     phone.text,
     /Codex · gpt-5\.6-sol/,
