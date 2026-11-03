@@ -17,6 +17,7 @@ export interface SimulatorFrame {
  */
 interface SimulatorsState {
   listed?: SimulatorsListed
+  /** By `simulatorKey`: a simulator's ID is its host's, so two hosts may both have one. */
   chosen?: string
   frames: Record<string, SimulatorFrame>
   /** Why the host turned the person's last press down, in its words. */
@@ -30,11 +31,13 @@ export const simulators = {
   async load() {
     if (!hasBridge()) return
     const listed = await getMako().simulatorsList().catch(() => undefined)
-    if (listed) simulatorsStore.set((state) => ({ listed, chosen: state.chosen && listed.simulators.some((simulator) => simulator.id === state.chosen) ? state.chosen : listed.simulators[0]?.id }))
+    if (!listed) return
+    const first = listed.simulators[0]
+    simulatorsStore.set((state) => ({ listed, chosen: state.chosen && listed.simulators.some((simulator) => simulatorKey(simulator) === state.chosen) ? state.chosen : first && simulatorKey(first) }))
   },
 
-  choose(id: string) {
-    simulatorsStore.set({ chosen: id, refused: undefined })
+  choose(key: string) {
+    simulatorsStore.set({ chosen: key, refused: undefined })
   },
 
   /** Takes it over from whichever Thread drives it, and boots it if it's off. */
@@ -53,6 +56,11 @@ export const simulators = {
     await getMako().simulatorsRelease({ simulator: simulator.id, host: simulator.hostId })
     await simulators.load()
   },
+}
+
+/** One simulator among every host's: its host and its host's own ID. */
+export function simulatorKey(simulator: Pick<ListedSimulator, "hostId" | "id">): string {
+  return `${simulator.hostId}/${simulator.id}`
 }
 
 /**

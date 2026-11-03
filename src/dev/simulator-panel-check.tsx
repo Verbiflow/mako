@@ -16,10 +16,10 @@ document.documentElement.classList.toggle("light", !dark)
 installMockBridge()
 const tablet = search.get("form") === "tablet"
 simulatorsStore.set({
-  ...(tablet && { chosen: "stand-in-tablet" }),
+  ...(tablet && { chosen: "stand-in/stand-in-tablet" }),
   frames: {
-    "stand-in-phone": { src: fakeFrame(402, 874, dark), width: 402, height: 874, at: Date.now() },
-    "stand-in-tablet": { src: fakeFrame(1032, 1376, dark), width: 1032, height: 1376, at: Date.now() },
+    "stand-in/stand-in-phone": { src: fakeFrame(402, 874, dark), width: 402, height: 874, at: Date.now() },
+    "stand-in/stand-in-tablet": { src: fakeFrame(1032, 1376, dark), width: 1032, height: 1376, at: Date.now() },
   },
 })
 const root = document.getElementById("root")

@@ -3,7 +3,7 @@ import { CircleIcon, KeyboardIcon, RotateCwIcon, SmartphoneIcon } from "lucide-r
 import type { ListedSimulator, SimulatorClaim, SimulatorPoint } from "@mako/host/contracts/simulators"
 import { Action, Blank, Chip, IconAction, Segmented } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
-import { pointOnScreen, simulators, touchOf, useSimulators, type SimulatorFrame } from "@/state/simulators"
+import { pointOnScreen, simulatorKey, simulators, touchOf, useSimulators, type SimulatorFrame } from "@/state/simulators"
 
 /** Until a host says a screen's size, a phone's and a tablet's in points. */
 const SCREENS = { phone: { width: 402, height: 874 }, tablet: { width: 1032, height: 1376 } }
@@ -18,7 +18,7 @@ export function SimulatorPanel() {
   const frame = useSimulators((state) => (state.chosen ? state.frames[state.chosen] : undefined))
   const refused = useSimulators((state) => state.refused)
   useEffect(() => void simulators.load(), [])
-  const simulator = listed?.simulators.find((entry) => entry.id === chosen)
+  const simulator = listed?.simulators.find((entry) => simulatorKey(entry) === chosen)
   const host = listed?.hosts.find((entry) => entry.id === simulator?.hostId) ?? listed?.hosts[0]
   if (!listed || !simulator)
     return (
@@ -42,9 +42,9 @@ export function SimulatorPanel() {
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
         <Segmented
           label="Simulator"
-          value={simulator.id}
-          options={listed.simulators.map((entry) => ({ value: entry.id, label: segmentLabel(entry, listed.simulators) }))}
-          onChange={(id) => simulators.choose(id)}
+          value={simulatorKey(simulator)}
+          options={listed.simulators.map((entry) => ({ value: simulatorKey(entry), label: segmentLabel(entry, listed.simulators) }))}
+          onChange={(key) => simulators.choose(key)}
         />
         <span className="min-w-0 flex-1 truncate text-label text-faint" title={`${simulator.name}, ${simulator.runtime}`}>
           {simulator.name.replace(/^Mako /, "")} · {simulator.runtime}
