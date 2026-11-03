@@ -266,6 +266,7 @@
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
     "test:orch-ui": "node scripts/test-orch-ui.mjs",
     "test:animations-ui": "node scripts/test-animations-ui.mjs",
+    "bench:live-marks": "node scripts/bench-live-marks.mjs",
     "test:tool-rows-ui": "node scripts/test-tool-rows-ui.mjs",
     "test:packaged-animations": "node scripts/test-packaged-animations.mjs",
     "test:native-routing": "tsx scripts/test-native-routing.ts",

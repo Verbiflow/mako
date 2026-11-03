@@ -219,9 +219,9 @@ const STANDING_WORDS = {
   canceled: "Canceled",
 } as const satisfies Record<SubagentStanding, string>
 
-/** The dot beside it: ember only while it works, the diff hues once it has an outcome. */
+/** The dot beside it: sea only while it works, the diff hues once it has an outcome. */
 const STANDING_DOTS = {
-  working: "animate-live bg-ember",
+  working: "animate-live bg-sea",
   waiting: "bg-caution",
   done: "bg-added",
   failed: "bg-removed",

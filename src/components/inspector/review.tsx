@@ -215,7 +215,7 @@ export function ReviewBar({ workspace }: { workspace: string }) {
   if (count === 0) return null
 
   return (
-    <div className="flex shrink-0 items-center gap-2 border-t border-hairline bg-surface px-2.5 py-1.5">
+    <div className="flex shrink-0 items-center gap-2 bg-surface px-2.5 py-1.5">
       <span className="size-1.5 shrink-0 rounded-full bg-caution" />
       <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
         {count} {count === 1 ? "note" : "notes"} on {files}{" "}
