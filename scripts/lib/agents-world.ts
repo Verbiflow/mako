@@ -4,6 +4,7 @@ import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { HarnessLimit } from "@mako/host/contracts/account-usage"
+import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
@@ -73,6 +74,8 @@ export interface WorldOptions {
   limits?: Partial<Record<string, HarnessLimit>>
   /** The person's harness order. */
   order?: readonly string[]
+  /** The person's rules for Fins, as they stand when read. */
+  policy?: () => FinPolicy
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -160,6 +163,7 @@ export class AgentsWorld {
       catalogOf: (harness) => this.options.catalogs?.[harness],
       ...(this.options.limits && { limited: async (harness: string) => this.options.limits?.[harness] }),
       ...(this.options.order && { harnessOrder: async () => this.options.order! }),
+      ...(this.options.policy && { finPolicy: this.options.policy }),
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.processes && { processes: this.options.processes }),
     }

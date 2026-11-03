@@ -297,6 +297,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       },
       catalogOf: (harness) => harnesses.profiles.held(harness)?.models,
       limited: async (harness) => (await harnesses.accounts.limited(harness)) ?? undefined,
+      finPolicy: () => deps.finDefaults?.reading().policy,
       harnessOrder: async () => {
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))

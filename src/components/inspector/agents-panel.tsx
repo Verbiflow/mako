@@ -26,6 +26,7 @@ import { Blank } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
 import { finTuningLine } from "@mako/host/contracts/fin-tuning"
+import { SignpostIcon } from "lucide-react"
 
 const labels = {
   working: "Running",
@@ -362,6 +363,12 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
               </span>
             ))}
           </span>
+          {agent.runsOn?.rule ? (
+            <span data-fin-rule-applied className="flex min-w-0 items-center gap-1 text-label text-faint" title={`Started by your rule: ${agent.runsOn.rule}`}>
+              <SignpostIcon aria-hidden className="size-3 shrink-0" />
+              <span className="truncate">{agent.runsOn.rule}</span>
+            </span>
+          ) : null}
           {agent.runsOn?.note ? (
             <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
               {agent.runsOn.note}

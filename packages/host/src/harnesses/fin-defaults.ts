@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "no
 import { dirname } from "node:path"
 import { z } from "zod"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
-import type { FinChoicesReading, FinDefaults } from "../contracts/fin-tuning.js"
+import { FinPolicySchema, FinRuleSchema, FinTargetSchema, type FinChoicesReading, type FinDefaults, type FinPolicy } from "../contracts/fin-tuning.js"
 import type { MethodTable } from "../base/methods.js"
 
 const HarnessSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
@@ -12,8 +12,12 @@ const StoredSchema = z.object({
   version: z.literal(1),
   chosen: SettingsByHarness.default({}),
   used: SettingsByHarness.default({}),
+  /** Each rule read alone: one in a shape a newer Mako wrote is left out, never the others. */
+  policy: z
+    .object({ rules: z.array(FinRuleSchema.optional().catch(undefined)).catch([]), otherwise: FinTargetSchema.optional().catch(undefined) })
+    .default({ rules: [] }),
 })
-type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings> }
+type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy }
 
 function kept(entries: Readonly<Record<string, SessionSettings | undefined>>): Record<string, SessionSettings> {
   return Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, SessionSettings] => entry[1] !== undefined))
@@ -29,7 +33,7 @@ const same = (left: SessionSettings | undefined, right: SessionSettings | undefi
  */
 export class FinDefaultsStore {
   readonly #file: string
-  #stored: Stored = { chosen: {}, used: {} }
+  #stored: Stored = { chosen: {}, used: {}, policy: { rules: [] } }
   #readAt = -1
 
   constructor(file: string) {
@@ -37,8 +41,8 @@ export class FinDefaultsStore {
   }
 
   reading(): FinChoicesReading {
-    const { chosen, used } = this.#read()
-    return { chosen: { ...chosen }, used: { ...used } }
+    const { chosen, used, policy } = this.#read()
+    return { chosen: { ...chosen }, used: { ...used }, policy }
   }
 
   /** Fins on `harness` run on `settings`, or with none, on what the person uses there. */
@@ -53,6 +57,20 @@ export class FinDefaultsStore {
       else delete chosen[harness]
       this.#write({ ...stored, chosen })
     }
+    return this.reading()
+  }
+
+  /** The person's rules, whole, as Settings › Fins saved them: in their order, each id once. */
+  savePolicy(policy: FinPolicy): FinChoicesReading {
+    const parsed = FinPolicySchema.parse(policy)
+    const ids = new Set(parsed.rules.map((rule) => rule.id))
+    if (ids.size !== parsed.rules.length) throw new Error("Each rule has an id of its own.")
+    for (const target of [...parsed.rules.map((rule) => rule.target), ...(parsed.otherwise ? [parsed.otherwise] : [])]) {
+      HarnessSchema.parse(target.harness)
+      if (target.settings && !target.settings.model) throw new Error("A rule's model is named, or left to what the person uses.")
+    }
+    const stored = this.#read()
+    if (JSON.stringify(stored.policy) !== JSON.stringify(parsed)) this.#write({ ...stored, policy: parsed })
     return this.reading()
   }
 
@@ -74,7 +92,8 @@ export class FinDefaultsStore {
     if (modified === this.#readAt) return this.#stored
     try {
       const parsed = StoredSchema.parse(JSON.parse(readFileSync(this.#file, "utf8")))
-      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used) }
+      const rules = parsed.policy.rules.filter((rule) => rule !== undefined)
+      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used), policy: { rules, ...(parsed.policy.otherwise && { otherwise: parsed.policy.otherwise }) } }
     } catch {
       // A file this build can't read is replaced at the next choice; until then Fins run on what the person uses.
     }
@@ -96,4 +115,5 @@ export class FinDefaultsStore {
 export function declareFinDefaultMethods(methods: MethodTable, store: FinDefaultsStore): void {
   methods.handle("mako:fin-defaults", () => store.reading())
   methods.handle("mako:fin-default-choose", (harness: string, settings: SessionSettings | null) => store.choose(harness, settings))
+  methods.handle("mako:fin-policy-save", (policy: FinPolicy) => store.savePolicy(policy))
 }

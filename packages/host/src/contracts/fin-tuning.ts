@@ -33,16 +33,60 @@ import {
 export const FinDefaultsSchema = z.record(z.string().min(1).max(64), SessionSettingsSchema)
 export type FinDefaults = z.infer<typeof FinDefaultsSchema>
 
+/** The most rules a person keeps, and the longest one: what every Apex reads must stay short. */
+export const FIN_RULES_LIMIT = 12
+export const FIN_RULE_CHARS = 280
+
+/** Where a rule sends a Fin: a harness, and the model and options to run it on there, or what the person uses there. */
+export const FinTargetSchema = z.object({ harness: z.string().min(1).max(64), settings: SessionSettingsSchema.optional() })
+export type FinTarget = z.infer<typeof FinTargetSchema>
+
+/** One of the person's rules, in their own words: work like `when` goes to `target`. */
+export const FinRuleSchema = z.object({
+  id: z.string().min(1).max(64),
+  when: z.string().trim().min(1).max(FIN_RULE_CHARS),
+  target: FinTargetSchema,
+})
+export type FinRule = z.infer<typeof FinRuleSchema>
+
+/**
+ * How the person wants an Apex to pick its Fins' harness and model (Settings › Fins): rules in their own words, first
+ * fit wins, read by every Apex as it starts a Fin and named on the Fin it chose, and where the rest go (`otherwise`;
+ * absent, the Apex's own harness).
+ */
+export const FinPolicySchema = z.object({
+  rules: z.array(FinRuleSchema).max(FIN_RULES_LIMIT),
+  otherwise: FinTargetSchema.optional(),
+})
+export type FinPolicy = z.infer<typeof FinPolicySchema>
+
 /** What the host keeps of the person's model choices for Fins (`mako:fin-defaults`). */
 export interface FinChoicesReading {
   /** Settings › Fins, by harness. */
   chosen: FinDefaults
   /** The model and options the person last started or sent with on each harness, as "what I use" there. */
   used: Readonly<Record<string, SessionSettings>>
+  /** The person's rules for which work goes where. */
+  policy: FinPolicy
 }
 
+/**
+ * The rules as an Apex reads them, ahead of the person's message when they're new to it: one short line each,
+ * numbered as `agents_start`'s `rule` names them. Empty without rules or an `otherwise`.
+ */
+export function finPolicyNote(policy: FinPolicy, target: (target: FinTarget) => string): string[] {
+  if (!policy.rules.length && !policy.otherwise) return []
+  return [
+    "The person's rules for picking a Fin's harness and model, first fit wins. Pass its number as agents_start's rule, and leave harness, model, reasoning and fast out unless the person named them:",
+    ...policy.rules.map((rule, index) => `${index + 1}. ${oneLine(rule.when)} → ${target(rule.target)}`),
+    policy.otherwise ? `None fits: ${target(policy.otherwise)} (leave rule out).` : "None fits: your own harness (leave rule out).",
+  ]
+}
+
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
+
 /** Where a Fin's model came from, most specific first. */
-export const FinTuningSourceSchema = z.enum(["asked", "fins", "apex", "used", "mako", "harness"])
+export const FinTuningSourceSchema = z.enum(["asked", "rule", "fins", "apex", "used", "mako", "harness"])
 export type FinTuningSource = z.infer<typeof FinTuningSourceSchema>
 
 /** What a spawn named, as the person said it through its Apex. */
@@ -59,6 +103,8 @@ export interface FinTuningInput {
   /** Its catalog; empty while it hasn't been read, when nothing can be held to it. */
   models: readonly SessionModel[]
   asked: FinAsked
+  /** The person's rule the Apex followed, or their `otherwise`, on this harness: who it is in a note, and its model. */
+  rule?: { who: string; settings: SessionSettings }
   /** Settings › Fins for this harness. */
   chosen?: SessionSettings
   /** The Apex's model now, when the Fin runs on the Apex's harness. */
@@ -93,6 +139,7 @@ export function resolveFinTuning(input: FinTuningInput): FinTuning {
     base = { model: found.model, settings: found.model ? { model: found.model.id } : { model: asked.model }, source: "asked" }
   } else {
     const layers: [FinTuningSource, SessionSettings | undefined, string][] = [
+      ["rule", input.rule?.settings, input.rule?.who ?? "Your rule"],
       ["fins", input.chosen, `Your Fins default for ${label}`],
       ["apex", input.apex, "Your Apex's model"],
       ["used", input.used, `Your last model on ${label}`],

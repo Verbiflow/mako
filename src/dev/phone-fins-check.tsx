@@ -4,6 +4,7 @@ import { SessionSettingsSchema } from "@mako/sessions/settings"
 import { Toaster } from "@/components/ui/sonner"
 import { getMako } from "@/lib/bridge"
 import { threadsStore } from "@/state/thread-store"
+import { FinPolicySchema } from "@mako/host/contracts/fin-tuning"
 import { FinsGroup, type MacCall } from "@/web-client/fins"
 import { applyTheme } from "@/web-client/theme"
 import { fixtureHarnesses } from "./harness-fixtures"
@@ -12,7 +13,7 @@ import "../web-client/style.css"
 
 /**
  * The phone's Settings › Fins (`FinsGroup`) on the mock bridge's catalogs and choices, as a Mac answers them through
- * the gateway: `?open=<harness>` opens that harness's sheet, `?theme=light` the light theme.
+ * the gateway: `?open=<harness>` opens that harness's sheet, `?open=rule:<id>` a rule's, `?theme=light` the light theme.
  */
 
 const search = new URLSearchParams(location.search)
@@ -26,6 +27,8 @@ const call: MacCall = async <Result,>(channel: string, args: readonly unknown[])
     ? await mako.finDefaults()
     : channel === "mako:fin-default-choose"
       ? await mako.chooseFinDefault(String(args[0]), SessionSettingsSchema.nullable().parse(args[1] ?? null))
+      : channel === "mako:fin-policy-save"
+        ? await mako.saveFinPolicy(FinPolicySchema.parse(args[0]))
       : channel === "mako:harness-tuning"
         ? await mako.harnessTuning(String(args[0]))
         : undefined

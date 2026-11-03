@@ -104,6 +104,17 @@ const RUNS_ON = new Map<string, FinTuningWords>(Object.entries({
   "deep-links": { model: "Opus 5.5", reasoning: "High" },
   "pull-refresh": { model: "Grok 4.7", reasoning: "High" },
 }))
+/** The person's rule each Fin was started by (`mock-bridge`'s policy), or none that fit. */
+const RULES = new Map<string, { n?: number; when: string }>([
+  ["composer-chips", { n: 1, when: "UI, CSS and anything someone looks at: components, motion, visual polish" }],
+  ["deep-links", { n: 1, when: "UI, CSS and anything someone looks at: components, motion, visual polish" }],
+  ["push-wording", { n: 2, when: "Anything that isn't frontend: APIs, migrations, the host, tests" }],
+  ["dictation", { n: 2, when: "Anything that isn't frontend: APIs, migrations, the host, tests" }],
+  ["swipe", { n: 2, when: "Anything that isn't frontend: APIs, migrations, the host, tests" }],
+  ["sheet-motion", { n: 3, when: "Quick lookups, renames and one-line fixes" }],
+  ["share-sheet", { n: 3, when: "Quick lookups, renames and one-line fixes" }],
+  ["haptics", { when: "No rule fit" }],
+])
 const PASSED_OVER = new Map([["token-refresh", "Your Fins default for Grok, grok-4.6-mini, isn't listed by Grok anymore: it runs on Grok 4.7 instead."]])
 
 /** One Fin's roster entry, made by `childEntry` from its edge and what its Thread shows, as the host makes it. */
@@ -124,7 +135,7 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     op: `start:${APEX_SESSION}:${fixture.name}`,
     startedBy: { kind: "agent", session: apex },
     createdAt,
-    tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }) },
+    tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }), ...(RULES.has(fixture.name) && { rule: RULES.get(fixture.name) }) },
   }
   const { thread, journal } = shown(state, child, now - 60_000)
   return childEntry(

@@ -77,6 +77,7 @@ export const ChildSpecSchema = z.object({
   model: z.string().min(1).max(256).optional(),
   reasoning: z.string().min(1).max(64).optional(),
   fast: z.boolean().optional(),
+  rule: z.number().int().positive().optional(),
   /** At most the parent's tier (`childAccess`); absent means the parent's. */
   access: z.enum(ACCESS_TIER_NAMES).optional(),
   /** A `Place`, kept as the text it was asked as: a start's options carry it through the host call's generated schema. */
@@ -162,6 +163,8 @@ export const ThreadParentSchema = z.object({
       note: z.string().max(2_000).optional(),
       /** It was meant for its Apex's harness, whose account was at its limit, and started on the person's next one. */
       rerouted: z.object({ from: z.string().min(1).max(64), until: z.number().optional(), instead: z.string().max(320).optional() }).optional(),
+      /** The person's rule it was started by, as it read then (`n` absent: their choice for work no rule fits). */
+      rule: z.object({ n: z.number().int().positive().optional(), when: z.string().max(400) }).optional(),
     })
     .optional(),
 })
@@ -342,11 +345,17 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
   if (model) entry.model = model
-  if (thread.runsOn) entry.runsOn = { ...thread.runsOn, ...(edge.tuned?.note && { note: edge.tuned.note }) }
+  const rule = edge.tuned?.rule && ruleWords(edge.tuned.rule)
+  if (thread.runsOn) entry.runsOn = { ...thread.runsOn, ...(edge.tuned?.note && { note: edge.tuned.note }), ...(rule && { rule }) }
   if (edge.role !== "worker") entry.role = edge.role
   if (thread.toolUses) entry.usage = { toolUses: thread.toolUses }
   if (state.kind === "ended") entry.settledAt = thread.ended?.at ?? journal.latest?.at ?? edge.closedAt ?? edge.createdAt
   return entry
+}
+
+/** A Fin's rule as its row and strip say it: "Rule 2 · Anything that isn't frontend", or "No rule fit". */
+export function ruleWords(rule: { n?: number; when: string }): string {
+  return rule.n === undefined ? "No rule fit" : `Rule ${rule.n} · ${rule.when.replace(/\s+/g, " ").trim()}`
 }
 
 /** `state` within the entry's limits: its words are a roster note's at most. */
@@ -522,6 +531,7 @@ export type AgentRefusalReason =
   | "unknown-harness"
   | "unknown-model"
   | "limited"
+  | "unknown-rule"
   | "no-parent"
   | "conflict"
   | "stale-owner"

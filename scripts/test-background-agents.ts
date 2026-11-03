@@ -26,7 +26,8 @@ import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
 import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
 import { openCodeModes } from "@mako/host/harnesses/opencode/access"
 import { ThreadStore } from "@mako/host/threads/store"
-import { AgentsWorld, noConversations, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, noConversations, type Heard, type Script } from "./lib/agents-world.ts"
+import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
@@ -637,6 +638,80 @@ async function finModels(): Promise<void> {
 }
 
 /**
+ * The person's rules for Fins, in their words: every Thread reads them once before the person's next message, and
+ * again only when they change; a Fin started by one runs on its harness and model and says so; work no rule fits goes
+ * to their `otherwise`; what the person named in chat still wins; a rule that isn't there is refused with the ones that are.
+ */
+async function finRules(): Promise<void> {
+  const catalogs = { claude: recordedCatalog("claude")!.models, codex: recordedCatalog("codex")!.models, cursor: recordedCatalog("cursor")!.models }
+  let policy: FinPolicy = {
+    rules: [
+      { id: "backend", when: "Anything that isn't frontend: APIs,\n  migrations, tests", target: { harness: "codex", settings: { model: "gpt-6.1-sol", options: { effort: "high", plan: true } } } },
+      { id: "ui", when: "UI and CSS", target: { harness: "claude" } },
+    ],
+    otherwise: { harness: "cursor", settings: { model: "composer-2.5", options: { fast: "true" } } },
+  }
+  const heard: Heard[] = []
+  const w = new AgentsWorld({
+    root: join(root, "rules"),
+    script: (turn) => (turn.text.includes("You're fin:") ? "done" : "ok"),
+    defaults: { codex: { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } } },
+    catalogs,
+    policy: () => policy,
+    heard: (each) => heard.push(each),
+  })
+  try {
+    const apex = await w.apex("claude", "full", { model: "claude-opus-5-5", options: { effort: "max" } })
+    const said = async (text: string) => {
+      w.say(apex.conversation, text)
+      await waitFor(() => heard.some((each) => each.conversation === apex.conversation && each.text.includes(text)), `the Apex hearing "${text}"`)
+      return heard.findLast((each) => each.conversation === apex.conversation && each.text.includes(text))!.text
+    }
+    const first = await said("Split the work up.")
+    assert.match(first, /The person's rules for picking a Fin's harness and model, first fit wins\. Pass its number as agents_start's rule/)
+    assert.match(first, /\n1\. Anything that isn't frontend: APIs, migrations, tests → Codex · GPT-6\.1-Sol · High\n2\. UI and CSS → Claude, on the model the person uses there\nNone fits: Cursor · Composer 2\.5 · Fast \(leave rule out\)\./, "one short line each, in the person's words")
+    assert.doesNotMatch(await said("And the docs?"), /The person's rules/, "read once, not on every message")
+    policy = { ...policy, rules: policy.rules.slice(0, 1) }
+    assert.match(await said("One more."), /\n1\. Anything that isn't frontend[^\n]*\nNone fits:/, "and again once they change")
+
+    const brief = { objective: "Look" }
+    const asked = (answer: AgentsStarted) => ({ harness: w.live.session(answer.conversation!)?.harness, tuning: w.live.snapshot(answer.conversation!)?.requests[0]?.tuning })
+    policy = { ...policy, rules: [...policy.rules, { id: "ui", when: "UI and CSS", target: { harness: "claude" } }] }
+    const backend = await w.agents.start(apex.caller, { brief, rule: 1, name: "backend", clientKey: "b", cwd: w.root })
+    const ui = await w.agents.start(apex.caller, { brief, rule: 2, name: "ui", clientKey: "u", cwd: w.root })
+    const unsure = await w.agents.start(apex.caller, { brief, name: "unsure", clientKey: "x", cwd: w.root })
+    const named = await w.agents.start(apex.caller, { brief, rule: 1, harness: "claude", name: "named", clientKey: "n", cwd: w.root })
+    const told = await w.agents.start(apex.caller, { brief, harness: "codex", reasoning: "low", name: "told", clientKey: "t", cwd: w.root })
+    for (const answer of [backend, ui, unsure, named, told]) assert.ok(!("refused" in answer), JSON.stringify(answer))
+    const ok = (answer: typeof backend): AgentsStarted => {
+      assert.ok(!("refused" in answer), JSON.stringify(answer))
+      return answer
+    }
+    assert.deepEqual(asked(ok(backend)), { harness: "codex", tuning: { model: "gpt-6.1-sol", options: { effort: "high" } } }, "rule 1's harness and model, never its plan mode")
+    assert.equal(ok(backend).rule, "Rule 1 · Anything that isn't frontend: APIs, migrations, tests")
+    assert.deepEqual(asked(ok(ui)), { harness: "claude", tuning: { model: "claude-opus-5-5", options: { effort: "max" } } }, "a rule that names only a harness runs as the person does there: here, the Apex's own model")
+    assert.deepEqual(asked(ok(unsure)), { harness: "cursor", tuning: { model: "composer-2.5", options: { fast: "true" } } }, "work no rule fits goes to the person's otherwise")
+    assert.equal(ok(unsure).rule, "No rule fit")
+    assert.deepEqual(asked(ok(named)), { harness: "claude", tuning: { model: "claude-opus-5-5", options: { effort: "max" } } }, "a harness the person named wins over the rule's, whose model is for its own harness")
+    assert.equal(ok(named).rule, "Rule 1 · Anything that isn't frontend: APIs, migrations, tests", "and the rule is still what it followed")
+    assert.equal(asked(ok(told)).harness, "codex")
+    assert.equal(ok(told).rule, undefined, "a harness named with no rule follows none, and never the otherwise")
+    const missing = await w.agents.start(apex.caller, { brief, rule: 7, name: "missing", clientKey: "m", cwd: w.root })
+    assert.ok("refused" in missing && missing.refused === "unknown-rule" && /has 2 rules, so there's no rule 7: 1\. Anything that isn't frontend.* 2\. UI and CSS/s.test(missing.why), JSON.stringify(missing))
+    await w.settle()
+    const rows = w.agents.roster(apex.conversation)
+    assert.deepEqual(rows.map((row) => row.runsOn?.rule), ["Rule 1 · Anything that isn't frontend: APIs, migrations, tests", "Rule 2 · UI and CSS", "No rule fit", "Rule 1 · Anything that isn't frontend: APIs, migrations, tests", undefined], "each row says the rule it followed")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed && listed.children[0]?.rule === "Rule 1 · Anything that isn't frontend: APIs, migrations, tests")
+    const lead = await w.agents.start(apex.caller, { brief, role: "lead", harness: "claude", name: "lead", clientKey: "l", cwd: w.root })
+    assert.ok(!("refused" in lead))
+    assert.match(w.live.snapshot(lead.conversation!)?.requests[0]?.text ?? "", /The person's rules for picking a Fin's harness/, "an Apex of its own reads the rules with its brief")
+  } finally {
+    await w.close()
+  }
+}
+
+/**
  * A Fin never starts on a harness whose account is at its limit without saying so. Its Apex named no harness: it
  * starts on the person's next harness with room, and the answer and its row say why. Named, or with nowhere to go:
  * refused with the reset and the person's fallbacks. On the code before this, all five started on Claude and stopped.
@@ -748,6 +823,7 @@ try {
   await messagesReachLinkedRuns()
   await finModels()
   await limitedHarnesses()
+  await finRules()
   await apexStops()
   await staleEndsStayOut()
   await ownSessionIsNoChild()

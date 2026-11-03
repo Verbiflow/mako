@@ -7,6 +7,7 @@ import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuning, type FinTuningInput } from "@mako/host/contracts/fin-tuning"
 import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
 import { resetWords, spentUntil } from "@mako/host/contracts/account-usage"
+import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
@@ -171,13 +172,14 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
   try {
     const file = join(folder, "fin-defaults.json")
     const store = new FinDefaultsStore(file)
-    assert.deepEqual(store.reading(), { chosen: {}, used: {} }, "nothing chosen: every harness's Fins run as the person does")
+    assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] } }, "nothing chosen: every harness's Fins run as the person does")
     store.use("cursor", { model: "composer-2.5", options: { fast: "true" } })
     store.use("cursor", { options: { effort: "high" } })
     store.choose("codex", { model: "gpt-6.1-sol", options: { effort: "high" } })
     assert.deepEqual(new FinDefaultsStore(file).reading(), {
       chosen: { codex: { model: "gpt-6.1-sol", options: { effort: "high" } } },
       used: { cursor: { model: "composer-2.5", options: { fast: "true" } } },
+      policy: { rules: [] },
     }, "another host reads the same, and a send that names no model changes nothing")
     store.choose("codex", null)
     assert.deepEqual(store.reading().chosen, {}, "Same as you again")
@@ -185,6 +187,14 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
     const written = JSON.parse(readFileSync(file, "utf8"))
     writeFileSync(file, JSON.stringify({ ...written, chosen: { grok: { model: 7 }, claude: { model: "claude-opus-5-5" } } }))
     assert.deepEqual(new FinDefaultsStore(file).reading().chosen, { claude: { model: "claude-opus-5-5" } }, "an entry this build can't read is left out, never the rest")
+    const rule = (id: string, when: string, harness: string) => ({ id, when, target: { harness } })
+    const saved = new FinDefaultsStore(file).savePolicy({ rules: [rule("a", "  Anything that isn't frontend ", "codex"), rule("b", "UI", "claude")], otherwise: { harness: "cursor", settings: { model: "composer-2.5" } } })
+    assert.deepEqual(saved.policy.rules.map((each) => each.when), ["Anything that isn't frontend", "UI"], "rules keep their order, trimmed")
+    assert.throws(() => store.savePolicy({ rules: [rule("a", "x", "codex"), rule("a", "y", "claude")] }), /id of its own/)
+    assert.throws(() => store.savePolicy({ rules: [rule("a", "   ", "codex")] }))
+    const stored = JSON.parse(readFileSync(file, "utf8"))
+    writeFileSync(file, JSON.stringify({ ...stored, policy: { ...stored.policy, rules: [...stored.policy.rules, { id: "c", when: 7 }] } }))
+    assert.deepEqual(new FinDefaultsStore(file).reading().policy.rules.map((each) => each.id), ["a", "b"], "a rule this build can't read is left out, never the others")
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }
@@ -203,5 +213,13 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
   assert.match(resetWords(at(2), now), /^\d{1,2}:\d{2} [AP]M \S+$/, "a reset today is its time")
   assert.match(resetWords(at(30), now), /^[A-Z][a-z]{2},? \d{1,2}:\d{2} [AP]M \S+$/, "a later one names its day")
 }
+
+// ── The note every Thread reads: nothing without rules, one line each with them.
+assert.deepEqual(finPolicyNote({ rules: [] }, () => ""), [])
+assert.deepEqual(finPolicyNote({ rules: [{ id: "a", when: "Tests\n and   fixtures", target: { harness: "codex" } }] }, (target) => target.harness), [
+  "The person's rules for picking a Fin's harness and model, first fit wins. Pass its number as agents_start's rule, and leave harness, model, reasoning and fast out unless the person named them:",
+  "1. Tests and fixtures → codex",
+  "None fits: your own harness (leave rule out).",
+])
 
 console.log("fin tuning: the rule holds on Claude, Codex, Cursor, Devin, Grok and OpenCode")

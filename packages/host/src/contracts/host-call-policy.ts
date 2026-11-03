@@ -309,6 +309,8 @@ const replays = [
   "mako:harness-order",
   /** `FinDefaultsStore.choose`: the same choice for a harness saved twice is one choice. */
   "mako:fin-default-choose",
+  /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
+  "mako:fin-policy-save",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */

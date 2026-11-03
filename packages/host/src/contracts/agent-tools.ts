@@ -28,6 +28,8 @@ export interface AgentsStartInput extends DoorFilled {
   reasoning?: string
   /** True for the model's fast lane (or its harness's fast sibling of it), false for its standard one. */
   fast?: boolean
+  /** The number of the person's rule this Fin follows (`finPolicyNote`): its harness and model unless the spawn names them. */
+  rule?: number
   /** At most the caller's tier; absent means the caller's. */
   access?: AccessTier
   /** `here`, `device:<name>` or `cloud`, from what the person said; absent means where the caller runs. */
@@ -84,6 +86,8 @@ export interface AgentsStarted {
   note?: string
   /** Its Apex's harness was at its limit (until `until`), so it started on the person's next harness; `instead` is another account of that harness with room. */
   limited?: { harness: string; until?: number; instead?: string }
+  /** The person's rule it follows, as its row says it. */
+  rule?: string
   next: string
 }
 export type AgentsStartResult = AgentsStarted | AgentRefused
@@ -112,6 +116,8 @@ export interface AgentStrip {
   model?: string
   /** Its model, reasoning and fast lane in words: "Opus 5.5 · High · Fast". */
   runsOn?: string
+  /** The person's rule it was started by: "Rule 2 · Anything that isn't frontend". */
+  rule?: string
   origin: ChildOrigin
   state: ChildState
   title?: string
@@ -392,6 +398,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent. When that one's account is at its limit, the person's next harness with room, and the answer says so; one you name at its limit is refused with when it resets and what the person can use instead.",
         model: "Only when the person named one: a model the harness lists, by id or name (\"opus 5.5\", \"gpt-6.1-sol\"). Absent: what the person uses: their Fins default for the harness, else this Thread's own model on this Thread's harness, else their last model there. A model it doesn't list is refused with the ones it does.",
         reasoning: "Only when the person said one (\"on high\"): a level the model takes, such as low, medium, high, xhigh or max. Absent: the level of the model's choice above.",
+        rule: "The number of the person's rule that fits this work, from their rules in Mako's note. Its harness and model apply; leave harness, model, reasoning and fast out unless the person named them. Absent: their choice for work no rule fits.",
         fast: "Only when the person asked for it: true for the fast lane (\"the fast one\", quicker and pricier), false for the standard one. A harness whose fast model is a model of its own switches to it.",
         access: "plan, chat, ask, edits, auto, full or deny: at most this Thread's own; this Thread's when absent. A harness without that level runs the Fin on its nearest one below, and one whose every level is above it is refused.",
         place: "Only when the person said where: here, device:<name> or cloud. Absent: where this Thread runs.",

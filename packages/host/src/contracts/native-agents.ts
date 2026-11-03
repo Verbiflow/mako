@@ -71,7 +71,7 @@ export const NativeAgentObservationSchema = z.object({
    * choice its start would have taken (a model its harness stopped listing). Absent before its catalog is read.
    */
   runsOn: z
-    .object({ model: z.string().max(256), reasoning: z.string().max(64).optional(), fast: z.literal(true).optional(), note: note.optional() })
+    .object({ model: z.string().max(256), reasoning: z.string().max(64).optional(), fast: z.literal(true).optional(), note: note.optional(), rule: z.string().max(512).optional() })
     .optional(),
   role: z.string().max(256).optional(),
   work: NativeWorkSchema.optional(),

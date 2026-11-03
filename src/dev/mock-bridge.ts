@@ -814,6 +814,15 @@ export function installMockBridge() {
   let finChoices: FinChoicesReading = {
     chosen: { codex: { model: "gpt-6.1-sol", options: { effort: "high", fast: true } } },
     used: { claude: { model: "claude-opus-5-5", options: { effort: "high" } }, cursor: { model: "composer-2.5", options: { fast: true } }, devin: { model: "swe-2", options: { effort: "max" } } },
+    // The person's rules, as someone who keeps the frontend on Claude would write them.
+    policy: {
+      rules: [
+        { id: "rule-frontend", when: "UI, CSS and anything someone looks at: components, motion, visual polish", target: { harness: "claude", settings: { model: "claude-opus-5-5", options: { effort: "high" } } } },
+        { id: "rule-backend", when: "Anything that isn't frontend: APIs, migrations, the host, tests", target: { harness: "codex", settings: { model: "gpt-6.1-sol", options: { effort: "high" } } } },
+        { id: "rule-quick", when: "Quick lookups, renames and one-line fixes", target: { harness: "cursor", settings: { model: "composer-2.5", options: { fast: true } } } },
+      ],
+      otherwise: { harness: "claude" },
+    },
   }
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
@@ -996,6 +1005,10 @@ export function installMockBridge() {
       if (settings) chosen[harness] = settings
       else delete chosen[harness]
       finChoices = { ...finChoices, chosen }
+      return finChoices
+    },
+    saveFinPolicy: async (policy) => {
+      finChoices = { ...finChoices, policy }
       return finChoices
     },
     planBuilds: async () => planBuilds,

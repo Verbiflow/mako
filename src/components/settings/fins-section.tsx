@@ -1,10 +1,10 @@
 import { useEffect } from "react"
+import { FinRules } from "./fin-rules"
 import { toast } from "sonner"
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, ZapIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
 import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
 import { ModelList, ModelOptionRows, ModelSummary, type ModelChoice } from "@/components/composer/agent-model-picker"
-import { ListCard } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
@@ -31,30 +31,33 @@ export function FinsSection() {
   const profiles = useProviders((state) => state.profiles)
   const failed = useFinDefaults((state) => state.failed)
   return (
-    <section className="flex flex-col gap-3">
+    <div className="flex flex-col gap-8">
+      <FinRules order={order} profiles={profiles} />
+      <section className="flex flex-col gap-3">
       <div>
-        <h3 className="text-ui font-medium">What Fins run on</h3>
+        <h3 className="text-ui font-medium">What Fins run on, per harness</h3>
         <p className="mt-0.5 text-label text-muted-foreground">
-          When an Apex starts a Fin without naming a model. Same as you: on the Apex's own harness, the Apex's model and
-          reasoning; on another, the model you last chose there. A model, reasoning or speed you name in chat, on any
-          device, still wins.
+          Once a harness is picked, the model it runs on when your rule or your words name none. Same as you: on the
+          Apex's own harness, the Apex's model and reasoning; on another, the model you last chose there.
         </p>
       </div>
-      <ListCard className="px-1.5 py-1.5">
-        <div role="list" aria-label="What each harness's Fins run on">
+      <div>
+        <div role="list" aria-label="What each harness's Fins run on" className="flex flex-col gap-px">
           {order.map((harness) => (
             <FinRow key={harness} harness={harness} profile={profiles[harness]} />
           ))}
         </div>
-      </ListCard>
+      </div>
       {failed ? <p className="text-label text-caution">This Mac's choices for Fins couldn't be read. Reopen Settings to try again.</p> : null}
-    </section>
+      </section>
+    </div>
   )
 }
 
 /** Where "Same as you" lands when the Apex is on another harness, in a row's words. */
 const SOURCE_WORDS = {
   asked: () => "as asked",
+  rule: () => "your rule",
   fins: () => "your choice for Fins",
   apex: () => "your Apex's",
   used: () => "your last here",
@@ -73,8 +76,8 @@ function FinRow({ harness, profile }: { harness: string; profile: HarnessProfile
   const words = elsewhere?.settings ? finTuningWords(models, elsewhere.settings) : undefined
   const gone = chosen?.model && models.length && !finTuningWords(models, chosen) ? chosen.model : undefined
   return (
-    <div role="listitem" className={cn("flex items-center gap-3 rounded-md px-2.5 py-2.5", !signedIn && !pending && "text-muted-foreground")}>
-      <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-md bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", !signedIn && !pending && "opacity-50")}>
+    <div role="listitem" className={cn("flex items-center gap-3 bg-shell/55 px-3 py-2.5", !signedIn && !pending && "text-muted-foreground")}>
+      <span className={cn("flex size-7 shrink-0 items-center justify-center bg-raised", !signedIn && !pending && "opacity-50")}>
         <HarnessIcon harness={harness} className="size-3.5" />
       </span>
       <div className="min-w-0 flex-1">
@@ -126,10 +129,10 @@ function FinPicker({ harness, profile, chosen }: { harness: string; profile: Har
           type="button"
           aria-label={`${harnessLabel(harness)}'s Fins run on ${label}`}
           className={cn(
-            "pressable flex h-7 max-w-[17rem] min-w-0 shrink-0 items-center gap-1.5 rounded-md px-2",
+            "pressable flex h-7 max-w-[17rem] min-w-0 shrink-0 items-center gap-1.5 bg-fill-hover px-2",
             "text-ui font-medium text-foreground/85",
             "[transition:transform_var(--duration-press)_var(--ease-out),background-color_120ms_ease]",
-            "hover:bg-fill-hover data-[state=open]:bg-fill-selected"
+            "hover:bg-fill-selected data-[state=open]:bg-fill-selected"
           )}
         >
           {chosen ? (
