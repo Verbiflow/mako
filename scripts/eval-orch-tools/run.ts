@@ -137,6 +137,10 @@ try {
       assert.ok(text.includes(JSON.stringify(orchCase.prompt).slice(1, -1)), `${harness} ${orchCase.id}: the request carries the prompt`)
       if (orchCase.setup.asks?.length)
         assert.ok(text.includes("agents_answer") && text.includes(JSON.stringify(wakeText(orchCase)).slice(1, -1)), `${harness} ${orchCase.id}: the request carries its Fins' wake`)
+      else if (orchCase.setup.finished?.length)
+        assert.ok(text.includes(JSON.stringify(wakeText(orchCase)).slice(1, -1)), `${harness} ${orchCase.id}: the request carries its Fins' wake`)
+      else if (orchCase.setup.role === "fin")
+        assert.ok(text.includes("agents_list with scope crew"), `${harness} ${orchCase.id}: the request carries the Fin's brief`)
       else if (orchCase.setup.children?.length) {
         assert.ok(text.includes("agents_send"), `${harness} ${orchCase.id}: the request names agents_send`)
         assert.ok(text.includes("You're this Thread's Apex") && orchCase.setup.children.every((child) => text.includes(`fin:${child.name}`)), `${harness} ${orchCase.id}: the request carries the front-door note`)
@@ -171,6 +175,12 @@ try {
       ["fd-stale-fork", sample([[send("thread-env-old")]]), false],
       ["fd-finished-child-follow-up", sample([[send("ios")]]), true],
       ["fd-finished-child-follow-up", sample([[start()]]), false],
+      ["fd-finished-wake-carries-refs", { ...sample([]), text: "It landed: https://git.example.com/acme/app/pull/292, and the report is reports/alarm-loop.md." }, true],
+      ["fd-finished-wake-carries-refs", { ...sample([[{ tool: "agents_read", args: { child: "alarm-fix" } }]]), text: "It landed: https://git.example.com/acme/app/pull/292, and the report is reports/alarm-loop.md." }, false],
+      ["fin-reads-crew-before-shared-files", sample([[{ tool: "agents_list", args: { scope: "crew" } }], [{ tool: "edit", args: {} }]]), true],
+      ["fin-reads-crew-before-shared-files", sample([[{ tool: "edit", args: {} }]]), false],
+      ["fin-solo-no-crew", sample([[{ tool: "edit", args: {} }]]), true],
+      ["fin-solo-no-crew", sample([[{ tool: "agents_list", args: { scope: "crew" } }]]), false],
       ["fd-direct-not-resent", sample([[send("android")]]), false],
       ["fd-after-direct-by-content", sample([[send("ios")]]), true],
       ["fd-after-direct-by-content", sample([[send("android")]]), false],
