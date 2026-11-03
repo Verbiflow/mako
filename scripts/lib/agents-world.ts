@@ -59,6 +59,16 @@ export interface WorldOptions {
   processes?: ProcessReads
   /** Runs as a harness starts, before its driver names the native session it opened (`native-<conversation>`). */
   starting?: (conversation: string, harness: string) => Promise<void> | void
+  /** Hears each prompt and steer as its harness takes it, before its turn goes on: what a killed host's harnesses took stays known. */
+  heard?: (heard: Heard) => void
+}
+
+/** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
+export interface Heard {
+  kind: "prompt" | "steer"
+  conversation: string
+  harness: string
+  text: string
 }
 
 /**
@@ -103,7 +113,10 @@ export class AgentsWorld {
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
-      history: async () => null,
+      history: async (path) => {
+        const ref = this.options.catalog?.ref(path)
+        return ref ? this.options.catalog!.page(path) : null
+      },
       emit: (event) => {
         this.events.push(event)
         this.eventAt.push(Date.now())
@@ -240,6 +253,7 @@ export class AgentsWorld {
           steer: async (id: string, input: { text: string }) => {
             if (this.options.refuseSteers) return { kind: "not-accepted" as const, reason: "The turn moved on" }
             this.steers.push({ conversation: id, text: input.text, at: Date.now() })
+            this.options.heard?.({ kind: "steer", conversation: id, harness, text: input.text })
             return { kind: "accepted" as const }
           },
         },
@@ -248,11 +262,12 @@ export class AgentsWorld {
       available: () => true,
       start: async (_cwd, options) => {
         await this.options.starting?.(options.conversationId, harness)
-        return state(options.conversationId, options.resume ? { nativeId: options.resume } : {})
+        return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
       },
       prompt: async (id, text, _attachments, _settings, dispatch) => {
         dispatch.report({ kind: "submitted", source: "transport-call" })
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
+        this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
         const session = this.live.snapshot(id)?.session ?? state(id)
         this.live.observe({ type: "live-session", session: { ...session, status: "running", nativeRunId: `run-${this.prompts.length}` } })
         const turn = (async () => {
@@ -292,7 +307,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, snapshot: () => null, editQueued: none, transfer: none, submit: none,
-    act: async () => none(), cancel: async () => {}, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false,
+    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
 }

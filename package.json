@@ -251,6 +251,7 @@
     "test:agents-migrate": "tsx scripts/test-agents-migrate.ts",
     "test:agents-cli": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-cli.ts",
     "test:orch-update": "tsx scripts/test-orch-update.ts",
+    "test:orch-crash": "tsx scripts/test-orch-crash.ts",
     "test:agents-wake": "tsx scripts/test-agents-wake.ts",
     "test:orch-front-door": "tsx scripts/test-orch-front-door.ts && tsx --tsconfig tsconfig.app.json scripts/test-routed-transcript.ts",
     "test:orch-answer": "tsx scripts/test-orch-answer.ts",

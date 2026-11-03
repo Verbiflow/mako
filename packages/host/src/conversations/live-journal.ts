@@ -636,7 +636,18 @@ export class LiveJournal {
     const { steeredAt, ...summary } = journalSummary(metadata)
     const wakeAt = this.wakeAt()
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
-    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt } }
+    const unsettled = this.unsettled()
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled } }
+  }
+
+  /** Whether a message here was waiting, paused or running as the journal was last written; only rows that name such a status are parsed. */
+  private unsettled(): true | undefined {
+    const rows = this.db.prepare(`SELECT value FROM requests WHERE value LIKE '%"status":"queued"%' OR value LIKE '%"status":"held"%' OR value LIKE '%"status":"dispatching"%'`).all()
+    for (const row of rows) {
+      const status = LiveRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data?.status
+      if (status === "queued" || status === "held" || status === "dispatching") return true
+    }
+    return undefined
   }
 
   /**

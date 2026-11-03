@@ -85,6 +85,8 @@ export class LiveRecords {
   private readonly residents = new Map<string, Resident>()
   /** Conversations on disk only, as the listing has them. */
   private readonly recovered = new Map<string, LiveSummary>()
+  /** Conversations the host before this one left with a message waiting, paused or running, as `open` found them. */
+  private readonly unsettled = new Set<string>()
   /** Conversations `sweep` let go this host life; `load` puts each back as it was. */
   private readonly unloaded = new Map<string, Unloaded>()
   /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
@@ -126,7 +128,8 @@ export class LiveRecords {
         try {
           const found = journal.summary()
           if (found) {
-            const { ancestry, threadSession, ...summary } = found
+            const { ancestry, threadSession, unsettled, ...summary } = found
+            if (unsettled) this.unsettled.add(id)
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             backfillMemory(dependencies.memory, dependencies.root, id, summary.session)
             journals.push({
@@ -198,6 +201,11 @@ export class LiveRecords {
   /** The listing's line for every conversation, loaded or not. */
   listing(): LiveSummary[] {
     return [...this.recovered.values(), ...[...this.residents.values()].map(({ snapshot }) => residentSummary(snapshot))]
+  }
+
+  /** Whether the host before this one left a message of `id` waiting, paused or running (`open`). */
+  leftUnsettled(id: string): boolean {
+    return this.unsettled.has(id)
   }
 
   /** Whether `unload` let this resident go; a write through it is dropped. */
