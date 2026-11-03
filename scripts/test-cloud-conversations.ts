@@ -43,7 +43,8 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
 import type { LiveBatch, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { TURN_CHANGES_VERSION } from "@mako/host/contracts/turn-changes"
-import { followHostLog } from "@mako/host/base/host-log"
+import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
+import { withHostClient } from "@mako/host/base/host-client"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
 import type { WaitingClaim } from "@mako/host/usage/cloud-account"
@@ -184,7 +185,7 @@ async function cloudMachine(reach: Reach = {}, gatewayOptions: FakeGatewayOption
     stop: () => {},
   }
   /** One of the machine host's live batches, on its Thread's stream as the machine sends it. */
-  const batch = (threadId: string, conversation: string, revision: number, status: string, more: Pick<LiveBatch, "requests" | "requestChanges"> = {}) => {
+  const batch = (threadId: string, conversation: string, revision: number, status: string, more: Pick<LiveBatch, "requests" | "requestChanges" | "trace"> = {}) => {
     // SAFETY: a batch as the machine's live driver sends it, filled only as far as the router and summary read it.
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status }, ...more } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
@@ -867,6 +868,19 @@ test("a cloud conversation's folder is read on its machine, by its conversation:
   await until("the first's change told", () => changed.length === 1, 3_000)
   await new Promise((resolve) => setTimeout(resolve, 1_200))
   assert.deepEqual(changed, [first], "five batches, one change, and none for the other conversation")
+})
+
+test("a cloud Thread is followed as its own work: what it logs hours on names no call, not even the one that started it", async () => {
+  const machine = await cloudMachine()
+  const heard: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => line.message === "traced update heard" && heard.push(line))
+  after(stopHearing)
+  const { router } = conversations(machine.account, join(scratch, "follow-correlation", "conversations.json"))
+  const conversationId = randomUUID()
+  await withHostClient("app", () => router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }]), false, "c-the-start")
+  machine.batch(machine.created[0]!, conversationId, 2, "running", { trace: "st-0123" })
+  await until("the traced batch heard", () => heard.length === 1)
+  assert.equal(heard[0]!.fields?.correlationId, undefined, "the start's correlation ID stays with the start")
 })
 
 test("a cloud app's view is asked passively at this Mac's preview of its port; asleep, it's said from what this Mac kept, the same after a restart, and a call waking the machine is told as it wakes", async () => {
