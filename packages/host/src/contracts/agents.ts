@@ -3,6 +3,7 @@ import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, type ChildStateReading, type FinAsk, type NativeAgent } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
+import { FinTuningSourceSchema, type FinTuningWords } from "./fin-tuning.js"
 
 export { CHILDREN_BINDING }
 
@@ -75,6 +76,7 @@ export const ChildSpecSchema = z.object({
   harness: z.string().min(1).max(64).optional(),
   model: z.string().min(1).max(256).optional(),
   reasoning: z.string().min(1).max(64).optional(),
+  fast: z.boolean().optional(),
   /** At most the parent's tier (`childAccess`); absent means the parent's. */
   access: z.enum(ACCESS_TIER_NAMES).optional(),
   /** A `Place`, kept as the text it was asked as: a start's options carry it through the host call's generated schema. */
@@ -151,6 +153,8 @@ export const ThreadParentSchema = z.object({
   closedAt: z.number().optional(),
   /** Present while a process Mako didn't start runs the child's turns (`FollowedRun`). */
   run: FollowedRunSchema.optional(),
+  /** Where its model came from as it started (`resolveFinTuning`), and the choice passed over for one it no longer lists. */
+  tuned: z.object({ source: FinTuningSourceSchema, note: z.string().max(2_000).optional() }).optional(),
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
 
@@ -222,6 +226,8 @@ export interface ChildThread {
   title?: string
   harness?: string
   model?: string
+  /** Its model, reasoning and fast lane in words, from its harness's catalog. */
+  runsOn?: FinTuningWords
   /** The admission queue holds it. */
   queued?: { reason: QueueReason; ahead: number }
   starting?: "placing" | "preparing" | "booting" | "launching"
@@ -322,6 +328,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
   if (model) entry.model = model
+  if (thread.runsOn) entry.runsOn = { ...thread.runsOn, ...(edge.tuned?.note && { note: edge.tuned.note }) }
   if (edge.role !== "worker") entry.role = edge.role
   if (thread.toolUses) entry.usage = { toolUses: thread.toolUses }
   if (state.kind === "ended") entry.settledAt = thread.ended?.at ?? journal.latest?.at ?? edge.closedAt ?? edge.createdAt
@@ -499,6 +506,7 @@ export type AgentRefusalReason =
   | "cycle"
   | "unknown-child"
   | "unknown-harness"
+  | "unknown-model"
   | "no-parent"
   | "conflict"
   | "stale-owner"

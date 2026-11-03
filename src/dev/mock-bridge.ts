@@ -15,6 +15,7 @@ import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import type { AccessChoices } from "@mako/host/contracts/access-choices"
+import type { FinChoicesReading } from "@mako/host/contracts/fin-tuning"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
@@ -809,6 +810,11 @@ export function installMockBridge() {
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   let planBuilds: PlanBuilds = {}
   let accessChoices: AccessChoices = {}
+  // Codex's Fins chosen in Settings › Fins; the rest as the person uses each harness.
+  let finChoices: FinChoicesReading = {
+    chosen: { codex: { model: "gpt-6.1-sol", options: { effort: "high", fast: true } } },
+    used: { claude: { model: "claude-opus-5-5", options: { effort: "high" } }, cursor: { model: "composer-2.5", options: { fast: true } }, devin: { model: "swe-2", options: { effort: "max" } } },
+  }
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
     boot: async () => boot,
@@ -983,6 +989,14 @@ export function installMockBridge() {
     adoptAccessChoices: async (modes) => {
       accessChoices = { ...Object.fromEntries(Object.entries(modes).map(([harness, mode]) => [harness, { mode }])), ...accessChoices }
       return accessChoices
+    },
+    finDefaults: async () => finChoices,
+    chooseFinDefault: async (harness, settings) => {
+      const chosen = { ...finChoices.chosen }
+      if (settings) chosen[harness] = settings
+      else delete chosen[harness]
+      finChoices = { ...finChoices, chosen }
+      return finChoices
     },
     planBuilds: async () => planBuilds,
     recordPlanBuild: async (planId, build) => {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
-import type { SessionSettings } from "@mako/sessions/settings"
+import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
@@ -62,8 +62,12 @@ export interface WorldOptions {
   starting?: (conversation: string, harness: string) => Promise<void> | void
   /** Hears each prompt and steer as its harness takes it, before its turn goes on: what a killed host's harnesses took stays known. */
   heard?: (heard: Heard) => void
-  /** What a new conversation of each harness starts on, as its profile says. */
+  /** What a new conversation of each harness starts on, as its profile says (Mako's pick). */
   defaults?: Partial<Record<string, SessionSettings>>
+  /** Each harness's catalog, as its profile lists it; a harness without one has none read. */
+  catalogs?: Partial<Record<string, readonly SessionModel[]>>
+  /** The person's Settings › Fins and what they last used, by harness. */
+  fins?: { chosen?: Partial<Record<string, SessionSettings>>; used?: Partial<Record<string, SessionSettings>> }
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -142,7 +146,13 @@ export class AgentsWorld {
       runs: () => this.options.catalog !== undefined,
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
       modes: (harness) => drivers.get(harness)?.modes,
-      defaultTuning: async (harness) => this.options.defaults?.[harness],
+      finChoices: async (harness) => {
+        const recommended = this.options.defaults?.[harness]
+        const chosen = this.options.fins?.chosen?.[harness]
+        const used = this.options.fins?.used?.[harness]
+        return { models: this.options.catalogs?.[harness] ?? [], ...(recommended && { recommended }), ...(chosen && { chosen }), ...(used && { used }) }
+      },
+      catalogOf: (harness) => this.options.catalogs?.[harness],
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.processes && { processes: this.options.processes }),
     }

@@ -1,6 +1,6 @@
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
-import type { SessionSettings } from "@mako/sessions/settings"
+import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
 import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
@@ -69,6 +69,7 @@ import {
 } from "../contracts/agent-tools.js"
 import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
+import { FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -106,11 +107,32 @@ export interface AgentsDeps {
   harnessLabel(harness: string): string
   /** The modes `harness`'s live driver declares, each with its access tier; undefined for one that declares none. */
   modes(harness: string): readonly LiveSessionMode[] | undefined
-  /** What a new conversation of `harness` in `cwd` starts on: Mako's choice for it, else the harness's own default. */
-  defaultTuning?(harness: string, cwd: string): Promise<SessionSettings | undefined>
+  /** What a Fin of `harness` in `cwd` may run on: the harness's catalog, Mako's pick for it, and the person's own choices there. */
+  finChoices?(harness: string, cwd: string): Promise<FinChoices>
+  /** `harness`'s catalog as this host last read it, for a Fin's row; undefined before it's read. */
+  catalogOf?(harness: string): readonly SessionModel[] | undefined
   budget?: TreeBudget
   processes?: ProcessReads
   now?(): number
+}
+
+/** What a Fin of one harness may run on (`AgentsDeps.finChoices`). */
+export interface FinChoices {
+  /** Its catalog; empty while it hasn't been read. */
+  models: readonly SessionModel[]
+  /** Mako's pick for the harness (`HarnessDefaults.work`). */
+  recommended?: SessionSettings
+  /** The person's Settings › Fins choice for it. */
+  chosen?: SessionSettings
+  /** The model the person last started or sent with on it. */
+  used?: SessionSettings
+}
+
+/** A spawn's model, decided as it's admitted: what it starts with, where that came from, and any choice passed over. */
+interface Tuned {
+  settings?: SessionSettings
+  source: FinTuningSource
+  note?: string
 }
 
 /** An Apex resolved in the store: its Session, its Thread, and its conversation here. */
@@ -127,6 +149,8 @@ interface QueuedStart {
   input: AgentsStartInput
   tier: AccessTier
   harness: string
+  /** Absent from a build before models were decided at admission: decided at its start. */
+  tuned?: Tuned
 }
 
 const QueuedStartSchema = z.object({
@@ -134,6 +158,7 @@ const QueuedStartSchema = z.object({
   input: hostCallSchema("mako:agents-start").def.items[1],
   tier: z.enum(ACCESS_TIER_NAMES),
   harness: z.string(),
+  tuned: z.object({ settings: SessionSettingsSchema.optional(), source: FinTuningSourceSchema, note: z.string().optional() }).optional(),
 }) satisfies z.ZodType<QueuedStart>
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
@@ -469,6 +494,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offers}, each above ${allowed}, the most this ${FIN_WORD} may have. Start it on another harness.`)
     }
     const tier = mode.tier
+    const tuned = await this.tuningOf(apex, harness, input)
+    if ("refused" in tuned) return this.refuse(op, "unknown-model", tuned.refused)
     const tree = this.rootOf(apex.thread)
     const counts = this.treeCounts(tree)
     // A queued spawn is one the tree has started: once the budget would refuse it, it never waits.
@@ -476,13 +503,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (counts.started + queued >= this.budget.started)
       return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
     if (counts.running >= this.budget.running) {
-      const queued: QueuedStart = { lead: apex, input, tier, harness }
+      const queued: QueuedStart = { lead: apex, input, tier, harness, tuned }
       store.queueSpawn({ op, tree, record: JSON.stringify(queued), at: this.now() })
       hostLog("agents", "start queued", { op, why: "tree-running", running: counts.running, budget: this.budget.running })
       this.forget(apex.thread)
       return this.queuedAnswer(op, apex, false)
     }
-    return this.launch(op, { lead: apex, input, tier, harness })
+    return this.launch(op, { lead: apex, input, tier, harness, tuned })
   }
 
   async link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult> {
@@ -849,6 +876,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         harness,
         ...(input.model && { model: input.model }),
         ...(input.reasoning && { reasoning: input.reasoning }),
+        ...(input.fast !== undefined && { fast: input.fast }),
         access: tier,
         ...(input.place && { place: input.place }),
         ...(input.workspace && { workspace: input.workspace }),
@@ -858,8 +886,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       op,
       startedBy: { kind: "agent", session: SessionIdSchema.parse(apex.session) },
     }
+    const decided = queued.tuned ?? await this.tuningOf(apex, harness, input)
+    if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
+    parent.tuned = { source: decided.source, ...(decided.note && { note: decided.note }) }
+    const tuning = decided.settings
     const workspace = input.workspace
-    const tuning = await this.tuningOf(apex, harness, cwd, input)
     const options: LiveStartOptions = {
       conversationId,
       initialRequest: { id: namedUuid(`${op}\nbrief`), text: briefText(input.brief, name), attachments: [] },
@@ -896,20 +927,31 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * What a Fin runs on: the model the spawn named, else its Apex's own model
-   * and options on the Apex's harness, else what a new conversation of that
-   * harness starts on. A reasoning level it named applies to any of them.
+   * What a Fin runs on (`resolveFinTuning`): what the spawn named, held to its
+   * harness's catalog, else what the person uses there. The Apex's own model
+   * counts only on the Apex's harness. Its folder doesn't change the catalog,
+   * so the Apex's is read.
    */
-  private async tuningOf(apex: Apex, harness: string, cwd: string, input: AgentsStartInput): Promise<SessionSettings | undefined> {
-    const effort = input.reasoning ? { effort: input.reasoning } : undefined
-    if (input.model) return { model: input.model, ...(effort && { options: effort }) }
-    const own = apex.conversation && this.deps.live.session(apex.conversation)?.harness === harness ? this.settingsOf(apex.conversation) : undefined
-    const settings = own ?? await this.deps.defaultTuning?.(harness, cwd).catch((error) => {
-      hostWarn("agents", "a Fin's harness default couldn't be read; it starts on the harness's own", { harness, error: errorMessage({ error }) })
+  private async tuningOf(apex: Apex, harness: string, input: AgentsStartInput): Promise<Tuned | { refused: string }> {
+    const cwd = input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined)
+    const choices: FinChoices = (cwd && await this.deps.finChoices?.(harness, cwd).catch((error) => {
+      hostWarn("agents", "a Fin's catalog couldn't be read; its choice isn't held to it", { harness, error: errorMessage({ error }) })
       return undefined
+    })) || { models: [] }
+    const apexSettings = apex.conversation && this.deps.live.session(apex.conversation)?.harness === harness ? this.settingsOf(apex.conversation) : undefined
+    const decided = resolveFinTuning({
+      label: this.deps.harnessLabel(harness),
+      models: choices.models,
+      asked: { ...(input.model && { model: input.model }), ...(input.reasoning && { reasoning: input.reasoning }), ...(input.fast !== undefined && { fast: input.fast }) },
+      ...(choices.chosen && { chosen: choices.chosen }),
+      ...(apexSettings && { apex: apexSettings }),
+      ...(choices.used && { used: choices.used }),
+      ...(choices.recommended && { recommended: choices.recommended }),
     })
-    if (!settings?.model) return effort && { options: effort }
-    return { model: settings.model, ...((settings.options || effort) && { options: { ...settings.options, ...effort } }) }
+    if ("refused" in decided) return decided
+    const note = decided.notes.join(" ")
+    hostLog("agents", "a Fin's model decided", { harness, source: decided.source, ...(decided.settings?.model && { model: decided.settings.model }), ...(note && { passedOver: true }) })
+    return { ...(decided.settings && { settings: decided.settings }), source: decided.source, ...(note && { note }) }
   }
 
   /** The model a conversation runs on now: the person's last choice in it, else what its harness reported, else what it started with. */
@@ -949,11 +991,15 @@ export class Agents implements AgentOperations, ConversationChildren {
     const state = this.stateOf(edge)
     const counts = this.treeCounts(this.rootOf(apex.thread))
     const conversation = this.conversationOf(edge.child)
+    const reading = this.childReading(edge)
+    const runsOn = reading.runsOn ? finTuningLine(reading.runsOn) : reading.model
     return {
       child: edge.child,
       name: edge.name,
       ...(conversation && { conversation }),
       state: state.kind,
+      ...(runsOn && { runsOn }),
+      ...(edge.tuned?.note && { note: edge.tuned.note }),
       tree: { ...counts, of: { ...this.budget } },
       ...(deduped && { deduped: true as const }),
       next: afterStart(edge.asked.wake ?? "decisions"),
@@ -1214,7 +1260,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
     const thread = this.store()?.thread(edge.child)
     const title = thread?.title ?? session.title
-    const model = this.settingsOf(conversation)?.model
+    const settings = this.settingsOf(conversation)
+    const model = settings?.model
+    const catalog = this.deps.catalogOf?.(session.harness)
+    const runsOn = catalog && finTuningWords(catalog, settings)
     return {
       source: "live",
       conversation,
@@ -1224,6 +1273,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(title && { title }),
       harness: session.harness,
       ...(model && { model }),
+      ...(runsOn && { runsOn }),
       ...((session.status === "starting" || this.starting.has(edge.op)) && { starting: "launching" as const }),
       ...(working && { working }),
       ...(working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
@@ -1330,6 +1380,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(under && { under }),
       harness: reading.harness ?? this.harnessOf(edge),
       ...((reading.model ?? edge.asked.model) && { model: reading.model ?? edge.asked.model }),
+      ...(reading.runsOn && { runsOn: finTuningLine(reading.runsOn) }),
       origin: edge.origin,
       state: this.stateOf(edge),
       ...(reading.title && { title: reading.title }),

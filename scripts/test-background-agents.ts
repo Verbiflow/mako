@@ -27,6 +27,7 @@ import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
 import { openCodeModes } from "@mako/host/harnesses/opencode/access"
 import { ThreadStore } from "@mako/host/threads/store"
 import { AgentsWorld, noConversations, type Script } from "./lib/agents-world.ts"
+import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
  * The children engine (`npm run test:background-agents`): a child's state and
@@ -525,28 +526,52 @@ async function messagesReachLinkedRuns(): Promise<void> {
 }
 
 /** A Fin runs on the model its spawn names, else its Apex's own on the Apex's harness, else its harness's default; its strip shows it. */
+/**
+ * What a Fin runs on: its Apex's model on the Apex's harness, the person's own choices on another (Settings › Fins,
+ * then what they last used there), Mako's pick only after those, and what a spawn names held to the harness's catalog.
+ * On `main` before this, a Fin on another harness ran on that harness's default and a named model went unchecked.
+ */
 async function finModels(): Promise<void> {
+  const claude = recordedCatalog("claude")!.models
+  const codex = recordedCatalog("codex")!.models
+  const cursor = recordedCatalog("cursor")!.models
   const w = new AgentsWorld({
     root: join(root, "models"),
     script: (turn) => (turn.text.includes("You're fin:") ? "done" : "ok"),
-    defaults: { claude: { model: "claude-sonnet-5", options: { effort: "medium" } } },
+    defaults: { claude: { model: "claude-opus-5-5", options: { effort: "high", fast: false } }, codex: { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } } },
+    catalogs: { claude, codex, cursor },
+    fins: { chosen: { cursor: { model: "gpt-4o" } }, used: { claude: { model: "claude-sonnet-5", options: { effort: "medium" } } } },
   })
   try {
-    const apex = await w.apex("cursor", "full", { model: "claude-opus-5-5", options: { effort: "high" } })
+    const apex = await w.apex("cursor", "full", { model: "claude-opus-5-5[context=300k,effort=xhigh,fast=true]" })
     const brief = { objective: "Look" }
     const same = await w.agents.start(apex.caller, { brief, name: "same", clientKey: "s", cwd: w.root })
     const other = await w.agents.start(apex.caller, { brief, harness: "claude", name: "other", clientKey: "o", cwd: w.root })
-    const named = await w.agents.start(apex.caller, { brief, harness: "cursor", model: "gpt-6", reasoning: "low", name: "named", clientKey: "n", cwd: w.root })
-    assert.ok(!("refused" in same) && !("refused" in other) && !("refused" in named), JSON.stringify([same, other, named]))
+    const told = await w.agents.start(apex.caller, { brief, harness: "codex", reasoning: "high", name: "told", clientKey: "t", cwd: w.root })
+    const named = await w.agents.start(apex.caller, { brief, harness: "claude", model: "opus 5.5", reasoning: "max", fast: true, name: "named", clientKey: "n", cwd: w.root })
+    assert.ok(!("refused" in same) && !("refused" in other) && !("refused" in told) && !("refused" in named), JSON.stringify([same, other, told, named]))
     const asked = (answer: AgentsStarted) => w.live.snapshot(answer.conversation!)?.requests[0]?.tuning
-    assert.deepEqual(asked(same), { model: "claude-opus-5-5", options: { effort: "high" } }, "a Fin on its Apex's harness runs on the Apex's model and reasoning, not the harness's default")
-    assert.deepEqual(asked(other), { model: "claude-sonnet-5", options: { effort: "medium" } }, "one on another harness runs on that harness's default")
-    assert.deepEqual(asked(named), { model: "gpt-6", options: { effort: "low" } })
+    assert.deepEqual(asked(same), { model: "claude-opus-5-5", options: { context: "300k", effort: "xhigh", fast: "true" } }, "a Fin on its Apex's harness runs on the Apex's model, reasoning and fast lane, past a Fins default Cursor no longer lists")
+    assert.match(same.note ?? "", /Your Fins default for Cursor, gpt-4o, isn't listed by Cursor anymore: it runs on Claude Opus 5\.5 instead\./, "and the Apex hears the default was passed over")
+    assert.equal(same.runsOn, "Claude Opus 5.5 · Extra High · Fast")
+    assert.deepEqual(asked(other), { model: "claude-sonnet-5", options: { effort: "medium" } }, "one on another harness runs on what the person last used there, not the harness's default")
+    assert.deepEqual(asked(told), { model: "gpt-6.1-sol", options: { effort: "high", serviceTier: "default" } }, "\"Codex on high\": Codex's model for the person, on high")
+    assert.deepEqual(asked(named), { model: "claude-opus-5-5", options: { effort: "max", fast: true } }, "a named model, level and fast lane, read leniently")
+    const unknown = await w.agents.start(apex.caller, { brief, harness: "claude", model: "gpt-6", name: "unknown", clientKey: "u", cwd: w.root })
+    assert.ok("refused" in unknown && unknown.refused === "unknown-model" && /Claude has no model "gpt-6"\. Its models: Opus 5\.5 \(claude-opus-5-5\)/.test(unknown.why), JSON.stringify(unknown))
+    const levelless = await w.agents.start(apex.caller, { brief, harness: "claude", model: "haiku", reasoning: "high", name: "levelless", clientKey: "l", cwd: w.root })
+    assert.ok("refused" in levelless && /Haiku 4\.5 on Claude has no reasoning levels/.test(levelless.why), JSON.stringify(levelless))
     await w.settle()
     const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed)
-    assert.deepEqual(listed.children.map((strip) => [strip.name, strip.model]), [["same", "claude-opus-5-5"], ["other", "claude-sonnet-5"], ["named", "gpt-6"]], "each strip shows its model")
-    assert.deepEqual(w.agents.roster(apex.conversation).map((entry) => entry.model), ["claude-opus-5-5", "claude-sonnet-5", "gpt-6"], "and so does each Fin's row")
+    assert.deepEqual(
+      listed.children.map((strip) => [strip.name, strip.runsOn]),
+      [["same", "Claude Opus 5.5 · Extra High · Fast"], ["other", "Sonnet 5 · Medium"], ["told", "GPT-6.1-Sol · High"], ["named", "Opus 5.5 · Max · Fast"]],
+      "each strip says its model, reasoning and fast lane"
+    )
+    const rows = w.agents.roster(apex.conversation)
+    assert.deepEqual(rows.map((entry) => entry.runsOn && [entry.runsOn.model, entry.runsOn.reasoning, entry.runsOn.fast ?? false]), [["Claude Opus 5.5", "Extra High", true], ["Sonnet 5", "Medium", false], ["GPT-6.1-Sol", "High", false], ["Opus 5.5", "Max", true]], "and so does each Fin's row")
+    assert.match(rows[0]!.runsOn?.note ?? "", /gpt-4o, isn't listed by Cursor anymore/, "the row keeps why its model isn't the Fins default")
   } finally {
     await w.close()
   }

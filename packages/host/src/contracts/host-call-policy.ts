@@ -174,6 +174,8 @@ const reads = [
   "mako:daemon-login",
   "mako:utility-model-settings",
   "mako:harness-order-saved",
+  /** Reads Settings › Fins and what the person used on each harness from one small file. */
+  "mako:fin-defaults",
   "mako:integrations",
   "mako:skills-discover",
   "mako:skills-resolve",
@@ -305,6 +307,8 @@ const replays = [
   "mako:utility-choice",
   /** Saving the same harness order again leaves the same order. */
   "mako:harness-order",
+  /** `FinDefaultsStore.choose`: the same choice for a harness saved twice is one choice. */
+  "mako:fin-default-choose",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */

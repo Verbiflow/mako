@@ -191,6 +191,7 @@ const inputs = {
         harness: z.string().optional(),
         model: z.string().optional(),
         reasoning: z.string().optional(),
+        fast: z.boolean().optional(),
         access: z
           .union([
             z.literal("ask"),
@@ -319,7 +320,6 @@ const inputs = {
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
   "mako:build-update": () => z.tuple([]),
-  "mako:measure-update-again": () => z.tuple([]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -441,6 +441,20 @@ const inputs = {
   "mako:element-pick-targets": () => z.tuple([]),
   "mako:element-pick-wait": () => z.tuple([z.string(), z.number()]),
   "mako:external-editors": () => z.tuple([]),
+  "mako:fin-default-choose": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.null(),
+        z.object({
+          model: z.string().optional(),
+          options: z
+            .record(z.string(), z.union([z.boolean(), z.string()]))
+            .optional(),
+        }),
+      ]),
+    ]),
+  "mako:fin-defaults": () => z.tuple([]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
@@ -964,6 +978,7 @@ const inputs = {
               harness: z.string().optional(),
               model: z.string().optional(),
               reasoning: z.string().optional(),
+              fast: z.boolean().optional(),
               access: z
                 .union([
                   z.literal("ask"),
@@ -1011,6 +1026,19 @@ const inputs = {
               }),
             ]),
             op: z.string(),
+            tuned: z
+              .object({
+                source: z.union([
+                  z.literal("harness"),
+                  z.literal("asked"),
+                  z.literal("mako"),
+                  z.literal("fins"),
+                  z.literal("apex"),
+                  z.literal("used"),
+                ]),
+                note: z.string().optional(),
+              })
+              .optional(),
           })
           .optional(),
       }),
@@ -1132,6 +1160,7 @@ const inputs = {
         scope: z.union([z.literal("workspace"), z.literal("user")]),
       }),
     ]),
+  "mako:measure-update-again": () => z.tuple([]),
   "mako:merge-pull": () =>
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
@@ -2095,7 +2124,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:browser-control-status", "control"],
   ["mako:browser-extension-setup", "control"],
   ["mako:build-update", "application"],
-  ["mako:measure-update-again", "application"],
   ["mako:capabilities", "workspaces"],
   ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
@@ -2152,6 +2180,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:element-pick-targets", "control"],
   ["mako:element-pick-wait", "control"],
   ["mako:external-editors", "workspaces"],
+  ["mako:fin-default-choose", "harnesses"],
+  ["mako:fin-defaults", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
   ["mako:git-changed-since", "git"],
@@ -2254,6 +2284,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-discover", "tools"],
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
+  ["mako:measure-update-again", "application"],
   ["mako:merge-pull", "git"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],

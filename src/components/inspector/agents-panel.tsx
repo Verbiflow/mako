@@ -25,6 +25,7 @@ import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { Blank } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
+import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 
 const labels = {
   working: "Running",
@@ -307,7 +308,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
   const facts = [
     kind,
     harnessLabel(agent.provider),
-    agent.model,
+    agent.runsOn ? finTuningLine(agent.runsOn) : agent.model,
     agent.role,
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
     agent.usage?.tokens !== undefined ? `${formatTokens(agent.usage.tokens)} tokens` : undefined,
@@ -361,6 +362,11 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
               </span>
             ))}
           </span>
+          {agent.runsOn?.note ? (
+            <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
+              {agent.runsOn.note}
+            </span>
+          ) : null}
         </span>
       </button>
       {transcript && agent.child?.path && agent.child.nativeId ? (

@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils"
 import { acp, acpStore } from "@/state/acp"
 import { threadChildren, useThreadChildren } from "@/state/apex-fins"
 import { Elapsed } from "@/components/inspector/elapsed"
+import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 
 const HEADINGS = {
   needs: "Needs you",
@@ -135,7 +136,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
   const line = childLine(state)
   const facts = [
     harnessLabel(agent.provider),
-    agent.model,
+    agent.runsOn ? finTuningLine(agent.runsOn) : agent.model,
     agent.role === APEX_ROLE ? APEX_WORD : undefined,
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
   ].filter(Boolean)
@@ -170,6 +171,11 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
               </span>
             ))}
           </span>
+          {agent.runsOn?.note ? (
+            <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
+              {agent.runsOn.note}
+            </span>
+          ) : null}
         </span>
       </button>
       {agent.role === APEX_ROLE && agent.child ? <SubApexFold thread={agent.child.thread} onOpen={onOpen} /> : null}

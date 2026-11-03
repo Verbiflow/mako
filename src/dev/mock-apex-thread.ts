@@ -1,5 +1,6 @@
 import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { childEntry, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
+import type { FinTuningWords } from "@mako/host/contracts/fin-tuning"
 import { BRIEF_CLOSE, briefIntro, fromAgent, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -88,6 +89,23 @@ function shown(state: ChildState, child: string, at: number): ChildShowing {
   }
 }
 
+/** What each Fin runs on, as its harness's catalog words it (`finTuningWords`); one passed over a model its harness stopped listing. */
+const RUNS_ON = new Map<string, FinTuningWords>(Object.entries({
+  "push-wording": { model: "GPT-5.6 Sol", reasoning: "High", fast: true },
+  "sheet-motion": { model: "Composer 2.5", fast: true },
+  "composer-chips": { model: "Opus 5.5", reasoning: "High" },
+  dictation: { model: "GPT-5.6 Sol", reasoning: "Medium" },
+  "token-refresh": { model: "Grok 4.7", reasoning: "High" },
+  outbox: { model: "Kimi K3", reasoning: "High" },
+  hunks: { model: "SWE-2", reasoning: "High" },
+  haptics: { model: "Opus 5.5", reasoning: "Medium" },
+  "share-sheet": { model: "Composer 2.5" },
+  swipe: { model: "GPT-5.6 Sol", reasoning: "Extra high" },
+  "deep-links": { model: "Opus 5.5", reasoning: "High" },
+  "pull-refresh": { model: "Grok 4.7", reasoning: "High" },
+}))
+const PASSED_OVER = new Map([["token-refresh", "Your Fins default for Grok, grok-4.6-mini, isn't listed by Grok anymore: it runs on Grok 4.7 instead."]])
+
 /** One Fin's roster entry, made by `childEntry` from its edge and what its Thread shows, as the host makes it. */
 export function apexFin(index: number, state: ChildState = CHILDREN[index]!.state): NativeAgent {
   const fixture = CHILDREN[index]!
@@ -106,6 +124,7 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     op: `start:${APEX_SESSION}:${fixture.name}`,
     startedBy: { kind: "agent", session: apex },
     createdAt,
+    tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }) },
   }
   const { thread, journal } = shown(state, child, now - 60_000)
   return childEntry(
@@ -115,6 +134,7 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
       title: fixture.title,
       harness: fixture.harness,
       model: fixture.model,
+      ...(RUNS_ON.has(fixture.name) && { runsOn: RUNS_ON.get(fixture.name) }),
       startedAt: createdAt,
       updatedAt: now,
       ...(fixture.toolUses && { toolUses: fixture.toolUses }),
