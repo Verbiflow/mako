@@ -170,6 +170,7 @@ export const LiveRequestSchema = z.object({
         .max(MAX_INTERRUPTED_CALLS)
         .optional(),
       moreCalls: z.number().int().positive().optional(),
+      since: z.number().optional(),
       told: z.number().optional(),
       closed: z.array(z.string()).optional(),
       stopped: z.array(z.string()).optional(),

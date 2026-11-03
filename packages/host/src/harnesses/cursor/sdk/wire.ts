@@ -387,6 +387,12 @@ export const SdkEventSchema = z.discriminatedUnion("event", [
     tokensAfter: z.number().int().nonnegative().optional(),
     drawn: z.literal(true).optional(),
   }),
+  /**
+   * The SDK resumed the turn's run from a checkpoint older than calls that
+   * had already run, and sent `text` (`resumeAccountText`) as a message on
+   * that checkpoint first, naming them (`calls`) and what moved in the checkout.
+   */
+  z.object({ event: z.literal("resumed"), turn: z.string(), text: z.string(), calls: z.number().int().positive() }),
   /** The side answer's text as it streams. */
   z.object({ event: z.literal("side-delta"), side: z.string(), text: z.string() }),
   z.object({ event: z.literal("login-url"), url: z.string() }),

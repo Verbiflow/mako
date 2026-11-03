@@ -69,6 +69,9 @@ import {
   type SdkSettledCalls,
 } from "./wire.js"
 import { adoptedEnvironment } from "./adopt.js"
+import { CURSOR_SDK_RESUME_HOOK, RunCallLog, resumedCalls, resumeWords, type LoggedCall, type ResumeAnswer, type ResumeQuestion } from "./resumed-calls.js"
+import { resumeAccountText } from "../../../contracts/resume-account.js"
+import { checkoutSince } from "../../../base/checkout-since.js"
 
 const PackageSchema = z.object({ name: z.string(), version: z.string() })
 
@@ -106,6 +109,12 @@ interface ActiveTurn {
   replayTruncated: boolean
   /** The next message's `seq`. */
   messages: number
+  /** The calls its stream showed, for the words a retry sends instead of resuming blind (`resumeHook`). */
+  calls: RunCallLog
+  /** Which of those calls the run's latest checkpoint holds: its own reader, apart from `pump`'s settling. */
+  checkpoints: CursorSdkRunCheckpoints
+  plan: boolean
+  startedAt: number
 }
 
 /** A turn's replay keeps its latest lines within this budget; text streamed as deltas is also in its messages. */
@@ -113,6 +122,13 @@ const MAX_REPLAY_CHARACTERS = 16 * 1024 * 1024
 
 let agent: OpenAgent | undefined
 let active: ActiveTurn | undefined
+/** Each running run's latest checkpoint root and when it was saved, as the store moved it. */
+const runRoots = new Map<string, { root: string; at: number }>()
+/**
+ * The calls a run that ended in error ran after its last checkpoint, which
+ * the next turn goes on without: told of in that turn's message (`send`).
+ */
+let missed: { calls: LoggedCall[]; since: number } | undefined
 /** The turn whose `send` has not returned yet: the SDK may still start its run. */
 let sending: string | undefined
 /** Stop arrived while `sending`: the run is cancelled the moment it exists. */
@@ -404,6 +420,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     const updated = await updateRun(input)
     const open = agent
     const root = input.run.latestCheckpointRef?.rootBlobId
+    if (root && runRoots.get(input.run.runId)?.root !== root) runRoots.set(input.run.runId, { root, at: Date.now() })
     if (open && root && input.run.agentId === open.agentId) await reportContext(open, root, turnOfRun(input.run.runId))
     return updated
   }
@@ -593,7 +610,7 @@ const ResultStatusSchema = z.object({ status: z.string().optional().catch(undefi
 /** How often a run looks for the result of a call it moved past, until the call settles or the stream ends. */
 const SETTLE_POLL_MS = 250
 
-async function pump(open: OpenAgent, turn: string, run: Run, turnEnded: () => boolean): Promise<void> {
+async function pump(open: OpenAgent, turn: string, run: Run, calls: RunCallLog, startedAt: number, turnEnded: () => boolean): Promise<void> {
   const unended = new Set<string>()
   // Calls whose result only the checkpoint keeps: open calls the model went
   // on past, which the stream may never end, and calls it ended as an error
@@ -619,6 +636,7 @@ async function pump(open: OpenAgent, turn: string, run: Run, turnEnded: () => bo
   try {
     for await (const message of run.stream()) {
       if (message.type === "tool_call") {
+        calls.record(message)
         if (message.status !== "running") {
           unended.delete(message.call_id)
           if (cursorCallErrored(message.status, ResultStatusSchema.parse(message.result).status)) passed.add(message.call_id)
@@ -644,11 +662,15 @@ async function pump(open: OpenAgent, turn: string, run: Run, turnEnded: () => bo
   let result
   try {
     result = await run.wait()
+    const saved = runRoots.get(run.id)
+    const unseen = result.status === "error" && calls.size ? calls.unseen(saved?.root, new Set(checkpoints.results(calls.ids()).keys())) : []
+    if (unseen.length) missed = { calls: unseen, since: saved?.at ?? startedAt }
   } catch (cause) {
     const error = cursorSdkWireError(cause)
     write({ event: "result", turn, result: { runId: run.id, status: "error", error: { message: error.message, code: error.code } } })
     return
   } finally {
+    runRoots.delete(run.id)
     if (active?.turn === turn) active = undefined
   }
   settleRun(open, run.id)
@@ -825,12 +847,19 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
   const options = { model: params.model, mode: params.plan ? ("plan" as const) : ("agent" as const), onDelta }
   sending = params.turn
   cancelWhileSending = false
+  const startedAt = Date.now()
   try {
+    const account = await missedAccount(open)
+    if (account) message.text = withControlAccount(message.text, account)
     const run = await startRun(open, message, options)
     let finish = () => {}
     const finished = new Promise<void>(resolve => { finish = resolve })
-    active = { turn: params.turn, run, finished, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0 }
-    void pump(open, params.turn, run, () => turnEnded).then(finish, cause => {
+    const calls = new RunCallLog()
+    active = {
+      turn: params.turn, run, finished, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0,
+      calls, checkpoints: new CursorSdkRunCheckpoints(open.stores, open.stateRoot, open.agentId, run.id), plan: params.plan === true, startedAt,
+    }
+    void pump(open, params.turn, run, calls, startedAt, () => turnEnded).then(finish, cause => {
       log("warn", `run projection ended early: ${cursorSdkWireError(cause).message}`)
       finish()
     })
@@ -854,6 +883,68 @@ function activeTurn(): SdkResult<"active"> {
   }
   if (sending) return { turn: sending, starting: true }
   return {}
+}
+
+/**
+ * What the previous turn's run, which ended in error, ran after its last
+ * checkpoint: the calls this turn's history lacks, and what moved in the
+ * checkout since. Told once.
+ */
+async function missedAccount(open: OpenAgent): Promise<string | undefined> {
+  const previous = missed
+  missed = undefined
+  if (!previous) return undefined
+  try {
+    const checkout = await checkoutSince(open.cwd, previous.since).catch(() => [])
+    return resumeAccountText({ calls: resumedCalls(previous.calls), checkout, cause: "continued" })
+  } catch (cause) {
+    log("warn", `the calls the last run ran after its checkpoint could not be told: ${cursorSdkWireError(cause).message}`)
+    return undefined
+  }
+}
+
+/** Mako's words go inside the message's control envelope, which saved conversations leave out of the person's words. */
+function withControlAccount(text: string, account: string): string {
+  const open = "<mako-local-control>\n"
+  const close = "\n</mako-local-control>"
+  const end = text.startsWith(open) ? text.indexOf(close) : -1
+  return end > 0 ? `${text.slice(0, end)}\n${account}${text.slice(end)}` : `${open}${account}${close}\n\n${text}`
+}
+
+/**
+ * Asked by the SDK's retry loop before each retry (`scripts/patch-cursor-sdk.mjs`):
+ * the words it sends instead of resuming the turn's run from its last
+ * checkpoint blind, naming each call that ran after that checkpoint and what
+ * moved in the checkout since. The host is shown them as the turn's own line.
+ * A side question's run, or a retry before any call ran, resumes as the SDK would.
+ */
+async function resumeHook(question: ResumeQuestion): Promise<ResumeAnswer | undefined> {
+  const open = agent
+  const current = active
+  if (!open || !current) return undefined
+  // Another request than the run's own is a message the SDK queued into the run, unless a side question's run is the one asking.
+  const ours = question.requestId !== undefined && question.requestId === current.run.requestId
+  if (!ours && [...sides.values()].some((side) => side.answering && (side.run?.requestId === undefined || side.run.requestId === question.requestId)))
+    return undefined
+  try {
+    const saved = runRoots.get(current.run.id)
+    const words = await resumeWords({
+      calls: current.calls,
+      root: saved?.root,
+      since: saved?.at ?? current.startedAt,
+      known: (ids) => new Set(current.checkpoints.results(ids).keys()),
+      checkout: (since) => checkoutSince(open.cwd, since),
+    })
+    if (!words) return undefined
+    log("info", `the SDK resumes the run from its last checkpoint; told of ${words.calls} calls that ran after it (attempt ${question.attempt})`)
+    const text = JSON.stringify({ event: "resumed", turn: current.turn, text: words.text, calls: words.calls } satisfies SdkChildLine)
+    writeText(text)
+    remember(current.turn, text)
+    return { text: words.text, plan: current.plan }
+  } catch (cause) {
+    log("warn", `the calls the resumed run missed could not be told: ${cursorSdkWireError(cause).message}`)
+    return undefined
+  }
 }
 
 async function steer(text: string): Promise<SdkResult<"steer">> {
@@ -1218,6 +1309,7 @@ function main(): void {
   console.info = (...args) => console.error(...args)
   console.debug = (...args) => console.error(...args)
   if (process.argv[2] === CURSOR_SDK_HEADLESS) return headlessMain(process.argv[3])
+  Object.assign(globalThis, { [CURSOR_SDK_RESUME_HOOK]: resumeHook })
   process.on(CURSOR_SDK_LOG_EVENT, (...args: unknown[]) => {
     const entry = CursorSdkLogEntry.safeParse(args[0])
     const line = entry.success ? cursorRunLogLine(entry.data) : undefined
