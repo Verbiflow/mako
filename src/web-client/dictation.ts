@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { noteDictation } from "./diagnostics"
+import { noteDictation } from "./probe"
 
 /** The browser's speech recognition, as Chrome and Safari name it: only what the composer uses. */
 export interface Recognition extends EventTarget {

@@ -4,7 +4,7 @@ import "./style.css"
 import { Starting, Unreachable } from "./start-screens"
 import { WebApp } from "./app"
 import { WebClient, WebClientContext, type WebClientOptions } from "./client"
-import { startDiagnostics } from "./diagnostics"
+import { startProbe } from "./probe"
 import { SignedOutError } from "./gateway"
 import { holdInstallPrompt } from "./install"
 import { applyTheme, followSystemTheme } from "./theme"
@@ -21,7 +21,7 @@ export async function startWebApp(element: HTMLElement, options: WebClientOption
   followSystemTheme()
   holdInstallPrompt()
   let client: WebClient | undefined
-  startDiagnostics({ origin: options.origin, build: options.build, token: () => client?.gateway.held() })
+  startProbe({ origin: options.origin, build: options.build, token: () => client?.gateway.held() })
   const root = createRoot(element)
   root.render(createElement(Starting))
   try {

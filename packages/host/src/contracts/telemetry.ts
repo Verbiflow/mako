@@ -159,6 +159,16 @@ export interface WebDiagnosticEvents {
   }
 }
 
+/** One reading the web client's probe took: when, of what, and its measures. */
+export type WebReading = { [Key in keyof WebDiagnosticEvents]: { id: string; at: number; name: Key; props: WebDiagnosticEvents[Key] } }[keyof WebDiagnosticEvents]
+
+/**
+ * The probe says each reading on the page's `window` as it's taken, a `CustomEvent` of this type whose `detail` is the
+ * `WebReading`: every one, before the per-minute limit on what's kept and sent. A test runner collects them by
+ * listening from the page's start.
+ */
+export const WEB_READING_EVENT = "mako:reading"
+
 export interface TelemetryApp {
   version: string
   build?: string

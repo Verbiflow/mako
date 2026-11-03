@@ -1,17 +1,20 @@
-import { MAX_BATCH_EVENTS, scrub, type TelemetryApp, type WebActivity, type WebDiagnosticEvents } from "@mako/host/contracts/telemetry"
+// The web client's probe: how the app runs on this device, read in the page. Each reading is shown in Settings ›
+// Diagnostics, sent to the gateway's telemetry as diagnostics, and said on `window` (`WEB_READING_EVENT`) for a test
+// runner that drives the page on a phone, a simulator or a stand-in browser. Its kinds and measures are the contract's
+// `WebDiagnosticEvents`.
+import { MAX_BATCH_EVENTS, scrub, WEB_READING_EVENT, type TelemetryApp, type WebActivity, type WebDiagnosticEvents, type WebReading } from "@mako/host/contracts/telemetry"
+import { z } from "zod"
 import { SCROLL_WRITE_EVENT } from "@/components/transcript/transcript-end"
 import { createHook, createStore } from "@/state/store"
 
 type Name = keyof WebDiagnosticEvents
-/** One reading this page took: when, of what, and its measures. */
-export type Reading = { [Key in Name]: { id: string; at: number; name: Key; props: WebDiagnosticEvents[Key] } }[Name]
 
 /** The readings this page took lately, newest last: Settings → Diagnostics shows them, and Copy takes them. */
-export const readingsStore = createStore<{ readings: readonly Reading[] }>({ readings: [] })
+export const readingsStore = createStore<{ readings: readonly WebReading[] }>({ readings: [] })
 export const useReadings = createHook(readingsStore)
 const KEPT = 40
 /** At most this many readings of a kind a minute are kept and sent, so a page caught in a loop floods neither. */
-const PER_MINUTE: Partial<Record<Name, number>> = { "web.dictation": 30, "web.page": 4, "web.scroll": 12 }
+const PER_MINUTE = new Map<Name, number>([["web.dictation", 30], ["web.page", 4], ["web.scroll", 12]])
 const DEFAULT_PER_MINUTE = 10
 /** Readings waiting to be sent past this are dropped, oldest first: the gateway may be out of reach for a while. */
 const PENDING_MAX = 200
@@ -30,15 +33,21 @@ const SHIFT_SCORE = 0.05
 const LAYOUT_EVERY_MS = 10_000
 
 const recentByName = new Map<Name, number[]>()
-let pending: Reading[] = []
+let pending: WebReading[] = []
+/** Says a reading on the page, once the probe has started there (`startProbe`). */
+let say: (reading: WebReading) => void = () => {}
 
-/** Keeps a reading, if its kind hasn't had its minute's share: shown in Diagnostics, and sent with the next batch. */
+/**
+ * Says a reading on the page, and keeps it if its kind hasn't had its minute's share: shown in Diagnostics, and sent
+ * with the next batch.
+ */
 export function note<Key extends Name>(name: Key, props: WebDiagnosticEvents[Key], at = Date.now()): void {
-  const minute = (recentByName.get(name) ?? []).filter((then) => at - then < 60_000)
-  if (minute.length >= (PER_MINUTE[name] ?? DEFAULT_PER_MINUTE)) return
-  recentByName.set(name, [...minute, at])
   // SAFETY: `name` and `props` are paired by `note`'s signature.
-  const reading = { id: crypto.randomUUID(), at, name, props } as Reading
+  const reading = { id: crypto.randomUUID(), at, name, props } as WebReading
+  say(reading)
+  const minute = (recentByName.get(name) ?? []).filter((then) => at - then < 60_000)
+  if (minute.length >= (PER_MINUTE.get(name) ?? DEFAULT_PER_MINUTE)) return
+  recentByName.set(name, [...minute, at])
   readingsStore.set({ readings: [...readingsStore.get().readings, reading].slice(-KEPT) })
   pending = [...pending, reading].slice(-PENDING_MAX)
 }
@@ -58,11 +67,18 @@ function activity(): WebActivity {
   return opening > 0 ? "opening" : "idle"
 }
 
+/** A Thread opening, as `openingThread` times it. */
+export interface ThreadOpening {
+  painted(from: "kept" | "network", turns: number): void
+  caughtUp(): void
+  close(): void
+}
+
 /**
  * A Thread opening: `painted` once its newest turn is on screen, from what this page held or the network, and
  * `caughtUp` once it has read the Thread as it stands. Said once, when both are known or the Thread closes.
  */
-export function openingThread(): { painted(from: "kept" | "network", turns: number): void; caughtUp(): void; close(): void } {
+export function openingThread(): ThreadOpening {
   const began = performance.now()
   opening += 1
   let open = true
@@ -113,8 +129,16 @@ export function watchSocket(place: string, socket: WebSocket): void {
   }, { once: true })
 }
 
-/** Which device and browser this is, from what the browser says of itself: only names and versions. */
-export function deviceOf(userAgent: string, touchPoints: number): { os: TelemetryApp["os"]; osVersion?: string; browser: WebDiagnosticEvents["web.page"]["browser"]; browserVersion?: string } {
+/** Which device and browser this is: only names and versions. */
+export interface Device {
+  os: TelemetryApp["os"]
+  osVersion?: string
+  browser: WebDiagnosticEvents["web.page"]["browser"]
+  browserVersion?: string
+}
+
+/** Which device and browser this is, from what the browser says of itself. */
+export function deviceOf(userAgent: string, touchPoints: number): Device {
   // An iPad asks for the desktop's pages, and says it's a Mac with a touch screen.
   const ios = /iPhone|iPad|iPod/.test(userAgent) || (/Macintosh/.test(userAgent) && touchPoints > 1)
   const os: TelemetryApp["os"] = ios ? "iOS" : /Android/.test(userAgent) ? "Android" : /Macintosh/.test(userAgent) ? "macOS" : /Windows/.test(userAgent) ? "Windows" : /Linux/.test(userAgent) ? "Linux" : "other"
@@ -130,14 +154,14 @@ export function deviceOf(userAgent: string, touchPoints: number): { os: Telemetr
 }
 
 /** An error's words and frames as they may leave the device: the app's own files named from its origin's root, then scrubbed. */
-export function errorReading(kind: string, error: unknown, origin: string): WebDiagnosticEvents["error.reported"] {
-  const name = error instanceof Error && /^[A-Za-z0-9][\w.:-]*$/.test(error.name) ? error.name.slice(0, 80) : undefined
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "A value that isn't an error was thrown"
-  const stack = error instanceof Error && error.stack ? scrub(error.stack.replaceAll(origin, "")).slice(0, 4_000) : undefined
+export function errorReading(kind: string, cause: unknown, origin: string): WebDiagnosticEvents["error.reported"] {
+  const name = cause instanceof Error && /^[A-Za-z0-9][\w.:-]*$/.test(cause.name) ? cause.name.slice(0, 80) : undefined
+  const message = cause instanceof Error ? cause.message : (z.string().safeParse(cause).data ?? "A value that isn't an error was thrown")
+  const stack = cause instanceof Error && cause.stack ? scrub(cause.stack.replaceAll(origin, "")).slice(0, 4_000) : undefined
   return { kind, ...(name && { name }), message: scrub(message).slice(0, 500), ...(stack && { stack }) }
 }
 
-export interface DiagnosticsOptions {
+export interface ProbeOptions {
   origin: string
   build?: string
   /** The connection token this page holds now, if any: the batch is the account's with it. Never asked for. */
@@ -150,9 +174,10 @@ let started = false
  * Starts reading how the app runs here and sending what it reads to the gateway's telemetry, as diagnostics only.
  * Nothing is sent under Global Privacy Control or Do Not Track; the readings are still shown in Diagnostics.
  */
-export function startDiagnostics(options: DiagnosticsOptions): void {
-  if (started || typeof window === "undefined") return
+export function startProbe(options: ProbeOptions): void {
+  if (started) return
   started = true
+  say = (reading) => dispatchEvent(new CustomEvent(WEB_READING_EVENT, { detail: reading }))
   const device = deviceOf(navigator.userAgent, navigator.maxTouchPoints ?? 0)
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") shownAt = performance.now()
@@ -162,6 +187,7 @@ export function startDiagnostics(options: DiagnosticsOptions): void {
   watchBusy()
   watchScroll()
   watchLayout()
+  // SAFETY: Global Privacy Control's flag is a boolean on `navigator` where a browser has it, and absent elsewhere.
   const optedOut = (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true || navigator.doNotTrack === "1"
   if (optedOut) return
   const version = options.build && /^[\w.+-]{1,40}$/.test(options.build) ? options.build : "web"
@@ -184,6 +210,9 @@ function installId(): string {
     return crypto.randomUUID()
   }
 }
+
+/** The gateway's answer to a batch, when it asks for a pause before the next. */
+const PauseSchema = z.object({ pauseSeconds: z.number().positive().max(24 * 60 * 60) })
 
 /** Sends what's pending in batches, and waits when the gateway says to. */
 class Sender {
@@ -219,8 +248,8 @@ class Sender {
         // Taken, or never takeable: either way not sent again.
         const sent = new Set(batch.map((reading) => reading.id))
         pending = pending.filter((reading) => !sent.has(reading.id))
-        const answer = (await response.json().catch(() => undefined)) as { pauseSeconds?: unknown } | undefined
-        if (typeof answer?.pauseSeconds === "number") this.#pausedUntil = Date.now() + answer.pauseSeconds * 1000
+        const pause = PauseSchema.safeParse(await response.json().catch(() => undefined)).data?.pauseSeconds
+        if (pause !== undefined) this.#pausedUntil = Date.now() + pause * 1000
       }
     } catch {
       // Out of reach: kept for the next try.
@@ -239,13 +268,14 @@ function watchErrors(origin: string): void {
   addEventListener("unhandledrejection", (event) => note("error.reported", errorReading("web-rejection", event.reason, origin)))
 }
 
-function watchPage(device: ReturnType<typeof deviceOf>): void {
+function watchPage(device: Device): void {
   let said = ""
   const say = () => {
     const props: WebDiagnosticEvents["web.page"] = {
       width: innerWidth,
       height: innerHeight,
       scale: Math.round(devicePixelRatio * 100) / 100,
+      // SAFETY: iOS Safari's `navigator.standalone` is a boolean, true on a page opened from the home screen; others lack it.
       standalone: matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true,
       touch: navigator.maxTouchPoints > 0,
       browser: device.browser,
@@ -283,6 +313,7 @@ function watchBusy(): void {
   }, TIMER_MS)
   if (PerformanceObserver.supportedEntryTypes?.includes("layout-shift"))
     new PerformanceObserver((list) => {
+      // SAFETY: a `layout-shift` observer is given layout-shift entries, each with its `value` and `hadRecentInput`.
       for (const entry of list.getEntries() as Array<PerformanceEntry & { value?: number; hadRecentInput?: boolean }>)
         if (!entry.hadRecentInput && (entry.value ?? 0) >= SHIFT_SCORE) note("web.layout-shift", { score: Math.round((entry.value ?? 0) * 1000) / 1000, during: activity() })
     }).observe({ type: "layout-shift", buffered: true })
@@ -380,7 +411,7 @@ function watchLayout(): void {
 }
 
 /** A reading in a line of Diagnostics: what happened, by how much. */
-export function readingWords(reading: Reading): string {
+export function readingWords(reading: WebReading): string {
   const seconds = (ms: number) => (ms >= 1_000 ? `${(ms / 1_000).toFixed(1)} s` : `${ms} ms`)
   switch (reading.name) {
     case "error.reported":

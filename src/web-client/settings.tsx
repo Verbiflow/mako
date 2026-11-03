@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { continueReadings, describeContinue } from "@mako/host/contracts/cloud-continues"
 import { describeFollow, describeList } from "@mako/host/contracts/sync-readings"
 import { webContinues } from "./continue-actions"
-import { readingWords, useReadings } from "./diagnostics"
+import { readingWords, useReadings } from "./probe"
 import { webSync } from "./sync-readings"
 import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"

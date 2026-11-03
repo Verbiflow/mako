@@ -9,7 +9,7 @@ import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
 import { renewAtMs } from "@mako/protocol"
-import { deviceOf, errorReading, note, openingThread, readingsStore, readingWords } from "../src/web-client/diagnostics"
+import { deviceOf, errorReading, note, openingThread, readingsStore, readingWords } from "../src/web-client/probe"
 import { rowDetail } from "../src/web-client/rows"
 import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places } from "../src/web-client/places"
 import { ROW, rubberband, SETTLE, springPath } from "../src/web-client/motion"
@@ -185,9 +185,10 @@ test("a repository typed in any of Git's shapes is the cloud's", () => {
 })
 
 /** A connection token as the gateway signs it: a JWT whose `exp` and `iat` are seconds on the gateway's clock. */
-function signedToken(asked: number, issuedAt: number, lifeSeconds: number): { token: string; expiresAt: number } {
-  const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url")
-  return { token: `${part({ alg: "EdDSA", typ: "JWT" })}.${part({ sub: uuid(2), did: uuid(1), iat: issuedAt, exp: issuedAt + lifeSeconds, n: asked })}.sig${asked}`, expiresAt: issuedAt + lifeSeconds }
+function signedToken(asked: number, issuedAt: number, lifeSeconds: number) {
+  const head = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url")
+  const claims = Buffer.from(JSON.stringify({ sub: uuid(2), did: uuid(1), iat: issuedAt, exp: issuedAt + lifeSeconds, n: asked })).toString("base64url")
+  return { token: `${head}.${claims}.sig${asked}`, expiresAt: issuedAt + lifeSeconds }
 }
 
 test("a connection token is renewed before it runs out, never on every ask, however short it lives or wrong the phone's clock", async () => {
@@ -829,7 +830,10 @@ test("a stop stops at once, from every state: a recognizer that never ends, a se
     }
   }
   const watched = () => {
-    const seen = { settled: [] as string[], ended: [] as Array<string | undefined>, done: 0, steps: [] as DictationStep[] }
+    const settled: string[] = []
+    const ended: Array<string | undefined> = []
+    const steps: DictationStep[] = []
+    const seen = { settled, ended, done: 0, steps }
     const session = new DictationSession(Hanging, {
       settled: (words) => seen.settled.push(words),
       hearing: () => undefined,

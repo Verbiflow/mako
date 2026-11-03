@@ -1,6 +1,6 @@
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
-import { watchSocket } from "./diagnostics"
+import { watchSocket } from "./probe"
 import { answered, CLOUD, unanswered } from "./reach"
 import { LIVE_FORM, clientEndpointPath, clientSessionOverSockets, problemType, renewAtMs, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
 
