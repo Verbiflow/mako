@@ -12,6 +12,7 @@ import {
   ruleWords,
   childMode,
   childState,
+  modeWithin,
   PlaceSchema,
   reportPhase,
   reportRoute,
@@ -71,7 +72,7 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { finPolicyNote, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
@@ -96,6 +97,8 @@ const LIMIT_READ_MS = 3_000
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
 /** How often Fins waiting for this Mac's room look for it. */
 const ROOM_EVERY_MS = 10_000
+/** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
+export const APEX_ANSWER_MS = 60_000
 
 /** What a message into a child's Thread became, and when the child hears it. */
 interface Delivered {
@@ -146,6 +149,8 @@ export interface AgentsDeps {
   /** This Mac's cores, memory and load (`MacCapacity`): Fins past what it runs at once wait. Without it, only the tree's budget holds. */
   capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
+  /** `APEX_ANSWER_MS`, shorter in tests. */
+  apexAnswerMs?: number
   now?(): number
 }
 
@@ -258,6 +263,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly awaiting = new Map<string, { conversation: string; request: string }>()
   /** The decision a blocked Fin's Apex was told of, by Fin: told once per question. */
   private readonly asked = new Map<string, string>()
+  /** By Fin, the ask its Apex didn't answer in time, now the person's too, and why in the person's words. */
+  private readonly escalated = new Map<string, { line: string; why: string }>()
+  /** By Fin, the timer that asks the person once its Apex has left its ask unanswered for `APEX_ANSWER_MS`. */
+  private readonly unanswered = new Map<string, NodeJS.Timeout>()
   /** What each `agents_send` key delivered, so a retry answers the same. */
   private readonly sent = new Map<string, AgentsSent>()
   /** What joined a running turn as a step, by its id: no request holds it for `redirect` to find. */
@@ -314,6 +323,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
   private current(notice: Notice): boolean {
     const { report } = notice
+    // Nor that it waits on an ask it no longer does: answered by the person, say, while its Apex's turn ran on.
+    if (report.implicit && report.status === "blocked") {
+      const conversation = this.conversationOf(report.child)
+      const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
+      return waiting !== undefined && report.id.endsWith(namedUuid(waiting.line))
+    }
     if (!report.implicit || (report.status !== "done" && report.status !== "failed")) return true
     const edge = this.store()?.edges().of(report.child)
     if (!edge?.run || edge.closedAt !== undefined) return true
@@ -597,20 +612,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     const own = this.tierOf(apex)
     const allowed = childAccess(own, input.access)
     if (!allowed) return this.refuse(op, "access", `A ${FIN_WORD} runs at most at its ${APEX_WORD}'s access: this Thread is on ${own}, so ${input.access} is refused.`)
+    const fit = await this.fitAccess(apex, asked, allowed, own, input, ruled)
+    if ("refused" in fit) return this.refuse(op, "access", fit.refused)
     // Without a limit reader there's nothing to wait for between these checks.
-    const placed = this.deps.limited ? await this.roomFor(apex, asked, allowed, input) : { harness: asked }
+    const placed = this.deps.limited ? await this.roomFor(apex, fit.harness, allowed, input) : { harness: fit.harness }
     if ("refused" in placed) return this.refuse(op, "limited", placed.refused)
     const { harness, rerouted } = placed
-    const mode = childMode(this.deps.modes(harness), allowed)
-    if (!mode) {
-      const offers = (this.deps.modes(harness) ?? []).flatMap((offered) => offered.access ? [offered.access] : []).join(", ")
-      return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offers}, each above ${allowed}, the most this ${FIN_WORD} may have. Start it on another harness.`)
-    }
+    // A harness at its limit hands the Fin to one that offers what was asked, so a widened tier stays with its own harness.
+    const fitted = harness === fit.harness ? fit : { harness, tier: allowed }
+    const mode = childMode(this.deps.modes(harness), fitted.tier)
+    if (!mode) return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offered(this.deps.modes(harness))}, each above ${fitted.tier}, the most this ${FIN_WORD} may have. Start it on another harness.`)
     const tier = mode.tier
     const decided = await this.tuningOf(apex, harness, input, ruled)
     if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
+    const note = [fitted.note, rerouted?.note, decided.note].filter(Boolean).join(" ")
     const tuned: Tuned = {
-      ...(rerouted ? { ...decided, note: [rerouted.note, decided.note].filter(Boolean).join(" "), rerouted: rerouted.on } : decided),
+      ...decided,
+      ...(note && { note }),
+      ...(rerouted && { rerouted: rerouted.on }),
       ...(ruled && { rule: ruled.rule }),
     }
     const tree = this.rootOf(apex.thread)
@@ -974,6 +993,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   dispose(): void {
     this.stopped = true
     this.stopRoomWatch()
+    for (const timer of this.unanswered.values()) clearTimeout(timer)
+    this.unanswered.clear()
     this.runs.dispose()
     this.wakes.dispose()
     for (const wake of this.waiters) wake()
@@ -1110,6 +1131,34 @@ export class Agents implements AgentOperations, ConversationChildren {
         on: { from: asked, ...(until !== undefined && { until }), ...(limit.instead && { instead: limit.instead }) },
       },
     }
+  }
+
+  /**
+   * Where a Fin asked on `allowed` runs when `asked` offers no mode at or below
+   * it, as Cursor offers only full: a start that named no harness, model or
+   * rule goes to the person's next harness that offers `allowed`; otherwise,
+   * or with none, it runs on `asked`'s least mode above `allowed` within its
+   * Apex's own access (`modeWithin`). The start's note says which. Refused
+   * only when every mode of the harness is wider than the Apex's own.
+   */
+  private async fitAccess(apex: Apex, asked: string, allowed: AccessTier, own: AccessTier, input: AgentsStartInput, ruled: Ruled | undefined): Promise<{ harness: string; tier: AccessTier; note?: string } | { refused: string }> {
+    const modes = this.deps.modes(asked)
+    if (childMode(modes, allowed)) return { harness: asked, tier: allowed }
+    const label = this.deps.harnessLabel(asked)
+    const offers = offered(modes)
+    if (input.harness === undefined && input.model === undefined && !ruled) {
+      const next = await this.nextHarness(asked, allowed, input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined))
+      if (next) {
+        hostLog("agents", "a Fin's harness runs above its access; it starts on the next", { from: asked, to: next, access: allowed })
+        return { harness: next, tier: allowed, note: `${label} runs only on ${offers}, above the ${allowed} it was asked on, so it runs on ${this.deps.harnessLabel(next)}, the person's next harness, on ${allowed}.` }
+      }
+    }
+    const wider = modeWithin(modes, allowed, own)
+    if (wider) {
+      hostLog("agents", "a Fin's harness runs above its access; it runs on the harness's nearest", { harness: asked, asked: allowed, access: wider.tier })
+      return { harness: asked, tier: wider.tier, note: `${label} runs only on ${offers}, so it runs on ${wider.tier} rather than the ${allowed} it was asked on, within this Thread's own ${own}.` }
+    }
+    return { refused: `${label} runs on ${offers}, each above ${allowed} and above this Thread's own ${own}, so a ${FIN_WORD} there would have more access than you. Name a harness that runs on ${allowed}, or leave harness out for the person's next one.` }
   }
 
   /** The first harness after `from` in the person's order that a Fin at `tier` can run on now. */
@@ -1408,7 +1457,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What a report is to its Apex: a notice, or nothing, and heard, when its route sends it elsewhere. */
   private noticeFor(edge: ThreadParent, report: Report, wake?: string): Notice | undefined {
     const store = this.store()!
-    const route = report.for === "person" ? "person" : reportRoute(edge.asked, report.status)
+    const route = report.for === "person" ? (report.told ? "apex" : "person") : reportRoute(edge.asked, report.status)
     if (route !== "apex") {
       store.markReportsDelivered([report.id], this.now())
       hostLog("agents", "report kept", { op: edge.op, report: report.id, status: report.status, to: route, wake: edge.asked.wake ?? "decisions" })
@@ -1529,22 +1578,34 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What a Fin's harness waits on, as its state says it: whose it is (the line says why when it's the person's) and what answers it. */
   private waitingOf(edge: ThreadParent, line: string, pending: PendingAsk | undefined): NonNullable<ChildThread["waiting"]> {
     const ask = pending ? nativeAsk(pending) : undefined
-    const why = this.personsBecause(edge, ask)
+    const why = this.personsBecause(edge, ask, line)
     return { question: why ? `${line} (yours to answer: ${why})` : line, on: !why ? "lead" : ask?.kind === "approval" ? "approval" : "person", ...(ask && { ask }) }
   }
 
   /**
-   * Why a Fin's ask is the person's, or undefined when it's its Apex's: an Apex
-   * answers within its own access (a question on any, an approval on full
-   * access), unless its spawn asked to hear only its result or it left the ask
-   * to the person.
+   * Why a Fin's ask `line` is the person's, or undefined when it's its Apex's
+   * alone: an Apex answers within its own access (a question on any, an
+   * approval on full access), unless its spawn asked to hear only its result,
+   * it left the ask to the person, or it hasn't answered in time.
    */
-  private personsBecause(edge: ThreadParent, ask: FinAsk | undefined): string | undefined {
+  private personsBecause(edge: ThreadParent, ask: FinAsk | undefined, line: string): string | undefined {
     if (reportRoute(edge.asked, "blocked") !== "apex") return `its ${APEX_WORD} hears only ${edge.asked.wake === "never" ? "what it reads" : "its result"}`
-    if (ask && this.latest.get(edge.child)?.id === passedId(edge.child, ask.id)) return `its ${APEX_WORD} left it to you`
+    if (this.passed(edge, ask)) return `its ${APEX_WORD} left it to you`
+    if (this.belowFull(edge, ask)) return `its ${APEX_WORD} isn't on full access`
+    const escalated = this.escalated.get(edge.child)
+    return escalated?.line === line ? escalated.why : undefined
+  }
+
+  private passed(edge: ThreadParent, ask: FinAsk | undefined): boolean {
+    return Boolean(ask && this.latest.get(edge.child)?.id === passedId(edge.child, ask.id))
+  }
+
+  /** The Apex's tier when `ask` is an approval and the Apex isn't on full access, so can't answer it. */
+  private belowFull(edge: ThreadParent, ask: FinAsk | undefined): AccessTier | undefined {
     if (ask?.kind !== "approval") return undefined
     const parent = this.frontOf(edge.parent, edge.parentSession)
-    return (parent ? this.tierOfConversation(parent) : undefined) === "full" ? undefined : `its ${APEX_WORD} isn't on full access`
+    const tier = (parent ? this.tierOfConversation(parent) : undefined) ?? "ask"
+    return tier === "full" ? undefined : tier
   }
 
   private stateOf(edge: ThreadParent): ChildState {
@@ -1592,27 +1653,81 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const hold of this.holds) if (hold.child === child) hold.check()
   }
 
-  /** A Fin's harness waits on a question, or an approval under an Apex on full access: the Apex hears it as `blocked`, keyed by what it waits on. */
+  /**
+   * A Fin's harness waits on a question or an approval: the Apex hears it as
+   * `blocked`, keyed by what it waits on, told whether it may answer. One it
+   * may answer that it leaves for `APEX_ANSWER_MS` goes to the person too
+   * (`escalate`), so no ask sits on an Apex busy with a long turn of its own.
+   */
   private askApex(edge: ThreadParent): void {
     const conversation = this.conversationOf(edge.child)
     const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
     if (!conversation || !waiting) {
       this.asked.delete(edge.child)
+      this.unwatch(edge.child)
       return
     }
     if (this.asked.get(edge.child) === waiting.line) return
     this.asked.set(edge.child, waiting.line)
+    this.unwatch(edge.child)
     const pending = this.deps.live.pendingAsk(conversation)
     const ask = pending ? nativeAsk(pending) : undefined
-    const why = this.personsBecause(edge, ask)
+    const why = this.personsBecause(edge, ask, waiting.line)
     hostLog("agents", "ask routed", { op: edge.op, child: edge.child, ask: ask?.kind ?? waiting.for, to: why ? "person" : "apex" })
-    if (why) return
-    this.keepReport(edge, {
-      id: `report:${edge.child}:waiting:${namedUuid(waiting.line)}`,
+    const asked = {
       child: ThreadIdSchema.parse(edge.child),
-      status: "blocked",
+      status: "blocked" as const,
       summary: `It waits: ${waiting.line}`,
-      question: apexAsk(waiting.line, ask?.kind === "approval"),
+      ...(ask?.options && { options: ask.options }),
+      implicit: true as const,
+      ownerGeneration: this.generation,
+    }
+    if (why) {
+      const tier = this.belowFull(edge, ask)
+      if (tier && reportRoute(edge.asked, "blocked") === "apex" && !this.passed(edge, ask))
+        this.keepReport(edge, { ...asked, id: personsId(edge.child, waiting.line), question: personsApproval(waiting.line, tier), for: "person", told: true, at: this.now() })
+      return
+    }
+    this.keepReport(edge, { ...asked, id: `report:${edge.child}:waiting:${namedUuid(waiting.line)}`, question: apexAsk(waiting.line, ask?.kind === "approval"), at: this.now() })
+    const line = waiting.line
+    const timer = setTimeout(() => this.escalate(edge.child, line, ask), this.deps.apexAnswerMs ?? APEX_ANSWER_MS)
+    timer.unref()
+    this.unanswered.set(edge.child, timer)
+  }
+
+  private unwatch(child: string): void {
+    clearTimeout(this.unanswered.get(child))
+    this.unanswered.delete(child)
+    this.escalated.delete(child)
+  }
+
+  /**
+   * The Apex left its Fin's ask `line` unanswered past `APEX_ANSWER_MS`: the
+   * person is asked too, through every surface that reads the Fin's state
+   * (the Inbox, a notification, the phone), and the Apex hears that they
+   * were, and that it may still answer. A digest still waiting with the
+   * first notice gives way to this one.
+   */
+  private escalate(child: string, line: string, ask: FinAsk | undefined): void {
+    this.unanswered.delete(child)
+    if (this.stopped || this.asked.get(child) !== line) return
+    const store = this.store()
+    const edge = store?.edges().of(child)
+    if (!store || !edge || edge.closedAt !== undefined) return
+    const ms = this.deps.apexAnswerMs ?? APEX_ANSWER_MS
+    const within = waitWords(ms)
+    const front = this.frontOf(edge.parent, edge.parentSession)
+    const busy = front !== undefined && this.ready(front) === "queue"
+    this.escalated.set(child, { line, why: `its ${APEX_WORD} ${busy ? "is mid-turn and " : ""}didn't answer within ${within}` })
+    hostLog("agents", "ask escalated", { op: edge.op, child, after: ms, busy })
+    const first = `report:${child}:waiting:${namedUuid(line)}`
+    if (front && this.wakes.withdraw(front, `notice:${child}:${first}`)) store.markReportsDelivered([first], this.now())
+    this.keepReport(edge, {
+      id: personsId(child, line),
+      child: ThreadIdSchema.parse(child),
+      status: "blocked",
+      summary: `It waits: ${line}`,
+      question: apexAsk(line, ask?.kind === "approval", `you ${busy ? "are mid-turn and " : ""}didn't answer within ${within}`),
       ...(ask?.options && { options: ask.options }),
       implicit: true,
       ownerGeneration: this.generation,
@@ -2086,6 +2201,26 @@ function waitedReport(report: Report): WaitedReport {
 
 /** Who answers a Fin's ask: its Apex, within its access, or the person, whose ask it is. */
 type Answerer = { kind: "apex"; apex: Apex } | { kind: "person" }
+
+/** The tiers a harness's modes run on, in words: "full", "ask, edits, full". */
+function offered(modes: readonly LiveSessionMode[] | undefined): string {
+  return (modes ?? []).flatMap((mode) => mode.access ? [mode.access] : []).join(", ")
+}
+
+/** The report that tells an Apex its Fin's ask `line` is the person's too. */
+function personsId(child: string, line: string): string {
+  return `report:${child}:to-person:${namedUuid(line)}`
+}
+
+/** A wait in words: "a minute", "2 minutes", "30 seconds". */
+function waitWords(ms: number): string {
+  if (ms >= 60_000) {
+    const minutes = Math.round(ms / 60_000)
+    return minutes === 1 ? "a minute" : `${minutes} minutes`
+  }
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  return seconds === 1 ? "a second" : `${seconds} seconds`
+}
 
 /** The report that leaves an ask to the person, one per ask. */
 function passedId(child: string, ask: string): string {

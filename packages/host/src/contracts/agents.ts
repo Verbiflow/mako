@@ -202,8 +202,10 @@ export const ReportSchema = z.object({
   recommended: z.number().int().nonnegative().optional(),
   /** What whoever answers does, in one sentence: "Pick the branch the release goes from." */
   action: z.string().max(400).optional(),
-  /** Its Apex left its question to the person (`agents_answer` with `person`). */
+  /** Its Apex left its question to the person (`agents_answer` with `person`), or it was the person's from the start. */
   for: z.literal("person").optional(),
+  /** The person's ask its Apex is told of though it can't answer it: an approval under an Apex below full access. */
+  told: z.literal(true).optional(),
   /** Recorded by the owner because the turn ended without one. */
   implicit: z.literal(true).optional(),
   /** The child owner's generation when it was written: a report from a stale owner is refused. */
@@ -425,6 +427,23 @@ export function childMode(ladder: readonly LiveSessionMode[] | undefined, tier: 
   for (const mode of ladder) {
     const at = mode.access ? ACCESS_LADDER.indexOf(mode.access) : -1
     if (at >= 0 && at < ACCESS_LADDER.indexOf(tier) && (!best || at > ACCESS_LADDER.indexOf(best.tier))) best = { id: mode.id, tier: mode.access! }
+  }
+  return best
+}
+
+/**
+ * For a harness with no mode at or below `tier` (`childMode` undefined): its least mode above `tier` that is still
+ * within `ceiling`, its Apex's own access, as Cursor's one mode is for a Fin asked on edits under an Apex on full.
+ * Undefined when none is, and always for `deny`, which only `deny` serves.
+ */
+export function modeWithin(ladder: readonly LiveSessionMode[] | undefined, tier: AccessTier, ceiling: AccessTier): { id: string; tier: AccessTier } | undefined {
+  if (!ladder || tier === "deny" || ceiling === "deny") return undefined
+  const from = ACCESS_LADDER.indexOf(tier)
+  const to = ACCESS_LADDER.indexOf(ceiling)
+  let best: { id: string; tier: AccessTier } | undefined
+  for (const mode of ladder) {
+    const at = mode.access ? ACCESS_LADDER.indexOf(mode.access) : -1
+    if (at > from && at <= to && (!best || at < ACCESS_LADDER.indexOf(best.tier))) best = { id: mode.id, tier: mode.access! }
   }
   return best
 }
