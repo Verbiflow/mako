@@ -217,7 +217,12 @@ handler, and reaches the agent three ways from the one projection
 <verb>` and `mako mcp`, the caller named by `MAKO_SESSION_ID`. A start
 commits the Fin's Thread, its edge, its Session and its first request (the
 brief, the Apex's words, not the person's) together
-(`LiveStartOptions.parent`), at an access tier no higher than its Apex's,
+(`LiveStartOptions.parent`), at an access tier no higher than its Apex's.
+A harness with no mode at or below the tier asked (Cursor's one mode is
+full) sends a Fin that named no harness, model or rule to the person's next
+harness that offers it, and otherwise runs it on the harness's nearest mode
+within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
+which; only a mode wider than the Apex's is refused. It starts
 here only (`place` other than `here` is refused); past a tree's running
 budget it queues with why, past its started budget it is refused with the
 count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
@@ -243,7 +248,16 @@ written again after its end reads as working while that Session is still
 being written, and a digest drops the end the host inferred for it
 (`AgentWakes.current`). A stop closes the edge with
 its reason (`closedReason`) before it cancels the turn. The cut turn then reports
-nothing and wakes no one, and the Fin reads as stopped in those words. A Fin
+nothing and wakes no one, and the Fin reads as stopped in those words. Its
+delegation stays over: a message to it is refused, and the person can open
+it. A Fin's harness asking (`askApex`) wakes its Apex, told whether it may
+answer: an approval under an Apex below full access is the person's at once,
+and the Apex hears so in the digest's "waits on the person" (`Report.told`).
+One the Apex may answer that it leaves for `APEX_ANSWER_MS` (a minute) goes
+to the person too (`escalate`), as an Apex mid-turn on a harness that hears
+a digest only at its turn's end would leave it; the Apex hears they were
+asked, and the first answer is the one the Fin hears. A digest drops an ask
+its Fin no longer waits on (`test:orch-answer`). A Fin
 that ends a turn without `agents_report` while its own Fins work, or while a
 `worktree_move` it asked for is pending (`movePending`), hasn't finished.
 Its turn's end writes no report, and it reads as working with "Waiting for

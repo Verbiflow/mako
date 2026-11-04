@@ -7,15 +7,20 @@ import type { AgentsAnswerInput, AgentsAnswerResult } from "@mako/host/contracts
 import type { AgentCaller, ChildState } from "@mako/host/contracts/agents"
 import { YOUR_APEX } from "@mako/host/contracts/children"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
-import { fromAgent } from "@mako/host/conversations/agent-wakes"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { FROM_AGENTS, fromAgent } from "@mako/host/conversations/agent-wakes"
 import { finAsking } from "@mako/host/conversations/session-report"
-import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, HARNESSES, type Script, type ScriptedTurn } from "./lib/agents-world.ts"
 
 /**
  * What a Fin asks, answered (`npm run test:orch-answer`). The person's access
  * mode is the grant: an Apex on full access answers its Fins' approvals with
  * `agents_answer` and the Fin goes on; the same Apex on Ask is refused, and
- * the approval is the person's, who answers it. A question grants nothing,
+ * the approval is the person's, who answers it, and the Apex is told so. One
+ * an Apex may answer but leaves past its window (an Apex mid-turn on a harness
+ * that hears a digest only at its turn's end) goes to the person too, and the
+ * Apex hears they were asked. A Fin stopped while it waits reads as stopped.
+ * A question grants nothing,
  * so an Apex on any mode answers its harness's question, and a question a
  * Fin's report asks, with its options and the one it recommends, which
  * reaches the Fin as its Apex's words. An Apex can leave an ask to the
@@ -46,12 +51,15 @@ interface Fixture {
   state(): ChildState | undefined
   /** What the Fin's harness heard back from each ask, in order. */
   heard: LivePermissionResponse[]
+  /** Every digest the Apex was woken with, in order. */
+  wakes: string[]
 }
 
 /**
  * An Apex on `harness` at `access` with one Fin on `finHarness`, whose first
  * turn runs `asks`. The Apex's script answers each decision it's woken with
- * through `onDecision`, when given.
+ * through `onDecision`, when given, and `apexTurn` takes the person's own
+ * messages to it. `apexAnswerMs` is how long an ask waits on the Apex alone.
  */
 async function fixture(name: string, options: {
   harness?: string
@@ -59,8 +67,11 @@ async function fixture(name: string, options: {
   finHarness: string
   asks: (world: AgentsWorld, fin: string, heard: LivePermissionResponse[]) => Promise<void>
   onDecision?: (world: AgentsWorld, caller: AgentCaller, text: string) => Promise<void>
+  apexTurn?: (turn: ScriptedTurn) => Promise<string>
+  apexAnswerMs?: number
 }): Promise<Fixture> {
   const heard: LivePermissionResponse[] = []
+  const wakes: string[] = []
   let finConversation = ""
   let firstTurn = true
   const script: Script = async (turn) => {
@@ -70,16 +81,18 @@ async function fixture(name: string, options: {
       await options.asks(turn.world, turn.conversation, heard)
       return "Done."
     }
+    if (!turn.text.startsWith(FROM_AGENTS)) return options.apexTurn?.(turn) ?? "ok"
+    wakes.push(turn.text)
     if (DECISION.test(turn.text)) await options.onDecision?.(turn.world, turn.caller, turn.text)
     return "ok"
   }
-  const world = new AgentsWorld({ root: join(root, name), script })
+  const world = new AgentsWorld({ root: join(root, name), script, ...(options.apexAnswerMs !== undefined && { apexAnswerMs: options.apexAnswerMs }) })
   const apex = await world.apex(options.harness ?? "claude", options.access)
   const started = await world.agents.start(apex.caller, { brief: { objective: "Run the tests" }, harness: options.finHarness, name: "tests", clientKey: "tests", cwd: world.root })
   assert.ok(!("refused" in started) && started.conversation)
   finConversation = started.conversation!
   const entry = () => world.agents.roster(apex.conversation).find((each) => each.child?.name === "tests")?.child
-  return { world, apex, fin: finConversation, thread: () => entry()!.thread, state: () => entry()?.state, heard }
+  return { world, apex, fin: finConversation, thread: () => entry()!.thread, state: () => entry()?.state, heard, wakes }
 }
 
 const approve = (world: AgentsWorld, fin: string, heard: LivePermissionResponse[]) => world.ask(fin, "npm test").then((response) => void heard.push(response))
@@ -109,11 +122,14 @@ try {
   }
   console.log(`full access: the Apex answered an approval on each of ${HARNESSES.length} harnesses, each Fin went on, a repeat answered once`)
 
-  // The same Apex on Ask: the approval is the person's. The Apex isn't woken, is refused if it tries, and the person answers.
+  // The same Apex on Ask: the approval is the person's at once. The Apex is told it can't answer, is refused if it tries, and the person answers.
   {
     let woken = 0
-    const { world, apex, thread, state, heard } = await fixture("ask", { access: "ask", finHarness: "codex", asks: approve, onDecision: async () => void (woken += 1) })
+    const { world, apex, thread, state, heard, wakes } = await fixture("ask", { access: "ask", finHarness: "codex", asks: approve, onDecision: async () => void (woken += 1) })
     await until("the approval", () => state()?.kind === "blocked")
+    await until("the Apex to be told", () => wakes.length === 1)
+    assert.match(wakes[0]!, /1 waits on the person:\n  • "tests" \(Codex\): Approve: npm test\. Only the person can answer this approval: you're on ask, and only an Apex on full access answers its Fins' approvals\. Mako asked them in their Inbox and on their devices\./)
+    assert.doesNotMatch(wakes[0]!, DECISION, "told, not asked to decide")
     const blocked = state()
     assert.ok(blocked?.kind === "blocked")
     assert.equal(blocked.on, "approval", "the person's approval")
@@ -136,11 +152,112 @@ try {
     assert.equal(answered(await world.agents.respond(apex.conversation, request)).deduped, true, "a repeat answers the first")
     assert.equal(world.answers.length, 1, "and its harness hears it once")
     assert.equal(world.agents.personAsk(apex.conversation), undefined, "and the row no longer waits on it")
-    assert.equal(woken, 0, "the Apex was never woken for the person's approval")
+    assert.equal(woken, 0, "the Apex was never asked to decide the person's approval")
+    assert.equal(wakes.length, 1, "and was told of it once")
     assert.deepEqual(world.agents.diagnostics().answers, { apex: 0, passed: 0, refused: 1, person: 1 })
     await world.close()
   }
-  console.log("ask: the Apex was refused the approval, never woken for it, and the person's answer from its Thread let the Fin go on, once")
+  console.log("ask: the Apex was told the approval was the person's, refused it, and the person's answer from its Thread let the Fin go on, once")
+
+  // What stalled two Fins for 45 minutes: an Apex on full access, mid-turn on a harness that hears a digest only at its
+  // turn's end, leaves an approval it may answer. Past the window the person is asked; their answer lets the Fin go on,
+  // and the Apex, its turn over, isn't woken for an ask already answered.
+  {
+    let busy!: () => void
+    const apexBusy = new Promise<void>((resolve) => { busy = resolve })
+    const { world, apex, thread, state, heard, wakes } = await fixture("late-busy", {
+      harness: "cursor", access: "full", finHarness: "claude", apexAnswerMs: 300,
+      asks: async (world, fin, heard) => {
+        await apexBusy
+        await approve(world, fin, heard)
+      },
+      apexTurn: (turn) => turn.world.hold(turn.conversation).then(() => "Benchmarks done."),
+    })
+    world.say(apex.conversation, "Run the benchmarks")
+    await until("the Apex's long turn", () => world.live.session(apex.conversation)?.status === "running")
+    busy()
+    await until("the approval to wait on the Apex", () => { const now = state(); return now?.kind === "blocked" && now.on === "lead" })
+    const lead = state()
+    assert.ok(lead?.kind === "blocked")
+    assert.equal(world.agents.personAsk(apex.conversation), undefined, "inside the window it's the Apex's")
+    await until("the person to be asked", () => { const now = state(); return now?.kind === "blocked" && now.on === "approval" })
+    const blocked = state()
+    assert.ok(blocked?.kind === "blocked")
+    assert.equal(blocked.question, "Approve: npm test (yours to answer: its Apex is mid-turn and didn't answer within a second)")
+    const asking = world.agents.personAsk(apex.conversation)
+    assert.deepEqual(asking && { fin: asking.fin, kind: asking.ask.kind, line: asking.line }, { fin: thread(), kind: "approval", line: "Approve: npm test" }, "the Apex's row carries it, so the Inbox, a notification and the phone say it")
+    assert.deepEqual(finAsking(asking)?.waiting, { for: "approval", line: "tests: Approve: npm test" })
+    assert.equal(wakes.length, 0, "the Apex, mid-turn, heard nothing yet")
+    assert.equal(answered(await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask!.id, allow: true, request: "r-late" })).answered, "approval")
+    await until("the Fin to go on", () => heard.length === 1 && state()?.kind === "ended")
+    assert.deepEqual(heard[0], { kind: "choice", optionId: "allow" })
+    world.release(apex.conversation)
+    await world.settle(600)
+    assert.equal(wakes.length, 1, "its turn over, the Apex hears its Fin's result")
+    assert.match(wakes[0]!, /1 finished:\n  • "tests" \(Claude\) done/)
+    assert.doesNotMatch(wakes[0]!, /Approve: npm test/, "and not the ask the person already answered")
+    await world.close()
+  }
+  console.log("late, busy: the person was asked once the busy Apex left the approval past its window, and their answer let the Fin go on")
+
+  // An idle Apex woken with an approval that doesn't answer it: the person is asked too, the Apex hears they were and
+  // that it may still answer, and its answer is the one the Fin hears.
+  {
+    const { world, apex, state, heard, wakes } = await fixture("late-idle", {
+      // Past the 2 s an idle Apex's wake waits for the rest of its burst, so the first wake goes before the window ends.
+      access: "full", finHarness: "codex", apexAnswerMs: 3_000, asks: approve,
+      onDecision: async (world, caller, text) => {
+        if (/Mako asked the person too/.test(text)) answered(await world.agents.answer(caller, { to: "tests", allow: true, clientKey: "late" }))
+      },
+    })
+    await until("the Apex to hear twice", () => wakes.length === 2)
+    assert.match(wakes[0]!, /Approve: npm test\. Allow it with agents_answer allow: true/)
+    assert.match(wakes[1]!, /Approve: npm test\. Mako asked the person too, since you didn't answer within 3 seconds: they can answer it from their Inbox\. You may still allow it with agents_answer allow: true, refuse it with allow: false, or stop it with agents_stop; the first answer is the one it hears\./)
+    await until("the Fin to go on", () => heard.length === 1 && state()?.kind === "ended")
+    assert.deepEqual(heard[0], { kind: "choice", optionId: "allow" })
+    assert.equal(world.agents.personAsk(apex.conversation), undefined, "and the person's row no longer waits on it")
+    assert.deepEqual(world.agents.diagnostics().answers, { apex: 1, passed: 0, refused: 0, person: 0 })
+    await world.close()
+  }
+  console.log("late, idle: the person was asked too, the Apex heard so, and its own answer still let the Fin go on")
+
+  // An Apex that answers inside the window never troubles the person.
+  {
+    const { world, apex, state, heard, wakes } = await fixture("in-time", {
+      access: "full", finHarness: "grok", apexAnswerMs: 3_000, asks: approve,
+      onDecision: async (world, caller) => void answered(await world.agents.answer(caller, { to: "tests", allow: true, clientKey: "now" })),
+    })
+    await until("the Fin to go on", () => heard.length === 1 && state()?.kind === "ended")
+    await world.settle(3_200)
+    assert.equal(wakes.length, 2, "woken for the ask and for the result, never a second time for the ask")
+    assert.doesNotMatch(wakes[1]!, /Approve: npm test/)
+    assert.equal(world.agents.personAsk(apex.conversation), undefined)
+    await world.close()
+  }
+  console.log("in time: an Apex that answered inside the window was woken once for the ask and the person never asked")
+
+  // A Fin its Apex stops while it waits on an approval ends as stopped, in the Apex's words: not failed, and nobody woken.
+  // Its delegation is over, so a message to it is refused; the person can still open it.
+  {
+    const { world, apex, fin, state, heard, wakes } = await fixture("stopped-blocked", {
+      harness: "cursor", access: "full", finHarness: "claude", asks: approve,
+      onDecision: async (world, caller) => void await world.agents.stop(caller, { child: "tests", reason: "its labels are in already" }),
+    })
+    await until("the stop", () => state()?.kind === "ended")
+    await world.settle(600)
+    assert.deepEqual(state(), { kind: "ended", outcome: "stopped", reason: "its labels are in already" })
+    assert.deepEqual(heard, [{ kind: "choice", optionId: null }], "its approval ended unanswered with its turn")
+    const child = world.agents.roster(apex.conversation).find((each) => each.child?.name === "tests")!
+    assert.equal(child.state.kind, "canceled", "every surface draws it as stopped")
+    const thread = ThreadIdSchema.parse(child.child!.thread)
+    assert.deepEqual(world.store.reportsOf(thread, 0).map((report) => report.status), ["blocked"], "no failure was written for the turn the stop cut")
+    assert.equal(wakes.length, 1, "the Apex that stopped it isn't woken again")
+    const sent = await world.agents.send(apex.caller, { to: "tests", text: "Carry on", clientKey: "again" })
+    assert.ok("refused" in sent && sent.refused === "conflict" && /was stopped/.test(sent.why))
+    assert.equal(world.prompts.filter((prompt) => prompt.conversation === fin).length, 1)
+    await world.close()
+  }
+  console.log("stopped while blocked: the Fin read as stopped with its Apex's reason, wrote no failure and woke no one")
 
   // The person answers a Fin harness's question left to them by one of its options, picked by its place.
   {
