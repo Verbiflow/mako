@@ -328,6 +328,8 @@
    */
   --sea: oklch(0.74 0.08 245);
   --sea-soft: color-mix(in oklab, var(--sea) 14%, transparent);
+  /* The composer while you type in it: a breath lighter than its raised tone. */
+  --composer-lift: color-mix(in oklab, var(--foreground) 3.5%, transparent);
 
   /*
    * The unread mark is a small sphere in the text colour: a specular point
@@ -440,6 +442,7 @@
 
   --sea: oklch(0.5 0.09 248);
   --sea-soft: color-mix(in oklab, var(--sea) 12%, transparent);
+  --composer-lift: color-mix(in oklab, white 32%, transparent);
 
   /* A dark sphere in daylight: the highlight is a grey sheen, the rim near black. */
   --mark-highlight: oklch(0.5 0.004 45);
@@ -1206,7 +1209,7 @@ diffs-container {
  * a Thread and the plain fin for a Fin, with its harness as a square badge in
  * the corner. The fin itself carries the state, one calm gesture a state: it
  * bobs while thinking, glides with a wake while writing, braces in two steps
- * on a tool, turns caution over a breathing waterline when it needs you,
+ * on a tool, turns the attention hue over a breathing waterline when it needs you,
  * drifts while asking its Apex and lists over when it failed. Square, like
  * every mark of Mako's. Every moving part is a box of its own that moves on
  * `transform` or `opacity`, so the compositor runs it and a frame costs the
@@ -1571,9 +1574,55 @@ diffs-container {
   --row-over: transparent;
 }
 
-.composer-send:not(:disabled) {
-  border: 1px solid color-mix(in srgb, var(--foreground) 70%, var(--surface));
-  background: linear-gradient(160deg, var(--foreground), color-mix(in srgb, var(--foreground) 75%, var(--surface)) 52%, var(--foreground));
+/*
+ * The composer: one square box a tone up from the conversation, nothing around it. Typing in it lifts it a breath,
+ * and its send is an arrow alone until there is something to send, when a solid square grows in behind it. Both are
+ * an opacity (and the square's scale) on a layer of their own, so the compositor runs them.
+ */
+.composer-box {
+  isolation: isolate;
+}
+.composer-box::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--composer-lift);
+  opacity: 0;
+  transition: opacity 220ms var(--ease-out);
+}
+.composer-box:focus-within::after {
+  opacity: 1;
+}
+.composer-send {
+  isolation: isolate;
+}
+.composer-send::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--foreground);
+  opacity: 0;
+  transform: scale(0.82);
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.composer-send:not(:disabled)::before {
+  opacity: 1;
+  transform: none;
+}
+.composer-send > svg {
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.composer-send:active:not(:disabled) > svg {
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-box::after,
+  .composer-send::before {
+    transition: none;
+  }
 }
 
 .attachment-preview {

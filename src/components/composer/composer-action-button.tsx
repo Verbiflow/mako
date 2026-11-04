@@ -21,9 +21,9 @@ interface ComposerActionButtonProps {
 /**
  * The primary action.
  *
- * Circular and lit rather than a flat pill: it is the only control in the
- * window that should look pressable from across the room, and a flat fill at
- * this size reads as a disabled placeholder. An empty running composer owns
+ * A square of the text colour once there is something to send, the arrow
+ * alone before: an empty composer has no grey slab saying "not yet", and the
+ * one solid shape in the box is the one thing to press. An empty running composer owns
  * the stop action; typing turns that same primary position into queue. An
  * empty idle composer whose newest turn was cut short or failed in a way a
  * repeat can fix offers to pick it up, with a play glyph and its name beside
@@ -85,10 +85,8 @@ export function ComposerActionButton({
       title={title}
       className={cn(
         "composer-send pressable relative flex size-8 shrink-0 items-center justify-center rounded-none focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-ring",
-        "[transition:transform_var(--duration-press)_var(--ease-out),background-color_160ms_ease,opacity_160ms_ease]",
-        enabled
-          ? "bg-foreground text-background hover:opacity-90"
-          : "bg-foreground/10 text-faint"
+        "[transition:transform_var(--duration-press)_var(--ease-out),color_160ms_ease,opacity_160ms_ease]",
+        enabled ? "text-background hover:opacity-90" : "text-faint"
       )}
     >
       {stop ? (

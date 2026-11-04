@@ -70,7 +70,7 @@ export function composerRunningPlaceholder(
   enter: ComposerEnterAction,
   canSteer: boolean
 ): string {
-  if (enter === "steer") return `Steer ${harness} — Cmd+Enter queues instead`
-  if (canSteer) return `Queue a message for ${harness} — Cmd+Enter steers instead`
-  return `Queue a message for ${harness}`
+  if (enter === "steer") return `Steer ${harness} · ⌘↩ queues`
+  if (canSteer) return `Queue for ${harness} · ⌘↩ steers`
+  return `Queue for ${harness}`
 }

@@ -123,7 +123,9 @@ async function check() {
   for (const [surface, selector] of Object.entries(surfaces)) {
     const at = selector === "[data-crew] header" ? "[data-crew] [data-fin-counts]" : selector
     assert.equal(await counts(at), label, `${surface} counts the roster as every surface does`)
-    agrees(surface, await text(selector), truth)
+    // The composer's chip shows the count and says the rest by its name, the line its tooltip reads.
+    const words = selector === "[data-agents-toggle]" ? await evaluate(`document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-label") ?? ""`) : await text(selector)
+    agrees(surface, words, truth)
   }
   assert.equal(await evaluate("document.querySelector('[data-thread-row] [data-fin-pips]').dataset.finPips"), "wwwi", "one pip per Fin: three working, one idle")
 
