@@ -18,6 +18,7 @@ import {
 } from "node:fs/promises"
 import { dirname, join, sep } from "node:path"
 import { z } from "zod"
+import { borrowSealContext } from "@mako/protocol/borrow"
 import { KeychainUnavailable, type SecretEncryption } from "./secure-storage.js"
 
 /**
@@ -506,8 +507,20 @@ export function handedKey(path: string): HandedKey {
   }
 }
 
+/** The account this device's own broker keeps its grants in, whoever is signed in. */
+export const DEVICE_ACCOUNT = "local"
+
+/** The grant a saved record is lent under: one per version, so a new value is a new grant and the old one ends. */
+export function secretGrantId({ kind, name, version }: Pick<SecretListing, "kind" | "name" | "version">): string {
+  return `secret:${createHash("sha256").update(`${kind}\0${name}`).digest("hex").slice(0, 32)}:${version}`
+}
+
+/**
+ * Format 1 sealed under the store's own context; format 2 under borrowing's one seal, as every value Mako lends is.
+ * A format 1 record is sealed again as format 2 the first time it's read.
+ */
 const FileRecordSchema = z.object({
-  format: z.literal(1),
+  format: z.union([z.literal(1), z.literal(2)]),
   sealer: z.enum(["aes-256-gcm", "plain"]),
   kind: KindSchema,
   name: NameSchema,
@@ -519,12 +532,9 @@ const FileRecordSchema = z.object({
 type FileRecord = z.infer<typeof FileRecordSchema>
 const MAX_FILE_BYTES = 2 * MAX_VALUE_BYTES
 
-function sealContext({
-  kind,
-  name,
-  version,
-}: Pick<SecretListing, "kind" | "name" | "version">): string {
-  return `mako-secret\0${kind}\0${name}\0${version}`
+function sealContext(record: Pick<SecretListing, "kind" | "name" | "version">, format: FileRecord["format"] = 2): string {
+  if (format === 1) return `mako-secret\0${record.kind}\0${record.name}\0${record.version}`
+  return borrowSealContext(DEVICE_ACCOUNT, secretGrantId(record), record.version)
 }
 
 /**
@@ -571,6 +581,27 @@ export function fileSecrets(root: string, sealer: SecretSealer): Secrets {
     return parsed.data
   }
 
+  /** The record as one file, sealed under the one seal, replacing what was there by rename. */
+  const put = async (record: SecretRecord): Promise<void> => {
+    const file: FileRecord = { format: 2, sealer: sealer.format, ...listing(record), sealed: await sealer.seal(record.value, sealContext(record)) }
+    const path = pathOf(record.kind, record.name)
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    const temporary = `${path}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, JSON.stringify(file), { mode: 0o600, flag: "wx" })
+      await rename(temporary, path)
+    } finally {
+      await rm(temporary, { force: true })
+    }
+  }
+  /** An older record sealed again under the one seal, same version and dates, unless a write replaced it meanwhile. */
+  const reseal = (stored: FileRecord, value: string): Promise<void> =>
+    queued(async () => {
+      const now = await load(stored.kind, stored.name).catch(() => null)
+      if (now?.format !== 1 || now.version !== stored.version) return
+      await put({ ...listing(stored), value })
+    }).catch(() => undefined)
+
   return {
     durable: () => sealer.available(),
     async read(kind, name) {
@@ -586,35 +617,14 @@ export function fileSecrets(root: string, sealer: SecretSealer): Secrets {
       }
       if (!stored) return null
       if (stored.sealer !== sealer.format) throw new SecretLocked("unreadable")
-      return {
-        ...listing(stored),
-        value: await sealer.open(stored.sealed, sealContext(stored)),
-      }
+      const value = await sealer.open(stored.sealed, sealContext(stored, stored.format))
+      if (stored.format === 1) await reseal(stored, value)
+      return { ...listing(stored), value }
     },
     async write(kind, name, value, options = {}) {
       const record = written(kind, name, value, options)
       if (!(await sealer.available())) throw new SecretUnavailable()
-      const sealed = await sealer.seal(value, sealContext(record))
-      const file: FileRecord = {
-        format: 1,
-        sealer: sealer.format,
-        ...listing(record),
-        sealed,
-      }
-      const path = pathOf(kind, name)
-      await queued(async () => {
-        await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-        const temporary = `${path}.${randomUUID()}.tmp`
-        try {
-          await writeFile(temporary, JSON.stringify(file), {
-            mode: 0o600,
-            flag: "wx",
-          })
-          await rename(temporary, path)
-        } finally {
-          await rm(temporary, { force: true })
-        }
-      })
+      await queued(() => put(record))
       return record
     },
     async delete(kind, name) {
