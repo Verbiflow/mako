@@ -1,5 +1,6 @@
 import { configureOpenCodeCalls } from "./call-plugin.js"
 import { realpath } from "node:fs/promises"
+import { openCodeModelRoutes } from "./connections.js"
 import { OpenCodeCallBounds } from "./call-bounds.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeReviewCommand } from "./review.js"
@@ -727,6 +728,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     approvalAnswerDigest: openCodeApprovalDigest,
     nativeAgents: { kind: "observed", via: "`subagent` task calls and the child sessions they start." },
     nativeRouting: { kind: "at-launch", via: "A deny on the `subagent` permission, last in the Build and Plan agents' rules in `OPENCODE_CONFIG_CONTENT`, which removes the tool.", verified: { version: "2.2.3", how: "harness:native-tools records Build and Plan as a lead without `subagent`, where a deny on `task` left it (2026-11-01); test:native-routing-live: a lead offered none, an ordinary Thread's child ran and was observed" } },
+    modelRoutes: openCodeModelRoutes,
     questions: { kind: "request", via: "The `question` tool's form, answered with `form.reply`." },
     contextBreakdown: { kind: "unavailable", reason: "OpenCode reports token totals per message, not what fills the context." },
     modeSwitching: { kind: "native", via: "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`." },

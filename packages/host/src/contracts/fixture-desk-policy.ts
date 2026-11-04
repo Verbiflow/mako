@@ -65,6 +65,8 @@ const fixtureReads = [
   "mako:native-requests",
   "mako:terminal-list",
   "mako:utility-model-settings",
+  /** Read from the profile's own file; never a key. */
+  "mako:model-connections",
   "mako:harness-order-saved",
   /** Read from the profile's own file. */
   "mako:fin-defaults",

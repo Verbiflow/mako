@@ -127,6 +127,7 @@ export class HarnessAccounts {
   private readonly removalListeners = new Set<(harness: string, name: string, event: AccountRemovalEvent) => void>()
   private readonly suggestedAt = new Map<string, number>()
   private gate: ((provider: string) => Promise<void>) | undefined
+  private route: ((provider: string, env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>) | undefined
   private readonly capabilities: ProviderRegistry<ProviderAccountCapability>
 
   constructor(capabilities: ProviderRegistry<ProviderAccountCapability>, root: AccountRoot) {
@@ -411,6 +412,11 @@ export class HarnessAccounts {
     this.gate = gate
   }
 
+  /** What every launch's environment goes through last: the person's model routes, for a harness whose adapter takes them. */
+  routeLaunches(route: (provider: string, env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>): void {
+    this.route = route
+  }
+
   async launch(
     provider: string,
     base: NodeJS.ProcessEnv,
@@ -419,12 +425,12 @@ export class HarnessAccounts {
     if (options.trackCredential !== false) await this.gate?.(provider)
     const env = childProcessEnv(base)
     const capability = this.capabilities.get(provider)
-    if (!capability) return { env, account: { name: "default" }, selection: { kind: "unavailable" } }
+    if (!capability) return { env: await this.routed(provider, env), account: { name: "default" }, selection: { kind: "unavailable" } }
     const resolve = async () => {
       const selection = await capabilitySelection(this.root, capability)
       const name = selection ?? "default"
       const before = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
-      const resolved = await capability.accountEnv(selection, env)
+      const resolved = await this.routed(provider, await capability.accountEnv(selection, env))
       const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
       if (before !== revision) throw new ExecutionAccountChanged("credentials")
       const launch: AccountLaunch = { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"
@@ -436,6 +442,17 @@ export class HarnessAccounts {
       return launch
     }
     return capability.mode === "selectable" ? this.mutate(provider, resolve) : resolve()
+  }
+
+  /** `env` with the routes `provider` takes; a route that can't be applied never stops the launch. */
+  private async routed(provider: string, env: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+    if (!this.route) return env
+    try {
+      return await this.route(provider, env)
+    } catch (error) {
+      hostWarn("model-routes", "routes were not applied", { harness: provider, error: error instanceof Error ? error.message : String(error) })
+      return env
+    }
   }
 
   /** Linearizes new input against configured selection and credential revision.

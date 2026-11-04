@@ -94,6 +94,8 @@ jobs:
       - run: npm run test:send-race
       - run: npm run test:durable-outbox
       - run: npm run test:tuning
+      # Model connections: the store's keys stay in the secrets, a locked keychain, removal, and the OpenCode providers they become.
+      - run: npm run test:model-connections
       # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
       - run: npm run test:notifications
       # What a local update builds from: its checkout against origin, fetched, and how Settings › Updates says it.

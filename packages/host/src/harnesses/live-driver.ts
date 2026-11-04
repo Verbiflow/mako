@@ -23,6 +23,7 @@ import type { UsageAmendment } from "./account-usage-readings.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
+import type { ModelRouteAdapter } from "./model-routes.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
@@ -442,6 +443,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   nativeAgents: NativeAgentsCapability
   /** How a lead's native spawns go to Mako instead (`contracts/native-routing.ts`). */
   nativeRouting: NativeRoutingCapability
+  /** Which of the person's model connections it runs on, and how (`contracts/model-routes.ts`). */
+  modelRoutes: ModelRouteAdapter
   contextBreakdown: ContextBreakdownCapability
   compaction: ProviderCompaction
   goals: GoalsCapability
@@ -541,6 +544,10 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const modeCount = driver.modes?.length ?? 0
   if ((driver.modeSwitching.kind === "native") !== modeCount > 1)
     throw new Error(`${driver.provider}: mode switching is ${driver.modeSwitching.kind} with ${modeCount} mode${modeCount === 1 ? "" : "s"} declared`)
+  if (driver.modelRoutes.kind !== "absent" && !driver.modelRoutes.wires.length)
+    throw new Error(`${driver.provider}: model routes name the wires they take`)
+  if (driver.modelRoutes.kind === "accepts" && !driver.modelRoutes.kinds.length)
+    throw new Error(`${driver.provider}: model routes name the kinds of connection they take`)
   for (const [name, text] of declaredTexts(driver))
     if (!text.trim()) throw new Error(`${driver.provider}: explain its ${name} declaration`)
   for (const mode of driver.modes ?? [])
@@ -576,10 +583,10 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
 /** The words each capability declaration carries, so none is left empty. */
 function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
   const text = (value: { kind: string; via?: string; reason?: string }) => value.via ?? value.reason ?? ""
-  const { resume, fork, steering, questions, nativeAgents, nativeRouting, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
+  const { resume, fork, steering, questions, nativeAgents, nativeRouting, modelRoutes, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
   const texts: [string, string][] = [
     ["resume", text(resume)], ["fork", text(fork)], ["steering", text(steering)], ["questions", text(questions)],
-    ["subagents", text(nativeAgents)], ["native routing", text(nativeRouting)], ["context breakdown", text(contextBreakdown)],
+    ["subagents", text(nativeAgents)], ["native routing", text(nativeRouting)], ["model routes", text(modelRoutes)], ["context breakdown", text(contextBreakdown)],
     ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["goals", text(goals)],
     ["side questions", text(sideQuestions)], ["review", text(review)], ["mode switching", text(modeSwitching)],
   ]
