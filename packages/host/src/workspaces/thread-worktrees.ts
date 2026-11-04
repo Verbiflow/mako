@@ -108,6 +108,12 @@ export interface ThreadCheckout {
   worktrees: ThreadWorktree[]
 }
 type WorktreeFrom = { kind: "newest" } | { kind: "head" } | WorktreeStart
+
+/** The branch an agent's move names, and the commit it starts from. */
+export interface WorktreeWanted {
+  branch?: string
+  base?: string
+}
 /** A repository's recent pull requests, newest first; null when GitHub can't answer. */
 type PullsOf = (repoRoot: string) => Promise<WorktreeBranchPull[] | null>
 
@@ -278,6 +284,8 @@ export class ThreadWorktreeService {
   /** Answers fixed by the commits they were read at, least recently asked first (`byCommits`): landings, and counts of commits. */
   private readonly landings = new Map<string, Promise<WorktreeLanding>>()
   private readonly counts = new Map<string, Promise<number>>()
+  /** What each agent's move asked of its branch (`wantBranch`), by its conversation. */
+  private readonly wanted = new Map<string, WorktreeWanted>()
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
@@ -321,11 +329,11 @@ export class ThreadWorktreeService {
    * changes move along and must apply where they were made; a
    * `WorktreeStart`, where the person chose.
    */
-  prepare(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom = { kind: "newest" }, onStep?: (step: WorktreeStep) => void): Promise<PreparedWorktree> {
+  prepare(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom = { kind: "newest" }, onStep?: (step: WorktreeStep) => void, branch?: string): Promise<PreparedWorktree> {
     ConversationIdSchema.parse(conversationId)
     let work = this.pending.get(conversationId)
     if (!work) {
-      work = this.create(conversationId, cwd, name, from, onStep)
+      work = this.create(conversationId, cwd, name, from, onStep, branch)
       this.pending.set(conversationId, work)
       void work.finally(() => this.pending.delete(conversationId)).catch(() => {})
     }
@@ -376,7 +384,44 @@ export class ThreadWorktreeService {
       if (busy.length)
         throw new Error(`${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in ${basename(folder)}. Moving its changes would pull files from under ${busy.length === 1 ? "it" : "them"}; continue once ${busy.length === 1 ? "it stops" : "they stop"}.`)
     }
-    return this.prepare(forkId, cwd, name, { kind: "head" })
+    const wanted = this.wanted.get(sourceId)
+    this.wanted.delete(sourceId)
+    return this.prepare(forkId, cwd, name, wanted?.base ? { kind: "from", ref: wanted.base } : { kind: "head" }, undefined, wanted?.branch)
+  }
+
+  /**
+   * The branch an agent's move asked for, and the commit to start it from,
+   * checked now and used when the move makes the worktree (`prepareFork`).
+   * The branch must be new; a base needs a checkout with nothing
+   * uncommitted, since a move carries changes onto the commit they were
+   * made on.
+   */
+  async wantBranch(conversationId: string, cwd: string, wanted: WorktreeWanted): Promise<void> {
+    if (!wanted.branch && !wanted.base) {
+      this.wanted.delete(conversationId)
+      return
+    }
+    const source = await realpath(cwd)
+    const roots = await this.git.output(source, ["rev-parse", "--show-toplevel"]).then((root) => [root], async () => {
+      const found = await projectRepositories(this.git, source)
+      return "refusal" in found ? [] : found.roots
+    })
+    if (!roots.length) throw new Error("This folder holds no repository, so there's no branch to make.")
+    if (wanted.branch !== undefined) {
+      if (!(await this.git.succeeds(source, ["check-ref-format", "--branch", wanted.branch])))
+        throw new Error(`${wanted.branch} isn't a name Git allows for a branch.`)
+      for (const repoRoot of roots)
+        if (await this.hasBranch(repoRoot, wanted.branch))
+          throw new Error(`${wanted.branch} already exists in ${basename(repoRoot)}. worktree_move makes a new branch; name another, or start a Fin with agents_start and workspace.branch to work on that one.`)
+    }
+    if (wanted.base !== undefined) {
+      if (roots.length > 1) throw new Error("This project holds several repositories, so its worktree starts each at its own commit; leave base out.")
+      if (!(await this.git.succeeds(roots[0]!, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${wanted.base}^{commit}`])))
+        throw new Error(`${wanted.base} isn't a commit, branch or tag in ${basename(roots[0]!)}.`)
+      if (await this.git.output(source, ["status", "--porcelain", "--untracked-files=no"]))
+        throw new Error("This checkout has uncommitted changes, which a move carries onto the commit they were made on. Leave base out, or commit them first.")
+    }
+    this.wanted.set(conversationId, wanted)
   }
 
   /**
@@ -1315,13 +1360,13 @@ export class ThreadWorktreeService {
     await rename(pending, target)
   }
 
-  private async create(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom, onStep?: (step: WorktreeStep) => void): Promise<Receipt> {
+  private async create(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom, onStep?: (step: WorktreeStep) => void, branch?: string): Promise<Receipt> {
     const began = performance.now()
     const source = await realpath(cwd)
     let receipt = await this.receipt(conversationId)
     if (receipt && receipt.source !== source) throw new Error("This conversation's worktree was made from another folder")
     if (receipt?.state === "ready" && existsSync(receipt.path)) return receipt
-    if (receipt?.members) return this.createProject(conversationId, source, name, from, began, onStep, receipt)
+    if (receipt?.members) return this.createProject(conversationId, source, name, from, began, onStep, receipt, branch)
     if (!receipt) {
       let repoRoot: string
       let base: string
@@ -1329,7 +1374,7 @@ export class ThreadWorktreeService {
         ;[repoRoot = "", base = ""] = (await this.git.output(source, ["rev-parse", "--show-toplevel", "--verify", "HEAD^{commit}"])).split("\n")
       } catch (error) {
         if (error instanceof GitError && /not a git repository/i.test(error.stderr))
-          return this.createProject(conversationId, source, name, from, began, onStep)
+          return this.createProject(conversationId, source, name, from, began, onStep, undefined, branch)
         throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or choose Project folder.", { cause: error })
       }
       let adopted: string | undefined
@@ -1344,7 +1389,7 @@ export class ThreadWorktreeService {
       const parent = this.projectFolder(repoRoot)
       const slug = adopted
         ? this.freeFolder(parent, worktreeSlug(adopted.replace(/[/_.]+/g, " ")))
-        : await this.reserveSlug(repoRoot, parent, worktreeSlug(name), base)
+        : await this.reserveSlug(repoRoot, parent, worktreeSlug(branch?.replace(/[/_.]+/g, " ") ?? name), base)
       const path = join(parent, slug)
       const inside = relative(repoRoot, source)
       receipt = {
@@ -1353,7 +1398,7 @@ export class ThreadWorktreeService {
         repoRoot,
         path,
         cwd: inside && !inside.startsWith("..") ? join(path, inside) : path,
-        branch: adopted ?? `${BRANCH_PREFIX}${slug}`,
+        branch: adopted ?? branch ?? `${BRANCH_PREFIX}${slug}`,
         base,
         state: "creating",
       }
@@ -1402,7 +1447,7 @@ export class ThreadWorktreeService {
    * Thread's branch. What lies outside the repositories isn't checked out;
    * the project's recipe's `carry` names what a Thread needs of it.
    */
-  private async createProject(conversationId: string, source: string, name: string | undefined, from: WorktreeFrom, began: number, onStep?: (step: WorktreeStep) => void, existing?: Receipt): Promise<Receipt> {
+  private async createProject(conversationId: string, source: string, name: string | undefined, from: WorktreeFrom, began: number, onStep?: (step: WorktreeStep) => void, existing?: Receipt, exactBranch?: string): Promise<Receipt> {
     let receipt = existing
     if (!receipt) {
       const found = await projectRepositories(this.git, source)
@@ -1422,7 +1467,7 @@ export class ThreadWorktreeService {
         return { repoRoot, base: point.commit, from: point.from }
       }))
       const parent = this.projectFolder(source)
-      const named = from.kind === "branch" ? started.find((member) => member.adopted)?.from ?? from.branch : undefined
+      const named = from.kind === "branch" ? started.find((member) => member.adopted)?.from ?? from.branch : exactBranch
       const slug = named
         ? this.freeFolder(parent, worktreeSlug(named.replace(/[/_.]+/g, " ")))
         : await this.reserveProjectSlug(started, parent, worktreeSlug(name))

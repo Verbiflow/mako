@@ -67,6 +67,7 @@ const CASES: Case[] = [
   { name: "a build", thread: inWorktree, command: "npm run build && npx vite build", cwd: worktree, route: "allow" },
   { name: "tests", thread: inWorktree, command: "npm test -- --run", cwd: worktree, route: "allow" },
   { name: "the escape hatch", thread: inWorktree, command: `${NATIVE_OVERRIDE} npm run dev`, cwd: worktree, route: "allow" },
+  { name: "no escape hatch for a worktree", thread: inMain, command: `${NATIVE_OVERRIDE} git worktree add ../alt -b alt`, cwd: main, route: "deny", rule: "git-worktree-add" },
   { name: "a dev server in another project", thread: inWorktree, command: "cd /Users/p/other && npm run dev", cwd: worktree, route: "allow" },
   { name: "curling the Thread's own app", thread: inWorktree, command: "curl -sS -i http://fix-login.thread.localhost:20540/settings", cwd: worktree, route: "warn", rule: "curl-own-app" },
   { name: "curling loopback", thread: inWorktree, command: "curl -s localhost:20540 | head", cwd: worktree, route: "warn", rule: "curl-own-app" },
@@ -106,7 +107,7 @@ for (const entry of CASES) {
     assert.equal(route.rule, entry.rule, `${entry.name}: rule`)
     assert.doesNotMatch(route.message, /\n/, `${entry.name}: one line`)
   }
-  if (route.kind === "deny") assert.ok(route.message.includes(NATIVE_OVERRIDE), `${entry.name}: a deny names the override`)
+  if (route.kind === "deny") assert.equal(route.message.includes(NATIVE_OVERRIDE), route.rule !== "git-worktree-add", `${entry.name}: a deny names the override, but for a worktree`)
 }
 
 // Messages name Mako's tools as the harness calls them.

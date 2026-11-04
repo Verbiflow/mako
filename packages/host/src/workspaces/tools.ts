@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, relative } from "node:path"
 import { z } from "zod"
 import { locateCheckout } from "../base/checkout-location.js"
 import { discoverRepositories, projectRepositories, type ReachableRepository, type RepositoryPlace } from "../git/index.js"
-import type { ThreadCheckout, ThreadWorktreeService } from "./thread-worktrees.js"
+import type { ThreadCheckout, ThreadWorktreeService, WorktreeWanted } from "./thread-worktrees.js"
 import { toolText } from "../base/tool-text.js"
 import type { WorkspaceMoves } from "./moves.js"
 import type { WorktreeLeaves } from "./worktree-leaves.js"
@@ -15,7 +15,7 @@ import { gitActionPrompt } from "../contracts/git-actions.js"
 import type { ThreadWorktree, WorktreeBranchPull, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import type { MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 
-type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares">
+type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares" | "wantBranch">
 
 interface Deps {
   git: Git
@@ -93,7 +93,7 @@ function changesOf(shares: MoveShares): NonNullable<WorkspaceStatus["changes"]> 
 
 export interface WorkspaceTools {
   status(conversationId: string): Promise<WorkspaceStatus>
-  move(conversationId: string): Promise<string>
+  move(conversationId: string, wanted?: WorktreeWanted): Promise<string>
   update(conversationId: string): Promise<string>
   merge(conversationId: string): Promise<string>
   remove(conversationId: string): Promise<string>
@@ -298,7 +298,15 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       if (move) status.move = move
       return status
     },
-    move: (conversationId) => deps.moves.ask(conversationId),
+    async move(conversationId, wanted = {}) {
+      if (wanted.branch || wanted.base) {
+        if (!deps.worktrees) throw new Error("Worktrees aren't available here.")
+        await deps.worktrees.wantBranch(conversationId, cwdOf(conversationId), wanted)
+      }
+      const asked = await deps.moves.ask(conversationId)
+      const named = [wanted.branch && `on ${wanted.branch}`, wanted.base && `from ${wanted.base}`].filter(Boolean).join(" ")
+      return named ? `The worktree's branch: ${named}. ${asked}` : asked
+    },
     async bring(conversationId, entries) {
       const cwd = cwdOf(conversationId)
       const current = deps.worktrees?.threadCheckout(conversationId)
@@ -452,11 +460,14 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_move",
     {
       description:
-        "Call when the user asks for this work on its own branch or in a worktree, or when you'd otherwise make a worktree or a copy of the checkout to keep work apart. Asks to move this Thread into its own worktree, so your edits stay out of the main checkout; for a project folder holding several repositories, that's one worktree per repository on one branch. Use this instead of `git worktree add`, copying the checkout, a `--worktree` flag or a worktree tool of your own: Mako, its Changes panel and the recipe's checks see only this Thread's checkouts. Mako shows the branch in the app and brings the conversation along with this Thread's own uncommitted changes: each line whose last writer is this Thread, and the files it created, deleted or renamed. Other Threads' and the user's changes stay in the main checkout, so a checkout holding others' work is no reason not to move; lines that might be this Thread's and changes nobody can be named for stay unless the user brings them. worktree_status says beforehand which is which. Afterwards Mako offers merging or a pull request. This Session and the Thread's other Sessions in this checkout move together, into the same worktree. Returns at once, saying what will come and what will stay. The user answers in the app, unless the project always allows it; an allowed move happens once your turn and theirs have ended, and the message you get in the worktree lists what came and what stayed.",
-      inputSchema: none,
+        "Call when the user asks for this work on its own branch or in a worktree, or when you'd otherwise make a worktree or a copy of the checkout to keep work apart. Asks to move this Thread into its own worktree, so your edits stay out of the main checkout; for a project folder holding several repositories, that's one worktree per repository on one branch. Use this instead of `git worktree add`, `git checkout -b`, copying the checkout, a `--worktree` flag or a worktree tool of your own: Mako, its Changes panel and the recipe's checks see only this Thread's checkouts. Pass branch to name the new branch (the user's name for it, such as `alt`; Mako names one when left out) and base to start it from another commit, branch or tag, which needs a checkout with nothing uncommitted. Mako shows the branch in the app and brings the conversation along with this Thread's own uncommitted changes: each line whose last writer is this Thread, and the files it created, deleted or renamed. Other Threads' and the user's changes stay in the main checkout, so a checkout holding others' work is no reason not to move; lines that might be this Thread's and changes nobody can be named for stay unless the user brings them. worktree_status says beforehand which is which. Afterwards Mako offers merging or a pull request. This Session and the Thread's other Sessions in this checkout move together, into the same worktree. Returns at once, saying what will come and what will stay. The user answers in the app, unless the project always allows it; an allowed move happens once your turn and theirs have ended, and the message you get in the worktree lists what came and what stayed.",
+      inputSchema: z.object({
+        branch: z.string().min(1).max(200).optional().describe("The new branch's name; it must not exist yet."),
+        base: z.string().min(1).max(200).optional().describe("The commit, branch or tag to start it from; the checkout's own commit when left out."),
+      }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    () => reply(() => tools.move(conversationId()))
+    ({ branch, base }) => reply(() => tools.move(conversationId(), { ...branch && { branch }, ...base && { base } }))
   )
   server.registerTool(
     "worktree_update",

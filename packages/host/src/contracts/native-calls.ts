@@ -43,6 +43,9 @@ export const bareNames: ToolNames = (tool) => tool
 /** The prefix that lets a command the policy would deny run anyway. */
 export const NATIVE_OVERRIDE = "MAKO_NATIVE=1"
 
+/** Routes the override doesn't open: Mako's tool does all they do, so a refusal stands. */
+const NO_OVERRIDE = new Set(["git-worktree-add"])
+
 const OVERRIDE_LINE = `Only if that tool failed or can't do what was asked, run the command again starting with ${NATIVE_OVERRIDE}.`
 
 /** One simple command of a shell line, as the policy reads it. */
@@ -341,14 +344,13 @@ export function routeShellCall(thread: CallThread, call: { command: string; cwd?
   if (line.loop && line.segments.some((segment) => basename(segment.argv[0]!) === "sleep"))
     findings.push({ kind: "warn", family: "polling", rule: "sleep-loop", message: `Don't wait in a loop: it holds the turn and nobody else can use it. A Fin's report wakes you (${n("agents_start")} with mode wait when your next step needs its result), ${n("app_logs")} and ${n("app_status")} read the app, and ${n("pull_request_status")} reads checks; otherwise end your turn and say what you're waiting for.` })
   for (const segment of line.segments) {
-    if (segment.env.MAKO_NATIVE === "1") continue
     const found = segmentFinding(thread, segment, line, n)
-    if (found) findings.push(found)
+    if (found && (segment.env.MAKO_NATIVE !== "1" || NO_OVERRIDE.has(found.rule))) findings.push(found)
   }
   const deny = findings.find((finding) => finding.kind === "deny")
   const chosen = deny ?? findings[0]
   if (!chosen) return { kind: "allow" }
-  return chosen.kind === "deny" ? { ...chosen, message: `${chosen.message} ${OVERRIDE_LINE}` } : chosen
+  return chosen.kind === "deny" && !NO_OVERRIDE.has(chosen.rule) ? { ...chosen, message: `${chosen.message} ${OVERRIDE_LINE}` } : chosen
 }
 
 function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLine, n: ToolNames): Finding | undefined {
@@ -360,7 +362,7 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     const place = placeOf(thread, git.cwd)
     if (place === "elsewhere") return undefined
     if (git.sub === "worktree" && git.args[0] === "add")
-      return { kind: "deny", family: "worktree", rule: "git-worktree-add", message: `Mako doesn't see a worktree made with \`git worktree add\`: its Changes panel, pull request, app and checks follow only this Thread's own checkouts. Call ${n("worktree_move")} to work on this Thread's own branch, or ${n("agents_start")} with a workspace to put parallel work on a branch of its own.` }
+      return { kind: "deny", family: "worktree", rule: "git-worktree-add", message: `Mako doesn't see a worktree made with \`git worktree add\`: its Changes panel, pull request, app and checks follow only this Thread's own checkouts. Call ${n("worktree_move")} to work on this Thread's own branch (it takes the branch's name and a base), or ${n("agents_start")} with a workspace to put parallel work on a branch of its own.` }
     if (git.sub === "worktree" && git.args[0] === "remove")
       return { kind: "warn", family: "worktree", rule: "git-worktree-remove", message: `${n("worktree_remove")} removes this Thread's worktree with its app and data folder; use it for Mako's worktrees.` }
     const creates = (git.sub === "checkout" && git.args.some((word) => word === "-b" || word === "-B")) ||
