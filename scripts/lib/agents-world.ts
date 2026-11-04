@@ -52,6 +52,10 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
+  /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */
+  conversationMemory?: ConstructorParameters<typeof LiveConversations>[0]["conversationMemory"]
+  /** How long a harness at rest stays connected before it hibernates (`LiveDependencies.providerIdleMs`). */
+  providerIdleMs?: number
   /** This Mac's load as a start reads it (`AgentsDeps.capacity`); a start says nothing of it without one. */
   capacity?: AgentsDeps["capacity"]
   /** The person's limit of Fins at once (`AgentsDeps.finLimit`); `FIN_LIMIT` without it. */
@@ -170,6 +174,8 @@ export class AgentsWorld {
       agents: () => this.agents,
       settled: (id) => this.agents?.moved(id),
       autoContinueDelayMs: this.options.autoContinueDelayMs ?? 10,
+      ...(this.options.conversationMemory && { conversationMemory: this.options.conversationMemory }),
+      ...(this.options.providerIdleMs !== undefined && { providerIdleMs: this.options.providerIdleMs }),
       resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     this.live = live
