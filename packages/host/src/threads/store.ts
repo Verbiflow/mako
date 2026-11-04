@@ -673,6 +673,7 @@ export class ThreadStore {
   private readonly forksSeen = new Map<string, SessionId | null>()
   private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
   private edgesSeen: { revision: number; edges: ThreadEdges } | undefined
+  private worktreesSeen: { revision: number; worktrees: ThreadWorktree[] } | undefined
   private changeSeq = 0
   private titleSeq = 0
   /** Threads whose name another host changed since `takeExternalTitles` last ran. */
@@ -1185,6 +1186,16 @@ export class ThreadStore {
    * project folder as `project`.
    */
   worktrees(): ThreadWorktree[] {
+    // Every summary, status and read of a worktree asks: read once per commit, as `groups` is.
+    this.syncVersion()
+    const held = this.worktreesSeen
+    if (held && held.revision === this.revision && this.depth === 0) return [...held.worktrees]
+    const worktrees = this.readWorktrees()
+    if (this.depth === 0) this.worktreesSeen = { revision: this.revision, worktrees }
+    return [...worktrees]
+  }
+
+  private readWorktrees(): ThreadWorktree[] {
     const repositories = new Map<string, WorktreeRepository[]>()
     for (const found of this.sql("SELECT path, checkout, repo_root, base FROM thread_worktree_repositories ORDER BY path").all()) {
       const row = WorktreeRepositoryRowSchema.parse(found)
@@ -2688,6 +2699,7 @@ export class ThreadStore {
     this.forksSeen.clear()
     this.groupsSeen = undefined
     this.edgesSeen = undefined
+    this.worktreesSeen = undefined
   }
 
   private remember(key: string, placed: ThreadPlacement): void {

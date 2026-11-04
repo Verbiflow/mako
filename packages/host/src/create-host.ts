@@ -7,6 +7,7 @@ import { HostMethods, runtimeInfo, startWebHost } from "./transport/index.js"
 import { HostJobs, type JobDemand } from "./base/host-jobs.js"
 import { HostDomains, hostDomainOptions, type Domain } from "./base/host-domains.js"
 import { EventLoopWatch } from "./base/event-loop.js"
+import { HeldLoopProfiler } from "./base/loop-profile.js"
 import type { HostLifecycle } from "./base/host-lifecycle.js"
 import { hostLog, hostWarn } from "./base/host-log.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
@@ -87,7 +88,22 @@ const MACHINE_FIRST_START_CAP_MS = 120_000
  */
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
-  const loop = new EventLoopWatch()
+  // A hold's log line names every piece of work open then; a profile of the next few seconds names the one holding it.
+  const profiler = new HeldLoopProfiler({
+    windowMs: 10_000,
+    restMs: 10 * 60_000,
+    report: (slices, ms) => {
+      if (!slices.length) return
+      const longest = [...slices].sort((a, b) => b.ms - a.ms).slice(0, 3)
+      hostWarn("loop", "held loop profiled", {
+        windowMs: ms,
+        slices: slices.length,
+        heldMs: slices.reduce((sum, slice) => sum + slice.ms, 0),
+        longest: longest.map((slice) => `${slice.ms} ms: ${slice.frames.map((frame) => `${frame.frame} (${frame.ms})`).join(" < ")}`).join(" | "),
+      })
+    },
+  })
+  const loop = new EventLoopWatch({ heldLong: () => profiler.held() })
   const foreground = new Foreground()
   const jobs = new HostJobs(loop, foreground)
   // A cloud machine is made for its Thread's first start, which its routine work waits for.
@@ -288,6 +304,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       hostLog("lifecycle", "stopped")
     } finally {
       loop.stop()
+      profiler.stop()
     }
   }
 

@@ -127,7 +127,7 @@ jobs:
       - run: npm run test:background-agents
       - run: npm run test:agents-migrate
       # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
-      # crash-safe, reversible, on a store of the person's shape (`docs/one-conversation.md`).
+      # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
       - run: npm run test:thread-split
       - run: npm run test:agents-wake
       - run: npm run test:orch-answer
@@ -246,6 +246,27 @@ jobs:
           version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run probe:steer-lands -- claude codex
+
+  # Whether the host keeps answering while many Fins work (`bench:host-load`): a real host on 52 Threads' worktrees,
+  # 95 apps and a busy process table, its Fins editing, building and writing transcripts, three windows polling. It
+  # fails when one health check or read in a hundred, or any one, waits past the bench's limits, and prints what held
+  # the loop.
+  host-load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npx tsgo -b packages/host
+      - run: npm run bench:host-load -- --scale ci --cpu-prof "$RUNNER_TEMP/host-load-profile"
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.
