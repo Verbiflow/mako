@@ -26,6 +26,10 @@ export interface AgentsStartInput extends DoorFilled {
   harness?: string
   model?: string
   reasoning?: string
+  /** True for the model's fast lane (or its harness's fast sibling of it), false for its standard one. */
+  fast?: boolean
+  /** The number of the person's rule this Fin follows (`finPolicyNote`): its harness and model unless the spawn names them. */
+  rule?: number
   /** At most the caller's tier; absent means the caller's. */
   access?: AccessTier
   /** `here`, `device:<name>` or `cloud`, from what the person said; absent means where the caller runs. */
@@ -79,6 +83,13 @@ export interface AgentsStarted {
   deduped?: true
   /** A `wait` start's outcome; a repeat of one answers its result again. */
   waited?: StartWaited
+  /** What it runs on, in words, and the choice passed over for one its harness no longer lists, or its harness at its limit. */
+  runsOn?: string
+  note?: string
+  /** Its Apex's harness was at its limit (until `until`), so it started on the person's next harness; `instead` is another account of that harness with room. */
+  limited?: { harness: string; until?: number; instead?: string }
+  /** The person's rule it follows, as its row says it. */
+  rule?: string
   next: string
 }
 export type AgentsStartResult = AgentsStarted | AgentRefused
@@ -95,8 +106,8 @@ export interface AgentsLinkInput {
 export type AgentsLinkResult = { child: string; name: string; origin: ChildOrigin; deduped?: true } | AgentRefused
 
 export interface AgentsListInput {
-  /** `tree` adds every descendant, each under its parent. */
-  scope?: "children" | "tree"
+  /** `tree` adds every descendant, each under its parent; `crew`, from a Fin, is its Apex and the other Fins it started (`AgentsCrew`). */
+  scope?: "children" | "tree" | "crew"
 }
 export interface AgentStrip {
   child: string
@@ -105,6 +116,10 @@ export interface AgentStrip {
   under?: string
   harness: string
   model?: string
+  /** Its model, reasoning and fast lane in words: "Opus 5.5 · High · Fast". */
+  runsOn?: string
+  /** The person's rule it was started by: "Rule 2 · Anything that isn't frontend". */
+  rule?: string
   origin: ChildOrigin
   state: ChildState
   title?: string
@@ -113,7 +128,28 @@ export interface AgentStrip {
   report?: { status: ReportStatus; line: string; at: number }
   startedAt: number
 }
-export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentRefused
+/**
+ * A Fin's view of the work it's part of (`agents_list` with `scope: crew`):
+ * its Apex as it stands now, and the other Fins that Apex started, each as
+ * the front door's note names it. Typed facts the host holds, never a
+ * transcript, so it costs no read of one.
+ */
+export interface AgentsCrew {
+  /** The caller's own name among them. */
+  you: string
+  apex: {
+    title?: string
+    harness?: string
+    working: boolean
+    /** The last thing its transcript shows it doing, while it works. */
+    step?: string
+    /** What it was asked, its first sentence, when it is a Fin too. */
+    asked?: string
+  }
+  crew: CrewMate[]
+}
+export type CrewMate = Omit<FrontDoorChild, "direct">
+export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentRefused
 
 export interface AgentsReadInput {
   /** The Fin's name or Thread ID. */
@@ -285,6 +321,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   "Background, parallel, cross-harness or remote work goes through `agents_start` (from a shell, `mako agents start` is the same tool).",
   "Use `agents_start` for parallel or background work even when your harness has its own subagent tool; keep that tool for a quick look you wait for.",
   "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
+  `Pass \`model\`, \`reasoning\` or \`fast\` only as the person said them ("Codex on high", "the fast one"); left out, a ${FIN_WORD} runs on what the person uses.`,
   `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report or ask, and a message to it has to stop its run.`,
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
@@ -388,9 +425,11 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       fields: {
         brief: "objective: what to do and why, with everything it needs; doneWhen: the checks that say it's done; boundaries: what not to touch; output: what its report must carry.",
         name: `A short name, unique among this Thread's ${FIN_WORD}s (made from the brief when absent).`,
-        harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent.",
-        model: "A model the harness lists. Absent: this Thread's own model and reasoning on this Thread's harness, else the harness's default.",
-        reasoning: "A reasoning level the model takes.",
+        harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent. When that one's account is at its limit, the person's next harness with room, and the answer says so; one you name at its limit is refused with when it resets and what the person can use instead.",
+        model: "Only when the person named one: a model the harness lists, by id or name (\"opus 5.5\", \"gpt-6.1-sol\"). Absent: what the person uses: their Fins default for the harness, else this Thread's own model on this Thread's harness, else their last model there. A model it doesn't list is refused with the ones it does.",
+        reasoning: "Only when the person said one (\"on high\"): a level the model takes, such as low, medium, high, xhigh or max. Absent: the level of the model's choice above.",
+        rule: "The number of the person's rule that fits this work, from their rules in Mako's note. Its harness and model apply; leave harness, model, reasoning and fast out unless the person named them. Absent: their choice for work no rule fits.",
+        fast: "Only when the person asked for it: true for the fast lane (\"the fast one\", quicker and pricier), false for the standard one. A harness whose fast model is a model of its own switches to it.",
         access: "plan, chat, ask, edits, auto, full or deny: at most this Thread's own; this Thread's when absent. A harness without that level runs the Fin on its nearest one below, and one whose every level is above it is refused.",
         place: "Only when the person said where: here, device:<name> or cloud. Absent: where this Thread runs.",
         workspace: "Its own worktree: on branch if it exists, else a new branch from base; in a project folder of several repositories, branch is every repository's. Absent: this Thread's folder, for reading or one writer.",
@@ -423,8 +462,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_list",
-      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Reports wake you on their own, so read this when you need the whole picture, not to wait.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s; or tree, which adds every ${FIN_WORD} below them.` },
+      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing.`,
+      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported.` },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },

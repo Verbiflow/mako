@@ -253,10 +253,33 @@ Fins' reports wake, or, with nothing to wake it, that turn's reply
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
-Mako drives it. A Fin started without a model runs on its Apex's model and
-options when it shares the Apex's harness, else on its harness profile's
-default (`defaultTuning`). The person's own choice in Settings › Models is
-kept in each window, so the host can't read it. A worktree in a project folder of several
+Mako drives it. What a Fin runs on is decided once, at admission
+(`resolveFinTuning`, `contracts/fin-tuning.ts`): a `model`, `reasoning` or
+`fast` the spawn names is held to its harness's catalog, read leniently, and
+refused (`unknown-model`) with the choices it offers; left out, the person's
+Settings › Fins choice for that harness, else its Apex's model and options on
+the Apex's harness (never its plan mode), else the model the person last
+started or sent with there, else Mako's pick (`HarnessDefaults.work`), else
+the harness's own. A layer whose model the harness stopped listing is passed
+over in a note its Apex and its row both show (`ThreadParent.tuned`). Fast is
+the model's speed option, or its fast sibling where the harness lists one as
+a model (Grok, Devin). The host keeps the choices and what the person used in
+`<user root>/fin-defaults.json` (`mako:fin-defaults`), so the web app reads
+them through the Mac, and a Fin's row says its model, reasoning and fast lane
+(`NativeAgent.runsOn`). A harness whose account in use is at its limit
+(`HarnessAccounts.limited`, read for at most `LIMIT_READ_MS`) takes no Fin:
+one whose Apex named no harness or model starts on the person's next harness
+with room (`harnessOrder`), its answer's `limited` and its row's note saying
+until when and which other account of that harness has room; a named one,
+or one with nowhere to go, is refused (`limited`) with the same. The person's rules for Fins (`FinPolicy`,
+Settings › Fins: their own words, each to a harness and maybe a model, first
+fit wins, and where the rest go) reach every Thread's agent ahead of the
+person's next message once they change (`finPolicyNote`, `rulesNote`), and
+an Apex of its own with its brief. `agents_start`'s `rule` names the one a
+Fin follows: its harness and model apply unless the spawn names them (a
+model only on the rule's own harness), a spawn with no rule, harness or
+model goes to `otherwise`, a missing rule is refused (`unknown-rule`), and
+the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
@@ -284,6 +307,21 @@ journal. `npm run test:background-agents` covers the engine,
 `bench:orch-wake`, `bench:orch-wake-latency`, `bench:orch-spawn` and
 `bench:orch-host` hold the follow, the wakes, a report's way to its Apex, a
 spawn's receipt and the host's loop to budgets.
+
+What an Apex and its Fins tell each other is kept short without dropping
+what the reader needs. Every `agents_*` answer is its JSON on one line
+(`agentToolText`), every field kept. A finished Fin's digest line
+(`finishedLine`) is its report's first paragraph past any heading, on one
+line, at most `FINISHED_CHARS`, with how many more characters the
+report holds (`agents_read` gives them), and every artifact by its ref with
+its label beside it.
+A Fin reads its Apex and the other open Fins it started with `agents_list`
+`scope: crew` (`AgentsCrew`): the Apex's title, harness, whether it works and
+its last step, what it was asked when it is a Fin too, and each other Fin as
+the front door's note names it (name, harness, state, what it was asked, its
+branch and last report). The person's direct words to a Fin stay out. It
+reads typed state, never a transcript, and its brief's first line says it's
+there. `npm run test:orch-comms` covers all three.
 
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where
