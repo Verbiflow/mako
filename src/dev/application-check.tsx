@@ -6,7 +6,7 @@ import { bindTheme, prefsStore } from "@/state/prefs"
 import { getMako } from "@/lib/bridge"
 import { installMockBridge } from "./mock-bridge"
 import { threadMoveStepped } from "@/state/cloud-moves"
-import type { BuildFailure, CheckoutStanding, LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UncommittedChanges, UnsurePerformance, UpdateInstallation, UpdateSource, UpdateSourcePlan } from "@mako/host/contracts/app-lifecycle"
+import type { BuildFailure, CheckoutStanding, UpdateBuildFrom, LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UncommittedChanges, UnsurePerformance, UpdateInstallation, UpdateSource, UpdateSourcePlan } from "@mako/host/contracts/app-lifecycle"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import "../index.css"
 
@@ -113,7 +113,7 @@ export const SOURCE_SCENES = {
   installing: { checkout: LEVEL, local: { kind: "building", phase: "installing", revision: UPSTREAM, dependencies: { count: 1, names: ["@mako/web-client"] } } },
   installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, uncommitted: { count: 1, files: [{ path: "package-lock.json", change: "edited" }] }, plan: plan("checkout", "ahead"), ahead: 1 }), local: { kind: "error", message: `The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
   installFailed: { checkout: LEVEL, local: { kind: "error", message: `The update couldn't install dependencies: npm install didn't finish within 10 minutes, so Mako stopped it. Run npm install yourself to see the whole error, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
-  building: { checkout: LEVEL, local: { kind: "building", phase: "checking", revision: UPSTREAM } },
+  building: { checkout: LEVEL, local: { kind: "building", phase: "checking", from: "upstream", revision: UPSTREAM } },
   ready: { checkout: LEVEL, local: READY },
   busy: { checkout: LEVEL, local: { ...READY, performance: BUSY } },
   remeasuring: { checkout: LEVEL, local: { kind: "building", phase: "checking", remeasuring: true, revision: UPSTREAM } },
@@ -169,6 +169,8 @@ let lifecycle: LifecycleState = {
 }
 export const calls = {
   build: 0,
+  /** Where each build was asked to come from: what the reading recommends, or the person's other choice. */
+  builtFrom: [] as (UpdateBuildFrom | "recommended")[],
   measuredAgain: 0,
   quit: 0,
   stopped: 0,
@@ -254,8 +256,9 @@ window.mako = {
     return installation
   },
   pickFolder: async () => "/Users/developer/Projects/mako",
-  buildUpdate: async () => {
+  buildUpdate: async (from?: UpdateBuildFrom) => {
     calls.build++
+    calls.builtFrom.push(from ?? "recommended")
     setLocal({ kind: "building", phase: "compiling" })
   },
   measureUpdateAgain: async () => {
