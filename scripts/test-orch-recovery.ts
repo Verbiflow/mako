@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
