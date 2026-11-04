@@ -167,10 +167,11 @@ let lifecycle: LifecycleState = {
   operation: { kind: "idle" },
   work: WORK,
 }
+/** Where each build was asked to come from: what the reading recommends, or the person's other choice. */
+const builtFrom: (UpdateBuildFrom | "recommended")[] = []
 export const calls = {
   build: 0,
-  /** Where each build was asked to come from: what the reading recommends, or the person's other choice. */
-  builtFrom: [] as (UpdateBuildFrom | "recommended")[],
+  builtFrom,
   measuredAgain: 0,
   quit: 0,
   stopped: 0,
