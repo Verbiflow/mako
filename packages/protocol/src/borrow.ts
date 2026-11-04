@@ -403,13 +403,14 @@ function argvMatches(pattern: string, ref: string): boolean {
   return want.length === have.length
 }
 
-/** Whether a grant's selector covers a ref of a kind. A ref with `..` never matches a path pattern. */
+/** Whether a grant's selector covers a ref of a kind: a folder's covers the files in it too. A ref with `..` never matches a path pattern. */
 export function selects(selector: ResourceSelector, kind: Kind, ref: string): boolean {
-  if (selector.kind !== kind) return false
+  const folderOfFile = selector.kind === "tree" && kind === "file"
+  if (selector.kind !== kind && !folderOfFile) return false
   if (kind === "command") return argvMatches(selector.ref, ref)
   if ((kind === "file" || kind === "tree") && ref.split("/").includes("..")) return false
-  if (kind === "tree" && selector.ref === ref) return true
-  if (kind === "tree" && !/[*?]/.test(selector.ref)) return ref === selector.ref || ref.startsWith(`${selector.ref}/`)
+  if (selector.kind === "tree" && selector.ref === ref) return true
+  if (selector.kind === "tree" && !/[*?]/.test(selector.ref)) return ref.startsWith(`${selector.ref}/`)
   return pathPattern(selector.ref).test(ref)
 }
 
