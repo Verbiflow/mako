@@ -13,7 +13,6 @@ import {
   flushNotificationBursts,
   installNotificationEnvironment,
   markAllSeen,
-  nextUnseen,
   noteOutcome,
   notificationsStore,
   reconcileVisible,
@@ -278,7 +277,7 @@ threadsStore.set({ descriptors: harnessDescriptors.map((descriptor) => ({ ...des
   })
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/c", "thread:/b"], "the ask joins the unseen answer")
   assert.deepEqual(fake.log.badges, [0, 1, 2])
-  assert.equal(nextUnseen()?.subject.id, "thread:/c", "asks come first")
+  assert.equal(unseenItems(notificationsStore.get().items)[0]?.subject.id, "thread:/c", "asks come first")
 
   // A burst of many becomes one banner naming them.
   for (let index = 0; index < BURST_SUMMARY_FROM; index += 1)

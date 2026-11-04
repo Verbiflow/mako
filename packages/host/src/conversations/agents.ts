@@ -1,6 +1,6 @@
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
-import type { SessionSettings } from "@mako/sessions/settings"
+import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
 import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
@@ -9,6 +9,7 @@ import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } f
 import {
   childAccess,
   childEntry,
+  ruleWords,
   childMode,
   childState,
   PlaceSchema,
@@ -70,6 +71,8 @@ import {
 } from "../contracts/agent-tools.js"
 import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
+import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
+import { finPolicyNote, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -85,6 +88,8 @@ import type { ConversationChildren } from "./live-runtime.js"
 import { macSlots, type MacReading, type MacSlots } from "./mac-capacity.js"
 
 const NONE: readonly NativeAgent[] = []
+/** How long a start waits to read whether a harness's account is at its limit before taking it as having room. */
+const LIMIT_READ_MS = 3_000
 /** A Fin's own Fins in these states are work it still waits on. */
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
 /** How often Fins waiting for this Mac's room look for it. */
@@ -125,13 +130,49 @@ export interface AgentsDeps {
   modes(harness: string): readonly LiveSessionMode[] | undefined
   /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet: it carries on there. */
   movePending?(conversation: string): boolean
-  /** What a new conversation of `harness` in `cwd` starts on: Mako's choice for it, else the harness's own default. */
-  defaultTuning?(harness: string, cwd: string): Promise<SessionSettings | undefined>
+  /** What a Fin of `harness` in `cwd` may run on: the harness's catalog, Mako's pick for it, and the person's own choices there. */
+  finChoices?(harness: string, cwd: string): Promise<FinChoices>
+  /** `harness`'s catalog as this host last read it, for a Fin's row; undefined before it's read. */
+  catalogOf?(harness: string): readonly SessionModel[] | undefined
+  /** `harness`'s account in use when it's at its limit (`HarnessAccounts.limited`); undefined while it has room. */
+  limited?(harness: string): Promise<HarnessLimit | undefined>
+  /** The harnesses in the person's order (Settings › Models), most preferred first: where a Fin goes when its Apex's harness is at its limit. */
+  harnessOrder?(): Promise<readonly string[]>
+  /** The person's rules for which work goes to which harness and model (Settings › Fins). */
+  finPolicy?(): FinPolicy | undefined
   budget?: TreeBudget
   /** This Mac's cores, memory and load (`MacCapacity`): Fins past what it runs at once wait. Without it, only the tree's budget holds. */
   capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
   now?(): number
+}
+
+/** What a Fin of one harness may run on (`AgentsDeps.finChoices`). */
+export interface FinChoices {
+  /** Its catalog; empty while it hasn't been read. */
+  models: readonly SessionModel[]
+  /** Mako's pick for the harness (`HarnessDefaults.work`). */
+  recommended?: SessionSettings
+  /** The person's Settings › Fins choice for it. */
+  chosen?: SessionSettings
+  /** The model the person last started or sent with on it. */
+  used?: SessionSettings
+}
+
+/** A spawn's model, decided as it's admitted: what it starts with, where that came from, and any choice passed over. */
+interface Tuned {
+  settings?: SessionSettings
+  source: FinTuningSource
+  note?: string
+  rerouted?: { from: string; until?: number; instead?: string }
+  rule?: { n?: number; when: string }
+}
+
+/** The person's rule a spawn follows, or their choice for work no rule fits: where it sends the Fin, and its words. */
+interface Ruled {
+  target: FinTarget
+  who: string
+  rule: { n?: number; when: string }
 }
 
 /** An Apex resolved in the store: its Session, its Thread, and its conversation here. */
@@ -148,6 +189,8 @@ interface QueuedStart {
   input: AgentsStartInput
   tier: AccessTier
   harness: string
+  /** Absent from a build before models were decided at admission: decided at its start. */
+  tuned?: Tuned
   /** What held it: the tree's running budget, or this Mac's room (`place-full`). A record from before says neither. */
   why?: Extract<QueueReason, "tree-running" | "place-full">
 }
@@ -157,6 +200,13 @@ const QueuedStartSchema = z.object({
   input: hostCallSchema("mako:agents-start").def.items[1],
   tier: z.enum(ACCESS_TIER_NAMES),
   harness: z.string(),
+  tuned: z.object({
+    settings: SessionSettingsSchema.optional(),
+    source: FinTuningSourceSchema,
+    note: z.string().optional(),
+    rerouted: z.object({ from: z.string(), until: z.number().optional(), instead: z.string().optional() }).optional(),
+    rule: z.object({ n: z.number().optional(), when: z.string() }).optional(),
+  }).optional(),
   why: z.enum(["tree-running", "place-full"]).optional(),
 }) satisfies z.ZodType<QueuedStart>
 
@@ -195,6 +245,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly conversations = new Map<string, string>()
   private readonly childOf = new Map<string, string>()
   private readonly starting = new Set<string>()
+  /** The rules each conversation last read (`rulesNote`), as they were said. */
+  private readonly rulesSaid = new Map<string, string>()
   private readonly waiters = new Set<() => void>()
   /** `wait` starts holding now: while one holds a Fin, its reports answer the start rather than wake its Apex. */
   private readonly holds = new Set<Hold>()
@@ -370,12 +422,37 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()
     const thread = store?.journalPlacement(conversation)?.thread
     if (!store || !thread) return []
+    const rules = this.rulesNote(conversation)
     const open = store.edges().children(thread).filter((edge) => !edge.closedAt)
-    if (!open.length) return []
+    if (!open.length) return rules
     this.sync()
-    const lines = frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), this.now())
+    const lines = [...rules, ...frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), this.now())]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
+  }
+
+  /**
+   * The person's rules for Fins, for a conversation that hasn't read them as they stand: once, and again when they
+   * change, so every Thread that might start a Fin knows them without paying for them on every message.
+   */
+  private rulesNote(conversation: string): string[] {
+    const lines = this.policyLines()
+    const said = lines.join("\n")
+    if (this.rulesSaid.get(conversation) === said) return []
+    this.rulesSaid.set(conversation, said)
+    return lines
+  }
+
+  /** The person's rules as an Apex reads them, each target in its catalog's words. */
+  private policyLines(): string[] {
+    const policy = this.deps.finPolicy?.()
+    if (!policy) return []
+    return finPolicyNote(policy, (target) => {
+      const label = this.deps.harnessLabel(target.harness)
+      const catalog = this.deps.catalogOf?.(target.harness)
+      const words = catalog && target.settings ? finTuningWords(catalog, target.settings) : undefined
+      return words ? `${label} · ${finTuningLine(words)}` : target.settings?.model ? `${label} · ${target.settings.model}` : `${label}, on the model the person uses there`
+    })
   }
 
   /**
@@ -502,18 +579,38 @@ export class Agents implements AgentOperations, ConversationChildren {
     const kept = store.edges().byOp(op)
     if (kept) return this.started(kept, apex, true)
     if (store.queuedSpawns().some((spawn) => spawn.op === op)) return this.queuedAnswer(op, apex, true)
-    const harness = input.harness ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.harness : undefined)
-    if (!harness || !this.deps.harnesses().includes(harness))
-      return this.refuse(op, "unknown-harness", `No harness named ${harness ?? "(none)"} runs here: ${this.deps.harnesses().join(", ")}.`)
+    const policy = this.deps.finPolicy?.()
+    const followed = input.rule === undefined ? undefined : policy?.rules[input.rule - 1]
+    if (input.rule !== undefined && !followed)
+      return this.refuse(op, "unknown-rule", policy?.rules.length
+        ? `The person has ${policy.rules.length} rule${policy.rules.length === 1 ? "" : "s"}, so there's no rule ${input.rule}: ${policy.rules.map((rule, index) => `${index + 1}. ${rule.when}`).join(" ")}`
+        : "The person has no rules for Fins: leave rule out.")
+    const otherwise = !followed && input.harness === undefined && input.model === undefined ? policy?.otherwise : undefined
+    const ruled: Ruled | undefined = followed
+      ? { target: followed.target, who: `Your rule ${input.rule}`, rule: { n: input.rule!, when: followed.when } }
+      : otherwise ? { target: otherwise, who: "Your choice for work no rule fits", rule: { when: "No rule fit" } } : undefined
+    const asked = input.harness ?? ruled?.target.harness ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.harness : undefined)
+    if (!asked || !this.deps.harnesses().includes(asked))
+      return this.refuse(op, "unknown-harness", `No harness named ${asked ?? "(none)"} runs here: ${this.deps.harnesses().join(", ")}.`)
     const own = this.tierOf(apex)
     const allowed = childAccess(own, input.access)
     if (!allowed) return this.refuse(op, "access", `A ${FIN_WORD} runs at most at its ${APEX_WORD}'s access: this Thread is on ${own}, so ${input.access} is refused.`)
+    // Without a limit reader there's nothing to wait for between these checks.
+    const placed = this.deps.limited ? await this.roomFor(apex, asked, allowed, input) : { harness: asked }
+    if ("refused" in placed) return this.refuse(op, "limited", placed.refused)
+    const { harness, rerouted } = placed
     const mode = childMode(this.deps.modes(harness), allowed)
     if (!mode) {
       const offers = (this.deps.modes(harness) ?? []).flatMap((offered) => offered.access ? [offered.access] : []).join(", ")
       return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offers}, each above ${allowed}, the most this ${FIN_WORD} may have. Start it on another harness.`)
     }
     const tier = mode.tier
+    const decided = await this.tuningOf(apex, harness, input, ruled)
+    if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
+    const tuned: Tuned = {
+      ...(rerouted ? { ...decided, note: [rerouted.note, decided.note].filter(Boolean).join(" "), rerouted: rerouted.on } : decided),
+      ...(ruled && { rule: ruled.rule }),
+    }
     const tree = this.rootOf(apex.thread)
     const counts = this.treeCounts(tree)
     // A queued spawn is one the tree has started: once the budget would refuse it, it never waits.
@@ -524,7 +621,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const mac = await this.macSlots()
     const why = counts.running >= this.budget.running ? "tree-running" : mac && (mac.working >= mac.slots || this.waitingForRoom() > 0) ? "place-full" : undefined
     if (why) {
-      const queued: QueuedStart = { lead: apex, input, tier, harness, why }
+      const queued: QueuedStart = { lead: apex, input, tier, harness, tuned, why }
       store.queueSpawn({ op, tree, record: JSON.stringify(queued), at: this.now() })
       hostLog("agents", "start queued", { op, why, running: counts.running, budget: this.budget.running, ...mac && { working: mac.working, slots: mac.slots, mac: mac.why } })
       this.forget(apex.thread)
@@ -532,7 +629,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (why === "place-full") void this.drain()
       return answer
     }
-    return this.launch(op, { lead: apex, input, tier, harness })
+    return this.launch(op, { lead: apex, input, tier, harness, tuned })
   }
 
   async link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult> {
@@ -901,6 +998,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         harness,
         ...(input.model && { model: input.model }),
         ...(input.reasoning && { reasoning: input.reasoning }),
+        ...(input.fast !== undefined && { fast: input.fast }),
+        ...(input.rule !== undefined && { rule: input.rule }),
         access: tier,
         ...(input.place && { place: input.place }),
         ...(input.workspace && { workspace: input.workspace }),
@@ -910,11 +1009,15 @@ export class Agents implements AgentOperations, ConversationChildren {
       op,
       startedBy: { kind: "agent", session: SessionIdSchema.parse(apex.session) },
     }
+    const decided = queued.tuned ?? await this.tuningOf(apex, harness, input)
+    if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
+    parent.tuned = { source: decided.source, ...(decided.note && { note: decided.note }), ...(decided.rerouted && { rerouted: decided.rerouted }), ...(decided.rule && { rule: decided.rule }) }
+    const tuning = decided.settings
     const workspace = input.workspace
-    const tuning = await this.tuningOf(apex, harness, cwd, input)
     const options: LiveStartOptions = {
       conversationId,
-      initialRequest: { id: namedUuid(`${op}\nbrief`), text: briefText(input.brief, name), attachments: [] },
+      // An Apex of its own starts Fins too: it reads the person's rules with its brief.
+      initialRequest: { id: namedUuid(`${op}\nbrief`), text: [briefText(input.brief, name), ...(input.role === APEX_ROLE ? [this.policyLines().join("\n")] : [])].filter(Boolean).join("\n\n"), attachments: [] },
       title: input.title ?? name,
       modeId: childMode(this.deps.modes(harness), tier)?.id ?? accessModeId(tier),
       ...(tuning && { tuning }),
@@ -948,20 +1051,88 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * What a Fin runs on: the model the spawn named, else its Apex's own model
-   * and options on the Apex's harness, else what a new conversation of that
-   * harness starts on. A reasoning level it named applies to any of them.
+   * What a Fin runs on (`resolveFinTuning`): what the spawn named, held to its
+   * harness's catalog, else what the person uses there. The Apex's own model
+   * counts only on the Apex's harness. Its folder doesn't change the catalog,
+   * so the Apex's is read.
    */
-  private async tuningOf(apex: Apex, harness: string, cwd: string, input: AgentsStartInput): Promise<SessionSettings | undefined> {
-    const effort = input.reasoning ? { effort: input.reasoning } : undefined
-    if (input.model) return { model: input.model, ...(effort && { options: effort }) }
-    const own = apex.conversation && this.deps.live.session(apex.conversation)?.harness === harness ? this.settingsOf(apex.conversation) : undefined
-    const settings = own ?? await this.deps.defaultTuning?.(harness, cwd).catch((error) => {
-      hostWarn("agents", "a Fin's harness default couldn't be read; it starts on the harness's own", { harness, error: errorMessage({ error }) })
+  private async tuningOf(apex: Apex, harness: string, input: AgentsStartInput, ruled?: Ruled): Promise<Tuned | { refused: string }> {
+    const cwd = input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined)
+    const choices: FinChoices = (cwd && await this.deps.finChoices?.(harness, cwd).catch((error) => {
+      hostWarn("agents", "a Fin's catalog couldn't be read; its choice isn't held to it", { harness, error: errorMessage({ error }) })
       return undefined
+    })) || { models: [] }
+    const apexSettings = apex.conversation && this.deps.live.session(apex.conversation)?.harness === harness ? this.settingsOf(apex.conversation) : undefined
+    const decided = resolveFinTuning({
+      label: this.deps.harnessLabel(harness),
+      models: choices.models,
+      asked: { ...(input.model && { model: input.model }), ...(input.reasoning && { reasoning: input.reasoning }), ...(input.fast !== undefined && { fast: input.fast }) },
+      // A rule's model is for its own harness: one named instead, or a harness at its limit, runs on its own choices.
+      ...(ruled?.target.settings && ruled.target.harness === harness && { rule: { who: ruled.who, settings: ruled.target.settings } }),
+      ...(choices.chosen && { chosen: choices.chosen }),
+      ...(apexSettings && { apex: apexSettings }),
+      ...(choices.used && { used: choices.used }),
+      ...(choices.recommended && { recommended: choices.recommended }),
     })
-    if (!settings?.model) return effort && { options: effort }
-    return { model: settings.model, ...((settings.options || effort) && { options: { ...settings.options, ...effort } }) }
+    if ("refused" in decided) return decided
+    const note = decided.notes.join(" ")
+    hostLog("agents", "a Fin's model decided", { harness, source: decided.source, ...(decided.settings?.model && { model: decided.settings.model }), ...(note && { passedOver: true }) })
+    return { ...(decided.settings && { settings: decided.settings }), source: decided.source, ...(note && { note }) }
+  }
+
+  /**
+   * Where a Fin can run when `asked`'s account is at its limit: a start that named no harness or model goes to the
+   * person's next harness (`harnessOrder`) that runs here at this access, is signed in and has room, and says so; one
+   * that named it, or with nowhere to go, is refused with when the limit resets and what the person can do instead.
+   * A limit that can't be read in `LIMIT_READ_MS` reads as room.
+   */
+  private async roomFor(apex: Apex, asked: string, tier: AccessTier, input: AgentsStartInput): Promise<{ harness: string; rerouted?: { note: string; on: NonNullable<Tuned["rerouted"]> } } | { refused: string }> {
+    const limit = await this.limitOf(asked)
+    if (!limit) return { harness: asked }
+    const label = this.deps.harnessLabel(asked)
+    const until = limit.until ?? undefined
+    const now = this.now()
+    const spent = `${label} is at its limit on ${limit.account}${until === undefined ? "" : ` until ${resetWords(until, now)}`}`
+    const switchTo = limit.instead ? `${limit.instead}, another ${label} account, has room: the person can switch to it in Settings › Agents.` : ""
+    const next = await this.nextHarness(asked, tier, input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined))
+    if (input.harness !== undefined || input.model !== undefined || !next) {
+      const elsewhere = next ? `Leave harness and model out to start it on ${this.deps.harnessLabel(next)}, the person's next harness, or name another.` : "No other harness here has room either."
+      return { refused: [`${spent}, so a ${FIN_WORD} there would stop at once.`, switchTo, elsewhere, until === undefined ? "" : "Or wait for the reset and start it then."].filter(Boolean).join(" ") }
+    }
+    hostLog("agents", "a Fin's harness is at its limit; it starts on the next", { from: asked, to: next, ...(until !== undefined && { until }) })
+    return {
+      harness: next,
+      rerouted: {
+        note: [`${spent}, so it runs on ${this.deps.harnessLabel(next)}, the person's next harness.`, switchTo].filter(Boolean).join(" "),
+        on: { from: asked, ...(until !== undefined && { until }), ...(limit.instead && { instead: limit.instead }) },
+      },
+    }
+  }
+
+  /** The first harness after `from` in the person's order that a Fin at `tier` can run on now. */
+  private async nextHarness(from: string, tier: AccessTier, cwd: string | undefined): Promise<string | undefined> {
+    const live = this.deps.harnesses()
+    const order = (await this.deps.harnessOrder?.().catch(() => undefined)) ?? live
+    for (const harness of [...order, ...live]) {
+      if (harness === from || !live.includes(harness) || !childMode(this.deps.modes(harness), tier)) continue
+      const signedIn = cwd ? ((await this.deps.finChoices?.(harness, cwd).catch(() => undefined))?.models.length ?? 0) > 0 : true
+      if (signedIn && !(await this.limitOf(harness))) return harness
+    }
+    return undefined
+  }
+
+  private async limitOf(harness: string): Promise<HarnessLimit | undefined> {
+    if (!this.deps.limited) return undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<undefined>((done) => { timer = setTimeout(() => done(undefined), LIMIT_READ_MS) })
+    try {
+      return await Promise.race([this.deps.limited(harness).catch((error) => {
+        hostWarn("agents", "a harness's limit couldn't be read; it's taken as having room", { harness, error: errorMessage({ error }) })
+        return undefined
+      }), late])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   /** The model a conversation runs on now: the person's last choice in it, else what its harness reported, else what it started with. */
@@ -1006,11 +1177,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     const state = this.stateOf(edge)
     const counts = this.treeCounts(this.rootOf(apex.thread))
     const conversation = this.conversationOf(edge.child)
+    const reading = this.childReading(edge)
+    const runsOn = reading.runsOn ? finTuningLine(reading.runsOn) : reading.model
     return {
       child: edge.child,
       name: edge.name,
       ...(conversation && { conversation }),
       state: state.kind,
+      ...(runsOn && { runsOn }),
+      ...(edge.tuned?.note && { note: edge.tuned.note }),
+      ...(edge.tuned?.rule && { rule: ruleWords(edge.tuned.rule) }),
+      ...(edge.tuned?.rerouted && { limited: { harness: edge.tuned.rerouted.from, ...(edge.tuned.rerouted.until !== undefined && { until: edge.tuned.rerouted.until }), ...(edge.tuned.rerouted.instead && { instead: edge.tuned.rerouted.instead }) } }),
       tree: { ...counts, of: { ...this.budget } },
       ...this.mac && { mac: { working: this.mac.working, slots: this.mac.slots, why: this.mac.why } },
       ...(deduped && { deduped: true as const }),
@@ -1321,7 +1498,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const working = busy || waits !== undefined
     const thread = this.store()?.thread(edge.child)
     const title = thread?.title ?? session.title
-    const model = this.settingsOf(conversation)?.model
+    const settings = this.settingsOf(conversation)
+    const model = settings?.model
+    const catalog = this.deps.catalogOf?.(session.harness)
+    const runsOn = catalog && finTuningWords(catalog, settings)
     return {
       source: "live",
       conversation,
@@ -1331,6 +1511,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(title && { title }),
       harness: session.harness,
       ...(model && { model }),
+      ...(runsOn && { runsOn }),
       ...((session.status === "starting" || this.starting.has(edge.op)) && { starting: "launching" as const }),
       ...(working && { working }),
       ...(waits ? { step: `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
@@ -1445,6 +1626,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(under && { under }),
       harness: reading.harness ?? this.harnessOf(edge),
       ...((reading.model ?? edge.asked.model) && { model: reading.model ?? edge.asked.model }),
+      ...(reading.runsOn && { runsOn: finTuningLine(reading.runsOn) }),
+      ...(edge.tuned?.rule && { rule: ruleWords(edge.tuned.rule) }),
       origin: edge.origin,
       state: this.stateOf(edge),
       ...(reading.title && { title: reading.title }),

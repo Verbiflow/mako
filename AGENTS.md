@@ -253,10 +253,33 @@ Fins' reports wake, or, with nothing to wake it, that turn's reply
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
-Mako drives it. A Fin started without a model runs on its Apex's model and
-options when it shares the Apex's harness, else on its harness profile's
-default (`defaultTuning`). The person's own choice in Settings › Models is
-kept in each window, so the host can't read it. A worktree in a project folder of several
+Mako drives it. What a Fin runs on is decided once, at admission
+(`resolveFinTuning`, `contracts/fin-tuning.ts`): a `model`, `reasoning` or
+`fast` the spawn names is held to its harness's catalog, read leniently, and
+refused (`unknown-model`) with the choices it offers; left out, the person's
+Settings › Fins choice for that harness, else its Apex's model and options on
+the Apex's harness (never its plan mode), else the model the person last
+started or sent with there, else Mako's pick (`HarnessDefaults.work`), else
+the harness's own. A layer whose model the harness stopped listing is passed
+over in a note its Apex and its row both show (`ThreadParent.tuned`). Fast is
+the model's speed option, or its fast sibling where the harness lists one as
+a model (Grok, Devin). The host keeps the choices and what the person used in
+`<user root>/fin-defaults.json` (`mako:fin-defaults`), so the web app reads
+them through the Mac, and a Fin's row says its model, reasoning and fast lane
+(`NativeAgent.runsOn`). A harness whose account in use is at its limit
+(`HarnessAccounts.limited`, read for at most `LIMIT_READ_MS`) takes no Fin:
+one whose Apex named no harness or model starts on the person's next harness
+with room (`harnessOrder`), its answer's `limited` and its row's note saying
+until when and which other account of that harness has room; a named one,
+or one with nowhere to go, is refused (`limited`) with the same. The person's rules for Fins (`FinPolicy`,
+Settings › Fins: their own words, each to a harness and maybe a model, first
+fit wins, and where the rest go) reach every Thread's agent ahead of the
+person's next message once they change (`finPolicyNote`, `rulesNote`), and
+an Apex of its own with its brief. `agents_start`'s `rule` names the one a
+Fin follows: its harness and model apply unless the spawn names them (a
+model only on the rule's own harness), a spawn with no rule, harness or
+model goes to `otherwise`, a missing rule is refused (`unknown-rule`), and
+the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
@@ -2325,9 +2348,10 @@ that starts working again retires its unseen items; four or more banners in
 600 ms become one summary. The app icon's badge counts distinct threads,
 never events, and it is the only standing count: the titlebar carried a pill
 reading "3 threads need you" over a list, which mirrored into the chrome what
-the rail's own marks and the Status view already say. The list is the Status
-view, the announcement is the toast, and Cmd+Shift+U opens the next thread
-that needs you. Banners and the badge are
+the rail's own marks and the Inbox already say. The list is the Inbox
+(`src/state/inbox.ts`, opened from the rail's top rows or Cmd+Shift+U, which
+pressed again opens the first item), the announcement is the toast, and the
+Inbox row's caution count is the rail's one count. Banners and the badge are
 answered by the client that owns the window (`electron/client-main.ts` or
 `src/dev/web-notifications.ts`), never by the shared host; one banner per thread is retained until it reports, and a click sends
 `notification-activated`. Preview windows record but never announce.
@@ -3432,8 +3456,18 @@ long generation cannot distinguish step delivery from turn-end delivery.
 Each renderer and web document owns its workspace pool and git target, selected
 through async request context. Provider conversations remain shared. A preview
 must never change another window's cwd, file target, or active workspace tab.
-The rail's Projects view keeps active sessions under their project; Recent is a
-bounded chronological list. Never gate provider names or the rail on model discovery.
+The rail opens with five fixed rows (`src/components/rail/rail-top.tsx`: New
+thread, Search, Inbox with its caution count, Pull requests with the open
+count, Automations with how many are on; a window that routes, the web desk,
+has no project of its own and shows the first three), then Pinned, then
+Threads by project. There is no view switch: Recent, a bounded chronological
+list, and Archived are choices in the Threads heading's filter menu, and the
+heading names the one showing and leads back. The phone's list
+(`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
+asking as a row of its own, "Mobile polish ·" before its question), Working
+and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
+asks answered through `answerFin`). The rail and the list carry no lines:
+spacing and type part them. Never gate provider names or the rail on model discovery.
 Position in the rail never carries status. `stableThreadRanks` in
 `src/lib/thread-folders.ts` gives a busy thread its rank when it starts, keeps
 it while the thread is working, observed, or externally active, and settles it
@@ -3478,14 +3512,14 @@ seen, so the pill and badge stop counting a thread you have put away. Before
 this, a session that failed once wore the red mark and its folder's "1
 failed" chip for as long as it existed, whatever you clicked or archived,
 and the pill kept the count after an archive. `test-stage-layout.ts` and
-`test-rail-ui.mjs` cover both marks. The Status view (`src/lib/thread-board.ts`) is the one place
-threads regroup by state, in a fixed section order; Archived is reached from
-the filter glyph. While the pointer is inside the rail the order caught at
+`test-rail-ui.mjs` cover both marks. Rows never regroup by state: what needs you is
+the Inbox, one list across Threads and Fins read from the records the marks
+read, answered in place; Archived is reached from the filter glyph. While the pointer is inside the rail the order caught at
 entry holds, so a click cannot land on a row that moved, and rows that do
 move glide there through `use-row-flip.ts` (transform only; nothing on first
 fill, view changes, offscreen, or under reduced motion). Every folder shows
 the same number of lead rows; selecting a project never resizes one.
-`test-stage-layout.ts` covers the ranks, held folders, and the board;
+`test-stage-layout.ts` covers the ranks and held folders;
 `node scripts/test-rail-ui.mjs` drives the production rail.
 A row's controls (pin, stop, actions, detach) live in a pill that appears over
 the row's meta on hover or focus; an invisible control must never reserve
