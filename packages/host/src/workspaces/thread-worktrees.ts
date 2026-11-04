@@ -177,15 +177,27 @@ const COMMIT_ANSWERS = 4096
  */
 async function worktreeHead(path: string, tips: ReadonlyMap<string, string>): Promise<string | undefined> {
   try {
-    const link = /^gitdir: (.+)$/m.exec(await readFile(join(path, ".git"), "utf8"))?.[1]
-    if (!link) return undefined
-    const head = (await readFile(join(resolve(path, link), "HEAD"), "utf8")).trim()
+    const gitDir = await worktreeGitDir(path)
+    if (!gitDir) return undefined
+    const head = (await readFile(join(gitDir, "HEAD"), "utf8")).trim()
     if (head.startsWith("ref: refs/heads/")) return tips.get(head.slice("ref: refs/heads/".length))
     return /^[0-9a-f]{40,64}$/.test(head) ? head : undefined
   } catch {
     return undefined
   }
 }
+
+/** A linked worktree's folder in its repository, from the `gitdir:` line of its `.git` file. */
+async function worktreeGitDir(path: string): Promise<string | undefined> {
+  const link = /^gitdir: (.+)$/m.exec(await readFile(join(path, ".git"), "utf8").catch(() => ""))?.[1]
+  return link && resolve(path, link)
+}
+
+/**
+ * How long a worktree's `status` answers for the summaries after it: windows ask every half minute anyway, and a
+ * commit, staging, checkout or merge rewrites the index, which asks again at once.
+ */
+const STATUS_FRESH_MS = 15_000
 
 /** `map` with at most `limit` running at once, results in order. */
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
@@ -259,6 +271,8 @@ export class ThreadWorktreeService {
   /** The summaries pass under way, and the one queued behind it for whoever asked meanwhile (`summaries`). */
   private summariesRunning: Promise<WorktreeSummary[]> | undefined
   private summariesNext: Promise<WorktreeSummary[]> | undefined
+  /** Each worktree's `status` as a summary last read it, with when and its index's modification time then (`statusOf`). */
+  private readonly statuses = new Map<string, { at: number; index: number; status: Promise<string> }>()
   /** Each receipt as last parsed, by the file's modification time and size then (`receipt`). */
   private readonly receiptsRead = new Map<string, { stamp: string; receipt: Receipt }>()
   /** Answers fixed by the commits they were read at, least recently asked first (`byCommits`): landings, and counts of commits. */
@@ -650,6 +664,8 @@ export class ThreadWorktreeService {
   /** One pass: each repository's facts read once, then each worktree's status, and what its commits say where they moved. */
   private async readSummaries(pullsOf: PullsOf | undefined): Promise<WorktreeSummary[]> {
     const { worktrees } = await this.list()
+    const listed = new Set(worktrees.map((worktree) => worktree.path))
+    for (const path of this.statuses.keys()) if (!listed.has(path)) this.statuses.delete(path)
     const facts = new Map<string, Promise<RepositoryFacts>>()
     const factsOf = (repoRoot: string) => {
       let known = facts.get(repoRoot)
@@ -672,6 +688,21 @@ export class ThreadWorktreeService {
       if (space > 0) tips.set(line.slice(space + 1), line.slice(0, space))
     }
     return { into, tips, point }
+  }
+
+  /**
+   * A worktree's `git status` for its summary, read again once `STATUS_FRESH_MS` passed or its index changed. Each
+   * read is a spawn, which holds the host's thread (hundreds of milliseconds each on a loaded Linux machine), and a
+   * hundred worktrees were read on every pass.
+   */
+  private async statusOf(path: string): Promise<string> {
+    const gitDir = await worktreeGitDir(path)
+    const index = gitDir ? await stat(join(gitDir, "index")).then(({ mtimeMs }) => mtimeMs, () => 0) : 0
+    const known = this.statuses.get(path)
+    if (known && gitDir && known.index === index && Date.now() - known.at < STATUS_FRESH_MS) return known.status
+    const status = this.git.readOutput(path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => "")
+    this.statuses.set(path, { at: Date.now(), index, status })
+    return status
   }
 
   /** One worktree's summary, with where its branch started; undefined for a folder that isn't one of Mako's worktrees. */
@@ -704,7 +735,7 @@ export class ThreadWorktreeService {
     const tip = facts.tips.get(worktree.branch) ?? ""
     const from = into ? facts.tips.get(into) : worktree.base
     const [status, landing, pulls, head] = await Promise.all([
-      this.git.readOutput(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => ""),
+      this.statusOf(worktree.path),
       this.landing(worktree, facts),
       this.pullsIn(worktree.repoRoot, pullsOf),
       worktreeHead(worktree.path, facts.tips),
