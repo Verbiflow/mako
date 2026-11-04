@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -20,7 +21,6 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  * a host restart and after its branch moved, a repeat of the same message
  * resuming it once, the person's own message, and a second stop.
  */
-for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) delete process.env[key]
 const root = mkdtempSync(join(tmpdir(), "mako-fin-resume-"))
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fin", GIT_AUTHOR_EMAIL: "fin@example.invalid", GIT_COMMITTER_NAME: "Fin", GIT_COMMITTER_EMAIL: "fin@example.invalid" } }).trim()
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
