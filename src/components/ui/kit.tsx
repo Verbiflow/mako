@@ -102,12 +102,13 @@ export function Chip({
   tone = "neutral",
   children,
   ...props
-}: ComponentProps<"span"> & { tone?: "neutral" | "positive" | "negative" | "caution" }) {
+}: ComponentProps<"span"> & { tone?: "neutral" | "positive" | "negative" | "caution" | "attention" }) {
   const palette = {
     neutral: "bg-raised text-muted-foreground ring-hairline",
     positive: "bg-positive/12 text-positive ring-positive/25",
     negative: "bg-negative/12 text-negative ring-negative/25",
     caution: "bg-caution/12 text-caution ring-caution/25",
+    attention: "bg-attention/12 text-attention ring-attention/25",
   }[tone]
   return (
     <span

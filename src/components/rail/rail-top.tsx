@@ -99,7 +99,7 @@ function InboxRow() {
       open={open}
       onSelect={() => (open ? inboxView.close() : openInbox())}
       end={count ? (
-        <span data-inbox-count={count} className="tabular flex h-[18px] min-w-[18px] items-center justify-center bg-caution/15 px-1 text-label font-medium text-caution">
+        <span data-inbox-count={count} className="tabular flex h-[18px] min-w-[18px] items-center justify-center bg-attention/15 px-1 text-label font-medium text-attention">
           {count}
         </span>
       ) : null}

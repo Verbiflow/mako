@@ -13,7 +13,7 @@ function Row({ state, motion, kind, harness, title, end, lit, size }: { state: L
         <HarnessIcon harness={harness} />
       </LiveMark>
       <span className={cn("min-w-0 flex-1 truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>{title}</span>
-      <span className={cn("shrink-0 text-label", end === "Needs you" ? "font-medium text-caution" : end === "Failed" ? "text-negative" : "tabular text-faint")}>{end}</span>
+      <span className={cn("shrink-0 text-label", end === "Needs you" ? "font-medium text-attention" : end === "Failed" ? "text-negative" : "tabular text-faint")}>{end}</span>
     </div>
   )
 }

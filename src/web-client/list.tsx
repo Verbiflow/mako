@@ -152,7 +152,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
             <>
               {sections(threads, fins).map((section) => (
                 <section key={section.id} aria-labelledby={`section-${section.id}`} data-list-section={section.id} className="web-section">
-                  <h2 id={`section-${section.id}`} className={cn("web-section-label", section.id === "needs" && "text-caution")}>
+                  <h2 id={`section-${section.id}`} className={cn("web-section-label", section.id === "needs" && "text-attention")}>
                     {section.label}
                   </h2>
                   <ul role="list" className="web-rows">
@@ -412,7 +412,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
                 {detail.elapsed ? <span className="tabular"> {detail.elapsed}</span> : null}
               </Shimmer>
             ) : (
-              <span className={cn("min-w-0 flex-1 truncate", detail.tone === "caution" ? "text-caution" : detail.tone === "negative" ? "text-negative" : "text-faint")}>
+              <span className={cn("min-w-0 flex-1 truncate", detail.tone === "attention" ? "text-attention" : detail.tone === "negative" ? "text-negative" : "text-faint")}>
                 {detail.lead ? (
                   <>
                     <span data-done className="font-medium text-foreground">
@@ -450,7 +450,7 @@ function TopChips({ count, open, onInbox }: { count: number; open: boolean; onIn
         <InboxIcon aria-hidden className="size-4 text-muted-foreground" />
         Inbox
         {count ? (
-          <span data-inbox-count={count} className="tabular flex h-5 min-w-5 items-center justify-center bg-caution/15 px-1.5 text-label font-medium text-caution">
+          <span data-inbox-count={count} className="tabular flex h-5 min-w-5 items-center justify-center bg-attention/15 px-1.5 text-label font-medium text-attention">
             {count}
           </span>
         ) : (

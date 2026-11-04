@@ -58,7 +58,7 @@ const HEADINGS = {
 
 const BAR_GROUPS: readonly ChildGroup[] = CHILD_GROUPS
 const BAR_TONE = {
-  needs: "bg-caution",
+  needs: "bg-attention",
   working: "bg-muted-foreground",
   queued: "bg-faint/50",
   idle: "bg-faint",
@@ -188,7 +188,7 @@ const NeedsRow = memo(function NeedsRow({
       data-fin-ask={ask?.kind}
       data-fin={agent.child.thread}
       aria-busy={sent ? true : undefined}
-      className="bg-[color-mix(in_oklab,var(--caution)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--caution)]"
+      className="bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
     >
       <div className="flex items-center gap-2">
         <FinMark agent={agent} state={state} cut="var(--raised)" />
@@ -533,7 +533,7 @@ export function CrewCard({
                     <span
                       className={
                         row.group === "needs"
-                          ? "font-medium text-caution"
+                          ? "font-medium text-attention"
                           : "font-medium text-muted-foreground"
                       }
                     >

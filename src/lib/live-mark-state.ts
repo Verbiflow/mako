@@ -7,7 +7,7 @@ import type { ThreadStatus } from "@/state/thread-status"
  *
  * - `working`: a comet runs round the agent's glyph; `background` is the same comet at half speed and quieter, the turn
  *   done while its Fins or a watcher still run; `starting`, the same comet faint while the agent comes up.
- * - `needs`: a whole ring in caution that breathes, waiting on the person.
+ * - `needs`: the fin in the attention hue over a waterline that breathes, waiting on the person.
  * - `lead`: a dotted ring that drifts, a Fin asking its Apex rather than the person.
  * - `queued`: a still dashed ring, the glyph dimmed.
  * - `open`: a still hairline ring, open in another app with no turn running there.

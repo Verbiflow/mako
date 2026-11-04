@@ -27,7 +27,9 @@ export function FinOfApexNote({ conversation }: { conversation: string }) {
     return (
       <div data-child-note="direct" data-addressee={addressee.name} className="mx-auto flex w-full max-w-content min-w-0 items-center gap-1.5 px-4 pt-2 text-label text-faint">
         <span className="flex h-7 min-w-0 shrink items-center gap-1.5 bg-raised pr-0.5 pl-2.5 text-label text-foreground">
-          <WebHarnessIcon harness={addressee.provider} className="size-3.5" />
+          <LiveMark kind="fin" state="idle" size={16} cut="var(--raised)" className="live-mark-still">
+            <WebHarnessIcon harness={addressee.provider} />
+          </LiveMark>
           <span className="min-w-0 truncate">To {addressee.title}</span>
           <button type="button" aria-label={`Write to ${title ?? `the ${APEX_WORD}`} instead`} onClick={() => unaddress(conversation)} className="pressable flex size-6 shrink-0 items-center justify-center text-faint">
             <XIcon className="size-3" />

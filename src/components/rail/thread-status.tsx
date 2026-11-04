@@ -43,7 +43,7 @@ export function ThreadMark({ status, state, harness, lit, cut, size, label, clas
 export function ThreadStatusEnd({ status, updatedAt }: { status: ThreadStatus; updatedAt?: string }) {
   if (status.kind === "needs-permission")
     return (
-      <span data-status-end="needs" className="shrink-0 text-label font-medium text-caution">
+      <span data-status-end="needs" className="shrink-0 text-label font-medium text-attention">
         Needs you
       </span>
     )

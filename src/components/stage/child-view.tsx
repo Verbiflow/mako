@@ -2,7 +2,9 @@ import { useEffect } from "react"
 import { ChevronLeftIcon, CircleStopIcon, XIcon } from "lucide-react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { Action } from "@/components/ui/kit"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { childStateOf } from "@mako/host/contracts/children"
+import { FinMark } from "@/components/stage/child-tabs"
+import { StillMark } from "@/components/transcript/message-avatar"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { acp, acpStore, activeAcp, useAcp } from "@/state/acp"
 import { followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
@@ -52,7 +54,7 @@ export function ChildBreadcrumb() {
         {open.apexTitle}
       </button>
       <span aria-hidden className="shrink-0 text-faint/70">/</span>
-      {agent ? <HarnessIcon harness={agent.provider} className="size-3.5 shrink-0" /> : null}
+      {agent ? <FinMark agent={agent} state={childStateOf(agent)} read size={16} /> : null}
       <span className="min-w-0 truncate text-ui font-medium text-foreground">{agent?.title ?? FIN_WORD}</span>
       <span className="flex min-w-0 shrink items-center gap-1.5 overflow-hidden pl-1">
         <span className="truncate">{elsewhere ? capitalized(elsewhere) : "This Mac"}</span>
@@ -97,7 +99,7 @@ export function ChildComposerNote() {
     return (
       <div data-child-note="direct" data-addressee={addressee.name} className="flex min-w-0 items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
         <span className="flex h-6 min-w-0 shrink items-center gap-1.5 rounded-md bg-fill-hover pr-0.5 pl-2 text-ui text-foreground">
-          <HarnessIcon harness={addressee.provider} className="size-3.5 shrink-0" />
+          <StillMark harness={addressee.provider} size={16} cut="var(--fill-hover)" />
           <span className="min-w-0 truncate">To {addressee.title}</span>
           <button
             type="button"

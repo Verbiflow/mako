@@ -448,7 +448,7 @@ function SessionSwitcher({ thread, current, wide, onSession, onAdd }: { thread: 
           <span className="shrink-0 text-faint">· {sessionBrief(current.facts, now, label, wide ? parent : undefined)}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-caution" : "bg-sea")} /> : null}
+          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-attention" : "bg-sea")} /> : null}
           {thread.sessions.length}
           <ChevronsUpDownIcon aria-hidden className="size-3.5" />
         </span>
@@ -504,7 +504,7 @@ function SessionList({ thread, current, now, onPick, onAdd }: { thread: WebThrea
                   <WebHarnessIcon harness={session.row.harness} className="size-5 shrink-0" />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate font-medium">{sessionName(session.facts, label)}</span>
-                    <span className={cn("line-clamp-2 text-label", standing === "waiting" ? "text-caution" : standing === "failed" ? "text-negative" : "text-faint")}>
+                    <span className={cn("line-clamp-2 text-label", standing === "waiting" ? "text-attention" : standing === "failed" ? "text-negative" : "text-faint")}>
                       {session.facts.title ? `${label} · ` : ""}
                       {sessionDetail(session.facts, now, label, forkedFrom(session.facts, facts, webHarnessLabel))}
                     </span>

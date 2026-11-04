@@ -16,7 +16,7 @@ const MOVING: ReadonlySet<LiveMarkState> = new Set(["working", "background", "st
  *
  * - working, by `motion`: thinking it bobs, writing it glides with a short wake behind it, running a tool it braces
  *   in two steps; `background` (its turn done, work it waits on still running) bobs at half speed, dimmer;
- * - needs you: it turns caution over a waterline that breathes, never below 40%;
+ * - needs you: it turns the attention hue over a waterline that breathes, never below 40%;
  * - asking its Apex: it drifts, dimmed; queued: faint and still; starting: it fades in and out;
  * - failed: it lists over in negative; an answer to read: still, with the unread sphere at its shoulder;
  * - idle and open elsewhere: still and dimmed.

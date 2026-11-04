@@ -190,6 +190,7 @@
   --color-positive: var(--positive);
   --color-negative: var(--negative);
   --color-caution: var(--caution);
+  --color-attention: var(--attention);
   --color-added: var(--added);
   --color-removed: var(--removed);
 
@@ -359,6 +360,8 @@
   --negative: oklch(0.68 0.14 25);
   --destructive: var(--negative);
   --caution: oklch(0.78 0.09 80);
+  /* Waiting on the person: the brand's sea gone deep, a step toward violet, distinct from the sea a Thread works in and from caution's amber. */
+  --attention: oklch(0.76 0.12 280);
   /*
    * The terminal's page: a neutral grey below the stage's surface. The warm
    * cast that keeps chrome from reading black turns ANSI colour muddy.
@@ -457,6 +460,7 @@
   --positive: oklch(0.53 0.095 150);
   --negative: oklch(0.545 0.15 26);
   --caution: oklch(0.59 0.085 75);
+  --attention: oklch(0.5 0.15 280);
   --terminal: oklch(0.995 0 0);
   --terminal-face: oklch(0.196 0.002 60);
   --terminal-face-ink: oklch(0.722 0.008 58);
@@ -1037,7 +1041,7 @@ diffs-container {
 }
 .activity-detail > svg { width: 24px; height: 24px; }
 .activity-mark[data-state="failed"] { color: var(--negative); }
-.activity-mark[data-state="waiting"] { color: var(--caution); }
+.activity-mark[data-state="waiting"] { color: var(--attention); }
 .activity-mark[data-state="complete"] { color: var(--muted-foreground); }
 .activity-idle { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.45; }
 .activity-orb { contain: layout paint; }
@@ -1254,8 +1258,8 @@ diffs-container {
   right: -2px;
   bottom: -2px;
   display: flex;
-  width: 46%;
-  height: 46%;
+  width: 52%;
+  height: 52%;
   align-items: center;
   justify-content: center;
   background: var(--raised);
@@ -1263,8 +1267,16 @@ diffs-container {
 }
 .live-mark-badge > svg,
 .live-mark-badge > span {
-  width: 80%;
-  height: 80%;
+  width: 84%;
+  height: 84%;
+}
+/* One ink at full contrast over the brand's tint or gradient: at 10px a tinted glyph on grey is a smudge. */
+.live-mark-badge path {
+  fill: var(--foreground);
+}
+.live-mark-badge > span {
+  color: var(--foreground);
+  background: none;
 }
 /* The line the fin rides: a Thread at work, or anyone waiting on the person. */
 .live-mark-water,
@@ -1309,11 +1321,11 @@ diffs-container {
   animation: live-mark-breathe 1.6s ease-in-out infinite;
 }
 .live-mark[data-live-mark="needs"] {
-  --lm-ink: var(--caution);
-  --lm-face: color-mix(in oklab, var(--caution) 55%, var(--shell));
+  --lm-ink: var(--attention);
+  --lm-face: color-mix(in oklab, var(--attention) 55%, var(--shell));
 }
 .live-mark[data-live-mark="needs"] .live-mark-water {
-  background: var(--caution);
+  background: var(--attention);
   animation: live-mark-breathe 2.4s ease-in-out infinite;
 }
 .live-mark[data-live-mark="lead"] .live-mark-body {
@@ -1443,7 +1455,7 @@ diffs-container {
   border-radius: 0;
 }
 .fin-pip[data-pip="needs"] {
-  background: var(--caution);
+  background: var(--attention);
 }
 .fin-pip[data-pip="working"] {
   background: color-mix(in oklab, var(--foreground) 85%, transparent);
