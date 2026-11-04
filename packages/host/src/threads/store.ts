@@ -945,6 +945,24 @@ export class ThreadStore {
     })
   }
 
+  /**
+   * Opens a stopped child's delegation again, as a message to it does: the
+   * close and its reason go into `resumed`, and a later stop closes it anew.
+   * The edge unchanged when it isn't closed, undefined when there's none.
+   */
+  reopenEdge(child: string, at: number): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      if (previous.closedAt === undefined) return previous
+      const { closedAt, closedReason, ...open } = previous
+      const next: ThreadParent = { ...open, resumed: { at, closedAt, ...(closedReason && { reason: closedReason }) } }
+      this.sql("UPDATE thread_parents SET record = ?, closed_at = NULL WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
   /** The Threads `thread` descends from, its parent first: one chain, since each Thread has one parent. */
   ancestors(thread: string): string[] {
     const edges = this.edges()

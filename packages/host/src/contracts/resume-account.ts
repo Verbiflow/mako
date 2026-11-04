@@ -146,3 +146,73 @@ export function resumeAccountLine(saved: { cause: ResumeAccount["cause"]; calls:
   const calls = `${saved.calls} ${saved.calls === 1 ? "call" : "calls"} it had already run`
   return saved.cause === "reconnected" ? `Reconnected; resumed with ${calls}` : `Continued; told it of ${calls}`
 }
+
+/** One repository's branch against the branch it goes into (`branchSince`): where it stands, and what landed there since. */
+export interface BranchChanges {
+  /** Its folder, as in `RepositoryChanges`. */
+  name: string
+  branch?: string
+  /** Files `git status` lists now. */
+  uncommitted: number
+  /** The branch it goes into (`origin/main`), as this checkout last fetched it. */
+  base?: {
+    ref: string
+    ahead: number
+    behind: number
+    /** Commits that landed on it since, touching files the branch changed. */
+    touching: { sha: string; subject: string; files: string[] }[]
+  }
+}
+
+/** A Fin a message resumes after it was stopped or its turn failed, and what moved since (`finResumedText`). */
+export interface FinResume {
+  how: "stopped" | "failed"
+  at: number
+  reason?: string
+  now: number
+  checkout: readonly RepositoryChanges[]
+  branches: readonly BranchChanges[]
+}
+
+/** How long ago, in words: "just now", "5 minutes ago", "3 hours ago", "2 days ago". */
+export function agoWords(ms: number): string {
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 1) return "just now"
+  const unit = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"} ago`
+  if (minutes < 90) return unit(minutes, "minute")
+  const hours = Math.round(minutes / 60)
+  return hours < 36 ? unit(hours, "hour") : unit(Math.round(hours / 24), "day")
+}
+
+function branchLine(branch: BranchChanges): string | undefined {
+  const parts: string[] = []
+  if (branch.branch) parts.push(`on ${branch.branch}`)
+  parts.push(branch.uncommitted ? `${branch.uncommitted} uncommitted ${branch.uncommitted === 1 ? "file" : "files"}` : "nothing uncommitted")
+  const base = branch.base
+  if (base) {
+    parts.push(`${base.ahead} ahead of ${base.ref} and ${base.behind} behind`)
+    if (base.touching.length)
+      parts.push(`${base.touching.length === 1 ? "a commit" : `${base.touching.length} commits`} landed there touching files you changed: ${base.touching.map((commit) => `${short(commit.sha)} ${clip(commit.subject, 160)} (${commit.files.slice(0, 6).join(", ")}${commit.files.length > 6 ? ", …" : ""})`).join("; ")}`)
+  }
+  return `- ${branch.name}: ${parts.join(", ")}.`
+}
+
+/**
+ * What a stopped or failed Fin reads beneath the message that resumes it, in
+ * the same Session: when and why it stopped, what moved in its checkout since,
+ * and where its branch stands against the one it goes into, so it doesn't
+ * redo or undo work done meanwhile.
+ */
+export function finResumedText(resume: FinResume): string {
+  const ago = agoWords(resume.now - resume.at)
+  const head = `[mako · resumed after ${resume.how === "stopped" ? "a stop" : "a failure"} ${ago}]`
+  const why = resume.reason ? ` (${clip(resume.reason, 400)})` : ""
+  const opening = resume.how === "stopped"
+    ? `You were stopped ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
+    : `Your last turn failed ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
+  const moved = checkoutLines(resume.checkout)
+  const since = moved.length ? `In your checkout since then:\n${moved.join("\n")}` : "Nothing moved in your checkout since then: no commit, push or file change."
+  const branches = resume.branches.map(branchLine).filter((line): line is string => line !== undefined)
+  const now = branches.length ? `\n\nWhere your branch stands now:\n${branches.join("\n")}` : ""
+  return `${head}\n${opening}\n\n${since}${now}\n\nCheck what you had in flight when you stopped (a command half-run, a file half-written) and anything that landed meanwhile before going on.`
+}

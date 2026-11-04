@@ -249,16 +249,10 @@ export const addresseeStore = createStore<AddresseeState>({ to: {} })
 
 export const useAddressee = createHook(addresseeStore)
 
-/** A stopped Fin's delegation is over: nothing is sent or moved to it. */
-export function finStopped(agent: NativeAgent): boolean {
-  const state = childStateOf(agent)
-  return state.kind === "ended" && state.outcome === "stopped"
-}
-
-/** A Fin as the composer names it; undefined for a stopped one, or one from a host that can't take a message for it (no `child.name`). */
+/** A Fin as the composer names it, a stopped one too, which a message resumes; undefined for one from a host that can't take a message for it (no `child.name`). */
 export function addresseeOf(agent: NativeAgent): Addressee | undefined {
   const child = agent.child
-  if (!child?.name || finStopped(agent)) return undefined
+  if (!child?.name) return undefined
   return { fin: child.thread, name: child.name, title: agent.title, provider: agent.provider }
 }
 

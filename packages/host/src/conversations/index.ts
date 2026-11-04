@@ -141,6 +141,8 @@ export interface ConversationsDeps {
   settled(conversationId: string): void
   /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet. */
   movePending?(conversationId: string): boolean
+  /** Whether the person archived a conversation's Thread, which ends a Fin's work for good. */
+  archived?(conversationId: string): boolean
   /** The attribution journal, for counting each turn's changes; undefined until it opens. */
   turnLedger?: LiveDependencies["turnLedger"]
   /** The attribution journal, for reviewing and undoing a turn; undefined until it opens. */
@@ -290,6 +292,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       harnessLabel: (harness) => harnessLabel(host, harness),
       modes: (harness) => host.liveDrivers.get(harness)?.modes,
       ...(deps.movePending && { movePending: deps.movePending }),
+      ...(deps.archived && { archived: deps.archived }),
       finChoices: async (harness, cwd) => {
         const profile = await harnesses.profiles.forSend(harness, cwd)
         const reading = deps.finDefaults?.reading()

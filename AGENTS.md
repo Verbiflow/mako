@@ -259,6 +259,16 @@ being written, and a digest drops the end the host inferred for it
 (`AgentWakes.current`). A stop closes the edge with
 its reason (`closedReason`) before it cancels the turn. The cut turn then reports
 nothing and wakes no one, and the Fin reads as stopped in those words. A
+stop is a pause: a message from its Apex (`agents_send`, the person's
+`direct`) or the person writing in its own Thread opens the delegation again
+(`ThreadStore.reopenEdge`, `ThreadParent.resumed`) in the same Session, and
+a stopped or failed Fin reads beneath that message when and why it stopped
+and what moved since (`finResumedText`): its checkout (`checkoutSince`) and
+its branch against the one it goes into, with commits landed there touching
+its files (`branchSince`). Its turns report and wake the Apex again, and a
+repeat of the message resumes it once. Archiving its Thread is the one
+end: one at work stops in those words, once (`Agents.archived`), and
+nothing resumes it until the person restores it (`test:fin-resume`). A
 Fin's harness asking (`askApex`) wakes its Apex, told whether it may
 answer: an approval under an Apex below full access is the person's at once,
 and the Apex hears so in the digest's "waits on the person" (`Report.told`).

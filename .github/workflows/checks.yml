@@ -131,6 +131,7 @@ jobs:
       - run: npm run test:thread-split
       - run: npm run test:agents-wake
       - run: npm run test:orch-answer
+      - run: npm run test:fin-resume
       - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
       - run: npm run test:orch-deliver

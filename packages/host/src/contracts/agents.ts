@@ -150,10 +150,12 @@ export const ThreadParentSchema = z.object({
   op: z.string().min(1).max(512),
   startedBy: ActorSchema,
   createdAt: z.number(),
-  /** The delegation is over; the child keeps existing as a Thread. */
+  /** The delegation is stopped: paused until a message to the child resumes it (`resumed`). */
   closedAt: z.number().optional(),
   /** Why it was stopped, as whoever stopped it said: said once, with `closedAt`. */
   closedReason: z.string().max(2000).optional(),
+  /** The last time a message resumed it after a stop: when, and the stop it ended. */
+  resumed: z.object({ at: z.number(), closedAt: z.number(), reason: z.string().max(2000).optional() }).optional(),
   /** Present while a process Mako didn't start runs the child's turns (`FollowedRun`). */
   run: FollowedRunSchema.optional(),
   /** Where its model came from as it started (`resolveFinTuning`), and the choice passed over for one it no longer lists. */
@@ -174,7 +176,7 @@ export type ThreadParent = z.infer<typeof ThreadParentSchema>
  * What a start that makes a child says of its edge (`LiveStartOptions.parent`): all of it but the Thread the start makes.
  * It crosses the host call unbranded; the start parses it.
  */
-export const ChildStartSchema = ThreadParentSchema.omit({ child: true, createdAt: true, closedAt: true, closedReason: true, run: true })
+export const ChildStartSchema = ThreadParentSchema.omit({ child: true, createdAt: true, closedAt: true, closedReason: true, resumed: true, run: true })
 export type ChildStart = z.input<typeof ChildStartSchema>
 
 /** A typed report from a child: explicit (`agents_report`), or implicit when its turn or run ended without one. */
