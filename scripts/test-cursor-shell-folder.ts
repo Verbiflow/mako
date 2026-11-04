@@ -71,9 +71,9 @@ try {
     ["/bin/zsh", ["-c", wrapper, "--"]],
     ["/bin/bash", ["-O", "extglob", "-c", wrapper, "--"]],
   ] as const) {
-    const denied = await run(shell, [...args, "echo SHOULD-NOT-RUN && gh pr create --fill"], workspace)
+    const denied = await run(shell, [...args, "echo SHOULD-NOT-RUN && gh pr merge --squash"], workspace)
     assert.ok(!denied.stdout.includes("SHOULD-NOT-RUN"), `${shell}: nothing on a denied line runs`)
-    assert.match(denied.stderr, /Call pull_request_open instead/, `${shell}: the agent reads the redirect`)
+    assert.match(denied.stderr, /Call pull_request_merge instead/, `${shell}: the agent reads the redirect`)
     assert.equal(denied.code, 1, `${shell}: a denied command fails`)
     const warned = await run(shell, [...args, "lsof -i :1 ; echo it-ran"], workspace)
     assert.ok(warned.stdout.includes("it-ran"), `${shell}: a warned command runs`)
@@ -97,9 +97,9 @@ try {
     const code = await new Promise<number | null>((resolve) => child.once("close", resolve))
     return { code, stdout, stderr }
   }
-  const pipedDenied = await piped("echo SHOULD-NOT-RUN && gh pr create --fill")
+  const pipedDenied = await piped("echo SHOULD-NOT-RUN && gh pr merge --squash")
   assert.ok(!pipedDenied.stdout.includes("SHOULD-NOT-RUN"), "a piped command routing denies doesn't run")
-  assert.match(pipedDenied.stderr, /Call pull_request_open instead/)
+  assert.match(pipedDenied.stderr, /Call pull_request_merge instead/)
   assert.equal(pipedDenied.code, 1)
   const pipedWarned = await piped("lsof -i :1 ; echo it-ran")
   assert.ok(pipedWarned.stdout.includes("it-ran") && /port_holder/.test(pipedWarned.stderr), "a piped command routing warns of runs after its note")
