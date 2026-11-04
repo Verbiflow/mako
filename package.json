@@ -92,6 +92,7 @@
     "bench:orch-route": "tsx scripts/bench-orch-route.ts",
     "bench:orch-ask": "tsx scripts/bench-orch-ask.ts",
     "bench:sync-pipeline": "npm run -s build --workspace @mako/sessions && tsx scripts/bench-sync-pipeline.ts",
+    "bench:host-load": "tsx --tsconfig tsconfig.scripts.json scripts/bench-host-load.ts",
     "bench:syncd-loop": "npm run -s build --workspace @mako/sessions && tsx scripts/bench-syncd-loop.ts",
     "bench:streams": "tsx --tsconfig tsconfig.app.json scripts/bench-native-streams.ts",
     "bench:backfill": "tsx scripts/bench-backfill.ts",

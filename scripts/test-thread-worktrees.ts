@@ -812,7 +812,65 @@ await assert.rejects(worktrees.prepare(randomUUID(), plain, "x"), /plain isn't i
 const empty = repository("empty", false)
 await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits yet/)
 
+// Summaries read each repository's facts once a pass and keep what commits decide: each answer still follows the commits.
+{
+  const summed = repository("summed")
+  const id = randomUUID()
+  started(id)
+  const made = await worktrees.prepare(id, summed, "Summed work")
+  await worktrees.list()
+  const read = async () => {
+    const found = (await worktrees.summaries()).find((summary) => summary.path === made.path)
+    assert.ok(found, "the worktree is summarized")
+    return found
+  }
+  let summary = await read()
+  assert.deepEqual([summary.ahead, summary.changes, summary.landing.kind, summary.behind?.commits], [0, 0, "empty", 0])
+  writeFileSync(join(made.path, "web", "index.ts"), "export const changed = 1\n")
+  summary = await read()
+  assert.equal(summary.changes, 1, "an uncommitted file counts")
+  git(made.path, "commit", "-qam", "Work")
+  summary = await read()
+  assert.deepEqual([summary.ahead, summary.changes, summary.landing.kind], [1, 0, "open"], "a commit on the branch is read, not an answer kept from before it")
+  git(summed, "commit", "-q", "--allow-empty", "-m", "Main moved")
+  summary = await read()
+  assert.equal(summary.behind?.commits, 1, "main moving is read")
+  git(summed, "merge", "-q", "--no-edit", made.branch)
+  summary = await read()
+  assert.deepEqual([summary.landing.kind, summary.ahead], ["merged", 0], "a merge into main lands it")
+  await worktrees.abandon(id).catch(() => undefined)
+}
+
+// Windows ask for summaries every half minute and on focus: one pass runs, and everyone who asked while it ran shares
+// the next, which starts after they asked.
+{
+  const shared = service()
+  let lists = 0
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  shared.list = async () => {
+    lists++
+    await gate
+    return { root, worktrees: [] }
+  }
+  const first = shared.summaries()
+  const later = Array.from({ length: 11 }, () => shared.summaries())
+  assert.equal(lists, 1, "one pass at a time")
+  release()
+  await first
+  assert.deepEqual(await Promise.all(later), later.map(() => []))
+  assert.equal(lists, 2, "those who asked during a pass share one pass after it")
+  shared.list = async () => {
+    throw new Error("listing failed")
+  }
+  await assert.rejects(shared.summaries(), /listing failed/)
+  shared.list = async () => ({ root, worktrees: [] })
+  assert.deepEqual(await shared.summaries(), [], "a failed pass keeps none after it from running")
+}
+
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, spares mirroring it taken whole and caught up per repository, spares replaced when its repositories change, a linked worktree beside its repository left out, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole, on one branch it names), refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), summaries (each answer following commits, one pass at a time shared by everyone who asked during the last), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, spares mirroring it taken whole and caught up per repository, spares replaced when its repositories change, a linked worktree beside its repository left out, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole, on one branch it names), refusals")
