@@ -110,6 +110,8 @@ export class AgentsWorld {
   /** Every prompt a driver was sent, in order: a turn lost or run twice shows here. */
   readonly prompts: { conversation: string; harness: string; text: string; at: number }[] = []
   readonly steers: { conversation: string; text: string; at: number }[] = []
+  /** Conversations whose Threads the person archived (`AgentsDeps.archived`). */
+  readonly archived = new Set<string>()
   /** Every answer to an approval a driver was sent: its conversation, its harness's request, and the answer. */
   readonly answers: { conversation: string; request: string; response: LivePermissionResponse; at: number }[] = []
   readonly events: HostEvent[] = []
@@ -181,6 +183,7 @@ export class AgentsWorld {
       ...(this.options.capacity && { capacity: this.options.capacity }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
+      archived: (conversation) => this.archived.has(conversation),
     }
     this.agents = new Agents(deps)
     this.agents.resume()

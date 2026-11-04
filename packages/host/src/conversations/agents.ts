@@ -137,6 +137,8 @@ export interface AgentsDeps {
   modes(harness: string): readonly LiveSessionMode[] | undefined
   /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet: it carries on there. */
   movePending?(conversation: string): boolean
+  /** Whether the person archived a conversation's Thread: a Fin's work ends there for good, until they restore it. */
+  archived?(conversation: string): boolean
   /** What a Fin of `harness` in `cwd` may run on: the harness's catalog, Mako's pick for it, and the person's own choices there. */
   finChoices?(harness: string, cwd: string): Promise<FinChoices>
   /** `harness`'s catalog as this host last read it, for a Fin's row; undefined before it's read. */
@@ -544,6 +546,18 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { to: edge.name, fin: edge.child, delivery: sent.delivery }
   }
 
+  /**
+   * The person archived a conversation's Thread: a Fin's work ends there, once.
+   * One at work is stopped as a stop would, in those words; one stopped
+   * already keeps its stop. A message to it is refused until it's restored.
+   */
+  async archived(conversation: string): Promise<boolean> {
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    if (!edge) return false
+    return this.end(edge, "the person archived it")
+  }
+
   async stopChild(conversation: string, child: string): Promise<boolean> {
     const store = this.store()
     const thread = store?.journalPlacement(conversation)?.thread
@@ -569,7 +583,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!edge) return
     // The person writing in a stopped Fin's own Thread resumes it, as a message from its Apex does.
     const closedAt = edge.closedAt
-    if (closedAt !== undefined && this.deps.live.held(conversation)?.requests.some((request) => (request.createdAt ?? 0) > closedAt && (!request.actor || request.actor.kind === "person")))
+    if (closedAt !== undefined && !this.deps.archived?.(conversation) && this.deps.live.held(conversation)?.requests.some((request) => (request.createdAt ?? 0) > closedAt && (!request.actor || request.actor.kind === "person")))
       return void this.reopen(edge, "the person")
     this.childMoved(edge, true)
   }
@@ -1954,6 +1968,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (repeat) return repeat.status === "queued" || repeat.status === "held"
       ? { delivery: "queued", hears: `${stopped.name} hears it when its current turn ends, as its next message.`, deduped: true }
       : { delivery: "turn", hears: `${stopped.name} already has it.`, deduped: true }
+    if (before && this.deps.archived?.(before))
+      return { refused: "conflict", why: `${stopped.name} was archived, which ends its work for good: start a new ${FIN_WORD} with agents_start, or the person can restore it, after which a message resumes it.` }
     const resumed = await this.resumeAccount(stopped)
     const edge = this.reopen(stopped, "a message")
     const taken = edge.run && (!edge.run.ended || !this.conversationOf(edge.child)) ? await this.takeOver(edge) : undefined

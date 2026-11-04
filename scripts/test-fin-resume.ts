@@ -19,7 +19,8 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  * in its checkout and on the branch it goes into since; its turns report and
  * wake the Apex again. Covered: a resume after a stop, after a failure, after
  * a host restart and after its branch moved, a repeat of the same message
- * resuming it once, the person's own message, and a second stop.
+ * resuming it once, the person's own message, a second stop, and archiving,
+ * the one end nothing resumes until the person restores it.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-fin-resume-"))
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fin", GIT_AUTHOR_EMAIL: "fin@example.invalid", GIT_COMMITTER_NAME: "Fin", GIT_COMMITTER_EMAIL: "fin@example.invalid" } }).trim()
@@ -207,6 +208,26 @@ try {
     await f.world.close()
   }
   console.log("the person's own message resumed it, and a second stop paused it again with its own reason")
+  // Archiving is the end: a Fin at work stops in those words, and nothing resumes it until the person restores it.
+  {
+    const f = await fixture("archived")
+    await until("the Fin to work", () => f.world.live.session(f.fin())?.status === "running")
+    f.world.archived.add(f.fin())
+    assert.equal(await f.world.agents.archived(f.fin()), true)
+    await until("the end", () => f.state()?.kind === "ended")
+    assert.deepEqual(f.state(), { kind: "ended", outcome: "stopped", reason: "the person archived it" })
+    const refused = await f.world.agents.send(f.apex.caller, { to: "labels", text: "Carry on.", clientKey: "go" })
+    assert.ok("refused" in refused && refused.refused === "conflict" && /was archived, which ends its work for good/.test(refused.why), JSON.stringify(refused))
+    f.world.say(f.fin(), "Are you there?")
+    await f.world.settle(400)
+    assert.deepEqual(f.state(), { kind: "ended", outcome: "stopped", reason: "the person archived it" }, "a message in its archived Thread doesn't resume it either")
+    assert.equal(await f.world.agents.archived(f.fin()), false, "its end is written once")
+    f.world.archived.delete(f.fin())
+    sent(await f.world.agents.send(f.apex.caller, { to: "labels", text: "Carry on.", clientKey: "go-restored" }))
+    await until("it to resume once restored", () => { const now = f.state(); return now?.kind === "ended" && now.outcome === "done" })
+    await f.world.close()
+  }
+  console.log("archived: its work ended once, no message resumed it, and once restored a message did")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

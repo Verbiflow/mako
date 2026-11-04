@@ -858,6 +858,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const answer = late.movers?.moves.answerFor(id)
       return answer === "asking" || answer === "allowed" || answer === "moving"
     },
+    archived: (id) => late.archivedHere?.(id) ?? false,
     // Each turn's changes, counted by the attribution journal once it opens.
     turnLedger: () => {
       const attribution = late.attribution
@@ -1120,7 +1121,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     nativeStops: { token: (path) => runs.stopToken(path), abort: (path, token) => runs.abort(path, token) },
     homes: workspaces.environments,
     emit,
-    archivedThread: ({ conversationId, sessionId }) => control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) }),
+    archivedThread: ({ conversationId, sessionId }) => {
+      control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) })
+      if (conversationId) void late.conversations?.agents?.archived(conversationId)
+    },
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })
   /** Archives a cloud Thread, or brings an archived one back here, as its window asked. */
