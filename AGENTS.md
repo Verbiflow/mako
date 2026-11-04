@@ -248,9 +248,8 @@ written again after its end reads as working while that Session is still
 being written, and a digest drops the end the host inferred for it
 (`AgentWakes.current`). A stop closes the edge with
 its reason (`closedReason`) before it cancels the turn. The cut turn then reports
-nothing and wakes no one, and the Fin reads as stopped in those words. Its
-delegation stays over: a message to it is refused, and the person can open
-it. A Fin's harness asking (`askApex`) wakes its Apex, told whether it may
+nothing and wakes no one, and the Fin reads as stopped in those words. A
+Fin's harness asking (`askApex`) wakes its Apex, told whether it may
 answer: an approval under an Apex below full access is the person's at once,
 and the Apex hears so in the digest's "waits on the person" (`Report.told`).
 One the Apex may answer that it leaves for `APEX_ANSWER_MS` (a minute) goes

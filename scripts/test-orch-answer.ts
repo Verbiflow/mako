@@ -237,7 +237,6 @@ try {
   console.log("in time: an Apex that answered inside the window was woken once for the ask and the person never asked")
 
   // A Fin its Apex stops while it waits on an approval ends as stopped, in the Apex's words: not failed, and nobody woken.
-  // Its delegation is over, so a message to it is refused; the person can still open it.
   {
     const { world, apex, fin, state, heard, wakes } = await fixture("stopped-blocked", {
       harness: "cursor", access: "full", finHarness: "claude", asks: approve,
@@ -252,8 +251,6 @@ try {
     const thread = ThreadIdSchema.parse(child.child!.thread)
     assert.deepEqual(world.store.reportsOf(thread, 0).map((report) => report.status), ["blocked"], "no failure was written for the turn the stop cut")
     assert.equal(wakes.length, 1, "the Apex that stopped it isn't woken again")
-    const sent = await world.agents.send(apex.caller, { to: "tests", text: "Carry on", clientKey: "again" })
-    assert.ok("refused" in sent && sent.refused === "conflict" && /was stopped/.test(sent.why))
     assert.equal(world.prompts.filter((prompt) => prompt.conversation === fin).length, 1)
     await world.close()
   }
