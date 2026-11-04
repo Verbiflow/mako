@@ -27,7 +27,9 @@ import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
 import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
 import { openCodeModes } from "@mako/host/harnesses/opencode/access"
 import { ThreadStore } from "@mako/host/threads/store"
-import { AgentsWorld, noConversations, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, noConversations, type Heard, type Script } from "./lib/agents-world.ts"
+import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
+import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
  * The children engine (`npm run test:background-agents`): a child's state and
@@ -705,30 +707,183 @@ async function waitingFins(): Promise<void> {
 }
 
 /** A Fin runs on the model its spawn names, else its Apex's own on the Apex's harness, else its harness's default; its strip shows it. */
+/**
+ * What a Fin runs on: its Apex's model on the Apex's harness, the person's own choices on another (Settings › Fins,
+ * then what they last used there), Mako's pick only after those, and what a spawn names held to the harness's catalog.
+ * On `main` before this, a Fin on another harness ran on that harness's default and a named model went unchecked.
+ */
 async function finModels(): Promise<void> {
+  const claude = recordedCatalog("claude")!.models
+  const codex = recordedCatalog("codex")!.models
+  const cursor = recordedCatalog("cursor")!.models
   const w = new AgentsWorld({
     root: join(root, "models"),
     script: (turn) => (turn.text.includes("You're fin:") ? "done" : "ok"),
-    defaults: { claude: { model: "claude-sonnet-5", options: { effort: "medium" } } },
+    defaults: { claude: { model: "claude-opus-5-5", options: { effort: "high", fast: false } }, codex: { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } } },
+    catalogs: { claude, codex, cursor },
+    fins: { chosen: { cursor: { model: "gpt-4o" } }, used: { claude: { model: "claude-sonnet-5", options: { effort: "medium" } } } },
   })
   try {
-    const apex = await w.apex("cursor", "full", { model: "claude-opus-5-5", options: { effort: "high" } })
+    const apex = await w.apex("cursor", "full", { model: "claude-opus-5-5[context=300k,effort=xhigh,fast=true]" })
     const brief = { objective: "Look" }
     const same = await w.agents.start(apex.caller, { brief, name: "same", clientKey: "s", cwd: w.root })
     const other = await w.agents.start(apex.caller, { brief, harness: "claude", name: "other", clientKey: "o", cwd: w.root })
-    const named = await w.agents.start(apex.caller, { brief, harness: "cursor", model: "gpt-6", reasoning: "low", name: "named", clientKey: "n", cwd: w.root })
-    assert.ok(!("refused" in same) && !("refused" in other) && !("refused" in named), JSON.stringify([same, other, named]))
+    const told = await w.agents.start(apex.caller, { brief, harness: "codex", reasoning: "high", name: "told", clientKey: "t", cwd: w.root })
+    const named = await w.agents.start(apex.caller, { brief, harness: "claude", model: "opus 5.5", reasoning: "max", fast: true, name: "named", clientKey: "n", cwd: w.root })
+    assert.ok(!("refused" in same) && !("refused" in other) && !("refused" in told) && !("refused" in named), JSON.stringify([same, other, told, named]))
     const asked = (answer: AgentsStarted) => w.live.snapshot(answer.conversation!)?.requests[0]?.tuning
-    assert.deepEqual(asked(same), { model: "claude-opus-5-5", options: { effort: "high" } }, "a Fin on its Apex's harness runs on the Apex's model and reasoning, not the harness's default")
-    assert.deepEqual(asked(other), { model: "claude-sonnet-5", options: { effort: "medium" } }, "one on another harness runs on that harness's default")
-    assert.deepEqual(asked(named), { model: "gpt-6", options: { effort: "low" } })
+    assert.deepEqual(asked(same), { model: "claude-opus-5-5", options: { context: "300k", effort: "xhigh", fast: "true" } }, "a Fin on its Apex's harness runs on the Apex's model, reasoning and fast lane, past a Fins default Cursor no longer lists")
+    assert.match(same.note ?? "", /Your Fins default for Cursor, gpt-4o, isn't listed by Cursor anymore: it runs on Claude Opus 5\.5 instead\./, "and the Apex hears the default was passed over")
+    assert.equal(same.runsOn, "Claude Opus 5.5 · Extra High · Fast")
+    assert.deepEqual(asked(other), { model: "claude-sonnet-5", options: { effort: "medium" } }, "one on another harness runs on what the person last used there, not the harness's default")
+    assert.deepEqual(asked(told), { model: "gpt-6.1-sol", options: { effort: "high", serviceTier: "default" } }, "\"Codex on high\": Codex's model for the person, on high")
+    assert.deepEqual(asked(named), { model: "claude-opus-5-5", options: { effort: "max", fast: true } }, "a named model, level and fast lane, read leniently")
+    const unknown = await w.agents.start(apex.caller, { brief, harness: "claude", model: "gpt-6", name: "unknown", clientKey: "u", cwd: w.root })
+    assert.ok("refused" in unknown && unknown.refused === "unknown-model" && /Claude has no model "gpt-6"\. Its models: Opus 5\.5 \(claude-opus-5-5\)/.test(unknown.why), JSON.stringify(unknown))
+    const levelless = await w.agents.start(apex.caller, { brief, harness: "claude", model: "haiku", reasoning: "high", name: "levelless", clientKey: "l", cwd: w.root })
+    assert.ok("refused" in levelless && /Haiku 4\.5 on Claude has no reasoning levels/.test(levelless.why), JSON.stringify(levelless))
     await w.settle()
     const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed)
-    assert.deepEqual(listed.children.map((strip) => [strip.name, strip.model]), [["same", "claude-opus-5-5"], ["other", "claude-sonnet-5"], ["named", "gpt-6"]], "each strip shows its model")
-    assert.deepEqual(w.agents.roster(apex.conversation).map((entry) => entry.model), ["claude-opus-5-5", "claude-sonnet-5", "gpt-6"], "and so does each Fin's row")
+    assert.deepEqual(
+      listed.children.map((strip) => [strip.name, strip.runsOn]),
+      [["same", "Claude Opus 5.5 · Extra High · Fast"], ["other", "Sonnet 5 · Medium"], ["told", "GPT-6.1-Sol · High"], ["named", "Opus 5.5 · Max · Fast"]],
+      "each strip says its model, reasoning and fast lane"
+    )
+    const rows = w.agents.roster(apex.conversation)
+    assert.deepEqual(rows.map((entry) => entry.runsOn && [entry.runsOn.model, entry.runsOn.reasoning, entry.runsOn.fast ?? false]), [["Claude Opus 5.5", "Extra High", true], ["Sonnet 5", "Medium", false], ["GPT-6.1-Sol", "High", false], ["Opus 5.5", "Max", true]], "and so does each Fin's row")
+    assert.match(rows[0]!.runsOn?.note ?? "", /gpt-4o, isn't listed by Cursor anymore/, "the row keeps why its model isn't the Fins default")
   } finally {
     await w.close()
+  }
+}
+
+/**
+ * The person's rules for Fins, in their words: every Thread reads them once before the person's next message, and
+ * again only when they change; a Fin started by one runs on its harness and model and says so; work no rule fits goes
+ * to their `otherwise`; what the person named in chat still wins; a rule that isn't there is refused with the ones that are.
+ */
+async function finRules(): Promise<void> {
+  const catalogs = { claude: recordedCatalog("claude")!.models, codex: recordedCatalog("codex")!.models, cursor: recordedCatalog("cursor")!.models }
+  let policy: FinPolicy = {
+    rules: [
+      { id: "backend", when: "Anything that isn't frontend: APIs,\n  migrations, tests", target: { harness: "codex", settings: { model: "gpt-6.1-sol", options: { effort: "high", plan: true } } } },
+      { id: "ui", when: "UI and CSS", target: { harness: "claude" } },
+    ],
+    otherwise: { harness: "cursor", settings: { model: "composer-2.5", options: { fast: "true" } } },
+  }
+  const heard: Heard[] = []
+  const w = new AgentsWorld({
+    root: join(root, "rules"),
+    script: (turn) => (turn.text.includes("You're fin:") ? "done" : "ok"),
+    defaults: { codex: { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } } },
+    catalogs,
+    policy: () => policy,
+    heard: (each) => heard.push(each),
+  })
+  try {
+    const apex = await w.apex("claude", "full", { model: "claude-opus-5-5", options: { effort: "max" } })
+    const said = async (text: string) => {
+      w.say(apex.conversation, text)
+      await waitFor(() => heard.some((each) => each.conversation === apex.conversation && each.text.includes(text)), `the Apex hearing "${text}"`)
+      return heard.findLast((each) => each.conversation === apex.conversation && each.text.includes(text))!.text
+    }
+    const first = await said("Split the work up.")
+    assert.match(first, /The person's rules for picking a Fin's harness and model, first fit wins\. Pass its number as agents_start's rule/)
+    assert.match(first, /\n1\. Anything that isn't frontend: APIs, migrations, tests → Codex · GPT-6\.1-Sol · High\n2\. UI and CSS → Claude, on the model the person uses there\nNone fits: Cursor · Composer 2\.5 · Fast \(leave rule out\)\./, "one short line each, in the person's words")
+    assert.doesNotMatch(await said("And the docs?"), /The person's rules/, "read once, not on every message")
+    policy = { ...policy, rules: policy.rules.slice(0, 1) }
+    assert.match(await said("One more."), /\n1\. Anything that isn't frontend[^\n]*\nNone fits:/, "and again once they change")
+
+    const brief = { objective: "Look" }
+    const asked = (answer: AgentsStarted) => ({ harness: w.live.session(answer.conversation!)?.harness, tuning: w.live.snapshot(answer.conversation!)?.requests[0]?.tuning })
+    policy = { ...policy, rules: [...policy.rules, { id: "ui", when: "UI and CSS", target: { harness: "claude" } }] }
+    const backend = await w.agents.start(apex.caller, { brief, rule: 1, name: "backend", clientKey: "b", cwd: w.root })
+    const ui = await w.agents.start(apex.caller, { brief, rule: 2, name: "ui", clientKey: "u", cwd: w.root })
+    const unsure = await w.agents.start(apex.caller, { brief, name: "unsure", clientKey: "x", cwd: w.root })
+    const named = await w.agents.start(apex.caller, { brief, rule: 1, harness: "claude", name: "named", clientKey: "n", cwd: w.root })
+    const told = await w.agents.start(apex.caller, { brief, harness: "codex", reasoning: "low", name: "told", clientKey: "t", cwd: w.root })
+    for (const answer of [backend, ui, unsure, named, told]) assert.ok(!("refused" in answer), JSON.stringify(answer))
+    const ok = (answer: typeof backend): AgentsStarted => {
+      assert.ok(!("refused" in answer), JSON.stringify(answer))
+      return answer
+    }
+    assert.deepEqual(asked(ok(backend)), { harness: "codex", tuning: { model: "gpt-6.1-sol", options: { effort: "high" } } }, "rule 1's harness and model, never its plan mode")
+    assert.equal(ok(backend).rule, "Rule 1 · Anything that isn't frontend: APIs, migrations, tests")
+    assert.deepEqual(asked(ok(ui)), { harness: "claude", tuning: { model: "claude-opus-5-5", options: { effort: "max" } } }, "a rule that names only a harness runs as the person does there: here, the Apex's own model")
+    assert.deepEqual(asked(ok(unsure)), { harness: "cursor", tuning: { model: "composer-2.5", options: { fast: "true" } } }, "work no rule fits goes to the person's otherwise")
+    assert.equal(ok(unsure).rule, "No rule fit")
+    assert.deepEqual(asked(ok(named)), { harness: "claude", tuning: { model: "claude-opus-5-5", options: { effort: "max" } } }, "a harness the person named wins over the rule's, whose model is for its own harness")
+    assert.equal(ok(named).rule, "Rule 1 · Anything that isn't frontend: APIs, migrations, tests", "and the rule is still what it followed")
+    assert.equal(asked(ok(told)).harness, "codex")
+    assert.equal(ok(told).rule, undefined, "a harness named with no rule follows none, and never the otherwise")
+    const missing = await w.agents.start(apex.caller, { brief, rule: 7, name: "missing", clientKey: "m", cwd: w.root })
+    assert.ok("refused" in missing && missing.refused === "unknown-rule" && /has 2 rules, so there's no rule 7: 1\. Anything that isn't frontend.* 2\. UI and CSS/s.test(missing.why), JSON.stringify(missing))
+    await w.settle()
+    const rows = w.agents.roster(apex.conversation)
+    assert.deepEqual(rows.map((row) => row.runsOn?.rule), ["Rule 1 · Anything that isn't frontend: APIs, migrations, tests", "Rule 2 · UI and CSS", "No rule fit", "Rule 1 · Anything that isn't frontend: APIs, migrations, tests", undefined], "each row says the rule it followed")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed && listed.children[0]?.rule === "Rule 1 · Anything that isn't frontend: APIs, migrations, tests")
+    const lead = await w.agents.start(apex.caller, { brief, role: "lead", harness: "claude", name: "lead", clientKey: "l", cwd: w.root })
+    assert.ok(!("refused" in lead))
+    assert.match(w.live.snapshot(lead.conversation!)?.requests[0]?.text ?? "", /The person's rules for picking a Fin's harness/, "an Apex of its own reads the rules with its brief")
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * A Fin never starts on a harness whose account is at its limit without saying so. Its Apex named no harness: it
+ * starts on the person's next harness with room, and the answer and its row say why. Named, or with nowhere to go:
+ * refused with the reset and the person's fallbacks. On the code before this, all five started on Claude and stopped.
+ */
+async function limitedHarnesses(): Promise<void> {
+  const until = Date.now() + 3 * 3_600_000
+  const claude = recordedCatalog("claude")!.models
+  const codex = recordedCatalog("codex")!.models
+  const cursor = recordedCatalog("cursor")!.models
+  const limit = { account: "ada@example.com", until, instead: "ada-team@example.com" }
+  const w = new AgentsWorld({
+    root: join(root, "limited"),
+    script: (turn) => (turn.text.includes("You're fin:") ? "done" : "ok"),
+    defaults: { codex: { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } } },
+    catalogs: { claude, codex, cursor },
+    limits: { claude: limit, cursor: { account: "ada", until: null } },
+    order: ["claude", "cursor", "codex", "grok"],
+  })
+  try {
+    const apex = await w.apex("claude", "full", { model: "claude-opus-5-5", options: { effort: "high" } })
+    const brief = { objective: "Look" }
+    const moved = await w.agents.start(apex.caller, { brief, name: "moved", clientKey: "m", cwd: w.root })
+    assert.ok(!("refused" in moved), JSON.stringify(moved))
+    assert.equal(w.live.session(moved.conversation!)?.harness, "codex", "past Claude and Cursor, both at their limit, to the person's next harness with room (Grok has no catalog here)")
+    assert.deepEqual(moved.limited, { harness: "claude", until, instead: "ada-team@example.com" })
+    assert.match(moved.note ?? "", /^Claude is at its limit on ada@example\.com until \S.*, so it runs on Codex, the person's next harness\. ada-team@example\.com, another Claude account, has room: the person can switch to it in Settings › Agents\.$/)
+    await w.settle()
+    assert.match(w.agents.roster(apex.conversation)[0]?.runsOn?.note ?? "", /at its limit on ada@example\.com/, "its row says why it isn't on Claude")
+    const named = await w.agents.start(apex.caller, { brief, harness: "claude", name: "named", clientKey: "n", cwd: w.root })
+    assert.ok("refused" in named && named.refused === "limited", JSON.stringify(named))
+    assert.match(named.why, /Claude is at its limit on ada@example\.com until .*, so a Fin there would stop at once\. ada-team@example\.com, another Claude account, has room.*Leave harness and model out to start it on Codex, the person's next harness, or name another\. Or wait for the reset/)
+    const model = await w.agents.start(apex.caller, { brief, model: "opus 5.5", name: "model", clientKey: "o", cwd: w.root })
+    assert.ok("refused" in model && model.refused === "limited", "a model the Apex named is Claude's: it isn't moved to another harness's")
+    const fine = await w.agents.start(apex.caller, { brief, harness: "codex", name: "fine", clientKey: "f", cwd: w.root })
+    assert.ok(!("refused" in fine) && fine.limited === undefined && !fine.note, "a harness with room starts as asked, saying nothing")
+  } finally {
+    await w.close()
+  }
+  const nowhere = new AgentsWorld({
+    root: join(root, "limited-nowhere"),
+    script: () => "ok",
+    catalogs: { claude: recordedCatalog("claude")!.models },
+    limits: { claude: { account: "ada", until } },
+    order: ["claude"],
+  })
+  try {
+    const apex = await nowhere.apex("claude", "full")
+    const refused = await nowhere.agents.start(apex.caller, { brief: { objective: "Look" }, name: "stuck", clientKey: "s", cwd: nowhere.root })
+    assert.ok("refused" in refused && refused.refused === "limited" && /No other harness here has room either/.test(refused.why), JSON.stringify(refused))
+  } finally {
+    await nowhere.close()
   }
 }
 
@@ -789,6 +944,8 @@ try {
   await relinkedRuns()
   await messagesReachLinkedRuns()
   await finModels()
+  await limitedHarnesses()
+  await finRules()
   await apexStops()
   await staleEndsStayOut()
   await waitingFins()

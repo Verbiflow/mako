@@ -10,6 +10,7 @@ import { unaddress, useAddressee, useThreadChildren, useThreadRollup } from "@/s
 import { AgentsSheet } from "./agents"
 import { FinOfApexContext, OpenChildContext } from "./fin-of-apex"
 import { WebHarnessIcon } from "./harness-icon"
+import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 
 /**
  * Over the phone's composer in an Apex's Thread: who a message goes to. In the Apex's own view, the Apex, which passes
@@ -75,6 +76,7 @@ export function PhoneChildChips({ thread, conversation }: { thread: string; conv
           type="button"
           data-child-chip={agent.child?.thread}
           disabled={!agent.child?.conversation}
+          title={agent.runsOn ? finTuningLine(agent.runsOn) : agent.model}
           onClick={() => onOpen?.(agent)}
           className="pressable flex h-8 max-w-56 shrink-0 items-center gap-1.5 bg-raised pr-2 pl-2 text-label text-foreground disabled:opacity-60"
         >

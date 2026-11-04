@@ -487,7 +487,8 @@
   .web-chip-tab {
     @apply h-9 px-3;
   }
-  .web-chip-tab[aria-selected="true"] {
+  .web-chip-tab[aria-selected="true"],
+  .web-chip-tab[aria-checked="true"] {
     @apply bg-fill-selected text-foreground;
     box-shadow: inset 0 0 0 1px var(--border);
   }
