@@ -65,12 +65,16 @@ export interface LayerServer {
 }
 
 /**
- * A native capability Mako supplies instead. `remove`: never offered to this
- * launch. `intercept`: offered, and refused per call when its condition holds.
+ * A native capability Mako supplies instead, and how firmly. `guide` is the
+ * usual one: the tool stays offered, and when the agent uses it a short note
+ * names Mako's tool and why, and the agent decides. `intercept` refuses the
+ * call, and `remove` takes the tool out at launch: only where using the
+ * native tool is clearly wrong for this launch, such as an Apex starting
+ * work the person can't see.
  */
 export interface Replacement {
   native: NativeCapability
-  strength: "remove" | "intercept"
+  strength: "remove" | "intercept" | "guide"
 }
 
 /** The API a model endpoint speaks: adapters accept a route by its wire, never by provider. */
@@ -134,7 +138,7 @@ export interface LayerCapabilities {
   toolServing: LayerSupport<"in-process" | "http-mcp" | "stdio-mcp">
   /** Taking a native tool out of what the model is offered, at launch. */
   removal: LayerSupport<"tool-list" | "config-switch" | "environment-switch">
-  /** Refusing a native call as it's made, with a message naming Mako's tool. */
+  /** Answering a native call as it's made: a note naming Mako's tool (the call goes on), or a refusal where the replacement says so. */
   interception: LayerSupport<"pre-tool-hook" | "shell-guard" | "plugin" | "client-hook">
   /** Declaring Mako's subagents, so asking for one lands on Mako's primitive without a refusal. */
   subagents: LayerSupport<"declared">
@@ -152,11 +156,16 @@ export interface LayerAdapter<Fragment> {
   apply(layer: MakoLayer, conversation: string): Fragment
 }
 
-/** How a removal is carried out on a harness: removed at launch, intercepted per call, or only named in words. */
-export function removalPath(capabilities: LayerCapabilities): "removal" | "intercept" | "words" {
-  if (capabilities.removal.kind === "native") return "removal"
-  if (capabilities.interception.kind === "native") return "intercept"
-  return "words"
+/**
+ * How a replacement is carried out on a harness: removed at launch only when
+ * it's `remove` and the harness can; otherwise answered per call (refused for
+ * `intercept`, a note for `guide`) where the harness can; otherwise named in
+ * the instructions.
+ */
+export function replacementPath(capabilities: LayerCapabilities, strength: Replacement["strength"]): "removal" | "intercept" | "guide" | "words" {
+  if (strength === "remove" && capabilities.removal.kind === "native") return "removal"
+  if (capabilities.interception.kind !== "native") return "words"
+  return strength === "guide" ? "guide" : "intercept"
 }
 
 /** The harnesses whose adapters take a route on `wire`: where a connection's models are offered. */

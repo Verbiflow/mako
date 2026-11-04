@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { NATIVE_CAPABILITIES, TOOL_FAMILIES, removalPath, routeHarnesses, type LayerCapabilities } from "@mako/host/contracts/mako-layer"
+import { NATIVE_CAPABILITIES, TOOL_FAMILIES, replacementPath, routeHarnesses, type LayerCapabilities } from "@mako/host/contracts/mako-layer"
 import { nativeSpawnsOff, type RoutedThread } from "@mako/host/contracts/native-routing"
 import { conversationInstructions, conversationServers, type ConversationTools } from "@mako/host/harnesses/live-driver"
 import { layerOf } from "@mako/host/harnesses/mako-layer"
@@ -84,7 +84,8 @@ for (const { harness, capabilities } of declared) {
 assert.deepEqual(routeHarnesses(declared, "anthropic"), ["claude", "opencode"])
 assert.deepEqual(routeHarnesses(declared, "openai-chat"), ["codex", "opencode"])
 assert.deepEqual(routeHarnesses(declared, "native-login"), ["claude", "codex", "cursor", "opencode", "grok", "devin"])
-assert.deepEqual(declared.map(({ capabilities }) => removalPath(capabilities)), ["removal", "removal", "removal", "removal", "removal", "removal"])
+assert.deepEqual(declared.map(({ capabilities }) => replacementPath(capabilities, "remove")), ["removal", "removal", "removal", "removal", "removal", "removal"])
+assert.deepEqual(declared.map(({ capabilities }) => replacementPath(capabilities, "guide")), ["guide", "guide", "guide", "guide", "guide", "guide"])
 
 // Every native capability Mako replaces names a family Mako serves.
 for (const [native, { by }] of Object.entries(NATIVE_CAPABILITIES)) assert.ok(by in TOOL_FAMILIES, `${native} is replaced by a family`)
