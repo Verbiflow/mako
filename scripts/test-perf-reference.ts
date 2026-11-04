@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { MachineReading } from "@mako/host/base/machine-load"
-import { parseVerdicts } from "@mako/host/contracts/performance-verdict"
+import { parseVerdicts, PERFORMANCE_VERDICT_VARIABLE } from "@mako/host/contracts/performance-verdict"
 import { buildRepository, concluded, CONFIRM_ROUNDS, judge, MAX_ROUNDS, medianInterval, ROUNDS, settle, type Machine, type Paired, type Settling } from "./perf-reference"
 
 /**
@@ -138,7 +138,14 @@ try {
   const verdicts = parseVerdicts(readFileSync(file, "utf8"))
   assert.deepEqual(verdicts.map((verdict) => verdict.rows[0]!.outcome), ["unsure", "slower"], "each conclusion is a line the updater reads")
   assert.deepEqual(verdicts[0]!.busy, ["other work kept 12.6 of 14 cores busy"])
-  assert.match((await concluded("perf:decoders", busy, ALLOWED, undefined))[0]!, /unsure; measure it again on a quieter machine$/, "with nobody to choose, unsure fails")
+  const underUpdater = process.env[PERFORMANCE_VERDICT_VARIABLE]
+  process.env[PERFORMANCE_VERDICT_VARIABLE] = file
+  try {
+    assert.match((await concluded("perf:decoders", busy, ALLOWED, null))[0]!, /unsure; measure it again on a quieter machine$/, "with nobody to choose, unsure fails, even under the updater")
+  } finally {
+    if (underUpdater === undefined) delete process.env[PERFORMANCE_VERDICT_VARIABLE]
+    else process.env[PERFORMANCE_VERDICT_VARIABLE] = underUpdater
+  }
 } finally {
   rmSync(folder, { recursive: true, force: true })
 }
