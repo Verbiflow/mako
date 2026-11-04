@@ -86,7 +86,9 @@ const inputs = {
         z.object({ kind: z.literal("person") }),
       ]),
       z.object({
-        scope: z.union([z.literal("children"), z.literal("tree")]).optional(),
+        scope: z
+          .union([z.literal("children"), z.literal("tree"), z.literal("crew")])
+          .optional(),
       }),
     ]),
   "mako:agents-read": () =>
