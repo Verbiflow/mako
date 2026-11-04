@@ -55,6 +55,8 @@ const fixtureReads = [
   "mako:checkout-heads",
   "mako:workspace-moves",
   "mako:workspace-move-hold",
+  /** Answers from memory: agents' asks to move their Thread to the cloud. */
+  "mako:thread-move-asks",
   "mako:plan-builds",
   "mako:live-snapshot",
   "mako:live-state",

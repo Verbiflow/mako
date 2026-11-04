@@ -32,11 +32,11 @@ const PriorTurn = z.object({
   toolCalls: z.array(z.object({ tool: z.string(), input: z.json(), result: z.json() })).optional(),
 })
 
-export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver", "worktree", "pull-request", "app", "browser"] as const
+export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver", "worktree", "pull-request", "app", "browser", "move"] as const
 
-/** The budget each area counts toward, per harness and model: route ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%, Mako's own tools for worktrees, pull requests, the app and the browser ≥ 90%. */
+/** The budget each area counts toward, per harness and model: route (moving the Thread itself too) ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%, Mako's own tools for worktrees, pull requests, the app and the browser ≥ 90%. */
 export const BUDGET = {
-  route: { areas: ["route", "headless-shell", "place"], floor: 0.9 },
+  route: { areas: ["route", "headless-shell", "place", "move"], floor: 0.9 },
   "front door": { areas: ["front-door", "answer", "deliver"], floor: 0.9 },
   "don't spawn": { areas: ["dont-spawn", "native-child"], floor: 0.95 },
   "no polling": { areas: ["no-polling"], floor: 0.95 },
@@ -140,8 +140,10 @@ export type OrchCase = z.infer<typeof OrchCase>
 export const CASES_FILE = join(import.meta.dirname, "cases.ndjson")
 /** How a message reaches a working Fin (`agents_send`'s `deliver`): its own file, read after `CASES_FILE`. */
 export const DELIVER_CASES_FILE = join(import.meta.dirname, "cases-deliver.ndjson")
+/** Moving the Thread itself between this Mac and the cloud (`thread_move`): its own file, read last. */
+export const MOVE_CASES_FILE = join(import.meta.dirname, "cases-move.ndjson")
 
-export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE]): OrchCase[] {
+export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE, MOVE_CASES_FILE]): OrchCase[] {
   const cases = files.flatMap((file) => readFileSync(file, "utf8").split("\n").filter((line) => line.trim()).map((line, index) => {
     const parsed = OrchCase.safeParse(JSON.parse(line))
     if (!parsed.success) throw new Error(`${file}:${index + 1}: ${parsed.error.message}`)

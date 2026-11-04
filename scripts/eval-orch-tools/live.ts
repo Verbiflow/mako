@@ -7,7 +7,7 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
 import { caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
-import { bareName, isShell, shellCommand } from "./names.ts"
+import { bareName, isShell, makoTool, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
 /**
@@ -120,7 +120,7 @@ export async function liveSample(input: {
     const tool = bareName(harness, raw)
     // Cursor names every MCP call `mcp`: the stub's calls, in order, say which.
     if (tool === "mcp" && makoArgs.length) return [makoArgs.shift()!]
-    const recorded = tool.startsWith("agents_") ? makoArgs.findIndex((call) => call.tool === tool) : -1
+    const recorded = makoTool(tool) ? makoArgs.findIndex((call) => call.tool === tool) : -1
     const known = recorded === -1 ? undefined : makoArgs.splice(recorded, 1)[0]
     return [{ tool, args: known?.args ?? args }]
   })

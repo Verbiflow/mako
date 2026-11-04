@@ -9,10 +9,10 @@ function namesOf(harness: string, kind: string): Set<string> {
   return new Set(Object.entries(vocabulary.tools).filter(([, tool]) => tool.kind === kind).flatMap(([name, tool]) => [name, ...tool.aliases ?? []]))
 }
 
-const MAKO_TOOL = /(?:^|[_.:/])(agents_[a-z]+)$/
+const MAKO_TOOL = /(?:^|[_.:/])(agents_[a-z]+|thread_move)$/
 
 /**
- * A call as the cases name it: Mako's `agents_*` by bare name, however the
+ * A call as the cases name it: Mako's `agents_*` and `thread_move` by bare name, however the
  * harness prefixes its MCP tools; any of the harness's own spawn tools as
  * `native_spawn`; anything else as the harness calls it.
  */
@@ -36,4 +36,9 @@ export function shellCommand(args: ToolArgs): string {
     if (command.success) return command.data
   }
   return JSON.stringify(args)
+}
+
+/** Whether a bare name is one of the `mako` server's tools the stub answers and records. */
+export function makoTool(name: string): boolean {
+  return name.startsWith("agents_") || name === "thread_move"
 }

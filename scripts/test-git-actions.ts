@@ -274,7 +274,7 @@ try {
   const grant = grants.mint("binding", "c")
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
   const listed = (await agent.listTools()).tools
-  assert.deepEqual(listed.map((tool) => tool.name), ["pull_request_status", "pull_request_open", "pull_request_merge"])
+  assert.deepEqual(listed.map((tool) => tool.name), ["pull_request_status", "pull_request_open", "pull_request_merge", "pull_request_rerun"])
   for (const tool of listed) assert.match(tool.description ?? "", /^Call (when|before|only when)\b/, `${tool.name} opens with when to call it`)
   const describe = (name: string) => listed.find((tool) => tool.name === name)!
   assert.ok(describe("pull_request_open").description!.endsWith(PULL_REQUEST_WRITING), "the agent writes by the shared rules")
@@ -294,6 +294,12 @@ try {
   assert.equal(changed, 1, "windows read GitHub again after opening")
   rmSync(join(project, "draft.txt"))
   assert.equal(text(await agent.callTool({ name: "pull_request_open", arguments: {} })), "#101 was already open; nothing new to push: https://github.com/o/r/pull/101.")
+  // Re-run, as the sidebar's: the failed jobs of each failed run on the pushed commit.
+  const rerunsBefore = github().reruns.length
+  const rerun = text(await agent.callTool({ name: "pull_request_rerun", arguments: {} }))
+  assert.match(rerun, /^(Re-running the failed jobs of \d+ GitHub Actions runs? on the pushed commit\.|No GitHub Actions run on the pushed commit has failed, so nothing was re-run\.)/)
+  assert.equal(github().reruns.length - rerunsBefore, Number(/of (\d+) GitHub/.exec(rerun)?.[1] ?? 0), "the tool re-runs what the sidebar's Re-run does")
+  assert.match(describe("pull_request_rerun").description!, /^Call when the user asks to re-run this branch's failed checks: Re-run in the Git sidebar\./, "below full access, a re-run is the person's ask")
   for (const tool of listed) {
     assert.ok(z.object({ properties: z.object({ repository: z.object({ type: z.literal("string") }) }) }).safeParse(tool.inputSchema).success, `${tool.name} takes a repository`)
     assert.match(tool.description ?? "", /one pull request per repository/, `${tool.name} says how it picks a project's repository`)
@@ -311,6 +317,7 @@ try {
   assert.match(onFull.get("pull_request_merge")!, /^Call when the user asks to merge .* or when merging it is the next step of the work you were given: this Thread is on full access, so it merges without asking first\./)
   assert.match(onFull.get("pull_request_open")!, /^Call when this branch's work is ready for review, .*this Thread is on full access, so it opens one without asking first\./)
   assert.equal(onFull.get("pull_request_status"), describe("pull_request_status").description, "reading is the same on every access")
+  assert.match(onFull.get("pull_request_rerun")!, /^Call when a check failed for a reason outside the branch's change/, "on full access it re-runs a flaky check on its own")
 
   // A project folder of two repositories on one branch: a pull request each, the repository named by its folder.
   const multi = join(root, "multi")

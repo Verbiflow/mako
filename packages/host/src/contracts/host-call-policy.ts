@@ -28,6 +28,8 @@ const reads = [
   "mako:launch-prewarm",
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
+  /** Agents' asks to move their Thread, as they stand. */
+  "mako:thread-move-asks",
   "mako:handoff-settings",
   "mako:conversation-settings",
   "mako:git-status",
@@ -268,6 +270,10 @@ const replays = [
   "mako:thread-continue",
   /** A return is settled by its id: a repeat joins the return running, or answers how it went. */
   "mako:thread-return",
+  /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
+  "mako:threads-move",
+  /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
+  "mako:thread-move-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
   /** A move staged again stages the same, or what the device sent since: nothing of it is the machine's own yet. */
