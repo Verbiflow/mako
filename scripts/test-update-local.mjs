@@ -372,7 +372,7 @@ try {
   const sourcePrompts = []
   const readSource = (installed, answer) => prepareSource({ project: sourceCheckout, installed, say: (line) => sourceLines.push(line), ask: async (prompt) => (sourcePrompts.push(prompt), answer) })
   assert.equal(await readSource({ revision: firstRevision, dirty: false }, false), true)
-  assert.match(sourcePrompts.at(-1), new RegExp(`^Update to main ${secondRevision.slice(0, 8)} \\(1 new change\\)\\? \\[Y/n\\] $`))
+  assert.match(sourcePrompts.at(-1), new RegExp(`^Move main forward to origin/main ${secondRevision.slice(0, 8)} and build it\\? \\[Y/n\\] $`))
   assert.equal(runGit(sourceCheckout, "rev-parse", "HEAD"), firstRevision, "declined, the checkout stays")
   assert.match(sourceLines.at(-1), /^Building main as it is, at /)
   assert.equal(await readSource({ revision: firstRevision, dirty: false }, true), true)

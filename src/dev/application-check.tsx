@@ -111,8 +111,8 @@ export const SOURCE_SCENES = {
   ahead: { checkout: reading({ head: LOCAL, ahead: 2, behind: 0, plan: plan("checkout", "ahead"), target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Local experiment", "Local fix"] } }) },
   offline: { checkout: reading({ fetch: { kind: "failed", reason: "origin didn't answer in 15 seconds" }, behind: 4, upstream: { name: "origin/main", commit: "d9da1b16a8e2f3c4b5a6978877665544332211ff", branch: "main" }, target: "d9da1b16a8e2f3c4b5a6978877665544332211ff", changes: { ...CHANGES, count: 4, titles: CHANGES.titles.slice(4) } }) },
   installing: { checkout: LEVEL, local: { kind: "building", phase: "installing", revision: UPSTREAM, dependencies: { count: 1, names: ["@mako/web-client"] } } },
-  installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, uncommitted: { count: 1, files: [{ path: "package-lock.json", change: "edited" }] }, plan: plan("checkout", "ahead"), ahead: 1 }), local: { kind: "error", message: `The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
-  installFailed: { checkout: LEVEL, local: { kind: "error", message: `The update couldn't install dependencies: npm install didn't finish within 10 minutes, so Mako stopped it. Run npm install yourself to see the whole error, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
+  installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, uncommitted: { count: 1, files: [{ path: "package-lock.json", change: "edited" }] }, plan: plan("checkout", "ahead"), ahead: 1 }), local: failed({ step: "installing", blame: "checkout", what: "package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again.", next: "Mako installs into its own copy, never your checkout." }, BY_HAND) },
+  installFailed: { checkout: LEVEL, local: failed({ step: "installing", blame: "machine", what: "npm install didn't finish within 10 minutes, so Mako stopped it. Run npm install yourself to see the whole error, then build again.", next: "This is the network or the Mac, not the code. Build again when it's back." }, BY_HAND) },
   building: { checkout: LEVEL, local: { kind: "building", phase: "checking", from: "upstream", revision: UPSTREAM } },
   ready: { checkout: LEVEL, local: READY },
   busy: { checkout: LEVEL, local: { ...READY, performance: BUSY } },
@@ -125,8 +125,8 @@ export const SOURCE_SCENES = {
   installed: { checkout: reading({ head: UPSTREAM, behind: 0, plan: plan(null, "level", { upstream: true, checkout: true }), changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, installed: CHANGES },
 } satisfies Record<string, Partial<UpdateInstallation>>
 /** A failed build as the updater words it. */
-function failed(failure: BuildFailure): LocalBuildState {
-  return { kind: "error", message: `${failure.what} ${failure.next} Your installed app and agents were not changed.`, failure }
+function failed(failure: BuildFailure, command?: string): LocalBuildState {
+  return { kind: "error", message: `${failure.what} ${failure.next} Your installed app and agents were not changed.`, failure, ...command && { command } }
 }
 export function sourceScene(name: keyof typeof SOURCE_SCENES) {
   lifecycle = { ...lifecycle, work: [], operation: { kind: "idle" } }

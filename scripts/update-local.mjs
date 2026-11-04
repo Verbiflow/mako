@@ -220,7 +220,8 @@ export async function prepareSource({ project, installed, say, ask }) {
       return true
     }
     if (reading.plan.checkout.installed) {
-      say(`Your installed app already runs ${name} at ${shortRevision(reading.head)}, so there's nothing to build here.${reading.plan.upstream && !reading.plan.upstream.installed ? ` Settings › Updates builds ${reading.upstream?.name ?? "the upstream"} without touching this checkout.` : ""}`)
+      if (reading.plan.upstream && !reading.plan.upstream.installed)
+        say(`Your installed app already runs ${name} at ${shortRevision(reading.head)}, so there's nothing to build here. Settings › Updates builds ${reading.upstream?.name ?? "the upstream"} without touching this checkout.`)
       return false
     }
     // update:local builds in place, so it builds what the checkout holds; Settings builds the upstream clean.
