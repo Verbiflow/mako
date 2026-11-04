@@ -124,12 +124,11 @@ async function shoot() {
     await new Promise((done) => setTimeout(done, 400))
     await capture(`icons-${name}.png`)
   }
-  await window.loadURL(theme("dark"))
-  await until(`document.querySelectorAll('[role=tree] [role=treeitem]').length > 5`)
   const opened = Date.now()
-  await evaluate(`import('/src/state/viewer.ts').then(({viewer}) => viewer.open(${JSON.stringify(config.file)}))`)
+  await window.loadURL(`${theme("dark")}&file=${encodeURIComponent(config.file)}`)
+  await until(`document.querySelectorAll('[role=tree] [role=treeitem]').length > 5`)
   await until(highlighted)
-  console.log(`file highlighted ${Date.now() - opened} ms after it was opened`)
+  console.log(`file highlighted ${Date.now() - opened} ms after the page was asked for`)
   await capture(config.phone ? "phone-tree-dark.png" : "desk-dark.png")
 
   const nameTimes = await typed(config.name, `document.querySelector('[role=listbox] [role=option]')?.textContent.length > 0`)
@@ -141,9 +140,8 @@ async function shoot() {
   console.log(`keystroke to painted name results: ${nameTimes.join(", ")} ms`)
   console.log(`keystroke to painted results while typing "${config.text}": ${textTimes.join(", ")} ms`)
 
-  await window.loadURL(theme("light"))
+  await window.loadURL(`${theme("light")}&file=${encodeURIComponent(config.file)}`)
   await until(`document.querySelectorAll('[role=tree] [role=treeitem]').length > 5`)
-  await evaluate(`import('/src/state/viewer.ts').then(({viewer}) => viewer.open(${JSON.stringify(config.file)}))`)
   await until(highlighted)
   await capture(config.phone ? "phone-tree-light.png" : "desk-light.png")
   clearTimeout(watchdog)

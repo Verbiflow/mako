@@ -10,7 +10,7 @@ import { WorkspaceFocusContext } from "@/components/stage/workspace-focus-contex
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { FileIcon } from "@/components/ui/file-icon"
 import { bindTheme, prefsStore } from "@/state/prefs"
-import { activeDocument, useViewer } from "@/state/viewer"
+import { activeDocument, useViewer, viewer } from "@/state/viewer"
 import { FilesLayer } from "@/web-client/files-layer"
 import { openFiles } from "@/web-client/files-open"
 import type { FileFoldersOptions, FileGrepOptions } from "@mako/host/contracts/file-index"
@@ -94,6 +94,10 @@ function Phone() {
     </TooltipProvider>
   )
 }
+
+// `?file=`: the file the viewer opens, as a click in the tree would.
+const opening = params.get("file")
+if (opening && params.get("form") !== "phone") void viewer.open(opening)
 
 if (params.get("form") === "phone") {
   await import("@/web-client/style.css")
