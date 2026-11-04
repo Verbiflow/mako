@@ -17,12 +17,6 @@ export const opencodeLayer: LayerAdapter<OpenCodeLayerFragment> = {
     interception: { kind: "native", via: "plugin", how: "a plugin of Mako's named in `OPENCODE_CONFIG_CONTENT`, posting each call to Mako", inUse: true },
     subagents: { kind: "native", via: "declared", how: "agent definitions in `OPENCODE_CONFIG_CONTENT`", inUse: false },
     hooks: { kind: "native", via: "plugin", how: "a plugin in the inline config", inUse: true },
-    modelRoute: {
-      "native-login": { kind: "native", via: "login", how: "OpenCode's own logins, the ChatGPT and Copilot plans among them", inUse: true },
-      anthropic: { kind: "native", via: "provider-config", how: "a provider in the inline config", inUse: false },
-      "openai-chat": { kind: "native", via: "provider-config", how: "a provider in the inline config", inUse: false },
-      "openai-responses": { kind: "native", via: "provider-config", how: "a provider in the inline config", inUse: false },
-    },
     personSetup: "kept",
   },
   apply(layer, conversation) {

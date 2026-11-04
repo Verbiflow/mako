@@ -160,7 +160,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
                     <span
                       aria-hidden
                       className={cn(
-                        "size-3 items-center justify-center rounded-[3px] ring-1 ring-current",
+                        "size-3 items-center justify-center ring-1 ring-current",
                         isPicked ? "flex bg-foreground text-background ring-foreground" : choosing ? "flex text-faint" : "hidden text-faint group-hover:flex group-focus-visible:flex"
                       )}
                     >

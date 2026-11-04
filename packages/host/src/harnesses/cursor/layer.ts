@@ -17,12 +17,6 @@ export const cursorLayer: LayerAdapter<CursorLayerFragment> = {
     interception: { kind: "native", via: "shell-guard", how: "the SDK child's shell spawn guard; tools other than the shell fall back to words", inUse: true },
     subagents: { kind: "fallback", via: "words", loses: "Cursor curates its own `task` subagents; the instructions say when to start a Fin" },
     hooks: { kind: "native", via: "config-hooks", how: "the SDK's run events, and the project's `.cursor/hooks.json` through `settingSources`", inUse: true },
-    modelRoute: {
-      "native-login": { kind: "native", via: "login", how: "the person's Cursor account or key", inUse: true },
-      anthropic: { kind: "fallback", via: "other-harness", loses: "Cursor runs only its own catalog" },
-      "openai-chat": { kind: "fallback", via: "other-harness", loses: "Cursor runs only its own catalog" },
-      "openai-responses": { kind: "fallback", via: "other-harness", loses: "Cursor runs only its own catalog" },
-    },
     personSetup: "kept",
   },
   apply(layer, conversation) {

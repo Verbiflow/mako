@@ -278,9 +278,10 @@ export function linkedCarry(git: Git, checkout: string, recipe: Pick<Recipe, "ca
  * Each linked output in `checkout` made its own: a clone of the main
  * checkout's, swapped in whole, so an install can run there. Where the
  * volume can't clone, or the main checkout's copy is gone, the links go
- * and the install makes it in full. Returns the entries.
+ * and the install makes it in full. Returns each entry, and whether it was
+ * cloned or only unlinked, which leaves it for the install to make.
  */
-export async function ownPackages(git: Git, checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
+export async function ownPackages(git: Git, checkout: string, steps: readonly PrepareStep[]): Promise<Array<{ entry: string; cloned: boolean }>> {
   const entries = await linkedEntries(git, checkout, steps)
   if (!entries.length) return []
   const staging = join(dirname(checkout), CARRYING)
@@ -292,14 +293,17 @@ export async function ownPackages(git: Git, checkout: string, steps: readonly Pr
   }))
   const present = staged.filter(({ from }) => existsSync(from))
   const cloned = await cloneTrees(present.map(({ from, clone }) => [from, clone]), false)
+  const owned: Array<{ entry: string; cloned: boolean }> = []
   for (const item of staged) {
     await rename(item.to, item.links)
     const index = present.indexOf(item)
-    if (index >= 0 && cloned[index]) await rename(item.clone, item.to)
+    const made = index >= 0 && cloned[index] === true
+    if (made) await rename(item.clone, item.to)
     else await rm(item.clone, { recursive: true, force: true })
     await rm(item.links, { recursive: true, force: true })
+    owned.push({ entry: item.entry, cloned: made })
   }
-  return entries
+  return owned
 }
 
 /**

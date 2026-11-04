@@ -14,6 +14,7 @@ import { hostReplacementPending } from "../application/index.js"
 import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { conversationCallId } from "../contracts/conversation-calls.js"
+import { ownerFileRead } from "../workspaces/index.js"
 
 const snapshotIdentity = z.object({
   session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional(), status: z.string(), connection: z.string().optional() }),
@@ -170,6 +171,7 @@ export class SharedConversations {
     // Preserve the original request id. The owner's journal settles a replay;
     // this router never retries a mutation after an ambiguous transport error.
     const value = await invokeRuntimeEncoded(route.socket, this.client, channel, args, 1, { history: hostHistoryPaging() })
+    if (channel === "mako:read-live-file") return { handled: true, value: ownerFileRead({ kind: "socket", socket: route.socket }, value) }
     if (channel === "mako:live-fork") {
       const fork = snapshotIdentity.parse(decodeRuntimeValue(value))
       const input = z.object({ id: z.string(), provider: z.string(), move: z.boolean().optional() }).parse(args[1])

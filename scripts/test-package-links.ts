@@ -11,10 +11,11 @@ import { environmentTools } from "@mako/host/workspaces/environment-tools"
 import { portListening, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { perThreadValues, publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "@mako/host/workspaces/thread-recipe"
-import { childHistory } from "@mako/host/workspaces/watch-backend"
+import { childHistory, type FileHistory } from "@mako/host/workspaces/watch-backend"
 import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, missingEntries, ownPackages } from "@mako/host/workspaces/worktree-carry"
 import { parse as parseYaml } from "yaml"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+import { reapApps } from "./lib/reap-apps.ts"
 
 const gitRunner = new Git()
 
@@ -58,6 +59,7 @@ const worktree = (name: string, ui: string) => {
 }
 
 const install = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: true }
+const reap = reapApps(new ThreadProcesses({ root: join(root, "records"), listening: portListening }))
 try {
   // Every install step starts in the checkout's root, whatever the one before it changed into.
   const steps = join(root, "steps")
@@ -125,9 +127,17 @@ try {
   assert.deepEqual((await carryOutputs(gitRunner, main, built, [build])).carried.map((entry) => entry.entries), [["dist"]])
   assert.equal(readlinkSync(join(built, "dist", "index.html")), join(main, "dist", "index.html"))
   assert.equal(readlinkSync(join(built, "dist", "assets")), join(main, "dist", "assets"))
-  assert.deepEqual(await ownPackages(gitRunner, built, [build]), ["dist"], "app_own_packages makes any linked output the checkout's own")
-  assert.ok(lstatSync(join(built, "dist", "index.html")).isFile())
+  const [owned] = await ownPackages(gitRunner, built, [build])
+  assert.equal(owned?.entry, "dist", "app_own_packages makes any linked output the checkout's own")
+  // A volume that clones (APFS) gets a copy; one that can't (ext4, as CI's) loses the links, for the install to make it in full.
+  if (owned.cloned) assert.ok(lstatSync(join(built, "dist", "index.html")).isFile())
+  else assert.equal(existsSync(join(built, "dist")), false, "never a half-linked folder")
+  // With nothing to copy (the main checkout's output gone, or a volume that can't clone), the links go and it says so.
+  const gone = worktree("gone", "gone ui")
+  await carryOutputs(gitRunner, main, gone, [build])
   rmSync(join(main, "dist"), { recursive: true })
+  assert.deepEqual(await ownPackages(gitRunner, gone, [build]), [{ entry: "dist", cloned: false }])
+  assert.equal(existsSync(join(gone, "dist")), false)
 
   // Linking: each package a link to the main checkout's, the rest this checkout's own.
   const fix = worktree("fix", "fix ui")
@@ -157,7 +167,8 @@ try {
   const ran = join(root, "installs.log")
   const recipes = join(root, "recipes")
   const recipe = RecipeSchema.parse({
-    prepare: [{ ...install, command: `test ! -e node_modules/${LINKED_MARK} && echo "$PWD" >> ${JSON.stringify(ran)}` }],
+    // As an install would: never over the links, and making what's missing.
+    prepare: [{ ...install, command: `test ! -e node_modules/${LINKED_MARK} && echo "$PWD" >> ${JSON.stringify(ran)} && mkdir -p node_modules/left-pad && { test -e node_modules/left-pad/index.js || echo "module.exports = 'left-pad'" > node_modules/left-pad/index.js; }` }],
     checks: { quick: "node -e \"require('left-pad')\"" },
   })
   const environment = (dataDir: string): ThreadEnvironment => ({ app: AppKeySchema.parse("folder-00000000000000aa"), host: "fix.thread.localhost", port: 20_020, ports: 10, dataDir })
@@ -173,12 +184,18 @@ try {
   assert.match(await inFix.status("c1"), /prepare:\n {2}.*: up to date\n/, "a linked checkout whose lockfile matches the main checkout's has nothing to install")
 
   // Asked first, the checkout gets its own copy and the main checkout's stays as it was.
-  assert.match(await inFix.ownPackages("c1"), /node_modules is now this checkout's own/)
+  const answer = await inFix.ownPackages("c1")
   assert.equal(existsSync(join(modules, LINKED_MARK)), false)
-  assert.ok(lstatSync(join(modules, "left-pad")).isDirectory() && !lstatSync(join(modules, "left-pad")).isSymbolicLink())
-  writeFileSync(join(modules, "left-pad", "index.js"), "module.exports = 'changed here'\n")
-  assert.equal(readFileSync(join(main, "node_modules", "left-pad", "index.js"), "utf8"), "module.exports = 'left-pad'\n", "a change in the copy stays out of the main checkout")
-  assert.equal(readFileSync(join(modules, "@scope", "ui", "index.js"), "utf8"), "module.exports = 'fix ui'\n")
+  if (owned.cloned) {
+    assert.match(answer, /node_modules is now this checkout's own/)
+    assert.ok(lstatSync(join(modules, "left-pad")).isDirectory() && !lstatSync(join(modules, "left-pad")).isSymbolicLink())
+    writeFileSync(join(modules, "left-pad", "index.js"), "module.exports = 'changed here'\n")
+    assert.equal(readFileSync(join(main, "node_modules", "left-pad", "index.js"), "utf8"), "module.exports = 'left-pad'\n", "a change in the copy stays out of the main checkout")
+    assert.equal(readFileSync(join(modules, "@scope", "ui", "index.js"), "utf8"), "module.exports = 'fix ui'\n")
+  } else {
+    assert.match(answer, /^node_modules no longer links to the main checkout's, and is gone here: this volume can't copy them cheaply, so run the install \(.*\) to make it in full before using it\.$/, "never told it has a copy it doesn't")
+    assert.equal(existsSync(modules), false)
+  }
   assert.match(await inFix.ownPackages("c1"), /its own already/)
   assert.match(await inFix.status("c1"), /\npackages: This checkout's own/)
 
@@ -226,8 +243,18 @@ try {
     assert.match(dirty, /Set "link": false/)
     assert.match(parseYaml(await inProve.status("c3")).writesThroughLinks, /^Since this app came up, node_modules\/left-pad\/index\.js changed in the main checkout/, "app_status says so while the app runs")
     await inProve.stop("c3")
+    // A history that lost events there, or a fseventsd restart since the app came up, can't prove nothing wrote: said, never passed.
+    const losing: FileHistory = { mark: () => history.mark(), since: async (mark, roots, options) => ({ ...(await history.since(mark, roots, options)), lost: [...roots] }) }
+    const inLost = environmentTools({ git: gitRunner, cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history: losing })
+    rmSync(join(provingEnvironment.dataDir, "up"), { force: true })
+    await inLost.save("c4", RecipeSchema.parse({ ...server(false), verify: { run: "node -e \"require('@scope/ui')\"" } }), "Only reads its packages, with the history incomplete")
+    const unproven = await inLost.publish("c4")
+    assert.match(unproven, /macOS's file-change history lost events in the main checkout \(.*\/shop\), so Mako can't tell whether anything wrote through the links/, unproven)
+    assert.match(parseYaml(await inLost.status("c4")).writesThroughLinks, /lost events in the main checkout .* whether anything wrote through the links isn't known/, "app_status says so too")
+    await inLost.stop("c4")
   }
-  console.log("package links: linked in under 2 seconds with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were; any outputs link entry by entry; a proof that writes through the links fails, one that only runs them passes")
+  console.log("package links: linked in under 2 seconds with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were; any outputs link entry by entry; a proof that writes through the links fails, one that only runs them passes, and one whose history lost events says links weren't checked")
 } finally {
+  await reap()
   rmSync(root, { recursive: true, force: true })
 }

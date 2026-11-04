@@ -29,12 +29,6 @@ export const codexLayer: LayerAdapter<CodexLayerFragment> = {
     interception: { kind: "native", via: "pre-tool-hook", how: "`PreToolUse` command hooks in the thread's config, trusted in the same layer, posting each shell or browser call to Mako (`codexCallsConfig`)", inUse: true },
     subagents: { kind: "fallback", via: "words", loses: "Codex declares no agents Mako can define; the instructions say when to start a Fin" },
     hooks: { kind: "native", via: "config-hooks", how: "app-server events, and hooks in the thread's config", inUse: true },
-    modelRoute: {
-      "native-login": { kind: "native", via: "login", how: "the person's own ChatGPT or API login, one of their accounts", inUse: true },
-      anthropic: { kind: "fallback", via: "other-harness", loses: "Codex speaks only OpenAI's APIs" },
-      "openai-chat": { kind: "native", via: "provider-config", how: "`config.model_providers` with `base_url`, `env_key` and `wire_api`, and `modelProvider` on the thread", inUse: false },
-      "openai-responses": { kind: "native", via: "provider-config", how: "`config.model_providers` with `wire_api = \"responses\"`, and `modelProvider` on the thread", inUse: false },
-    },
     personSetup: "kept",
   },
   apply(layer, conversation) {

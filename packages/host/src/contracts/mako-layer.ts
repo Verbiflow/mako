@@ -8,7 +8,8 @@ import type { RoutedThread } from "./native-routing.js"
  * that harness's own launch options and declares, capability by capability,
  * how it does so (`LayerCapabilities`). A new harness gets the whole layer
  * by writing one adapter, and the conformance suite grades every adapter on
- * the same cases.
+ * the same cases. Model connections are the driver's own declaration
+ * (`ProviderLiveDriver.modelRoutes`, `contracts/model-routes.ts`).
  *
  * The registries below are the only lists to extend: a new Mako tool
  * family, native capability or instruction block is one entry, and every
@@ -77,22 +78,11 @@ export interface Replacement {
   strength: "remove" | "intercept" | "guide"
 }
 
-/** The API a model endpoint speaks: adapters accept a route by its wire, never by provider. */
-export const MODEL_WIRES = ["native-login", "anthropic", "openai-chat", "openai-responses"] as const
-export type ModelWire = (typeof MODEL_WIRES)[number]
-
-/** Which connection serves the model. Account fallback stays `ask` until the person decides otherwise. */
-export interface ModelRoute {
-  wire: ModelWire
-  fallback: "ask"
-}
-
 export interface MakoLayer {
   role: RoutedThread["role"]
   instructions: readonly InstructionBlock[]
   servers: readonly LayerServer[]
   replaces: readonly Replacement[]
-  model: ModelRoute
   /** The person's own harness setup (settings, instruction files, skills, hooks, MCP) loads as it would without Mako. */
   keepsPersonSetup: true
 }
@@ -119,8 +109,6 @@ export type LayerFallback =
   | "words"
   /** A tool that can't be served in-process is served by Mako's HTTP MCP. */
   | "http-mcp"
-  /** A model route this harness can't take is offered on the harnesses whose adapter can. */
-  | "other-harness"
 
 /**
  * How one harness does one capability: natively (`via` names the option, in
@@ -143,7 +131,6 @@ export interface LayerCapabilities {
   /** Declaring Mako's subagents, so asking for one lands on Mako's primitive without a refusal. */
   subagents: LayerSupport<"declared">
   hooks: LayerSupport<"sdk-hooks" | "config-hooks" | "plugin" | "client-hooks">
-  modelRoute: { readonly [Wire in ModelWire]: LayerSupport<"login" | "base-url-env" | "provider-config" | "provider-param"> }
   /** Must stay `kept`: Mako's layer never drops the person's own harness setup. */
   personSetup: "kept"
 }
@@ -166,9 +153,4 @@ export function replacementPath(capabilities: LayerCapabilities, strength: Repla
   if (strength === "remove" && capabilities.removal.kind === "native") return "removal"
   if (capabilities.interception.kind !== "native") return "words"
   return strength === "guide" ? "guide" : "intercept"
-}
-
-/** The harnesses whose adapters take a route on `wire`: where a connection's models are offered. */
-export function routeHarnesses(adapters: readonly Pick<LayerAdapter<unknown>, "harness" | "capabilities">[], wire: ModelWire): string[] {
-  return adapters.filter((adapter) => adapter.capabilities.modelRoute[wire].kind === "native").map((adapter) => adapter.harness)
 }

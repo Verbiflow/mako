@@ -337,8 +337,16 @@ export type RecipeRead =
 
 /** The Git checkout a folder is in, or the folder itself outside Git; resolved, so one folder has one name. */
 export async function checkoutOf(git: Git, cwd: string): Promise<string> {
-  const top = (await git.output(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")) || cwd
+  const top = (await git.openRepository(cwd).catch(() => null))?.root ?? cwd
   return realpath(top).catch(() => top)
+}
+
+/**
+ * The repository's common folder (the main checkout's `.git`), absolute; empty outside Git. A window asks for an app's
+ * every few seconds, so it's read from the repository `Git` keeps open rather than by a Git process each time.
+ */
+async function commonDir(git: Git, checkout: string): Promise<string> {
+  return (await git.openRepository(checkout).catch(() => null))?.commonDir ?? ""
 }
 
 const ProjectCheckoutSchema = z.object({ project: z.string().min(1) })
@@ -356,7 +364,7 @@ export async function mirroredProject(checkout: string): Promise<string | undefi
 
 /** The project a checkout belongs to: its main checkout, which every worktree of it shares. */
 export async function projectRoot(git: Git, checkout: string): Promise<string> {
-  const common = await git.output(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
+  const common = await commonDir(git, checkout)
   if (common) return realpath(dirname(common)).catch(() => dirname(common))
   return (await mirroredProject(checkout)) ?? checkout
 }
@@ -367,7 +375,7 @@ export async function projectRoot(git: Git, checkout: string): Promise<string> {
  * Named so a person can find it.
  */
 export async function recipePath(git: Git, root: string, checkout: string): Promise<string> {
-  const common = await git.output(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
+  const common = await commonDir(git, checkout)
   const folder = common || (await mirroredProject(checkout)) || checkout
   const identity = await realpath(folder).catch(() => folder)
   const project = common ? basename(dirname(identity)) : basename(identity)

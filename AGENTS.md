@@ -122,6 +122,20 @@ conversations?.live`) rather than a domain importing another's files.
   `setInterval`: each job is named, runs on an unreferenced timer that varies
   by a tenth either way, skips a run while the last is still going, logs a
   failure as `jobs <name> failed`, and stops with the host.
+- **A held loop says what held it.** `loop event loop held` names every piece
+  of work open at a hold, most of it waiting on a process or a reply; a hold
+  of a second or more starts a 10-second profile of the host's own thread
+  (`HeldLoopProfiler`, at most one per 10 minutes), logged as `held loop
+  profiled` with its longest slices by the host's own functions. On a day of
+  many Fins the log blamed worktree summaries and live reads while Git
+  spawns held the thread. `npm run bench:host-load` runs a real host on a
+  world of that day's size (52 Threads' worktrees, 95 apps, Fins editing,
+  building and writing transcripts, three windows polling). A shared
+  runner's speed varies by several times between runs, so its limits are
+  calibrated in the same run by a yardstick process timed beside the host;
+  it fails only on a clear regression (a loop held for seconds, or several
+  times the yardstick's waits), never on a fixed number of milliseconds, and
+  writes every number to the job's summary. CI runs it as `host-load`.
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the
@@ -217,7 +231,12 @@ handler, and reaches the agent three ways from the one projection
 <verb>` and `mako mcp`, the caller named by `MAKO_SESSION_ID`. A start
 commits the Fin's Thread, its edge, its Session and its first request (the
 brief, the Apex's words, not the person's) together
-(`LiveStartOptions.parent`), at an access tier no higher than its Apex's,
+(`LiveStartOptions.parent`), at an access tier no higher than its Apex's.
+A harness with no mode at or below the tier asked (Cursor's one mode is
+full) sends a Fin that named no harness, model or rule to the person's next
+harness that offers it, and otherwise runs it on the harness's nearest mode
+within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
+which; only a mode wider than the Apex's is refused. It starts
 here only (`place` other than `here` is refused); past a tree's running
 budget it queues with why, past its started budget it is refused with the
 count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
@@ -243,7 +262,25 @@ written again after its end reads as working while that Session is still
 being written, and a digest drops the end the host inferred for it
 (`AgentWakes.current`). A stop closes the edge with
 its reason (`closedReason`) before it cancels the turn. The cut turn then reports
-nothing and wakes no one, and the Fin reads as stopped in those words. A Fin
+nothing and wakes no one, and the Fin reads as stopped in those words. A
+stop is a pause: a message from its Apex (`agents_send`, the person's
+`direct`) or the person writing in its own Thread opens the delegation again
+(`ThreadStore.reopenEdge`, `ThreadParent.resumed`) in the same Session, and
+a stopped or failed Fin reads beneath that message when and why it stopped
+and what moved since (`finResumedText`): its checkout (`checkoutSince`) and
+its branch against the one it goes into, with commits landed there touching
+its files (`branchSince`). Its turns report and wake the Apex again, and a
+repeat of the message resumes it once. Archiving its Thread is the one
+end: one at work stops in those words, once (`Agents.archived`), and
+nothing resumes it until the person restores it (`test:fin-resume`). A
+Fin's harness asking (`askApex`) wakes its Apex, told whether it may
+answer: an approval under an Apex below full access is the person's at once,
+and the Apex hears so in the digest's "waits on the person" (`Report.told`).
+One the Apex may answer that it leaves for `APEX_ANSWER_MS` (a minute) goes
+to the person too (`escalate`), as an Apex mid-turn on a harness that hears
+a digest only at its turn's end would leave it; the Apex hears they were
+asked, and the first answer is the one the Fin hears. A digest drops an ask
+its Fin no longer waits on (`test:orch-answer`). A Fin
 that ends a turn without `agents_report` while its own Fins work, or while a
 `worktree_move` it asked for is pending (`movePending`), hasn't finished.
 Its turn's end writes no report, and it reads as working with "Waiting for
@@ -322,6 +359,18 @@ the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
 there. `npm run test:orch-comms` covers all three.
+An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
+(`AgentsApexes`): every tree's top Apex but its own whose conversation is
+open here, each with its title, harness, whether it works and its last step,
+folder and branch, its Fins' `rollup`, and a digest of its open Fins' last
+reports and its own last reply's first paragraph. Reading wakes no one.
+`agents_send` `to: apex:<title or Thread>` messages one: Mako's words
+(`fromApex`, `apexNote`), never the person's, after its turn unless steered;
+the transcript draws it as a card from that Apex. The turn that answers it
+sends its reply back once, as the sender's wake (`Notice.reply`), and that
+wake sends nothing on. At most three go from one Apex to another an hour
+(`rate-limited`). The rule for when to message is in
+`ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
 
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where
@@ -1460,6 +1509,22 @@ the conversation. `npm run test:send-race` sends from the Mac, a phone and
 another Mac at once, through the protocol's gateway, with lost replies, cut
 links, messages taken twice from the account and restarts, and holds each to
 landing once, one turn at a time, in arrival order, with nothing left queued.
+The outbox never turns the person away for a host that can't take a message
+yet (`sendTo`, `steerTo`, `delivery-policy.ts`): a message is drawn and kept at
+once, and one conversation's messages reach the host one at a time, in the
+order sent. A host that's away (the composer sends to a live conversation
+while disconnected), slow (an answer past `DELIVERY_PATIENCE_MS`, or the
+bridge's `HostCallTimeoutError`) or busy (a rewind, a provider switch, a turn
+still ending, a move in transit; `waitsFor`) leaves it waiting, with that
+reason on its row in the queue ("Waiting · …", with Send now and Remove), and
+later messages wait behind it; it goes by itself under its one ID. A steer
+shows as steering until the turn takes it; a host busy with the previous steer
+is asked again for `STEER_BUSY_MS` before the words go next, and a steer whose
+outcome is unknown no longer holds the next one (`LiveActions.submit`).
+`npm run test:durable-outbox` holds it to that against a scripted host: away,
+busy, 5 s stalls, a lost answer, duplicate tries, steers mid-turn and a reload
+mid-delivery; `test:steer-landing` checks a message queues and a steer lands
+mid-turn on each of the six harnesses by its own driver's landing.
 A refused message comes back
 into the field only if the field is empty, else it's kept under the composer
 with Retry (`outbox.ts`). Under each sent message the phone says where it is,
@@ -2001,6 +2066,8 @@ The agent's Git tools work in a project folder of several repositories, whose Th
 
 `git.openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds. Previews are cached per repository within one 64 MB budget per `Git`, least recently used first; worktree previews are cached only while watched. Commit drafting reuses piece summaries only from the `DraftSummaries` a caller passes; the host keeps one in `GitDrafting`.
 
+Every spawn holds the host's thread for a moment, so what windows poll reads what a repository shares once, not once per worktree. `summaries` (every window's rail, every half minute and on focus) runs one pass at a time, shared by everyone who asked while the last ran; each pass reads a repository's branch tips with one `for-each-ref`, its start point once, and each worktree's `status` at most every 15 s unless its index changed (a spawn on Linux forks the whole host and held its thread for 300-450 ms), and keeps landing, ahead and behind by the commits they were read at. Before, each worktree spawned about seventeen processes outside the read slots: 1,800 a pass at 104 worktrees.
+
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
 
 Drafting lives in the package too: `draftCommit`, `draftPullRequest` and `commitDraft` take a `DraftingModel`. `packages/host/src/git/drafting.ts` supplies that model from `UtilityWork.resolve("commit")`, which picks one of the person's API connections, never a harness. A chunked draft makes up to 80 model calls, and a harness would start its CLI process for each one and spend the person's subscription, so harnesses don't draft; a saved `agent:` choice from older builds reads as Automatic. `draftPullRequest` reads what the branch's commits change since `merge-base` with `origin/<base>`, never uncommitted files; the app doesn't call it. A pull request is written by the Thread's harness with its `pull_request_open` tool, by `PULL_REQUEST_WRITING`, in the session on screen or a new session of the Thread (`handGitAction` in `src/state/git-actions.ts`); the Changes form is the hand-written override. The `@` menu and the pull request's row attach it as a snapshot (`pull-request-context.ts`), as Git conflicts are. The commit prompt is the fixed `COMMIT_RULES` plus the person's style, or `COMMIT_STYLE` when they haven't written one; Settings shows `COMMIT_STYLE` as the default, so what is shown is what is sent. Structured output goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. A failed draft is logged under `git-drafting`, never with the model's text. `npm run test:git` checks the package against real temporary repositories and a fake model, including 120 random edits compared against full status reads.
@@ -2043,6 +2110,46 @@ On macOS with a local certificate, every new build is a new keychain partition
 (`cdhash:`, since only Apple-issued certificates carry a Team ID), so the first
 keychain access after an install asks once for Always Allow; that is macOS,
 not a lost connection.
+
+Settings › Models › Connections is every way the person pays for models, and
+Add a connection lists them in four groups (`MODEL_CONNECTION_PROVIDERS` in
+`contracts/model-connections.ts`). A subscription is a harness's own sign-in:
+its row starts that harness's account sign-in (`accounts.signIn`), or, for
+GitHub Copilot and ChatGPT through OpenCode, names `opencode auth login` and
+reads OpenCode's login back. Mako never asks for, reads or keeps a
+subscription's token; Claude connects only through the `claude` CLI's own
+sign-in. A gateway, a local server or a custom endpoint is a
+`ModelConnection` (`harnesses/model-connections.ts`, `ProviderHost.modelConnections`):
+what it is in `<user root>/model-connections.json`, with no secret in it, and
+its key the saved key `connection/<id>` its `credential` names. Check access
+lists `/models` before anything is saved; a gateway's key goes only to its
+own host, a local server is only ever on loopback.
+
+What a launch receives of them is the model-route part of the layering
+contract (`contracts/model-routes.ts`), the same for every harness: a
+`ModelRoute` per model, with its connection, kind, wire (`anthropic`,
+`openai-chat`, `openai-responses`), base URL, model and credential
+reference, never the key. Each driver declares `modelRoutes` beside
+`nativeRouting`: `accepts` (the wires and kinds it takes, and an adapter
+that turns routes into its own configuration), `planned` (its way in, which
+no adapter uses yet) or `absent` with why. `HarnessAccounts.launch` applies
+them last for whichever harness launches (`routeLaunches`, wired in
+`createProviderHost`), so every start and discovery gets them and nothing
+outside an adapter names a harness; Settings lists a connection under every
+harness whose declaration takes its wire and kind. OpenCode's adapter
+(`opencode/connections.ts`) is the one built: each connection is the provider
+`mako-<id>` in `OPENCODE_CONFIG_CONTENT`, an `@ai-sdk/openai-compatible`
+endpoint with the models kept, its key in `MAKO_CONNECTION_KEY_<ID>`, which
+the provider names in `env`, never in the config's text; OpenCode's own
+discovery lists the models. Claude (`ANTHROPIC_BASE_URL` and a key per
+launch) and Codex (`config.model_providers` and `modelProvider`) are
+`planned`; Cursor, Grok and Devin are `absent`. A key that won't open (the
+keychain locked) leaves its connection out of the launch and says so on its
+row. `npm run test:model-connections` covers the store and the providers;
+`npm run test:model-connections-live` adds connections, finds their models in
+the installed OpenCode's catalog and runs a turn on one against a stand-in
+endpoint in a scratch home; `npm run test:model-connections-ui` drives the
+list and the dialog.
 Changing a custom endpoint requires re-entering its key. Non-sensitive text diffs,
 including lockfiles and generated files, are captured completely. Working-tree
 captures use private Git objects and a private index without modifying the real
@@ -2122,8 +2229,25 @@ deliberate action and never rides along with a commit.
   a pane's sections by tone and spacing, never a hairline. The composer's
   input is one raised box inset from its pane. Hairlines stay for content
   (a diff's file headers, a table) and controls (an input's or a button's
-  outline). Structural panes keep square edges; rounded `.card` surfaces are
-  reserved for content within a pane.
+  outline). **Every corner is square**, as the fin is: the radius tokens
+  (`--radius-*`) are all 0, so panes, rows, tabs, cards, fields, buttons,
+  menus, dialogs, toasts, the composer, the prompt bubble and avatars meet
+  at square corners. Only what means a dot (status dots, the unread sphere,
+  a switch's knob, a sheet's grab handle) is round, through `rounded-full`;
+  a device frame drawn to its hardware keeps the hardware's corners.
+- **One count and one vocabulary for an Apex's Fins.** Every surface (the
+  composer's chip, the crew card, the rail's pips, the Agents panel, the stop
+  card, the phone's row) counts from the Thread's one roster
+  (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
+  `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
+  (`packages/host/src/contracts/children.ts`). They are Fins, never agents,
+  and they stand as needs you, working, queued, idle, failed or done; an idle
+  Fin is open for its next message, so it is neither working nor done and is
+  never background work. A Fin's step reads as a phrase (`readableStep`:
+  "Running gh pr checks 340", "Reading desk.tsx"), never the raw command or a
+  home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
+  without this; `npm run test:fin-counts-ui` draws every surface from one
+  roster and requires the same numbers, and `test:fin-words` holds the words.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, an agent's tile (its harness's
   glyph on the raised plane) on its reply's byline, and the sender's tile on
@@ -2144,25 +2268,29 @@ deliberate action and never rides along with a commit.
   text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
   sea, hue appears only where it carries meaning: diff add/remove, error,
   warning.
-- **Every Thread and Fin wears one live mark** (`LiveMark`,
-  `src/components/ui/live-mark.tsx`; states in `src/lib/live-mark-state.ts`):
-  its agent's glyph, and round it a ring that carries the state. A comet
-  runs round it while it works (in sea on the open Thread, in the text
-  colour elsewhere), the same comet slower and quieter while its turn is done
-  and background work runs, a caution ring breathes while it needs the
-  person, a dotted ring drifts while a Fin asks its Apex, a dashed ring holds
-  while it's queued, and a dot is cut out of it for a failure (negative, low
-  right) or an answer to read (the unread sphere, high right). The rail, the
-  tabs, the Agents panel, the crew card and the phone draw this one mark,
-  and a row's one trailing slot says "Needs you", "Failed" or its age. Its
-  motion is `transform` and `opacity` on HTML boxes only (an SVG element's
-  own transform runs on the main thread: a drifting dotted ring once cost
-  588 ms in 3 s for 22 marks), every moving layer runs on the shared clock
-  and rests off screen (`observePhaseLockedAnimation`), and no React state
-  moves it. `npm run bench:live-marks` holds 500 moving marks and the desk
-  at 500 more Apexes to no React commit, no layout and no style pass per
-  frame, the marks scrolled away paused, and every running mark in phase;
-  `scripts/live-marks.html` draws every state.
+- **Every Thread and Fin wears Mako's fin, doing what it does** (`LiveMark`,
+  `src/components/ui/live-mark.tsx`; states, kinds and motions in
+  `src/lib/live-mark-state.ts`). A Thread is the two-tone fin of the app icon,
+  a Fin the plain fin, and the harness a small square badge in the corner:
+  the harness is secondary, the brand's fin is who. The fin itself moves, one
+  calm gesture a state, as Grok Bot's character does rather than a spinner
+  beside an icon: thinking it bobs, writing it glides with a short wake,
+  running a tool it braces in two steps (`motionOf` reads which from the
+  status line or step), its turn done with work still running it bobs at
+  half speed, needing you it turns caution over a breathing waterline,
+  asking its Apex it drifts, failed it lists over in negative; queued, idle
+  and open elsewhere are still and dimmed, and an answer to read wears the
+  unread sphere. The open Thread's face takes the sea, the pane's one accent.
+  The rail, the tabs, the Agents panel, the crew card, the Inbox, the folder
+  chip, the asks and the phone draw this one mark, and avatars draw it still.
+  Its motion is `transform` and `opacity` on HTML boxes only (an SVG
+  element's own transform runs on the main thread), every moving layer runs
+  on the shared clock and rests off screen (`observePhaseLockedAnimation`,
+  whose play-state rule must stay as specific as the state rules' shorthand
+  or they reset it), and no React state moves it. `npm run bench:live-marks`
+  holds 500 moving marks, and the desk at 500 more Apexes watched in one load
+  with its marks stopped and then moving, to no React commit, no layout and
+  no style pass per frame; `scripts/live-marks.html` draws every state.
 - **Three UI type sizes only** — `text-label` (12), `text-ui` (14),
   `text-title` (16) — plus prose (16) and code (12). Weights come off
   Geist's variable axis as 440/530/640 through the standard `font-normal`/
@@ -4172,11 +4300,16 @@ room for regressions to add up unnoticed on a quiet machine until a slower
 one goes over and compares the row with that old commit. Devin's saved open
 crossed at a person's update that way, +69% over its baseline's commit, from
 two changes neither over budget: a subagent analysis on every read, and the
-media `_meta` parses below. `npm run update:local` runs no `test:performance`; Settings >
-Updates does, in a copy without `.git` (`updates/checkout.noindex`, named so
-Spotlight skips its 50,000 dependency files), alone after `test:application`
-and `test:renderer-assets` so it doesn't time them, and names its source in
-`MAKO_BUILD_SOURCE` for the export. It names a file in
+media `_meta` parses below. `npm run update:local` runs no performance check;
+Settings › Updates runs `test:update-performance` (`test-update-performance.ts`):
+only `perf:decoders` and the budgets, never the harness's unit tests or the
+rest of `test:performance`, alone after `test:application` and
+`test:renderer-assets` so it doesn't time them, at a gross 1.5× line
+(`MAKO_PERFORMANCE_ALLOWED`, `allowedRegression`) rather than CI's 25%, and
+skipping a comparison none of whose inputs (its imports followed into the
+packages' sources, its fixtures and baselines, the lockfile) changed since the
+installed build (`MAKO_UPDATE_CHANGED`). It names its source in
+`MAKO_BUILD_SOURCE` for the export, and a file in
 `MAKO_PERFORMANCE_VERDICT` (`contracts/performance-verdict.ts`) that each
 comparing script appends its rows to: a slower row fails the update by name,
 and unsure rows leave it built, verified and `ready` with `performance` set,
@@ -4238,9 +4371,23 @@ do not relax dependency-link isolation to make copying pass.
 `npm run test:checkout-copy` exercises the real Electron filesystem with an ASAR
 fixture; pass the checkout path to verify real dependencies, or `-- --app <app>`
 to check signed-bundle staging. `npm run test:settings-build -- <checkout>` runs
-the complete Settings build service against a private profile without installing.
-They preserve npm security configuration, run build,
-lint and regression checks, and verify the existing signing identity. Public
+the complete Settings build service against a private profile without installing
+(`-- --from upstream|checkout` picks the source; it prints each step's time).
+They preserve npm security configuration, run the update's checks, and verify
+the existing signing identity. The checks are `UPDATE_CHECKS`
+(`application/local-update-checks.ts`): `build` alone, then `test:application`
+and `test:renderer-assets` together, then `test:update-performance` alone,
+only what protects the install; lint, typecheck and the whole performance
+suite gate every change in CI instead. They run through `runUpdateChecks`, in
+the environment `updateEnvironment` builds from the few variables
+`updaterInherited` lets through, and CI's `update-checks` job (macOS,
+`scripts/ci-update-checks.ts`) runs that same function in that same
+environment: an update once failed three times on a test that broke only
+under the updater's verdict variable, which nothing at review set. Add a
+variable the updater sets there, never in a check alone. A failed build says
+whose it is (`local-update-failures.ts`: the code, the Mac, or the checkout),
+what to do next, and the failing command's last lines apart; each step's time
+is logged (`build ready`, `build failed`) and carried on the ready build. Public
 release updates remain separate from local builds. `package-mac.mjs` stamps the
 actual packaged inputs with a build ID, timestamp and source revision, and
 the uncommitted files the build took (`makoBuild.uncommitted`, below).
@@ -4259,28 +4406,41 @@ Packaged tests must check full host shutdown as well as client Quit/reopen;
 `BrowserWindow.close()` is asynchronous, so final client exit belongs to the
 last window's `closed` event.
 
-A local build never takes the checkout on trust. Before anything is copied,
-`local-update-source.ts` fetches the remote's default branch (15 s, no
-credential prompts; offline is said and the last fetch is used) and reads the
-checkout against it. Only a checkout on the branch that tracks it, behind it,
-with no changes to tracked files, is fast-forwarded (`fastForward` in
-`@mako/git`: `merge --ff-only --no-autostash` under the repository's write
-queue, refused if HEAD moved since the reading); anything else (changes,
-diverged, another branch, detached, no remote) is built as it is and the
-reading says why. Nothing is stashed, no branch is switched, and untracked
-files stay (Git refuses rather than overwrite one). A build that would carry
-the installed, clean revision doesn't run: Settings says "You're already on
-<rev>". The installed revision is the bundle's `makoBuild`; the available one
-is the reading's upstream. Settings › Updates and `npm run update:local` say
-it in the same words (`contracts/update-source-text.ts`), and what a build
-brought (`build-changes.json`, keyed by build id) shows under the revision
-once that build runs. A checkout 21 commits behind once built and installed
-the revision already running, and the update read as done. `npm run
-test:update-source` covers it against scratch repositories and a local bare
-remote, and draws every state.
+A local build never takes the checkout on trust, and Settings never changes
+it. Before anything is copied, `local-update-source.ts` fetches the remote's
+default branch (15 s, no credential prompts; offline is said and the last
+fetch is used) and reads the checkout against it. The reading's plan offers
+two builds and recommends one (`UpdateSourcePlan`): the upstream's newest
+commit, checked out clean in Mako's own clone (`upstream-copy.ts`,
+`updates/upstream.noindex`: `clone --shared`, so no history is copied, and
+`checkout --force` plus `clean -ffd` per build, so nothing untracked goes in
+while `node_modules` and the compile output carry over; the recording
+encoder is carried from the checkout, packaging checks its recipe), or the
+checkout as it is. The upstream is recommended whenever the checkout is
+behind, or has uncommitted files and no commits of its own; the checkout
+when it has its own commits on top. Settings shows the recommended one as
+Build and the other beside it. Nothing is stashed, no branch is switched or
+moved. `update:local` builds in place, so it alone fast-forwards
+(`forwardable`, `bringForward`: `fastForward` in `@mako/git`,
+`merge --ff-only --no-autostash`, refused if HEAD moved since the reading),
+after asking. A build that would carry the installed, clean revision doesn't
+run: Settings says "You're already on <rev>". The installed revision is the
+bundle's `makoBuild`; the available one is the reading's upstream. Settings ›
+Updates and `npm run update:local` read it with the same words
+(`contracts/update-source-text.ts`), and what a build brought
+(`build-changes.json`, keyed by build id) shows under the revision once that
+build runs. A checkout 21 commits behind once built and installed the
+revision already running; one 35 behind, with another session's 8
+uncommitted files, built that old code three times and failed on a test main
+had fixed. `npm run test:update-source` covers it against scratch
+repositories and a local bare remote, draws every state, and
+`test-update-behind-dirty.ts` runs Settings' builder end to end on a checkout
+behind and dirty, the checkout byte-for-byte untouched.
 
 Built as it is, the checkout goes in with every uncommitted file in it, other
-agents' work in progress included, and nobody should be surprised by that.
+agents' work in progress included, and nobody should be surprised by that:
+each file names who changed it, from the change journal (`writers`,
+`rewindWriters`: Thread titles, "you").
 `readUncommitted` (`local-update-source.ts`, `git status -z` with renames)
 names each tracked change and untracked, non-ignored file (edited, added,
 deleted, renamed from, untracked, conflicted; the first 200 by name, the rest
@@ -4297,13 +4457,15 @@ the build it made and the app installed. A build from an older updater has
 `dirty` only and says just "with uncommitted changes". Nothing answers the
 install question for the person: `update:local` takes no `--yes`.
 
-Then the checkout's node_modules must hold what its package-lock.json lists
+Then the build's node_modules must hold what its package-lock.json lists
 (`local-update-dependencies.ts`: each lockfile entry against npm's
 `node_modules/.package-lock.json`, by version; optional and peer entries
-aside). When it doesn't, as after a fast-forward or a pull that changed the
-lockfile, Settings (phase `installing`, "Installing dependencies…") and
-`update:local` run `npm install --no-audit --no-fund --no-save` in the
-checkout with the npm and Node the build uses, before anything is copied:
+aside). When it doesn't, as when the upstream's lockfile moved or a pull
+changed the checkout's, Settings (phase `installing`, "Installing
+dependencies…") runs `npm install --no-audit --no-fund --no-save` in its own
+copy, never the checkout (a fresh clean copy starts from the checkout's
+node_modules, cloned), and `update:local` runs it in the checkout it builds
+in place, with the npm and Node the build uses:
 never `npm ci` (it deletes node_modules under whatever else reads it), and
 `--no-save` so package.json and package-lock.json stay as Git has them. It's
 refused while any package.json or package-lock.json has uncommitted

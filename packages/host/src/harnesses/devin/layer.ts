@@ -8,11 +8,5 @@ export const DEVIN_LAYER: LayerCapabilities = {
   interception: { kind: "native", via: "pre-tool-hook", how: "hooks appended to the person's own in the launch's copy of `config.json`, posting each call to Mako", inUse: true },
   subagents: { kind: "fallback", via: "words", loses: "Devin declares no agents Mako can define; the instructions say when to start a Fin" },
   hooks: { kind: "native", via: "config-hooks", how: "hooks in the launch's own config folder", inUse: true },
-  modelRoute: {
-    "native-login": { kind: "native", via: "login", how: "the person's Devin account", inUse: true },
-    anthropic: { kind: "absent", reason: "Devin runs only the models its account serves" },
-    "openai-chat": { kind: "absent", reason: "Devin runs only the models its account serves" },
-    "openai-responses": { kind: "absent", reason: "Devin runs only the models its account serves" },
-  },
   personSetup: "kept",
 }

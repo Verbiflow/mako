@@ -1,5 +1,6 @@
 import type { LiveSessionState } from "./providers-acp.js"
 import { isBusyNativeAgent, isProviderWork, type NativeAgent, type NativeAgentRoster, type NativeWork } from "./native-agents.js"
+import { childGroup, childStateOf } from "./children.js"
 
 /**
  * What a session still runs after its turn ended: the work the provider
@@ -25,9 +26,18 @@ export interface BackgroundWork {
 
 type WorkSession = Pick<LiveSessionState, "status" | "connection" | "backgroundTasks">
 
-/** Active work the roster names that counts as activity: ambient watchers never do. */
+/**
+ * Active work the roster names that counts as activity: ambient watchers never do, and a Fin only while `rollup`
+ * counts it as at work (working, queued or asking the person). An idle Fin is open, not running: counting it once
+ * read "Waiting on 4 agents" beside a composer saying "3 Fins working".
+ */
 export function activeWork(roster: NativeAgentRoster | undefined): NativeAgent[] {
-  return (roster?.agents ?? []).filter(isBusyNativeAgent)
+  return (roster?.agents ?? []).filter((agent) => isBusyNativeAgent(agent) && (!agent.child || finAtWork(agent)))
+}
+
+function finAtWork(agent: NativeAgent): boolean {
+  const group = childGroup(childStateOf(agent))
+  return group === "working" || group === "needs" || group === "queued"
 }
 
 /**
@@ -47,20 +57,24 @@ export function backgroundWork(session: WorkSession | undefined, roster: NativeA
 }
 
 const NOUNS = {
+  fin: ["Fin", "Fins"],
   agent: ["agent", "agents"],
   workflow: ["workflow", "workflows"],
   command: ["command", "commands"],
   monitor: ["monitor", "monitors"],
   task: ["task", "tasks"],
-} satisfies Record<NativeWork, [string, string]>
+} satisfies Record<NativeWork | "fin", [string, string]>
 
-/** "2 commands and an agent", or "3 background tasks" when the kinds are mixed past two or unnamed. */
+/** "2 commands and an agent", "3 Fins", or "3 background tasks" when the kinds are mixed past two or unnamed. */
 export function backgroundWorkText(work: BackgroundWork): string {
-  const counts = new Map<NativeWork, number>()
-  for (const agent of work.named) counts.set(agent.work ?? "agent", (counts.get(agent.work ?? "agent") ?? 0) + 1)
+  const counts = new Map<NativeWork | "fin", number>()
+  for (const agent of work.named) {
+    const kind = agent.child ? "fin" : (agent.work ?? "agent")
+    counts.set(kind, (counts.get(kind) ?? 0) + 1)
+  }
   if (work.unnamed || counts.size > 2 || counts.size === 0)
     return `${work.count} background ${work.count === 1 ? "task" : "tasks"}`
-  return [...counts].map(([kind, count]) => `${count === 1 ? (kind === "agent" ? "an" : "a") : count} ${NOUNS[kind][count === 1 ? 0 : 1]}`).join(" and ")
+  return [...counts].map(([kind, count]) => `${count === 1 ? (kind === "agent" ? "an" : kind === "fin" ? "1" : "a") : count} ${NOUNS[kind][count === 1 ? 0 : 1]}`).join(" and ")
 }
 
 /** Field-wise equality for selectors, so a progress note does not re-render a row's mark. */

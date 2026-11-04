@@ -8,6 +8,7 @@ import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import type { HarnessModel } from "@/lib/types"
 import { HarnessOrderSection } from "./harness-order-section"
+import { ModelConnections } from "./model-connection-list"
 import {
   LOADOUT_LIMIT,
   placeInLoadout,
@@ -20,8 +21,9 @@ import { providers, useProviders } from "@/state/providers"
 const DRAG_TYPE = "application/x-mako-loadout"
 
 /**
- * Models: the loadout the composer's picker opens on and ⌃⌘1–5 reach, and
- * each harness with what it starts a new conversation on.
+ * Models: the connections that pay for them, the loadout the composer's
+ * picker opens on and ⌃⌘1–5 reach, and each harness with what it starts a new
+ * conversation on.
  */
 export function ModelsSection() {
   useEffect(() => {
@@ -29,6 +31,7 @@ export function ModelsSection() {
   }, [])
   return (
     <>
+      <ModelConnections />
       <LoadoutSlots />
       <HarnessOrderSection />
     </>

@@ -23,7 +23,6 @@ export function layerOf(options: Pick<ProviderStartOptions, "conversationTools" 
     instructions: instructions ? [{ id: "show-media", text: instructions }] : [],
     servers: tools ? conversationServers(tools).map(({ name, url }) => ({ name, url, token: tools.token, families: familiesOf(name) })) : [],
     replaces,
-    model: { wire: "native-login", fallback: "ask" },
     keepsPersonSetup: true,
   }
 }

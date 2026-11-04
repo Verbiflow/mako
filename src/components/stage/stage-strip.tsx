@@ -1,5 +1,5 @@
 import { IconAction } from "@/components/ui/kit"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { StillMark } from "@/components/transcript/message-avatar"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
 import { ApexFinTabs } from "@/components/stage/child-tabs"
@@ -209,7 +209,7 @@ export function StageStrip({
             >
               {agent ? (
                 agentHarness ? (
-                  <HarnessIcon harness={agentHarness} className="size-4" />
+                  <StillMark harness={agentHarness} kind="thread" size={18} />
                 ) : (
                   <MakoMark className="size-4" />
                 )

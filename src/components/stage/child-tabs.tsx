@@ -5,7 +5,7 @@ import type { ChildState } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { LiveMark } from "@/components/ui/live-mark"
-import { finMarkState } from "@/lib/live-mark-state"
+import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { useHarnessIdentity, harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
@@ -20,14 +20,14 @@ const GAP_PX = 6
 const MORE_PX = 40
 
 /**
- * A Fin's live mark: its harness's glyph with its state round it, as the rail draws a Thread's. A Fin that finished
- * and hasn't been read wears the unread dot.
+ * A Fin's live mark: the plain fin doing what the Fin does, its harness a corner badge. A Fin that finished and
+ * hasn't been read wears the unread dot.
  */
-export function FinMark({ agent, state, read, lit, cut }: { agent: NativeAgent; state: ChildState; read?: boolean; lit?: boolean; cut?: string }) {
+export function FinMark({ agent, state, read, lit, cut, size }: { agent: NativeAgent; state: ChildState; read?: boolean; lit?: boolean; cut?: string; size?: number }) {
   const line = childLine(state)
   const unread = state.kind === "ended" && state.outcome === "done" && !read
   return (
-    <LiveMark state={unread ? "unread" : finMarkState(state)} lit={lit} cut={cut} label={line ? `${childWord(state)}: ${line}` : childWord(state)}>
+    <LiveMark kind="fin" state={unread ? "unread" : finMarkState(state)} motion={motionOf(line)} lit={lit} cut={cut} size={size} label={line ? `${childWord(state)}: ${line}` : childWord(state)}>
       <HarnessIcon harness={agent.provider} />
     </LiveMark>
   )

@@ -57,6 +57,8 @@ jobs:
       # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
       - run: npm run test:device-join
       - run: npm run test:cloud-conversations
+      # A picture or page another host read (a cloud Thread's machine, another device, another host here) loads in this host's windows.
+      - run: npx tsx scripts/test-owned-files.ts
       - run: npx tsx scripts/test-cloud-returns.ts
 
   # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
@@ -82,6 +84,7 @@ jobs:
       - run: npm run test:transcript
       - run: npm run test:transcript-events
       - run: npm run test:stage
+      - run: npm run test:fin-words
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
@@ -89,7 +92,10 @@ jobs:
       - run: npm run test:live-form
       # Messages from the Mac, a phone and another Mac at once, with lost replies, cut links and restarts: each lands once.
       - run: npm run test:send-race
+      - run: npm run test:durable-outbox
       - run: npm run test:tuning
+      # Model connections: the store's keys stay in the secrets, a locked keychain, removal, and the OpenCode providers they become.
+      - run: npm run test:model-connections
       # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
       - run: npm run test:notifications
       # What a local update builds from: its checkout against origin, fetched, and how Settings › Updates says it.
@@ -98,6 +104,11 @@ jobs:
       # every script's scratch repositories away from the one it was started in.
       - run: npm run test:attribution
       - run: npm run test:workspace-snapshots
+      # A worktree's packages linked from the main checkout's: workspace packages resolve to the worktree's own code,
+      # and no install writes through the links into the main checkout.
+      - run: npx tsx scripts/test-package-links.ts
+      # fseventsd's health and its restart, against fakes: what's degraded, the samples, the evidence, recovery.
+      - run: npx tsx scripts/test-file-events-service.ts
 
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
   # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief
@@ -121,15 +132,19 @@ jobs:
       - run: npm run test:background-agents
       - run: npm run test:agents-migrate
       # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
-      # crash-safe, reversible, on a store of the person's shape (`docs/one-conversation.md`).
+      # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
       - run: npm run test:thread-split
       - run: npm run test:agents-wake
       - run: npm run test:orch-answer
+      - run: npm run test:fin-resume
       - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
       - run: npm run test:orch-deliver
+      # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
+      - run: npm run test:steer-landing
       - run: npm run test:agents-doors
       - run: npm run test:agents-cli
+      - run: npm run test:thread-move-tool
       - run: npm run test:orch-update
       - run: npm run test:orch-crash
 
@@ -189,6 +204,27 @@ jobs:
       # The host's live delivery, the window's reduction, usage and tool identity (`test-performance-budgets.ts`), the same way.
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --reference HEAD^1
 
+  # The local updater's own checks (`UPDATE_CHECKS`), through the function Settings › Updates runs, on a Mac, in the
+  # environment it builds: the variables it sets (its verdict file and gross line for the performance check alone, the
+  # build's identity and source) and none it doesn't. A check that fails only the updater's way fails here, before
+  # merge, rather than on someone's update. Each step's time goes to the job's summary.
+  update-checks:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          # A row over budget is measured beside the commit its baseline recorded, exported from this history.
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npx tsgo -b packages/host
+      - run: npx tsx scripts/ci-update-checks.ts
+
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
   # the owner's Codex at the tested build sealed against the bench's stand-in model.
@@ -212,6 +248,52 @@ jobs:
           version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run bench:sync-latency
+
+  # A message the person sends into a running turn reaches the model within `LANDS_BUDGET_MS`, through Mako's own host,
+  # on the real harnesses this runner has (Claude Code from its SDK, Codex at the tested build), each against the
+  # probe's stand-in model with a 15 s command running (`probe-steer-semantics.ts --lands`).
+  steer-latency:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+      - uses: ./.github/actions/codex-sandbox
+      - name: Steer latency on Claude Code and Codex
+        run: |
+          version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
+          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
+          PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run probe:steer-lands -- claude codex
+
+  # Whether the host keeps answering while many Fins work (`bench:host-load`): a real host on 52 Threads' worktrees,
+  # 95 apps and a busy process table, its Fins editing, building and writing transcripts, three windows polling. Its
+  # limits are calibrated by a yardstick process timed beside it on this runner; it fails only on a clear regression
+  # (a loop held for seconds, or several times the yardstick's waits) and writes every number to the job's summary.
+  host-load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npx tsgo -b packages/host
+      - run: npm run bench:host-load -- --scale today --cpu-prof "$RUNNER_TEMP/host-load-profile"
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.

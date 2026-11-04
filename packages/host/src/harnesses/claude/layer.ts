@@ -21,12 +21,6 @@ export const claudeLayer: LayerAdapter<ClaudeLayerFragment> = {
     interception: { kind: "native", via: "pre-tool-hook", how: "the `PreToolUse` callback, which denies a routed spawn or native call with a message naming Mako's tool", inUse: true },
     subagents: { kind: "native", via: "declared", how: "the query's `agents` definitions; today `SubagentStart` adds Mako's paragraph to native ones", inUse: false },
     hooks: { kind: "native", via: "sdk-hooks", how: "SDK hooks for transcript, compaction, attribution and routing", inUse: true },
-    modelRoute: {
-      "native-login": { kind: "native", via: "login", how: "the person's own `claude` login, one of their accounts, signed in through Anthropic's flow", inUse: true },
-      anthropic: { kind: "native", via: "base-url-env", how: "`ANTHROPIC_BASE_URL` and a key in the launch's environment", inUse: false },
-      "openai-chat": { kind: "fallback", via: "other-harness", loses: "Claude Code speaks only Anthropic's API" },
-      "openai-responses": { kind: "fallback", via: "other-harness", loses: "Claude Code speaks only Anthropic's API" },
-    },
     personSetup: "kept",
   },
   apply(layer) {

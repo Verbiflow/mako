@@ -5,17 +5,19 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
-import { bringForward, buildUncommitted, readUncommitted, readUpdateSource } from "@mako/host/application/local-update-source"
+import { bringForward, buildUncommitted, forwardable, readUncommitted, readUpdateSource } from "@mako/host/application/local-update-source"
 import { LocalUpdates } from "@mako/host/application/local-updates"
-import { UNCOMMITTED_LISTED, type UpdateSource } from "@mako/host/contracts/app-lifecycle"
+import { UNCOMMITTED_LISTED, type CheckoutStanding, type UpdateSource, type UpdateSourcePlan } from "@mako/host/contracts/app-lifecycle"
 
 /**
  * What a Settings build takes from its source checkout, against real
- * repositories and a local bare remote: a checkout behind its upstream and
- * clean is fast-forwarded (files and index with it), anything else is built
- * as it is with the reason named, uncommitted and untracked work is never
- * touched, the branch never changes, and the installed revision is never
- * rebuilt.
+ * repositories and a local bare remote: a checkout behind its upstream, or
+ * with uncommitted files and no commits of its own, builds the upstream's
+ * commit in Mako's own clean copy and is never moved; one with its own
+ * commits on top builds as it is; both are offered whenever they differ;
+ * the installed revision is never rebuilt. `update:local`, which builds in
+ * place, fast-forwards a clean checkout on its tracking branch (files and
+ * index, never untracked work) and refuses a stale reading.
  */
 
 const root = await mkdtemp(join(tmpdir(), "mako-update-source-"))
@@ -38,6 +40,11 @@ const commit = async (cwd: string, file: string, text: string, subject: string) 
   run(cwd, "commit", "-qm", subject)
   return run(cwd, "rev-parse", "HEAD")
 }
+const plan = (recommended: UpdateSourcePlan["recommended"], standing: CheckoutStanding, installed: { upstream?: boolean | null; checkout?: boolean } = {}): UpdateSourcePlan => ({
+  recommended,
+  upstream: installed.upstream === null ? null : { installed: installed.upstream ?? false },
+  checkout: { standing, installed: installed.checkout ?? false },
+})
 const checkout = (reading: UpdateSource) => {
   assert.equal(reading.kind, "checkout")
   if (reading.kind !== "checkout") throw new Error("unreachable")
@@ -59,7 +66,7 @@ try {
 
   // Level with the upstream and installed: nothing to build.
   const level = checkout(await readUpdateSource(git, source, { fetch: true, installed }))
-  assert.deepEqual(level.plan, { kind: "current" })
+  assert.deepEqual(level.plan, plan(null, "level", { upstream: true, checkout: true }))
   assert.equal(level.fetch.kind, "fetched")
   assert.deepEqual(level.upstream, { name: "origin/main", commit: first, branch: "main" })
   assert.deepEqual(level.changes, { from: first, count: 0, titles: [] })
@@ -69,10 +76,11 @@ try {
   await commit(writer, "other.txt", "other\n", "Third (#3)")
   const newest = await commit(writer, "app.txt", "four\n", "Fourth (#4)")
   run(writer, "push", "-q", "origin", "main")
-  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed })).plan, { kind: "current" }, "what was fetched before is all an unfetched reading knows")
+  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed })).plan, plan(null, "level", { upstream: true, checkout: true }), "what was fetched before is all an unfetched reading knows")
   await writeFile(join(source, "notes.txt"), "someone's untracked notes\n")
   const behind = checkout(await readUpdateSource(git, source, { fetch: true, installed }))
-  assert.deepEqual(behind.plan, { kind: "fast-forward" }, "untracked files don't keep a checkout from moving forward")
+  assert.deepEqual(behind.plan, plan("upstream", "behind"), "behind, the upstream is recommended")
+  assert.ok(forwardable(behind), "untracked files don't keep update:local from moving a checkout forward")
   assert.equal(behind.behind, 3)
   assert.equal(behind.ahead, 0)
   assert.equal(behind.untracked, 1)
@@ -90,17 +98,17 @@ try {
   assert.match(run(source, "reflog", "-1", "--format=%gs"), /Fast-forward/)
   assert.equal(run(source, "stash", "list"), "", "nothing was stashed")
   const forwarded = checkout(await readUpdateSource(git, source, { fetch: false, installed }))
-  assert.deepEqual(forwarded.plan, { kind: "as-is", why: "level", installed: false }, "level with the upstream, ahead of the installed build")
+  assert.deepEqual(forwarded.plan, plan("upstream", "level"), "level with the upstream, ahead of the installed build")
   assert.equal(forwarded.changes?.count, 3)
   await rm(join(source, "notes.txt"))
-  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed: { revision: newest, dirty: false } })).plan, { kind: "current" })
-  assert.equal(checkout(await readUpdateSource(git, source, { fetch: false, installed: { revision: newest, dirty: true } })).plan.kind, "as-is", "an installed build with local changes is never taken for the clean revision")
+  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed: { revision: newest, dirty: false } })).plan, plan(null, "level", { upstream: true, checkout: true }))
+  assert.equal(checkout(await readUpdateSource(git, source, { fetch: false, installed: { revision: newest, dirty: true } })).plan.recommended, "upstream", "an installed build with local changes is never taken for the clean revision")
 
   // A reading that went stale is refused rather than applied: HEAD moved after it was read.
   const fifth = await commit(writer, "app.txt", "five\n", "Fifth (#5)")
   run(writer, "push", "-q", "origin", "main")
   const stale = checkout(await readUpdateSource(git, source, { fetch: true, installed }))
-  assert.equal(stale.plan.kind, "fast-forward")
+  assert.ok(forwardable(stale))
   run(source, "checkout", "-q", "--detach")
   await assert.rejects(bringForward(git, source, stale), /Couldn't bring main up to .*moved since it was read.*Nothing in the checkout changed/)
   run(source, "checkout", "-q", "main")
@@ -109,11 +117,12 @@ try {
   // Uncommitted changes to tracked files: built as they are, and a fast-forward asked for anyway is refused.
   await writeFile(join(source, "app.txt"), "someone's edit\n")
   const changed = checkout(await readUpdateSource(git, source, { fetch: false, installed }))
-  assert.deepEqual(changed.plan, { kind: "as-is", why: "changes", installed: false })
+  assert.deepEqual(changed.plan, plan("upstream", "behind"), "behind with someone's edit: the upstream, clean, is recommended")
   assert.equal(changed.changed, 1)
-  assert.equal(changed.target, newest, "a checkout built as it is carries its own HEAD")
+  assert.equal(changed.target, fifth, "the recommended build carries the upstream's commit")
+  assert.equal(changed.head, newest)
   assert.equal(await bringForward(git, source, changed), null)
-  await assert.rejects(bringForward(git, source, { ...changed, plan: { kind: "fast-forward" }, target: fifth }), /uncommitted changes in 1 file/)
+  await assert.rejects(bringForward(git, source, { ...changed, changed: 0 }), /uncommitted changes in 1 file/)
   assert.equal(await readFile(join(source, "app.txt"), "utf8"), "someone's edit\n", "someone's edit is untouched")
   run(source, "checkout", "--", "app.txt")
 
@@ -122,29 +131,29 @@ try {
   run(writer, "push", "-q", "origin", "main")
   await writeFile(join(source, "fresh.txt"), "mine\n")
   const collides = checkout(await readUpdateSource(git, source, { fetch: true, installed }))
-  assert.equal(collides.plan.kind, "fast-forward")
+  assert.ok(forwardable(collides))
   await assert.rejects(bringForward(git, source, collides), /untracked files there would be overwritten/)
   assert.equal(await readFile(join(source, "fresh.txt"), "utf8"), "mine\n")
   assert.equal(run(source, "rev-parse", "HEAD"), newest)
   await rm(join(source, "fresh.txt"))
 
-  // Another branch: built as it is, never switched. Its revision installed, there is nothing to build.
+  // Another branch behind the upstream: the upstream is recommended, the branch offered, and never switched.
   run(source, "checkout", "-q", "-b", "feature")
   const other = checkout(await readUpdateSource(git, source, { fetch: false, installed }))
-  assert.deepEqual(other.plan, { kind: "as-is", why: "branch", installed: false })
+  assert.deepEqual(other.plan, plan("upstream", "branch"))
   assert.equal(other.upstream?.branch, "main", "the branch that tracks the upstream is named")
-  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed: { revision: newest, dirty: false } })).plan, { kind: "as-is", why: "branch", installed: true })
+  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed: { revision: newest, dirty: false } })).plan, plan("upstream", "branch", { checkout: true }))
   assert.equal(await bringForward(git, source, other), null)
   assert.equal(run(source, "symbolic-ref", "--short", "HEAD"), "feature")
   run(source, "checkout", "-q", "main")
 
   // Detached, and diverged.
   run(source, "checkout", "-q", "--detach")
-  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed })).plan, { kind: "as-is", why: "detached", installed: false })
+  assert.deepEqual(checkout(await readUpdateSource(git, source, { fetch: false, installed })).plan, plan("upstream", "detached"))
   run(source, "checkout", "-q", "main")
   await commit(source, "local.txt", "local\n", "Local work")
   const diverged = checkout(await readUpdateSource(git, source, { fetch: false, installed }))
-  assert.deepEqual(diverged.plan, { kind: "as-is", why: "diverged", installed: false })
+  assert.deepEqual(diverged.plan, plan("upstream", "diverged"))
   assert.equal(diverged.ahead, 1)
   assert.equal(diverged.behind, 2)
   run(source, "reset", "-q", "--hard", newest)
@@ -154,15 +163,15 @@ try {
   const offline = checkout(await readUpdateSource(git, source, { fetch: true, installed }))
   assert.equal(offline.fetch.kind, "failed")
   if (offline.fetch.kind === "failed") assert.match(offline.fetch.reason, /gone\.git|does not appear|not found/i)
-  assert.equal(offline.plan.kind, "fast-forward", "the upstream as last fetched still counts")
+  assert.equal(offline.plan.recommended, "upstream", "the upstream as last fetched still counts")
   run(source, "remote", "set-url", "origin", remote)
 
   // No remote at all, and a folder that isn't a checkout.
   const alone = join(root, "alone")
   run(root, "init", "-q", "-b", "main", alone)
   const only = await commit(alone, "a.txt", "a\n", "Only")
-  assert.deepEqual(checkout(await readUpdateSource(git, alone, { fetch: true, installed: null })).plan, { kind: "as-is", why: "no-upstream", installed: false })
-  assert.deepEqual(checkout(await readUpdateSource(git, alone, { fetch: false, installed: { revision: only, dirty: false } })).plan, { kind: "current" })
+  assert.deepEqual(checkout(await readUpdateSource(git, alone, { fetch: true, installed: null })).plan, plan("checkout", "no-upstream", { upstream: null }))
+  assert.deepEqual(checkout(await readUpdateSource(git, alone, { fetch: false, installed: { revision: only, dirty: false } })).plan, plan(null, "no-upstream", { upstream: null, checkout: true }))
 
   // Every uncommitted file a build of the checkout as it is takes, by name: edits, a staged new file, a deletion, a
   // staged rename (one file, with where it came from), untracked files in new folders each named, and a path with
@@ -248,10 +257,10 @@ process.exit(1)
   await finished(current)
   assert.deepEqual(current.snapshot().local, { kind: "idle" }, "the installed revision isn't rebuilt")
   const reading = current.snapshot().checkout
-  assert.equal(reading?.kind === "checkout" && reading.plan.kind, "current")
-  assert.deepEqual((await readdir(currentRoot)).filter((name) => /^(checkout|build-)/.test(name)), [], "nothing was copied")
+  assert.equal(reading?.kind === "checkout" && reading.plan.recommended, null)
+  assert.deepEqual((await readdir(currentRoot)).filter((name) => /^(checkout|build-|upstream)/.test(name)), [], "nothing was copied")
 
-  // Behind: Build brings the checkout forward before it copies, builds the new revision, and names it.
+  // Behind: Build builds the upstream's commit in its own clean copy, names it, and leaves the checkout where it is.
   await commit(writer, "app.txt", "eight\n", "Eighth (#8)")
   run(writer, "push", "-q", "origin", "main")
   const target = run(writer, "rev-parse", "HEAD")
@@ -265,23 +274,34 @@ process.exit(1)
   await builder.select(source)
   builder.start()
   await finished(builder)
-  assert.equal(run(source, "rev-parse", "HEAD"), target, "the source was fast-forwarded")
+  assert.equal(run(source, "rev-parse", "HEAD"), head, "the source was never moved")
+  assert.equal(run(join(buildRoot, "upstream.noindex"), "rev-parse", "HEAD"), target, "Mako's own copy has the upstream's commit")
   assert.ok(phases.includes(`compiling:${target.slice(0, 8)}`), `the build names the revision it builds: ${phases.join(", ")}`)
   const failed = builder.snapshot().local
   // The fixture's packaging script fails, so packaging is where it stops.
   assert.equal(failed.kind, "error")
-  if (failed.kind === "error") assert.match(failed.message, /failed during packaging/)
+  if (failed.kind === "error") {
+    assert.equal(failed.failure?.step, "packaging")
+    assert.match(failed.message, /^Packaging failed on origin\/main at [0-9a-f]{8}\. /)
+  }
 
   assert.deepEqual(JSON.parse(await readFile(join(buildRoot, "packaged-with.json"), "utf8")), { uncommitted: JSON.stringify({ count: 0, files: [] }), dirty: "0" }, "a clean build passes an empty list")
 
-  // A checkout with uncommitted work is built as it is, and packaging is handed every file by name, as read when the
-  // copy was taken.
+  // Uncommitted work and behind: Build still builds the upstream, clean, and takes none of it.
   await writeFile(join(source, "app.txt"), "someone else's edit\n")
   await writeFile(join(source, "draft.md"), "not added yet\n")
+  const safe = new LocalUpdates(git, buildRoot, "A".repeat(40), () => {}, identity(head), roomy)
+  await safe.load()
+  await safe.select(source)
+  safe.start()
+  await finished(safe)
+  assert.deepEqual(JSON.parse(await readFile(join(buildRoot, "packaged-with.json"), "utf8")), { uncommitted: JSON.stringify({ count: 0, files: [] }), dirty: "0" }, "the recommended build takes no uncommitted file")
+
+  // Asked to build the checkout as it is, packaging is handed every file by name, as read when the copy was taken.
   const asIs = new LocalUpdates(git, buildRoot, "A".repeat(40), () => {}, identity(head), roomy)
   await asIs.load()
   await asIs.select(source)
-  asIs.start()
+  asIs.start("checkout")
   await finished(asIs)
   const passed = JSON.parse(await readFile(join(buildRoot, "packaged-with.json"), "utf8"))
   assert.deepEqual(JSON.parse(passed.uncommitted), { count: 2, files: [{ path: "app.txt", change: "edited" }, { path: "draft.md", change: "untracked" }] })
@@ -298,7 +318,7 @@ process.exit(1)
   await stranger.load()
   assert.equal(stranger.snapshot().installed, null, "another build's changes aren't claimed")
 
-  console.log("Update source: fetches the upstream, fast-forwards a clean checkout on its tracking branch (files and index, never untracked work), builds anything else as it is with the reason, refuses stale readings, never rebuilds the installed revision, and names every uncommitted file a build takes (edits, renames, deletions, untracked files), handing packaging the list it read")
+  console.log("Update source: fetches the upstream, recommends it clean in Mako's own copy when the checkout is behind or has only uncommitted work and never moves the checkout, builds the checkout as it is when asked (naming every uncommitted file it takes and handing packaging that list), never rebuilds the installed revision, and lets update:local fast-forward a clean checkout (files and index, never untracked work) while refusing stale readings")
 } finally {
   git.close()
   await rm(root, { recursive: true, force: true })

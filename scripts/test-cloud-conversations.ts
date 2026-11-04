@@ -31,6 +31,7 @@ import { createFakeGateway, type FakeGatewayOptions } from "@mako/protocol/fake-
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository, type CloudConversationsOptions, type CloudCopies } from "@mako/host/conversations/cloud-conversations"
 import { SyncRecorder } from "@mako/host/contracts/sync-readings"
+import { verifyFilePreview } from "@mako/host/workspaces/file-previews"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { cloudRuntimeOf, namedUuid } from "@mako/host/conversations/cloud-moves"
 import { MoveIdSchema, type RuntimeId } from "@mako/host/contracts/thread-execution"
@@ -54,6 +55,8 @@ import { z } from "zod"
 
 /** A move's calls and its way back's, which these conversations never make (`test-cloud-moves.ts` covers them). */
 const unused = () => Promise.reject(new Error("no move in this test"))
+/** A URL as a cloud machine's host signs one, with a secret this process doesn't have. */
+const MACHINE_SIGNED = `mako-file://asset/${Buffer.from(JSON.stringify(["/tmp/mako-control-artifacts/shot.png", Date.now() + 60_000, 1, 2, 4, 5, 0])).toString("base64url")}/${"a".repeat(64)}/shot.png`
 const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "handOverMove" | "refuseMove" | "moveAnswer" | "threadRecords" | "deviceRecords" | "deviceOriginals" | "readCheckpoint" | "beginReturn" | "releaseReturn" | "cancelReturn" | "giveBackReturn" | "finishReturn" | "archiveReturn" | "returnState"> = {
   sendCheckpoint: unused,
   handOverMove: unused,
@@ -127,6 +130,9 @@ async function cloudMachine(reach: Reach = {}, gatewayOptions: FakeGatewayOption
         return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
       }
       if (channel === "mako:thread-app") return JSON.stringify(app.view)
+      // A screenshot its agent took, as the machine's host reads it: signed with the machine's own secret.
+      if (channel === "mako:read-live-file" || channel === "mako:read-file")
+        return JSON.stringify({ path: String(args[1] ?? args[0]), size: 4, binary: true, truncated: false, media: "image", mimeType: "image/png", previewUrl: MACHINE_SIGNED, thumbnailUrl: `${MACHINE_SIGNED}?rendition=thumbnail` })
       if (channel === "mako:live-start") {
         const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), session: z.string().optional() }).loose()]).parse(args)
         return JSON.stringify({ session: { id: options.conversationId, harness, cwd, status: "running" }, revision: 1, createdAt: 1, requests: [], ...options.session && { sessionId: options.session } })
@@ -435,6 +441,34 @@ test("a machine that couldn't clone the Thread's repository starts nothing: the 
   delete machine.folder.unmade
   await router.route("mako:live-start", ["claude", "/Users/me/project", { ...options, conversationId: randomUUID() }])
   assert.equal(machine.calls.find((call) => call.channel === "mako:live-start")?.args[1], CLONE)
+})
+
+test("a picture a cloud Thread's agent made loads in a window here: the machine's signed URLs come back signed here, for the machine, and nothing else is changed", async () => {
+  const machine = await cloudMachine()
+  const { router } = conversations(machine.account, join(scratch, "file-reads", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+  const [threadId] = machine.created
+  const path = "/tmp/mako-control-artifacts/shot.png"
+  const read = await router.route("mako:read-live-file", [conversationId, path, "preview"])
+  assert.ok(read.handled)
+  const file = z.object({ path: z.string(), mimeType: z.string(), previewUrl: z.string(), thumbnailUrl: z.string() }).parse(decodeRuntimeValue(read.value))
+  assert.equal(file.path, path)
+  assert.equal(file.mimeType, "image/png")
+  assert.notEqual(file.previewUrl, MACHINE_SIGNED, "the machine's own URL would be one this Mac's host can't verify")
+  assert.equal((await verifyFilePreview(MACHINE_SIGNED)).kind, "invalid", "as it is, this host refuses another host's URL: the broken picture")
+  assert.deepEqual(await verifyFilePreview(file.previewUrl), { kind: "owned", owner: { kind: "thread", threadId }, url: MACHINE_SIGNED, entry: true })
+  assert.deepEqual(await verifyFilePreview(file.thumbnailUrl), { kind: "owned", owner: { kind: "thread", threadId }, url: `${MACHINE_SIGNED}?rendition=thumbnail`, entry: true })
+  // A tab whose folder is the conversation's on its machine reads the same way.
+  const folder = await router.folder(conversationId)
+  const answered = await folder!.call("mako:read-file", [path])
+  assert.notEqual(answered, "here")
+  const tabRead = z.object({ previewUrl: z.string() }).parse(decodeRuntimeValue(answered === "here" ? undefined : answered.value))
+  assert.deepEqual(await verifyFilePreview(tabRead.previewUrl), { kind: "owned", owner: { kind: "thread", threadId }, url: MACHINE_SIGNED, entry: true })
+  // Any other call's answer crosses as the machine encoded it.
+  const other = await router.route("mako:live-state", [conversationId])
+  assert.ok(other.handled)
+  assert.deepEqual(decodeRuntimeValue(other.value), { channel: "mako:live-state" })
 })
 
 test("a cloud turn's end is heard once however its batches fell: the session stopping, a request ending in a batch of its own, never a list restated", async () => {

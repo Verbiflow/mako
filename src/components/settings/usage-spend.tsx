@@ -142,7 +142,7 @@ function WindowSpend({ window, metric, truncated }: { window: UsageWindow; metri
                 title={[outside?.state === "absent" ? outside.reason : undefined, unpriced ? `${formatTokens(source.unpricedTokens ?? 0)} tokens have no known price` : undefined].filter(Boolean).join(" ") || undefined}
                 className="flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100 hover:bg-fill-hover"
               >
-                <span aria-hidden className={cn("size-2 shrink-0 rounded-[2px]", entry?.ink)} />
+                <span aria-hidden className={cn("size-2 shrink-0", entry?.ink)} />
                 {source.harness ? <HarnessIcon harness={source.harness} className="size-3.5" /> : <span aria-hidden className="size-3.5 shrink-0" />}
                 <span className="min-w-0 truncate text-ui">{source.source}</span>
                 <span className="shrink-0 text-label text-faint tabular-nums">

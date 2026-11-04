@@ -1,5 +1,6 @@
 import type { AccessTier } from "./access.js"
 import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import type { AskOption, FinAsk } from "./native-agents.js"
 
@@ -106,8 +107,11 @@ export interface AgentsLinkInput {
 export type AgentsLinkResult = { child: string; name: string; origin: ChildOrigin; deduped?: true } | AgentRefused
 
 export interface AgentsListInput {
-  /** `tree` adds every descendant, each under its parent; `crew`, from a Fin, is its Apex and the other Fins it started (`AgentsCrew`). */
-  scope?: "children" | "tree" | "crew"
+  /**
+   * `tree` adds every descendant, each under its parent; `crew`, from a Fin, is its Apex and the other Fins it started
+   * (`AgentsCrew`); `apexes`, the person's other Apexes on this host (`AgentsApexes`).
+   */
+  scope?: "children" | "tree" | "crew" | "apexes"
 }
 export interface AgentStrip {
   child: string
@@ -149,7 +153,38 @@ export interface AgentsCrew {
   crew: CrewMate[]
 }
 export type CrewMate = Omit<FrontDoorChild, "direct">
-export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentRefused
+
+/**
+ * The person's other Apexes on this host (`agents_list` with `scope: apexes`),
+ * every one outside the caller's own tree whose conversation is open here.
+ * Typed facts the host holds, never a transcript, and reading them never
+ * wakes or messages one.
+ */
+export interface AgentsApexes {
+  apexes: OtherApex[]
+}
+export interface OtherApex {
+  /** Its Thread, which `agents_send` takes as `apex:<thread>`. */
+  thread: string
+  title?: string
+  harness?: string
+  working: boolean
+  /** The last thing its transcript shows it doing, while it works. */
+  step?: string
+  folder?: string
+  /** Its worktree's branch, when it has one. */
+  branch?: string
+  /** Its Fins by where each stands for the person (`rollup`). */
+  fins: Rollup
+  /**
+   * Its open Fins' last reports (or, before one, their state), what needs the person first, at most
+   * `APEX_DIGEST_FINS` and how many more; and `said`, the first paragraph of its own last reply.
+   */
+  digest: { fins: { name: string; line: string }[]; more?: number; said?: string }
+}
+/** The open Fins one Apex's digest names; the rest are counted. */
+export const APEX_DIGEST_FINS = 8
+export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentsApexes | AgentRefused
 
 export interface AgentsReadInput {
   /** The Fin's name or Thread ID. */
@@ -177,7 +212,7 @@ export interface AgentsReportInput {
 export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none" } | AgentRefused
 
 export interface AgentsSendInput {
-  /** The Fin's name or Thread ID. */
+  /** The Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean
@@ -325,8 +360,11 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report or ask, and a message to it has to stop its run.`,
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
-  `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide.`,
+  `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
   `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended.`,
+  `Other ${APEX_WORD}es of the person: read them with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them.`,
+  `Message another ${APEX_WORD} (\`agents_send\` \`to: apex:<title>\`) only when the person asked you to, or when you need something only it can give or decide (it owns the files or branch you'd change, or its work blocks yours).`,
+  "Never message for status, thanks or acknowledgement: their digest already says how they stand. One message with everything it needs; its reply wakes you; don't reply to a reply unless it asks you something.",
 ].join(" ")
 
 /** A Fin as the front door's note shows it to its Apex: typed facts the host already holds, never its transcript. */
@@ -431,7 +469,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         rule: "The number of the person's rule that fits this work, from their rules in Mako's note. Its harness and model apply; leave harness, model, reasoning and fast out unless the person named them. Absent: their choice for work no rule fits.",
         fast: "Only when the person asked for it: true for the fast lane (\"the fast one\", quicker and pricier), false for the standard one. A harness whose fast model is a model of its own switches to it.",
         access: "plan, chat, ask, edits, auto, full or deny: at most this Thread's own; this Thread's when absent. A harness without that level runs the Fin on its nearest one below, and one whose every level is above it is refused.",
-        place: "Only when the person said where: here, device:<name> or cloud. Absent: where this Thread runs.",
+        place: "Only when the person said where a new Fin runs: here, device:<name> or cloud. Absent: where this Thread runs. To continue this Thread's own work in the cloud, use thread_move instead.",
         workspace: "Its own worktree: on branch if it exists, else a new branch from base; in a project folder of several repositories, branch is every repository's. Absent: this Thread's folder, for reading or one writer.",
         title: "A few words the person sees for it.",
         role: `worker (default), reviewer, verifier, researcher, or lead: an ${APEX_WORD} of its own, which starts its own ${FIN_WORD}s.`,
@@ -462,8 +500,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_list",
-      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported.` },
+      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
+      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest.` },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
@@ -534,9 +572,10 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread. A working one takes it as deliver says: queue (the default) after its turn, for more to do; steer, into the turn it's running, when the message changes what it's doing now; interrupt, stopping that turn first, when what it's running is wrong.`,
         `One running in an agent CLI your shell started is stopped and its session resumed here with the message, its last step maybe cut short.`,
         `It returns at once, saying when that ${FIN_WORD}'s harness lets it hear the message; what the ${FIN_WORD} does reports back as its work does.`,
+        `Another ${APEX_WORD} (apex:<title>) hears it after its turn (steer only when its current work is wrong); its reply wakes you once; at most 3 an hour to one.`,
       ].join(" "),
       fields: {
-        to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID.`,
+        to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID; another ${APEX_WORD}: apex:<title or Thread ID>.`,
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
         deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,
@@ -552,7 +591,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_stop",
-      description: `Stop one of this Thread's ${FIN_WORD}s for good (its running turn, or its process and everything it started), or all of them: it takes no more messages. To stop its turn and redirect it, agents_send with deliver: interrupt.`,
+      description: `Stop one of this Thread's ${FIN_WORD}s (its running turn, or its process and everything it started), or all of them. A stop pauses it: agents_send resumes it later in the same session, told what changed meanwhile. To stop its turn and redirect it now, agents_send with deliver: interrupt.`,
       fields: { child: "Its name or Thread ID, or all.", reason: "Why, for its transcript and your digest." },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },

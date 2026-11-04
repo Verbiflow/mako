@@ -14,7 +14,7 @@ import { configureOpenCodeCalls } from "@mako/host/harnesses/opencode/call-plugi
 import { pathToFileURL } from "node:url"
 import { codexHookHash } from "@mako/host/harnesses/codex/authoring"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
-import { NATIVE_OVERRIDE, routeNativeTool, routeShellCall, shellLine, shellWords, type CallThread } from "@mako/host/contracts/native-calls"
+import { NATIVE_CALL_POLICY, NATIVE_OVERRIDE, routeNativeTool, routeShellCall, shellLine, shellWords, type CallThread } from "@mako/host/contracts/native-calls"
 
 const main = "/Users/p/proj"
 const worktree = "/Users/p/.mako/worktrees/proj-1/fix-login"
@@ -67,6 +67,7 @@ const CASES: Case[] = [
   { name: "a build", thread: inWorktree, command: "npm run build && npx vite build", cwd: worktree, route: "allow" },
   { name: "tests", thread: inWorktree, command: "npm test -- --run", cwd: worktree, route: "allow" },
   { name: "the escape hatch", thread: inWorktree, command: `${NATIVE_OVERRIDE} npm run dev`, cwd: worktree, route: "allow" },
+  { name: "no escape hatch for a worktree", thread: inMain, command: `${NATIVE_OVERRIDE} git worktree add ../alt -b alt`, cwd: main, route: "deny", rule: "git-worktree-add" },
   { name: "a dev server in another project", thread: inWorktree, command: "cd /Users/p/other && npm run dev", cwd: worktree, route: "allow" },
   { name: "curling the Thread's own app", thread: inWorktree, command: "curl -sS -i http://fix-login.thread.localhost:20540/settings", cwd: worktree, route: "warn", rule: "curl-own-app" },
   { name: "curling loopback", thread: inWorktree, command: "curl -s localhost:20540 | head", cwd: worktree, route: "warn", rule: "curl-own-app" },
@@ -106,7 +107,7 @@ for (const entry of CASES) {
     assert.equal(route.rule, entry.rule, `${entry.name}: rule`)
     assert.doesNotMatch(route.message, /\n/, `${entry.name}: one line`)
   }
-  if (route.kind === "deny") assert.ok(route.message.includes(NATIVE_OVERRIDE), `${entry.name}: a deny names the override`)
+  if (route.kind === "deny") assert.equal(route.message.includes(NATIVE_OVERRIDE), route.rule !== "git-worktree-add", `${entry.name}: a deny names the override, but for a worktree`)
 }
 
 // Messages name Mako's tools as the harness calls them.
@@ -262,5 +263,8 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
     await rm(root, { recursive: true, force: true })
   }
 }
+
+assert.equal(NATIVE_CALL_POLICY.shell(inWorktree, { command: "gh pr create", cwd: worktree }).kind, "deny", "the policy as one value answers as its functions do")
+assert.equal(NATIVE_CALL_POLICY.tool(inMain, { tool: "EnterWorktree" }).kind, "deny")
 
 console.log(`native calls: ${CASES.length} shell cases and the native tools pass`)

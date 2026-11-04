@@ -60,6 +60,7 @@ import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { callThreadOf } from "./live-runtime.js"
+export { OwnerFiles } from "./owner-files.js"
 export { ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
@@ -84,6 +85,7 @@ export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
+export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, threadToolText, type ThreadToolDoor } from "./thread-move-tool.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
@@ -139,6 +141,8 @@ export interface ConversationsDeps {
   settled(conversationId: string): void
   /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet. */
   movePending?(conversationId: string): boolean
+  /** Whether the person archived a conversation's Thread, which ends a Fin's work for good. */
+  archived?(conversationId: string): boolean
   /** The attribution journal, for counting each turn's changes; undefined until it opens. */
   turnLedger?: LiveDependencies["turnLedger"]
   /** The attribution journal, for reviewing and undoing a turn; undefined until it opens. */
@@ -288,6 +292,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       harnessLabel: (harness) => harnessLabel(host, harness),
       modes: (harness) => host.liveDrivers.get(harness)?.modes,
       ...(deps.movePending && { movePending: deps.movePending }),
+      ...(deps.archived && { archived: deps.archived }),
       finChoices: async (harness, cwd) => {
         const profile = await harnesses.profiles.forSend(harness, cwd)
         const reading = deps.finDefaults?.reading()

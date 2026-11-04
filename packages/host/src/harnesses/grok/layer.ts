@@ -8,11 +8,5 @@ export const GROK_LAYER: LayerCapabilities = {
   interception: { kind: "native", via: "client-hook", how: "ACP client hooks in the session's `_meta`, answered in Mako's process", inUse: true },
   subagents: { kind: "fallback", via: "words", loses: "Grok declares no agents Mako can define; the instructions say when to start a Fin" },
   hooks: { kind: "native", via: "client-hooks", how: "ACP client hooks Mako answers", inUse: true },
-  modelRoute: {
-    "native-login": { kind: "native", via: "login", how: "the person's xAI account", inUse: true },
-    anthropic: { kind: "absent", reason: "not yet known whether the Grok CLI takes another endpoint" },
-    "openai-chat": { kind: "absent", reason: "not yet known whether the Grok CLI takes another endpoint" },
-    "openai-responses": { kind: "absent", reason: "not yet known whether the Grok CLI takes another endpoint" },
-  },
   personSetup: "kept",
 }

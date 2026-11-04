@@ -125,7 +125,7 @@ test("a command run at a repository's root names none of its files by its folder
 })
 
 test("a commit made while the watch lost events moves the base once the loss is heard", async () => {
-  // A busy fseventsd delivers nothing for a while; meanwhile the person
+  // A degraded fseventsd delivers nothing for a while; meanwhile the person
   // commits. The rescan that follows sees no file differ from its stat, so
   // only a HEAD check finds the commit.
   const w = await world({ "src/a.ts": "export const a = 1\n" })
@@ -863,7 +863,7 @@ test("a write heard as late as the watcher now delivers is dated by when it was 
   w.clock.advance(500)
   w.mark("call", "T1", "c1", "end", { turn: "t1" })
   w.mark("turn", "T1", "t1", "end")
-  // An fseventsd that delivers in batches: heard 16 s after the turn ended.
+  // A degraded fseventsd delivers in batches: heard 16 s after the turn ended.
   w.clock.advance(16_000)
   w.events.changed(path)
   await w.tracker.settled()

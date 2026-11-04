@@ -7,6 +7,7 @@ import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { StoreFormats } from "./store-formats.js"
+import type { FileEventsService } from "./file-events-service.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep } from "./thread-worktrees.js"
@@ -107,6 +108,8 @@ export type HostEventBody =
   | { type: "github-changed" }
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
   | { type: "workspace-moves"; moves: WorkspaceMoves }
+  /** Agents' asks to move their Thread to the cloud (`thread_move` below full access), which the person answers above its composer. */
+  | { type: "thread-move-asks"; asks: import("./thread-tools.js").ThreadMoveAsk[] }
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
   /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */
@@ -187,6 +190,8 @@ export type HostEventBody =
   | { type: "thread-purposes"; purposes: ThreadPurpose[] }
   /** A shared store's format changed under this host: a newer Mako changed it, so this one now only reads it. Window-wide. */
   | { type: "store-formats"; formats: StoreFormats }
+  /** fseventsd's health changed, or a restart moved a step; window-wide. */
+  | { type: "file-events-service"; service: FileEventsService }
   /** These Threads' names changed, from any host; the rest are as they were. Window-wide. */
   | { type: "thread-titles"; titles: ThreadTitleEntry[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */

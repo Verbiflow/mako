@@ -24,6 +24,7 @@ import type { ProviderLaunchTrace } from "./provider-launch.js"
 import type { LayerCapabilities } from "../contracts/mako-layer.js"
 import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
+import type { ModelRouteAdapter } from "./model-routes.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
@@ -156,11 +157,26 @@ export type NativeFork =
  * when its turn ends, so a turn that ends, even stopped or failed, leaves no
  * steer whose fate is unknown: its answer is on its way. `hears`: when the
  * agent hears a steer it took, as another agent reads it in `agents_send`'s
- * result ("hears it …"), seen on a real run of the harness.
+ * result ("hears it …"), seen on a real run of the harness. `landing`: how
+ * the person's message reaches the agent within `STEER_LANDS_MS`.
  */
 export type SteerCapability =
-  | { kind: "supported"; lands: LiveSteering; answersOnEnd?: true; hears?: string; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
+  | { kind: "supported"; lands: LiveSteering; landing?: SteerLanding; answersOnEnd?: true; hears?: string; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
   | DriverAbsent
+
+/**
+ * How a message the person sends into a running turn reaches the agent at once, picked per harness from the latency
+ * `scripts/probe-steer-semantics.ts` measures on it. `native` (the default): its own steer is heard at once.
+ * `confirm`: its own steer is heard at once unless the agent is in a step it holds steers through, and the harness
+ * says which by confirming delivery; one it hasn't confirmed within `STEER_LANDS_MS` is sent as a `restart`.
+ * `restart`: its own steer waits for the running command to return, so Mako stops the turn and sends the message as
+ * the next one, telling the agent what the stopped turn left (`steered`). An agent's own steer (`agents_send`) and a
+ * question's answer always go natively.
+ */
+export type SteerLanding = "native" | "confirm" | "restart"
+
+/** How long a person's steer may wait for a `confirm` harness to confirm it before the turn is restarted for it. */
+export const STEER_LANDS_MS = 1_000
 
 /** When an agent hears a steer its harness took, as `hears` says, or as `lands` implies for one that doesn't. */
 export function steerHeard(steering: Extract<SteerCapability, { kind: "supported" }>): string {
@@ -430,6 +446,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   nativeRouting: NativeRoutingCapability
   /** How the harness takes the Mako layer (`contracts/mako-layer.ts`): its adapter's capabilities. Every installed harness declares it (`test-harness-definitions.ts`). */
   layer?: LayerCapabilities
+  /** Which of the person's model connections it runs on, and how (`contracts/model-routes.ts`). */
+  modelRoutes: ModelRouteAdapter
   contextBreakdown: ContextBreakdownCapability
   compaction: ProviderCompaction
   goals: GoalsCapability
@@ -529,6 +547,10 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const modeCount = driver.modes?.length ?? 0
   if ((driver.modeSwitching.kind === "native") !== modeCount > 1)
     throw new Error(`${driver.provider}: mode switching is ${driver.modeSwitching.kind} with ${modeCount} mode${modeCount === 1 ? "" : "s"} declared`)
+  if (driver.modelRoutes.kind !== "absent" && !driver.modelRoutes.wires.length)
+    throw new Error(`${driver.provider}: model routes name the wires they take`)
+  if (driver.modelRoutes.kind === "accepts" && !driver.modelRoutes.kinds.length)
+    throw new Error(`${driver.provider}: model routes name the kinds of connection they take`)
   for (const [name, text] of declaredTexts(driver))
     if (!text.trim()) throw new Error(`${driver.provider}: explain its ${name} declaration`)
   for (const mode of driver.modes ?? [])
@@ -564,10 +586,10 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
 /** The words each capability declaration carries, so none is left empty. */
 function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
   const text = (value: { kind: string; via?: string; reason?: string }) => value.via ?? value.reason ?? ""
-  const { resume, fork, steering, questions, nativeAgents, nativeRouting, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
+  const { resume, fork, steering, questions, nativeAgents, nativeRouting, modelRoutes, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
   const texts: [string, string][] = [
     ["resume", text(resume)], ["fork", text(fork)], ["steering", text(steering)], ["questions", text(questions)],
-    ["subagents", text(nativeAgents)], ["native routing", text(nativeRouting)], ["context breakdown", text(contextBreakdown)],
+    ["subagents", text(nativeAgents)], ["native routing", text(nativeRouting)], ["model routes", text(modelRoutes)], ["context breakdown", text(contextBreakdown)],
     ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["goals", text(goals)],
     ["side questions", text(sideQuestions)], ["review", text(review)], ["mode switching", text(modeSwitching)],
   ]

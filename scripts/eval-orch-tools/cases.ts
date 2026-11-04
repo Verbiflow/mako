@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
-import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import { frontDoorNote, type AgentsApexes, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
 import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import type { Report } from "@mako/host/contracts/agents"
 import { apexAsk } from "@mako/host/contracts/children"
@@ -13,6 +13,7 @@ import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/threa
 import { threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { digest } from "@mako/host/conversations/agent-wakes"
 import { briefText } from "@mako/host/conversations/agents"
+import { namedUuid } from "@mako/host/conversations/cloud-moves"
 
 /**
  * The cases of `eval:orch-tools`, in T3 Code's MCP tool-use schema rewritten
@@ -32,11 +33,11 @@ const PriorTurn = z.object({
   toolCalls: z.array(z.object({ tool: z.string(), input: z.json(), result: z.json() })).optional(),
 })
 
-export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver", "worktree", "pull-request", "app", "browser"] as const
+export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver", "worktree", "pull-request", "app", "browser", "move"] as const
 
-/** The budget each area counts toward, per harness and model: route ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%, Mako's own tools for worktrees, pull requests, the app and the browser ≥ 90%. */
+/** The budget each area counts toward, per harness and model: route (moving the Thread itself too) ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%, Mako's own tools for worktrees, pull requests, the app and the browser ≥ 90%. */
 export const BUDGET = {
-  route: { areas: ["route", "headless-shell", "place"], floor: 0.9 },
+  route: { areas: ["route", "headless-shell", "place", "move"], floor: 0.9 },
   "front door": { areas: ["front-door", "answer", "deliver"], floor: 0.9 },
   "don't spawn": { areas: ["dont-spawn", "native-child"], floor: 0.95 },
   "no polling": { areas: ["no-polling"], floor: 0.95 },
@@ -76,6 +77,18 @@ const EvalFinished = z.object({
   artifacts: z.array(z.object({ kind: z.enum(["branch", "commit", "pull-request", "file", "screenshot", "test-run", "link"]), ref: z.string(), label: z.string().optional() })).optional(),
 })
 
+/** Another of the person's Apexes, as `agents_list` with `scope: apexes` answers it (`OtherApex`), less its Thread. */
+const EvalApex = z.object({
+  title: z.string(),
+  harness: z.string(),
+  working: z.boolean(),
+  step: z.string().optional(),
+  folder: z.string().optional(),
+  branch: z.string().optional(),
+  fins: z.object({ needs: z.number(), working: z.number(), queued: z.number(), idle: z.number().default(0), failed: z.number(), done: z.number() }),
+  digest: z.object({ fins: z.array(z.object({ name: z.string(), line: z.string() })), more: z.number().optional(), said: z.string().optional() }),
+})
+
 export const OrchCase = z.object({
   id: z.string(),
   area: z.enum(AREAS),
@@ -112,6 +125,8 @@ export const OrchCase = z.object({
     }).optional(),
     /** Reports of those Fins that finished, waking the Apex the same way. */
     finished: z.array(EvalFinished).optional(),
+    /** The person's other Apexes, which the stub answers `agents_list` with `scope: apexes` with. */
+    apexes: z.array(EvalApex).optional(),
   }),
   prompt: z.string(),
   expect: z.object({
@@ -140,8 +155,10 @@ export type OrchCase = z.infer<typeof OrchCase>
 export const CASES_FILE = join(import.meta.dirname, "cases.ndjson")
 /** How a message reaches a working Fin (`agents_send`'s `deliver`): its own file, read after `CASES_FILE`. */
 export const DELIVER_CASES_FILE = join(import.meta.dirname, "cases-deliver.ndjson")
+/** Moving the Thread itself between this Mac and the cloud (`thread_move`): its own file, read last. */
+export const MOVE_CASES_FILE = join(import.meta.dirname, "cases-move.ndjson")
 
-export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE]): OrchCase[] {
+export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE, MOVE_CASES_FILE]): OrchCase[] {
   const cases = files.flatMap((file) => readFileSync(file, "utf8").split("\n").filter((line) => line.trim()).map((line, index) => {
     const parsed = OrchCase.safeParse(JSON.parse(line))
     if (!parsed.success) throw new Error(`${file}:${index + 1}: ${parsed.error.message}`)
@@ -265,6 +282,17 @@ export function turnText(orchCase: OrchCase): string {
   if (wake) return wake
   const note = [threadNote(orchCase), frontDoorText(orchCase)].filter(Boolean).join("\n\n")
   return note ? `${note}\n\n${orchCase.prompt}` : orchCase.prompt
+}
+
+/** The other Apexes a case's stub lists, each under a Thread made from its title, so every sample reads the same. */
+export function apexesAnswer(orchCase: OrchCase): AgentsApexes {
+  return {
+    apexes: (orchCase.setup.apexes ?? []).map((apex) => ({
+      thread: namedUuid(`${orchCase.id}:${apex.title}`),
+      ...apex,
+      fins: { total: apex.fins.needs + apex.fins.working + apex.fins.queued + apex.fins.idle + apex.fins.failed + apex.fins.done, ...apex.fins },
+    })),
+  }
 }
 
 /** Whether a case runs on `harness`. */

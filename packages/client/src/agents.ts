@@ -6,20 +6,21 @@ import { heavy } from "@mako/host/base/heavy-packages"
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS, SESSION_VARIABLE, WAIT_LIMIT_MS, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import { AgentAnswerSchema, agentToolText, registerAgentTools, type AgentToolDoor } from "@mako/host/conversations/agent-tools"
+import { registerThreadTools, ThreadMoveAnswerSchema } from "@mako/host/conversations/thread-move-tool"
 import { z } from "zod"
 import { localHost, type HostTransport } from "./transport.js"
 
 export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--fast|--standard] [--rule <n>] [--access <tier>]
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
                     [--wait [--timeout <ms>]] [--wake decisions|finish|never]
-  mako agents list [--tree | --crew]
+  mako agents list [--tree | --crew | --apexes]
   mako agents read <fin> [--transcript]
   mako agents report <status> <summary> [--question <q>] [--key <k>]
   mako agents wait [fin…] [--timeout <ms>]
   mako agents send <fin> [words…] [--forward] [--key <k>]
   mako agents stop <fin|all> [--reason <words>]
   mako agents link <harness> <session> [--pid <n>]
-  mako mcp [--cwd <folder>]   the same operations as an MCP server on stdio
+  mako mcp [--cwd <folder>]   the same operations, and thread_move, as an MCP server on stdio
 
   A brief file ending .json is a brief ({objective, doneWhen, boundaries, output}); any other is its objective.
   The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell: an Apex, and each Thread it starts
@@ -70,6 +71,7 @@ const OPTIONS = {
   key: { type: "string" },
   tree: { type: "boolean" },
   crew: { type: "boolean" },
+  apexes: { type: "boolean" },
   transcript: { type: "boolean" },
   question: { type: "string" },
   wait: { type: "boolean" },
@@ -113,7 +115,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       }
     }
     case "list":
-      return { tool: tool("list"), input: values.crew ? { scope: "crew" } : values.tree ? { scope: "tree" } : {} }
+      return { tool: tool("list"), input: values.apexes ? { scope: "apexes" } : values.crew ? { scope: "crew" } : values.tree ? { scope: "tree" } : {} }
     case "read":
       if (!first) throw new Error("agents read needs a Fin")
       return { tool: tool("read"), input: { child: first, ...(values.transcript && { view: "transcript" }) } }
@@ -175,6 +177,7 @@ async function serveAgentsMcp(transport: HostTransport, cwd: string): Promise<vo
   const { McpServer, StdioServerTransport } = await heavy.mcpStdio.load("mako mcp")
   const server = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: ORCHESTRATION_INSTRUCTIONS })
   registerAgentTools(server, door(transport, cwd))
+  registerThreadTools(server, { invoke: async (channel, args) => ThreadMoveAnswerSchema.parse(await transport.call(channel, args)), caller })
   const ended = new Promise<void>((resolve) => process.stdin.once("end", resolve))
   await server.connect(new StdioServerTransport())
   await ended

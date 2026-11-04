@@ -34,7 +34,7 @@ export function describeActionRecovery(action: LiveAction) {
     case "dispatching":
       return compact
         ? { title: `${label} awaiting confirmation`, guidance: "Mako saved the action. The agent has not confirmed acceptance yet." }
-        : { title: `${label} waiting for the agent`, guidance: "Mako sent it. The agent takes it at its next step, once the call it's in returns, so a subagent it waits on finishes first." }
+        : { title: `Steering`, guidance: "Mako is handing your message to the agent. If the agent hasn't taken it within a second, Mako stops the turn and sends it as the next message." }
     case "accepted":
       return { title: `${label} ${compact ? "in progress" : "accepted"}`, guidance: "The agent accepted the action. Completion has not been confirmed." }
     case "completed":

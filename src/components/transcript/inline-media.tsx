@@ -55,9 +55,11 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
           className="group/tile pressable relative grid w-full cursor-zoom-in place-items-center overflow-hidden media-surface border border-hairline bg-shell"
         >
           {error ? (
-            <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-3 text-label text-faint">
-              <ImageOffIcon className="size-4" aria-hidden />
-              <span className="max-w-full truncate">{name}</span>
+            <span data-media-unavailable title={`${error}\n${openPath ?? path}`} className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-3 text-center text-label text-faint">
+              <ImageOffIcon className="mb-0.5 size-4" aria-hidden />
+              <span className="max-w-full truncate text-muted-foreground">{name}</span>
+              <span className="line-clamp-2 max-w-full break-words">{error}</span>
+              {error.includes(openPath ?? path) ? null : <span className="max-w-full truncate" dir="rtl"><bdi>{openPath ?? path}</bdi></span>}
             </span>
           ) : picture ? (
             <img
@@ -96,7 +98,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
   if (error)
     return (
       <div ref={hostRef} data-inline-file-preview={path} className="not-prose my-3">
-        <MediaUnavailable name={name} reason={error} onRetry={onRetry} />
+        <MediaUnavailable name={name} reason={error} path={openPath ?? path} onRetry={onRetry} />
       </div>
     )
   const box = mediaBox(known?.width, known?.height, ratio)

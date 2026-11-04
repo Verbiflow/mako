@@ -3,7 +3,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { assertDraftsSaved } from "@/lib/draft-persistence"
 import { handOff } from "@/state/handoff"
 import { prefsStore, setPref } from "@/state/prefs"
-import type { LifecycleAction, LifecycleCommand, LifecycleState, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
+import type { LifecycleAction, LifecycleCommand, LifecycleState, UpdateBuildFrom, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
 
 export const applicationStore = createStore<{
   lifecycle: LifecycleState | null
@@ -177,10 +177,11 @@ export const application = {
       applicationStore.set({ error: error instanceof Error ? error.message : "Mako couldn't read the source checkout." })
     }
   },
-  build(): Promise<void> {
+  /** Build the update from `from`, or from what the source's reading recommends. */
+  build(from?: UpdateBuildFrom): Promise<void> {
     application.openUpdates()
     return perform(async () => {
-      await getMako().buildUpdate()
+      await getMako().buildUpdate(from)
       applicationStore.set({
         installation: await getMako().installationState(),
       })

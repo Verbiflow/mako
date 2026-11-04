@@ -84,7 +84,7 @@ export function Keys({ keys, inverted }: { keys: string[]; inverted?: boolean })
           key={`${key}-${index}`}
           data-slot="kbd"
           className={cn(
-            "inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[3px] px-1 font-sans text-label leading-none",
+            "inline-flex h-[18px] min-w-[18px] items-center justify-center px-1 font-sans text-label leading-none",
             inverted
               ? "bg-background/15 text-background"
               : "bg-raised text-faint ring-1 ring-hairline ring-inset"
@@ -102,12 +102,13 @@ export function Chip({
   tone = "neutral",
   children,
   ...props
-}: ComponentProps<"span"> & { tone?: "neutral" | "positive" | "negative" | "caution" }) {
+}: ComponentProps<"span"> & { tone?: "neutral" | "positive" | "negative" | "caution" | "attention" }) {
   const palette = {
     neutral: "bg-raised text-muted-foreground ring-hairline",
     positive: "bg-positive/12 text-positive ring-positive/25",
     negative: "bg-negative/12 text-negative ring-negative/25",
     caution: "bg-caution/12 text-caution ring-caution/25",
+    attention: "bg-attention/12 text-attention ring-attention/25",
   }[tone]
   return (
     <span
@@ -221,7 +222,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(option.value)}
           className={cn(
-            "rounded-[4px] px-2 text-label font-medium disabled:pointer-events-none disabled:opacity-40",
+            " px-2 text-label font-medium disabled:pointer-events-none disabled:opacity-40",
             "[transition:background-color_120ms_ease,color_120ms_ease]",
             value === option.value
               ? "bg-surface text-foreground"

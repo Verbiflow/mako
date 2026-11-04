@@ -20,8 +20,8 @@ import { watchTree } from "@mako/host/workspaces/tree-watcher"
  * edits files in one checkout, commits every third, and reads the history
  * since it started, as a turn's footprint does. Turns run for `--minutes`.
  *
- *   --drops <s>        every checkout hears events dropped this often, as from an fseventsd that's behind
- *   --slow-delivery    the watcher's canary is heard 12 s late, as from an fseventsd delivering in 15 s batches
+ *   --drops <s>        every checkout hears events dropped this often, as from a degraded fseventsd
+ *   --slow-delivery    the watcher's canary is heard 12 s late, as from a degraded fseventsd delivering in batches
  *   --json             the readings as JSON on stdout
  *   --no-budgets       report without failing
  *
@@ -52,7 +52,7 @@ const scratch = realpathSync(mkdtempSync(join(tmpdir(), "mako-footprint-bench-")
 const own = join(scratch, "own")
 const timers: NodeJS.Timeout[] = []
 mkdirSync(own)
-// Every beat is heard 12 s late and none is lost, as from an fseventsd that delivers in batches.
+// Every beat is heard 12 s late and none is lost, as a degraded fseventsd delivers.
 if (slowDelivery) process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 2_000, lagMs: 12_000 })
 
 /** CPU, disk and memory of a process, read without root. */

@@ -1,4 +1,4 @@
-import type { BuildIdentity, MissingDependencies, UncommittedFile, UpdateSource } from "./app-lifecycle.js"
+import type { BuildIdentity, MissingDependencies, UncommittedFile, UpdateBuildFrom, UpdateSource } from "./app-lifecycle.js"
 
 /**
  * How a source checkout's reading is said, in Settings › Updates and by
@@ -8,10 +8,14 @@ import type { BuildIdentity, MissingDependencies, UncommittedFile, UpdateSource 
 export interface UpdateSourceText {
   /** What is true now. */
   title: string
-  /** What Build does, and why. */
+  /** What Build does, and why: where it builds from, at which commit, and what it leaves out. */
   detail: string
-  /** Build's label; null when there is nothing to build. */
+  /** Build's label; null when nothing is recommended. */
   action: string | null
+  /** Where Build builds from. */
+  from: UpdateBuildFrom | null
+  /** The other build on offer, beside Build; null when there's none. */
+  alternative: { label: string; from: UpdateBuildFrom } | null
   /** The checkout and the upstream, one line: `main at 9a7a5c0c · origin/main at 079f9b31`. */
   standing: string
   /** The fetch that didn't answer, and what the reading used instead. */
@@ -75,66 +79,72 @@ function localWork(changed: number, untracked: number): string | null {
   return parts.length ? parts.join(" and ") : null
 }
 
+/** How the checkout stands against the upstream, as a clause: `main is 35 commits behind origin/main`. */
+function standingClause(reading: Extract<UpdateSource, { kind: "checkout" }>): string | null {
+  const { branch, upstream, ahead, behind, plan } = reading
+  const name = branch ?? "HEAD"
+  const there = upstream?.name ?? "the upstream"
+  switch (plan.checkout.standing) {
+    case "level": return null
+    case "behind": return `${name} is ${count(behind, "commit")} behind ${there}`
+    case "ahead": return `${name} has ${count(ahead, "commit")} ${there} doesn't`
+    case "diverged": return `${name} has ${count(ahead, "commit")} ${there} doesn't and is ${count(behind, "commit")} behind it`
+    case "branch": return `The checkout is on ${name}${upstream?.branch ? `, not ${upstream.branch}` : ""}`
+    case "detached": return "The checkout's HEAD isn't on a branch"
+    case "no-upstream": return null
+  }
+}
+
+/** Who changed the uncommitted files, as the journal names them: `from “Fix the runner” and you`. */
+function writersOf(reading: Extract<UpdateSource, { kind: "checkout" }>): string | null {
+  const names = [...new Set(reading.uncommitted.files.flatMap((file) => file.by ?? []))]
+  if (!names.length) return null
+  const quoted = names.map((name) => name === "you" ? name : `“${name}”`)
+  const listed = quoted.length > 3 ? `${quoted.slice(0, 3).join(", ")} and ${quoted.length - 3} more` : quoted.length > 1 ? `${quoted.slice(0, -1).join(", ")} and ${quoted.at(-1)}` : quoted[0]
+  return `changed by ${listed}`
+}
+
 export function updateSourceText(reading: Extract<UpdateSource, { kind: "checkout" }>): UpdateSourceText {
-  const { head, branch, upstream, ahead, behind, changed, untracked, plan, target, changes, fetch } = reading
+  const { head, branch, upstream, changed, untracked, plan, changes, fetch } = reading
   const at = shortRevision(head)
   const name = branch ?? "HEAD"
   const standing = [`${branch ?? "detached HEAD"} at ${at}`, upstream && `${upstream.name} at ${shortRevision(upstream.commit)}`].filter(Boolean).join(" · ")
   const remote = upstream?.name.split("/")[0] ?? "the remote"
   const offline = fetch.kind === "failed" ? `Couldn't reach ${remote}: ${fetch.reason}. This compares with what was fetched from it before.` : null
   const work = localWork(changed, untracked)
-  const includes = work ? ` It has ${work}; the build includes them.` : ""
-  const text = (title: string, detail: string, action: string | null): UpdateSourceText => ({ title, detail, action, standing, offline })
+  const who = writersOf(reading)
+  const text = (title: string, detail: string, from: UpdateBuildFrom | null, action: string | null, alternative: UpdateSourceText["alternative"]): UpdateSourceText => ({ title, detail, action, from, alternative, standing, offline })
+  const asIs = work ? `Build ${name} ${at} with ${uncommittedCount(changed + untracked)}` : `Build ${name} ${at} as it is`
+  const checkoutChoice = plan.checkout.installed ? null : { label: asIs, from: "checkout" as const }
+  const clause = upstream ? standingClause(reading) : null
 
-  if (plan.kind === "current")
+  if (plan.recommended === "upstream" && upstream) {
+    const target = shortRevision(upstream.commit)
+    const fresh = changes?.from ? changes.count : reading.behind
+    const left = [clause, work && `${clause ? "it has" : "Your checkout has"} ${work}${who ? `, ${who},` : ""} that this build leaves out`].filter(Boolean)
     return text(
-      `You're already on ${shortRevision(target)}`,
-      upstream ? `Your installed app was built from ${upstream.name} at its newest commit.` : `Your installed app was built from ${name} at ${at}.`,
-      null
-    )
-  if (plan.kind === "fast-forward" && upstream && branch) {
-    const fresh = changes?.from ? changes.count : behind
-    return text(
-      `${count(fresh, "new change")} on ${upstream.name}`,
-      `Mako moves ${branch} forward to ${shortRevision(target)}, then builds and verifies the app. Your installed app and agents keep running.${untracked ? ` ${count(untracked, "untracked file")} stay as they are and go into the build.` : ""}`,
-      `Update to ${branch} ${shortRevision(target)} (${count(fresh, "new change")})`
+      fresh ? `${count(fresh, "new change")} on ${upstream.name}` : `Ready to build ${upstream.name}`,
+      `Mako builds ${upstream.name} at ${target} in a clean copy of its own and leaves your checkout exactly as it is.${left.length ? ` ${left.join(", and ")}.` : ""}`,
+      "upstream",
+      fresh ? `Update to ${upstream.name} ${target} (${count(fresh, "new change")})` : `Build ${upstream.name} ${target}`,
+      checkoutChoice
     )
   }
-  const why = plan.kind === "as-is" ? plan.why : "level"
-  const installed = plan.kind === "as-is" && plan.installed
-  const newer = changes?.from && changes.count ? `, ${count(changes.count, "change")} newer than your app` : ""
-  const asIs = installed ? ` Your app is already on ${at}, so there's nothing to build.` : ` Mako builds ${name} as it is, at ${at}.${includes}`
-  const plain = installed ? null : work ? `Build ${at} with local changes` : `Build ${name} ${at}`
-  switch (why) {
-    case "level":
-      return text("Ready to build from your checkout", `${name} is at ${upstream?.name ?? "its upstream"}'s newest commit, ${at}${newer}.${includes}`, plain)
-    case "ahead":
-      return text("Ready to build from your checkout", `${name} has ${count(ahead, "commit")} ${upstream?.name ?? "its upstream"} doesn't.${asIs}`, plain)
-    case "changes":
-      return text(
-        `${count(behind, "new change")} on ${upstream?.name ?? "the upstream"}`,
-        `${name} has ${work ?? "uncommitted changes"}, so Mako won't move it. Commit or discard them to take the update, or build ${at} as it is.`,
-        installed ? null : `Build ${at} as it is`
-      )
-    case "diverged":
-      return text(
-        `${name} and ${upstream?.name ?? "its upstream"} have diverged`,
-        `${count(ahead, "commit")} here, ${count(behind, "commit")} there. Mako won't merge them.${asIs}`,
-        installed ? null : `Build ${at} as it is`
-      )
-    case "branch":
-      return text(
-        `The checkout is on ${name}`,
-        `Updates come from ${upstream?.name ?? "the upstream"}${upstream?.branch ? `, which ${upstream.branch} tracks` : ""}${behind ? `, and ${name} is ${count(behind, "commit")} behind it` : ""}. Mako never switches branches.${asIs}`,
-        installed ? null : `Build ${name} ${at}`
-      )
-    case "detached":
-      return text(
-        "The checkout isn't on a branch",
-        `${behind && upstream ? `${upstream.name} has ${count(behind, "change")} it doesn't.` : "HEAD is detached."}${asIs}`,
-        installed ? null : `Build ${at} as it is`
-      )
-    case "no-upstream":
-      return text("Ready to build from your checkout", `There's no remote to compare with.${asIs}`, plain)
+  const upstreamChoice = upstream && plan.upstream && !plan.upstream.installed ? { label: `Build ${upstream.name} ${shortRevision(upstream.commit)} instead`, from: "upstream" as const } : null
+  const includes = work ? ` It has ${work}${who ? `, ${who}` : ""}; the build includes them.` : ""
+  if (plan.recommended === "checkout") {
+    const why = clause ? `${clause}. ` : !upstream ? "There's no remote to compare with. " : ""
+    return text("Ready to build from your checkout", `${why}Mako builds ${name} as it is, at ${at}.${includes}`, "checkout", work ? `Build ${at} with local changes` : `Build ${name} ${at}`, upstreamChoice)
   }
+  // Nothing recommended: the app already runs the upstream, or the checkout as it is.
+  const runs = plan.upstream?.installed && upstream ? shortRevision(upstream.commit) : at
+  const extra = checkoutChoice && (work || reading.ahead) ? ` ${[clause, work && `${clause ? "it has" : "Your checkout has"} ${work}${who ? `, ${who}` : ""}`].filter(Boolean).join(", and ")}; build it as it is to try ${work ? "them" : "it"}.` : ""
+  return text(
+    `You're already on ${runs}`,
+    `${upstream && plan.upstream?.installed ? `Your installed app was built from ${upstream.name} at its newest commit.` : `Your installed app was built from ${name} at ${at}.`}${extra}`,
+    null,
+    null,
+    extra ? checkoutChoice : null
+  )
 }
+

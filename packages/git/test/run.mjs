@@ -32,6 +32,19 @@ async function test(name, body) {
   console.log(`PASS: ${name}`)
 }
 
+await test("readOutput shares the six read slots and keeps a command's failure", async () => {
+  const traces = []
+  const reads = new Git({ trace: (trace) => traces.push(trace) })
+  const jobs = Array.from({ length: 24 }, () => reads.readOutput(scratch, ["version"]))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.ok(reads.activity().running.length <= 6)
+  const answers = await Promise.all(jobs)
+  assert.ok(answers.every((answer) => answer.startsWith("git version ")))
+  assert.ok(traces.some((trace) => trace.queuedMs > 0))
+  await assert.rejects(reads.readOutput(scratch, ["rev-parse", "--verify", "refs/heads/missing"]), GitError)
+  reads.close()
+})
+
 async function repository(name) {
   const root = join(scratch, name)
   await mkdir(root, { recursive: true })

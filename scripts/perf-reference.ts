@@ -49,6 +49,15 @@ const QUIET_POLL_MS = 10_000
  * updater runs two scripts that compare inside one check.
  */
 export const BUSY_MEASURE_MS = 5 * 60_000
+/**
+ * How much slower than its reference a row may be before it fails: CI's
+ * 25% unless the updater names its gross line (`MAKO_PERFORMANCE_ALLOWED`,
+ * `local-update-checks.ts`).
+ */
+export function allowedRegression(env: NodeJS.ProcessEnv = process.env, fallback = 1.25): number {
+  const named = Number(env.MAKO_PERFORMANCE_ALLOWED)
+  return Number.isFinite(named) && named > 1 ? named : fallback
+}
 /** Each side of the interval misses the true median at most this often: the sign test's 95%, one-sided. */
 const MISS = 0.05
 
@@ -532,9 +541,10 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
  * What a script makes of `settled`: the lines to fail on. Under the local
  * updater, which names a verdict file (`PERFORMANCE_VERDICT_VARIABLE`), the
  * verdict goes there and an unsure row doesn't fail; anywhere else nobody is
- * there to choose, so it fails beside a slower one.
+ * there to choose, so it fails beside a slower one. `null` names no file even
+ * under the updater.
  */
-export async function concluded(script: string, settled: Settled, allowed: number, file = process.env[PERFORMANCE_VERDICT_VARIABLE]): Promise<string[]> {
+export async function concluded(script: string, settled: Settled, allowed: number, file: string | null = process.env[PERFORMANCE_VERDICT_VARIABLE] ?? null): Promise<string[]> {
   if (file) {
     const verdict: PerformanceVerdict = { script, allowed, rows: settled.rows, machine: settled.machine, busy: settled.busy }
     await appendFile(file, `${JSON.stringify(verdict)}\n`)

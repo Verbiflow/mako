@@ -87,7 +87,12 @@ const inputs = {
       ]),
       z.object({
         scope: z
-          .union([z.literal("children"), z.literal("tree"), z.literal("crew")])
+          .union([
+            z.literal("children"),
+            z.literal("tree"),
+            z.literal("crew"),
+            z.literal("apexes"),
+          ])
           .optional(),
       }),
     ]),
@@ -329,7 +334,7 @@ const inputs = {
     z.tuple([z.union([z.null(), z.string()])]),
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
-  "mako:build-update": () => z.tuple([]),
+  "mako:build-update": () => z.tuple([z.enum(["upstream", "checkout"]).optional()]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -451,6 +456,8 @@ const inputs = {
   "mako:element-pick-targets": () => z.tuple([]),
   "mako:element-pick-wait": () => z.tuple([z.string(), z.number()]),
   "mako:external-editors": () => z.tuple([]),
+  "mako:file-events-restart": () => z.tuple([]),
+  "mako:file-events-service": () => z.tuple([]),
   "mako:fin-default-choose": () =>
     z.tuple([
       z.string(),
@@ -1223,6 +1230,35 @@ const inputs = {
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
       z.literal("app").optional(),
     ]),
+  "mako:model-connection-add": () =>
+    z.tuple([
+      z.object({
+        name: z.string().optional(),
+        models: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string().optional(),
+            contextTokens: z.number().optional(),
+          })
+        ),
+        provider: z.string(),
+        baseUrl: z.string().optional(),
+        apiKey: z.string().optional(),
+      }),
+    ]),
+  "mako:model-connection-check": () =>
+    z.tuple([
+      z.object({
+        provider: z.string(),
+        baseUrl: z.string().optional(),
+        apiKey: z.string().optional(),
+      }),
+    ]),
+  "mako:model-connection-enable": () => z.tuple([z.string(), z.boolean()]),
+  "mako:model-connection-local": () => z.tuple([]),
+  "mako:model-connection-remove": () => z.tuple([z.string()]),
+  "mako:model-connection-test": () => z.tuple([z.string()]),
+  "mako:model-connections": () => z.tuple([]),
   "mako:move-arrive": () =>
     z.tuple([
       z.object({
@@ -2254,6 +2290,8 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:thread-move-ask-answer": () => z.tuple([z.string(), z.boolean()]),
+  "mako:thread-move-asks": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
@@ -2301,6 +2339,18 @@ const inputs = {
       z
         .object({ cwd: z.string().optional(), harness: z.string().optional() })
         .optional(),
+    ]),
+  "mako:threads-move": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        to: z.union([z.literal("cloud"), z.literal("back")]),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
     ]),
   "mako:transcript-document": () =>
     z.tuple([
@@ -2531,6 +2581,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:element-pick-targets", "control"],
   ["mako:element-pick-wait", "control"],
   ["mako:external-editors", "workspaces"],
+  ["mako:file-events-restart", "workspaces"],
+  ["mako:file-events-service", "workspaces"],
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
@@ -2638,6 +2690,13 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-sync-preview", "tools"],
   ["mako:measure-update-again", "application"],
   ["mako:merge-pull", "git"],
+  ["mako:model-connection-add", "harnesses"],
+  ["mako:model-connection-check", "harnesses"],
+  ["mako:model-connection-enable", "harnesses"],
+  ["mako:model-connection-local", "harnesses"],
+  ["mako:model-connection-remove", "harnesses"],
+  ["mako:model-connection-test", "harnesses"],
+  ["mako:model-connections", "harnesses"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],
   ["mako:move-follow", "conversations"],
@@ -2764,6 +2823,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
   ["mako:thread-move", "conversations"],
+  ["mako:thread-move-ask-answer", "conversations"],
+  ["mako:thread-move-asks", "conversations"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],
@@ -2780,6 +2841,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-titles-import", "threads"],
   ["mako:thread-unfollow", "threads"],
   ["mako:threads", "threads"],
+  ["mako:threads-move", "conversations"],
   ["mako:transcript-document", "conversations"],
   ["mako:unread-records", "threads"],
   ["mako:unwatch-file", "workspaces"],

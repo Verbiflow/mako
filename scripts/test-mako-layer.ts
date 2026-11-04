@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { NATIVE_CAPABILITIES, TOOL_FAMILIES, replacementPath, routeHarnesses, type LayerCapabilities } from "@mako/host/contracts/mako-layer"
+import { NATIVE_CAPABILITIES, TOOL_FAMILIES, replacementPath, type LayerCapabilities } from "@mako/host/contracts/mako-layer"
 import { nativeSpawnsOff, type RoutedThread } from "@mako/host/contracts/native-routing"
 import { conversationInstructions, conversationServers, type ConversationTools } from "@mako/host/harnesses/live-driver"
 import { layerOf } from "@mako/host/harnesses/mako-layer"
@@ -76,14 +76,10 @@ const declared: Array<{ harness: string; capabilities: LayerCapabilities }> = [
 ]
 for (const { harness, capabilities } of declared) {
   assert.equal(capabilities.personSetup, "kept", `${harness} keeps the person's setup`)
-  assert.equal(capabilities.modelRoute["native-login"].kind, "native", `${harness} runs on the person's own login`)
-  const { instructions, toolServing, removal, interception, subagents, hooks, modelRoute } = capabilities
-  for (const [name, support] of Object.entries({ instructions, toolServing, removal, interception, subagents, hooks, ...modelRoute }))
+  const { instructions, toolServing, removal, interception, subagents, hooks } = capabilities
+  for (const [name, support] of Object.entries({ instructions, toolServing, removal, interception, subagents, hooks }))
     assert.ok(support.kind === "native" ? support.how.length > 0 : support.kind === "fallback" ? support.loses.length > 0 : support.reason.length > 0, `${harness} says how it stands on ${name}`)
 }
-assert.deepEqual(routeHarnesses(declared, "anthropic"), ["claude", "opencode"])
-assert.deepEqual(routeHarnesses(declared, "openai-chat"), ["codex", "opencode"])
-assert.deepEqual(routeHarnesses(declared, "native-login"), ["claude", "codex", "cursor", "opencode", "grok", "devin"])
 assert.deepEqual(declared.map(({ capabilities }) => replacementPath(capabilities, "remove")), ["removal", "removal", "removal", "removal", "removal", "removal"])
 assert.deepEqual(declared.map(({ capabilities }) => replacementPath(capabilities, "guide")), ["guide", "guide", "guide", "guide", "guide", "guide"])
 

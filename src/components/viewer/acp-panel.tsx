@@ -122,7 +122,7 @@ function PaneWaiting() {
   })
   if (!waiting) return null
   return (
-    <p className="flex shrink-0 items-center gap-1.5 px-4 py-2 text-label text-caution">
+    <p className="flex shrink-0 items-center gap-1.5 px-4 py-2 text-label text-attention">
       <ShieldQuestionIcon className="size-3.5 shrink-0" />
       Waiting for your answer. Click here to answer.
     </p>
@@ -531,10 +531,10 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
         {permission.kind ? (
           <ToolGlyph
             kind={tool.kind}
-            className="size-3.5 shrink-0 text-caution/90"
+            className="size-3.5 shrink-0 text-attention/90"
           />
         ) : (
-          <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
+          <ShieldQuestionIcon className="size-3.5 shrink-0 text-attention/90" />
         )}
         <span className={cn("min-w-0 truncate", !makoTool && !permission.detail && "font-mono")}>{makoTool ?? bareCommand(permission.title)}</span>
       </p>
@@ -630,7 +630,7 @@ function QuestionPermission({
   return (
     <div className="shrink-0 bg-surface/60 px-4 py-3">
       <p className="flex items-center gap-1.5 pb-2 text-ui text-foreground/90">
-        <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
+        <ShieldQuestionIcon className="size-3.5 shrink-0 text-attention/90" />
         <span className="min-w-0 truncate">{permission.title}</span>
       </p>
       <div className="max-h-72 space-y-3 overflow-y-auto">

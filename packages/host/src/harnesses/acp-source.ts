@@ -3,11 +3,12 @@ import type { AcpDecoderHooks, AcpPlanDecoder as AcpUpdatePlans } from "@mako/se
 import type { LayerCapabilities } from "../contracts/mako-layer.js"
 import type { NativeRoutingCapability } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
+import type { ModelRouteAdapter } from "./model-routes.js"
 import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
-import type { DriverAbsent, DriverSideQuestion, NativeFork, NativeResume, ProviderLiveDriver } from "./live-driver.js"
+import type { DriverAbsent, DriverSideQuestion, NativeFork, NativeResume, ProviderLiveDriver, SteerLanding } from "./live-driver.js"
 import type { RequestPermissionRequest, NewSessionRequest, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk"
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "./acp-access.js"
@@ -97,7 +98,7 @@ export type AcpResume =
  * that queues it behind the turn declares it unavailable.
  */
 export type AcpSteering =
-  | { kind: "supported"; via: string; hears?: string; wire: "concurrent-prompt" | "interrupting-prompt" | { extension: string; taken: z.ZodType } }
+  | { kind: "supported"; via: string; hears?: string; landing?: SteerLanding; wire: "concurrent-prompt" | "interrupting-prompt" | { extension: string; taken: z.ZodType } }
   | DriverAbsent
 
 /** Subagents, observed by the provider's own child evidence; shared ACP owns only binding lifetime and delivery. */
@@ -247,6 +248,8 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   nativeRouting: NativeRoutingCapability
   /** How the agent takes the Mako layer (`acpLayer`). */
   layer: LayerCapabilities
+  /** Which of the person's model connections the agent runs on (`ProviderLiveDriver.modelRoutes`). */
+  modelRoutes: ModelRouteAdapter
   resume: AcpResume
   steering: AcpSteering
   access?: AcpAccessPolicy

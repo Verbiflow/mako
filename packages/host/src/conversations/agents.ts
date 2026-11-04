@@ -3,6 +3,8 @@ import type { Entry } from "@mako/sessions/entries"
 import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
 import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { branchSince, checkoutSince } from "../base/checkout-since.js"
+import { finResumedText } from "../contracts/resume-account.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } from "../contracts/access.js"
@@ -12,6 +14,7 @@ import {
   ruleWords,
   childMode,
   childState,
+  modeWithin,
   PlaceSchema,
   reportPhase,
   reportRoute,
@@ -40,9 +43,12 @@ import {
 } from "../contracts/agents.js"
 import {
   afterStart,
+  APEX_DIGEST_FINS,
   WAIT_LIMIT_MS,
   type AgentOperations,
+  type AgentsApexes,
   type AgentsCrew,
+  type OtherApex,
   type AgentStrip,
   type CrewMate,
   type AgentsLinkInput,
@@ -71,7 +77,7 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, BRIEF_CLOSE, briefIntro, finName, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { finPolicyNote, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
@@ -83,7 +89,7 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../c
 import { crashedChildTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
-import { AgentWakes, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
+import { AgentWakes, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
@@ -96,6 +102,8 @@ const LIMIT_READ_MS = 3_000
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
 /** How often Fins waiting for this Mac's room look for it. */
 const ROOM_EVERY_MS = 10_000
+/** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
+export const APEX_ANSWER_MS = 60_000
 
 /** What a message into a child's Thread became, and when the child hears it. */
 interface Delivered {
@@ -107,6 +115,29 @@ interface Delivered {
 /** How long a steer waits for its child's turn to start, and then for its harness's answer, before the call answers without it. */
 const STEER_WAIT_MS = 3_000
 const STEER_ANSWER_MS = 2_000
+/** How `agents_send` names another of the person's Apexes: `apex:<title or Thread ID>`. */
+const APEX_PREFIX = "apex:"
+/** Messages one Apex sends another in an hour; past them it's refused, so two Apexes can't talk in a loop. */
+const APEX_SENDS_PER_HOUR = 3
+const HOUR_MS = 3_600_000
+
+/** Another of the person's Apexes as a message to it is addressed: its Thread, and the conversation that speaks for it. */
+interface OtherApexRef {
+  thread: string
+  conversation: string
+  title?: string
+}
+
+/** A message to another Apex whose reply goes back: to whom, from whom, as the sender's digest names it. */
+interface ApexAsk {
+  sender: Apex
+  /** Its conversation and the requests whose turn answers it: the message's own, or the turn it was steered into. */
+  conversation: string
+  requests: string[]
+  thread: string
+  label: string
+}
+
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
 const READ_ENTRIES = 40
 const READ_CHARS = 8_000
@@ -132,6 +163,8 @@ export interface AgentsDeps {
   modes(harness: string): readonly LiveSessionMode[] | undefined
   /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet: it carries on there. */
   movePending?(conversation: string): boolean
+  /** Whether the person archived a conversation's Thread: a Fin's work ends there for good, until they restore it. */
+  archived?(conversation: string): boolean
   /** What a Fin of `harness` in `cwd` may run on: the harness's catalog, Mako's pick for it, and the person's own choices there. */
   finChoices?(harness: string, cwd: string): Promise<FinChoices>
   /** `harness`'s catalog as this host last read it, for a Fin's row; undefined before it's read. */
@@ -146,6 +179,8 @@ export interface AgentsDeps {
   /** This Mac's cores, memory and load (`MacCapacity`): Fins past what it runs at once wait. Without it, only the tree's budget holds. */
   capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
+  /** `APEX_ANSWER_MS`, shorter in tests. */
+  apexAnswerMs?: number
   now?(): number
 }
 
@@ -258,8 +293,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly awaiting = new Map<string, { conversation: string; request: string }>()
   /** The decision a blocked Fin's Apex was told of, by Fin: told once per question. */
   private readonly asked = new Map<string, string>()
+  /** By Fin, the ask its Apex didn't answer in time, now the person's too, and why in the person's words. */
+  private readonly escalated = new Map<string, { line: string; why: string }>()
+  /** By Fin, the timer that asks the person once its Apex has left its ask unanswered for `APEX_ANSWER_MS`. */
+  private readonly unanswered = new Map<string, NodeJS.Timeout>()
   /** What each `agents_send` key delivered, so a retry answers the same. */
   private readonly sent = new Map<string, AgentsSent>()
+  /** Messages to another Apex, by its conversation and the request whose turn answers it: its reply goes to the sender once. */
+  private readonly apexAsks = new Map<string, ApexAsk>()
+  /** When each Apex messaged another, by the ordered pair: at most `APEX_SENDS_PER_HOUR` an hour. */
+  private readonly apexSends = new Map<string, number[]>()
   /** What joined a running turn as a step, by its id: no request holds it for `redirect` to find. */
   private readonly steered = new Map<string, Pick<LiveRequest, "text" | "attachments">>()
   /** The person's direct messages by their request, delivering or delivered, so a repeat answers the first. */
@@ -314,6 +357,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
   private current(notice: Notice): boolean {
     const { report } = notice
+    // Nor that it waits on an ask it no longer does: answered by the person, say, while its Apex's turn ran on.
+    if (report.implicit && report.status === "blocked") {
+      const conversation = this.conversationOf(report.child)
+      const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
+      return waiting !== undefined && report.id.endsWith(namedUuid(waiting.line))
+    }
     if (!report.implicit || (report.status !== "done" && report.status !== "failed")) return true
     const edge = this.store()?.edges().of(report.child)
     if (!edge?.run || edge.closedAt !== undefined) return true
@@ -516,7 +565,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     const edge = this.resolve({ session: placed.session, thread: placed.thread, conversation }, input.to, false)
     if (!edge) return unknownFin(input.to)
     if (!input.text.trim() && !input.attachments?.length) return { refused: "conflict", why: "A message needs words or an attachment." }
-    if (edge.closedAt) return { refused: "conflict", why: `${edge.name} was stopped. Open it to talk to it there.` }
     const received = namedUuid(`direct:${input.request}`)
     const attachments = input.attachments ?? []
     const sent = await this.deliver(edge, received, input.text, attachments, undefined, "steer")
@@ -526,6 +574,18 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!sent.deduped) this.routes.direct += 1
     hostLog("agents", "direct", { to: edge.op, request: input.request, delivery: sent.delivery, kept, ms: Math.round(performance.now() - began), ...(sent.deduped && { deduped: true }) })
     return { to: edge.name, fin: edge.child, delivery: sent.delivery }
+  }
+
+  /**
+   * The person archived a conversation's Thread: a Fin's work ends there, once.
+   * One at work is stopped as a stop would, in those words; one stopped
+   * already keeps its stop. A message to it is refused until it's restored.
+   */
+  async archived(conversation: string): Promise<boolean> {
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    if (!edge) return false
+    return this.end(edge, "the person archived it")
   }
 
   async stopChild(conversation: string, child: string): Promise<boolean> {
@@ -539,6 +599,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   settled(conversation: string, request: string): void {
     // A turn that ended mid-wait left no one to answer: the Fin's result wakes it instead.
     for (const hold of this.holds) if (hold.apex === conversation) hold.end()
+    this.apexReplied(conversation, request)
     this.wakes.settled(conversation)
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
@@ -550,7 +611,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   moved(conversation: string): void {
     const child = this.childOf.get(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
-    if (edge) this.childMoved(edge, true)
+    if (!edge) return
+    // The person writing in a stopped Fin's own Thread resumes it, as a message from its Apex does.
+    const closedAt = edge.closedAt
+    if (closedAt !== undefined && !this.deps.archived?.(conversation) && this.deps.live.held(conversation)?.requests.some((request) => (request.createdAt ?? 0) > closedAt && (!request.actor || request.actor.kind === "person")))
+      return void this.reopen(edge, "the person")
+    this.childMoved(edge, true)
   }
 
   // ── AgentOperations ──
@@ -597,20 +663,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     const own = this.tierOf(apex)
     const allowed = childAccess(own, input.access)
     if (!allowed) return this.refuse(op, "access", `A ${FIN_WORD} runs at most at its ${APEX_WORD}'s access: this Thread is on ${own}, so ${input.access} is refused.`)
+    const fit = await this.fitAccess(apex, asked, allowed, own, input, ruled)
+    if ("refused" in fit) return this.refuse(op, "access", fit.refused)
     // Without a limit reader there's nothing to wait for between these checks.
-    const placed = this.deps.limited ? await this.roomFor(apex, asked, allowed, input) : { harness: asked }
+    const placed = this.deps.limited ? await this.roomFor(apex, fit.harness, allowed, input) : { harness: fit.harness }
     if ("refused" in placed) return this.refuse(op, "limited", placed.refused)
     const { harness, rerouted } = placed
-    const mode = childMode(this.deps.modes(harness), allowed)
-    if (!mode) {
-      const offers = (this.deps.modes(harness) ?? []).flatMap((offered) => offered.access ? [offered.access] : []).join(", ")
-      return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offers}, each above ${allowed}, the most this ${FIN_WORD} may have. Start it on another harness.`)
-    }
+    // A harness at its limit hands the Fin to one that offers what was asked, so a widened tier stays with its own harness.
+    const fitted = harness === fit.harness ? fit : { harness, tier: allowed }
+    const mode = childMode(this.deps.modes(harness), fitted.tier)
+    if (!mode) return this.refuse(op, "access", `${this.deps.harnessLabel(harness)} runs on ${offered(this.deps.modes(harness))}, each above ${fitted.tier}, the most this ${FIN_WORD} may have. Start it on another harness.`)
     const tier = mode.tier
     const decided = await this.tuningOf(apex, harness, input, ruled)
     if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
+    const note = [fitted.note, rerouted?.note, decided.note].filter(Boolean).join(" ")
     const tuned: Tuned = {
-      ...(rerouted ? { ...decided, note: [rerouted.note, decided.note].filter(Boolean).join(" "), rerouted: rerouted.on } : decided),
+      ...decided,
+      ...(note && { note }),
+      ...(rerouted && { rerouted: rerouted.on }),
       ...(ruled && { rule: ruled.rule }),
     }
     const tree = this.rootOf(apex.thread)
@@ -666,6 +736,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
     if (input.scope === "crew") return this.crewOf(apex)
+    if (input.scope === "apexes") return this.apexesOf(apex)
     const store = this.store()!
     const strips: AgentStrip[] = []
     const visit = (parent: string, under?: string) => {
@@ -718,6 +789,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const began = performance.now()
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
+    if (input.to.startsWith(APEX_PREFIX)) return this.sendToApex(apex, input, began)
     const edge = this.resolve(apex, input.to, false)
     if (!edge) return unknownFin(input.to)
     const op = `send:${apex.session}:${input.clientKey}`
@@ -745,6 +817,68 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (input.forward) this.routes.forwarded += 1
     else this.routes.sent += 1
     hostLog("agents", "send", { op, child: edge.child, request, deliver, delivery: sent.delivery, forward: input.forward ?? false, ms: Math.round(performance.now() - began) })
+    return answer
+  }
+
+  /**
+   * A message to another of the person's Apexes: Mako's words, never the
+   * person's, naming the Apex and Thread that sent it, after the other's turn
+   * unless the sender steers it into a turn whose work is wrong. The turn that
+   * answers it sends its reply back once, as the sender's wake
+   * (`apexReplied`), which sends nothing on. At most `APEX_SENDS_PER_HOUR` go
+   * from one Apex to another; a repeat of the key answers the first.
+   */
+  private async sendToApex(sender: Apex, input: AgentsSendInput, began: number): Promise<AgentsSendResult> {
+    const op = `send:${sender.session}:${input.clientKey}`
+    const kept = this.sent.get(op)
+    if (kept) return { ...kept, deduped: true }
+    const target = this.otherApexNamed(sender, input.to.slice(APEX_PREFIX.length))
+    if ("refused" in target) return target
+    const name = `${APEX_PREFIX}${target.title ?? target.thread}`
+    const own = input.text?.trim()
+    if (input.forward) return this.refuse(op, "conflict", `forward passes the person's message on to a ${FIN_WORD}: to another ${APEX_WORD}, write everything it needs as text.`)
+    if (!own) return this.refuse(op, "conflict", "A message needs text.")
+    if (input.deliver === "interrupt") return this.refuse(op, "conflict", `Another ${APEX_WORD}'s turn is its own to end: queue (the default), or steer when what it's doing now is wrong.`)
+    const now = this.now()
+    const pair = `${sender.thread}>${target.thread}`
+    const recent = (this.apexSends.get(pair) ?? []).filter((at) => now - at < HOUR_MS)
+    if (recent.length >= APEX_SENDS_PER_HOUR) {
+      const minutes = Math.max(1, Math.ceil((recent[0]! + HOUR_MS - now) / 60_000))
+      return this.refuse(op, "rate-limited", `${name} had ${APEX_SENDS_PER_HOUR} messages from this ${APEX_WORD} in the last hour; the next can go in ${minutes} min. agents_list with scope apexes says how it stands.`)
+    }
+    const conversation = target.conversation
+    const ready = this.ready(conversation)
+    if (ready === "gone") return this.refuse(op, "unavailable", `${name}'s conversation isn't on this device.`)
+    const request = namedUuid(op)
+    const senderTitle = this.store()!.thread(ThreadIdSchema.parse(sender.thread))?.title ?? (sender.conversation && this.deps.live.session(sender.conversation)?.title) ?? `Thread ${sender.thread}`
+    const text = `${fromApex(senderTitle)}\n${apexNote(sender.thread)}\n\n${own}`
+    const requests = [request]
+    let sent: Delivered
+    if (this.deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) sent = { delivery: "queued", hears: `${name} already has it.`, deduped: true }
+    else {
+      this.deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(sender.session) })
+      const queued: Delivered = ready === "idle"
+        ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
+        : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message.` }
+      sent = queued
+      if (ready !== "idle" && input.deliver === "steer") {
+        const running = this.deps.live.held(conversation)?.requests.find((asked) => asked.status === "dispatching")?.id
+        const steered = await this.steerInto(conversation, name, request, text, [])
+        if ("why" in steered) sent = { ...queued, hears: `${name} hears it when its current turn ends, as its next message: ${steered.why}` }
+        else {
+          sent = steered
+          if (running) requests.push(running)
+        }
+      }
+      recent.push(now)
+      this.apexSends.set(pair, recent)
+      const harness = this.deps.live.session(conversation)?.harness
+      const ask: ApexAsk = { sender, conversation, requests, thread: target.thread, label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})` }
+      for (const id of requests) this.apexAsks.set(`${conversation}:${id}`, ask)
+    }
+    const answer: AgentsSent = { child: target.thread, name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
+    this.sent.set(op, answer)
+    hostLog("agents", "send apex", { op, to: target.thread, request, deliver: input.deliver ?? "queue", delivery: sent.delivery, ms: Math.round(performance.now() - began) })
     return answer
   }
 
@@ -974,6 +1108,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   dispose(): void {
     this.stopped = true
     this.stopRoomWatch()
+    for (const timer of this.unanswered.values()) clearTimeout(timer)
+    this.unanswered.clear()
     this.runs.dispose()
     this.wakes.dispose()
     for (const wake of this.waiters) wake()
@@ -1110,6 +1246,34 @@ export class Agents implements AgentOperations, ConversationChildren {
         on: { from: asked, ...(until !== undefined && { until }), ...(limit.instead && { instead: limit.instead }) },
       },
     }
+  }
+
+  /**
+   * Where a Fin asked on `allowed` runs when `asked` offers no mode at or below
+   * it, as Cursor offers only full: a start that named no harness, model or
+   * rule goes to the person's next harness that offers `allowed`; otherwise,
+   * or with none, it runs on `asked`'s least mode above `allowed` within its
+   * Apex's own access (`modeWithin`). The start's note says which. Refused
+   * only when every mode of the harness is wider than the Apex's own.
+   */
+  private async fitAccess(apex: Apex, asked: string, allowed: AccessTier, own: AccessTier, input: AgentsStartInput, ruled: Ruled | undefined): Promise<{ harness: string; tier: AccessTier; note?: string } | { refused: string }> {
+    const modes = this.deps.modes(asked)
+    if (childMode(modes, allowed)) return { harness: asked, tier: allowed }
+    const label = this.deps.harnessLabel(asked)
+    const offers = offered(modes)
+    if (input.harness === undefined && input.model === undefined && !ruled) {
+      const next = await this.nextHarness(asked, allowed, input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined))
+      if (next) {
+        hostLog("agents", "a Fin's harness runs above its access; it starts on the next", { from: asked, to: next, access: allowed })
+        return { harness: next, tier: allowed, note: `${label} runs only on ${offers}, above the ${allowed} it was asked on, so it runs on ${this.deps.harnessLabel(next)}, the person's next harness, on ${allowed}.` }
+      }
+    }
+    const wider = modeWithin(modes, allowed, own)
+    if (wider) {
+      hostLog("agents", "a Fin's harness runs above its access; it runs on the harness's nearest", { harness: asked, asked: allowed, access: wider.tier })
+      return { harness: asked, tier: wider.tier, note: `${label} runs only on ${offers}, so it runs on ${wider.tier} rather than the ${allowed} it was asked on, within this Thread's own ${own}.` }
+    }
+    return { refused: `${label} runs on ${offers}, each above ${allowed} and above this Thread's own ${own}, so a ${FIN_WORD} there would have more access than you. Name a harness that runs on ${allowed}, or leave harness out for the person's next one.` }
   }
 
   /** The first harness after `from` in the person's order that a Fin at `tier` can run on now. */
@@ -1408,7 +1572,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What a report is to its Apex: a notice, or nothing, and heard, when its route sends it elsewhere. */
   private noticeFor(edge: ThreadParent, report: Report, wake?: string): Notice | undefined {
     const store = this.store()!
-    const route = report.for === "person" ? "person" : reportRoute(edge.asked, report.status)
+    const route = report.for === "person" ? (report.told ? "apex" : "person") : reportRoute(edge.asked, report.status)
     if (route !== "apex") {
       store.markReportsDelivered([report.id], this.now())
       hostLog("agents", "report kept", { op: edge.op, report: report.id, status: report.status, to: route, wake: edge.asked.wake ?? "decisions" })
@@ -1529,22 +1693,34 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What a Fin's harness waits on, as its state says it: whose it is (the line says why when it's the person's) and what answers it. */
   private waitingOf(edge: ThreadParent, line: string, pending: PendingAsk | undefined): NonNullable<ChildThread["waiting"]> {
     const ask = pending ? nativeAsk(pending) : undefined
-    const why = this.personsBecause(edge, ask)
+    const why = this.personsBecause(edge, ask, line)
     return { question: why ? `${line} (yours to answer: ${why})` : line, on: !why ? "lead" : ask?.kind === "approval" ? "approval" : "person", ...(ask && { ask }) }
   }
 
   /**
-   * Why a Fin's ask is the person's, or undefined when it's its Apex's: an Apex
-   * answers within its own access (a question on any, an approval on full
-   * access), unless its spawn asked to hear only its result or it left the ask
-   * to the person.
+   * Why a Fin's ask `line` is the person's, or undefined when it's its Apex's
+   * alone: an Apex answers within its own access (a question on any, an
+   * approval on full access), unless its spawn asked to hear only its result,
+   * it left the ask to the person, or it hasn't answered in time.
    */
-  private personsBecause(edge: ThreadParent, ask: FinAsk | undefined): string | undefined {
+  private personsBecause(edge: ThreadParent, ask: FinAsk | undefined, line: string): string | undefined {
     if (reportRoute(edge.asked, "blocked") !== "apex") return `its ${APEX_WORD} hears only ${edge.asked.wake === "never" ? "what it reads" : "its result"}`
-    if (ask && this.latest.get(edge.child)?.id === passedId(edge.child, ask.id)) return `its ${APEX_WORD} left it to you`
+    if (this.passed(edge, ask)) return `its ${APEX_WORD} left it to you`
+    if (this.belowFull(edge, ask)) return `its ${APEX_WORD} isn't on full access`
+    const escalated = this.escalated.get(edge.child)
+    return escalated?.line === line ? escalated.why : undefined
+  }
+
+  private passed(edge: ThreadParent, ask: FinAsk | undefined): boolean {
+    return Boolean(ask && this.latest.get(edge.child)?.id === passedId(edge.child, ask.id))
+  }
+
+  /** The Apex's tier when `ask` is an approval and the Apex isn't on full access, so can't answer it. */
+  private belowFull(edge: ThreadParent, ask: FinAsk | undefined): AccessTier | undefined {
     if (ask?.kind !== "approval") return undefined
     const parent = this.frontOf(edge.parent, edge.parentSession)
-    return (parent ? this.tierOfConversation(parent) : undefined) === "full" ? undefined : `its ${APEX_WORD} isn't on full access`
+    const tier = (parent ? this.tierOfConversation(parent) : undefined) ?? "ask"
+    return tier === "full" ? undefined : tier
   }
 
   private stateOf(edge: ThreadParent): ChildState {
@@ -1592,27 +1768,81 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const hold of this.holds) if (hold.child === child) hold.check()
   }
 
-  /** A Fin's harness waits on a question, or an approval under an Apex on full access: the Apex hears it as `blocked`, keyed by what it waits on. */
+  /**
+   * A Fin's harness waits on a question or an approval: the Apex hears it as
+   * `blocked`, keyed by what it waits on, told whether it may answer. One it
+   * may answer that it leaves for `APEX_ANSWER_MS` goes to the person too
+   * (`escalate`), so no ask sits on an Apex busy with a long turn of its own.
+   */
   private askApex(edge: ThreadParent): void {
     const conversation = this.conversationOf(edge.child)
     const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
     if (!conversation || !waiting) {
       this.asked.delete(edge.child)
+      this.unwatch(edge.child)
       return
     }
     if (this.asked.get(edge.child) === waiting.line) return
     this.asked.set(edge.child, waiting.line)
+    this.unwatch(edge.child)
     const pending = this.deps.live.pendingAsk(conversation)
     const ask = pending ? nativeAsk(pending) : undefined
-    const why = this.personsBecause(edge, ask)
+    const why = this.personsBecause(edge, ask, waiting.line)
     hostLog("agents", "ask routed", { op: edge.op, child: edge.child, ask: ask?.kind ?? waiting.for, to: why ? "person" : "apex" })
-    if (why) return
-    this.keepReport(edge, {
-      id: `report:${edge.child}:waiting:${namedUuid(waiting.line)}`,
+    const asked = {
       child: ThreadIdSchema.parse(edge.child),
-      status: "blocked",
+      status: "blocked" as const,
       summary: `It waits: ${waiting.line}`,
-      question: apexAsk(waiting.line, ask?.kind === "approval"),
+      ...(ask?.options && { options: ask.options }),
+      implicit: true as const,
+      ownerGeneration: this.generation,
+    }
+    if (why) {
+      const tier = this.belowFull(edge, ask)
+      if (tier && reportRoute(edge.asked, "blocked") === "apex" && !this.passed(edge, ask))
+        this.keepReport(edge, { ...asked, id: personsId(edge.child, waiting.line), question: personsApproval(waiting.line, tier), for: "person", told: true, at: this.now() })
+      return
+    }
+    this.keepReport(edge, { ...asked, id: `report:${edge.child}:waiting:${namedUuid(waiting.line)}`, question: apexAsk(waiting.line, ask?.kind === "approval"), at: this.now() })
+    const line = waiting.line
+    const timer = setTimeout(() => this.escalate(edge.child, line, ask), this.deps.apexAnswerMs ?? APEX_ANSWER_MS)
+    timer.unref()
+    this.unanswered.set(edge.child, timer)
+  }
+
+  private unwatch(child: string): void {
+    clearTimeout(this.unanswered.get(child))
+    this.unanswered.delete(child)
+    this.escalated.delete(child)
+  }
+
+  /**
+   * The Apex left its Fin's ask `line` unanswered past `APEX_ANSWER_MS`: the
+   * person is asked too, through every surface that reads the Fin's state
+   * (the Inbox, a notification, the phone), and the Apex hears that they
+   * were, and that it may still answer. A digest still waiting with the
+   * first notice gives way to this one.
+   */
+  private escalate(child: string, line: string, ask: FinAsk | undefined): void {
+    this.unanswered.delete(child)
+    if (this.stopped || this.asked.get(child) !== line) return
+    const store = this.store()
+    const edge = store?.edges().of(child)
+    if (!store || !edge || edge.closedAt !== undefined) return
+    const ms = this.deps.apexAnswerMs ?? APEX_ANSWER_MS
+    const within = waitWords(ms)
+    const front = this.frontOf(edge.parent, edge.parentSession)
+    const busy = front !== undefined && this.ready(front) === "queue"
+    this.escalated.set(child, { line, why: `its ${APEX_WORD} ${busy ? "is mid-turn and " : ""}didn't answer within ${within}` })
+    hostLog("agents", "ask escalated", { op: edge.op, child, after: ms, busy })
+    const first = `report:${child}:waiting:${namedUuid(line)}`
+    if (front && this.wakes.withdraw(front, `notice:${child}:${first}`)) store.markReportsDelivered([first], this.now())
+    this.keepReport(edge, {
+      id: personsId(child, line),
+      child: ThreadIdSchema.parse(child),
+      status: "blocked",
+      summary: `It waits: ${line}`,
+      question: apexAsk(line, ask?.kind === "approval", `you ${busy ? "are mid-turn and " : ""}didn't answer within ${within}`),
       ...(ask?.options && { options: ask.options }),
       implicit: true,
       ownerGeneration: this.generation,
@@ -1809,7 +2039,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private steer(conversation: string, id: string, text: string): Promise<boolean> | false {
     const running = this.deps.live.held(conversation)?.requests.find((request) => request.status === "dispatching")
     if (!running) return false
-    return this.deps.live.act(conversation, { kind: "steer", id, requestId: running.id, text, attachments: [] }).then(
+    return this.deps.live.act(conversation, { kind: "steer", id, requestId: running.id, text, attachments: [] }, "native").then(
       (action) => {
         const took = action.state.kind === "accepted" || action.state.kind === "completed"
         if (!took) hostWarn("agents", "a digest wasn't taken by the running turn", { conversation, state: action.state.kind })
@@ -1827,12 +2057,19 @@ export class Agents implements AgentOperations, ConversationChildren {
    * takes a follow-up where its work is. `hears` says when the child hears it, as the child's own harness takes a
    * message, whatever harness the sender runs on.
    */
-  private async deliver(edge: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver): Promise<Delivered | AgentRefused> {
-    if (edge.closedAt)
-      return { refused: "conflict", why: `${edge.name} was stopped, and a stopped Thread's delegation stays over: start a new one with agents_start, or the person can open it and talk to it there.` }
+  private async deliver(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver): Promise<Delivered | AgentRefused> {
+    const before = this.conversationOf(stopped.child)
+    const repeat = before ? this.deps.live.held(before)?.requests.find((asked) => asked.id === request) : undefined
+    if (repeat) return repeat.status === "queued" || repeat.status === "held"
+      ? { delivery: "queued", hears: `${stopped.name} hears it when its current turn ends, as its next message.`, deduped: true }
+      : { delivery: "turn", hears: `${stopped.name} already has it.`, deduped: true }
+    if (before && this.deps.archived?.(before))
+      return { refused: "conflict", why: `${stopped.name} was archived, which ends its work for good: start a new ${FIN_WORD} with agents_start, or the person can restore it, after which a message resumes it.` }
+    const resumed = await this.resumeAccount(stopped)
+    const edge = this.reopen(stopped, "a message")
     const taken = edge.run && (!edge.run.ended || !this.conversationOf(edge.child)) ? await this.takeOver(edge) : undefined
     if (taken && "refused" in taken) return taken
-    const message = taken?.cut ? `${text}\n\n${HANDED_OVER_NOTE}` : text
+    const message = [text, resumed, taken?.cut ? HANDED_OVER_NOTE : undefined].filter(Boolean).join("\n\n")
     const conversation = this.conversationOf(edge.child)
     const ready = conversation ? this.ready(conversation) : "gone"
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
@@ -1861,6 +2098,39 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = queue()
     const steered = await this.steerInto(conversation, name, request, text, attachments)
     return "why" in steered ? { ...queued, hears: `${name} hears it when its current turn ends, as its next message: ${steered.why}` } : steered
+  }
+
+  /**
+   * What a stopped or failed Fin reads beneath the message that resumes it
+   * (`finResumedText`): when and why it stopped, and what moved in its
+   * checkout and on the branch it goes into since. Undefined for a Fin that
+   * didn't end that way.
+   */
+  private async resumeAccount(edge: ThreadParent): Promise<string | undefined> {
+    const state = this.stateOf(edge)
+    if (state.kind !== "ended" || (state.outcome !== "stopped" && state.outcome !== "failed")) return undefined
+    const reading = this.childReading(edge)
+    const at = (state.outcome === "stopped" ? edge.closedAt : this.latest.get(edge.child)?.at) ?? reading.ended?.at ?? edge.closedAt ?? edge.createdAt
+    const conversation = this.conversationOf(edge.child)
+    const path = reading.path ?? (edge.run?.nativeId ? this.deps.catalog.nativePath({ harness: edge.run.harness, nativeId: edge.run.nativeId }) : undefined)
+    const cwd = (conversation ? this.deps.live.session(conversation)?.cwd : undefined) ?? (path ? this.deps.catalog.ref(path)?.cwd : undefined)
+    const [checkout, branches] = cwd ? await Promise.all([checkoutSince(cwd, at), branchSince(cwd, at)]) : [[], []]
+    return finResumedText({ how: state.outcome, at, ...(state.reason && { reason: state.reason }), now: this.now(), checkout, branches })
+  }
+
+  /**
+   * Stopping a Fin pauses it: whatever next reaches it (`why`) opens its
+   * delegation again, in the same Session, so its turns report and wake its
+   * Apex as before. The edge as it stands after.
+   */
+  private reopen(edge: ThreadParent, why: string): ThreadParent {
+    if (edge.closedAt === undefined) return edge
+    const store = this.store()!
+    const open = store.reopenEdge(edge.child, this.now()) ?? edge
+    hostLog("agents", "resumed after stop", { op: edge.op, child: edge.child, by: why, stoppedFor: this.now() - edge.closedAt })
+    this.forget(edge.parent)
+    this.childMoved(open, false)
+    return open
   }
 
   /**
@@ -1916,7 +2186,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     while (!turn() && Date.now() < deadline && this.deps.live.session(conversation)?.status !== "ready") await new Promise((resolve) => setTimeout(resolve, 50))
     const running = turn()
     if (!running) return { why: "its turn hadn't started yet." }
-    const action = Promise.resolve().then(() => this.deps.live.act(conversation, { kind: "steer-queued", id: namedUuid(`steer:${request}`), requestId: running.id, queuedRequestId: request, text, attachments }))
+    const action = Promise.resolve().then(() => this.deps.live.act(conversation, { kind: "steer-queued", id: namedUuid(`steer:${request}`), requestId: running.id, queuedRequestId: request, text, attachments }, "native"))
     const answered = await Promise.race([
       action.then((taken) => taken.state, (error) => ({ kind: "refused" as const, reason: errorMessage({ error }) })),
       new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now()) + STEER_ANSWER_MS)),
@@ -1967,6 +2237,100 @@ export class Agents implements AgentOperations, ConversationChildren {
       },
       crew: store.edges().children(edge.parent).filter((other) => other.child !== edge.child && !other.closedAt).map((other) => crewMate(this.frontDoorChild(other))),
     }
+  }
+
+  /** The person's other Apexes open here, each as it stands, from typed state: reading one never wakes it. */
+  private apexesOf(caller: Apex): AgentsApexes {
+    return { apexes: this.otherApexes(caller).map((other) => this.otherApex(other)) }
+  }
+
+  /** Every tree's top Apex but the caller's own whose conversation is open on this host, with the conversation that speaks for it. */
+  private otherApexes(caller: Apex): OtherApexRef[] {
+    const store = this.store()!
+    this.sync()
+    const roots = new Set(store.edges().all.map((edge) => this.rootOf(edge.parent)))
+    roots.delete(this.rootOf(caller.thread))
+    return [...roots].flatMap((thread) => {
+      const record = store.thread(ThreadIdSchema.parse(thread))
+      const first = record?.sessions[0]
+      const conversation = first && this.frontOf(thread, first)
+      if (!conversation || !this.deps.live.held(conversation)) return []
+      const title = record.title ?? this.deps.live.session(conversation)?.title
+      return [{ thread, conversation, ...(title && { title }) }]
+    })
+  }
+
+  /** Another Apex by its title or Thread, as `scope: apexes` lists them; a title two share is refused with their Threads. */
+  private otherApexNamed(caller: Apex, ref: string): OtherApexRef | AgentRefused {
+    const others = this.otherApexes(caller)
+    const words = ref.trim().toLowerCase()
+    const found = others.filter((other) => other.thread === ref.trim() || other.title?.trim().toLowerCase() === words)
+    if (found.length === 1) return found[0]!
+    if (found.length) return { refused: "unknown-apex", why: `${found.length} ${APEX_WORD}es are titled ${ref}: name one as apex:<Thread ID>: ${found.map((other) => other.thread).join(", ")}.` }
+    const listed = others.map((other) => `${APEX_PREFIX}${other.title ?? other.thread}`).join(", ")
+    return { refused: "unknown-apex", why: `No other ${APEX_WORD} of the person's open here is ${ref}${listed ? `; they are ${listed}` : ""}. agents_list with scope apexes shows them.` }
+  }
+
+  private otherApex(other: OtherApexRef): OtherApex {
+    const store = this.store()!
+    const { thread, conversation } = other
+    const session = this.deps.live.session(conversation)
+    const ready = this.ready(conversation)
+    const working = ready === "steer" || ready === "queue"
+    const held = working ? this.deps.live.held(conversation) : undefined
+    const step = held && session ? lastStep(held.blocks.slice(-24), session.harness) : undefined
+    const branch = store.worktrees().find((worktree) => worktree.thread === thread)?.branch
+    const open = store.edges().children(thread).filter((edge) => !edge.closedAt).map((edge) => ({ edge, state: this.stateOf(edge) }))
+      .sort((a, b) => CHILD_GROUPS.indexOf(childGroup(a.state)) - CHILD_GROUPS.indexOf(childGroup(b.state)))
+    const fins = open.slice(0, APEX_DIGEST_FINS).map(({ edge, state }) => ({ name: edge.name, line: this.digestLine(edge, state) }))
+    const said = this.lastReply(conversation)
+    return {
+      thread,
+      ...(other.title && { title: other.title }),
+      ...(session && { harness: this.deps.harnessLabel(session.harness) }),
+      working,
+      ...(step && { step }),
+      ...(session?.cwd && { folder: session.cwd }),
+      ...(branch && { branch }),
+      fins: rollup(this.roster(conversation)),
+      digest: { fins, ...(open.length > fins.length && { more: open.length - fins.length }), ...(said && { said }) },
+    }
+  }
+
+  /** A Fin in another Apex's digest: its last report, or before one, its state. */
+  private digestLine(edge: ThreadParent, state: ChildState): string {
+    const latest = this.latest.get(edge.child)
+    if (latest) return `${latest.status}: ${noteLine(reportPhase(latest) ?? latest.status, 160)}`
+    const line = childLine(state)
+    return line ? `${state.kind}: ${noteLine(line, 160)}` : state.kind
+  }
+
+  /** The first paragraph of what a conversation's agent said as its last finished turn ended. */
+  private lastReply(conversation: string): string | undefined {
+    const last = this.deps.live.held(conversation)?.requests.filter((request) => request.status === "completed").at(-1)
+    const text = last ? this.deps.live.turnReply(conversation, last.id)?.text.trim() : undefined
+    return text ? firstParagraph(text) : undefined
+  }
+
+  /** The turn that answers another Apex's message ended: its reply goes to that Apex once, as a wake of its own. */
+  private apexReplied(conversation: string, request: string): void {
+    const ask = this.apexAsks.get(`${conversation}:${request}`)
+    if (!ask) return
+    for (const id of ask.requests) this.apexAsks.delete(`${conversation}:${id}`)
+    const reply = this.deps.live.turnReply(conversation, request)
+    const done = reply?.request?.status === "completed"
+    const said = reply?.text.trim() || (done ? "It ended its turn without a reply." : reply?.request?.error ?? "Its turn ended before it answered.")
+    const front = this.frontOf(ask.sender.thread, ask.sender.session) ?? ask.sender.conversation
+    const from = this.store()?.journalPlacement(conversation)?.session
+    if (!front || !from) return
+    this.wakes.notice(front, this.rootOf(ask.sender.thread), {
+      id: `notice:reply:${conversation}:${request}`,
+      report: { id: `reply:${conversation}:${request}`, child: ThreadIdSchema.parse(ask.thread), status: done ? "done" : "failed", summary: said.slice(0, 16_000), ownerGeneration: this.generation, at: this.now() },
+      label: ask.label,
+      from,
+      reply: true,
+    })
+    hostLog("agents", "apex replied", { conversation, request, to: ask.sender.thread, done })
   }
 
   /** A Fin as its Apex's front-door note names it: what it was asked, where it stands and what it said last. */
@@ -2086,6 +2450,26 @@ function waitedReport(report: Report): WaitedReport {
 
 /** Who answers a Fin's ask: its Apex, within its access, or the person, whose ask it is. */
 type Answerer = { kind: "apex"; apex: Apex } | { kind: "person" }
+
+/** The tiers a harness's modes run on, in words: "full", "ask, edits, full". */
+function offered(modes: readonly LiveSessionMode[] | undefined): string {
+  return (modes ?? []).flatMap((mode) => mode.access ? [mode.access] : []).join(", ")
+}
+
+/** The report that tells an Apex its Fin's ask `line` is the person's too. */
+function personsId(child: string, line: string): string {
+  return `report:${child}:to-person:${namedUuid(line)}`
+}
+
+/** A wait in words: "a minute", "2 minutes", "30 seconds". */
+function waitWords(ms: number): string {
+  if (ms >= 60_000) {
+    const minutes = Math.round(ms / 60_000)
+    return minutes === 1 ? "a minute" : `${minutes} minutes`
+  }
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  return seconds === 1 ? "a second" : `${seconds} seconds`
+}
 
 /** The report that leaves an ask to the person, one per ask. */
 function passedId(child: string, ask: string): string {

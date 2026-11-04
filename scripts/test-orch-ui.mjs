@@ -112,7 +112,7 @@ async function check() {
   for (const title of children) assert.ok(!nested.text.includes(title), `the rail lists no other Fin: ${title}`)
   assert.equal(await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-fin-pips]')].length"), 1, "one Apex row wears the pips")
   const label = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')")
-  assert.equal(label, "12 Fins: 2 need you, 5 working, 2 queued, 3 done")
+  assert.equal(label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
   assert.equal(await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]').dataset.tip"), label)
   await both("rail")
 
@@ -150,7 +150,7 @@ async function check() {
   })()`)
   console.log("STRIP", JSON.stringify(strip))
   // The composer's agents line counts the Apex's Fins by the rollup: queued and asking ones aren't "running".
-  assert.equal(await evaluate("document.querySelector('[data-agents-toggle]')?.innerText.trim()"), "5 Fins working · 2 need you")
+  assert.equal(await evaluate("document.querySelector('[data-agents-toggle]')?.innerText.trim()"), "12 Fins · 2 need you · 5 working")
   await both("strip")
 
   // The front door: the composer says a message goes to the Apex; where the Apex sent one stands as a line in its
@@ -232,9 +232,9 @@ async function check() {
   })()`)
   console.log("PANEL", JSON.stringify(panel))
   assert.match(panel.heading, /Mobile polish's Fins/)
-  assert.match(panel.heading, /12/)
+  assert.match(panel.heading, /12 Fins · 2 need you · 5 working · 2 queued · 1 idle · 2 done/)
   assert.match(panel.heading, /Stop all/)
-  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2", "Done 3"])
+  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2", "Idle 1", "Done 2"])
   await both("panel")
 
   // A Fin's tab opens it in place: its breadcrumb, its brief from the Apex first, the approval it waits on, its
@@ -294,7 +294,7 @@ async function check() {
   })()`)
   console.log("STOP", JSON.stringify(popover))
   assert.ok(popover.width <= 320 && popover.height <= 120, `the popover is at most 320×120 (${popover.width}×${popover.height})`)
-  assert.match(popover.text, /^5 Fins working, 4 more waiting/)
+  assert.match(popover.text, /^12 Fins · 2 need you · 5 working · 2 queued · 1 idle · 2 done/)
   assert.match(popover.text, /Stop the Apex only/)
   assert.match(popover.text, /Stop all$/)
   assert.equal(await evaluate("[...document.querySelectorAll('[data-stop-apex] button')].at(-1).title"), "Stop the Apex and 9 Fins")
@@ -337,7 +337,7 @@ async function check() {
   assert.deepEqual(list.asking.sort(), ["Quiet-hours push wording", "Sheet motion on iPad"], "the phone lists the Fins that need the person, each a row")
   for (const title of children) assert.ok(!list.text.includes(title), `the phone's list lists no other Fin (${title})`)
   assert.equal(list.rows, 4)
-  assert.equal(list.label, "12 Fins: 2 need you, 5 working, 2 queued, 3 done")
+  assert.equal(list.label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
   await both("phone-list")
   await click("[data-thread]")
   await until("Boolean(document.querySelector('[data-child-chips]'))", "the Apex's chips")

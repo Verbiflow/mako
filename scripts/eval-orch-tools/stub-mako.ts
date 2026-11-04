@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsCrew, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
+import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsApexes, type AgentsCrew, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
+import { registerThreadTools, ThreadMoveAnswerSchema } from "@mako/host/conversations/thread-move-tool"
+import { AFTER_MOVE, THREAD_MOVE_TOOL } from "@mako/host/contracts/thread-tools"
 import { startConversationMcp, type MakoTools } from "@mako/host/tools/conversation-mcp"
 import type { CallThread } from "@mako/host/contracts/native-calls"
 import { callGateAnswer, HookCall } from "@mako/host/harnesses/call-gate"
@@ -17,18 +19,19 @@ import { FIN_NAME, ToolArgs, type Call } from "./cases.ts"
 /**
  * Mako's own `mako` server for the eval: the conversation server a Thread's
  * agent reaches, with every `agents_*` tool as `registerAgentTools` projects
- * it from `AGENT_TOOLS` (so the shapes can't drift), answered by a door that
- * records each call and starts nothing. A start answers as a running child
- * would; a list, the children started so far.
+ * it from `AGENT_TOOLS`, and `thread_move` as `registerThreadTools` projects
+ * it (so the shapes can't drift), answered by a door that records each call
+ * and starts nothing. A start answers as a running child would; a list, the
+ * children started so far; a move, as a handoff under way.
  */
 export interface StubMako {
-  /** The grant one launch's agent gets (`ConversationTools`). */
-  grant(conversation: string): { token: string; computerUrl: string; makoUrl?: string }
+  /** The grant one launch's agent gets (`ConversationTools`), with the person's other Apexes its `scope: apexes` lists. */
+  grant(conversation: string, apexes?: AgentsApexes): { token: string; computerUrl: string; makoUrl?: string }
   /** The Thread a conversation's hooks are answered for at the `/calls` gate, as routing reads it. */
   routes(conversation: string, thread: CallThread): void
   /** A case's own answers to Mako's tools, over `FAMILY_ANSWERS`. */
   answers(conversation: string, answers: Record<string, string>): void
-  /** The `agents_*` calls so far, by bare tool name. */
+  /** The `agents_*` and `thread_move` calls so far, by bare tool name. */
   calls(conversation: string): Call[]
   /** What an agent reads first: the server's instructions and its tools. */
   describe(): Promise<{ instructions: string; tools: { name: string; description: string; inputSchema: JsonValue }[] }>
@@ -53,7 +56,8 @@ export function startedAlready(names: readonly string[]): AgentsStarted[] {
   return names.map((name, index) => ({ child: randomUUID(), name, state: "working", tree: { running: index + 1, started: index + 1, of: { running: 8, started: 32 } }, next: AFTER_START }))
 }
 
-export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[]): AgentAnswer {
+export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[], apexes: AgentsApexes = { apexes: [] }): AgentAnswer {
+  if (tool === THREAD_MOVE_TOOL.mcp.name) return { outcome: "handing-off", move: randomUUID(), next: AFTER_MOVE.handingOff }
   const tree = { running: started.length, started: started.length, of: { running: 8, started: 32 } }
   if (tool === "agents_start") {
     const name = Named.parse(args).name ?? `child-${started.length + 1}`
@@ -69,6 +73,7 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
     }
     return { ...crew }
   }
+  if (tool === "agents_list" && Scoped.parse(args).scope === "apexes") return { ...apexes }
   if (tool === "agents_list") {
     const listed: AgentsListResult = {
       children: started.map((child) => ({ child: child.child ?? child.name, name: child.name, harness: "codex", origin: "started", state: { kind: "working" }, startedAt: Date.now() - 60_000 })),
@@ -78,6 +83,12 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
   }
   if (tool === "agents_send") {
     const { to = "child", deliver = "queue" } = Sent.parse(args)
+    if (to.startsWith("apex:")) {
+      const other = apexes.apexes.find((apex) => to === `apex:${apex.thread}` || to.toLowerCase() === `apex:${apex.title?.toLowerCase()}`)
+      if (!other) return { refused: "unknown-apex", why: `No other Apex of the person's open here is ${to.slice("apex:".length)}. agents_list with scope apexes shows them.` }
+      const sent: AgentsSent = { child: other.thread, name: `apex:${other.title ?? other.thread}`, request: randomUUID(), ...SENT.queue(`apex:${other.title ?? other.thread}`) }
+      return { ...sent }
+    }
     const name = to.replace(/^(child|fin):/, "")
     const sent: AgentsSent = { child: randomUUID(), name, request: randomUUID(), ...SENT[deliver](name) }
     return { ...sent }
@@ -108,6 +119,7 @@ const FAMILY_ANSWERS = new Map<string, string>([
   ["pull_request_status", "pull request: #42 Fix login redirect (open)\nchecks: 4 passed, 1 failed\nfailed: lint (eslint: src/login.ts:12 no-unused-vars)\nreviews: none"],
   ["pull_request_open", "Pushed mako/thread-work and opened https://github.com/acme/app/pull/42."],
   ["pull_request_merge", "Merged #42 into main (squash)."],
+  ["pull_request_rerun", "Re-running the failed jobs of 1 GitHub Actions run on the pushed commit. pull_request_status shows them as they go."],
   ["app_status", "address: http://thread.localhost:20540\nprocesses: web stopped, api stopped\nrecipe: ready (web on 20540, api on 20541); checks quick, full"],
   ["app_start", "Started web on 20540 and api on 20541: http://thread.localhost:20540 answers 200."],
   ["app_stop", "Stopped web and api."],
@@ -154,6 +166,7 @@ export async function startStubMako(): Promise<StubMako> {
   const started = new Map<string, AgentsStarted[]>()
   const threads = new Map<string, CallThread>()
   const caseAnswers = new Map<string, Map<string, string>>()
+  const others = new Map<string, AgentsApexes>()
   const record = (conversation: string, tool: string, args: ToolArgs) => calls.set(conversation, [...calls.get(conversation) ?? [], { tool, args }])
   const servers = await startConversationMcp(
     { authorizeAgent() {} },
@@ -170,10 +183,18 @@ export async function startStubMako(): Promise<StubMako> {
         calls.set(conversation, [...calls.get(conversation) ?? [], { tool, args }])
         const children = started.get(conversation) ?? []
         started.set(conversation, children)
-        return stubAnswer(tool, args, children)
+        return stubAnswer(tool, args, children, others.get(conversation))
       },
       caller: () => ({ kind: "agent", session: conversationId() }),
       filled: () => ({}),
+    }), (server, conversationId) => registerThreadTools(server, {
+      invoke: async (_channel, [, input]) => {
+        const conversation = conversationId()
+        const args = ToolArgs.parse(JSON.parse(JSON.stringify(input ?? {})))
+        record(conversation, THREAD_MOVE_TOOL.mcp.name, args)
+        return ThreadMoveAnswerSchema.parse(stubAnswer(THREAD_MOVE_TOOL.mcp.name, args, []))
+      },
+      caller: () => ({ kind: "agent", session: conversationId() }),
     })],
     (conversation, event, body) => {
       const thread = threads.get(conversation)
@@ -182,9 +203,10 @@ export async function startStubMako(): Promise<StubMako> {
   )
   const grants = new Map<string, ReturnType<typeof servers.mint>>()
   return {
-    grant(conversation) {
+    grant(conversation, apexes) {
       const grant = servers.mint(`eval-${conversation}`, conversation)
       grants.set(conversation, grant)
+      if (apexes) others.set(conversation, apexes)
       return grant
     },
     routes: (conversation, thread) => { threads.set(conversation, thread) },

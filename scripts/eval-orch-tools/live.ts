@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { chmod, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -6,8 +8,8 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
-import { caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
-import { bareName, isShell, shellCommand } from "./names.ts"
+import { apexesAnswer, caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
+import { bareName, isShell, makoTool, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
 /**
@@ -20,6 +22,8 @@ import type { StubMako } from "./stub-mako.ts"
  * print and exit. Cursor has no asking mode; the stubs are what stands
  * between it and a real run.
  */
+
+const execFileAsync = promisify(execFile)
 
 /** The harnesses whose driver routes each shell call (`NativeCallsCapability` per-call): a command routing denies there never ran. */
 const ROUTED_CALLS = new Set(["claude", "cursor", "grok", "devin", "codex", "opencode"])
@@ -90,7 +94,9 @@ export async function liveSample(input: {
   const status = () => events.findLast((event) => event.type === "live-session")?.session.status
   try {
     const mode = ASKING_MODE.get(harness)
-    const grant = stub.grant(id)
+    // The project's branch is the one the case's Thread works on: main in the main checkout, the Thread's own in its worktree.
+    await execFileAsync("git", ["-C", project, "checkout", "-q", "-f", orchCase.setup.thread?.place === "main" ? "main" : "mako/thread-work"]).catch(() => undefined)
+    const grant = stub.grant(id, apexesAnswer(orchCase))
     if (routing === "on") stub.routes(id, caseCallThread(orchCase, project))
     if (orchCase.setup.answers) stub.answers(id, orchCase.setup.answers)
     await driver.start(project, admitted(harness, {
@@ -120,7 +126,7 @@ export async function liveSample(input: {
     const tool = bareName(harness, raw)
     // Cursor names every MCP call `mcp`: the stub's calls, in order, say which.
     if (tool === "mcp" && makoArgs.length) return [makoArgs.shift()!]
-    const recorded = tool.startsWith("agents_") ? makoArgs.findIndex((call) => call.tool === tool) : -1
+    const recorded = makoTool(tool) ? makoArgs.findIndex((call) => call.tool === tool) : -1
     const known = recorded === -1 ? undefined : makoArgs.splice(recorded, 1)[0]
     return [{ tool, args: known?.args ?? args }]
   })

@@ -754,7 +754,7 @@ const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[
 const folderMarkup = renderToStaticMarkup(<FolderActivity folder={activeFolder} />)
 assert.match(folderMarkup, /1 running/)
 assert.match(folderMarkup, /running outside this Mako/)
-assert.match(folderMarkup, /data-size="20"/)
+assert.match(folderMarkup, /data-live-mark="working"/, "the folder's chip wears the working fin")
 assert.doesNotMatch(folderMarkup, /1 active|animate-spin|lucide-loader/)
 assert.match(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,running:2}} />), /3 running/)
 assert.equal(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,active:0}} />), "")

@@ -85,6 +85,8 @@ export interface WorldOptions {
    * step, the rest none). `holds`: each steer waits for `answerSteer`, as Cursor holds one while its subagent runs.
    */
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
+  /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
+  apexAnswerMs?: number
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -108,6 +110,8 @@ export class AgentsWorld {
   /** Every prompt a driver was sent, in order: a turn lost or run twice shows here. */
   readonly prompts: { conversation: string; harness: string; text: string; at: number }[] = []
   readonly steers: { conversation: string; text: string; at: number }[] = []
+  /** Conversations whose Threads the person archived (`AgentsDeps.archived`). */
+  readonly archived = new Set<string>()
   /** Every answer to an approval a driver was sent: its conversation, its harness's request, and the answer. */
   readonly answers: { conversation: string; request: string; response: LivePermissionResponse; at: number }[] = []
   readonly events: HostEvent[] = []
@@ -178,6 +182,8 @@ export class AgentsWorld {
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.capacity && { capacity: this.options.capacity }),
       ...(this.options.processes && { processes: this.options.processes }),
+      ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
+      archived: (conversation) => this.archived.has(conversation),
     }
     this.agents = new Agents(deps)
     this.agents.resume()
@@ -341,6 +347,13 @@ export class AgentsWorld {
       },
       cancel: async (id) => {
         this.holds.get(id)?.()
+        // A cancelled turn takes its open asks with it, unanswered.
+        for (const [key, asked] of this.asking) {
+          if (!key.startsWith(`${id}:`)) continue
+          this.asking.delete(key)
+          this.live.observe({ type: "live-permission-ended", id, requestId: key.slice(id.length + 1), observationId: asked.observationId, source: "request-aborted" })
+          asked.answered({ kind: "choice", optionId: null })
+        }
       },
       close: () => {},
       setMode: async (id) => {

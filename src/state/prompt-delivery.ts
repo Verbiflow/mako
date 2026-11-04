@@ -25,12 +25,13 @@ export interface TurnStop {
 }
 
 /**
- * A turn that ended where the person chose: their own Stop, or their goal's
- * token budget. It's said quietly and nothing offers to continue it; a goal
- * at its budget goes on only when it's set again with more.
+ * A turn that ended where the person chose: their own Stop, their goal's
+ * token budget, or their message steered in by stopping it. It's said quietly
+ * and nothing offers to continue it; a goal at its budget goes on only when
+ * it's set again with more, and a steered turn goes on as the message's.
  */
 export function endedAsChosen(reason: InterruptionReason): boolean {
-  return reason === "stopped" || reason === "goal-budget"
+  return reason === "stopped" || reason === "goal-budget" || reason === "steered"
 }
 
 /**
@@ -172,6 +173,7 @@ const TURN_STOP_LABELS = {
   "not-saved": () => "Stopped when Mako couldn't save",
   "goal-budget": () => "Stopped at the goal's token budget",
   "machine-lost": () => "Interrupted",
+  steered: () => "Stopped for your message",
 } satisfies Record<InterruptionReason, (provider: string) => string>
 
 /**
@@ -235,6 +237,10 @@ export interface PendingPrompt {
    * acceptance, so it is never delivered twice.
    */
   unconfirmed?: boolean
+  /** Why it waits in this device's outbox for the host (`waitsFor`): it goes by itself, in order, once the host can take it. */
+  waiting?: string
+  /** Sent into the running turn: it shows as steering until the turn takes it, or goes as the next message. */
+  steering?: true
 }
 
 interface DeliveryInput {
@@ -326,7 +332,8 @@ export function promptDelivery(input: DeliveryInput): PromptDelivery {
       : input.session.status === "failed"
         ? input.pendingPrompts?.[0]
         : undefined
-  const starting = first?.status === "held" ? undefined : first
+  // A message waiting in this device's outbox stays in the queue, where its row says why, not drawn as sent.
+  const starting = first?.status === "held" || (first && "waiting" in first && first.waiting) ? undefined : first
   const visible = transcribedRequests(input)
   return {
     starting: starting && !visible.has(starting.id) ? starting : null,

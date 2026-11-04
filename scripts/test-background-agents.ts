@@ -10,7 +10,7 @@ import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import type { MarkedProcess } from "@mako/host/base/marked-processes"
 import { accessModeId } from "@mako/host/contracts/access"
-import { childEntry, childMode, childState, type ThreadParent } from "@mako/host/contracts/agents"
+import { childEntry, childMode, childState, modeWithin, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -94,7 +94,7 @@ function rosterAndLists(): void {
   assert.equal(withChildren(roster, [child]), roster, "the same children keep the same roster")
   const closed = backgroundWork({ status: "ready", connection: "hibernated" }, roster)
   assert.equal(closed?.count, 1, "a hibernated conversation still waits on its children, which are Mako's")
-  assert.equal(backgroundWorkText(closed!), "an agent")
+  assert.equal(backgroundWorkText(closed!), "1 Fin", "a child is a Fin in every surface's words")
   const childRef: ThreadRef = { harness: "claude", nativeId: "h", path: "/h.jsonl", parent: { thread: randomUUID(), session: randomUUID() } }
   const own: ThreadRef = { harness: "claude", nativeId: "o", path: "/o.jsonl" }
   assert.equal(listedAsThread(childRef), false)
@@ -340,6 +340,48 @@ async function harnessLadders(): Promise<void> {
     const above = await w.agents.start(asks.caller, { brief, harness: "cursor", clientKey: "a", cwd: w.root })
     assert.ok("refused" in above && above.refused === "access", "an Apex on ask can't start a child on a harness that runs only on full")
     assert.match(above.why, /Cursor runs on full, each above ask/)
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * A harness with no mode at or below what a Fin was asked on (Cursor runs on full only) doesn't refuse a start its
+ * Apex could make: with no harness named, the Fin goes to the person's next harness that offers that access; named,
+ * it runs on the harness's nearest mode within its Apex's own access. Only a mode wider than the Apex's is refused.
+ */
+async function accessFits(): Promise<void> {
+  assert.deepEqual(modeWithin(CURSOR_SDK_MODES, "edits", "full"), { id: "full-access", tier: "full" })
+  assert.equal(modeWithin(CURSOR_SDK_MODES, "edits", "auto"), undefined, "never wider than the Apex's own")
+  assert.equal(modeWithin(CURSOR_SDK_MODES, "deny", "full"), undefined, "deny is only deny")
+  const w = new AgentsWorld({
+    root: join(root, "access-fits"),
+    script: (turn) => turn.text.includes("You're fin:") ? "done" : "ok",
+    ladders: { claude: CLAUDE_MODES, cursor: CURSOR_SDK_MODES },
+    catalogs: { claude: recordedCatalog("claude")!.models, cursor: recordedCatalog("cursor")!.models },
+    order: ["cursor", "claude"],
+  })
+  try {
+    // The start that was refused: a Cursor Apex on full asks for a Fin on edits and names no harness.
+    const apex = await w.apex("cursor", "full")
+    await waitFor(() => w.live.session(apex.conversation)?.currentMode === "full-access", "the Apex to open in Cursor's full access")
+    const brief = { objective: "Label half the snippets" }
+    const moved = await w.agents.start(apex.caller, { brief, access: "edits", name: "label-a", clientKey: "a", cwd: w.root })
+    assert.ok(!("refused" in moved), JSON.stringify(moved))
+    assert.equal(w.live.session(moved.conversation!)?.harness, "claude", "on the person's next harness that offers edits")
+    assert.match(moved.note ?? "", /^Cursor runs only on full, above the edits it was asked on, so it runs on Claude, the person's next harness, on edits\./)
+    const named = await w.agents.start(apex.caller, { brief, harness: "cursor", access: "edits", name: "label-b", clientKey: "b", cwd: w.root })
+    assert.ok(!("refused" in named), JSON.stringify(named))
+    assert.equal(w.live.session(named.conversation!)?.harness, "cursor", "a harness the Apex named stays")
+    assert.match(named.note ?? "", /^Cursor runs only on full, so it runs on full rather than the edits it was asked on, within this Thread's own full\./)
+    await w.settle()
+    assert.equal(w.live.session(moved.conversation!)?.currentMode, "acceptEdits")
+    assert.equal(w.live.session(named.conversation!)?.currentMode, "full-access")
+    const edits = await w.apex("claude", "edits")
+    await waitFor(() => w.live.session(edits.conversation)?.currentMode === "acceptEdits", "the second Apex to open on edits")
+    const wider = await w.agents.start(edits.caller, { brief, harness: "cursor", clientKey: "w", cwd: w.root })
+    assert.ok("refused" in wider && wider.refused === "access", "an Apex on edits can't hand a Fin Cursor's full")
+    assert.match(wider.why, /^Cursor runs on full, each above edits and above this Thread's own edits, so a Fin there would have more access than you\./)
   } finally {
     await w.close()
   }
@@ -939,6 +981,7 @@ try {
   await refusals()
   await macRoom()
   await harnessLadders()
+  await accessFits()
   await stopAllUnqueues()
   await followsShellRuns()
   await relinkedRuns()

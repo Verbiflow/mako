@@ -104,6 +104,8 @@ const TEMPORARY_ROOTS = [
   "/private/var/folders",
 ]
 const WORKSPACE_PRESENCE_TTL_MS = 60_000
+/** How soon catalog events' activity is reconciled, all of them at once (`reconcileSoon`). */
+const RECONCILE_MS = 250
 const CATALOG_ACTOR: Actor = { kind: "service", name: "catalog" }
 
 /** Refs other host callers look through; the rail's own list is `threadList`. */
@@ -625,6 +627,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   /** When each catalogued store last visibly moved (bytes or activity time). */
   const storeWrites = new Map<string, number>()
   let writeSettleTimer: ReturnType<typeof setTimeout> | null = null
+  let reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
   /** Each store's last seen size and activity time, so a title refinement is not a write. */
   const storeMarks = new Map<string, string>()
@@ -669,6 +672,21 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return earliest
   }
 
+  /**
+   * A reconcile asks the ledger about every store written in the last
+   * `WRITE_ACTIVE_MS`, and a catalog event arrives for every write: with
+   * thirty Fins writing, a reconcile per event held the host's thread most of
+   * the time. Events ask for one within `RECONCILE_MS`, which answers for all.
+   */
+  function reconcileSoon(): void {
+    if (reconcileTimer) return
+    reconcileTimer = setTimeout(() => {
+      reconcileTimer = null
+      reconcileProviderActivity()
+    }, RECONCILE_MS)
+    reconcileTimer.unref?.()
+  }
+
   function reconcileProviderActivity(): void {
     if (!activityIndex)
       activityIndex = indexActivityRefs(daemon ? mirror.values() : (catalog?.list() ?? []))
@@ -698,7 +716,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     activityEngine = new ProviderActivityEngine(harnesses.processProbes())
     activityEngine.onChange((snapshot) => {
       providerActivity.set(snapshot.provider, snapshot.sessions)
-      reconcileProviderActivity()
+      reconcileSoon()
     })
     activityEngine.start()
   }
@@ -712,6 +730,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     storeMarks.clear()
     if (writeSettleTimer) clearTimeout(writeSettleTimer)
     writeSettleTimer = null
+    if (reconcileTimer) clearTimeout(reconcileTimer)
+    reconcileTimer = null
   }
 
   function start(): void {
@@ -764,14 +784,14 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       noteStoreWrite(event.ref, mirror.get(event.ref.path))
       mirror.set(event.ref.path, event.ref)
       if (announce) emit({ type: "thread-ref", ref: annotate(event.ref) })
-      reconcileProviderActivity()
+      reconcileSoon()
     } else if (event.event === "removed") {
       activityIndex = null
       nativeFolders = null
       mirror.delete(event.path)
       forgetStore(event.path)
       if (announce) emit({ type: "thread-removed", path: event.path })
-      reconcileProviderActivity()
+      reconcileSoon()
     } else if (event.event === "entries" && announce) {
       emit({
         type: "thread-entries",
@@ -1211,7 +1231,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
           noteStoreWrite(event.ref, undefined)
           emit({ type: "thread-ref", ref: annotate(event.ref) })
         }
-        reconcileProviderActivity()
+        reconcileSoon()
       })
       void catalogTask(signal, async () => {
         await source.scan()

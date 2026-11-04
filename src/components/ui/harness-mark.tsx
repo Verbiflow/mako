@@ -31,7 +31,7 @@ export function Initials({ name, className }: { name: string; className?: string
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-[3px] bg-foreground/10",
+        "inline-flex shrink-0 items-center justify-center bg-foreground/10",
         "text-[7px] font-bold tracking-tight text-muted-foreground uppercase",
         className
       )}

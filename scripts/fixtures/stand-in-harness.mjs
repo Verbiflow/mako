@@ -95,12 +95,6 @@ export async function installStandIn({ load, providerHost, context, store }) {
       interception: { kind: "absent", reason: "The stand-in agent takes no hooks." },
       subagents: { kind: "absent", reason: "The stand-in agent starts no subagents." },
       hooks: { kind: "absent", reason: "The stand-in agent takes no hooks." },
-      modelRoute: {
-        "native-login": { kind: "native", via: "login", how: "its scripted agent needs no sign-in", inUse: true },
-        anthropic: { kind: "absent", reason: "The stand-in agent runs no model." },
-        "openai-chat": { kind: "absent", reason: "The stand-in agent runs no model." },
-        "openai-responses": { kind: "absent", reason: "The stand-in agent runs no model." },
-      },
       personSetup: "kept",
     },
     sideQuestions: {

@@ -139,7 +139,7 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
 function ThisMacToMako({ state }: { state: "idle" | "waiting" | "connected" | "broken" }) {
   return (
     <div className="flex items-center gap-3" aria-hidden>
-      <div className="flex size-13 items-center justify-center rounded-[11px] border border-hairline bg-background text-muted-foreground shadow-xs [&_svg]:size-6">
+      <div className="flex size-13 items-center justify-center border border-hairline bg-background text-muted-foreground shadow-xs [&_svg]:size-6">
         <LaptopIcon strokeWidth={1.6} />
       </div>
       <div
