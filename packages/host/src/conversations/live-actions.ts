@@ -268,7 +268,8 @@ export class LiveActions {
       control.actions?.some(
         (action) =>
           action.state.kind === "dispatching" ||
-          action.state.kind === "uncertain"
+          // A steer whose outcome is unknown says so on its own notice; it doesn't hold the person's next message.
+          (action.state.kind === "uncertain" && (input.kind === "compact" || action.input.kind === "compact"))
       )
     )
       throw new Error(

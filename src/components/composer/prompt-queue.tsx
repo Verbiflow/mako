@@ -14,7 +14,7 @@ import {
 } from "lucide-react"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { promptDelivery, type PendingPrompt } from "@/state/prompt-delivery"
-import { editQueuedPrompt, type QueueTarget } from "@/state/acp-queue"
+import { discardWaiting, editQueuedPrompt, sendWaitingNow, type QueueTarget } from "@/state/acp-queue"
 import { parsePlanContext } from "@/lib/proposed-plan"
 import { readMessage } from "@/lib/context/wire"
 import { stripThreadReferenceAppendix } from "@/lib/thread-references"
@@ -49,6 +49,8 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           item.text === right[index]?.text &&
           item.status === right[index]?.status &&
           item.signIn === right[index]?.signIn &&
+          item.waiting === right[index]?.waiting &&
+          item.steering === right[index]?.steering &&
           item.attachments === right[index]?.attachments
       )
   )
@@ -132,7 +134,11 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
                 ? `Sends at ${clockText(delivery[0].wake.at)}`
               : delivery[0]?.status === "held"
                 ? "Paused"
-                : "After this turn"}
+                : delivery[0] && "waiting" in delivery[0] && delivery[0].waiting
+                  ? "Waiting for Mako"
+                  : delivery[0] && "steering" in delivery[0] && delivery[0].steering
+                    ? "Into this turn"
+                    : "After this turn"}
         </span>
       </div>
       <div className="min-h-0 overflow-y-auto">
@@ -193,6 +199,31 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
         </button>
       ) : null}
     </section>
+  )
+}
+
+/**
+ * Where a message this device hasn't handed to the host yet stands: steering into the running turn, on its way, or
+ * waiting in the outbox and why, which it leaves by itself, in order, once the host can take it.
+ */
+function OutboxLine({ conversation, request }: { conversation: string; request: PendingPrompt }) {
+  const words = request.waiting
+    ? `Waiting · ${request.waiting.replace(/\.$/, "")}. It goes by itself${request.steering ? ", into the turn or after it" : ""}.`
+    : request.steering ? "Steering into the running turn…" : "Sending…"
+  return (
+    <div className="mt-1 flex items-center gap-2 text-label text-faint" data-outbox={request.waiting ? "waiting" : request.steering ? "steering" : "sending"}>
+      <span className="min-w-0 flex-1 truncate" title={words}>{words}</span>
+      {request.waiting ? (
+        <>
+          <button type="button" data-outbox-action="send" className="pressable rounded px-2 py-0.5 text-foreground hover:bg-fill-hover" onClick={() => void sendWaitingNow(conversation)}>
+            Send now
+          </button>
+          <button type="button" data-outbox-action="remove" className="pressable rounded px-2 py-0.5 hover:bg-fill-hover hover:text-foreground" onClick={() => discardWaiting(conversation, request.id)}>
+            Remove
+          </button>
+        </>
+      ) : null}
+    </div>
   )
 }
 
@@ -383,6 +414,9 @@ function QueueRow({
         <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at}>
           {request.wake ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets` : "Paused until you resume or edit this message"}
         </p>
+      ) : null}
+      {target.kind === "live" && !editable && !editing && !request.status ? (
+        <OutboxLine conversation={target.id} request={request} />
       ) : null}
       {request.attachments.length ? (
         <p className="mt-1 truncate text-label text-faint">

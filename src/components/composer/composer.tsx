@@ -617,7 +617,12 @@ export function Composer() {
         const request = crypto.randomUUID()
         deliver = async (message, files) => Boolean(await sendDirect(addressee.conversation, addressee.to, request, message, files))
       }
-      if (hostConnectionStore.get().kind === "disconnected") {
+      // A message to a live conversation waits in this device's outbox while the host is away (`sendTo`); a start needs the host.
+      const awayLive = activeLiveAcp(acpStore.get())
+      const awayViewed = threadsStore.get().viewing?.ref
+      const waitsInOutbox = !deliver && !addressee && awayLive?.harness === threadsStore.get().composerHarness &&
+        (!awayViewed || awayViewed.path === awayLive.threadPath)
+      if (hostConnectionStore.get().kind === "disconnected" && !waitsInOutbox) {
         toast.error(
           "Reconnect the Mako host before sending. Your draft is saved.",
           { id: SEND_HELD_TOAST }

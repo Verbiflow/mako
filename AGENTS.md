@@ -1473,6 +1473,22 @@ the conversation. `npm run test:send-race` sends from the Mac, a phone and
 another Mac at once, through the protocol's gateway, with lost replies, cut
 links, messages taken twice from the account and restarts, and holds each to
 landing once, one turn at a time, in arrival order, with nothing left queued.
+The outbox never turns the person away for a host that can't take a message
+yet (`sendTo`, `steerTo`, `delivery-policy.ts`): a message is drawn and kept at
+once, and one conversation's messages reach the host one at a time, in the
+order sent. A host that's away (the composer sends to a live conversation
+while disconnected), slow (an answer past `DELIVERY_PATIENCE_MS`, or the
+bridge's `HostCallTimeoutError`) or busy (a rewind, a provider switch, a turn
+still ending, a move in transit; `waitsFor`) leaves it waiting, with that
+reason on its row in the queue ("Waiting · …", with Send now and Remove), and
+later messages wait behind it; it goes by itself under its one ID. A steer
+shows as steering until the turn takes it; a host busy with the previous steer
+is asked again for `STEER_BUSY_MS` before the words go next, and a steer whose
+outcome is unknown no longer holds the next one (`LiveActions.submit`).
+`npm run test:durable-outbox` holds it to that against a scripted host: away,
+busy, 5 s stalls, a lost answer, duplicate tries, steers mid-turn and a reload
+mid-delivery; `test:steer-landing` checks a message queues and a steer lands
+mid-turn on each of the six harnesses by its own driver's landing.
 A refused message comes back
 into the field only if the field is empty, else it's kept under the composer
 with Retry (`outbox.ts`). Under each sent message the phone says where it is,
