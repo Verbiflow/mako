@@ -2850,10 +2850,11 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .files-row[data-active] .files-icon { color: var(--muted-foreground); }
 .files-hit { background: none; color: var(--foreground); font-weight: 640; }
 .files-chevron { transition: transform 120ms var(--ease-out); }
-.files-pending { opacity: 0; animation: files-pending 1.4s var(--ease-out) 160ms infinite; }
+/* A listing that's quick never shows its bar; one that isn't fades it in once. */
+.files-pending { opacity: 0; animation: files-pending 200ms var(--ease-out) 160ms both; }
 @keyframes files-pending {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.8; }
+  from { opacity: 0; }
+  to { opacity: 0.6; }
 }
 .files-touch .files-row svg { width: 16px; height: 16px; }
 .files-touch .files-field { height: 40px; }
