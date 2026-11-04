@@ -6,7 +6,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CHECKOUT_GRANTS, CheckoutBorrowing, LOCAL_ACCOUNT, LOCAL_DEVICE, checkoutSource } from "@mako/host/workspaces/checkout-borrowing"
-import { LocalBorrowing } from "@mako/host/workspaces/local-borrowing"
+import { LocalBorrowing } from "@mako/host/base/local-borrowing"
 
 /**
  * What a worktree takes from its main checkout, as borrowing: each entry the recipe's carry or worktree_bring

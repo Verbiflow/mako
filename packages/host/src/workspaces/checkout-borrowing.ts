@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, writeF
 import { dirname, isAbsolute, join, relative } from "node:path"
 import type { Git } from "@mako/git"
 import type { BorrowAnswer, BorrowPush, Borrower, Grant, Kind, Mode, Need, Refusal, SourceAnswer, SourceAsk } from "@mako/protocol/borrow"
-import { LocalBorrowing, type LocalBorrowingOptions } from "./local-borrowing.js"
+import { LocalBorrowing, type LocalBorrowingOptions } from "../base/local-borrowing.js"
 import { LINKED_MARK, bringFiles, carryFiles, matchedEntries, type BringEntry, type BringReport } from "./worktree-carry.js"
 import type { CarryEntry } from "./thread-recipe.js"
 
