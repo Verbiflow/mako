@@ -9,8 +9,8 @@ import { seedScratchHome } from "./scratch-harness-home.ts"
 import { admitted } from "./fixtures/admitted-start.ts"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { memorySecrets } from "@mako/host/base/secrets"
-import { ModelConnections, modelConnectionsPath, type ServedConnection } from "@mako/host/harnesses/model-connections"
-import { openCodeAccountCapability } from "@mako/host/harnesses/opencode/accounts"
+import type { ModelConnectionView } from "@mako/host/contracts/model-connections"
+import { createProviderHost } from "@mako/host/harnesses/host"
 import { resolveOpenCodeInstallation, OpenCodeVersions } from "@mako/host/harnesses/opencode/installation"
 import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
 import { discoverOpenCodeCatalog } from "@mako/host/harnesses/opencode/profile"
@@ -18,8 +18,9 @@ import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 /**
- * A connection added the way Add a connection adds one shows its models in
- * OpenCode's model list, and a turn on one of them reaches its endpoint with
+ * A connection added the way Add a connection adds one is routed into an
+ * OpenCode launch by the harness-blind launch hook and OpenCode's declared
+ * adapter, shows its models in OpenCode's model list, and a turn on one of them reaches its endpoint with
  * its key. The installed OpenCode runs in a scratch home with no sign-in of
  * the person's; the endpoint is a stand-in on loopback that answers `/models`
  * and one streamed reply. With Ollama running on this Mac, a turn also runs on
@@ -75,7 +76,10 @@ async function turn(env: NodeJS.ProcessEnv, model: string): Promise<string | und
 }
 
 try {
-  const store = new ModelConnections(modelConnectionsPath(join(root, "user")), memorySecrets())
+  // A host with OpenCode's real driver: its `modelRoutes` adapter, applied by the launch hook every harness goes through.
+  const host = createProviderHost({ userRoot: join(root, "user"), secrets: { secrets: memorySecrets(), adoptLegacy: () => {} } })
+  host.liveDrivers.register(createOpenCodeDriver({ stores: new NativeStores(false), servers: new OpenCodeServers(), approvalRoot: async () => join(root, "approvals") }))
+  const store = host.modelConnections
   const baseUrl = `http://127.0.0.1:${port}/v1`
   // As the dialog does: Check access, then add what it listed. One keeps a key, the other has none.
   const keyed = await store.check({ provider: "local", baseUrl, apiKey: KEY })
@@ -85,14 +89,14 @@ try {
   const ollama = (await store.detectLocal()).find((entry) => entry.provider === "ollama")
   if (ollama?.running && ollama.models.length) await store.add({ provider: "ollama", models: ollama.models.slice(0, 1) })
 
-  const capability = openCodeAccountCapability(new NativeStores(false), () => store.served())
-  const env = await capability.accountEnv(null, { ...scratch.env })
+  assert.deepEqual(withKey.serves, [{ harness: "opencode", models: 2 }], "it serves the harness whose adapter takes it")
+  const env = await host.accounts.env("opencode", { ...scratch.env })
   assert.ok(!env.OPENCODE_CONFIG_CONTENT?.includes(KEY), "the inline config holds no key")
 
   const installation = await resolveOpenCodeInstallation(env, new OpenCodeVersions())
   const catalog = await discoverOpenCodeCatalog(installation.command, env, root, new OpenCodeServers())
   const ids = catalog.models.map((model) => model.id)
-  const served = (entry: ServedConnection["connection"]) => entry.models.map((model) => `mako-${entry.id}/${model.id}`)
+  const served = (entry: ModelConnectionView) => entry.models.map((model) => `mako-${entry.id}/${model.id}`)
   for (const id of [...served(withKey), ...served(custom)])
     assert.ok(ids.includes(id), `OpenCode's model list has ${id}`)
   const named = catalog.models.find((model) => model.id === `mako-${withKey.id}/stand-in-coder`)

@@ -9,6 +9,7 @@ import {
   type ModelConnectionTest,
   type ModelConnectionView,
 } from "@mako/host/contracts/model-connections"
+import { routeAccepted, type HarnessModelRoutes } from "@mako/host/contracts/model-routes"
 
 const OPENROUTER_MODELS: ConnectionModel[] = [
   { id: "anthropic/claude-sonnet-4.5", name: "Anthropic: Claude Sonnet 4.5", contextTokens: 1_000_000 },
@@ -20,6 +21,15 @@ const OPENROUTER_MODELS: ConnectionModel[] = [
   { id: "x-ai/grok-code-fast-1", name: "xAI: Grok Code Fast 1", contextTokens: 256_000 },
   { id: "z-ai/glm-4.6", name: "Z.AI: GLM 4.6", contextTokens: 202_752 },
 ]
+/** What each harness's driver declares, as the host reports it. */
+const HARNESSES: HarnessModelRoutes[] = [
+  { harness: "claude", routes: { kind: "planned", wires: ["anthropic"], via: "`ANTHROPIC_BASE_URL` and a key in one launch's environment." } },
+  { harness: "codex", routes: { kind: "planned", wires: ["openai-chat", "openai-responses"], via: "A provider in `config.model_providers` and `modelProvider` on `thread/start`." } },
+  { harness: "cursor", routes: { kind: "absent", reason: "Cursor's SDK runs its models through Cursor's own service." } },
+  { harness: "opencode", routes: { kind: "accepts", wires: ["openai-chat"], kinds: ["gateway", "local", "custom"], via: "Each connection is a provider of its own in OpenCode's inline config." } },
+  { harness: "grok", routes: { kind: "absent", reason: "The Grok CLI runs on xAI's models through the person's Grok sign-in." } },
+  { harness: "devin", routes: { kind: "absent", reason: "Devin runs its models through Devin's own service." } },
+]
 const OLLAMA_MODELS: ConnectionModel[] = [{ id: "gpt-oss:20b" }, { id: "qwen3-coder:30b" }, { id: "llama3.2:latest" }]
 
 /**
@@ -30,10 +40,13 @@ const OLLAMA_MODELS: ConnectionModel[] = [{ id: "gpt-oss:20b" }, { id: "qwen3-co
  */
 export function mockModelConnections() {
   const empty = new URLSearchParams(globalThis.location?.search).get("connections") === "0"
-  const serving = (view: Omit<ModelConnectionView, "serves">): ModelConnectionView => ({ ...view, serves: view.enabled ? [{ harness: "opencode", models: view.models.length }] : [] })
+  const serving = (view: Omit<ModelConnectionView, "serves">): ModelConnectionView => ({
+    ...view,
+    serves: view.enabled ? HARNESSES.filter(({ routes }) => routeAccepted(routes, view.kind, view.wire)).map(({ harness }) => ({ harness, models: view.models.length })) : [],
+  })
   let kept: ModelConnectionView[] = empty ? [] : [
-    serving({ id: "openrouter", provider: "openrouter", kind: "gateway", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", models: Array.from({ length: 42 }, (_, index) => OPENROUTER_MODELS[index % OPENROUTER_MODELS.length]!).map((model, index) => index < OPENROUTER_MODELS.length ? model : { ...model, id: `${model.id}-${index}` }), enabled: true, credential: { kind: "keychain", name: "connection/openrouter" }, addedAt: "2026-10-28T10:00:00.000Z" }),
-    serving({ id: "ollama", provider: "ollama", kind: "local", name: "Ollama", baseUrl: "http://localhost:11434/v1", models: OLLAMA_MODELS, enabled: true, credential: null, addedAt: "2026-11-01T09:00:00.000Z" }),
+    serving({ id: "openrouter", provider: "openrouter", kind: "gateway", name: "OpenRouter", wire: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", models: Array.from({ length: 42 }, (_, index) => OPENROUTER_MODELS[index % OPENROUTER_MODELS.length]!).map((model, index) => index < OPENROUTER_MODELS.length ? model : { ...model, id: `${model.id}-${index}` }), enabled: true, credential: { kind: "keychain", name: "connection/openrouter" }, addedAt: "2026-10-28T10:00:00.000Z" }),
+    serving({ id: "ollama", provider: "ollama", kind: "local", name: "Ollama", wire: "openai-chat", baseUrl: "http://localhost:11434/v1", models: OLLAMA_MODELS, enabled: true, credential: null, addedAt: "2026-11-01T09:00:00.000Z" }),
   ]
   const pause = (ms = 700) => new Promise((resolve) => setTimeout(resolve, ms))
   const listed = (input: ModelConnectionCheckInput): ModelConnectionCheck => {
@@ -48,7 +61,7 @@ export function mockModelConnections() {
     return { baseUrl, models: provider.kind === "local" ? OLLAMA_MODELS : OPENROUTER_MODELS }
   }
   return {
-    modelConnections: async (): Promise<ModelConnectionsSnapshot> => ({ connections: kept, issues: [], secureStorage: true }),
+    modelConnections: async (): Promise<ModelConnectionsSnapshot> => ({ connections: kept, issues: [], secureStorage: true, harnesses: HARNESSES }),
     checkModelConnection: async (input: ModelConnectionCheckInput) => {
       await pause()
       return listed(input)
@@ -59,7 +72,7 @@ export function mockModelConnections() {
       const provider = MODEL_CONNECTION_PROVIDERS.find((entry) => entry.id === input.provider)!
       const id = provider.kind === "custom" || provider.id === "local" ? `${provider.id === "local" ? "local" : "custom"}-${kept.length}` : provider.id
       if (kept.some((connection) => connection.id === id)) throw new Error(`${provider.name} is already connected. Remove it to connect it again.`)
-      const view = serving({ id, provider: provider.id, kind: provider.kind, name: input.name?.trim() || provider.name, baseUrl, models: input.models, enabled: true, credential: input.apiKey ? { kind: "keychain", name: `connection/${id}` } : null, addedAt: new Date().toISOString() })
+      const view = serving({ id, provider: provider.id, kind: provider.kind, name: input.name?.trim() || provider.name, wire: provider.wire ?? "openai-chat", baseUrl, models: input.models, enabled: true, credential: input.apiKey ? { kind: "keychain", name: `connection/${id}` } : null, addedAt: new Date().toISOString() })
       kept = [...kept, view]
       return view
     },

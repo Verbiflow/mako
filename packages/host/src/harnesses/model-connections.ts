@@ -17,6 +17,8 @@ import {
   type ModelConnectionTest,
   type ModelConnectionView,
 } from "../contracts/model-connections.js"
+import { MODEL_WIRES, routeAccepted, type HarnessModelRoutes, type ModelRoute, type ModelRoutesCapability } from "../contracts/model-routes.js"
+import type { RoutedLaunch } from "./model-routes.js"
 
 /** A saved connection's key is the saved key `connection/<id>`. */
 const SECRET_PREFIX = "connection/"
@@ -40,6 +42,8 @@ const storedSchema = z.object({
   provider: z.string().min(1).max(64),
   kind: z.enum(["subscription", "gateway", "local", "custom"]),
   name: z.string().trim().min(1).max(120),
+  // Every connection before routes spoke OpenAI's chat API.
+  wire: z.enum(MODEL_WIRES).default("openai-chat"),
   baseUrl: z.string().max(2_048),
   models: z.array(modelSchema).max(MAX_MODELS),
   enabled: z.boolean(),
@@ -64,11 +68,6 @@ const listing = z.union([
 
 export class ConnectionError extends Error {}
 
-/** A connection a launch puts to work, with its key when it has one. */
-export interface ServedConnection {
-  connection: ModelConnection
-  apiKey?: string
-}
 
 export function connectionProvider(id: string): ModelConnectionProvider | undefined {
   return MODEL_CONNECTION_PROVIDERS.find((provider) => provider.id === id)
@@ -161,16 +160,24 @@ export async function listConnectionModels(
  * (no secret in it), and each key in the host's secrets under the name the
  * connection's credential names. Changes go one at a time.
  */
+export interface ModelConnectionsOptions {
+  /** What each harness's driver declares it takes; Settings shows a connection under every harness that takes it. */
+  harnesses?: () => HarnessModelRoutes[]
+  request?: typeof fetch
+}
+
 export class ModelConnections {
   private writes: Promise<unknown> = Promise.resolve()
   private readonly path: string
   private readonly secrets: Secrets
   private readonly request: typeof fetch
+  private readonly harnesses: () => HarnessModelRoutes[]
 
-  constructor(path: string, secrets: Secrets, request: typeof fetch = fetch) {
+  constructor(path: string, secrets: Secrets, options: ModelConnectionsOptions = {}) {
     this.path = path
     this.secrets = secrets
-    this.request = request
+    this.request = options.request ?? fetch
+    this.harnesses = options.harnesses ?? (() => [])
   }
 
   async snapshot(): Promise<ModelConnectionsSnapshot> {
@@ -178,28 +185,49 @@ export class ModelConnections {
     const issues: ModelConnectionsSnapshot["issues"] = []
     for (const connection of connections)
       if (connection.enabled && connection.credential && !secureStorage)
-        issues.push({ id: connection.id, message: "Your keychain is locked, so OpenCode can't use this key. Unlock it, then start a new conversation." })
-    return { connections: connections.map(view), issues, secureStorage }
+        issues.push({ id: connection.id, message: "Your keychain is locked, so no harness can use this key. Unlock it, then start a new conversation." })
+    const harnesses = this.harnesses()
+    return { connections: connections.map((connection) => view(connection, harnesses)), issues, secureStorage, harnesses }
   }
 
-  /** The connections a harness's launch puts to work: each turned on, with its key; one whose key won't open is left out. */
-  async served(): Promise<ServedConnection[]> {
-    const served: ServedConnection[] = []
+  /**
+   * The routes a launch of a harness that declares `capability` takes: every
+   * model of each connection turned on whose wire and kind it accepts, with
+   * each key opened for that launch alone. A connection whose key won't open
+   * is left out; the rest still go.
+   */
+  async routes(capability: ModelRoutesCapability): Promise<RoutedLaunch> {
+    const routes: ModelRoute[] = []
+    const keys = new Map<string, string>()
     for (const connection of await this.read().catch(() => [])) {
-      if (!connection.enabled || !connection.models.length) continue
-      if (!connection.credential) {
-        served.push({ connection })
-        continue
+      if (!connection.enabled || !routeAccepted(capability, connection.kind, connection.wire)) continue
+      if (connection.credential) {
+        try {
+          const record = await this.secrets.read("saved-key", connection.credential.name)
+          if (!record) {
+            hostWarn("model-connections", "a connection's key is missing", { id: connection.id })
+            continue
+          }
+          keys.set(connection.credential.name, record.value)
+        } catch {
+          hostWarn("model-connections", "a connection's key could not be opened", { id: connection.id })
+          continue
+        }
       }
-      try {
-        const record = await this.secrets.read("saved-key", connection.credential.name)
-        if (record) served.push({ connection, apiKey: record.value })
-        else hostWarn("model-connections", "a connection's key is missing", { id: connection.id })
-      } catch {
-        hostWarn("model-connections", "a connection's key could not be opened", { id: connection.id })
-      }
+      for (const model of connection.models)
+        routes.push({
+          connection: connection.id,
+          connectionName: connection.name,
+          kind: connection.kind,
+          wire: connection.wire,
+          baseUrl: connection.baseUrl,
+          model: model.id,
+          ...(model.name && { name: model.name }),
+          ...(model.contextTokens && { contextTokens: model.contextTokens }),
+          credential: connection.credential,
+        })
     }
-    return served
+    return { routes, key: (route) => (route.credential ? keys.get(route.credential.name) : undefined) }
   }
 
   /** Check access: the models `input` lists with the key given, before anything is saved. */
@@ -236,6 +264,7 @@ export class ModelConnections {
         provider: provider.id,
         kind: provider.kind,
         name,
+        wire: provider.wire ?? "openai-chat",
         baseUrl,
         models: models.data.map(stripModel),
         enabled: true,
@@ -243,7 +272,7 @@ export class ModelConnections {
         addedAt: new Date().toISOString(),
       }
       hostLog("model-connections", "added", { id, provider: provider.id, models: connection.models.length })
-      return { next: [...connections, connection], result: view(connection) }
+      return { next: [...connections, connection], result: view(connection, this.harnesses()) }
     })
   }
 
@@ -358,7 +387,10 @@ function stripModel({ id, name, contextTokens }: ConnectionModel): ConnectionMod
   return { id, ...(name && { name }), ...(contextTokens && { contextTokens }) }
 }
 
-/** Gateways, local servers and custom endpoints are put to work in OpenCode, which accepts any provider. */
-function view(connection: ModelConnection): ModelConnectionView {
-  return { ...connection, serves: connection.enabled ? [{ harness: "opencode", models: connection.models.length }] : [] }
+/** A connection with every harness whose declared adapter takes it. */
+function view(connection: ModelConnection, harnesses: readonly HarnessModelRoutes[]): ModelConnectionView {
+  const serves = connection.enabled
+    ? harnesses.filter(({ routes }) => routeAccepted(routes, connection.kind, connection.wire)).map(({ harness }) => ({ harness, models: connection.models.length }))
+    : []
+  return { ...connection, serves }
 }

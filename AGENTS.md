@@ -2123,14 +2123,29 @@ sign-in. A gateway, a local server or a custom endpoint is a
 what it is in `<user root>/model-connections.json`, with no secret in it, and
 its key the saved key `connection/<id>` its `credential` names. Check access
 lists `/models` before anything is saved; a gateway's key goes only to its
-own host, a local server is only ever on loopback. OpenCode, which accepts any
-provider, is handed them on every launch and discovery through its account's
-environment (`opencode/connections.ts`): each is the provider `mako-<id>` in
-`OPENCODE_CONFIG_CONTENT`, an `@ai-sdk/openai-compatible` endpoint with the
-models kept, and its key travels in `MAKO_CONNECTION_KEY_<ID>`, which the
-provider names in `env`, never in the config's text. A key that won't open
-(the keychain locked) leaves its connection out of the launch and says so on
-its row. `npm run test:model-connections` covers the store and the providers;
+own host, a local server is only ever on loopback.
+
+What a launch receives of them is the model-route part of the layering
+contract (`contracts/model-routes.ts`), the same for every harness: a
+`ModelRoute` per model, with its connection, kind, wire (`anthropic`,
+`openai-chat`, `openai-responses`), base URL, model and credential
+reference, never the key. Each driver declares `modelRoutes` beside
+`nativeRouting`: `accepts` (the wires and kinds it takes, and an adapter
+that turns routes into its own configuration), `planned` (its way in, which
+no adapter uses yet) or `absent` with why. `HarnessAccounts.launch` applies
+them last for whichever harness launches (`routeLaunches`, wired in
+`createProviderHost`), so every start and discovery gets them and nothing
+outside an adapter names a harness; Settings lists a connection under every
+harness whose declaration takes its wire and kind. OpenCode's adapter
+(`opencode/connections.ts`) is the one built: each connection is the provider
+`mako-<id>` in `OPENCODE_CONFIG_CONTENT`, an `@ai-sdk/openai-compatible`
+endpoint with the models kept, its key in `MAKO_CONNECTION_KEY_<ID>`, which
+the provider names in `env`, never in the config's text; OpenCode's own
+discovery lists the models. Claude (`ANTHROPIC_BASE_URL` and a key per
+launch) and Codex (`config.model_providers` and `modelProvider`) are
+`planned`; Cursor, Grok and Devin are `absent`. A key that won't open (the
+keychain locked) leaves its connection out of the launch and says so on its
+row. `npm run test:model-connections` covers the store and the providers;
 `npm run test:model-connections-live` adds connections, finds their models in
 the installed OpenCode's catalog and runs a turn on one against a stand-in
 endpoint in a scratch home; `npm run test:model-connections-ui` drives the

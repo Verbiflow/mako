@@ -18,13 +18,14 @@ import {
   type ModelConnectionKind,
   type ModelConnectionProvider,
 } from "@mako/host/contracts/model-connections"
+import { routeAccepted } from "@mako/host/contracts/model-routes"
 
 const inputClass =
   "h-9 w-full rounded-md bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
 
 const GROUPS: Array<{ kind: ModelConnectionKind; title: string; note: string }> = [
   { kind: "subscription", title: "Subscriptions", note: "Sign in with the plan you already pay for." },
-  { kind: "gateway", title: "Gateways", note: "Paste a key; its models appear in OpenCode." },
+  { kind: "gateway", title: "Gateways", note: "Paste a key; its models appear under every harness that takes them." },
   { kind: "local", title: "Local", note: "Models running on this Mac, which your agents reach on localhost." },
   { kind: "custom", title: "Custom endpoint", note: "A base URL and a key." },
 ]
@@ -60,8 +61,8 @@ function useSubscription(provider: ModelConnectionProvider) {
 /**
  * Add a connection: every way to pay for models in one searchable list.
  * Subscriptions open their harness's own sign-in; a gateway, a local server
- * or an endpoint is checked for its models, then kept once and served
- * through OpenCode.
+ * or an endpoint is checked for its models, then kept once and routed to
+ * every harness whose adapter takes it.
  */
 export function AddConnection({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("")
@@ -280,6 +281,9 @@ function ConnectionForm({ provider, onBusy, onBack, onClose }: { provider: Model
   }, [onBusy, working])
   const needsKey = provider.key === "required"
   const host = provider.keyUrl ? keyHost(provider.keyUrl) : null
+  useHarnessIdentity()
+  const declared = useModelConnections((state) => state.snapshot?.harnesses)
+  const takenBy = (declared ?? []).filter(({ routes }) => routeAccepted(routes, provider.kind, provider.wire ?? "openai-chat")).map(({ harness }) => harnessLabel(harness))
 
   const invalidate = () => {
     version.current += 1
@@ -415,7 +419,9 @@ function ConnectionForm({ provider, onBusy, onBack, onClose }: { provider: Model
         <footer className="flex flex-col gap-3 border-t border-hairline px-5 py-4">
           <p className="text-label leading-relaxed text-faint">
             {check
-              ? "The models you keep appear in OpenCode's model list, in new conversations."
+              ? takenBy.length
+                ? `The models you keep appear in ${takenBy.join(" and ")}'s model list, in new conversations.`
+                : "No harness takes this connection yet; it waits for one that does."
               : "Check access lists the models it serves. Nothing is saved and no prompt is sent."}
           </p>
           <div className="flex justify-end gap-2">

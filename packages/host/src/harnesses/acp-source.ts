@@ -2,6 +2,7 @@ import type { z } from "zod"
 import type { AcpDecoderHooks, AcpPlanDecoder as AcpUpdatePlans } from "@mako/sessions/acp-decoder"
 import type { NativeRoutingCapability } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
+import type { ModelRouteAdapter } from "./model-routes.js"
 import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -244,6 +245,8 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   /** How the agent's own spawns are routed to Mako; a source with a control reads `AcpLaunchOptions.nativeSpawnsOff`. */
   nativeRouting: NativeRoutingCapability
+  /** Which of the person's model connections the agent runs on (`ProviderLiveDriver.modelRoutes`). */
+  modelRoutes: ModelRouteAdapter
   resume: AcpResume
   steering: AcpSteering
   access?: AcpAccessPolicy

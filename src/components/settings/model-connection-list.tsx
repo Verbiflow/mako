@@ -56,7 +56,7 @@ export function ModelConnections() {
           <h3 className="text-ui font-medium">Connections</h3>
           <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">
             Every way you pay for models. Subscriptions run in their own harness; a gateway, a local model or an
-            endpoint is kept once and served through OpenCode.
+            endpoint is kept once and runs in every harness that takes it.
           </p>
         </div>
         <Action size="xs" tone="outline" onClick={() => setAdding(true)} className="shrink-0">

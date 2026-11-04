@@ -76,7 +76,7 @@ export const installOpenCode: ProviderModule = (host, context) => {
     }),
     decoder: openCodeDecoderSource,
     profile: openCodeProfileLoader(servers, versions),
-    accounts: openCodeAccountCapability(context.stores, () => host.modelConnections.served()),
+    accounts: openCodeAccountCapability(context.stores),
     acp: lacks("Runs on OpenCode’s native API"),
     nativeRunner: openCodeNativeRunner(context.stores, versions),
     processProbe: openCodeProcessProbeFor(servers),

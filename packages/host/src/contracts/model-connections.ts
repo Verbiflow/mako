@@ -1,8 +1,10 @@
+import type { HarnessModelRoutes, ModelWire } from "./model-routes.js"
+
 /**
  * Every way the person pays for models, in one list. A subscription is a
  * harness's own sign-in (its accounts); a gateway, a local server or a custom
  * endpoint is a connection Mako keeps once, its key in the keychain, and hands
- * to the harnesses that accept any provider.
+ * as routes (`model-routes.ts`) to every harness whose adapter takes them.
  */
 export type ModelConnectionKind = "subscription" | "gateway" | "local" | "custom"
 
@@ -20,6 +22,8 @@ export interface ModelConnectionProvider {
   /** The person enters or changes the URL to their own gateway, region or server; `<…>` marks what they fill in. */
   urlHint?: string
   key: ModelConnectionKey
+  /** The API its endpoint speaks; a subscription's is its harness's own. */
+  wire?: ModelWire
   /** Where a key is made. */
   keyUrl?: string
   /** A subscription: the harness whose sign-in it is. */
@@ -36,18 +40,18 @@ export const MODEL_CONNECTION_PROVIDERS: readonly ModelConnectionProvider[] = [
   { id: "devin", name: "Devin", kind: "subscription", harness: "devin", key: "none", description: "Your Devin plan, through Devin's sign-in" },
   { id: "github-copilot", name: "GitHub Copilot", kind: "subscription", harness: "opencode", openCodeProvider: "github-copilot", key: "none", description: "Your Copilot plan, served through OpenCode" },
   { id: "chatgpt", name: "ChatGPT", kind: "subscription", harness: "opencode", openCodeProvider: "openai", key: "none", description: "Your ChatGPT plan, served through OpenCode" },
-  { id: "openrouter", name: "OpenRouter", kind: "gateway", baseUrl: "https://openrouter.ai/api/v1", key: "required", keyUrl: "https://openrouter.ai/settings/keys", description: "Hundreds of models behind one key" },
-  { id: "vercel", name: "Vercel AI Gateway", kind: "gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", key: "required", keyUrl: "https://vercel.com/dashboard", description: "Models from every major lab, billed through Vercel" },
-  { id: "cloudflare", name: "Cloudflare AI Gateway", kind: "gateway", urlHint: "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat", key: "required", keyUrl: "https://dash.cloudflare.com", description: "Your gateway's OpenAI-compatible endpoint" },
-  { id: "bedrock", name: "Amazon Bedrock", kind: "gateway", baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1", urlHint: "https://bedrock-runtime.<region>.amazonaws.com/openai/v1", key: "required", keyUrl: "https://console.aws.amazon.com/bedrock/home#/api-keys", description: "A Bedrock API key in your region" },
-  { id: "together", name: "Together AI", kind: "gateway", baseUrl: "https://api.together.xyz/v1", key: "required", keyUrl: "https://api.together.ai/settings/api-keys", description: "Open models, served fast" },
-  { id: "deepinfra", name: "DeepInfra", kind: "gateway", baseUrl: "https://api.deepinfra.com/v1/openai", key: "required", keyUrl: "https://deepinfra.com/dash/api_keys", description: "Open models at low cost" },
-  { id: "fireworks", name: "Fireworks", kind: "gateway", baseUrl: "https://api.fireworks.ai/inference/v1", key: "required", keyUrl: "https://fireworks.ai/account/api-keys", description: "Open models and your fine-tunes" },
-  { id: "baseten", name: "Baseten", kind: "gateway", baseUrl: "https://inference.baseten.co/v1", key: "required", keyUrl: "https://app.baseten.co/settings/api_keys", description: "Model APIs and your own deployments" },
-  { id: "ollama", name: "Ollama", kind: "local", baseUrl: "http://localhost:11434/v1", key: "none", description: "Models you pulled with Ollama, on this Mac" },
-  { id: "lmstudio", name: "LM Studio", kind: "local", baseUrl: "http://localhost:1234/v1", key: "none", description: "The models LM Studio's server has loaded" },
-  { id: "local", name: "Other local server", kind: "local", baseUrl: "http://localhost:8080/v1", urlHint: "http://localhost:<port>/v1", key: "optional", description: "Any OpenAI-compatible server on this Mac" },
-  { id: "openai-compatible", name: "Custom endpoint", kind: "custom", urlHint: "https://your-endpoint/v1", key: "optional", description: "Any OpenAI-compatible base URL and key" },
+  { id: "openrouter", name: "OpenRouter", kind: "gateway", wire: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", key: "required", keyUrl: "https://openrouter.ai/settings/keys", description: "Hundreds of models behind one key" },
+  { id: "vercel", name: "Vercel AI Gateway", kind: "gateway", wire: "openai-chat", baseUrl: "https://ai-gateway.vercel.sh/v1", key: "required", keyUrl: "https://vercel.com/dashboard", description: "Models from every major lab, billed through Vercel" },
+  { id: "cloudflare", name: "Cloudflare AI Gateway", kind: "gateway", wire: "openai-chat", urlHint: "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat", key: "required", keyUrl: "https://dash.cloudflare.com", description: "Your gateway's OpenAI-compatible endpoint" },
+  { id: "bedrock", name: "Amazon Bedrock", kind: "gateway", wire: "openai-chat", baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1", urlHint: "https://bedrock-runtime.<region>.amazonaws.com/openai/v1", key: "required", keyUrl: "https://console.aws.amazon.com/bedrock/home#/api-keys", description: "A Bedrock API key in your region" },
+  { id: "together", name: "Together AI", kind: "gateway", wire: "openai-chat", baseUrl: "https://api.together.xyz/v1", key: "required", keyUrl: "https://api.together.ai/settings/api-keys", description: "Open models, served fast" },
+  { id: "deepinfra", name: "DeepInfra", kind: "gateway", wire: "openai-chat", baseUrl: "https://api.deepinfra.com/v1/openai", key: "required", keyUrl: "https://deepinfra.com/dash/api_keys", description: "Open models at low cost" },
+  { id: "fireworks", name: "Fireworks", kind: "gateway", wire: "openai-chat", baseUrl: "https://api.fireworks.ai/inference/v1", key: "required", keyUrl: "https://fireworks.ai/account/api-keys", description: "Open models and your fine-tunes" },
+  { id: "baseten", name: "Baseten", kind: "gateway", wire: "openai-chat", baseUrl: "https://inference.baseten.co/v1", key: "required", keyUrl: "https://app.baseten.co/settings/api_keys", description: "Model APIs and your own deployments" },
+  { id: "ollama", name: "Ollama", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:11434/v1", key: "none", description: "Models you pulled with Ollama, on this Mac" },
+  { id: "lmstudio", name: "LM Studio", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:1234/v1", key: "none", description: "The models LM Studio's server has loaded" },
+  { id: "local", name: "Other local server", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:8080/v1", urlHint: "http://localhost:<port>/v1", key: "optional", description: "Any OpenAI-compatible server on this Mac" },
+  { id: "openai-compatible", name: "Custom endpoint", kind: "custom", wire: "openai-chat", urlHint: "https://your-endpoint/v1", key: "optional", description: "Any OpenAI-compatible base URL and key" },
 ]
 
 /** A model a connection serves. */
@@ -72,6 +76,7 @@ export interface ModelConnection {
   provider: string
   kind: ModelConnectionKind
   name: string
+  wire: ModelWire
   baseUrl: string
   /** What it serves: the models the person kept when they added it. */
   models: ConnectionModel[]
@@ -87,7 +92,7 @@ export interface ConnectionServes {
 }
 
 export interface ModelConnectionView extends ModelConnection {
-  /** Empty while it's turned off. */
+  /** Every harness whose adapter takes its wire and kind; empty while it's turned off. */
   serves: ConnectionServes[]
 }
 
@@ -97,6 +102,8 @@ export interface ModelConnectionsSnapshot {
   issues: Array<{ id: string; message: string }>
   /** Whether a key can be kept: the keychain answers. */
   secureStorage: boolean
+  /** What each harness takes, as its driver declares it. */
+  harnesses: HarnessModelRoutes[]
 }
 
 /** What Check access asks: the provider, its URL as entered, and a key to try. */

@@ -22,6 +22,7 @@ import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { detachedSecrets, type DomainSecrets } from "../base/host-secrets.js"
 import { unwatchedWork, type HostWork } from "../base/event-loop.js"
 import { ModelConnections, modelConnectionsPath } from "./model-connections.js"
+import { declaredModelRoutes } from "./model-routes.js"
 
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
@@ -56,7 +57,7 @@ export interface ProviderHost {
   discovery: DiscoveryProcesses
   /** The installed version each launch would start, bound to the runtime readings once the harnesses open. */
   launchReadings: LaunchReadings
-  /** The gateways, local servers and endpoints the person connected, which harnesses that accept any provider launch with. */
+  /** The gateways, local servers and endpoints the person connected, routed into each launch whose harness's adapter takes them. */
   modelConnections: ModelConnections
 }
 
@@ -104,6 +105,17 @@ export function createProviderHost({ userRoot, secrets = detachedSecrets(), work
     (provider) => profiles.get(provider)?.label ?? provider,
     launchReadings
   )
+  const liveDrivers = new LiveDrivers(accountAdmission(accounts), work, floor)
+  const modelConnections = new ModelConnections(modelConnectionsPath(userRoot), secrets.secrets, {
+    harnesses: () => liveDrivers.list().map((driver) => ({ harness: driver.provider, routes: declaredModelRoutes(driver.modelRoutes) })),
+  })
+  // Every harness's launches and discoveries get the routes its own adapter takes; no harness is named here.
+  accounts.routeLaunches(async (provider, env) => {
+    const adapter = liveDrivers.get(provider)?.modelRoutes
+    if (adapter?.kind !== "accepts") return env
+    const launch = await modelConnections.routes(adapter)
+    return launch.routes.length ? adapter.apply(env, launch) : env
+  })
   return {
     harnesses,
     hooks: new ProviderRegistry(),
@@ -112,7 +124,7 @@ export function createProviderHost({ userRoot, secrets = detachedSecrets(), work
     skillEditing: new ProviderRegistry(),
     mcpEditing: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
-    liveDrivers: new LiveDrivers(accountAdmission(accounts), work, floor),
+    liveDrivers,
     decoders: new ProviderRegistry(),
     nativeRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),
@@ -128,6 +140,6 @@ export function createProviderHost({ userRoot, secrets = detachedSecrets(), work
     accounts,
     discovery: new DiscoveryProcesses(),
     launchReadings,
-    modelConnections: new ModelConnections(modelConnectionsPath(userRoot), secrets.secrets),
+    modelConnections,
   }
 }
