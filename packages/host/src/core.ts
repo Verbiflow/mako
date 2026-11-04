@@ -29,7 +29,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, CLOUD_MACHINE_INSTRUCTIONS, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -840,7 +840,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // A harness without instructions of its own hears how media reaches the person here (`makoInstructions`).
       const harness = late.conversations?.live.session(conversationId)?.harness
       const media = harness && !harnesses.host.liveDrivers.get(harness)?.makoInstructions ? SHOW_MEDIA_LINE : undefined
-      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), media, ...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
+      const cloudMachine = config.machineAgentFd !== undefined
+      return [cloudMachine ? CLOUD_MACHINE_INSTRUCTIONS : undefined, session && controlLine(session), launched && threadEnvironmentInstructions(launched, cloudMachine ? "cloud" : "local"), media, ...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
     },
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
@@ -1163,7 +1164,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     withHost,
     session: {
       // A conversation that moved to the cloud is the cloud's: its journal here stands aside.
-      liveSummaries: () => [...live.summaries().filter((summary) => !cloudConversations?.has(summary.session.id)), ...(cloudConversations?.summaries() ?? [])],
+      // The cloud's summary of a conversation stands in for this Mac's only when it has one: a moved conversation it
+      // remembers without one would otherwise be listed by neither, and a window restoring it would take it for this Mac's.
+      liveSummaries: () => {
+        const cloud = cloudConversations?.summaries() ?? []
+        const served = new Set(cloud.map((summary) => summary.session.id))
+        return [...live.summaries().filter((summary) => !served.has(summary.session.id)), ...cloud]
+      },
       archives: () => threads.archives.snapshot(),
       ready,
       withHost,

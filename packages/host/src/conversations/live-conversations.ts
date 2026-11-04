@@ -378,9 +378,12 @@ export class LiveConversations {
 
   summaries(): LiveSummary[] {
     const agents = this.dependencies.agents?.()
-    return this.records.listing().map((summary) => {
+    const listing = this.records.listing()
+    const away = this.threads.runningElsewhere(listing.map((summary) => summary.session.id))
+    return listing.map((summary) => {
       const children = agents ? rollup(agents.roster(summary.session.id)) : undefined
-      return { ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id), ...(children?.total && { children }) }
+      const elsewhere = away.get(summary.session.id)
+      return { ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id), ...(children?.total && { children }), ...(elsewhere && { elsewhere }) }
     })
   }
 
