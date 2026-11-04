@@ -31,7 +31,7 @@ export type GitHubTokenPhase =
   | { kind: "failed"; message: string }
 
 /** A refusal in the cloud's or GitHub's own words, without the bridge's wrapping. */
-const said = (message: string) => message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "")
+export const refusalWords = (message: string) => message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "")
 
 /** The setting as the account has it, and its two changes; `error` is the last change's refusal, in GitHub's or the cloud's words. */
 export function useGitHubToken(tokens: GitHubTokens) {
@@ -39,7 +39,7 @@ export function useGitHubToken(tokens: GitHubTokens) {
   const [busy, setBusy] = useState<"saving" | "removing" | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const settle = useCallback((reading: Promise<GitHubTokenListing | null>, live: () => boolean = () => true) => {
-    void reading.then((listing) => live() && setPhase({ kind: "ready", listing }), (failure: Error) => live() && setPhase({ kind: "failed", message: said(errorMessage({ error: failure })) }))
+    void reading.then((listing) => live() && setPhase({ kind: "ready", listing }), (failure: Error) => live() && setPhase({ kind: "failed", message: refusalWords(errorMessage({ error: failure })) }))
   }, [])
   useEffect(() => {
     let live = true
@@ -60,7 +60,7 @@ export function useGitHubToken(tokens: GitHubTokens) {
       setPhase({ kind: "ready", listing: await tokens.save(token.trim(), repository) })
       return true
     } catch (failure) {
-      setError(said(errorMessage({ error: failure })))
+      setError(refusalWords(errorMessage({ error: failure })))
       return false
     } finally {
       setBusy(undefined)
@@ -74,7 +74,7 @@ export function useGitHubToken(tokens: GitHubTokens) {
       setPhase({ kind: "ready", listing: null })
       return true
     } catch (failure) {
-      setError(said(errorMessage({ error: failure })))
+      setError(refusalWords(errorMessage({ error: failure })))
       return false
     } finally {
       setBusy(undefined)

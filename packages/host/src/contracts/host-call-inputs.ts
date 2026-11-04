@@ -557,6 +557,29 @@ const inputs = {
   "mako:git-status": () => z.tuple([]),
   "mako:git-unstage": () => z.tuple([z.array(z.string())]),
   "mako:git-unstage-all": () => z.tuple([]),
+  "mako:github-ask-answer": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.literal("thread"),
+        z.literal("project"),
+        z.literal("decline"),
+      ]),
+    ]),
+  "mako:github-asks": () => z.tuple([]),
+  "mako:github-reach": () => z.tuple([z.string()]),
+  "mako:github-reach-save": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({ mode: z.literal("repository") }),
+        z.object({
+          mode: z.literal("chosen"),
+          repositories: z.array(z.string()),
+        }),
+        z.object({ mode: z.literal("installation") }),
+      ]),
+    ]),
   "mako:github-status": () => z.tuple([]),
   "mako:github-token": () => z.tuple([]),
   "mako:github-token-remove": () => z.tuple([]),
@@ -2558,6 +2581,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:git-status", "git"],
   ["mako:git-unstage", "git"],
   ["mako:git-unstage-all", "git"],
+  ["mako:github-ask-answer", "usage"],
+  ["mako:github-asks", "usage"],
+  ["mako:github-reach", "usage"],
+  ["mako:github-reach-save", "usage"],
   ["mako:github-status", "git"],
   ["mako:github-token", "usage"],
   ["mako:github-token-remove", "usage"],

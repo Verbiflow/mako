@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { continueReadings, describeContinue } from "@mako/host/contracts/cloud-continues"
 import { describeFollow, describeList } from "@mako/host/contracts/sync-readings"
 import { webContinues } from "./continue-actions"
 import { readingWords, useReadings } from "./probe"
 import { webSync } from "./sync-readings"
-import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
+import { ArrowUpRightIcon, BellIcon, BellOffIcon, CheckIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
 import { webGitHubTokens } from "./github-tokens"
 import { useForm } from "./route"
+import { GITHUB_REACH_HINT, GITHUB_REACH_LIMIT, GITHUB_REACH_TITLE, GitHubReachProjectSchema, typedReachRepository, type GitHubAsk, type GitHubAskAnswer, type GitHubReach as Reach, type GitHubReachMode } from "@mako/host/contracts/github-reach"
+import { GitHubAsks, GitHubReach, RepositoryNames, type AskAnswers } from "@/components/settings/github-reach"
+import { askerName, projectName, reachChoices, settledWords, useGitHubAsks, useGitHubReach, withoutRepository, withRepository, type GitHubReachTransport } from "@/state/github-reach"
+import { webGitHubReach } from "./github-reach"
+import { accountProjects } from "./account"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
 import { copyAge } from "@/lib/format"
@@ -31,6 +36,11 @@ const READINGS_SHOWN = 8
 /** Settings: a screen of its own on a phone, Back to the list; wide, the pane beside the rail, opened from its foot. */
 export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
   const client = useWebClient()
+  const touch = useForm() !== "desk"
+  const reach = useMemo(() => webGitHubReach(client.gateway, client.account.id), [client])
+  // An answer at the top changes what the project below reaches, so it reads again.
+  const [answered, setAnswered] = useState(0)
+  const nudge = useCallback(() => setAnswered((count) => count + 1), [])
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-shell">
       <header className={cn("web-bar flex shrink-0 items-center gap-1", onBack ? "px-1.5" : "px-5")}>
@@ -52,10 +62,12 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
               </div>
             </div>
           </Group>
+          <GitHubAsksPart transport={reach} touch={touch} onAnswered={nudge} />
           <Notifications />
           <Conversation />
           <Fins />
           <PullRequests />
+          <GitHubReachSettings transport={reach} touch={touch} nudge={answered} />
           <Appearance />
           <ThisBrowser />
           <Diagnostics />
@@ -384,5 +396,221 @@ function Diagnostics() {
         Copy diagnostics
       </button>
     </Group>
+  )
+}
+
+/**
+ * Every project's pending GitHub asks, at the top of Settings so a phone gets them in one place: the desktop's own list
+ * in a laptop's browser, the touch layout on a phone. Nothing while there are none.
+ */
+export function GitHubAsksPart({ transport, touch, onAnswered }: { transport: GitHubReachTransport; touch: boolean; onAnswered?: () => void }) {
+  if (!touch) return <GitHubAsks transport={transport} onAnswered={onAnswered} />
+  return <TouchGitHubAsks transport={transport} onAnswered={onAnswered} />
+}
+
+function TouchGitHubAsks({ transport, onAnswered }: { transport: GitHubReachTransport; onAnswered?: () => void }) {
+  const asks = useGitHubAsks(transport, onAnswered)
+  if (!asks.asks.length && !asks.settled.length) return null
+  return (
+    <Group title="Cloud Threads asking for GitHub repositories" footer="Read-only. Allow one for the Thread while it lives, or add it to the project's repositories.">
+      <TouchAskRows transport={transport} asks={asks.asks} answers={asks} projects />
+    </Group>
+  )
+}
+
+function TouchAskRows({ transport, asks, answers, projects }: { transport: GitHubReachTransport; asks: GitHubAsk[]; answers: AskAnswers; projects?: boolean }) {
+  return (
+    <>
+      {asks.map((ask) => {
+        const mine = answers.answering?.id === ask.id ? answers.answering.answer : undefined
+        const busy = answers.answering !== undefined
+        const refusal = answers.refusal?.id === ask.id ? answers.refusal.message : undefined
+        const press = (answer: GitHubAskAnswer) => void answers.answer(ask, answer)
+        return (
+          <div key={ask.id} className="flex flex-col gap-3 px-4 py-3.5" data-github-ask={ask.id}>
+            <div>
+              <p className="text-ui [overflow-wrap:anywhere]">
+                <span className="font-medium">{askerName(transport, ask)}</span> asks to read <RepositoryNames names={ask.repositories} />
+                {ask.why ? <span className="text-muted-foreground">: {ask.why}</span> : null}
+              </p>
+              <p className="mt-0.5 text-label text-faint">{projects ? `In ${projectName(ask.repository)} · ` : ""}{copyAge(Date.parse(ask.askedAt))}</p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <button type="button" className="web-button h-11" disabled={busy} data-github-ask-answer="thread" onClick={() => press("thread")}>{mine === "thread" ? "Allowing…" : "Allow for this Thread"}</button>
+              <div className="flex gap-2">
+                <button type="button" className="web-quiet-button h-11 flex-1 whitespace-nowrap" disabled={busy} data-github-ask-answer="project" onClick={() => press("project")}>{mine === "project" ? "Allowing…" : "Allow for the project"}</button>
+                <button type="button" className="web-quiet-button h-11 px-5" disabled={busy} data-github-ask-answer="decline" onClick={() => press("decline")}>{mine === "decline" ? "Declining…" : "Decline"}</button>
+              </div>
+            </div>
+            {refusal ? <p role="alert" className="text-label text-negative">{refusal}</p> : null}
+          </div>
+        )
+      })}
+      {answers.settled.map((outcome) => (
+        <div key={outcome.ask.id} className="flex min-h-12 items-center gap-3 px-4 py-2.5">
+          <p className="min-w-0 flex-1 truncate text-label text-muted-foreground">
+            {askerName(transport, outcome.ask)} · <RepositoryNames names={outcome.ask.repositories} />
+          </p>
+          <span className={cn("shrink-0 text-label", outcome.already ? "text-caution" : "text-faint")}>{settledWords(outcome)}</span>
+        </div>
+      ))}
+    </>
+  )
+}
+
+/**
+ * Each project's GitHub repositories: what its cloud Threads can read besides their own. The projects are the account's
+ * cloud projects (`GET /v1/projects`), since a cloud Session is listed without its repository. In a laptop's browser
+ * it's the desktop's own part (`GitHubReach`); on a phone, the touch layout here. Asks are listed at the top instead.
+ */
+function GitHubReachSettings({ transport, touch, nudge }: { transport: GitHubReachTransport; touch: boolean; nudge: number }) {
+  const client = useWebClient()
+  const [projects, setProjects] = useState<string[]>([])
+  useEffect(() => {
+    let live = true
+    void accountProjects(client.gateway).then(
+      (found) => live && setProjects(found.map((project) => project.url).filter((url) => GitHubReachProjectSchema.safeParse(url).success)),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [client])
+  return <GitHubReachProjects transport={transport} projects={projects} touch={touch} nudge={nudge} />
+}
+
+export function GitHubReachProjects({ transport, projects, touch, nudge }: { transport: GitHubReachTransport; projects: string[]; touch: boolean; nudge?: number }) {
+  const [chosen, setChosen] = useState<string | undefined>(undefined)
+  const repository = chosen && projects.includes(chosen) ? chosen : projects[0]
+  if (!repository) return null
+  const picker = projects.length > 1 ? (
+    <select aria-label="Project" value={repository} onChange={(event) => setChosen(event.target.value)} className={touch ? "web-field w-auto max-w-[60%] truncate" : "h-8 max-w-[50%] truncate rounded-md bg-raised px-2 text-ui text-foreground ring-1 ring-hairline focus:outline-none focus-visible:ring-border"}>
+      {projects.map((url) => <option key={url} value={url}>{projectName(url)}</option>)}
+    </select>
+  ) : (
+    <span className="truncate text-ui text-muted-foreground">{projectName(repository)}</span>
+  )
+  if (touch) return <TouchGitHubReach key={repository} transport={transport} repository={repository} picker={picker} nudge={nudge} />
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-ui font-medium">In Mako Cloud</h3>
+          <p className="mt-0.5 text-label text-muted-foreground">For a project's Threads in the cloud.</p>
+        </div>
+        {picker}
+      </div>
+      <GitHubReach key={repository} transport={transport} repository={repository} asks={false} nudge={nudge} />
+    </section>
+  )
+}
+
+function TouchGitHubReach({ transport, repository, picker, nudge }: { transport: GitHubReachTransport; repository: string; picker: ReactNode; nudge?: number }) {
+  const reach = useGitHubReach(transport, repository, nudge)
+  const { phase } = reach
+  return (
+    <Group title={GITHUB_REACH_TITLE} footer={GITHUB_REACH_HINT}>
+      <Row label="Project" end={picker} />
+      {phase.kind === "loading" ? <p className="px-4 py-3.5 text-ui text-faint">Reading…</p> : null}
+      {phase.kind === "failed" ? (
+        <>
+          <p className="px-4 py-3 text-label text-negative">{phase.message}</p>
+          <button type="button" onClick={reach.read} className="web-row flex h-12 w-full items-center px-4 text-left text-ui">Try again</button>
+        </>
+      ) : null}
+      {phase.kind === "ready" ? <TouchChoices key={phase.reach.mode} repository={repository} reach={phase.reach} saving={reach.saving} error={reach.error} onSave={reach.save} onEdit={reach.clearError} /> : null}
+    </Group>
+  )
+}
+
+function TouchChoices({ repository, reach, saving, error, onSave, onEdit }: {
+  repository: string
+  reach: Reach
+  saving: boolean
+  error: string | undefined
+  onSave: (reach: Reach) => Promise<boolean>
+  onEdit: () => void
+}) {
+  const [picked, setPicked] = useState<GitHubReachMode>(reach.mode)
+  const [typed, setTyped] = useState("")
+  const [refused, setRefused] = useState<string | undefined>(undefined)
+  const chosen = reach.mode === "chosen" ? reach.repositories : []
+  const full = chosen.length >= GITHUB_REACH_LIMIT
+  const choose = (mode: GitHubReachMode) => {
+    onEdit()
+    setPicked(mode)
+    if (mode !== "chosen" && mode !== reach.mode) void onSave({ mode }).then((saved) => saved || setPicked(reach.mode))
+  }
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!typed.trim() || saving || full) return
+    const parsed = typedReachRepository(typed, repository)
+    if ("refused" in parsed) return setRefused(parsed.refused)
+    void onSave(withRepository(reach, parsed.repository)).then((saved) => saved && setTyped(""))
+  }
+  return (
+    <>
+      <div role="radiogroup" aria-label={GITHUB_REACH_TITLE} className="flex flex-col [&>*+*]:border-t [&>*+*]:border-hairline">
+        {reachChoices(repository).map((choice) => (
+          <button
+            key={choice.mode}
+            type="button"
+            role="radio"
+            aria-checked={picked === choice.mode}
+            disabled={saving}
+            data-github-reach-mode={choice.mode}
+            onClick={() => choose(choice.mode)}
+            className="web-row flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left text-ui"
+          >
+            <span className="min-w-0 flex-1">{choice.label}</span>
+            {picked === choice.mode ? <CheckIcon className="size-4 shrink-0" strokeWidth={2.25} /> : null}
+          </button>
+        ))}
+      </div>
+      {picked === "chosen" ? (
+        <>
+          {chosen.map((name) => (
+            <div key={name} className="flex min-h-12 items-center gap-3 px-4 py-2" data-github-reach-repository={name}>
+              <span className="min-w-0 flex-1 truncate font-mono text-label">{name}</span>
+              <button type="button" className="web-quiet-button h-9 px-3" disabled={saving} onClick={() => void onSave(withoutRepository(reach, name))}>Remove</button>
+            </div>
+          ))}
+          <form onSubmit={submit} className="flex flex-col gap-2 px-4 py-3" data-github-reach-add>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                maxLength={200}
+                value={typed}
+                disabled={saving || full}
+                placeholder="owner/name"
+                aria-label="Repository to add"
+                aria-invalid={refused ? true : undefined}
+                onChange={(event) => {
+                  setTyped(event.target.value)
+                  setRefused(undefined)
+                  onEdit()
+                }}
+                className="web-field h-11 min-w-0 flex-1 font-mono placeholder:font-sans"
+              />
+              <button type="submit" className="web-button h-11 px-4" disabled={!typed.trim() || saving || full}>{saving ? "Saving…" : "Add"}</button>
+            </div>
+            {refused ? <p role="alert" className="text-label text-negative">{refused}</p> : null}
+            <p className="text-label text-faint">
+              {full
+                ? `That's the most a project can have, ${GITHUB_REACH_LIMIT}. Remove one to add another.`
+                : chosen.length
+                  ? `${chosen.length} of at most ${GITHUB_REACH_LIMIT}, read-only.`
+                  : reach.mode === "chosen"
+                    ? "None yet: cloud Threads read only this repository."
+                    : "Add the first to switch to these. Until then nothing changes."}
+            </p>
+          </form>
+        </>
+      ) : null}
+      {error ? <p role="alert" className="px-4 py-3 text-label text-negative">{error}</p> : null}
+    </>
   )
 }

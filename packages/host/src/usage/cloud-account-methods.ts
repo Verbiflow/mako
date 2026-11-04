@@ -12,6 +12,7 @@ import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudCarriedFile } from "../contracts/cloud-carried-files.js"
+import type { GitHubAskAnswer, GitHubReach } from "../contracts/github-reach.js"
 import type { CloudAccount as CloudAccountView } from "../contracts/cloud-account.js"
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
@@ -334,6 +335,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:github-token", () => cloud.githubToken())
   methods.handle("mako:github-token-save", (token: string, repository?: string) => cloud.saveGitHubToken(token, repository))
   methods.handle("mako:github-token-remove", () => cloud.removeGitHubToken())
+  // GitHub reach: which repositories a project's cloud Threads may read besides their own, and answers to their asks.
+  methods.handle("mako:github-reach", (repository: string) => cloud.githubReach(repository))
+  methods.handle("mako:github-reach-save", (repository: string, reach: GitHubReach) => cloud.saveGitHubReach(repository, reach))
+  methods.handle("mako:github-asks", () => cloud.githubAsks())
+  methods.handle("mako:github-ask-answer", (askId: string, answer: GitHubAskAnswer) => cloud.answerGitHubAsk(askId, answer))
 
   sync?.start()
   const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))

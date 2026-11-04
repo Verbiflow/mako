@@ -71,6 +71,21 @@ import { clipReason, CloudRepositorySchema, type CloudRepository } from "../cont
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import { GitHubTokenAnswerSchema, GitHubTokenListingSchema, type GitHubTokenListing } from "../contracts/github-person.js"
+import {
+  GitHubAskAnswerSchema,
+  GitHubAskAnsweredSchema,
+  GitHubAskConflictSchema,
+  GitHubAsksAnswerSchema,
+  GitHubReachAnswerSchema,
+  GitHubReachProjectSchema,
+  GitHubReachSavedSchema,
+  GitHubReachSchema,
+  type GitHubAsk,
+  type GitHubAskAnswer,
+  type GitHubAskOutcome,
+  type GitHubReach,
+  type GitHubReachView,
+} from "../contracts/github-reach.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
@@ -705,6 +720,38 @@ export class CloudAccounts {
   /** Turns it off: the account removes the token, and each cloud machine its copy before its next pull request. */
   async removeGitHubToken(): Promise<void> {
     await this.#call("github-token.remove", "DELETE", `${this.#accountPath()}/github-token`)
+  }
+
+  /** A project's GitHub reach (`repository`, its GitHub URL): what its cloud Threads may read besides their own, and its pending asks. */
+  async githubReach(repository: string): Promise<GitHubReachView> {
+    const response = await this.#call("github-reach.read", "GET", this.#githubReachPath(repository))
+    return GitHubReachAnswerSchema.parse(await response.json())
+  }
+
+  /** Sets a project's reach; running cloud Threads get the new reach token within a minute. A refusal says which repository and why. */
+  async saveGitHubReach(repository: string, reach: GitHubReach): Promise<GitHubReach> {
+    const response = await this.#call("github-reach.save", "PUT", this.#githubReachPath(repository), GitHubReachSchema.parse(reach))
+    return GitHubReachSavedSchema.parse(await response.json()).reach
+  }
+
+  /** Every project's pending asks, newest first. */
+  async githubAsks(): Promise<GitHubAsk[]> {
+    const response = await this.#call("github-asks.list", "GET", `${this.#accountPath()}/github-asks`)
+    return GitHubAsksAnswerSchema.parse(await response.json()).asks
+  }
+
+  /** Answers an ask; one answered or expired before this reached it comes back as it stands, `already`. */
+  async answerGitHubAsk(askId: string, answer: GitHubAskAnswer): Promise<GitHubAskOutcome> {
+    const response = await this.#call("github-asks.answer", "POST", `${this.#accountPath()}/github-asks/${encodeURIComponent(askId)}`, { answer: GitHubAskAnswerSchema.parse(answer) }, false, [409])
+    const body: unknown = await response.json().catch(() => undefined)
+    if (response.status !== 409) return { ask: GitHubAskAnsweredSchema.parse(body).ask, already: false }
+    const ask = GitHubAskConflictSchema.safeParse(body).data?.detail
+    if (!ask) throw new CloudAccountError(problemWords(ProblemSchema.safeParse(body).data, "That ask was already answered."))
+    return { ask, already: true }
+  }
+
+  #githubReachPath(repository: string): string {
+    return `${this.#accountPath()}/github-reach?repository=${encodeURIComponent(GitHubReachProjectSchema.parse(repository))}`
   }
 
   /** A project's carried files the account's store keeps (`?repository=`), listed without their values. */

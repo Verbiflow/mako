@@ -161,6 +161,9 @@ const reads = [
   "mako:cloud-carried-files",
   /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
   "mako:github-token",
+  /** A project's GitHub reach and its pending asks, and every project's asks, read from the cloud. */
+  "mako:github-reach",
+  "mako:github-asks",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
@@ -293,6 +296,8 @@ const replays = [
   /** The same token saved twice is kept once; removing it twice leaves it off. */
   "mako:github-token-save",
   "mako:github-token-remove",
+  /** The same reach set twice is one reach. */
+  "mako:github-reach-save",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */

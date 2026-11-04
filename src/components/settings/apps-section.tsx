@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils"
 import { appSetupStore, useAppSetup } from "@/state/app-setup"
 import { decideCarriedFiles, keepCarriedFile, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
 import { useCloudAccount } from "@/state/cloud-account"
+import { desktopGitHubReach } from "@/state/github-reach"
+import { GitHubReach } from "./github-reach"
 import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { setupAgentLabel, startProjectSetup, useSetupAgent } from "@/state/project-setup"
@@ -338,7 +340,7 @@ function Recipe({ state, root }: { state: ReadyRecipe; root: string }) {
       ) : null}
 
       {recipe.carry.length ? <Carried carry={recipe.carry} /> : null}
-      {recipe.carry.some((entry) => !entry.link) ? <InTheCloud root={root} /> : null}
+      <InTheCloud root={root} carries={recipe.carry.some((entry) => !entry.link)} />
 
       {values.length ? (
         <Part title="Values" hint="Set in every process’s and agent’s environment, for each Thread.">
@@ -438,11 +440,12 @@ function Carried({ carry }: { carry: RecipeView["carry"] }) {
 }
 
 /**
- * The project's carried files in Mako Cloud, for an account with the cloud: off until the person copies them, then
- * each file with where it stands, removable one at a time or all at once. What's carried is the recipe's `carry`, the
- * same list a new worktree here gets.
+ * The project in Mako Cloud, for an account with the cloud. Its carried files, where the recipe carries any: off until
+ * the person copies them, then each file with where it stands, removable one at a time or all at once. What's carried
+ * is the recipe's `carry`, the same list a new worktree here gets. Under them, once the project's repository is known,
+ * the GitHub repositories its cloud Threads can read (`GitHubReach`).
  */
-function InTheCloud({ root }: { root: string }) {
+function InTheCloud({ root, carries }: { root: string; carries: boolean }) {
   const invited = useCloudAccount((state) => state.account?.state.status === "signed-in" && state.account.state.account.entitlements.includes("cloud"))
   const view = useCarriedFiles((state) => state.byFolder[root])
   const busy = useCarriedFiles((state) => state.busy[root])
@@ -451,6 +454,15 @@ function InTheCloud({ root }: { root: string }) {
     if (invited) void readCarriedFiles(root)
   }, [invited, root])
   if (!invited) return null
+  return (
+    <div className="flex flex-col gap-5">
+      {carries ? <CarriedInTheCloud view={view} busy={busy} failed={failed} /> : null}
+      {view?.repository ? <GitHubReach transport={desktopGitHubReach} repository={view.repository} /> : null}
+    </div>
+  )
+}
+
+function CarriedInTheCloud({ view, busy, failed }: { view: CarriedFilesView | undefined; busy: string | undefined; failed: string | undefined }) {
   return (
     <Part title="In Mako Cloud" hint="For this project’s Threads in the cloud.">
       {!view ? (

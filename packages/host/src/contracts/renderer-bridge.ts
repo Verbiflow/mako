@@ -75,6 +75,7 @@ import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, Simulat
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
+import type { GitHubAsk, GitHubAskAnswer, GitHubAskOutcome, GitHubReach, GitHubReachView } from "./github-reach.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { ContinueReading } from "./cloud-continues.js"
@@ -519,6 +520,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     githubToken: () => invokeTrustedHost<GitHubTokenListing | null>("mako:github-token"),
     githubTokenSave: (token: string, repository?: string) => invokeTrustedHost<GitHubTokenListing>("mako:github-token-save", token, repository),
     githubTokenRemove: () => invokeTrustedHost<void>("mako:github-token-remove"),
+    /* GitHub reach: which repositories a project's cloud Threads may read besides their own (`repository`, its GitHub URL), and answers to their asks. */
+    githubReach: (repository: string) => invokeTrustedHost<GitHubReachView>("mako:github-reach", repository),
+    githubReachSave: (repository: string, reach: GitHubReach) => invokeTrustedHost<GitHubReach>("mako:github-reach-save", repository, reach),
+    githubAsks: () => invokeTrustedHost<GitHubAsk[]>("mako:github-asks"),
+    githubAskAnswer: (askId: string, answer: GitHubAskAnswer) => invokeTrustedHost<GitHubAskOutcome>("mako:github-ask-answer", askId, answer),
     /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
