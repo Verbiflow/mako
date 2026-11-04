@@ -56,6 +56,23 @@ export function threadRollup(state: AcpState, thread: string | undefined): Rollu
   return children.length || !thread ? rollup(children) : (listedRollup(state, thread) ?? rollup(children))
 }
 
+const askingOf = new WeakMap<readonly NativeAgent[], readonly NativeAgent[]>()
+
+/**
+ * A Thread's Fins that wait on the person, in its roster's order, the same array while its roster is. Empty until this
+ * window holds the roster; the Inbox reads the roster of every Apex whose count says one waits (`useInboxRosters`).
+ */
+export function threadAsking(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
+  const children = threadChildren(state, thread)
+  let held = askingOf.get(children)
+  if (!held) {
+    const asking = children.filter((agent) => childGroup(childStateOf(agent)) === "needs")
+    held = asking.length ? asking : NO_CHILDREN
+    askingOf.set(children, held)
+  }
+  return held
+}
+
 export function useThreadRollup(thread: string | undefined): Rollup {
   return useAcp((state) => threadRollup(state, thread), sameRollup)
 }
@@ -182,6 +199,16 @@ export function useApexTitle(liveId: string | undefined, threadPath: string | un
   const listed = useThreads((state) => (thread ? state.threads.find((ref) => ref.threadId === thread)?.title : undefined))
   const live = useAcp((state) => (thread ? Object.values(state.conversations).find((conversation) => conversation.threadId === thread)?.title : undefined))
   return opened ?? listed ?? live
+}
+
+/** The harness the Apex of a Fin's Thread runs on, from what this window holds of it, for its avatar. */
+export function useApexHarness(liveId: string | undefined, threadPath: string | undefined): string | undefined {
+  const apex = useAcp((state) => (liveId ? state.conversations[liveId]?.parent?.thread : undefined))
+  const savedApex = useThreads((state) => (threadPath && !apex ? state.threads.find((ref) => ref.path === threadPath)?.parent?.thread : undefined))
+  const thread = apex ?? savedApex
+  const live = useAcp((state) => (thread ? Object.values(state.conversations).find((conversation) => conversation.threadId === thread)?.harness : undefined))
+  const listed = useThreads((state) => (thread && !live ? state.threads.find((ref) => ref.threadId === thread)?.harness : undefined))
+  return live ?? listed
 }
 
 /**

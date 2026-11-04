@@ -1,11 +1,71 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { CheckIcon, XIcon } from "lucide-react"
-import { childWord } from "@mako/host/contracts/children"
+import {
+  childGroup,
+  childStateOf,
+  childWord,
+} from "@mako/host/contracts/children"
+import { FinMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { cn } from "@/lib/utils"
 import { activeAcp, useAcp } from "@/state/acp"
-import { useThreadAsks } from "@/state/apex-fins"
+import { useThreadAsks, useThreadChildren } from "@/state/apex-fins"
+import {
+  scrollCrewNeedsIntoView,
+  useCrewCardVisible,
+} from "@/state/crew-card-view"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
+
+/**
+ * One line while the crew card is scrolled away and Fins need the person:
+ * their marks and the count. It brings the card's Needs you group back.
+ * Nothing while the card is in view, since the asks live there. A Thread
+ * with no card doesn't render this; its dock keeps the asks themselves.
+ */
+export function FinsNeedYou({
+  thread,
+  compact = false,
+}: {
+  thread: string | undefined
+  compact?: boolean
+}) {
+  const visible = useCrewCardVisible(thread)
+  const children = useThreadChildren(thread)
+  const needs = useMemo(
+    () =>
+      children.filter((agent) => childGroup(childStateOf(agent)) === "needs"),
+    [children]
+  )
+  if (visible !== false || !needs.length) return null
+  const word =
+    needs.length === 1 ? "1 Fin needs you" : `${needs.length} Fins need you`
+  return (
+    <div className={cn(!compact && "bg-surface/60")}>
+      <button
+        type="button"
+        data-crew-away
+        data-compact={compact || undefined}
+        onClick={scrollCrewNeedsIntoView}
+        className={cn(
+          "pressable flex w-full items-center gap-2 text-left text-ui text-foreground",
+          compact ? "min-h-11 px-3" : "px-4 py-2"
+        )}
+      >
+        <span aria-hidden className="flex shrink-0 items-center gap-1">
+          {needs.slice(0, 5).map((agent) => (
+            <FinMark
+              key={agent.nativeId}
+              agent={agent}
+              state={childStateOf(agent)}
+              cut="var(--surface)"
+            />
+          ))}
+        </span>
+        <span className="min-w-0 truncate">{word}</span>
+      </button>
+    </div>
+  )
+}
 
 /**
  * Over an Apex's composer: what its Fins ask the person, each answered here
@@ -16,10 +76,12 @@ import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 export function FinAsks() {
   const key = useAcp((state) => activeAcp(state)?.key)
   const thread = useAcp((state) => activeAcp(state)?.threadId)
+  const card = useCrewCardVisible(thread)
   const asks = useThreadAsks(thread)
+  if (card !== null) return <FinsNeedYou thread={thread} />
   if (!key || !asks.length) return null
   return (
-    <div data-fin-asks={asks.length} className="flex shrink-0 flex-col gap-2.5 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-fin-asks={asks.length} className="flex shrink-0 flex-col gap-2.5 bg-surface/60 px-4 py-2.5">
       {asks.map((ask) => (
         <FinAskRow key={`${ask.fin}:${ask.ask.id}`} apex={key} ask={ask} />
       ))}
@@ -40,22 +102,51 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
   const approval = ask.ask.kind === "approval"
   const options = ask.ask.options ?? []
   return (
-    <div data-fin-ask={ask.ask.kind} data-fin={ask.fin} aria-busy={sending || undefined} className="flex flex-col gap-1.5">
+    <div
+      data-fin-ask={ask.ask.kind}
+      data-fin={ask.fin}
+      aria-busy={sending || undefined}
+      className="flex flex-col gap-1.5"
+    >
       <p className="flex min-w-0 items-center gap-1.5 text-label">
         <HarnessIcon harness={ask.harness} className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate font-medium text-foreground">{ask.title}</span>
-        <span className="shrink-0 text-caution">{childWord({ kind: "blocked", question: ask.question, on: approval ? "approval" : "person" })}</span>
+        <span className="min-w-0 truncate font-medium text-foreground">
+          {ask.title}
+        </span>
+        <span className="shrink-0 text-caution">
+          {childWord({
+            kind: "blocked",
+            question: ask.question,
+            on: approval ? "approval" : "person",
+          })}
+        </span>
       </p>
       <p className="max-w-prose text-ui text-foreground/90">{ask.question}</p>
-      {ask.ask.action ? <p className="max-w-prose text-label text-muted-foreground">{ask.ask.action}</p> : null}
+      {ask.ask.action ? (
+        <p className="max-w-prose text-label text-muted-foreground">
+          {ask.ask.action}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
         {approval ? (
           <>
-            <button type="button" data-fin-answer="allow" disabled={sending} onClick={() => send({ allow: true })} className="pressable flex items-center gap-1.5 rounded-md border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50">
+            <button
+              type="button"
+              data-fin-answer="allow"
+              disabled={sending}
+              onClick={() => send({ allow: true })}
+              className="pressable flex items-center gap-1.5 rounded-md border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
+            >
               <CheckIcon className="size-3" />
               Allow once
             </button>
-            <button type="button" data-fin-answer="refuse" disabled={sending} onClick={() => send({ allow: false })} className="pressable flex items-center gap-1.5 rounded-md border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50">
+            <button
+              type="button"
+              data-fin-answer="refuse"
+              disabled={sending}
+              onClick={() => send({ allow: false })}
+              className="pressable flex items-center gap-1.5 rounded-md border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50"
+            >
               <XIcon className="size-3" />
               Refuse
             </button>
@@ -74,11 +165,15 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
                 onClick={() => send({ option: index })}
                 className={cn(
                   "pressable flex items-center gap-1.5 rounded-md border px-2 py-1 text-label transition-colors disabled:opacity-50",
-                  recommended ? "border-hairline bg-foreground text-background hover:opacity-90" : "border-hairline text-foreground hover:bg-fill-hover"
+                  recommended
+                    ? "border-hairline bg-foreground text-background hover:opacity-90"
+                    : "border-hairline text-foreground hover:bg-fill-hover"
                 )}
               >
                 {option.label}
-                {recommended ? <span className="opacity-70">· recommended</span> : null}
+                {recommended ? (
+                  <span className="opacity-70">· recommended</span>
+                ) : null}
               </button>
             )
           })
@@ -96,7 +191,9 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               onChange={(event) => setWords(event.target.value)}
               disabled={sending}
               aria-label={`Answer ${ask.title} in your own words`}
-              placeholder={options.length ? "Or answer in your own words" : "Your answer"}
+              placeholder={
+                options.length ? "Or answer in your own words" : "Your answer"
+              }
               className="h-7 w-full rounded-md border border-hairline bg-transparent px-2 text-label text-foreground placeholder:text-faint focus:border-foreground/30 focus:outline-none"
             />
           </form>

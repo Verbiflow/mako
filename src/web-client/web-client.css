@@ -120,7 +120,7 @@
   }
 
   /*
-   * The list. A phone's: rows edge to edge, parted by hairlines under their words. The rail's: rows inset and rounded on
+   * The list. A phone's: rows edge to edge, parted by their own spacing, no lines. The rail's: rows inset and rounded on
    * the shell, the open one raised, as the desk's rail draws them.
    */
   .web-section {
@@ -140,6 +140,16 @@
   .web-row-mark {
     @apply flex w-7 shrink-0 items-center justify-center;
   }
+  .web-row-mark {
+    --live-mark-size: 28px;
+    --lm-cut: var(--shell);
+  }
+  [data-list="rail"] .web-row-mark {
+    --live-mark-size: 20px;
+  }
+  [data-list="rail"] .web-row[aria-current="page"] .web-row-mark {
+    --lm-cut: var(--raised);
+  }
   /* A row lights on touch-down and fades back after: the press is seen even on a quick tap. */
   .web-row:active {
     @apply bg-fill-selected;
@@ -149,14 +159,6 @@
     .web-row:hover {
       @apply bg-fill-hover;
     }
-  }
-  [data-list="screen"] li + li .web-row::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    left: 56px;
-    border-top: 1px solid var(--hairline);
   }
   /*
    * A row over its swipe action: the row slides left over Archive, ink on the page's ground, drawn only while it shows.
@@ -200,16 +202,6 @@
   .web-swipe[data-armed] .web-swipe-archive > svg {
     scale: 1.18;
   }
-  /* "Done" and a hand's "unread": a dot in the row's ink beside its time, never the accent. */
-  .web-row[data-unread] [data-unread-mark] {
-    animation: web-unread-in 220ms var(--ease-out);
-  }
-  @keyframes web-unread-in {
-    from {
-      opacity: 0;
-      scale: 0.4;
-    }
-  }
 
   [data-list="rail"] .web-rows {
     @apply flex flex-col gap-px px-2;
@@ -226,6 +218,21 @@
   }
   [data-list="rail"] .web-row-mark {
     @apply w-6;
+  }
+  /* An Apex's pips veil in the paint of the row they sit on (`.fin-pips`). */
+  [data-list="screen"] .fin-pips {
+    --pips-under: var(--surface);
+  }
+  [data-list="rail"] .web-row[aria-current="page"] .fin-pips {
+    --pips-under: var(--raised);
+  }
+  @media (hover: hover) {
+    .web-row:hover .fin-pips {
+      --pips-over: var(--fill-hover);
+    }
+  }
+  .web-row:active .fin-pips {
+    --pips-over: var(--fill-selected);
   }
   .web-account {
     @apply flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-ui text-muted-foreground;
@@ -480,7 +487,8 @@
   .web-chip-tab {
     @apply h-9 px-3;
   }
-  .web-chip-tab[aria-selected="true"] {
+  .web-chip-tab[aria-selected="true"],
+  .web-chip-tab[aria-checked="true"] {
     @apply bg-fill-selected text-foreground;
     box-shadow: inset 0 0 0 1px var(--border);
   }
@@ -557,7 +565,7 @@
     @apply size-9 text-muted-foreground;
   }
   .web-composer-input {
-    @apply min-w-0 resize-none bg-transparent px-2 py-[7px] text-foreground caret-ember outline-none placeholder:text-faint;
+    @apply min-w-0 resize-none bg-transparent px-2 py-[7px] text-foreground caret-sea outline-none placeholder:text-faint;
     font-size: max(16px, var(--text-ui));
     line-height: 22px;
     max-height: 180px;
@@ -615,7 +623,7 @@
    * the prose size, and one routing row under it, where, model and access as quiet text with their glyphs.
    */
   .web-composer[data-desk] {
-    @apply max-w-none border-t border-hairline bg-surface p-0;
+    @apply max-w-none bg-surface p-0;
   }
   .web-composer[data-desk] .web-composer-field {
     @apply flex flex-col rounded-none bg-transparent p-0;
@@ -836,9 +844,9 @@
   opacity: 1;
   transition: opacity 160ms var(--ease-out) 80ms;
 }
-/* The working dot: the one ember on the screen while a turn runs. */
+/* The working dot: the one sea accent on the screen while a turn runs. */
 .web-capsule-dot {
-  @apply size-1.5 shrink-0 rounded-full bg-ember;
+  @apply size-1.5 shrink-0 rounded-full bg-sea;
   animation: web-breathe 1.6s ease-in-out infinite;
 }
 .web-jump {
@@ -880,6 +888,15 @@
     0 0 0 1px var(--hairline),
     var(--elevation-floating);
   animation: web-rise 220ms var(--ease-out) both;
+}
+/* In the Inbox the card lies in the page: no float, no rise, as tall as it needs. */
+.web-ask[data-in-inbox] {
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  box-shadow: none;
+  animation: none;
 }
 .web-ask-body {
   display: flex;
@@ -1625,7 +1642,7 @@
 
   /*
    * The capsule's app: a segment that opens it. Its dot is the text's own colour: hue is for diff, error and warning,
-   * and ember for the turn at work beside it.
+   * and sea for the turn at work beside it.
    */
   .web-capsule-app {
     @apply text-foreground;

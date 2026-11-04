@@ -234,7 +234,54 @@ the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
 Mac frees up (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
-across the host), its end written once. A report (`agents_report`, else one
+across the host), its end written once. Linking it again with another pid
+follows it there, and the link's name is its Thread's title. When its
+process goes, a process of its Apex's shell holding its Session is the same
+run (a chat resumed to hand it a message), and otherwise its end waits until
+its Session has been quiet for `END_CONFIRM_MS`. A run whose Session is
+written again after its end reads as working while that Session is still
+being written, and a digest drops the end the host inferred for it
+(`AgentWakes.current`). A stop closes the edge with
+its reason (`closedReason`) before it cancels the turn. The cut turn then reports
+nothing and wakes no one, and the Fin reads as stopped in those words. A Fin
+that ends a turn without `agents_report` while its own Fins work, or while a
+`worktree_move` it asked for is pending (`movePending`), hasn't finished.
+Its turn's end writes no report, and it reads as working with "Waiting for
+…" (`waitsOn`). Its result is the turn after that work ends: the one its
+Fins' reports wake, or, with nothing to wake it, that turn's reply
+(`checkAwaiting`). A message to it
+(`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
+Thread on Mako's live driver at no more than its Apex's access, and arrives
+with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
+Mako drives it. What a Fin runs on is decided once, at admission
+(`resolveFinTuning`, `contracts/fin-tuning.ts`): a `model`, `reasoning` or
+`fast` the spawn names is held to its harness's catalog, read leniently, and
+refused (`unknown-model`) with the choices it offers; left out, the person's
+Settings › Fins choice for that harness, else its Apex's model and options on
+the Apex's harness (never its plan mode), else the model the person last
+started or sent with there, else Mako's pick (`HarnessDefaults.work`), else
+the harness's own. A layer whose model the harness stopped listing is passed
+over in a note its Apex and its row both show (`ThreadParent.tuned`). Fast is
+the model's speed option, or its fast sibling where the harness lists one as
+a model (Grok, Devin). The host keeps the choices and what the person used in
+`<user root>/fin-defaults.json` (`mako:fin-defaults`), so the web app reads
+them through the Mac, and a Fin's row says its model, reasoning and fast lane
+(`NativeAgent.runsOn`). A harness whose account in use is at its limit
+(`HarnessAccounts.limited`, read for at most `LIMIT_READ_MS`) takes no Fin:
+one whose Apex named no harness or model starts on the person's next harness
+with room (`harnessOrder`), its answer's `limited` and its row's note saying
+until when and which other account of that harness has room; a named one,
+or one with nowhere to go, is refused (`limited`) with the same. The person's rules for Fins (`FinPolicy`,
+Settings › Fins: their own words, each to a harness and maybe a model, first
+fit wins, and where the rest go) reach every Thread's agent ahead of the
+person's next message once they change (`finPolicyNote`, `rulesNote`), and
+an Apex of its own with its brief. `agents_start`'s `rule` names the one a
+Fin follows: its harness and model apply unless the spawn names them (a
+model only on the rule's own harness), a spawn with no rule, harness or
+model goes to `otherwise`, a missing rule is refused (`unknown-rule`), and
+the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). A worktree in a project folder of several
+repositories can be on a branch it names, adopted in each repository that
+has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
 its next step where its harness steers there and at its turn's end where it
@@ -260,6 +307,21 @@ journal. `npm run test:background-agents` covers the engine,
 `bench:orch-wake`, `bench:orch-wake-latency`, `bench:orch-spawn` and
 `bench:orch-host` hold the follow, the wakes, a report's way to its Apex, a
 spawn's receipt and the host's loop to budgets.
+
+What an Apex and its Fins tell each other is kept short without dropping
+what the reader needs. Every `agents_*` answer is its JSON on one line
+(`agentToolText`), every field kept. A finished Fin's digest line
+(`finishedLine`) is its report's first paragraph past any heading, on one
+line, at most `FINISHED_CHARS`, with how many more characters the
+report holds (`agents_read` gives them), and every artifact by its ref with
+its label beside it.
+A Fin reads its Apex and the other open Fins it started with `agents_list`
+`scope: crew` (`AgentsCrew`): the Apex's title, harness, whether it works and
+its last step, what it was asked when it is a Fin too, and each other Fin as
+the front door's note names it (name, harness, state, what it was asked, its
+branch and last report). The person's direct words to a Fin stay out. It
+reads typed state, never a transcript, and its brief's first line says it's
+there. `npm run test:orch-comms` covers all three.
 
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where
@@ -2053,18 +2115,54 @@ deliberate action and never rides along with a commit.
 ## Design rules
 
 - Tokens live in `src/index.css` and nowhere else. No literal colors in
-  components. Chrome (`--shell`) carries no shadow, ever. Structural workspace
-  panes tile edge-to-edge with square edges and 1px dividers; rounded `.card`
-  surfaces are reserved for content within a pane. Real shadows exist only on
+  components. Chrome (`--shell`) carries no shadow, ever. **No lines in the
+  chrome.** The title strip, the rail and each pane's tab strip sit on the
+  shell; a pane's body is the surface; panes side by side are parted by a 6px
+  gutter of the shell (`Divider`, whose bar shows only under the pointer), and
+  a pane's sections by tone and spacing, never a hairline. The composer's
+  input is one raised box inset from its pane. Hairlines stay for content
+  (a diff's file headers, a table) and controls (an input's or a button's
+  outline). Structural panes keep square edges; rounded `.card` surfaces are
+  reserved for content within a pane.
+- **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
+  the person's own face beside their prompt, an agent's tile (its harness's
+  glyph on the raised plane) on its reply's byline, and the sender's tile on
+  words another Thread wrote in (an Apex's brief, a Fin's report). Every
+  avatar is square with a corner just soft enough not to cut, the rail
+  footer's too. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
-- **The ramp is warm ember neutrals — red-shifted near-blacks, warm
-  off-white text — and stays that quiet.** Ember (`--ember`) is punctuation,
-  not brand: the live/working dot, the composer caret, at most one badge.
-  Never on links, borders, focus, selection, hover fills, icons at rest, or
-  any fill larger than a badge; if two ember moments are visible in one
-  pane, one is wrong. Selection and hover are tints of the text colour
-  (`--fill-hover` / `--fill-selected`), never the accent. Beyond ember, hue
-  appears only where it carries meaning: diff add/remove, error, warning.
+- **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
+  text — and stays that quiet.** The one accent is the brand's sea
+  (`--sea`): the steel blue of the fin's lit face in the icon kit
+  (`mako-icons/_masters`, #415f81 to #6386a6) and the marketing site's own
+  `--sea` (mako-cloud `apps/site`), hue 245. Until November 2026 the accent
+  was an orange "ember" that appeared nowhere in the brand. It is
+  punctuation: the open Thread's working comet, the live dot, the composer
+  caret, at most one badge. Never on links, borders, focus, selection, hover
+  fills, icons at rest, or any fill larger than a badge; if two sea moments
+  are visible in one pane, one is wrong. Selection and hover are tints of the
+  text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
+  sea, hue appears only where it carries meaning: diff add/remove, error,
+  warning.
+- **Every Thread and Fin wears one live mark** (`LiveMark`,
+  `src/components/ui/live-mark.tsx`; states in `src/lib/live-mark-state.ts`):
+  its agent's glyph, and round it a ring that carries the state. A comet
+  runs round it while it works (in sea on the open Thread, in the text
+  colour elsewhere), the same comet slower and quieter while its turn is done
+  and background work runs, a caution ring breathes while it needs the
+  person, a dotted ring drifts while a Fin asks its Apex, a dashed ring holds
+  while it's queued, and a dot is cut out of it for a failure (negative, low
+  right) or an answer to read (the unread sphere, high right). The rail, the
+  tabs, the Agents panel, the crew card and the phone draw this one mark,
+  and a row's one trailing slot says "Needs you", "Failed" or its age. Its
+  motion is `transform` and `opacity` on HTML boxes only (an SVG element's
+  own transform runs on the main thread: a drifting dotted ring once cost
+  588 ms in 3 s for 22 marks), every moving layer runs on the shared clock
+  and rests off screen (`observePhaseLockedAnimation`), and no React state
+  moves it. `npm run bench:live-marks` holds 500 moving marks and the desk
+  at 500 more Apexes to no React commit, no layout and no style pass per
+  frame, the marks scrolled away paused, and every running mark in phase;
+  `scripts/live-marks.html` draws every state.
 - **Three UI type sizes only** — `text-label` (12), `text-ui` (14),
   `text-title` (16) — plus prose (16) and code (12). Weights come off
   Geist's variable axis as 440/530/640 through the standard `font-normal`/
@@ -2112,8 +2210,8 @@ duplicates a doorway that already exists: the palette is Cmd+K and search is
 the one control there with no other way in. The rail is the vertical thread
 list; horizontal tabs inside the central workbench hold that thread's
 sessions, then its files and diffs. The rail never nests sessions: a Thread
-with several is one row wearing each Session's agent mark and the most
-demanding status among them (`src/lib/thread-fold.ts`), and clicking it
+with several is one row wearing the live mark of the Session its most
+demanding status comes from (`src/lib/thread-fold.ts`), and clicking it
 opens the Session you last had open there. `+` and Cmd+T open the Thread's
 new tab; nothing is created until its first message is sent, an empty new
 tab disappears when you leave it, and one holding unsent text stays as a
@@ -2121,6 +2219,13 @@ Draft tab, its text kept per Thread (`src/state/thread-sessions.ts`). An
 untitled Session's tab shows its agent's name, never a shared placeholder. A fork
 joins its parent's Thread as a tab unless Option-click asks for a new one.
 Moves are per Thread; no control offers to move one Session.
+
+This is changing: a Thread becomes one conversation (`docs/one-conversation.md`).
+The Thread store's split of every multi-Session Thread, forks and `+` as
+Threads beside their source, and shared places (`thread_places`, `placeOf`)
+are built behind `ThreadStoreOptions.oneConversation`, off except on an
+isolated host with `MAKO_ONE_CONVERSATION=1`; the windows' half is listed
+there. `npm run test:thread-split` covers the split.
 
 The composer groups file attachments, screenshots, references, skills, and MCP
 settings under one + popover. `composer.controls` contributions render inside
@@ -2212,10 +2317,19 @@ in the command palette, not as an extra composer icon. Context usage is shown
 only with an exact, usable reading; unsupported providers do not get an empty
 ring. Chat activity uses one compact 20px mark and no redundant Responding row
 while answer text streams. Thought-process details remain available without a
-second animated status. The composer carries no Queue/Steer control, not in
-the footer and not in the conversation menu: the placeholder and the send
-button's icon say what Enter does, Cmd+Enter does the other, and the
-preference is a row in Settings > Conversation. The
+second animated status. The composer carries no Queue/Steer control: the
+placeholder and the send button's icon say what Enter does, Cmd+Enter does
+the other, and the preference is a row in Settings > Conversation. The
+composer bar has no overflow menu either. Its `···` once held a compaction
+control, saved messages, the history of switches, steering and approvals,
+and End live session, and showed a days-old "Steering message not accepted"
+to a person who had never opened it. Each has a home now or is gone:
+compaction is in the context meter beside the composer, a message that
+wasn't answered is its row in the transcript where it failed, a switch, a
+steering message or an approval is a notice above the composer only while it
+is under way or went wrong (`src/desk/notices.ts`), and an idle provider
+closes itself after ten minutes. A notice that no longer stands is not kept
+anywhere to be found later. The
 routing row gives way in a fixed order as the pane narrows (the centre can be
 450px), found by measuring rather than a width breakpoint
 (`use-compact-row.ts`): the access chip drops to its glyph first, the harness
@@ -2249,9 +2363,10 @@ that starts working again retires its unseen items; four or more banners in
 600 ms become one summary. The app icon's badge counts distinct threads,
 never events, and it is the only standing count: the titlebar carried a pill
 reading "3 threads need you" over a list, which mirrored into the chrome what
-the rail's own marks and the Status view already say. The list is the Status
-view, the announcement is the toast, and Cmd+Shift+U opens the next thread
-that needs you. Banners and the badge are
+the rail's own marks and the Inbox already say. The list is the Inbox
+(`src/state/inbox.ts`, opened from the rail's top rows or Cmd+Shift+U, which
+pressed again opens the first item), the announcement is the toast, and the
+Inbox row's caution count is the rail's one count. Banners and the badge are
 answered by the client that owns the window (`electron/client-main.ts` or
 `src/dev/web-notifications.ts`), never by the shared host; one banner per thread is retained until it reports, and a click sends
 `notification-activated`. Preview windows record but never announce.
@@ -3343,8 +3458,18 @@ long generation cannot distinguish step delivery from turn-end delivery.
 Each renderer and web document owns its workspace pool and git target, selected
 through async request context. Provider conversations remain shared. A preview
 must never change another window's cwd, file target, or active workspace tab.
-The rail's Projects view keeps active sessions under their project; Recent is a
-bounded chronological list. Never gate provider names or the rail on model discovery.
+The rail opens with five fixed rows (`src/components/rail/rail-top.tsx`: New
+thread, Search, Inbox with its caution count, Pull requests with the open
+count, Automations with how many are on; a window that routes, the web desk,
+has no project of its own and shows the first three), then Pinned, then
+Threads by project. There is no view switch: Recent, a bounded chronological
+list, and Archived are choices in the Threads heading's filter menu, and the
+heading names the one showing and leads back. The phone's list
+(`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
+asking as a row of its own, "Mobile polish ·" before its question), Working
+and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
+asks answered through `answerFin`). The rail and the list carry no lines:
+spacing and type part them. Never gate provider names or the rail on model discovery.
 Position in the rail never carries status. `stableThreadRanks` in
 `src/lib/thread-folders.ts` gives a busy thread its rank when it starts, keeps
 it while the thread is working, observed, or externally active, and settles it
@@ -3389,14 +3514,14 @@ seen, so the pill and badge stop counting a thread you have put away. Before
 this, a session that failed once wore the red mark and its folder's "1
 failed" chip for as long as it existed, whatever you clicked or archived,
 and the pill kept the count after an archive. `test-stage-layout.ts` and
-`test-rail-ui.mjs` cover both marks. The Status view (`src/lib/thread-board.ts`) is the one place
-threads regroup by state, in a fixed section order; Archived is reached from
-the filter glyph. While the pointer is inside the rail the order caught at
+`test-rail-ui.mjs` cover both marks. Rows never regroup by state: what needs you is
+the Inbox, one list across Threads and Fins read from the records the marks
+read, answered in place; Archived is reached from the filter glyph. While the pointer is inside the rail the order caught at
 entry holds, so a click cannot land on a row that moved, and rows that do
 move glide there through `use-row-flip.ts` (transform only; nothing on first
 fill, view changes, offscreen, or under reduced motion). Every folder shows
 the same number of lead rows; selecting a project never resizes one.
-`test-stage-layout.ts` covers the ranks, held folders, and the board;
+`test-stage-layout.ts` covers the ranks and held folders;
 `node scripts/test-rail-ui.mjs` drives the production rail.
 A row's controls (pin, stop, actions, detach) live in a pill that appears over
 the row's meta on hover or focus; an invisible control must never reserve

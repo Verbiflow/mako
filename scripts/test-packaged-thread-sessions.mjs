@@ -182,10 +182,9 @@ async function runHarness(provider) {
     await click(q(tabSelector(session)), { label: `Session tab ${session}` })
     if (id) await until(q(`[data-live-conversation="${id}"]`), `live panel of ${id}`)
   }
-  /** Conversation actions, End live session: the Session stays in its Thread, read from its saved history. */
+  /** The live session ended as the host ends an idle one: the Session stays in its Thread, read from its saved history. */
   async function endLive(id) {
-    await click(q('button[aria-label="Conversation actions"]'), { label: "Conversation actions" })
-    await click(`[...document.querySelectorAll('button')].find(b => b.getClientRects().length && b.textContent.includes('End live session'))`, { label: "End live session" })
+    await bridge("liveClose", [id])
     await waitFor(() => snapshot(id), (snap) => snap?.session.status === "closed", "the live session ended")
   }
   async function openFromHistory(session, id) {

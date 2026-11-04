@@ -36,6 +36,8 @@ export function answerText(question: string, answer: string): string {
 /** Between the person's words an Apex passed on and what it added. */
 export const PASSED_ON_NOTE = `[mako · what ${YOUR_APEX} adds]`
 const PASSED_ON_NOTES = [PASSED_ON_NOTE, `[mako · what your ${LEGACY_APEX_WORD} adds]`]
+/** Beneath a message that reached a Fin by stopping the headless run it was in and resuming its session in Mako. */
+export const HANDED_OVER_NOTE = "[mako · to deliver this, Mako stopped your run and resumed your session here: your last step may have been cut off mid-way. Check what you had in flight (a command half-finished, a file half-written), then carry on with this message taken into account.]"
 
 const AGENT_HEADER = /^\[mako · from (.+?)(?: \(agent\))?, not the person\]\n?/
 const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(agent\)\]\n?/
@@ -44,7 +46,9 @@ const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(ag
 export function briefIntro(name: string): string {
   return `You're fin:${name}${INTRO_TAIL}`
 }
-const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
+const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope crew shows it and the other ${FIN_WORD}s it started.`
+/** The intro's tail before a Fin could read its crew. */
+const EARLIER_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
 export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells ${YOUR_APEX} how it ended.`
 /** A brief's lines as builds before the names wrote them, still left out of its card. */
 const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation." }
@@ -93,7 +97,7 @@ function spoken(from: string): string {
 }
 
 function briefIntroLine(line: string): boolean {
-  return (line.startsWith("You're fin:") && line.endsWith(INTRO_TAIL)) || (line.startsWith(LEGACY_INTRO.head) && line.endsWith(LEGACY_INTRO.tail))
+  return (line.startsWith("You're fin:") && (line.endsWith(INTRO_TAIL) || line.endsWith(EARLIER_INTRO_TAIL))) || (line.startsWith(LEGACY_INTRO.head) && line.endsWith(LEGACY_INTRO.tail))
 }
 
 /** A Fin's name as an agent may write it: `fin:<name>`, `child:<name>` as builds before the names taught it, or bare. */

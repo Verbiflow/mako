@@ -51,11 +51,6 @@ import {
   workedFolderRanks,
   type RailRanks,
 } from "../src/lib/thread-folders.ts"
-import {
-  boardBucketOf,
-  groupThreadBoard,
-  liveBoardBucket,
-} from "../src/lib/thread-board.ts"
 import { entriesToMessages, pendingThreadInput } from "../src/lib/entry-messages.ts"
 import { runningTerminalForWorkspace } from "../src/state/terminal.ts"
 import { workspaceFocusOf } from "../src/components/stage/workspace-focus-context.ts"
@@ -151,6 +146,15 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.link-bead[data-state="offline"]::before', { animation: "link-bead-breathe", reduced: "global" }],
   // A side question's mark pulses only while it's being answered.
   [".side-panel-glyph", { animation: "side-glyph", reduced: /\.side-panel-glyph\s*\{\s*animation:\s*none;/ }],
+  // The live mark: a comet while it works, a breath while it needs you, a drift while a Fin asks its Apex. Each rests
+  // on the gate (`observePhaseLockedAnimation`), which also stills it under reduced motion.
+  [".live-mark-comet", { animation: "live-mark-turn", reduced: "global" }],
+  ['.live-mark[data-live-mark="needs"] > .live-mark-ring', { animation: "live-mark-breathe", reduced: "global" }],
+  ['.live-mark[data-live-mark="lead"] > .live-mark-ring', { animation: "live-mark-turn", reduced: "global" }],
+  // An Apex's working pips: one veil per row sweeping on `transform`, on the same gate.
+  [".fin-pips-veil", { animation: "fin-pips-wave", reduced: /\.fin-pips-veil\s*\{\s*display:\s*none;/ }],
+  // The crew card's bar: the working stretch alone sweeps, only while it is on screen (`observeVisibleAnimation`) and motion is allowed.
+  [".crew-bar-working::after", { animation: "crew-bar-sweep", reduced: "global" }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
@@ -1076,24 +1080,6 @@ assert.deepEqual(
   "a pinned folder stays above a folder you just used"
 )
 
-// The status board: fixed sections, newest change first, empty ones absent.
-const board = groupThreadBoard([
-  { key: "d1", bucket: "done", at: "2026-09-11T10:00:00Z", item: 1 },
-  { key: "w1", bucket: "working", at: "2026-09-11T10:05:00Z", item: 2 },
-  { key: "n1", bucket: "needs-input", at: "2026-09-11T10:01:00Z", item: 3 },
-  { key: "n2", bucket: "needs-input", at: "2026-09-11T10:02:00Z", item: 4 },
-  { key: "r1", bucket: "review", at: "2026-09-11T10:03:00Z", item: 5 },
-])
-assert.deepEqual(
-  board.map((section) => [section.key, section.rows.map((row) => row.key)]),
-  [["needs-input", ["n2", "n1"]], ["review", ["r1"]], ["working", ["w1"]], ["done", ["d1"]]]
-)
-assert.deepEqual(boardBucketOf({ kind: "needs-permission", since: Date.parse("2026-09-11T10:01:00Z") }), { bucket: "needs-input", at: "2026-09-11T10:01:00.000Z" })
-assert.deepEqual(boardBucketOf({ kind: "review", at: 1, unread: false }), { bucket: "done" })
-assert.deepEqual(boardBucketOf({ kind: "external-active" }), { bucket: "working" })
-assert.deepEqual(boardBucketOf({ kind: "observed" }), { bucket: "done" })
-assert.equal(liveBoardBucket("needs-permission"), "needs-input")
-assert.equal(liveBoardBucket("starting"), "working")
 assert.ok(
   threadStatusPriority({ kind: "needs-permission", since: 1 }) >
     threadStatusPriority({ kind: "working", since: 1 })

@@ -3,11 +3,13 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
 import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import type { Report } from "@mako/host/contracts/agents"
 import { apexAsk } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { controlNote } from "@mako/host/control/launch"
 import { digest } from "@mako/host/conversations/agent-wakes"
+import { briefText } from "@mako/host/conversations/agents"
 
 /**
  * The cases of `eval:orch-tools`, in T3 Code's MCP tool-use schema rewritten
@@ -62,6 +64,14 @@ const EvalAsk = z.object({
 })
 type EvalAsk = z.infer<typeof EvalAsk>
 
+/** A Fin's report that it finished, as `agents_report` takes one. */
+const EvalFinished = z.object({
+  name: z.string(),
+  status: z.enum(["done", "failed"]),
+  summary: z.string(),
+  artifacts: z.array(z.object({ kind: z.enum(["branch", "commit", "pull-request", "file", "screenshot", "test-run", "link"]), ref: z.string(), label: z.string().optional() })).optional(),
+})
+
 export const OrchCase = z.object({
   id: z.string(),
   area: z.enum(AREAS),
@@ -78,12 +88,18 @@ export const OrchCase = z.object({
     priorTurns: z.array(PriorTurn).optional(),
     /** Facts the shell's answers keep to. */
     world: z.record(z.string(), z.json()).optional(),
+    /** The person's rules for Fins, each "<their words> → <where it goes>", as the note ahead of their message lists them (`finPolicyNote`). */
+    rules: z.array(z.object({ when: z.string(), to: z.string() })).optional(),
+    /** Where work no rule fits goes, in the note's words. */
+    otherwise: z.string().optional(),
     /** Regexes on a shell command, answered with `output` instead of the default. */
     shellMocks: z.array(z.object({ match: z.string(), output: z.string() })).optional(),
     /** An Apex's Fins as they stand: the front-door note the host sends ahead of the person's message (`frontDoorNote`). */
     children: z.array(EvalChild).optional(),
     /** Asks of those Fins that wake the Apex: the case's agent reads the wake the host sends, after the person's message (`prompt`) as an earlier turn. */
     asks: z.array(EvalAsk).optional(),
+    /** Reports of those Fins that finished, waking the Apex the same way. */
+    finished: z.array(EvalFinished).optional(),
   }),
   prompt: z.string(),
   expect: z.object({
@@ -126,6 +142,8 @@ export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE]): OrchCase[] 
 }
 
 const NOW = Date.UTC(2026, 10, 1, 18)
+/** A `fin` case's agent, as its brief names it. */
+export const FIN_NAME = "rename"
 const minutesAgo = (minutes: number) => NOW - minutes * 60_000
 
 function frontDoorChild(child: EvalChild): FrontDoorChild {
@@ -144,7 +162,11 @@ function frontDoorChild(child: EvalChild): FrontDoorChild {
 
 /** What a case's agent reads ahead of the person's message: the note an Apex with these Fins hears, as the host writes it. */
 export function frontDoorText(orchCase: OrchCase): string | undefined {
-  return orchCase.setup.children?.length ? controlNote(frontDoorNote(orchCase.setup.children.map(frontDoorChild), NOW)) : undefined
+  const { rules, otherwise, children } = orchCase.setup
+  // The note's targets are words already, so each rule's `to` stands for its target.
+  const policy = rules?.length || otherwise ? finPolicyNote({ rules: (rules ?? []).map((rule, index) => ({ id: `r${index}`, when: rule.when, target: { harness: rule.to } })), ...(otherwise && { otherwise: { harness: otherwise } }) }, (target) => target.harness) : []
+  const lines = [...policy, ...(children?.length ? frontDoorNote(children.map(frontDoorChild), NOW) : [])]
+  return lines.length ? controlNote(lines) : undefined
 }
 
 function askReport(ask: EvalAsk, child: EvalChild): Report {
@@ -161,27 +183,36 @@ function askReport(ask: EvalAsk, child: EvalChild): Report {
   }
 }
 
-/** The wake a case's asks send its Apex, as the host writes it (`digest`). */
+/** The wake a case's asks and finished reports send its Apex, as the host writes it (`digest`). */
 export function wakeText(orchCase: OrchCase): string | undefined {
-  const { asks, children = [] } = orchCase.setup
-  if (!asks?.length) return undefined
-  const notices = asks.map((ask) => {
-    const child = children.find((each) => each.name === ask.name)
-    if (!child) throw new Error(`${orchCase.id}: ${ask.name} asks, but isn't one of its children`)
-    return { id: randomUUID(), report: askReport(ask, child), label: `"${child.name}" (${child.harness})`, from: randomUUID() }
-  })
+  const { asks = [], finished = [], children = [] } = orchCase.setup
+  if (!asks.length && !finished.length) return undefined
+  const childOf = (name: string) => {
+    const child = children.find((each) => each.name === name)
+    if (!child) throw new Error(`${orchCase.id}: ${name} reports, but isn't one of its children`)
+    return child
+  }
+  const notices = [
+    ...asks.map((ask) => ({ child: childOf(ask.name), report: askReport(ask, childOf(ask.name)) })),
+    ...finished.map((done) => ({ child: childOf(done.name), report: finishedReport(done) })),
+  ].map(({ child, report }) => ({ id: randomUUID(), report, label: `"${child.name}" (${child.harness})`, from: randomUUID() }))
   const tally = (states: readonly EvalChild["state"][]) => children.filter((child) => states.includes(child.state)).length
   return digest(notices, `${tally(["working"])} working, ${tally(["blocked"])} blocked, ${tally(["done", "failed", "stopped"])} ended.`)
+}
+
+function finishedReport(done: z.infer<typeof EvalFinished>): Report {
+  return { id: randomUUID(), child: ThreadIdSchema.parse(randomUUID()), status: done.status, summary: done.summary, ...(done.artifacts && { artifacts: done.artifacts }), ownerGeneration: 1, at: NOW }
 }
 
 /** The case's Thread before the turn it grades: its earlier turns, and the person's message when its Fins' wake is the turn. */
 export function priorTurns(orchCase: OrchCase): z.infer<typeof PriorTurn>[] {
   const prior = orchCase.setup.priorTurns ?? []
-  return orchCase.setup.asks?.length ? [...prior, { role: "user", text: orchCase.prompt }] : prior
+  return orchCase.setup.asks?.length || orchCase.setup.finished?.length ? [...prior, { role: "user", text: orchCase.prompt }] : prior
 }
 
-/** What the graded turn opens with: the wake its Fins send, or the person's message behind the note an Apex's Fins send ahead of it. */
+/** What the graded turn opens with: a Fin's brief, the wake its Fins send, or the person's message behind the note an Apex's Fins send ahead of it. */
 export function turnText(orchCase: OrchCase): string {
+  if (orchCase.setup.role === "fin") return briefText({ objective: orchCase.prompt }, FIN_NAME)
   const wake = wakeText(orchCase)
   if (wake) return wake
   const note = frontDoorText(orchCase)

@@ -1,30 +1,25 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { attentionLine } from "@mako/host/contracts/notifications"
-import { useState } from "react"
 import { CloudIcon, LaptopIcon } from "lucide-react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
-import { ThreadRollup } from "@/components/rail/rollup-badge"
-import { FoldGlyph } from "@/components/rail/fold-glyph"
-import { MarkStack } from "@/components/ui/mark-stack"
+import { ApexCrewLine } from "@/components/rail/fin-pips"
+import { useIsApex } from "@/state/fin-pips"
+import { ApexAsks } from "@/components/rail/apex-asks"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
-import { EarlierAgentMark, ROW_ACTIONS, ROW_ACTIONS_BESIDE_MARK, ROW_SURFACE, SessionCount } from "@/components/rail/thread-row"
+import { APEX_SURFACE, ROW_ACTIONS, ROW_SURFACE, RowLine, SessionCount } from "@/components/rail/thread-row"
 import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { copyAge, formatRelative, workspaceName } from "@/lib/format"
 import {
-  FOLD_GLYPHS,
   foldedThreadState,
-  foldRowHarness,
   presenceThreadStatus,
   sameFoldedThreadState,
-  sessionRunning,
   sessionStateText,
   type FoldedThread,
 } from "@/lib/thread-fold"
-import { ReadyBesideMark, ThreadStatusMark } from "@/components/rail/thread-status"
+import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
 import { threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { acpForThread, useAcp } from "@/state/acp"
@@ -54,11 +49,11 @@ export function LiveAgentRow({
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(presence, state.threadOf))
   const setup = useThreadPurposes((state) => (thread ? state.byThread[thread]?.kind : undefined) ?? presence.purpose) === "setup"
-  const [since] = useState(() => performance.now())
   const checkout = useWorktrees((state) => worktreeAt(state.worktrees, presence.cwd)?.worktree.path)
   // Lit by the same rule as `ThreadRow`: a thread open in the viewer is the
   // selection; otherwise the live conversation on screen is.
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
+  const apex = useIsApex(thread)
   const viewedMember = useThreads((state) => {
     const path = state.opening?.ref.path ?? state.viewing?.ref.path
     return path === undefined ? undefined : Boolean(folded?.members.some((member) => member.kind === "native" && member.ref.path === path))
@@ -91,16 +86,6 @@ export function LiveAgentRow({
               : presence.openElsewhere
                 ? `Open in ${harnessLabel(presence.harness)}`
                 : "Ready"
-  const state: ActivityState =
-    presence.status === "needs-permission"
-      ? "waiting"
-      : presence.status === "starting"
-        ? "connecting"
-        : presence.status === "running"
-          ? "working"
-          : presence.status === "failed"
-            ? "failed"
-            : "idle"
   const foldState = useThreads(
     (threadState) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, threadState)) : null),
     sameFoldedThreadState
@@ -108,6 +93,10 @@ export function LiveAgentRow({
   // A folded row whose other Session is the one doing something shows that
   // Session's state; this conversation's own mark is for when it's the news.
   const otherSession = foldState && foldState.status.kind !== "idle" && foldState.sessions[0]?.status !== foldState.status
+  // A device that can't be heard shows nothing of its at work.
+  const quiet = presence.quietSince !== undefined && presence.status === "ready"
+  const status = otherSession ? foldState.status : quiet ? IDLE : presenceThreadStatus(presence)
+  const markHarness = otherSession ? (foldState.sessions.find((session) => session.status === foldState.status)?.harness ?? presence.harness) : presence.harness
   const named = useThreadTitles((titles) => (thread ? titles.byThread[thread]?.title : undefined))
   // A Thread's name titles its row, this Mac's from its store, another device's from the account's list.
   const title =
@@ -131,6 +120,7 @@ export function LiveAgentRow({
     archiveTargets,
   }
   return (
+    <>
     <ThreadContextMenu {...menu}>
       <div
         role="button"
@@ -152,29 +142,24 @@ export function LiveAgentRow({
         data-active={lit || undefined}
         aria-current={lit || undefined}
         onClick={open}
-        className={cn("pressable", ROW_SURFACE, indent ? "pl-2" : "pl-1.5")}
+        data-apex-row={apex || undefined}
+        className={cn("pressable", ROW_SURFACE, apex && APEX_SURFACE, indent ? "pl-2" : "pl-1.5")}
       >
-        <MarkStack>
-          {folded || !presence.lineage ? null : <EarlierAgentMark lineage={presence.lineage} />}
-          {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member, index) => {
-            const session = foldState?.sessions[index]
-            return (
-              <FoldGlyph
-                key={member?.key ?? presence.key}
-                harness={member ? foldRowHarness(member) : presence.harness}
-                live={session ? sessionRunning(session.status) : false}
-                rowSince={since}
-              />
-            )
-          })}
-        </MarkStack>
+        <RowLine apex={apex}>
+        <ThreadMark
+          status={status}
+          state={!otherSession && presence.status === "starting" ? "starting" : undefined}
+          harness={markHarness}
+          lit={lit}
+          cut={lit ? "var(--raised)" : undefined}
+          label={otherSession ? undefined : label}
+        />
         <span className={cn("min-w-0 flex-[1_1_60%] truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>
           {title}
         </span>
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
         {presence.elsewhere && (!routed || presence.elsewhere === CLOUD_WHERE) ? <ElsewhereMark where={presence.elsewhere} /> : null}
         {folded ? <SessionCount count={folded.members.length} /> : null}
-        <ThreadRollup thread={thread} />
         {/* The branch its owner's worktree is on, as a row this Mac made one for wears it. */}
         {presence.worktreeBranch ? <WorktreeMark worktree={{ branch: presence.worktreeBranch }} summary={undefined} /> : null}
         {!indent ? (
@@ -184,35 +169,27 @@ export function LiveAgentRow({
         ) : null}
         <span
           data-tip-quiet
-          className={cn("rail-row-actions", ROW_ACTIONS, (presence.status === "needs-permission" || presence.status === "failed") && ROW_ACTIONS_BESIDE_MARK)}
+          className={cn("rail-row-actions", ROW_ACTIONS)}
           onClick={(event) => event.stopPropagation()}
         >
           <ThreadActions {...menu} />
         </span>
         {checkout ? <AppMarkIcon checkout={checkout} /> : null}
         {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
-        {otherSession ? (
-          <ThreadStatusMark status={foldState.status} />
-        ) : presence.status === "background" ? (
-          <ThreadStatusMark status={presenceThreadStatus(presence)} />
-        ) : presence.quietSince !== undefined && presence.status === "ready" ? (
-          <span data-last-seen title={`Last seen ${copyAge(presence.quietSince)}`} className="tabular shrink-0 text-label text-faint">
+        {quiet ? (
+          <span data-last-seen title={`Last seen ${copyAge(presence.quietSince!)}`} className="tabular shrink-0 text-label text-faint">
             {/* "seen", so it doesn't read as an idle row's time of its last change. */}
-            seen {formatRelative(presence.quietSince)}
+            seen {formatRelative(presence.quietSince!)}
           </span>
-        ) : presence.openElsewhere ? (
-          // Open in its harness's own app there: the hollow ring that device's rail draws, beside the same time.
-          <ThreadStatusMark status={presenceThreadStatus(presence)} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} />
-        ) : presence.status === "ready" && presence.movedAt !== undefined ? (
-          // Listed from another device and ready: how long ago it last moved, as this Mac's own rows say.
-          <ThreadStatusMark status={IDLE} updatedAt={new Date(presence.movedAt).toISOString()} />
         ) : (
-          <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
-            <ActivityMark state={state} size={20} />
-          </span>
+          <ThreadStatusEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} />
         )}
+        </RowLine>
+        {apex ? <ApexCrewLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
+    {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
+    </>
   )
 }
 

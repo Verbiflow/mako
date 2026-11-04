@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 
 /**
- * A 1px hairline with a 9px grab area. Dragging writes straight to a ref-held
- * callback and never through React state, so a resize costs one style write
- * per frame instead of a tree render.
+ * A 6px gutter of the shell between two panes, with no line in it: the
+ * panes' own tone separates them, and a bar shows only under the pointer or
+ * focus. Dragging writes straight to a ref-held callback and never through
+ * React state, so a resize costs one style write per frame instead of a tree
+ * render.
  */
 export function Divider({
   side,
@@ -124,15 +126,18 @@ export function Divider({
         onCommit(min)
       }}
       className={cn(
-        "no-drag group relative z-10 shrink-0 bg-hairline",
-        horizontal ? "h-px w-full cursor-row-resize" : "h-full w-px cursor-col-resize",
+        "no-drag group relative z-10 shrink-0 bg-shell",
+        horizontal ? "h-1.5 w-full cursor-row-resize" : "h-full w-1.5 cursor-col-resize",
         className
       )}
     >
+      {/* The grab area reaches past the gutter; the bar inside shows only under the pointer or focus. */}
+      <span aria-hidden className={cn("absolute", horizontal ? "-top-1 -bottom-1 inset-x-0" : "inset-y-0 -left-1 -right-1")} />
       <span
+        aria-hidden
         className={cn(
-          "absolute transition-colors duration-150 group-hover:bg-foreground/20 group-focus-visible:bg-foreground/35 group-active:bg-foreground/35",
-          horizontal ? "-top-1 -bottom-1 inset-x-0" : "inset-y-0 -left-1 -right-1"
+          "absolute rounded-full transition-colors duration-150 group-hover:bg-foreground/20 group-focus-visible:bg-foreground/35 group-active:bg-foreground/35",
+          horizontal ? "inset-x-0 top-1/2 h-0.5 -translate-y-1/2" : "inset-y-0 left-1/2 w-0.5 -translate-x-1/2"
         )}
       />
     </div>

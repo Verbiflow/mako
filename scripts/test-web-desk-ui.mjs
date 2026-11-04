@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url"
  * The web app in a laptop's browser (`src/dev/web-desk-check.tsx`: `Desk` through its production pieces, on the mock
  * bridge), at a laptop's size with a mouse:
  *
- * - The rail is the desktop's own (`AgentThreads`): the account's Threads under their projects, indented from a
- *   hairline, a Thread's four Sessions one row wearing their count, Projects, Recent and Status; each project with what
+ * - The rail is the desktop's own (`AgentThreads`): its top rows (New thread, Search, the Inbox), then the account's
+ *   Threads under their projects, indented, a Thread's four Sessions one row wearing their count; each project with what
  *   its checkout has checked out, a row with the agent it ran in before, a Thread waiting on background work with
  *   the hourglass before it's opened, and a session another app holds with the hollow ring, all as the Mac's list
  *   says them.
@@ -111,9 +111,9 @@ async function checkDesk() {
     assert.ok(heads.some((head) => head.startsWith("site") && head.includes("Rebasing pricing-table")), `the site project mid-rebase: ${JSON.stringify(heads)}`)
     const busy = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Thread Environments'))"
     assert.equal(await evaluate(`${busy}.getAttribute('aria-label').includes('background task')`), true, "the busy Thread waits on its background work, before it's opened")
-    assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).querySelectorAll('.mark-stack > *').length"), 2, "a row wears the agent it ran in before, beside its own")
+    assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).querySelectorAll('.live-mark').length"), 1, "a row wears one mark, its current agent's, whatever it ran in before")
     const held = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Wire the payments retry queue'))"
-    assert.equal(await evaluate(`Boolean(${held}.querySelector('[aria-label^="Open in Devin"] .ring-1'))`), true, "a session Devin's own app holds wears the Mac's hollow ring")
+    assert.equal(await evaluate(`Boolean(${held}.querySelector('[data-live-mark="open"][aria-label^="Open in Devin"]'))`), true, "a session Devin's own app holds wears the Mac's hollow ring")
     await capture("list-1280-dark.png")
     console.log("Rail: checkouts, earlier agents, background work and another app's ring from the Mac's list")
 
@@ -127,7 +127,8 @@ async function checkDesk() {
     assert.ok((await evaluate("document.querySelectorAll('[data-thread-row][data-thread-indent]').length")) >= 4, "Threads are indented under their project")
     assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"4 sessions\"]').length"), 1, "the busy Thread is one row for its four Sessions")
     assert.equal(await evaluate("Boolean(document.querySelector('[data-thread-row][data-active]'))"), true, "the open Thread's row is lit")
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('[aria-label=\"Thread view\"] button')].map(node => node.textContent)"), ["Projects", "Recent", "Status"], "the rail's views")
+    assert.equal(await evaluate("document.querySelector('[data-rail-threads-heading]')?.textContent"), "Threads", "the rail's Threads, by project, with no view switch")
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-rail-top-row]')].map(node => node.dataset.railTopRow)"), ["session.new", "view.command-palette", "inbox"], "a browser's rail tops with New thread, Search and the Inbox")
     console.log(`Rail: ${folders.length} projects, the desktop's rows`)
 
     // 2. Nothing runs off the window: the page, the transcript's column, the background work, the composer's send.

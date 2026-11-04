@@ -32,7 +32,7 @@ const STATE_WORDS = {
 } satisfies Record<RoomApp["state"], string>
 
 /**
- * Every app on this Mac, in the Status view: what it is, what it holds, how
+ * Every app on this Mac, at the foot of the Inbox: what it is, what it holds, how
  * long it has been up, and how many copies of each project's app fit. Rows
  * select for stopping several at once; stopping an app that isn't the one
  * in view asks first. Watched only while it shows.
