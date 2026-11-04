@@ -98,3 +98,22 @@ export function describeMachine(reading: MachineReading): string {
   const thermal = reading.thermal ? `, thermal ${reading.thermal}` : ""
   return `other work ${reading.othersBusy.toFixed(1)} of ${reading.cores} cores, load average ${reading.loadAverage.toFixed(1)}, memory ${reading.memory}${thermal}`
 }
+
+/**
+ * Whether other work kept this machine busy since the last ask: more than
+ * `BUSY_SHARE` of the cores, or the cores slowed for heat. Memory pressure
+ * doesn't count, since a degraded fseventsd is itself one cause of it. The
+ * first ask counts from when this was made.
+ */
+export function busySinceLastAsk(): () => Promise<boolean> {
+  let last = cpuTicks()
+  return async () => {
+    const now = cpuTicks()
+    const elapsed = now.total - last.total
+    const cores = availableParallelism()
+    const othersBusy = elapsed > 0 ? ((now.busy - last.busy) / elapsed) * cores : 0
+    last = now
+    const thermal = await thermalPressure()
+    return othersBusy > cores * BUSY_SHARE || (thermal !== undefined && thermal !== "nominal")
+  }
+}
