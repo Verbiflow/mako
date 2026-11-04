@@ -208,10 +208,10 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
         <span
           aria-hidden
           data-notice-peek={next.notice.tone}
-          className={cn("absolute inset-x-5 top-[3px] h-3 rounded-t-md transition-colors duration-150", LIPS[next.notice.tone])}
+          className={cn("absolute inset-x-5 top-[3px] h-3 transition-colors duration-150", LIPS[next.notice.tone])}
         />
       ) : null}
-      <div className={cn("relative rounded-lg bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", ARRIVE)}>
+      <div className={cn("relative bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", ARRIVE)}>
         {row(front, "front")}
       </div>
     </div>
@@ -261,7 +261,7 @@ function NoticeRow({
         if (leaving && event.target === event.currentTarget && event.propertyName === "opacity") onLeft(notice)
       }}
       className={cn(
-        "flex min-h-9 min-w-0 items-center gap-2 rounded-md py-1 pr-1 pl-2.5 text-ui",
+        "flex min-h-9 min-w-0 items-center gap-2 py-1 pr-1 pl-2.5 text-ui",
         "transition-[opacity,translate] duration-200 ease-[var(--ease-swift)]",
         replacing && ARRIVE,
         leaving && "-translate-y-1 opacity-0"
@@ -278,7 +278,7 @@ function NoticeRow({
         <button
           type="button"
           onClick={onMore}
-          className="pressable shrink-0 rounded px-1 text-label text-faint hover:text-foreground"
+          className="pressable shrink-0 px-1 text-label text-faint hover:text-foreground"
         >
           {more} more
         </button>
@@ -291,7 +291,7 @@ function NoticeRow({
           title={action.title}
           onClick={action.onClick}
           className={cn(
-            "pressable h-6 shrink-0 rounded-md px-2 text-label transition-colors duration-100 disabled:opacity-45",
+            "pressable h-6 shrink-0 px-2 text-label transition-colors duration-100 disabled:opacity-45",
             action.primary
               ? "bg-fill-selected font-medium text-foreground hover:bg-foreground/15"
               : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
@@ -309,7 +309,7 @@ function NoticeRow({
           aria-label={notice.dismissLabel ?? "Dismiss"}
           title={notice.dismissLabel ?? "Dismiss"}
           onClick={() => onDismiss(notice)}
-          className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          className="pressable grid size-6 shrink-0 place-items-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         >
           <XIcon className="size-3.5" />
         </button>
@@ -327,7 +327,7 @@ function NoticeDetail({ notice, open, onOpenChange }: { notice: ComposerNotice; 
           type="button"
           aria-label="More about this"
           title="More about this"
-          className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+          className="pressable grid size-6 shrink-0 place-items-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
         >
           <InfoIcon className="size-3.5" />
         </button>

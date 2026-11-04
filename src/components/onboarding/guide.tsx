@@ -94,7 +94,7 @@ export function Guide() {
             type="button"
             aria-label="Close"
             onClick={() => setOpen(false)}
-            className="pressable ml-auto rounded p-1 text-faint hover:text-foreground"
+            className="pressable ml-auto p-1 text-faint hover:text-foreground"
           >
             <XIcon className="size-3.5" />
           </button>
@@ -103,7 +103,7 @@ export function Guide() {
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3.5">
           <div className="flex flex-col gap-1.5">
             {REGIONS.map((region) => (
-              <div key={region.name} className="flex items-start gap-3 rounded-lg bg-surface px-3 py-2">
+              <div key={region.name} className="flex items-start gap-3 bg-surface px-3 py-2">
                 <span className="w-24 shrink-0 text-ui font-medium">{region.name}</span>
                 <span className="min-w-0 flex-1 text-ui leading-relaxed text-muted-foreground">
                   {region.what}

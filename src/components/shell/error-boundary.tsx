@@ -94,7 +94,7 @@ export class ErrorBoundary extends Component<
           </p>
         </div>
 
-        <pre className="max-h-40 w-full max-w-dialog overflow-auto rounded-lg bg-surface p-3 text-left font-mono text-label leading-relaxed text-faint ring-1 ring-hairline">
+        <pre className="max-h-40 w-full max-w-dialog overflow-auto bg-surface p-3 text-left font-mono text-label leading-relaxed text-faint ring-1 ring-hairline">
           {error.message}
           {!surface && info ? info.split("\n").slice(0, 6).join("\n") : ""}
         </pre>

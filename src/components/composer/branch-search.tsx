@@ -142,7 +142,7 @@ export function BranchSearch({ cwd, onBack, onChoose }: { cwd: string; onBack: (
         onMouseMove={() => setActive(index)}
         onClick={(event) => take(row, event.metaKey || event.ctrlKey)}
         className={cn(
-          "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left",
+          "flex w-full min-w-0 items-center gap-2 px-2 py-1.5 text-left",
           on && "bg-fill-hover",
           row.kind === "pull" && row.held && "opacity-60"
         )}
@@ -163,7 +163,7 @@ export function BranchSearch({ cwd, onBack, onChoose }: { cwd: string; onBack: (
           type="button"
           aria-label="Back"
           onClick={onBack}
-          className="pressable flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground"
+          className="pressable flex size-6 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
         >
           <ChevronLeftIcon className="size-3.5" />
         </button>

@@ -53,7 +53,7 @@ const ChildTab = memo(function ChildTab({ agent, selected, onOpen }: { agent: Na
       }}
       style={{ flex: `0 1 ${CHILD_TAB_PX}px`, minWidth: CHILD_TAB_MIN_PX }}
       className={cn(
-        "session-tab group relative flex h-7 items-center gap-1.5 overflow-hidden rounded-md pr-0.5 pl-1.5 text-ui",
+        "session-tab group relative flex h-7 items-center gap-1.5 overflow-hidden pr-0.5 pl-1.5 text-ui",
         selected ? "bg-raised font-medium text-foreground" : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       )}
     >
@@ -103,7 +103,7 @@ export function ApexFinTabs({ thread, apexTitle }: { thread: string; apexTitle: 
         data-apex-count={counts.total}
         onClick={() => stage.open("agents")}
         title={`${finsWord(counts.total)} under ${apexTitle}, in the Agents panel`}
-        className="pressable flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+        className="pressable flex h-7 shrink-0 items-center gap-1 px-1.5 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
       >
         <ApexMark className="size-3.5" />
         <span className="tabular">{counts.total}</span>
@@ -118,7 +118,7 @@ export function ApexFinTabs({ thread, apexTitle }: { thread: string; apexTitle: 
             data-child-more={rest}
             onClick={() => stage.open("agents")}
             title={`${finsWord(rest)} more under ${apexTitle}, in the Agents panel`}
-            className="pressable ml-auto flex h-7 shrink-0 items-center rounded-md px-2 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+            className="pressable ml-auto flex h-7 shrink-0 items-center px-2 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
           >
             <span className="tabular">+{rest}</span>
           </button>

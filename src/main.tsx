@@ -40,7 +40,7 @@ void start().catch((error) => {
     <div className="p-8 text-ui text-foreground">
       <p>{error instanceof Error ? error.message : "Mako could not start"}</p>
       <button
-        className="pressable mt-4 rounded border border-hairline px-3 py-2"
+        className="pressable mt-4 border border-hairline px-3 py-2"
         onClick={() => location.reload()}
       >
         Retry connection

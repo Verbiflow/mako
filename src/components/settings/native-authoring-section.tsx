@@ -50,7 +50,7 @@ export function NativeAuthoringSection() {
                 aria-selected={id === provider}
                 onClick={() => authoring.select(id, family)}
                 className={cn(
-                  "pressable flex h-7 items-center gap-1.5 rounded-md px-2 text-ui",
+                  "pressable flex h-7 items-center gap-1.5 px-2 text-ui",
                   id === provider ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
                 )}
               >
@@ -86,7 +86,7 @@ function ViewBody({ view }: { view: AuthoringView }) {
   const editor = useAuthoring((state) => state.editor)
   if (view.absent) {
     return (
-      <div className="rounded-lg bg-surface px-4 py-6 ring-1 ring-hairline">
+      <div className="bg-surface px-4 py-6 ring-1 ring-hairline">
         <p className="text-ui font-medium">{view.absent.by === "harness" ? `${view.label} has no ${view.family} of its own` : `Mako doesn't edit ${view.label}'s ${view.family} yet`}</p>
         <p className="mt-1 max-w-[46rem] text-label leading-relaxed text-muted-foreground">{view.absent.reason}.</p>
       </div>
@@ -111,7 +111,7 @@ function SourceCard({ view, source, entries, editor }: { view: AuthoringView; so
   const creating = editor?.mode === "create" && editor.sourceId === source.id
   const canCreate = view.operations.create.supported && source.writable.supported && !source.problem
   return (
-    <section aria-label={source.label} className="rounded-lg bg-surface ring-1 ring-hairline">
+    <section aria-label={source.label} className="bg-surface ring-1 ring-hairline">
       <header className="flex flex-wrap items-center gap-2 border-b border-hairline px-3 py-2">
         <Chip>{AUTHORING_SCOPES[source.scope]}</Chip>
         <span className="min-w-0 flex-1 truncate font-mono text-label text-muted-foreground" title={source.path}>{homeRelative(source.path)}</span>
@@ -199,7 +199,7 @@ function editableDraft(entry: AuthoringEntry): AuthoringDraft | null {
   return null
 }
 
-const field = "rounded-md bg-background px-2 py-1.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:ring-border focus:outline-none disabled:opacity-60"
+const field = "bg-background px-2 py-1.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:ring-border focus:outline-none disabled:opacity-60"
 
 function Editor({ view, editor, plan }: { view: AuthoringView; editor: AuthoringEditor; plan: AuthoringPlan | null }) {
   const busy = useAuthoring((state) => state.busy)

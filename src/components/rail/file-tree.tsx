@@ -114,7 +114,7 @@ export function FileTree() {
               }
             }}
             placeholder="Find a file"
-            className="h-7 w-full rounded-md bg-raised pr-7 pl-7 text-ui placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
+            className="h-7 w-full bg-raised pr-7 pl-7 text-ui placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
           />
           {query ? (
             <button
@@ -229,7 +229,7 @@ const DirRow = memo(function DirRow({
       onClick={() => onToggle(row.key)}
       style={indent(row.depth)}
       className={cn(
-        "group flex h-full w-full items-center gap-1.5 rounded pr-1.5 text-left",
+        "group flex h-full w-full items-center gap-1.5 pr-1.5 text-left",
         "transition-colors duration-100 hover:bg-fill-hover"
       )}
     >
@@ -281,7 +281,7 @@ const FileRow = memo(function FileRow({
       data-active={active || undefined}
       style={indent(row.depth)}
       className={cn(
-        "flex h-full w-full items-center gap-1.5 rounded pr-1.5 text-left",
+        "flex h-full w-full items-center gap-1.5 pr-1.5 text-left",
         "transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised"
       )}
     >

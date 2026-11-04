@@ -161,7 +161,7 @@ function Crumb({ item }: { item: InboxAsk }) {
   )
 }
 
-const BUTTON = "pressable flex h-7 items-center gap-1.5 rounded-md px-2.5 text-label transition-colors disabled:opacity-50"
+const BUTTON = "pressable flex h-7 items-center gap-1.5 px-2.5 text-label transition-colors disabled:opacity-50"
 const PRIMARY = "bg-foreground text-background hover:opacity-90"
 const QUIET = "bg-fill-hover text-foreground hover:bg-fill-selected"
 
@@ -189,7 +189,7 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
         event.preventDefault()
         openInboxItem(item)
       }}
-      className="flex flex-col gap-2 rounded-lg bg-raised px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
+      className="flex flex-col gap-2 bg-raised px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
     >
       <div className="flex h-5 min-w-0 items-center gap-2">
         <AskMark item={item} />
@@ -205,7 +205,7 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
         ) : null}
         <span className="flex-1" />
-        <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable rounded-md px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
+        <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
           Open
         </button>
       </div>
@@ -271,7 +271,7 @@ function ReadRow({ item }: { item: ReadInboxItem }) {
       data-inbox-item={item.key}
       data-inbox-kind={item.kind}
       onClick={() => openInboxItem(item)}
-      className="pressable flex h-8 w-full min-w-0 items-center gap-2.5 rounded-md px-2 text-left transition-colors duration-100 hover:bg-fill-hover"
+      className="pressable flex h-8 w-full min-w-0 items-center gap-2.5 px-2 text-left transition-colors duration-100 hover:bg-fill-hover"
     >
       <LiveMark state={item.kind === "failed" ? "failed" : "unread"} label={item.kind === "failed" ? "Failed" : "Answer to read"}>
         <HarnessIcon harness={item.harness} />

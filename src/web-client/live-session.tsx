@@ -207,7 +207,7 @@ function useDeliveryNote(conversation: string) {
           <span data-delivery={state} className="flex items-center gap-1 text-caution">
             {DELIVERY_WORDS[state]}
             <span aria-hidden>·</span>
-            <button type="button" className="pressable -mx-1 rounded px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
+            <button type="button" className="pressable -mx-1 px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
               Retry
             </button>
           </span>

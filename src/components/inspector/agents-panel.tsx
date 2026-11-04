@@ -254,7 +254,7 @@ function AgentRoster({
             type="button"
             disabled={stopping}
             onClick={() => void acp.stopBackground(conversation)}
-            className="pressable ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
+            className="pressable ml-auto shrink-0 px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
           >
             {stopping ? "Stopping" : "Stop all"}
           </button>
@@ -278,7 +278,7 @@ function AgentRoster({
         {agents.length > visible ? (
           <button
             type="button"
-            className="pressable w-full rounded-md px-3 py-2 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+            className="pressable w-full px-3 py-2 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
             onClick={() => setVisible((count) => count + 40)}
           >
             Show more
@@ -325,7 +325,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
       <button
         type="button"
         aria-expanded={more ? expanded : undefined}
-        className={cn("pressable flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", agent.ambient && "opacity-70")}
+        className={cn("pressable flex w-full items-start gap-2.5 px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", agent.ambient && "opacity-70")}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="flex h-5 shrink-0 items-center text-muted-foreground">
@@ -350,12 +350,12 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
             </span>
           ) : null}
           {expanded && agent.detail ? (
-            <span className="mt-1 max-h-40 overflow-y-auto rounded-md bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
+            <span className="mt-1 max-h-40 overflow-y-auto bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
               {agent.detail}
             </span>
           ) : null}
           {expanded && agent.output ? (
-            <span data-native-output className="mt-1 max-h-56 overflow-y-auto rounded-md bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
+            <span data-native-output className="mt-1 max-h-56 overflow-y-auto bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
               {agent.output}
             </span>
           ) : null}
@@ -385,7 +385,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
           type="button"
           data-open-transcript
           onClick={() => openTranscript(agent)}
-          className="pressable mb-1.5 ml-[2.375rem] rounded-md px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+          className="pressable mb-1.5 ml-[2.375rem] px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
         >
           Open transcript
         </button>
@@ -400,7 +400,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
             setStopping(true)
             void acp.stopAgent(conversation, agent.nativeId).finally(() => setStopping(false))
           }}
-          className="pressable absolute top-2 right-2 flex size-6 items-center justify-center rounded bg-surface text-faint opacity-0 group-hover/agent:opacity-100 hover:bg-fill-hover hover:text-foreground focus-visible:opacity-100 disabled:opacity-40"
+          className="pressable absolute top-2 right-2 flex size-6 items-center justify-center bg-surface text-faint opacity-0 group-hover/agent:opacity-100 hover:bg-fill-hover hover:text-foreground focus-visible:opacity-100 disabled:opacity-40"
         >
           <SquareIcon className="size-2.5 fill-current" strokeWidth={0} />
         </button>
@@ -448,7 +448,7 @@ export function AgentsToggle() {
       onClick={() => stage.toggle("agents")}
       aria-label={reading.fins || undefined}
       title={reading.finsLabel ? `${reading.finsLabel}; open the Agents panel` : reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
-      className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
+      className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
     >
       {marks.length ? (
         <span className="flex items-center -space-x-1">

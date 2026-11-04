@@ -139,6 +139,21 @@ export default defineConfig([
             "Literal pixel type sizes are banned; use the scale (text-label, text-ui, text-title) or prose/code styles.",
         },
         {
+          selector: "Literal[value=/(?:^|[\\s:])rounded(?:-(?:t|b|l|r|s|e|tl|tr|bl|br|ss|se|es|ee))?(?:-(?:xs|sm|md|lg|xl|2xl|3xl|4xl|\\[[^\\]]*\\]))?(?=\\s|$)/]",
+          message:
+            "Every corner is square (docs/design.md): the radius tokens are 0, so a radius class draws nothing. Leave it out; only what means a dot is rounded-full.",
+        },
+        {
+          selector: "TemplateElement[value.raw=/(?:^|[\\s:])rounded(?:-(?:t|b|l|r|s|e|tl|tr|bl|br|ss|se|es|ee))?(?:-(?:xs|sm|md|lg|xl|2xl|3xl|4xl|\\[[^\\]]*\\]))?(?=\\s|$)/]",
+          message:
+            "Every corner is square (docs/design.md): the radius tokens are 0, so a radius class draws nothing. Leave it out; only what means a dot is rounded-full.",
+        },
+        {
+          selector: "Literal[value=/(?:^|[\\s:])(?:bg|text|border|ring|fill|stroke|from|to|via|shadow|outline|decoration|caret|accent)-\\[(?:#|rgb|hsl|oklch|oklab)/]",
+          message:
+            "Colour comes from the tokens (docs/design.md): no literal colour in a class; use a token, or color-mix of tokens.",
+        },
+        {
           selector: "Literal[value=/(?:^|\\s)animate-(?:spin|pulse|ping|bounce)(?:\\s|$)/]",
           message:
             "Work in progress moves on one gate (`observeVisibleAnimation`): use <Spinner>, <Shimmer> or <Skeleton>, never Tailwind's endless animate-* loops.",

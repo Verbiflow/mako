@@ -1229,7 +1229,7 @@ export function Composer() {
             <button
               type="button"
               onClick={() => void actions.clearQueue()}
-              className="pressable ml-auto flex items-center gap-1 rounded px-1 hover:text-foreground"
+              className="pressable ml-auto flex items-center gap-1 px-1 hover:text-foreground"
             >
               <XIcon className="size-3" />
               Clear
@@ -1269,7 +1269,7 @@ export function Composer() {
         >
           {referencing ? (
             <div aria-live="polite" className="pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-center">
-              <span className="rounded-md bg-raised px-2 py-1 text-label text-muted-foreground ring-1 ring-hairline">
+              <span className="bg-raised px-2 py-1 text-label text-muted-foreground ring-1 ring-hairline">
                 Drop to reference this conversation
               </span>
             </div>

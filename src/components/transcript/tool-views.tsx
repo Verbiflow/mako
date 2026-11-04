@@ -156,7 +156,7 @@ function diffLines(before: string, after: string): DiffLine[] {
 
 function DiffBlock({ lines }: { lines: DiffLine[] }) {
   return (
-    <div className="overflow-x-auto rounded-md font-mono text-label leading-[1.6]">
+    <div className="overflow-x-auto font-mono text-label leading-[1.6]">
       {lines.map((line, index) => (
         <div
           key={index}

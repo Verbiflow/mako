@@ -113,7 +113,7 @@ function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
           ))}
         </ListCard>
       ) : (
-        <div className="rounded-lg bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+        <div className="bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
           <Blank title="No projects yet" body="Start a Thread in a project folder and it shows up here." />
         </div>
       )}
@@ -127,7 +127,7 @@ function ProjectRow({ root, setup, onOpen }: { root: string; setup: ProjectAppSe
       type="button"
       data-app-project={folderName(root)}
       onClick={onOpen}
-      className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-100 first:rounded-t-lg last:rounded-b-lg hover:bg-fill-hover"
+      className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-100 hover:bg-fill-hover"
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate text-ui font-medium text-foreground">{setup?.project ?? folderName(root)}</span>
@@ -214,7 +214,7 @@ function NotSetUp({ setup }: { setup: ProjectAppSetup }) {
     Object.values(state.byCwd).find((view) => view.kind === "setting-up" && view.root === setup.root)
   )
   return (
-    <div className="rounded-lg bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <div className="bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
       <Blank
         title={underWay?.kind === "setting-up" ? `“${underWay.thread.title}” is setting it up` : `${setup.project} isn’t set up to run yet`}
         body={
@@ -254,7 +254,7 @@ function NotSetUp({ setup }: { setup: ProjectAppSetup }) {
 function Broken({ setup, message, file }: { setup: ProjectAppSetup; message: string; file?: string }) {
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-lg bg-negative/[0.06] px-4 py-3.5 [box-shadow:inset_0_0_0_0.5px_color-mix(in_oklab,var(--negative)_30%,transparent)]">
+      <div className="bg-negative/[0.06] px-4 py-3.5 [box-shadow:inset_0_0_0_0.5px_color-mix(in_oklab,var(--negative)_30%,transparent)]">
         <p className="text-ui font-medium text-negative">The recipe is broken, so its Threads can’t run the app</p>
         <p className="mt-1 text-label leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{message}</p>
       </div>
@@ -601,7 +601,7 @@ function Command({ className, children }: { className?: string; children: ReactN
 
 function FileName({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex h-6 items-center rounded-md bg-raised px-2 font-mono text-label text-foreground/85 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <span className="inline-flex h-6 items-center bg-raised px-2 font-mono text-label text-foreground/85 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
       {children}
     </span>
   )

@@ -13,7 +13,7 @@ export function PersonTokenNotice({ problem }: { problem: PersonTokenProblem }) 
   const [sent, setSent] = useState(false)
   const { title, detail } = personTokenWords(problem)
   return (
-    <div data-person-token-notice={problem.reason} className="my-1.5 rounded-md bg-surface/60 px-3 py-2.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <div data-person-token-notice={problem.reason} className="my-1.5 bg-surface/60 px-3 py-2.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         <CircleAlertIcon aria-hidden className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0">{title}</span>
@@ -23,7 +23,7 @@ export function PersonTokenNotice({ problem }: { problem: PersonTokenProblem }) 
         <button
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: GITHUB_PERSON_SETTINGS }))}
-          className="pressable flex items-center gap-1.5 rounded-md border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90"
+          className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90"
         >
           <KeyRoundIcon className="size-3" />
           Update token
@@ -35,7 +35,7 @@ export function PersonTokenNotice({ problem }: { problem: PersonTokenProblem }) 
             setSent(true)
             void askAgent(openAsAppPrompt(problem.repository)).catch(() => setSent(false))
           }}
-          className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
+          className="pressable border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
         >
           Open it as {MAKO_GITHUB_APP} instead
         </button>

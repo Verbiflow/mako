@@ -491,7 +491,7 @@ function CarriedLine({ carried, time }: { carried: CarriedHistory; time?: number
           data-open-transcript=""
           onClick={() => void viewer.open(carried.file)}
           title="The transcript the agent was given"
-          className="pressable flex h-5 items-center gap-1 rounded px-1 hover:text-foreground focus-visible:text-foreground"
+          className="pressable flex h-5 items-center gap-1 px-1 hover:text-foreground focus-visible:text-foreground"
         >
           <FileTextIcon className="size-3" />
           <span>Transcript</span>
@@ -649,7 +649,7 @@ function Prompt({ message }: { message: ChatMessage }) {
           at a reading measure, unmistakably theirs without a ring. The
           assistant's reply below stays full-width and chrome-free. */}
       <div className="flex w-full items-start justify-end gap-2.5">
-      <div onCopy={event => copyPromptSelection(event, reused.records)} className="max-w-[min(82%,64ch)] rounded-xl rounded-br-md bg-raised px-3.5 py-2.5">
+      <div onCopy={event => copyPromptSelection(event, reused.records)} className="max-w-[min(82%,64ch)] bg-raised px-3.5 py-2.5">
         <Prose text={sent.body} sent={prose} className="prompt-prose whitespace-normal" />
         <PlanContextChips plans={reused.plans} />
         <TranscriptAttachments attachments={media.filter(
@@ -671,7 +671,7 @@ function Prompt({ message }: { message: ChatMessage }) {
 
       <div className="mt-1 mr-[34px] flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-muted-foreground">
         {note?.(message.requestId)}
-        <button type="button" aria-label="Copy question" onClick={() => void copy()} className="pressable flex h-6 items-center gap-1 rounded px-1 hover:bg-fill-hover hover:text-foreground">
+        <button type="button" aria-label="Copy question" onClick={() => void copy()} className="pressable flex h-6 items-center gap-1 px-1 hover:bg-fill-hover hover:text-foreground">
           {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
           {copied ? "Copied question" : "Copy question"}
         </button>
@@ -683,7 +683,7 @@ function Prompt({ message }: { message: ChatMessage }) {
           data-transcript-action="reuse"
           title="Put this prompt back in the composer"
           onClick={compose}
-          className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
+          className="pressable flex items-center gap-1 px-1 hover:text-foreground"
         >
           <RotateCcwIcon className="size-3" />
           Reuse
@@ -696,7 +696,7 @@ function Prompt({ message }: { message: ChatMessage }) {
               data-transcript-action="edit"
               title="Rewind to here and re-ask — later turns stay on their own branch"
               onClick={() => void editHere()}
-              className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
+              className="pressable flex items-center gap-1 px-1 hover:text-foreground"
             >
               <PencilIcon className="size-3" />
               Edit
@@ -706,7 +706,7 @@ function Prompt({ message }: { message: ChatMessage }) {
               data-transcript-action="fork"
               title="Branch from this point into a new tab — both lines stay open"
               onClick={() => void actions.fork(message.id)}
-              className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
+              className="pressable flex items-center gap-1 px-1 hover:text-foreground"
             >
               <GitForkIcon className="size-3" />
               Fork
@@ -945,61 +945,61 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
   const cut = Boolean(stop) && !yours
   const verb = stop ? (yours ? "Stopped" : "Interrupted") : fold.continued ? "Continued" : "Worked"
   const said = work.tools > 0 ? text : undefined
-  const title = duration ? `${verb} ${stop ? "after" : "for"} ${duration}` : stop ? verb : said ? said.charAt(0).toUpperCase() + said.slice(1) : "Show the steps"
-  const detail = duration || stop ? said : undefined
-  // On a phone a settled turn's work is one line too, opening everything it hides, the words between steps included.
-  const compact = useContext(CompactPresentationContext)?.steps
-  if (compact)
-    return (
-      <div data-turn-fold="compact" className="flex flex-col">
-        {compact({
-          id: foldKey,
-          calls: fold.messages.flatMap((message) => pairTools(message.blocks)),
-          provider: fold.messages.find((message) => message.provider)?.provider,
-          live: false,
-          interrupted: cut,
-          failed: false,
-          ...(fold.worked !== undefined && { worked: fold.worked }),
-          body: <div className="flex flex-col gap-4 pt-1">{children}</div>,
-        })}
-        {kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
-        {tokenProblems}
-      </div>
-    )
-  return (
-    <div data-turn-fold={open ? "open" : "closed"} className="flex flex-col">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setTurnFoldOpen(foldKey, !open)}
-        className={cn(
-          "pressable group/fold -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start rounded-md px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
-          cut ? "text-caution" : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
-        )}
-      >
-        <ChevronRightIcon
-          aria-hidden
-          className={cn(
-            "size-3.5 shrink-0 text-faint transition-[transform,color] duration-200 ease-[var(--ease-out)] group-hover/fold:text-muted-foreground",
-            open && "rotate-90"
-          )}
-        />
-        <span className="shrink-0">{title}</span>
-        {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
-        <WorkEndings work={work} />
-      </button>
-      <Collapse open={open}>
-        <div data-turn-fold-body className="mt-1.5 ml-[6.5px] flex flex-col gap-4 border-l border-hairline pt-1 pb-1 pl-4">
-          {children}
-        </div>
-      </Collapse>
-      {!open && kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
-      {!open ? tokenProblems : null}
-    </div>
-  )
+  const title = duration ? `${verb} ${stop ? "after" : "for"} ${duration}`: stop ? verb : said ? said.charAt(0).toUpperCase() + said.slice(1) : "Show the steps"
+ const detail = duration || stop ? said : undefined
+ // On a phone a settled turn's work is one line too, opening everything it hides, the words between steps included.
+ const compact = useContext(CompactPresentationContext)?.steps
+ if (compact)
+ return (
+ <div data-turn-fold="compact" className="flex flex-col">
+ {compact({
+ id: foldKey,
+ calls: fold.messages.flatMap((message) => pairTools(message.blocks)),
+ provider: fold.messages.find((message) => message.provider)?.provider,
+ live: false,
+ interrupted: cut,
+ failed: false,
+ ...(fold.worked !== undefined && { worked: fold.worked }),
+ body: <div className="flex flex-col gap-4 pt-1">{children}</div>,
+ })}
+ {kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+ {tokenProblems}
+ </div>
+ )
+ return (
+ <div data-turn-fold={open ? "open" : "closed"} className="flex flex-col">
+ <button
+ type="button"
+ aria-expanded={open}
+ onClick={() => setTurnFoldOpen(foldKey, !open)}
+ className={cn(
+ "pressable group/fold -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
+ cut ? "text-caution" : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
+ )}
+ >
+ <ChevronRightIcon
+ aria-hidden
+ className={cn(
+ "size-3.5 shrink-0 text-faint transition-[transform,color] duration-200 ease-[var(--ease-out)] group-hover/fold:text-muted-foreground",
+ open && "rotate-90"
+ )}
+ />
+ <span className="shrink-0">{title}</span>
+ {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
+ <WorkEndings work={work} />
+ </button>
+ <Collapse open={open}>
+ <div data-turn-fold-body className="mt-1.5 ml-[6.5px] flex flex-col gap-4 border-l border-hairline pt-1 pb-1 pl-4">
+ {children}
+ </div>
+ </Collapse>
+ {!open && kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+ {!open ? tokenProblems : null}
+ </div>
+ )
 }
 
-/** The notice of each call in `messages` that refused for the person's own GitHub token, as its row draws it when shown. */
+/** The notice of each call in`messages` that refused for the person's own GitHub token, as its row draws it when shown. */
 function personTokenNotices(messages: TurnFold["messages"]): ReactNode[] {
   return messages.flatMap((message) => pairTools(message.blocks)).flatMap((call) => {
     const problem = call.isError ? readPersonTokenProblem(call.result) : undefined
@@ -1059,52 +1059,52 @@ function describeWork(work: WorkSummaryData) {
 
 /** The summary's one glyph (see `WORK_PHRASES`). */
 function SummaryGlyph({ kinds, className }: { kinds: readonly ToolKind[]; className?: string }) {
-  const [only] = kinds
-  if (kinds.length !== 1 || !only) return <LayersIcon className={className} />
-  return only === "agent" ? <AgentMark className={className} /> : <ToolGlyph kind={only} className={className} />
+ const [only] = kinds
+ if (kinds.length !== 1 || !only) return <LayersIcon className={className} />
+ return only === "agent" ? <AgentMark className={className} /> : <ToolGlyph kind={only} className={className} />
 }
 
 function WorkSummary({
-  work,
-  interrupted,
-  failed,
-  open,
-  onToggle,
+ work,
+ interrupted,
+ failed,
+ open,
+ onToggle,
 }: {
-  work: WorkSummaryData
-  interrupted: boolean
-  failed: boolean
-  open: boolean
-  onToggle: () => void
+ work: WorkSummaryData
+ interrupted: boolean
+ failed: boolean
+ open: boolean
+ onToggle: () => void
 }) {
-  const elapsed =
-    work.duration !== undefined ? formatDuration(work.duration) : undefined
-  const { kinds, text } = describeWork(work)
-  const troubled = interrupted || failed
-  const stop = interrupted ? "Interrupted" : "Failed"
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={open}
-      data-work-summary
-      className={cn(
-        "pressable group/row -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start rounded-md px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
-        interrupted
-          ? "text-caution"
-          : failed
-            ? "text-negative"
-            : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
-      )}
-    >
-      <LeadSlot
-        open={open}
-        glyph={troubled ? <TriangleAlertIcon aria-hidden className="size-3.5" /> : <SummaryGlyph kinds={kinds} className="size-3.5 text-faint" />}
-      />
-      <span className="min-w-0 truncate">
-        {troubled ? (
-          <>
-            {elapsed ? `${stop} after ${elapsed}` : stop}
+ const elapsed =
+ work.duration !== undefined ? formatDuration(work.duration) : undefined
+ const { kinds, text } = describeWork(work)
+ const troubled = interrupted || failed
+ const stop = interrupted ? "Interrupted" : "Failed"
+ return (
+ <button
+ type="button"
+ onClick={onToggle}
+ aria-expanded={open}
+ data-work-summary
+ className={cn(
+ "pressable group/row -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
+ interrupted
+ ? "text-caution"
+ : failed
+ ? "text-negative"
+ : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
+ )}
+ >
+ <LeadSlot
+ open={open}
+ glyph={troubled ? <TriangleAlertIcon aria-hidden className="size-3.5" /> : <SummaryGlyph kinds={kinds} className="size-3.5 text-faint" />}
+ />
+ <span className="min-w-0 truncate">
+ {troubled ? (
+ <>
+ {elapsed ?`${stop} after ${elapsed}` : stop}
             <span className="text-muted-foreground"> · </span>
             <span className="text-muted-foreground">
               <ChangingLabel text={text} />
@@ -1210,23 +1210,23 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-label={`${live ? "Reasoning in progress" : "Reasoning"}${summary ? `: ${summary}` : ""}`}
-        className="pressable group/row -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-ui transition-colors duration-100 hover:bg-fill-hover"
-      >
-        <LeadSlot open={open} glyph={<ToolGlyph kind="think" className={cn("size-3.5", live ? "text-foreground/80" : "text-faint")} />} />
-        {/* A thought still coming sweeps, as a running call's words do; nothing at the row's end says it again. */}
-        {live ? <Shimmer text="Thinking" className="shrink-0" /> : <span className="shrink-0 text-muted-foreground">Thought process</span>}
-        {summary && !open ? <span className="min-w-0 truncate text-faint">{summary}</span> : null}
-      </button>
-      {open ? (
-        <div className="ml-1.75 border-l border-hairline py-1.5 pl-3.75 text-muted-foreground">
-          <Prose text={text} streaming={live} />
-        </div>
-      ) : null}
-    </div>
-  )
+ className="pressable group/row -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 px-1.5 text-left text-ui transition-colors duration-100 hover:bg-fill-hover"
+ >
+ <LeadSlot open={open} glyph={<ToolGlyph kind="think" className={cn("size-3.5", live ? "text-foreground/80" : "text-faint")} />} />
+ {/* A thought still coming sweeps, as a running call's words do; nothing at the row's end says it again. */}
+ {live ? <Shimmer text="Thinking" className="shrink-0" /> : <span className="shrink-0 text-muted-foreground">Thought process</span>}
+ {summary && !open ? <span className="min-w-0 truncate text-faint">{summary}</span> : null}
+ </button>
+ {open ? (
+ <div className="ml-1.75 border-l border-hairline py-1.5 pl-3.75 text-muted-foreground">
+ <Prose text={text} streaming={live} />
+ </div>
+ ) : null}
+ </div>
+ )
 }
 
-/** The note sections that run on from `start`, drawn together. */
+/** The note sections that run on from`start`, drawn together. */
 function noteRun(sections: readonly PlacedSection[], start: number): ChatMessage[] {
   const run: ChatMessage[] = []
   for (let index = start; sections[index]?.kind === "note"; index++) {
@@ -1238,101 +1238,101 @@ function noteRun(sections: readonly PlacedSection[], start: number): ChatMessage
 
 /** Consecutive notes: provider markers as `EventNotes`, Mako's own separators between them. */
 function SystemNotes({ messages, inline, refused }: { messages: readonly ChatMessage[]; inline?: boolean; refused?: ExchangeData["refused"] }) {
-  const groups: ChatMessage[][] = []
-  for (const message of messages) {
-    const last = groups.at(-1)
-    if (message.note && !message.opensTurn && last?.[0]?.note && !last[0].opensTurn) last.push(message)
-    else groups.push([message])
-  }
-  return groups.map((group) =>
-    group[0]!.opensTurn ? (
-      // A cause delivered with the prompt above it: it reads as one, under it.
-      <div key={group[0]!.id} className={cn("flex flex-col", inline ? "my-1" : "mt-1")}>
-        <ProviderTurn message={group[0]!} />
-      </div>
-    ) : group[0]!.note ? (
-      <EventNotes key={group[0]!.id} messages={group} inline={inline} refused={refused} />
-    ) : (
-      <SystemNote key={group[0]!.id} message={group[0]!} inline={inline} />
-    )
-  )
+ const groups: ChatMessage[][] = []
+ for (const message of messages) {
+ const last = groups.at(-1)
+ if (message.note && !message.opensTurn && last?.[0]?.note && !last[0].opensTurn) last.push(message)
+ else groups.push([message])
+ }
+ return groups.map((group) =>
+ group[0]!.opensTurn ? (
+ // A cause delivered with the prompt above it: it reads as one, under it.
+ <div key={group[0]!.id} className={cn("flex flex-col", inline ? "my-1" : "mt-1")}>
+ <ProviderTurn message={group[0]!} />
+ </div>
+ ) : group[0]!.note ? (
+ <EventNotes key={group[0]!.id} messages={group} inline={inline} refused={refused} />
+ ) : (
+ <SystemNote key={group[0]!.id} message={group[0]!} inline={inline} />
+ )
+ )
 }
 
 /** A system line with no marker behind it: the same quiet line, opening onto the rest when there is more. */
 function SystemNote({ message, inline }: { message: ChatMessage; inline?: boolean }) {
-  const text = textOf(message.blocks).trim()
-  if (!text) return null
-  const first = text.split("\n", 1)[0]!
-  return (
-    <EventLine words={{ glyph: "notice", title: first }} className={inline ? undefined : "my-3"} data-system-note>
-      {first !== text || first.length > LONG_CAUSE ? <p className="whitespace-pre-wrap text-faint">{text}</p> : null}
-    </EventLine>
-  )
+ const text = textOf(message.blocks).trim()
+ if (!text) return null
+ const first = text.split("\n", 1)[0]!
+ return (
+ <EventLine words={{ glyph: "notice", title: first }} className={inline ? undefined : "my-3"} data-system-note>
+ {first !== text || first.length > LONG_CAUSE ? <p className="whitespace-pre-wrap text-faint">{text}</p> : null}
+ </EventLine>
+ )
 }
 
 /* ------------------------------------------------------------------ */
-/* one footer per answer                                               */
+/* one footer per answer */
 /* ------------------------------------------------------------------ */
 
 function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; streaming?: boolean; interrupted?: boolean | TurnStop }) {
-  const { liveId } = useTranscriptSource()
-  const text = responseText(exchange)
-  const { copied, copy } = useCopy(text, undefined, () => completeLiveAnswer(liveId, exchange))
-  const last = exchange.response.at(-1)
-  const compact = useContext(CompactPresentationContext)?.reply
-  if (!text && !last?.timestamp && !interrupted) return null
-  if (compact) return <CompactFooter exchange={exchange} text={text} streaming={streaming} interrupted={interrupted} reply={compact} />
+ const { liveId } = useTranscriptSource()
+ const text = responseText(exchange)
+ const { copied, copy } = useCopy(text, undefined, () => completeLiveAnswer(liveId, exchange))
+ const last = exchange.response.at(-1)
+ const compact = useContext(CompactPresentationContext)?.reply
+ if (!text && !last?.timestamp && !interrupted) return null
+ if (compact) return <CompactFooter exchange={exchange} text={text} streaming={streaming} interrupted={interrupted} reply={compact} />
 
-  return (
-    <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
-      {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
-      {/* The answer's time and model are the finished answer's: a running turn's newest step is not its answer. */}
-      {last?.timestamp && !streaming ? (
-        <span className="tabular">{formatTime(last.timestamp)}</span>
-      ) : null}
-      {last?.model && !streaming ? <span className="truncate">{last.model}</span> : null}
-      {/* The whole answer exists once the turn ends; until then the footer keeps its place, empty of it. */}
-      {text && !streaming ? (
-        <button
-          type="button"
-          aria-label="Copy answer"
-          title="Copy the agent's whole answer to this question"
-          onClick={() => {
-            void copy()
-          }}
-          className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
-        >
-          {copied ? (
-            <CheckIcon className="size-3 text-positive" />
-          ) : (
-            <CopyIcon className="size-3" />
-          )}
-          <span role="status" className="min-w-20">
-            <ChangingLabel text={copied ? "Copied answer" : "Copy answer"} />
-          </span>
-        </button>
-      ) : null}
-      {!streaming && !interrupted ? <ForkButton exchange={exchange} /> : null}
-      {!streaming ? <ShowOriginal origins={exchange.response.map((message) => message.origin)} /> : null}
-      {last ? <Slot name="transcript.turn.trailing" message={last} /> : null}
-    </div>
-  )
+ return (
+ <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
+ {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
+ {/* The answer's time and model are the finished answer's: a running turn's newest step is not its answer. */}
+ {last?.timestamp && !streaming ? (
+ <span className="tabular">{formatTime(last.timestamp)}</span>
+ ) : null}
+ {last?.model && !streaming ? <span className="truncate">{last.model}</span> : null}
+ {/* The whole answer exists once the turn ends; until then the footer keeps its place, empty of it. */}
+ {text && !streaming ? (
+ <button
+ type="button"
+ aria-label="Copy answer"
+ title="Copy the agent's whole answer to this question"
+ onClick={() => {
+ void copy()
+ }}
+ className="pressable flex items-center gap-1 px-1 hover:text-foreground"
+ >
+ {copied ? (
+ <CheckIcon className="size-3 text-positive" />
+ ) : (
+ <CopyIcon className="size-3" />
+ )}
+ <span role="status" className="min-w-20">
+ <ChangingLabel text={copied ? "Copied answer" : "Copy answer"} />
+ </span>
+ </button>
+ ) : null}
+ {!streaming && !interrupted ? <ForkButton exchange={exchange} /> : null}
+ {!streaming ? <ShowOriginal origins={exchange.response.map((message) => message.origin)} /> : null}
+ {last ? <Slot name="transcript.turn.trailing" message={last} /> : null}
+ </div>
+ )
 }
 
 /** The phone's footer: a reply offers what it can be used for; its time and model are the desk's details. */
 function CompactFooter({ exchange, text, streaming, interrupted, reply }: { exchange: ExchangeData; text: string; streaming?: boolean; interrupted?: boolean | TurnStop; reply: NonNullable<CompactPresentation["reply"]> }) {
-  // Asked only here: whether a fork can follow this answer is the phone's Branch, never the desk's footer.
-  const fork = useLiveFork(exchange)
-  return (
-    <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
-      {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
-      {streaming ? null : reply({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
-    </div>
-  )
+ // Asked only here: whether a fork can follow this answer is the phone's Branch, never the desk's footer.
+ const fork = useLiveFork(exchange)
+ return (
+ <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
+ {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
+ {streaming ? null : reply({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
+ </div>
+ )
 }
 
 /**
- * Why the turn ended early. A bare `true` is a Stop with no recorded reason
+ * Why the turn ended early. A bare`true` is a Stop with no recorded reason
  * (a foreign transcript's own marker). When Mako's exit or the provider's
  * own connection cut the newest turn short, the footer says which and offers
  * to pick the turn up; the offer sends through the same path as a typed
@@ -1379,7 +1379,7 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
             setSending(true)
             void continueTurn(liveId, reason).finally(() => setSending(false))
           }}
-          className="pressable flex items-center gap-1 rounded px-1 text-foreground hover:bg-fill-hover disabled:opacity-50"
+          className="pressable flex items-center gap-1 px-1 text-foreground hover:bg-fill-hover disabled:opacity-50"
           title="Ask the agent to go on from where this turn stopped"
         >
           <PlayIcon className="size-3" />
@@ -1454,7 +1454,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
           data-transcript-action="fork"
           title="Fork after this answer into a new tab in this Thread. Option-click forks into a new Thread."
           onClick={(event) => void acp.fork(liveAnswer, event.altKey ? "new" : "parent", scopedLiveAcp(acpStore.get(), scope))}
-          className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
+          className="pressable flex items-center gap-1 px-1 hover:text-foreground"
         >
           <GitForkIcon className="size-3" /> Fork
         </button>
@@ -1468,7 +1468,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
         data-transcript-action="fork"
         title="Fork from this completed answer into a new tab"
         onClick={() => void actions.fork(nativeEntry, "at")}
-        className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
+        className="pressable flex items-center gap-1 px-1 hover:text-foreground"
       >
         <GitForkIcon className="size-3" />
         Fork
@@ -1484,7 +1484,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
         <button
           type="button"
           title="Fork from this answer into a new tab in this Thread, any agent. Option-click an agent to fork into a new Thread."
-          className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
+          className="pressable flex items-center gap-1 px-1 hover:text-foreground"
         >
           <GitForkIcon className="size-3" />
           Fork
@@ -1507,7 +1507,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
               setOpen(false)
               void threads.forkAt(viewing, anchor, target, event.altKey ? "new" : "parent")
             }}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui text-foreground/90 transition-colors duration-100 hover:bg-fill-hover"
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-ui text-foreground/90 transition-colors duration-100 hover:bg-fill-hover"
           >
             <HarnessIcon harness={target} className="size-3.5" />
             <span className="flex-1">{harnessLabels()[target] ?? target}</span>

@@ -166,7 +166,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           <button
             type="button"
             disabled={page === 0}
-            className="pressable rounded px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
+            className="pressable px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
             onClick={() => setPageIndex(page - 1)}
           >
             Previous
@@ -178,7 +178,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           <button
             type="button"
             disabled={(page + 1) * 20 >= delivery.length}
-            className="pressable rounded px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
+            className="pressable px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
             onClick={() => setPageIndex(page + 1)}
           >
             Next
@@ -215,10 +215,10 @@ function OutboxLine({ conversation, request }: { conversation: string; request: 
       <span className="min-w-0 flex-1 truncate" title={words}>{words}</span>
       {request.waiting ? (
         <>
-          <button type="button" data-outbox-action="send" className="pressable rounded px-2 py-0.5 text-foreground hover:bg-fill-hover" onClick={() => void sendWaitingNow(conversation)}>
+          <button type="button" data-outbox-action="send" className="pressable px-2 py-0.5 text-foreground hover:bg-fill-hover" onClick={() => void sendWaitingNow(conversation)}>
             Send now
           </button>
-          <button type="button" data-outbox-action="remove" className="pressable rounded px-2 py-0.5 hover:bg-fill-hover hover:text-foreground" onClick={() => discardWaiting(conversation, request.id)}>
+          <button type="button" data-outbox-action="remove" className="pressable px-2 py-0.5 hover:bg-fill-hover hover:text-foreground" onClick={() => discardWaiting(conversation, request.id)}>
             Remove
           </button>
         </>
@@ -342,14 +342,14 @@ function QueueRow({
               }
             }}
             rows={3}
-            className="w-full resize-none rounded-md bg-surface px-2 py-1.5 text-ui leading-relaxed text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="w-full resize-none bg-surface px-2 py-1.5 text-ui leading-relaxed text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
           <div className="flex items-center justify-end gap-2 text-label">
             <button
               type="button"
               disabled={busy}
               onClick={() => void change("resume")}
-              className="pressable rounded px-2 py-1 text-faint hover:bg-fill-hover hover:text-foreground"
+              className="pressable px-2 py-1 text-faint hover:bg-fill-hover hover:text-foreground"
             >
               Cancel
             </button>
@@ -357,7 +357,7 @@ function QueueRow({
               type="button"
               disabled={busy || (!draft.trim() && !request.attachments.length)}
               onClick={() => void change("edit")}
-              className="pressable flex items-center gap-1 rounded bg-fill-selected px-2 py-1 text-foreground disabled:opacity-40"
+              className="pressable flex items-center gap-1 bg-fill-selected px-2 py-1 text-foreground disabled:opacity-40"
             >
               <CheckIcon className="size-3" />
               Save message
@@ -370,7 +370,7 @@ function QueueRow({
             {continuation ? "Continues the turn where it stopped" : body || `${request.attachments.length} attachments`}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
-            {request.status === "held" && !request.signIn ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
+            {request.status === "held" && !request.signIn ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
             {canSteer ? (
               <button
                 type="button"
@@ -378,7 +378,7 @@ function QueueRow({
                 aria-label="Send now, into the running turn"
                 title="Send now, into the running turn"
                 disabled={!editable || busy}
-                className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
+                className="pressable grid size-6 place-items-center hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
                 onClick={() => void sendNow()}
               >
                 <ArrowUpIcon className="size-3.5" />
@@ -390,7 +390,7 @@ function QueueRow({
               aria-label="Edit queued message"
               title="Edit queued message"
               disabled={!editable || busy || continuation}
-              className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
+              className="pressable grid size-6 place-items-center hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
               ref={editButton}
               onClick={() => (onEdit ? onEdit(request, body) : void change("pause"))}
             >
@@ -402,7 +402,7 @@ function QueueRow({
               aria-label="Remove queued message"
               title="Remove queued message"
               disabled={!editable || busy}
-              className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
+              className="pressable grid size-6 place-items-center hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
               onClick={() => void change("remove")}
             >
               <XIcon className="size-3.5" />

@@ -223,7 +223,7 @@ export function InlineFilePreview({
           />
         </button>
         {file ? (
-          <button type="button" aria-label={`Expand ${name}`} title="Expand preview" onClick={() => changeEnlarged(true)} className="pressable rounded p-1 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
+          <button type="button" aria-label={`Expand ${name}`} title="Expand preview" onClick={() => changeEnlarged(true)} className="pressable p-1 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
             <ExpandIcon className="size-3.5" />
           </button>
         ) : null}
@@ -234,23 +234,23 @@ export function InlineFilePreview({
         ) : null}
         <button
           type="button"
-          className="pressable rounded p-1 text-faint hover:bg-fill-hover"
+          className="pressable p-1 text-faint hover:bg-fill-hover"
           aria-label={`Refresh ${name}`}
           onClick={() => setAttempt(attempt + 1)}
         >
           <RotateCwIcon className="size-3.5" />
         </button>
         {resolvedFile?.previewUrl ? (
-          <a className="pressable rounded px-2 py-1 text-label text-muted-foreground hover:bg-fill-hover" href={resolvedFile.previewUrl} target="_blank" rel="noreferrer">Open original</a>
+          <a className="pressable px-2 py-1 text-label text-muted-foreground hover:bg-fill-hover" href={resolvedFile.previewUrl} target="_blank" rel="noreferrer">Open original</a>
         ) : (
-          <button type="button" className="pressable rounded px-2 py-1 text-label text-muted-foreground hover:bg-fill-hover" onClick={() => void viewer.open(path, undefined, context.threadPath, context.liveId)}>Open</button>
+          <button type="button" className="pressable px-2 py-1 text-label text-muted-foreground hover:bg-fill-hover" onClick={() => void viewer.open(path, undefined, context.threadPath, context.liveId)}>Open</button>
         )}
       </div>
       {result?.error ? (
         <div className="flex items-center gap-2 border-t border-hairline px-3 py-2 text-label text-faint">
           <span className="min-w-0 flex-1">{result.error}</span>
           <button
-            className="pressable rounded p-1"
+            className="pressable p-1"
             aria-label={`Retry ${name}`}
             onClick={() => setAttempt(attempt + 1)}
           >
@@ -266,7 +266,7 @@ export function InlineFilePreview({
                   key={value}
                   aria-pressed={mode === value}
                   onClick={() => setMode(value)}
-                  className={`pressable rounded px-2 py-1 ${mode === value ? "bg-fill-selected text-foreground" : "text-faint hover:bg-fill-hover"}`}
+                  className={`pressable px-2 py-1 ${mode === value ? "bg-fill-selected text-foreground" : "text-faint hover:bg-fill-hover"}`}
                 >
                   {value === "preview" ? "Preview" : "Source"}
                 </button>

@@ -237,7 +237,7 @@ export function CommandPalette() {
     >
       <div
         onKeyDown={onKeyDown}
-        className="overlay-panel w-full max-w-dialog overflow-hidden rounded-xl"
+        className="overlay-panel w-full max-w-dialog overflow-hidden"
       >
         <div className="flex h-11 items-center gap-2.5 border-b border-hairline px-3.5">
           <SearchIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
@@ -271,7 +271,7 @@ export function CommandPalette() {
                       entry.run()
                     }}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                      "flex w-full items-center gap-2 px-2 py-1.5 text-left",
                       index === cursor && "bg-fill-selected"
                     )}
                   >

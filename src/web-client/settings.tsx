@@ -335,7 +335,7 @@ function Appearance() {
             role="radio"
             aria-checked={theme === each.value}
             onClick={() => setTheme(each.value)}
-            className={cn("pressable h-9 rounded-xl text-ui", theme === each.value ? "bg-fill-selected font-medium text-foreground" : "text-muted-foreground")}
+            className={cn("pressable h-9 text-ui", theme === each.value ? "bg-fill-selected font-medium text-foreground" : "text-muted-foreground")}
           >
             {each.label}
           </button>

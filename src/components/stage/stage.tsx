@@ -190,7 +190,7 @@ export function Stage() {
                 <button
                   type="button"
                   onClick={() => stage.close()}
-                  className="pressable flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+                  className="pressable flex items-center gap-1 px-1.5 py-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
                 >
                   <ArrowLeftIcon className="size-3" />
                   Workbench
@@ -335,7 +335,7 @@ function RightSidebarTabs({
               })
             }}
             className={cn(
-              "my-1.5 flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-1.5 text-ui font-medium transition-[background-color,color] duration-150 ease-(--ease-out)",
+              "my-1.5 flex min-w-0 flex-1 items-center justify-center gap-1.5 px-1.5 text-ui font-medium transition-[background-color,color] duration-150 ease-(--ease-out)",
               active
                 ? "bg-raised text-foreground"
                 : "text-faint hover:bg-fill-hover hover:text-muted-foreground"

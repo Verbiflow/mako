@@ -173,9 +173,9 @@ export function ThreadActions(props: ThreadMenuProps) {
   }
   return (
     <span className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-      {running && controlled ? <button type="button" aria-label={`Stop ${title}`} title="Stop this run and pause its queue" disabled={busy} onClick={() => { void stop() }} className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"><SquareIcon className="size-2.5 fill-current" strokeWidth={0} /></button> : null}
+      {running && controlled ? <button type="button" aria-label={`Stop ${title}`} title="Stop this run and pause its queue" disabled={busy} onClick={() => { void stop() }} className="pressable flex size-6 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"><SquareIcon className="size-2.5 fill-current" strokeWidth={0} /></button> : null}
       <Menu modal={false} onOpenChange={menu.onOpenChange}>
-        <MenuTrigger asChild><button type="button" aria-label={`Actions for ${title}`} className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"><MoreHorizontalIcon className="size-3.5" /></button></MenuTrigger>
+        <MenuTrigger asChild><button type="button" aria-label={`Actions for ${title}`} className="pressable flex size-6 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"><MoreHorizontalIcon className="size-3.5" /></button></MenuTrigger>
         <MenuContent align="end" sideOffset={4} className="min-w-52" onCloseAutoFocus={menu.onCloseAutoFocus}>
           <ThreadMenuItems props={props} menu={menu} />
         </MenuContent>

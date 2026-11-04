@@ -78,7 +78,7 @@ export function McpSection() {
         </section>
       ) : null}
       {state.driver?.executable ? (
-        <div className="mb-3 flex items-center gap-3 rounded-lg bg-surface px-2.5 py-2 ring-1 ring-hairline">
+        <div className="mb-3 flex items-center gap-3 bg-surface px-2.5 py-2 ring-1 ring-hairline">
           <span className="min-w-0 flex-1">
             <span className="block text-ui text-foreground/90">
               {state.driver.version
@@ -116,7 +116,7 @@ export function McpSection() {
           </p>
           <div className="flex items-center justify-between pt-2 pb-1">
             <Eyebrow className="px-0">Sync to</Eyebrow>
-            <span className="flex rounded-md bg-raised p-0.5 text-label">
+            <span className="flex bg-raised p-0.5 text-label">
               {(["user", "workspace"] as const).map((value) => (
                 <button
                   key={value}
@@ -126,7 +126,7 @@ export function McpSection() {
                     setTargets([])
                   }}
                   className={cn(
-                    "pressable rounded px-1.5 py-0.5",
+                    "pressable px-1.5 py-0.5",
                     scope === value
                       ? "bg-surface text-foreground"
                       : "text-faint hover:text-foreground"
@@ -151,7 +151,7 @@ export function McpSection() {
                 <label
                   key={`${provider.id}:${provider.account}`}
                   className={cn(
-                    "flex items-center gap-2 rounded-md bg-surface px-2.5 py-2 text-ui ring-1 ring-hairline",
+                    "flex items-center gap-2 bg-surface px-2.5 py-2 text-ui ring-1 ring-hairline",
                     provider.available ? "cursor-pointer" : "opacity-50"
                   )}
                   title={provider.detail ?? provider.source}
@@ -175,7 +175,7 @@ export function McpSection() {
           </div>
 
           <Eyebrow className="px-0 pb-1">Definitions</Eyebrow>
-          <div className="flex flex-col rounded-lg bg-surface ring-1 ring-hairline">
+          <div className="flex flex-col bg-surface ring-1 ring-hairline">
             {orderedServers.map((server) => {
               const previews = state.previews[server.id] ?? []
               const previewsCurrent =
@@ -204,7 +204,7 @@ export function McpSection() {
                     <span className={cn("block", disabled && "opacity-60")}>
                     <span className="flex items-center gap-1.5">
                       <span className="font-mono text-ui">{server.name}</span>
-                      <span className="rounded bg-raised px-1 py-0.5 text-label text-faint">
+                      <span className="bg-raised px-1 py-0.5 text-label text-faint">
                         {server.transport}
                       </span>
                       {server.managed ? (

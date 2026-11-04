@@ -7,7 +7,7 @@ import { useState, type ComponentProps, type ReactNode } from "react"
 /* ------------------------------------------------------------------ */
 
 const base =
-  "pressable no-drag inline-flex shrink-0 select-none items-center justify-center gap-1.5 rounded-md " +
+  "pressable no-drag inline-flex shrink-0 select-none items-center justify-center gap-1.5" +
   "text-ui font-medium whitespace-nowrap " +
   "[transition:transform_var(--duration-press)_var(--ease-out),background-color_120ms_ease,color_120ms_ease,opacity_120ms_ease] " +
   "disabled:pointer-events-none disabled:opacity-40 " +
@@ -113,7 +113,7 @@ export function Chip({
   return (
     <span
       className={cn(
-        "inline-flex h-[18px] items-center gap-1 rounded px-1.5 text-label font-medium ring-1 ring-inset",
+        "inline-flex h-[18px] items-center gap-1 px-1.5 text-label font-medium ring-1 ring-inset",
         palette,
         className
       )}
@@ -213,7 +213,7 @@ export function Segmented<T extends string>({
   disabled?: boolean
 }) {
   return (
-    <div role="group" aria-label={label} className="flex h-6 shrink-0 items-center rounded-md bg-raised p-[2px]">
+    <div role="group" aria-label={label} className="flex h-6 shrink-0 items-center bg-raised p-[2px]">
       {options.map((option) => (
         <button
           key={option.value}
@@ -274,7 +274,7 @@ export function ListCard({ className, children }: ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "rounded-lg bg-shell/55 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
+        "bg-shell/55 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
         className
       )}
     >
@@ -322,7 +322,7 @@ export function Blank({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-8 py-12 text-center">
       {icon ? (
-        <div className="mb-1 flex size-8 items-center justify-center rounded-lg bg-raised text-faint [&_svg]:size-4">
+        <div className="mb-1 flex size-8 items-center justify-center bg-raised text-faint [&_svg]:size-4">
           {icon}
         </div>
       ) : null}
@@ -336,7 +336,7 @@ export function Blank({
               key={hint.label}
               type="button"
               onClick={hint.onSelect}
-              className="pressable flex h-9 items-center justify-between rounded-md px-2.5 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+              className="pressable flex h-9 items-center justify-between px-2.5 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
             >
               {hint.label}
               {hint.keys ? <Keys keys={hint.keys} /> : null}

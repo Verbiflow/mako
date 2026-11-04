@@ -67,7 +67,7 @@ export function UsageChart({
           onKeyDown={step}
           onMouseLeave={() => setActive(null)}
           onBlur={() => setActive(null)}
-          className={cn("relative flex-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring", PLOT_HEIGHT)}
+          className={cn("relative flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring", PLOT_HEIGHT)}
         >
           {scale.ticks.map((tick) => (
             <span
@@ -83,7 +83,7 @@ export function UsageChart({
                 key={period.start}
                 onMouseEnter={() => setActive(index)}
                 className={cn(
-                  "relative flex min-w-0 flex-1 flex-col-reverse rounded-t-[2px] transition-colors duration-100",
+                  "relative flex min-w-0 flex-1 flex-col-reverse transition-colors duration-100",
                   active === index && "bg-fill-hover"
                 )}
               >
@@ -93,7 +93,7 @@ export function UsageChart({
                     <span
                       key={entry.key}
                       className={cn(
-                        "w-full shrink-0 transition-opacity duration-150 last:rounded-t-[2px]",
+                        "w-full shrink-0 transition-opacity duration-150",
                         entry.ink,
                         focus && focus !== entry.key && "opacity-20"
                       )}
@@ -107,7 +107,7 @@ export function UsageChart({
           {shown ? (
             <div
               role="status"
-              className="overlay-panel pointer-events-none absolute top-0 z-10 w-48 rounded-lg px-2.5 py-2 text-label"
+              className="overlay-panel pointer-events-none absolute top-0 z-10 w-48 px-2.5 py-2 text-label"
               style={readoutPlace(Number(active), periods.length)}
               data-usage-readout
             >

@@ -34,7 +34,7 @@ export function AutomationsSection() {
       </p>
 
       {list.length === 0 ? (
-        <p className="rounded-lg bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">
+        <p className="bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">
           This project has none. Add <code>.mako/automations.json</code> with a
           name, a prompt, and a trigger of <code>manual</code>,{" "}
           <code>files</code>, or <code>commit</code>.
@@ -44,7 +44,7 @@ export function AutomationsSection() {
           {list.map((entry) => (
             <div
               key={entry.id}
-              className="rounded-lg bg-surface px-3 py-2.5 ring-1 ring-hairline"
+              className="bg-surface px-3 py-2.5 ring-1 ring-hairline"
             >
               <div className="flex items-center gap-2">
                 <Toggle

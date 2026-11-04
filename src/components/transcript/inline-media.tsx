@@ -89,7 +89,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
           {tile.more ? (
             <span className="media-more absolute inset-0 grid place-items-center text-title font-medium tabular-nums">+{tile.more}</span>
           ) : (
-            <span className="media-control pointer-events-none absolute bottom-1.5 left-1.5 max-w-[calc(100%-0.75rem)] truncate rounded-md px-2 py-0.5 text-left text-label opacity-0 transition-opacity duration-150 group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100">{name}</span>
+            <span className="media-control pointer-events-none absolute bottom-1.5 left-1.5 max-w-[calc(100%-0.75rem)] truncate px-2 py-0.5 text-left text-label opacity-0 transition-opacity duration-150 group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100">{name}</span>
           )}
         </button>
       </div>
@@ -129,11 +129,11 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
         ) : (
           <div className="size-full overflow-hidden media-surface border border-hairline bg-shell"><Skeleton className="block size-full rounded-none" /></div>
         )}
-        <span className={cn("media-control pointer-events-none absolute left-1.5 max-w-[calc(100%-6rem)] truncate rounded-md px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/media:opacity-100", format === "image" ? "bottom-1.5" : "top-1.5")}>{name}</span>
+        <span className={cn("media-control pointer-events-none absolute left-1.5 max-w-[calc(100%-6rem)] truncate px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/media:opacity-100", format === "image" ? "bottom-1.5" : "top-1.5")}>{name}</span>
         {file ? (
           <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 transition-opacity duration-150 group-hover/media:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100">
             {format === "video" && onOpen ? (
-              <button type="button" aria-label={`Expand ${name}`} title="Expand" onClick={onOpen} className="media-control pressable grid size-7 place-items-center rounded-md">
+              <button type="button" aria-label={`Expand ${name}`} title="Expand" onClick={onOpen} className="media-control pressable grid size-7 place-items-center">
                 <ExpandIcon className="size-3.5" />
               </button>
             ) : null}
