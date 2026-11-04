@@ -1,6 +1,6 @@
 import { use, useState } from "react"
 import { childGroup, childLine, childStateOf, childWord } from "@mako/host/contracts/children"
-import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
+import { APEX_WORD, finsWord } from "@mako/host/contracts/agents"
 import { XIcon } from "lucide-react"
 import { LiveMark } from "@/components/ui/live-mark"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
@@ -26,7 +26,7 @@ export function FinOfApexNote({ conversation }: { conversation: string }) {
   if (addressee)
     return (
       <div data-child-note="direct" data-addressee={addressee.name} className="mx-auto flex w-full max-w-content min-w-0 items-center gap-1.5 px-4 pt-2 text-label text-faint">
-        <span className="flex h-7 min-w-0 shrink items-center gap-1.5 bg-raised pr-0.5 pl-2.5 text-label text-foreground">
+        <span title={`Straight to ${addressee.title}; ${title ?? `its ${APEX_WORD}`} sees what you said`} className="flex h-7 min-w-0 shrink items-center gap-1.5 bg-raised pr-0.5 pl-2.5 text-label text-foreground">
           <LiveMark kind="fin" state="idle" size={16} cut="var(--raised)" className="live-mark-still">
             <WebHarnessIcon harness={addressee.provider} />
           </LiveMark>
@@ -35,15 +35,9 @@ export function FinOfApexNote({ conversation }: { conversation: string }) {
             <XIcon className="size-3" />
           </button>
         </span>
-        <span className="min-w-0 truncate">{title ?? `Its ${APEX_WORD}`} sees what you said</span>
       </div>
     )
-  return (
-    <div data-child-note={apex ? "fin" : "apex"} className="mx-auto flex w-full max-w-content items-center gap-1.5 px-4 pt-2 text-label text-faint">
-      <ApexMark className="size-3" />
-      {apex ? <>Straight to this {FIN_WORD} · {apex} sees what you said</> : <>To the {APEX_WORD} · it passes it on to the right {FIN_WORD}</>}
-    </div>
-  )
+  return null
 }
 
 /**

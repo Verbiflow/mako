@@ -456,6 +456,7 @@ const inputs = {
   "mako:element-pick-targets": () => z.tuple([]),
   "mako:element-pick-wait": () => z.tuple([z.string(), z.number()]),
   "mako:external-editors": () => z.tuple([]),
+  "mako:file-events-dismiss": () => z.tuple([]),
   "mako:file-events-restart": () => z.tuple([]),
   "mako:file-events-service": () => z.tuple([]),
   "mako:fin-default-choose": () =>
@@ -2581,6 +2582,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:element-pick-targets", "control"],
   ["mako:element-pick-wait", "control"],
   ["mako:external-editors", "workspaces"],
+  ["mako:file-events-dismiss", "workspaces"],
   ["mako:file-events-restart", "workspaces"],
   ["mako:file-events-service", "workspaces"],
   ["mako:fin-default-choose", "harnesses"],

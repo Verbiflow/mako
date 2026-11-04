@@ -210,16 +210,13 @@ function AccessPicker({
       <span
         aria-label={`Access: ${label}`}
         title={title || label}
-        className="flex h-7 max-w-40 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint"
+        className="flex size-7 shrink-0 items-center justify-center text-faint"
       >
         {full ? (
-          <TriangleAlertIcon className="size-3 shrink-0 text-caution" />
+          <TriangleAlertIcon className="size-3.5 shrink-0 text-caution" />
         ) : (
-          <ShieldIcon className="size-3 shrink-0" />
+          <ShieldIcon className="size-3.5 shrink-0" />
         )}
-        <span data-collapse="1" className="truncate">
-          {label}
-        </span>
       </span>
     )
   }
@@ -230,17 +227,13 @@ function AccessPicker({
           type="button"
           aria-label={`Access: ${label}`}
           title={selected ? (modeDetail(selected, harness) ?? label) : unresolvedDetail}
-          className="pressable flex h-7 max-w-40 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
+          className="pressable flex size-7 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
         >
           {full ? (
-            <TriangleAlertIcon className="size-3 shrink-0 text-caution" />
+            <TriangleAlertIcon className="size-3.5 shrink-0 text-caution" />
           ) : (
-            <ShieldIcon className="size-3 shrink-0" />
+            <ShieldIcon className="size-3.5 shrink-0" />
           )}
-          {/* The first thing the routing row gives up when it is short of room. */}
-          <span data-collapse="1" className="truncate">
-            {label}
-          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">

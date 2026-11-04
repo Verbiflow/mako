@@ -219,6 +219,8 @@ const reads = [
  * content differs.
  */
 const replays = [
+  /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
+  "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
   "mako:storage-free",
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */

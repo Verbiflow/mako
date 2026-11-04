@@ -3323,6 +3323,10 @@ export function installMockBridge() {
       setFileEvents(mockFileEventsService("fseventsd-restarted"))
       return mockFileEvents
     },
+    fileEventsDismiss: async () => {
+      setFileEvents({ ...mockFileEvents, notice: false, ...(mockFileEvents.restart && { restart: { ...mockFileEvents.restart, seen: true } }) })
+      return mockFileEvents
+    },
     makoFootprint: async () => ({
       at: new Date().toISOString(),
       processes: [
@@ -3912,6 +3916,7 @@ function mockFileEventsService(scene: string | null): FileEventsService {
       residentBytes: Math.round(10.5 * GB),
       readAt: now - 20_000,
       history: degradedDay,
+      notice: true,
     }
   if (scene === "fseventsd-restarted") {
     const at = now - 40_000
@@ -3923,6 +3928,8 @@ function mockFileEventsService(scene: string | null): FileEventsService {
       pid: 19_513,
       residentBytes: Math.round(8.2 * MB),
       readAt: now - 5_000,
+      notice: false,
+      settlingUntil: now + 9 * 60_000,
       history: [
         ...degradedDay.slice(-5),
         { at, pid: 19_513, residentBytes: Math.round(8.2 * MB), lagMs: 54, beats: 5, state: "healthy", why: "restarted", context },
@@ -3945,6 +3952,7 @@ function mockFileEventsService(scene: string | null): FileEventsService {
     pid: 19_513,
     residentBytes: Math.round(11.8 * MB),
     readAt: now - 30_000,
+    notice: false,
     history: Array.from({ length: 96 }, (_, index) => ({
       at: now - (96 - index) * 15 * 60_000,
       pid: 19_513,

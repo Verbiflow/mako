@@ -10,16 +10,28 @@ import { z } from "zod"
  * is a fault, not a busy Mac: Mako says so and offers the restart.
  */
 
-/** A canary's median beat later than this is degraded: healthy beats arrive in 15 to 60 ms, 60 when parcel's 50 ms debounce holds one. */
-export const DEGRADED_LAG_MS = 250
-/** The beats the median is taken over, one every 10 s: a minute of them. */
-export const LAG_BEATS = 6
-/** A median taken over fewer beats than this says nothing yet. */
-export const LAG_BEATS_NEEDED = 4
+/**
+ * A canary's median beat later than this, over `LAG_BEATS` (five minutes at
+ * the 10 s beat, `LAG_BEATS_NEEDED` at least), is degraded. Healthy beats
+ * take 13 to 60 ms on a quiet Mac, and a few hundred on a busy one: 257 ms
+ * was seen from a healthy 11 MB daemon just after a restart. The degraded
+ * daemon this is for was 2.6 s late at the median, for days.
+ */
+export const DEGRADED_LAG_MS = 1_000
+export const LAG_BEATS = 30
+export const LAG_BEATS_NEEDED = 18
+/** A canary unheard this long is degraded too; shorter silences are the watcher's own to answer. */
+export const DEGRADED_SILENCE_MS = 3 * 60_000
 /** Resident memory past this is degraded: healthy, fseventsd holds under 50 MB. */
 export const DEGRADED_MEMORY_BYTES = 1024 ** 3
 /** Readings of memory over the threshold in a row, a minute apart, before it's said. */
 export const MEMORY_READINGS_NEEDED = 2
+/** After fseventsd starts over, its lag isn't judged for this long: only its memory is. */
+export const SETTLE_MS = 10 * 60_000
+/** Healthy this long ends a degraded episode; a degradation within it is the same one, never said again. */
+export const EPISODE_GAP_MS = 30 * 60_000
+/** A snoozed notice comes back early only for a reading this many times worse, or a new reason. */
+export const WORSE_BY = 2
 /** How often the rolling history keeps a sample. */
 export const SAMPLE_EVERY_MS = 15 * 60_000
 
@@ -102,5 +114,14 @@ export interface FileEventsService {
   history: FileEventsSample[]
   /** A restart under way, by step. */
   restarting?: FileEventsRestartStep
-  restart?: FileEventsRestart
+  /** The last restart's outcome; `seen` once the person closed its notice. */
+  restart?: FileEventsRestart & { seen?: boolean }
+  /** Whether the desk says it's degraded now: once an episode, and not while "Not now" holds unless it got worse. */
+  notice: boolean
+  /** "Not now" holds until then, the end of the day it was pressed. */
+  snoozedUntil?: number
+  /** Just restarted: lag isn't judged until then. */
+  settlingUntil?: number
+  /** This Mac is busy with other work, so a late canary says nothing about fseventsd. */
+  busy?: boolean
 }

@@ -116,7 +116,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
         <span className="min-w-0 truncate font-medium text-foreground">
           {ask.title}
         </span>
-        <span className="shrink-0 text-caution">
+        <span className="shrink-0 text-attention">
           {childWord({
             kind: "blocked",
             question: ask.question,

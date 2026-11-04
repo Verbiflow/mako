@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 export function DeclaredMark({ mark, tinted, className }: { mark: HarnessMark; tinted: boolean; className?: string }) {
   const gradient = useId()
   const [x = 0, y = 0, width = 0, height = 0] = mark.viewBox.split(" ").map(Number)
-  const fill = mark.gradient ? `url(#${gradient})` : undefined
+  const fill = tinted && mark.gradient ? `url(#${gradient})` : undefined
   return (
     <svg
       viewBox={mark.viewBox}
@@ -15,7 +15,7 @@ export function DeclaredMark({ mark, tinted, className }: { mark: HarnessMark; t
       style={tinted && !mark.gradient && mark.tint !== "currentColor" ? { color: mark.tint } : undefined}
       aria-hidden
     >
-      {mark.gradient ? (
+      {tinted && mark.gradient ? (
         <defs>
           <linearGradient id={gradient} gradientUnits="userSpaceOnUse" x1={x + width / 2} x2={x + width / 2} y1={y} y2={y + height}>
             {mark.gradient.map((stop) => <stop key={stop.offset} offset={stop.offset} stopColor={stop.color} />)}

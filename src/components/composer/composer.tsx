@@ -1,9 +1,10 @@
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { ChildComposerNote } from "@/components/stage/child-view"
 import { useApexStop } from "@/components/composer/stop-apex"
-import { address, addresseeOf, addresseeStore, pickedFin, sendDirect, threadChildren, unaddress, useAddressee, type Addressee } from "@/state/apex-fins"
+import { address, addressableFins, addresseeOf, addresseeStore, pickedFin, sendDirect, threadChildren, unaddress, useAddressee, useThreadChildren, type Addressee } from "@/state/apex-fins"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
-import { APEX_WORD } from "@mako/host/contracts/agents"
+import { FIN_WORD } from "@mako/host/contracts/agents"
+import { useOnScreen } from "@/state/thread-sessions"
 import { gitConflictAttachment } from "@/state/git-conflicts"
 import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
 import { pullRequestAttachment } from "@/state/github"
@@ -1167,8 +1168,9 @@ export function Composer() {
   // A session whose records a newer version of its harness wrote goes on from its transcript until the harness is updated (`RestorePlan`).
   const viewingOutdated = useRestorePlans((state) => viewingPath !== undefined && state.plans[viewingPath]?.kind === "update")
   const newHarness = useThreads((state) => state.composerHarness)
+  const finsHere = addressableFins(useThreadChildren(useOnScreen().thread)).length > 0
   const placeholder = addressee && liveOwnsComposer && !held
-    ? `Message ${addressee.title} straight — the ${APEX_WORD} takes no turn`
+    ? `Message ${addressee.title}`
     : planDecision && !held
     ? `Tell ${harnessTitle(planDecision.harness ?? newHarness)} what to change in the plan`
     : planning && !held && !turnRunning
@@ -1183,12 +1185,12 @@ export function Composer() {
       ? copyOn
         ? WAITING_PLACEHOLDER
         : liveStarting
-        ? `Queue a message for ${harnessTitle(liveHarness)}`
+        ? `Queue for ${harnessTitle(liveHarness)}`
         : liveRunning
           ? composerRunningPlaceholder(harnessTitle(liveHarness), enterAction, canSteer)
           : newHarness !== liveHarness
             ? `Reply — moves this conversation to ${harnessTitle(newHarness)}`
-            : `Reply — ${harnessTitle(liveHarness)} answers live`
+            : finsHere ? `Ask anything, or @ a ${FIN_WORD}` : "Ask anything"
       : routedHarness
         ? newHarness !== routedHarness
           ? `Reply — moves this conversation to ${harnessTitle(newHarness)}`
@@ -1201,7 +1203,7 @@ export function Composer() {
               : viewingKept === "records"
               ? `Reply — Mako restores this session and ${harnessTitle(routedHarness)} resumes it`
               : viewingRunning
-                ? `Queue a message for ${harnessTitle(routedHarness)}`
+                ? `Queue for ${harnessTitle(routedHarness)}`
                 : `Reply — ${harnessTitle(routedHarness)} answers`
         : newSessionKey
           ? `Start a ${harnessTitle(newHarness)} session in this Thread`
@@ -1237,7 +1239,6 @@ export function Composer() {
 
         {planDecision ? <PlanDecisionBar key={planDecision.plan.id} decision={planDecision} /> : null}
         <ComposerNotices meta={meta} draftKey={draftKey} />
-        <ChildComposerNote />
 
         <input
           ref={filePicker}
@@ -1262,7 +1263,7 @@ export function Composer() {
             void attach([...event.dataTransfer.files])
           }}
           className={cn(
-            "relative mx-3 mb-3 flex min-h-0 flex-col rounded-lg bg-raised",
+            "composer-box relative mx-3 mb-3 flex min-h-0 flex-col bg-raised",
             (dragging || referencing) && "ring-1 ring-foreground/40 ring-inset"
           )}
         >
@@ -1293,6 +1294,7 @@ export function Composer() {
            * native caret, IME, undo, and spellcheck — a contenteditable would
            * trade all four for the same visual result.
            */}
+          <ChildComposerNote />
           <ComposerSendsTo />
           <PlanContextChips
             plans={draftPlans ?? []}
@@ -1385,7 +1387,7 @@ export function Composer() {
               className={cn(
                 // No max-height and no scrolling of its own — the wrapper owns
                 // both, so the painted layer behind it stays in register.
-                "composer-input relative block min-h-20 w-full resize-none overflow-hidden bg-transparent px-4 pt-4 pb-2",
+                "composer-input relative block min-h-12 w-full resize-none overflow-hidden bg-transparent px-4 pt-3.5 pb-1.5",
                 "font-sans text-prose leading-[1.6] placeholder:text-faint focus:outline-none",
                 // Transparent glyphs let the overlay show through; the caret
                 // and selection stay native and visible.
@@ -1394,7 +1396,7 @@ export function Composer() {
             />
           </div>
 
-          <div className="flex min-h-11 shrink-0 items-center gap-1 px-3 pb-3">
+          <div className="flex min-h-11 shrink-0 items-center gap-0.5 px-2 pb-2">
             {wordsOnly ? null : (
               <ComposerAdditions
                 meta={meta}

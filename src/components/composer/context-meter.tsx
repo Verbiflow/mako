@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import { CompactionControl } from "./compaction-control"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { formatCost, formatTokens } from "@/lib/format"
+import { formatUsd, formatTokens } from "@/lib/format"
 import { harnessLabel } from "@/lib/harness-label"
 import type { Capability, ContextBreakdown, ContextCategory, HarnessUsage, LiveRequest, LiveSessionUsage, TokenCounts } from "@/lib/types"
 import { settledTurns, useThreadChanges } from "@/state/thread-changes"
@@ -408,11 +408,11 @@ function Spent({ spend, declared, harness, sideQuestions, changes }: { spend: Co
           <Row label="Total" value={formatTokens(total(tokens))} strong />
         </>
       ) : null}
-      {cost ? <Row label={`Cost, as ${harnessLabel(harness)} priced it`} value={formatCost(cost)} strong /> : null}
+      {cost ? <Row label={`Cost, as ${harnessLabel(harness)} priced it`} value={formatUsd(cost)} strong /> : null}
       {estimate ? (
         <Row
           label="Cost at API list prices"
-          value={`≈ ${formatCost(estimate.amount)}`}
+          value={`≈ ${formatUsd(estimate.amount)}`}
           title={estimateTitle(estimate.tables)}
           strong={!cost}
           data-cost-estimate
@@ -455,7 +455,7 @@ function Spent({ spend, declared, harness, sideQuestions, changes }: { spend: Co
 function LastTurn({ spend, declared }: { spend: TurnSpend; declared: HarnessUsage }) {
   const parts = [
     reports(declared.tokens) && spend.tokens ? `${formatTokens(total(spend.tokens))} tokens` : undefined,
-    reports(declared.cost) && spend.cost !== undefined ? formatCost(spend.cost) : spend.estimate ? `≈ ${formatCost(spend.estimate.amount)}` : undefined,
+    reports(declared.cost) && spend.cost !== undefined ? formatUsd(spend.cost) : spend.estimate ? `≈ ${formatUsd(spend.estimate.amount)}` : undefined,
   ].filter(Boolean)
   return parts.length ? <Row label="Last turn" value={parts.join(" · ")} faint /> : null
 }
@@ -468,7 +468,7 @@ function HarnessTotal({ native, declared, harness }: { native: NonNullable<LiveS
     <section className="flex flex-col gap-1 border-t border-hairline px-3 py-2.5" data-harness-total>
       <span className="text-label text-faint">{harnessLabel(harness)}&rsquo;s own count for this session</span>
       {tokens ? <Row label="Tokens" value={formatTokens(tokens)} /> : null}
-      {native.cost !== undefined && reports(declared.cost) ? <Row label="Cost" value={formatCost(native.cost)} /> : null}
+      {native.cost !== undefined && reports(declared.cost) ? <Row label="Cost" value={formatUsd(native.cost)} /> : null}
       <span className="text-label text-faint">It includes turns run outside Mako.</span>
     </section>
   )

@@ -1,19 +1,13 @@
 import type { JsonObject } from "../../contracts/json.js"
 import type { RoutedThread } from "../../contracts/native-routing.js"
-import { launchSpawnsOff } from "../native-routing.js"
 import { hostLog } from "../../base/host-log.js"
+import { layerOf } from "../mako-layer.js"
 import { codexHookHash, codexHookKey } from "./authoring.js"
+import { codexLayer } from "./layer.js"
 
-/**
- * What `thread/start`, `thread/resume` and `thread/fork` carry in `config`
- * for native routing. Codex resolves its multi-agent tools from the config's
- * override first, then the model's own `multi_agent_version`, then the
- * features, so `features.multi_agent = false` leaves a bundled model's
- * `spawn_agent` in place: only `agents.enabled = false` removes it. An
- * enabled `features.multi_agent_v2` would win over that, so it's off too.
- */
+/** What `thread/start`, `thread/resume` and `thread/fork` carry in `config` for native routing (`codexLayer`). */
 export function codexRoutingConfig(conversation: string, routing: (() => RoutedThread) | undefined): JsonObject {
-  return launchSpawnsOff("codex", "agents.enabled", conversation, routing) ? { "agents.enabled": false, "features.multi_agent_v2": false } : {}
+  return codexLayer.apply(layerOf({ nativeRouting: routing }), conversation).config()
 }
 
 /** Where Codex's own hook for a call posts it (`/calls/before` on the conversation server), and the grant it posts with. */

@@ -7,6 +7,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
+    "./amounts": "./dist/amounts.js",
     "./jsonl": "./dist/jsonl.js",
     "./record-files": "./dist/record-files.js",
     "./record-original": "./dist/record-original.js",

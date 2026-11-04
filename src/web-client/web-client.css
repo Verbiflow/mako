@@ -545,11 +545,6 @@
   .web-composer-field {
     @apply grid min-w-0 flex-1 items-end bg-raised p-1;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    box-shadow: inset 0 0 0 1px var(--hairline);
-    transition: box-shadow 160ms ease;
-  }
-  .web-composer-field:focus-within {
-    box-shadow: inset 0 0 0 1px var(--border);
   }
   .web-composer-field > .web-attachments,
   .web-composer-field > .web-where {
@@ -884,9 +879,6 @@
   overflow: hidden;
   border-radius: 0;
   background: var(--raised);
-  box-shadow:
-    0 0 0 1px var(--hairline),
-    var(--elevation-floating);
   animation: web-rise 220ms var(--ease-out) both;
 }
 /* In the Inbox the card lies in the page: no float, no rise, as tall as it needs. */

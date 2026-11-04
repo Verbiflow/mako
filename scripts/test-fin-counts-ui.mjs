@@ -123,7 +123,9 @@ async function check() {
   for (const [surface, selector] of Object.entries(surfaces)) {
     const at = selector === "[data-crew] header" ? "[data-crew] [data-fin-counts]" : selector
     assert.equal(await counts(at), label, `${surface} counts the roster as every surface does`)
-    agrees(surface, await text(selector), truth)
+    // The composer's chip shows the count and says the rest by its name, the line its tooltip reads.
+    const words = selector === "[data-agents-toggle]" ? await evaluate(`document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-label") ?? ""`) : await text(selector)
+    agrees(surface, words, truth)
   }
   assert.equal(await evaluate("document.querySelector('[data-thread-row] [data-fin-pips]').dataset.finPips"), "wwwi", "one pip per Fin: three working, one idle")
 
@@ -135,7 +137,9 @@ async function check() {
   assert.equal(await evaluate("Boolean(document.querySelector('[data-background-work]'))"), false, "no background line beside the crew card")
   assert.doesNotMatch(await text("[data-composer]"), /Waiting on/, "no 'Waiting on' over the composer")
 
-  // Steps are phrases: no home folder, no shell plumbing.
+  // Steps are phrases: no home folder, no shell plumbing. The idle Fin is under the settled line, opened.
+  await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = el.scrollHeight; const line = document.querySelector('[data-crew-settled=folded]'); line?.click(); return true })()")
+  await until("document.querySelector('[data-crew-settled]')?.dataset.crewSettled === 'open'", "the settled line opening")
   const rows = await evaluate("[...document.querySelectorAll('[data-crew-row]')].map((row) => row.innerText.replace(/\\s+/g, ' '))")
   for (const row of rows) assert.doesNotMatch(row, /\/Users\/|2>&1|&&|\| awk/, `a Fin's step is a phrase: "${row}"`)
   assert.ok(rows.some((row) => row.includes("Running gh pr checks 340")), `the shell step reads as what it does: ${JSON.stringify(rows)}`)

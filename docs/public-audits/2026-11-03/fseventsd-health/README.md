@@ -8,11 +8,13 @@ Mako measured the lag already, through its watcher child's canary, but only work
 
 | Reading | Healthy, measured here | Degraded when | Why |
 |---|---|---|---|
-| Canary beat lag, median of the last 6 (at least 4) | 13 to 17 ms on the host; 57 ms from a fresh probe | over 250 ms | 4 to 15 times healthy, and a tenth of the 2.6 s seen. A median over a minute of beats ignores one slow moment. |
-| Canary unheard | heard every 10 s | 30 s unheard, twice | The watcher already calls this a silence. |
-| Resident memory (`ps -o rss=`, no root) | 8 to 12 MB | over 1 GB, twice a minute apart | 20 times the 50 MB a healthy daemon stays under. The degraded one was at 10.5 GB. |
+| Resident memory (`ps -o rss=`, no root) | 8 to 12 MB | over 1 GB, twice a minute apart | 20 times the 50 MB a healthy daemon stays under. The degraded one was at 10.5 GB. Judged even right after a restart. |
+| Canary beat lag, median of the last 30 beats (at least 18) | 13 to 17 ms on a quiet host; 257 ms on a busy one with a healthy 11 MB daemon | over 1 s, on a Mac not busy with other work, and not in the 10 minutes after fseventsd starts over | The degraded daemon was 2.6 s late for days. A first cut at 250 ms flagged the busy Mac above two seconds after its restart. Three to five minutes of beats ignore a busy stretch. |
+| Canary unheard | heard every 10 s | 3 minutes | Shorter silences are the watcher's own to answer by restarting its child. |
 
-At the canary's 10 s beat, a lag past 250 ms is said after four beats, about 40 s. Memory is said within two minutes. The 5 s `SLOW_DELIVERY_MS` is unchanged: it decides when watches start polling around a slow daemon, not when Mako says the daemon is unwell.
+Memory is said within two minutes, and lag after three minutes of beats at the earliest. The 5 s `SLOW_DELIVERY_MS` is unchanged: it decides when watches start polling around a slow daemon, not when Mako says the daemon is unwell.
+
+The host decides whether the notice shows. It shows once per episode, and an episode ends only after half an hour healthy. "Not now" holds until midnight, is saved for every window and the next host, and gives way only to a reading twice as bad or a new reason. A restart answers its episode the same way, and its outcome is shown instead.
 
 ## On the desk
 
