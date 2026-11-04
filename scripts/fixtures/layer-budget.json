@@ -1,0 +1,4 @@
+{
+  "instructions": { "mako": 3358, "orchestration": 1577 },
+  "families": { "agents": 13755, "app": 7223, "worktree": 6737, "pull-request": 6242, "recipe": 4092 }
+}
