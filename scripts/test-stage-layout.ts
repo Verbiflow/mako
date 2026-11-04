@@ -151,6 +151,7 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body', { animation: "live-mark-glide", reduced: "global" }],
   [".live-mark-wake", { animation: "live-mark-wake", reduced: "global" }],
+  [".live-mark-glint > i", { animation: "live-mark-glint", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="tool"] .live-mark-body', { animation: "live-mark-brace", reduced: "global" }],
   ['.live-mark[data-live-mark="background"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
   ['.live-mark[data-live-mark="starting"] .live-mark-body', { animation: "live-mark-breathe", reduced: "global" }],

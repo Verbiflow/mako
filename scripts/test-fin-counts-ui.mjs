@@ -137,7 +137,9 @@ async function check() {
   assert.equal(await evaluate("Boolean(document.querySelector('[data-background-work]'))"), false, "no background line beside the crew card")
   assert.doesNotMatch(await text("[data-composer]"), /Waiting on/, "no 'Waiting on' over the composer")
 
-  // Steps are phrases: no home folder, no shell plumbing.
+  // Steps are phrases: no home folder, no shell plumbing. The idle Fin is under the settled line, opened.
+  await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = el.scrollHeight; const line = document.querySelector('[data-crew-settled=folded]'); line?.click(); return true })()")
+  await until("document.querySelector('[data-crew-settled]')?.dataset.crewSettled === 'open'", "the settled line opening")
   const rows = await evaluate("[...document.querySelectorAll('[data-crew-row]')].map((row) => row.innerText.replace(/\\s+/g, ' '))")
   for (const row of rows) assert.doesNotMatch(row, /\/Users\/|2>&1|&&|\| awk/, `a Fin's step is a phrase: "${row}"`)
   assert.ok(rows.some((row) => row.includes("Running gh pr checks 340")), `the shell step reads as what it does: ${JSON.stringify(rows)}`)
