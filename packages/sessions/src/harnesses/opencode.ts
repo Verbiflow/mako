@@ -13,7 +13,8 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
   },
   mcp: [],
   tools: {
-    shell: { kind: "shell", aliases: ["bash"], effects: { cwd: "workdir", background: "background", exitCode: "result.exit" } },
+    // Its answer closes with `Exited with code 1` (`OPENCODE_CLOSING`).
+    shell: { kind: "shell", aliases: ["bash"], effects: { cwd: "workdir", background: "background", exitCode: "result.exit", exitText: /(?:^|\n)(?:Command )?[Ee]xited with code (-?\d+)\.?\s*$/ } },
     read: { kind: "read" },
     edit: { kind: "edit", aliases: ["multiedit"], effects: { edits: { old: "oldString", new: "newString", all: "replaceAll", list: "edits" }, reported: { form: "files", key: "files" } } },
     patch: { kind: "edit", aliases: ["apply_patch"], effects: { patch: "patchText", reported: { form: "files", key: "files" } } },

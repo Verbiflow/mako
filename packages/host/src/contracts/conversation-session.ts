@@ -116,6 +116,8 @@ export type Block =
       isCanceled?: boolean
       /** The turn ended while the call ran, so it never returned; `text` says how. Not the call's failure. */
       isCutOff?: boolean
+      /** How its command exited, as its harness reported beside the answer (the call's command effect). */
+      exitCode?: number
       streaming?: boolean
       /** When the host first saw the call finished, on the same clock as its call's `at`. */
       endedAt?: number

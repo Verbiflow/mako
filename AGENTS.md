@@ -1165,6 +1165,22 @@ running, and refuses a box among its words; `npm run test:tool-rows-ui` streams
 a Cursor turn's edits on the desk and in the phone's steps sheet, short and
 windowed, and holds every drawn row apart on every frame.
 
+Mako's own `mako` server speaks in its own words, from one table
+(`packages/sessions/src/mako-tools.ts`, `makoToolWords`): each tool's name
+("Start fin:x on Codex", a failed call's words), its running words and its
+settled ones, read from its arguments and, once it answers, its answer
+("Opened PR #374"). The desk's row, the phone's steps, the activity line and
+a Fin's last step all read it; its rows carry no server tag and their glyph
+says what the tool is about. A new tool of the server needs a line there, and
+`scripts/test-tool-words.ts` fails until it has one and a row on the fixture
+page (`src/dev/tool-words-fixture.ts`, `tool-rows.html?rows=words`). A row's
+facts sit in its label face: a failed command's exit code (its command
+effect's, else the text its shell declares as `exitText`), a read's range
+(":120–180") and an edit's lines ("+12 −3") from the identity
+(`range`, `added`, `removed`, `files`). A turn's folded summary counts a
+failure only while no later call of the same kind with the same normalized
+arguments went through (`unfixedFailures`); the failed row still says failed.
+
 What a call did to the machine is read once too, in
 `@mako/sessions/tool-effect-reading`: its `ToolEffect`s
 (`@mako/sessions/tool-effects`: files created, modified with a patch or an

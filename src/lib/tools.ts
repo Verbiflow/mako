@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { normalizeToolOutput } from "@mako/sessions/tool-output"
-import { identifyTool, toolKindWork, type ToolArguments as CallArguments, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
+import { commandExitCode, identifyTool, makoToolWords, toolArguments, toolKindWork, type HarnessName, type MakoToolWords, type ToolArguments as CallArguments, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
 import type { Block, ChatMessage } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
 import type { Entry } from "@mako/sessions/entries"
@@ -260,6 +260,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
       existing.isError = block.isError
       existing.isCanceled = block.isCanceled
       existing.isCutOff = block.isCutOff
+      if (block.exitCode !== undefined) existing.exitCode = block.exitCode
       existing.pending = block.streaming === true
       if (block.endedAt !== undefined) existing.endedAt = block.endedAt
       existing.rest = block.rest
@@ -284,6 +285,36 @@ export function pairTools(blocks: Block[]): ToolCall[] {
   return order.map((id) => byId.get(id)!).filter(Boolean)
 }
 
+/** A call of Mako's own `mako` server in its own words, its answer read once it returned well; undefined for any other call. */
+export function makoCallWords(call: ToolCall, harness?: HarnessName): MakoToolWords | undefined {
+  if (call.tool.server !== "mako" || call.tool.kind !== "mcp" || !call.tool.tool) return undefined
+  return makoToolWords(call.tool.tool, toolArguments(toolInputText(call.arguments)), call.isError || call.pending ? undefined : call.result, harness)
+}
+
+/** "+12 −3" for an edit, "+12" for a write: the lines its arguments add and remove. */
+export function changedLinesNote(tool: ToolIdentity): string | undefined {
+  if (tool.added === undefined && tool.removed === undefined) return undefined
+  const parts = [tool.added ? `+${tool.added}` : undefined, tool.removed ? `−${tool.removed}` : undefined].filter(Boolean)
+  return parts.length ? parts.join(" ") : undefined
+}
+
+/** What a row adds after its target, in the label face: a read's range, an edit's lines. */
+export function toolFacts(tool: ToolIdentity): string | undefined {
+  return tool.range ?? changedLinesNote(tool)
+}
+
+/**
+ * How a settled command exited, when that says something: a failed one's
+ * code, or the code of one its harness kept as completed though it exited
+ * other than 0 (Cursor's does). The code its harness reported beside the
+ * answer comes first, then the one its answer's text states.
+ */
+export function failedExitCode(call: ToolCall, harness: string | undefined): number | undefined {
+  if (call.pending || call.tool.kind !== "shell") return undefined
+  const code = call.exitCode ?? commandExitCode(harness, call.tool.tool ?? call.name, call.result)
+  return call.isError || (code !== undefined && code !== 0) ? code : undefined
+}
+
 export interface ToolWorkSummary {
   tools: number
   /**
@@ -306,14 +337,48 @@ export interface ToolWorkSummary {
   cutOff: number
 }
 
+/** A JSON value with its object keys in order, so two spellings of the same arguments compare equal. */
+function ordered(value: ToolContent | undefined): ToolContent | undefined {
+  if (Array.isArray(value)) return value.map((item) => ordered(item) ?? null)
+  if (!isToolArguments(value)) return stringContent(value)?.trim() ?? value
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])]))
+}
+
+/**
+ * What makes two calls the same call: their kind (and the server's tool, for
+ * an MCP call, whose kind says nothing of it), and their arguments as one
+ * normalized text, a command bare of its shell wrapper.
+ */
+function callKey(call: ToolCall): string {
+  const { kind, server, tool, command } = call.tool
+  const args = kind === "shell" && command ? command.trim() : JSON.stringify(ordered(parseToolArguments(call.arguments)) ?? toolInputText(call.arguments) ?? "")
+  return `${kind}\0${server ? `${server}:${tool ?? ""}` : ""}\0${args}`
+}
+
+/**
+ * How many of `calls` failed and stay failed: a failure counts unless a
+ * later call of the same kind, with the same normalized arguments, went
+ * through. Read newest first, so each failure asks only what came after it.
+ */
+export function unfixedFailures(calls: readonly ToolCall[]): number {
+  const fixed = new Set<string>()
+  let failed = 0
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const call = calls[index]!
+    if (call.isError) {
+      if (!fixed.has(callKey(call))) failed += 1
+    } else if (!call.pending && !call.isCutOff && !call.isCanceled) fixed.add(callKey(call))
+  }
+  return failed
+}
+
 export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
   let edits = 0
   const counts = { command: 0, read: 0, search: 0, skill: 0, agent: 0, plan: 0, other: 0 }
-  let failed = 0
+  const failed = unfixedFailures(calls)
   let stopped = 0
   let cutOff = 0
   for (const call of calls) {
-    if (call.isError) failed += 1
     if (call.isCutOff && call.isCanceled) stopped += 1
     else if (call.isCutOff) cutOff += 1
     const work = toolKindWork(call.tool.kind)

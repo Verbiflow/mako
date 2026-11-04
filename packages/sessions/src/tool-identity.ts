@@ -1,6 +1,9 @@
 import { z } from "zod"
 import { VOCABULARIES } from "./harnesses/index.js"
 import type { ArgumentWrapper, FieldKeys, McpNaming, NativeTool, ScriptWrapper, ToolField } from "./harnesses/vocabulary.js"
+import { makoToolWords } from "./mako-tools.js"
+
+export { isWordedMakoTool, MAKO_TOOL_NAMES, makoToolGroup, makoToolWords, type HarnessName, type MakoToolGroup, type MakoToolWords } from "./mako-tools.js"
 
 /**
  * What a tool call is, whichever harness made it.
@@ -114,6 +117,16 @@ export interface ToolIdentity {
   url?: string
   /** The arguments the tool ran with, as JSON, when they came from inside a wrapper. */
   input?: string
+  /** A Mako tool's words while it runs and once it returned, from its arguments alone (`makoToolWords`); `label` names it. */
+  running?: string
+  done?: string
+  /** The lines a read asked for: ":120–180", or ":120+" to the end. */
+  range?: string
+  /** The lines an edit or write adds and removes, from its arguments, where they hold the text. */
+  added?: number
+  removed?: number
+  /** The files a patch touches, when it touches more than one. */
+  files?: number
 }
 
 export interface ToolSource {
@@ -212,28 +225,8 @@ const HARNESSES: ReadonlyMap<string, Vocabulary> = new Map(VOCABULARIES.map((dec
 const MCP_NAMING: ReadonlyMap<string, readonly McpNaming[]> = new Map(VOCABULARIES.map((declared) => [declared.harness, declared.mcp]))
 const ANY_MCP_NAMING: readonly McpNaming[] = ["s__t", "s: t", "s.t"]
 
-/** Mako's own `mako` server, by tool; the `workspace_` names are the worktree tools' earlier ones, in saved history. */
-const MAKO_TOOLS: ReadonlyMap<string, string> = new Map([
-  ["recipe_guide", "Recipe guide"],
-  ["recipe_save", "Save recipe"],
-  ["app_status", "App status"],
-  ["app_start", "Start app"],
-  ["app_stop", "Stop app"],
-  ["app_restart", "Restart app"],
-  ["app_logs", "App logs"],
-  ["app_check", "Check app"],
-  ["app_probe", "Probe app"],
-  ["app_own_packages", "Unlink packages"],
-  ["port_holder", "Port holder"],
-  ["worktree_status", "Worktree status"],
-  ["worktree_move", "Move to worktree"],
-  ["worktree_merge", "Merge worktree"],
-  ["worktree_remove", "Remove worktree"],
-  ["workspace_status", "Worktree status"],
-  ["workspace_move", "Move to worktree"],
-  ["workspace_merge", "Merge worktree"],
-  ["workspace_remove", "Remove worktree"],
-])
+/** Mako's own `mako` server is worded by tool in `mako-tools.ts` (`makoToolWords`), for every surface at once. */
+const MAKO_SERVER = "mako"
 
 /** Local Control's servers; their programs are the computer acting. */
 const COMPUTER_SERVERS = new Set(["mako-computer", "mako-control", "mako_computer", "mako_control", "mako-local-control", "mako-browser-use"])
@@ -270,6 +263,11 @@ function parseArguments(input: string | undefined): JsonRecord | undefined {
   } catch {
     return undefined
   }
+}
+
+/** A call's arguments as `identifyTool` reads them: a JSON object's fields, or undefined for anything else. */
+export function toolArguments(input: string | undefined): ToolArguments | undefined {
+  return parseArguments(input)
 }
 
 function sourceArguments(source: ToolSource): JsonRecord | undefined {
@@ -411,13 +409,9 @@ function describe(source: ToolSource, name: string, spec: ToolSpec, args = sourc
 function describeMcp(source: ToolSource, name: string, mcp: McpName, args: JsonRecord | undefined): ToolIdentity {
   const server = mcp.server
   const builtin = specFor(source.harness, mcp.tool)
-  if (server === "mako") {
-    const label = MAKO_TOOLS.get(mcp.tool)
-    if (label) {
-      const identity: ToolIdentity = { kind: "mcp", name, label, server, tool: mcp.tool }
-      identity.target = textOf(args?.["tier"]) ?? textOf(args?.["processes"]) ?? textOf(args?.["process"]) ?? textOf(args?.["port"]) ?? portText(args)
-      return identity
-    }
+  if (server === MAKO_SERVER) {
+    const words = makoToolWords(mcp.tool, args)
+    return { kind: "mcp", name, label: words.label, server, tool: mcp.tool, running: words.running, done: words.done }
   }
   if (COMPUTER_SERVERS.has(server)) {
     const identity: ToolIdentity = { kind: "computer", name, label: computerLabel(mcp.tool), server, tool: mcp.tool }
@@ -442,11 +436,6 @@ function computerLabel(tool: string): string {
   return `Computer: ${humanToolName(action).toLowerCase()}`
 }
 
-function portText(args: JsonRecord | undefined): string | undefined {
-  const port = args?.["port"]
-  return port === undefined || port === null ? undefined : String(port)
-}
-
 function firstScalar(args: JsonRecord | undefined): string | undefined {
   if (!args) return undefined
   for (const value of Object.values(args)) {
@@ -469,6 +458,129 @@ function fill(identity: ToolIdentity, kind: ToolKind, args: JsonRecord | undefin
   if (url) identity.url = url
   const target = targetFor(kind, identity, args, keys, input)
   if (target) identity.target = target
+  if (kind === "read") {
+    const range = readRange(args)
+    if (range) identity.range = range
+  }
+  if (kind === "edit" || kind === "write") {
+    const lines = changedLines(kind, args, input)
+    if (lines) {
+      identity.added = lines.added
+      identity.removed = lines.removed
+      if (lines.files > 1) {
+        identity.files = lines.files
+        identity.target = `${lines.files} files`
+      }
+    }
+  }
+}
+
+const Whole = z.union([z.number().int(), z.string().trim().regex(/^-?\d+$/).transform(Number)])
+
+function numberOf(value: JsonValue | undefined): number | undefined {
+  return Whole.safeParse(value).data
+}
+
+/**
+ * The lines a read asked for, as its row says them: ":120–180", or ":120+"
+ * to the end. Every harness's read takes a first line and a count
+ * (`offset`, `limit`), some a first and last (`start_line`, `end_line`,
+ * `view_range`); a negative first line counts from the end and isn't shown.
+ */
+function readRange(args: JsonRecord | undefined): string | undefined {
+  if (!args) return undefined
+  const range = Array.isArray(args["view_range"]) ? args["view_range"] : undefined
+  const first = numberOf(args["offset"]) ?? numberOf(args["start_line"]) ?? numberOf(args["line_start"]) ?? numberOf(range?.[0])
+  const limit = numberOf(args["limit"]) ?? numberOf(args["max_lines"])
+  const last = numberOf(args["end_line"]) ?? numberOf(args["line_end"]) ?? numberOf(range?.[1])
+  if (first === undefined && limit === undefined && last === undefined) return undefined
+  if (first !== undefined && first < 0) return undefined
+  const from = Math.max(1, first ?? 1)
+  const to = last !== undefined && last >= from ? last : limit !== undefined && limit > 0 ? from + limit - 1 : undefined
+  return to === undefined ? `:${from}+` : `:${from}–${to}`
+}
+
+const OLD_KEYS = ["old_string", "oldString", "old_str", "oldText"] as const
+const NEW_KEYS = ["new_string", "newString", "new_str", "newText"] as const
+const CONTENT_KEYS = ["content", "contents", "file_text", "fileText", "text"] as const
+
+function lineCount(text: string): number {
+  if (!text) return 0
+  const lines = text.split("\n").length
+  return text.endsWith("\n") ? lines - 1 : lines
+}
+
+/** The lines one replacement removes and adds, past the lines its old and new text share at either end. */
+function replacedLines(before: string, after: string): Omit<ChangedLines, "files"> {
+  const left = before ? before.split("\n") : []
+  const right = after ? after.split("\n") : []
+  let head = 0
+  while (head < left.length && head < right.length && left[head] === right[head]) head += 1
+  let tail = 0
+  while (tail < left.length - head && tail < right.length - head && left[left.length - 1 - tail] === right[right.length - 1 - tail]) tail += 1
+  return { added: right.length - head - tail, removed: left.length - head - tail }
+}
+
+function firstText(args: JsonRecord, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = z.string().safeParse(args[key])
+    if (value.success) return value.data
+  }
+  return undefined
+}
+
+/** The lines a change adds and removes, and the files it touches. */
+interface ChangedLines {
+  added: number
+  removed: number
+  files: number
+}
+
+/**
+ * How many lines an edit or write adds and removes, and how many files it
+ * touches, from what its arguments hold: its replacements, the file's whole
+ * text, or a patch (Codex's envelope or a unified diff). Undefined where the
+ * arguments don't hold the text.
+ */
+function changedLines(kind: ToolKind, args: JsonRecord | undefined, input: string | undefined): ChangedLines | undefined {
+  const patch = textOf(args?.["patchText"]) ?? textOf(args?.["patch"]) ?? textOf(args?.["input"]) ?? (args ? undefined : input)
+  if (patch && /^(?:\*\*\* Begin Patch|--- |diff --git |\*\*\* (?:Update|Add|Delete) File: )/m.test(patch)) return patchLines(patch)
+  if (!args) return undefined
+  if (kind === "write") {
+    const content = firstText(args, CONTENT_KEYS)
+    return content === undefined ? undefined : { added: lineCount(content), removed: 0, files: 1 }
+  }
+  const pairs = Array.isArray(args["edits"]) ? args["edits"] : [args]
+  let added = 0
+  let removed = 0
+  let found = false
+  for (const pair of pairs) {
+    const edit = Arguments.safeParse(pair)
+    if (!edit.success) continue
+    const before = firstText(edit.data, OLD_KEYS)
+    const after = firstText(edit.data, NEW_KEYS)
+    if (before === undefined || after === undefined) continue
+    const lines = replacedLines(before, after)
+    added += lines.added
+    removed += lines.removed
+    found = true
+  }
+  return found ? { added, removed, files: 1 } : undefined
+}
+
+function patchLines(patch: string): ChangedLines {
+  let added = 0
+  let removed = 0
+  let envelope = 0
+  let unified = 0
+  for (const line of patch.split("\n")) {
+    if (/^\*\*\* (?:Update|Add|Delete) File: /.test(line)) envelope += 1
+    else if (line.startsWith("+++ ")) unified += 1
+    else if (line.startsWith("--- ") || line.startsWith("*** ")) continue
+    else if (line.startsWith("+")) added += 1
+    else if (line.startsWith("-")) removed += 1
+  }
+  return { added, removed, files: Math.max(1, envelope || unified) }
 }
 
 function targetFor(kind: ToolKind, identity: ToolIdentity, args: JsonRecord | undefined, keys: FieldKeys | undefined, input: string | undefined): string | undefined {
@@ -713,6 +825,27 @@ export function nativeToolNames(harness: string, kind: ToolKind): string[] {
 /** What a harness declares of one native tool, by name or alias; the shared table's entry for a name it doesn't declare. */
 export function toolDeclaration(harness: string | undefined, name: string): NativeTool | undefined {
   return specFor(harness, name)
+}
+
+/**
+ * A call as one line where no row draws it (a Fin's last step): a Mako
+ * tool's own words, running or done, else its label and target.
+ */
+export function toolPhrase(identity: ToolIdentity, running: boolean): string {
+  const said = running ? identity.running : identity.done
+  if (said) return said
+  return identity.target ? `${identity.label} ${identity.target}` : identity.label
+}
+
+/**
+ * The exit code a failed command's answer states, in the shape its
+ * harness's shell declares (`EffectReading.exitText`); undefined where the
+ * harness states none in its text.
+ */
+export function commandExitCode(harness: string | undefined, name: string | undefined, output: string | undefined): number | undefined {
+  const pattern = name ? specFor(harness, name)?.effects?.exitText : undefined
+  const code = pattern && output ? pattern.exec(output)?.[1] : undefined
+  return code === undefined ? undefined : Number(code)
 }
 
 /** How a harness's results say it refused a call before it ran (`HarnessVocabulary.refusals`). */

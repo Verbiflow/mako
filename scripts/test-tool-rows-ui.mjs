@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url"
  * bring them, each opening as "Editing", its path arriving, and settling as "Edit" while the next opens; a row opens
  * mid-stream and grows. On every frame, every row's words stay inside its row, and each row starts at or below where
  * the one above it ends, its words included. Each case runs on a short transcript and a windowed one (over 200 turns),
- * dark and light.
+ * dark and light. Then a turn of every tool of Mako's own server and the row facts (`?rows=words`) says what each call
+ * did, in Mako's words, with a failed command's exit, a read's range and an edit's size, none naming the `mako` server.
  *
  * Screenshots go to the printed directory, or to the directory given as the first argument; `--port` serves the page
  * on that port (default: any free one).
@@ -167,6 +168,26 @@ async function checkRows() {
           console.log(`${label}: ${watched.frames} frames, up to ${watched.most} rows, none over another`)
         }
       }
+    }
+    // Every tool of Mako's own server and the row facts (`?rows=words`): each row says what happened, on one line.
+    await send("Emulation.setDeviceMetricsOverride", SIZES.desk)
+    for (const theme of ["dark", "light"]) {
+      const label = `words, ${theme}`
+      await window.loadURL(`${new URL("scripts/tool-rows.html", process.env.MAKO_ROWS_URL).href}?rows=words&theme=${theme}`)
+      await until(`Boolean(document.querySelector('[data-transcript-viewport] [data-exchange]'))`, `${label}: the transcript`)
+      await evaluate("document.fonts.ready.then(() => true)")
+      await evaluate(`document.querySelectorAll('[data-work-summary][aria-expanded="false"]').forEach(summary => summary.click()), true`)
+      await evaluate(WATCH)
+      await wait(400)
+      const said = await evaluate(`[...document.querySelectorAll('[data-transcript-tool]')].map(row => row.querySelector('button').innerText.replace(/\\s+/g, ' ').trim())`)
+      for (const words of ["Started fin:own-words on Codex", "Answered fin:own-words: Squash it", "Messaged apex:Release notes", "Opened PR #374", "Start the app (api) failed", "Showed rows-after.png", "npm test failed · exit 2", "tool-row.tsx …/src/components/transcript :120–180", "+3 −2", "Edit 3 files +4 −2", "Starting fin:verify on"])
+        assert.ok(said.some((row) => row.includes(words)), `${label}: no row says "${words}": ${JSON.stringify(said)}`)
+      assert.ok(!said.some((row) => /\bmako$/.test(row)), `${label}: a Mako tool's row names its server`)
+      assert.match(await evaluate(`[...document.querySelectorAll('[data-work-summary]')].map(summary => summary.innerText).join(' ')`), /\b1 failed\b/, `${label}: the lint a retry fixed still counts as failed`)
+      await capture(`tool-words-desk-${theme}.png`)
+      const watched = await evaluate("window.__rows.stop()")
+      assert.deepEqual(watched.faults, [], `${label}: rows drew over one another`)
+      console.log(`${label}: ${said.length} rows say what happened, none over another`)
     }
   } finally {
     clearTimeout(watchdog)

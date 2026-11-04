@@ -32,11 +32,7 @@ import {
   WaitBody,
   WriteBody,
 } from "@/components/transcript/tool-views"
-import {
-  countLines,
-  editsOf,
-  writtenText,
-} from "@/lib/tools"
+import { toolFacts } from "@/lib/tools"
 
 /**
  * The desk's own contributions, registered through exactly the same public
@@ -119,26 +115,21 @@ export function installBuiltins(): () => void {
     // every harness's shell, edit and agent draws the same row. The row's
     // summary is the identity's target unless a view says otherwise.
     registerToolKindView("shell", { body: BashBody }),
+    // A file row says how much it read or changed after the file, in the label face: ":120–180", "+12 −3".
     ...(["edit", "delete", "move"] as const).map((kind) =>
       registerToolKindView(kind, {
-        summary: (call: ToolCall) => {
-          const edits = editsOf(call)
-          return fileSummary(call, edits.length > 1 ? `${edits.length} edits` : undefined)
-        },
+        summary: (call: ToolCall) => (call.tool.files ? filesSummary(call.tool.files, toolFacts(call.tool)) : fileSummary(call, toolFacts(call.tool))),
         body: EditBody,
         openPath: (call: ToolCall) => call.tool.path,
       })
     ),
     registerToolKindView("write", {
-      summary: (call: ToolCall) => {
-        const lines = countLines(writtenText(call))
-        return fileSummary(call, lines ? `${lines} ${lines === 1 ? "line" : "lines"}` : undefined)
-      },
+      summary: (call: ToolCall) => fileSummary(call, toolFacts(call.tool)),
       body: WriteBody,
       openPath: (call: ToolCall) => call.tool.path,
     }),
     registerToolKindView("read", {
-      summary: (call: ToolCall) => fileSummary(call),
+      summary: (call: ToolCall) => fileSummary(call, toolFacts(call.tool)),
       openPath: (call: ToolCall) => call.tool.path,
     }),
     registerToolKindView("plan-exit", {
@@ -159,4 +150,9 @@ export function installBuiltins(): () => void {
 function fileSummary(call: ToolCall, note?: string) {
   const path = call.tool.target ?? call.tool.path
   return path ? <FileTarget path={path} note={note} /> : note ?? ""
+}
+
+/** A patch of several files: how many, then what it changed in all of them. */
+function filesSummary(files: number, note?: string) {
+  return <>{files} files{note ? <span className="text-label"> {note}</span> : null}</>
 }

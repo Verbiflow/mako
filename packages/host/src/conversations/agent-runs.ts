@@ -2,7 +2,7 @@ import { open, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
-import { identifyTool } from "@mako/sessions/tool-identity"
+import { identifyTool, toolPhrase } from "@mako/sessions/tool-identity"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { markedProcesses, processesHolding, processFolders, type MarkedProcess } from "../base/marked-processes.js"
@@ -672,7 +672,7 @@ export function lastStep(entries: readonly Entry[], harness: string): string | u
     const entry = entries[index]!
     if (entry.type === "tool") {
       const identity = identifyTool({ harness, name: entry.name, input: entry.input, acpKind: entry.toolKind, title: entry.title })
-      return clip(identity.target ? `${identity.label} ${identity.target}` : identity.label, STEP_CHARS)
+      return clip(toolPhrase(identity, entry.status === "pending" || entry.status === "running"), STEP_CHARS)
     }
     if (entry.type === "thinking") return "Thinking"
     if (entry.type === "text" && entry.text.trim()) return clip(entry.text.replace(/^[#>*\-\s]+/, ""), STEP_CHARS)
