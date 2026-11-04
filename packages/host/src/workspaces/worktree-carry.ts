@@ -11,6 +11,7 @@ import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./
 import { discoverRepositories } from "../git/index.js"
 import type { Git } from "@mako/git"
 import { onLinux, onMac } from "../base/platform.js"
+import type { CheckoutBorrowing } from "./checkout-borrowing.js"
 
 const execute = promisify(execFile)
 
@@ -50,6 +51,8 @@ export interface CheckoutSetup {
   forgetPrepared?(checkout: string): Promise<void>
   /** Runs a spare checkout's install steps in the background; without it, spares get cloned outputs only. */
   spareInstall?: SpareInstall
+  /** This device's broker for what a worktree takes from its main checkout; without it, one kept in memory. */
+  borrowing?: CheckoutBorrowing
 }
 
 /** One install step's outputs, cloned from the main checkout for the inputs they were made from. */
