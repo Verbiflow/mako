@@ -26,10 +26,11 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  * yardstick process beside the host, under the same contention and running none of Mako's code
  * (`host-load-yardstick.mjs`), times its own event loop while the host is probed. It fails (exit 1) only on a clear
  * regression: a health check waiting two seconds (the stalled host held its loop for 3-5 s at a time), one in a hundred
- * waiting past `--times` (8) times the yardstick's one in a hundred (at least 150 ms), one read in a hundred past five
- * times that (at least 3 s), or a probe failing. The host that stalled waited 600 ms on one health check in a hundred
- * and ten seconds on reads where the yardstick waited under 50 ms. Every number goes to the job's summary
- * (`GITHUB_STEP_SUMMARY`) whether it passes or not. `--cpu-prof <dir>` keeps the host's CPU profile and
+ * waiting past `--times` (30) times the yardstick's one in a hundred (at least 150 ms), one read in a hundred past ten
+ * times that, or a probe failing. On one CI runner in one job, at this scale, the yardstick waited 14 ms on one tick in
+ * a hundred; the host before #358 waited 3.3 s on one health check in a hundred and 20 s on a read, and the host
+ * after it 74 ms and 605 ms: each limit is several times from either. Every number goes to the job's summary
+ * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` judges without failing. `--cpu-prof <dir>` keeps the host's CPU profile and
  * prints the longest slices it held the loop for, named by the host's own functions; `--out <file>` keeps the report;
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
  *
@@ -44,7 +45,7 @@ const { values } = parseArgs({
     "cpu-prof": { type: "string" },
     "home-from": { type: "string" },
     "budget-ms": { type: "string", default: "50" },
-    times: { type: "string", default: "8" },
+    times: { type: "string", default: "30" },
     "report-only": { type: "boolean", default: false },
     windows: { type: "string", default: "3" },
     root: { type: "string" },
@@ -70,8 +71,7 @@ const HELD_MS = 2_000
 /** One health check in a hundred may wait this long whatever the yardstick says: below it a runner's noise decides. */
 const HEALTH_FLOOR_MS = 150
 /** A read does work of its own (a hundred worktrees looked at), so it may take this many health checks' limits. */
-const READ_TIMES = 5
-const READ_FLOOR_MS = 3_000
+const READ_TIMES = 10
 
 const root = realpathSync(values.root ? (mkdirSync(values.root, { recursive: true }), values.root) : mkdtempSync(join(tmpdir(), "mako-host-load-")))
 say(`world: ${root}`)
@@ -204,7 +204,7 @@ try {
   const Measured = z.object({ n: z.number(), p50: z.number(), p99: z.number(), max: z.number() })
   const measured = z.object({ late: Measured, spawn: Measured, chunk: Measured }).parse(JSON.parse(readFileSync(yardstickOut, "utf8")))
   const healthLimit = Math.max(HEALTH_FLOOR_MS, times * measured.late.p99)
-  const readLimit = Math.max(READ_FLOOR_MS, READ_TIMES * healthLimit)
+  const readLimit = READ_TIMES * healthLimit
   const failures: string[] = []
   for (const name of ["health", "reads"] as const) {
     const result = answers[name]
