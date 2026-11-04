@@ -1,0 +1,191 @@
+import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
+import { mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { manualDevUpdates } from "../electron/dev-updates.mjs"
+
+/**
+ * Who cloud commits and pull requests are authored as, in Settings › Git on the desktop (the fixture desk's own
+ * Settings), in a laptop's browser and on a phone (the web client's Settings, against a stand-in for the gateway's
+ * route): As you by default; under As you with no token, one line that Mako's App opens pull requests until one is
+ * added, pointing at "Open pull requests as me"; under As Mako, one line that commits name Mako's bot with the person
+ * as co-author. Screenshots of each, dark and light, stay in the printed directory.
+ */
+
+if (process.versions.electron) {
+  void checkWindow().catch(async (error) => {
+    console.error(error)
+    const { app } = await import("electron")
+    app.exit(1)
+  })
+} else {
+  const { createServer } = await import("vite")
+  const root = process.env.MAKO_UI_EVIDENCE_DIR ?? await mkdtemp(join(tmpdir(), "mako-commit-authorship-ui-"))
+  const server = await createServer({
+    cacheDir: join(await mkdtemp(join(tmpdir(), "mako-commit-authorship-cache-")), "cache"),
+    define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
+    plugins: [manualDevUpdates()],
+    server: { host: "127.0.0.1", port: 0 },
+  })
+  await server.listen()
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-commit-authorship-check", main: fileURLToPath(import.meta.url) }))
+  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
+  delete env.ELECTRON_RUN_AS_NODE
+  try {
+    const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
+    process.exitCode = await new Promise((resolveExit, reject) => {
+      child.once("error", reject)
+      child.once("exit", (code) => resolveExit(code ?? 1))
+    })
+  } finally {
+    await server.close()
+  }
+  console.log(`UI evidence: ${root}`)
+}
+
+const FALLBACK = "Pull requests are opened by Mako by Verbiflow until you add a token in Open pull requests as me."
+const AS_MAKO = "Commits name Mako's bot, with you as co-author."
+
+async function checkWindow() {
+  const { app, BrowserWindow } = await import("electron")
+  const root = process.env.MAKO_UI_TEST_ROOT
+  const base = process.env.MAKO_UI_TEST_URL
+  app.setPath("userData", join(root, "profile"))
+  await app.whenReady()
+  const window = new BrowserWindow({ width: 1280, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  const page = window.webContents
+  page.debugger.attach("1.3")
+  const watchdog = setTimeout(() => {
+    console.error("Commit authorship UI verification exceeded its 240-second limit")
+    app.exit(1)
+  }, 240_000)
+  page.on("console-message", (details) => {
+    if (details.level === "error") console.error(`[ui] ${details.message}`)
+  })
+  const evaluate = (code) => page.executeJavaScript(code).catch((error) => {
+    throw new Error(`${error.message} in: ${code.slice(0, 400)}`)
+  })
+  const frames = () => evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")
+  const settle = async () => {
+    await evaluate(`(() => { if (!document.getElementById('hide-toasts')) document.head.insertAdjacentHTML('beforeend', '<style id="hide-toasts">[data-sonner-toaster]{display:none!important}</style>'); return true })()`)
+    await evaluate("document.fonts.ready.then(() => true)")
+    await evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))).then(() => true)`)
+    await frames()
+  }
+  /** The window, cropped around `around` when given. */
+  const capture = async (name, around) => {
+    await settle()
+    const rect = around && await evaluate(`(() => {
+      const node = document.querySelector(${JSON.stringify(around)})
+      if (!node) return null
+      const r = node.getBoundingClientRect()
+      const pad = 20
+      const x = Math.max(0, Math.floor(r.left - pad)), y = Math.max(0, Math.floor(r.top - pad))
+      return { x, y, width: Math.min(innerWidth - x, Math.ceil(r.width + pad * 2)), height: Math.min(innerHeight - y, Math.ceil(r.height + pad * 2)) }
+    })()`)
+    await writeFile(join(root, `${name}.png`), (await (rect ? page.capturePage(rect) : page.capturePage())).toPNG())
+  }
+  const until = async (code, label = code) => {
+    const deadline = Date.now() + 30_000
+    while (!(await evaluate(code))) {
+      if (Date.now() > deadline) {
+        await capture("failure")
+        throw new Error(`UI condition timed out: ${label}`)
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 30))
+    }
+  }
+  const click = async (selector) => {
+    const at = await evaluate(`(() => { const node = [...document.querySelectorAll(${JSON.stringify(selector.css)})].find(node => ${selector.text ? `node.textContent.trim() === ${JSON.stringify(selector.text)}` : "true"}); if (!node) throw new Error('Missing target ' + ${JSON.stringify(JSON.stringify(selector))}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await page.debugger.sendCommand("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...at })
+  }
+  const text = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText.replace(/\\s+/g, ' ') ?? ''`)
+  const has = (selector, words) => `(document.querySelector(${JSON.stringify(selector)})?.innerText ?? '').replace(/\\s+/g, ' ').includes(${JSON.stringify(words)})`
+
+  // The desktop: the fixture desk's own Settings › Git, opened where "Open pull requests as me" is.
+  const section = "#pull-requests"
+  const desktop = async (query, theme) => {
+    await window.loadURL(`${base}?mock${query}`)
+    await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: ${JSON.stringify(theme)}}))`)
+    await until(`Boolean(document.querySelector('.composer-input'))`, "the desk")
+    await evaluate(`window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'git#pull-requests' }))`)
+    await until(`Boolean(document.querySelector('${section} [aria-label="Commits and pull requests"] button[aria-pressed="true"]:not([disabled])'))`, "the authorship control, read")
+    await evaluate(`document.querySelector('${section}').scrollIntoView({ block: 'center' })`)
+  }
+  const pressed = (scope) => evaluate(`document.querySelector(${JSON.stringify(`${scope} [aria-label="Commits and pull requests"] [aria-pressed="true"], ${scope} [aria-label="Commits and pull requests"] [aria-checked="true"]`)})?.textContent.trim()`)
+
+  for (const theme of ["dark", "light"]) {
+    // As you by default, with no token: the line that the App opens pull requests until one is added.
+    await desktop("", theme)
+    assert.equal(await pressed(section), "As you", "As you by default")
+    let said = await text(section)
+    assert.ok(said.includes("Commits name you."), said)
+    assert.ok(said.includes(FALLBACK), said)
+    await capture(`desktop-as-you-no-token-${theme}`, section)
+    // Its Add token opens "Open pull requests as me"'s form, and the line gives way to it.
+    await click({ css: `${section} button`, text: "Add token" })
+    await until(`Boolean(document.querySelector('${section} input[aria-label="GitHub token"]'))`, "the token form")
+    assert.ok(!(await text(section)).includes(FALLBACK))
+    // As Mako: one line, and no fallback.
+    await desktop("", theme)
+    await click({ css: `${section} [aria-label="Commits and pull requests"] button`, text: "As Mako" })
+    await until(has(section, AS_MAKO), "the As Mako line")
+    await until(`!document.querySelector('${section} [aria-label="Commits and pull requests"] button[disabled]')`, "saved")
+    said = await text(section)
+    assert.ok(!said.includes(FALLBACK), said)
+    assert.ok(said.includes("Used once commits and pull requests are as you."), said)
+    await capture(`desktop-as-mako-${theme}`, section)
+    // As you with a token: commits and pull requests are theirs, nothing to add.
+    await desktop("&github-token=on", theme)
+    await until(has(section, "Signed in as @ada"), "the token's listing")
+    said = await text(section)
+    assert.ok(said.includes("Commits name you, and pull requests open with your GitHub token."), said)
+    assert.ok(!said.includes(FALLBACK), said)
+    await capture(`desktop-as-you-token-${theme}`, section)
+    // Kept As Mako by the account, with a token kept but unused.
+    await desktop("&github-token=on&github-authorship=mako", theme)
+    assert.equal(await pressed(section), "As Mako")
+    assert.ok((await text(section)).includes("Your token is kept, but not used while commits and pull requests are as Mako."))
+  }
+
+  // The web client: a laptop's browser draws the desktop's group; a phone the touch layout.
+  const fixture = async (query, size) => {
+    window.setContentSize(size.width, size.height)
+    await window.loadURL(`${base}scripts/github-person-check.html?${query}`)
+  }
+  const deskGroup = "#pull-requests"
+  const phoneGroup = "section:has([role=radiogroup][aria-label='Commits and pull requests'])"
+  for (const theme of ["dark", "light"]) {
+    const tone = theme === "light" ? "&theme=light" : ""
+    await fixture(`view=desk&scene=off${tone}`, { width: 1100, height: 760 })
+    await until(has(deskGroup, FALLBACK), "the laptop's fallback line")
+    await capture(`web-as-you-no-token-${theme}`, deskGroup)
+    await fixture(`view=desk&scene=off&authorship=mako${tone}`, { width: 1100, height: 760 })
+    await until(has(deskGroup, AS_MAKO), "the laptop's As Mako line")
+    await capture(`web-as-mako-${theme}`, deskGroup)
+
+    await fixture(`view=phone&scene=off${tone}`, { width: 390, height: 844 })
+    await until(has(phoneGroup, FALLBACK), "the phone's fallback line")
+    assert.equal(await pressed(phoneGroup), "As you", "As you by default on a phone")
+    await capture(`phone-as-you-no-token-${theme}`)
+    await click({ css: `${phoneGroup} [role=radio]`, text: "As Mako" })
+    await until(has(phoneGroup, AS_MAKO), "the phone's As Mako line")
+    assert.ok(!(await text(phoneGroup)).includes(FALLBACK))
+    await capture(`phone-as-mako-${theme}`)
+    await fixture(`view=phone&scene=on${tone}`, { width: 390, height: 844 })
+    await until(has(phoneGroup, "Commits name you, and pull requests open with your GitHub token."), "the phone with a token")
+    assert.ok(!(await text(phoneGroup)).includes(FALLBACK))
+    await capture(`phone-as-you-token-${theme}`)
+  }
+  // The route not answering: said, with a way to ask again, and the token's own row still works.
+  await fixture("view=phone&scene=off&authorship=failed", { width: 390, height: 844 })
+  await until(has(phoneGroup, "Mako Cloud didn't answer"), "the phone's failure")
+  assert.ok((await text(phoneGroup)).includes("Try again"))
+  assert.equal(await evaluate(`document.querySelector('[role=switch][aria-label="Open pull requests as me"]').disabled`), false)
+  await capture("phone-unread-dark")
+
+  clearTimeout(watchdog)
+  app.exit(0)
+}

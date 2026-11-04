@@ -172,6 +172,45 @@ test("the person's choice opens it as the App this once: Git and gh are told, an
   assert.deepEqual(await recorded(), ["push as=app", "pr create as=app"])
 })
 
+test("without a token, a Thread's first pull request reply says once that the bot opened it, and why", async () => {
+  const { pullRequestTools } = await import("@mako/host/git/pull-request-tools")
+  const { PULL_REQUESTS_FALLBACK_SENTENCE } = await import("@mako/host/contracts/github-authorship")
+  const tools = (as: "you" | "mako" | "mako-fallback" | undefined, person: GitHubPerson) => pullRequestTools({
+    git,
+    place: async () => ({ folder: work, repositories: [{ name: "work", root: work, startedFrom: null }] }),
+    changed: () => undefined,
+    person: asking(person).personOf,
+    pullRequestsAs: async () => as,
+    // Two Sessions of one Thread, and a Session of another.
+    threadOf: (conversation) => (conversation === "other" ? "thread-2" : "thread-1"),
+  })
+  const fallback = tools("mako-fallback", { state: "off" })
+  const first = await fallback.open("session-1", draft)
+  assert.equal(first, `Opened #12 into main as ${MAKO_GITHUB_APP}: https://github.com/acme/shop/pull/12. ${PULL_REQUESTS_FALLBACK_SENTENCE}`)
+  const again = await fallback.open("session-2", {})
+  assert.ok(!again.includes("Opened by Mako's bot"), `said once per Thread, across its Sessions: ${again}`)
+  assert.ok((await fallback.open("other", {})).endsWith(PULL_REQUESTS_FALLBACK_SENTENCE), "another Thread hears it too")
+
+  for (const [as, person] of [["you", { state: "on", login: "ada", expiresAt: null }], ["mako", { state: "off" }], [undefined, { state: "off" }]] as const) {
+    await rm(opened, { force: true })
+    const reply = await tools(as, person).open("session-1", draft)
+    assert.ok(!reply.includes("Opened by Mako's bot"), `not said for ${as ?? "a machine whose agent wrote none"}: ${reply}`)
+  }
+})
+
+test("the machine's pull-requests file is read as the agent writes it, and anything else is nothing", async () => {
+  const { machinePullRequestsAs } = await import("@mako/host/git/pull-request-tools")
+  const identity = join(root, "identity")
+  await mkdir(identity, { recursive: true })
+  assert.equal(await machinePullRequestsAs(identity), undefined, "before the agent wrote it")
+  for (const as of ["you", "mako", "mako-fallback"] as const) {
+    await writeFile(join(identity, "pull-requests"), `${as}\n`)
+    assert.equal(await machinePullRequestsAs(identity), as)
+  }
+  await writeFile(join(identity, "pull-requests"), "someone-else\n")
+  assert.equal(await machinePullRequestsAs(identity), undefined)
+})
+
 test("the refusal's tag is read back whole, and text without one is nothing", async () => {
   const lines: string[] = []
   const stop = followHostLog((line) => void lines.push(JSON.stringify(line)))
