@@ -15,13 +15,26 @@ import {
 } from "../contracts/recovery.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
+import { hostLog } from "../base/host-log.js"
+import { STEER_LANDS_MS } from "../harnesses/index.js"
+
+export type SteerInput = Extract<LiveActionInput, { kind: "steer" | "steer-queued" }>
+
+/**
+ * Who sends a steer, which decides how it lands. `person`: within `STEER_LANDS_MS`, by the harness's
+ * `SteerCapability.landing`. `native`: as the harness takes it, for an agent's `agents_send` and a question's answer.
+ */
+export type SteerSender = "person" | "native"
 
 /** Durable command receipts. A retry returns its receipt and never repeats a provider write. */
 export class LiveActions {
   private readonly host: LiveAccess
   private readonly deadlines = new Map<string, ReturnType<typeof setTimeout>>()
-  constructor(host: LiveAccess) {
+  /** Stops the running turn `running` and sends the steer's words as the next message (`LiveConversations.steerByRestart`). */
+  private readonly restart: (id: string, running: string, input: SteerInput) => void
+  constructor(host: LiveAccess, restart: (id: string, running: string, input: SteerInput) => void) {
     this.host = host
+    this.restart = restart
   }
 
   blocks(resident: Resident): boolean {
@@ -201,7 +214,20 @@ export class LiveActions {
     this.host.drain(resident)
   }
 
-  async submit(id: string, raw: LiveActionInput): Promise<LiveAction> {
+  /** An action settled as it's taken, saved as its receipt. */
+  private receipt(resident: Resident, action: LiveAction): LiveAction {
+    const control = this.host.control(resident)
+    resident.snapshot = { ...resident.snapshot, control: { ...control, actions: [...(control.actions ?? []), action] } }
+    try {
+      this.host.flush(resident)
+    } catch (error) {
+      this.host.storageFailed(resident, { error })
+      throw error
+    }
+    return action
+  }
+
+  async submit(id: string, raw: LiveActionInput, sender: SteerSender = "native"): Promise<LiveAction> {
     const input = LiveActionInputSchema.parse(raw)
     const resident = this.host.require(id)
     const control = this.host.control(resident)
@@ -256,6 +282,8 @@ export class LiveActions {
     let perform: () => Promise<LiveAction["state"]>
     let retained = input
     let queued: LiveRequest | undefined
+    // Set once a steer that went unconfirmed went as the next message instead: its words aren't in the turn.
+    let restarted = false
     if (input.kind !== "compact") {
       const steering = driver.steering
       const request = resident.snapshot.requests.find(
@@ -281,10 +309,18 @@ export class LiveActions {
         if (queued.text !== input.text || !isDeepStrictEqual(queued.attachments, input.attachments))
           throw new Error("This queued message changed. Review it before steering")
       }
+      const landing = sender === "person" ? steering.landing ?? "native" : "native"
+      const running = request.id
+      if (landing === "restart") {
+        // Its words go as a message of their own, which retains its attachments; the receipt is the retry's answer.
+        this.restart(id, running, input)
+        hostLog("live", "a steer went as the next message, its turn stopped for it", { conversation: id, landing, provider: this.provider(resident) })
+        return this.receipt(resident, { input, digest, bindingId, createdAt: Date.now(), state: { kind: "accepted" } })
+      }
       const expectedRunId = request.nativeRun.runId
       const attachments = this.host.retainAttachments(input.attachments)
       retained = { ...input, attachments }
-      perform = () =>
+      const native = () =>
         steer(bindingId, {
           id: input.id,
           expectedRunId,
@@ -292,6 +328,22 @@ export class LiveActions {
           ...input.displayText !== undefined && input.displayText !== input.text && { shown: input.displayText },
           attachments,
         })
+      perform = landing === "native" ? native : async () => {
+        const started = Date.now()
+        const answer = native()
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const answered = await Promise.race([answer, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), STEER_LANDS_MS) })])
+          .finally(() => clearTimeout(timer))
+        if (answered) return answered
+        // The harness still holds it: its answer comes when the stopped turn ends, and finds this receipt settled.
+        answer.catch(() => {})
+        const current = this.host.control(resident).actions?.find((item) => item.input.id === input.id)
+        if (current?.state.kind !== "dispatching" || resident.snapshot.session.status !== "running") return await answer
+        restarted = true
+        this.restart(id, running, input)
+        hostLog("live", "a steer went as the next message, its turn stopped for it", { conversation: id, landing, provider: this.provider(resident), heldMs: Date.now() - started })
+        return { kind: "accepted" }
+      }
     } else {
       if (
         input.requestId &&
@@ -376,7 +428,7 @@ export class LiveActions {
       .control(resident)
       .actions?.find((item) => item.input.id === input.id)
     if (current?.state.kind !== "dispatching") return current ?? action
-    if (result.kind === "accepted" && input.kind !== "compact") {
+    if (result.kind === "accepted" && input.kind !== "compact" && !restarted) {
       // A delayed acknowledgement cannot retire questions that arrived after
       // this input was sent. A question answer is not an ordinary follow-up.
       resident.snapshot = { ...resident.snapshot,

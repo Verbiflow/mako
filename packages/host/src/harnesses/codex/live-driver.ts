@@ -65,6 +65,8 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     steering: {
       kind: "supported",
       lands: "step",
+      // Measured again 2026-11-03: heard 0.0 s after the steer, the command cut short. Its own steer lands at once.
+      landing: "native",
       // Seen with Codex 0.164.0 on gpt-6.1-sol (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command,
       // the code-mode cell yielded at once ("Script running with cell ID 1") and the model heard the message then.
       hears: "at once: a command it's running yields to the model and carries on in the background",
