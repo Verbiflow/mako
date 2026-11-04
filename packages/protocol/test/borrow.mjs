@@ -301,6 +301,9 @@ describe("borrowing: exact cases", () => {
     assert.ok(selects({ kind: "command", ref: "op read *" }, "command", "op read x"))
     assert.ok(!selects({ kind: "command", ref: "op read *" }, "command", "op read x y"))
     assert.ok(!selects({ kind: "file", ref: ".env" }, "env", ".env"))
+    assert.ok(selects({ kind: "tree", ref: "~/flage/src" }, "file", "~/flage/src/a.ts"), "a folder's grant covers the files in it")
+    assert.ok(selects({ kind: "tree", ref: "**" }, "file", ".env"))
+    assert.ok(!selects({ kind: "file", ref: "**" }, "tree", "fixtures"), "a file's grant never covers a folder")
   })
 
   test("a grant's kind decides its modes, and only a device asks or relays", () => {
