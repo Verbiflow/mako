@@ -3,6 +3,8 @@ import type { Entry } from "@mako/sessions/entries"
 import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
 import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { branchSince, checkoutSince } from "../base/checkout-since.js"
+import { finResumedText } from "../contracts/resume-account.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } from "../contracts/access.js"
@@ -531,7 +533,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     const edge = this.resolve({ session: placed.session, thread: placed.thread, conversation }, input.to, false)
     if (!edge) return unknownFin(input.to)
     if (!input.text.trim() && !input.attachments?.length) return { refused: "conflict", why: "A message needs words or an attachment." }
-    if (edge.closedAt) return { refused: "conflict", why: `${edge.name} was stopped. Open it to talk to it there.` }
     const received = namedUuid(`direct:${input.request}`)
     const attachments = input.attachments ?? []
     const sent = await this.deliver(edge, received, input.text, attachments, undefined, "steer")
@@ -565,7 +566,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   moved(conversation: string): void {
     const child = this.childOf.get(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
-    if (edge) this.childMoved(edge, true)
+    if (!edge) return
+    // The person writing in a stopped Fin's own Thread resumes it, as a message from its Apex does.
+    const closedAt = edge.closedAt
+    if (closedAt !== undefined && this.deps.live.held(conversation)?.requests.some((request) => (request.createdAt ?? 0) > closedAt && (!request.actor || request.actor.kind === "person")))
+      return void this.reopen(edge, "the person")
+    this.childMoved(edge, true)
   }
 
   // ── AgentOperations ──
@@ -1942,12 +1948,17 @@ export class Agents implements AgentOperations, ConversationChildren {
    * takes a follow-up where its work is. `hears` says when the child hears it, as the child's own harness takes a
    * message, whatever harness the sender runs on.
    */
-  private async deliver(edge: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver): Promise<Delivered | AgentRefused> {
-    if (edge.closedAt)
-      return { refused: "conflict", why: `${edge.name} was stopped, and a stopped Thread's delegation stays over: start a new one with agents_start, or the person can open it and talk to it there.` }
+  private async deliver(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver): Promise<Delivered | AgentRefused> {
+    const before = this.conversationOf(stopped.child)
+    const repeat = before ? this.deps.live.held(before)?.requests.find((asked) => asked.id === request) : undefined
+    if (repeat) return repeat.status === "queued" || repeat.status === "held"
+      ? { delivery: "queued", hears: `${stopped.name} hears it when its current turn ends, as its next message.`, deduped: true }
+      : { delivery: "turn", hears: `${stopped.name} already has it.`, deduped: true }
+    const resumed = await this.resumeAccount(stopped)
+    const edge = this.reopen(stopped, "a message")
     const taken = edge.run && (!edge.run.ended || !this.conversationOf(edge.child)) ? await this.takeOver(edge) : undefined
     if (taken && "refused" in taken) return taken
-    const message = taken?.cut ? `${text}\n\n${HANDED_OVER_NOTE}` : text
+    const message = [text, resumed, taken?.cut ? HANDED_OVER_NOTE : undefined].filter(Boolean).join("\n\n")
     const conversation = this.conversationOf(edge.child)
     const ready = conversation ? this.ready(conversation) : "gone"
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
@@ -1976,6 +1987,39 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = queue()
     const steered = await this.steerInto(conversation, name, request, text, attachments)
     return "why" in steered ? { ...queued, hears: `${name} hears it when its current turn ends, as its next message: ${steered.why}` } : steered
+  }
+
+  /**
+   * What a stopped or failed Fin reads beneath the message that resumes it
+   * (`finResumedText`): when and why it stopped, and what moved in its
+   * checkout and on the branch it goes into since. Undefined for a Fin that
+   * didn't end that way.
+   */
+  private async resumeAccount(edge: ThreadParent): Promise<string | undefined> {
+    const state = this.stateOf(edge)
+    if (state.kind !== "ended" || (state.outcome !== "stopped" && state.outcome !== "failed")) return undefined
+    const reading = this.childReading(edge)
+    const at = (state.outcome === "stopped" ? edge.closedAt : this.latest.get(edge.child)?.at) ?? reading.ended?.at ?? edge.closedAt ?? edge.createdAt
+    const conversation = this.conversationOf(edge.child)
+    const path = reading.path ?? (edge.run?.nativeId ? this.deps.catalog.nativePath({ harness: edge.run.harness, nativeId: edge.run.nativeId }) : undefined)
+    const cwd = (conversation ? this.deps.live.session(conversation)?.cwd : undefined) ?? (path ? this.deps.catalog.ref(path)?.cwd : undefined)
+    const [checkout, branches] = cwd ? await Promise.all([checkoutSince(cwd, at), branchSince(cwd, at)]) : [[], []]
+    return finResumedText({ how: state.outcome, at, ...(state.reason && { reason: state.reason }), now: this.now(), checkout, branches })
+  }
+
+  /**
+   * Stopping a Fin pauses it: whatever next reaches it (`why`) opens its
+   * delegation again, in the same Session, so its turns report and wake its
+   * Apex as before. The edge as it stands after.
+   */
+  private reopen(edge: ThreadParent, why: string): ThreadParent {
+    if (edge.closedAt === undefined) return edge
+    const store = this.store()!
+    const open = store.reopenEdge(edge.child, this.now()) ?? edge
+    hostLog("agents", "resumed after stop", { op: edge.op, child: edge.child, by: why, stoppedFor: this.now() - edge.closedAt })
+    this.forget(edge.parent)
+    this.childMoved(open, false)
+    return open
   }
 
   /**

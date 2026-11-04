@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process"
-import { existsSync, readdirSync } from "node:fs"
+import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { lstat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
-import type { RepositoryChanges } from "../contracts/resume-account.js"
+import type { BranchChanges, RepositoryChanges } from "../contracts/resume-account.js"
 
 /**
  * What moved in a checkout after `since` (epoch ms), read from what Git and
@@ -13,10 +13,32 @@ import type { RepositoryChanges } from "../contracts/resume-account.js"
  * when something needs the answer. `folder` is a repository, or a project
  * folder whose repositories are its direct subfolders.
  */
-export async function checkoutSince(folder: string, since: number, options: { files?: number } = {}): Promise<RepositoryChanges[]> {
+export async function checkoutSince(given: string, since: number, options: { files?: number } = {}): Promise<RepositoryChanges[]> {
+  const folder = real(given)
   const repositories = await repositoriesOf(folder)
   const changes = await Promise.all(repositories.map((repository) => repositorySince(folder, repository, since, options.files ?? 40)))
   return changes.filter((change): change is RepositoryChanges => change !== undefined)
+}
+
+/**
+ * Where each repository's branch stands now against the branch it goes into
+ * (`origin/HEAD`, else `origin/main`, as last fetched): its uncommitted files,
+ * how far ahead and behind it is, and the commits that landed there after
+ * `since` touching files the branch changed. Nothing is fetched.
+ */
+export async function branchSince(given: string, since: number): Promise<BranchChanges[]> {
+  const folder = real(given)
+  const repositories = await repositoriesOf(folder)
+  return Promise.all(repositories.map((repository) => branchOf(folder, repository, since)))
+}
+
+/** A folder as Git names it (`/private/var` for `/var` on macOS), so repositories are named relative to it. */
+function real(folder: string): string {
+  try {
+    return realpathSync(folder)
+  } catch {
+    return folder
+  }
 }
 
 const GIT_TIMEOUT_MS = 10_000
@@ -137,4 +159,38 @@ async function filesTouchedSince(repository: string, since: number): Promise<str
     }),
   )
   return touched.filter((path): path is string => path !== undefined)
+}
+
+async function branchOf(checkout: string, repository: string, since: number): Promise<BranchChanges> {
+  const name = relative(checkout, repository) || "."
+  const branch = (await git(repository, ["symbolic-ref", "-q", "--short", "HEAD"]))?.trim() || undefined
+  const status = await git(repository, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+  const uncommitted = status ? status.split("\0").filter((record) => record.length >= 4 && !/^[RC]/.test(record)).length : 0
+  const ref = await baseRef(repository)
+  if (!ref || (branch && ref.endsWith(`/${branch}`))) return { name, ...(branch && { branch }), uncommitted }
+  const counts = (await git(repository, ["rev-list", "--left-right", "--count", `HEAD...${ref}`]))?.trim().split(/\s+/)
+  const base = (await git(repository, ["merge-base", "HEAD", ref]))?.trim()
+  const changed = base ? ((await git(repository, ["diff", "--name-only", "-z", base, "HEAD", "--"]))?.split("\0").filter(Boolean) ?? []) : []
+  const touching: NonNullable<BranchChanges["base"]>["touching"] = []
+  if (changed.length) {
+    const log = await git(repository, ["log", "--format=%x1e%H%x1f%s", "--name-only", `--since=@${Math.floor(since / 1000)}`, "-n", "10", base ? `${base}..${ref}` : ref, "--", ...changed])
+    for (const record of log?.split("\x1e") ?? []) {
+      const [head, ...files] = record.trim().split("\n")
+      const [sha, subject] = (head ?? "").split("\x1f")
+      if (sha) touching.push({ sha, subject: subject ?? "", files: files.filter(Boolean).map((path) => (name === "." ? path : join(name, path))) })
+    }
+  }
+  return {
+    name,
+    ...(branch && { branch }),
+    uncommitted,
+    base: { ref: ref.replace(/^refs\/remotes\//, ""), ahead: Number(counts?.[0] ?? 0), behind: Number(counts?.[1] ?? 0), touching },
+  }
+}
+
+/** The branch work here goes into: the remote's default (`origin/HEAD`), else `origin/main`; undefined when neither is known. */
+async function baseRef(repository: string): Promise<string | undefined> {
+  const head = (await git(repository, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]))?.trim()
+  if (head) return head
+  return (await git(repository, ["rev-parse", "-q", "--verify", "refs/remotes/origin/main"])) ? "refs/remotes/origin/main" : undefined
 }

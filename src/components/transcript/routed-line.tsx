@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { useAcp } from "@/state/acp"
-import { address, addresseeOf, finStopped, openFinInApex, redirectRouted, useThreadChildren } from "@/state/apex-fins"
+import { address, addresseeOf, openFinInApex, redirectRouted, useThreadChildren } from "@/state/apex-fins"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 
 const DELIVERY = {
@@ -36,7 +36,7 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
   const open = use(RoutedOpenContext)
   const [moved, setMoved] = useState<string>()
   const target = children.find((agent) => (landed ? agent.child?.thread === landed.child : agent.title === routed.to))
-  const others = children.filter((agent) => agent !== target && agent.child?.thread && !finStopped(agent))
+  const others = children.filter((agent) => agent !== target && agent.child?.thread)
   const name = target?.title ?? routed.to
   const when = moved ? "" : landed ? DELIVERY[landed.delivery] : ""
   const openTarget = (agent: NativeAgent) => {
