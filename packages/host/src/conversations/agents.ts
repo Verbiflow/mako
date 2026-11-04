@@ -80,7 +80,7 @@ import {
 import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
-import { FIN_LIMIT, finPolicyNote, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
+import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -178,8 +178,10 @@ export interface AgentsDeps {
   /** The person's rules for which work goes to which harness and model (Settings › Fins). */
   finPolicy?(): FinPolicy | undefined
   budget?: TreeBudget
-  /** How many of the person's Fins run at once, every tree's (Settings › Fins); `FIN_LIMIT` without it. */
+  /** How many of the person's Fins run at once on this device, every tree's (Settings › Fins); `FIN_LIMIT` without it. */
   finLimit?(): number
+  /** What bounds the cloud's Fins (the person's plan and spend ceiling), once Fins start there; nothing without it. */
+  cloudLimits?(): CloudFinLimits
   /** This Mac's cores, memory and load (`MacCapacity`): a start's answer says when it's busy, and it starts anyway. */
   capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
@@ -265,6 +267,11 @@ const QueuedStartSchema = z.object({
   why: z.enum(["tree-running", "place-full"]).optional(),
   after: z.array(z.object({ name: z.string(), child: z.string().optional(), op: z.string().optional() })).optional(),
 }) satisfies z.ZodType<QueuedStart>
+
+/** Where a Fin runs, as its limit counts it: `here` (this device), `device:<name>` or `cloud`. */
+const HERE = "here"
+const placeOf = (place: string | undefined) => place ?? HERE
+const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
 /** A queued spawn's notice that a Fin it was to start after didn't finish: `after:<op>`; once its Apex heard it, it's dropped. */
 const HELD_PREFIX = "after:"
@@ -725,19 +732,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     if ("refused" in after) return this.refuse(op, after.refused, after.why)
     await this.readMac()
     // It waits only as its Apex asked: for the Fins it starts after, or with `queue` for a place, behind every spawn that waits for one already.
-    const working = this.working()
-    const limit = this.limit()
-    const why = after.length ? undefined : counts.running >= this.budget.running ? "tree-running" : working >= limit || this.waitingForRoom() > 0 ? "place-full" : undefined
-    if (why && !input.queue) {
-      const waiting = this.waitingForRoom()
+    const where = placeOf(input.place)
+    const working = this.working(where)
+    const full = this.full(where)
+    const waiting = this.waitingForRoom(where)
+    const why = after.length ? undefined : counts.running >= this.budget.running ? "tree-running" : full || waiting > 0 ? "place-full" : undefined
+    if (why && !input.queue)
       return this.refuse(op, "budget", why === "tree-running"
         ? `This tree runs ${counts.running} of its ${this.budget.running} Threads at once. Pass queue: true to start it when one ends.`
-        : `${working} of the person's ${limit} ${FIN_WORD}s at once are at work${waiting ? ` and ${waiting} wait for one to end` : ""}. Pass queue: true to start it when one ends, or after: to start it after one of yours.`)
-    }
+        : `${upper(full ?? `${working} ${FIN_WORD}s are at work here`)}${waiting ? ` and ${waiting} wait for one to end` : ""}. Pass queue: true to start it when one ends, or after: to start it after one of yours.`)
     if (why || after.length) {
       const record: QueuedStart = { lead: apex, input, tier, harness, tuned, ...(why && { why }), ...(after.length && { after }) }
       store.queueSpawn({ op, tree, record: JSON.stringify(record), at: this.now() })
-      hostLog("agents", "start queued", { op, ...(why && { why }), ...(after.length && { after: after.map((ref) => ref.name).join(" ") }), running: counts.running, budget: this.budget.running, working, limit })
+      hostLog("agents", "start queued", { op, ...(why && { why }), ...(after.length && { after: after.map((ref) => ref.name).join(" ") }), running: counts.running, budget: this.budget.running, working, place: where })
       this.forget(apex.thread)
       const answer = this.queuedAnswer(op, apex, false)
       void this.drain()
@@ -1448,7 +1455,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.draining) return void (this.drainAgain = true)
     this.draining = true
     try {
-      let room = this.limit() - this.working()
+      // Each place's own room: a device's count, or the cloud's plan and spend.
+      const filled = new Map<string, number>()
       for (const spawn of store.queuedSpawns()) {
         const queued = parseQueued(spawn.record)
         if (queued?.after?.length) {
@@ -1458,9 +1466,11 @@ export class Agents implements AgentOperations, ConversationChildren {
         }
         const counts = this.treeCounts(spawn.tree)
         if (counts.running >= this.budget.running) continue
-        // First come, first started: once the limit is in use, a later spawn of another tree doesn't go ahead of this one.
-        if (room <= 0) continue
-        room -= 1
+        // First come, first started: once a place is full, a later spawn of another tree doesn't go ahead of this one there.
+        const where = placeOf(queued?.input.place)
+        const started = filled.get(where) ?? 0
+        if (this.full(where, started)) continue
+        filled.set(where, started + 1)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
         if (queued && !store.edges().byOp(spawn.op)) {
           hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at, ...(queued.after?.length && { after: queued.after.map((ref) => ref.name).join(" ") }) })
@@ -1501,10 +1511,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
   }
 
-  /** The person's limit as it stands, and this Mac's load while it's busy, as every start's answer carries them. */
+  /** This device's limit as it stands, and its load while it's busy, as every start's answer carries them. */
   private placeWords(): Pick<AgentsStarted, "atOnce" | "mac"> {
+    const limit = this.placeLimit(HERE)
     return {
-      atOnce: { working: this.working(), of: this.limit() },
+      ...(limit.place === "device" && { atOnce: { working: this.working(HERE), of: limit.atOnce } }),
       ...this.mac?.busy && { mac: `This Mac is busy (${this.mac.why}): it starts anyway, so run builds and test suites one at a time.` },
     }
   }
@@ -1516,7 +1527,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = parseQueued(queue.find((spawn) => spawn.op === op)?.record ?? "")
     const counts = this.treeCounts(tree)
     const forRoom = queued?.why === "place-full"
-    const forTheLimit = store.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full")
+    const where = placeOf(queued?.input.place)
+    const forTheLimit = store.queuedSpawns().filter((spawn) => { const other = parseQueued(spawn.record); return other?.why === "place-full" && placeOf(other.input.place) === where })
     const ahead = Math.max(0, (forRoom ? forTheLimit : queue).findIndex((spawn) => spawn.op === op))
     const stand = queued?.after?.length ? this.afterStand(queued) : undefined
     const pending = stand?.pending ?? []
@@ -1528,7 +1540,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         : pending.length
           ? `It starts once ${pending.join(", ")} ${pending.length === 1 ? "finishes" : "finish"}; if one fails or is stopped it doesn't start, and you're woken to decide.`
           : forRoom
-            ? `${this.working()} of the person's ${this.limit()} ${FIN_WORD}s at once are at work; it starts when one ends (${ahead} ahead).`
+            ? `${upper(this.full(where) ?? "A place is free now")}; it starts when one ends (${ahead} ahead).`
             : `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${ahead} ahead).`,
       ...(pending.length && { after: pending }),
       tree: { ...counts, of: { ...this.budget } },
@@ -2115,17 +2127,24 @@ export class Agents implements AgentOperations, ConversationChildren {
       hostWarn("agents", "this Mac's load couldn't be read; a start says nothing of it", { error: errorMessage({ error }) })
       return undefined
     })
-    this.mac = reading ? macLoad(reading, this.working()) : undefined
+    this.mac = reading ? macLoad(reading, this.working(HERE)) : undefined
     return this.mac
   }
 
-  /** The person's Fins at work on this host, every tree's. */
-  private working(): number {
-    return (this.store()?.edges().all ?? []).filter((edge) => this.occupies(edge)).length
+  /** The person's Fins at work in one place, every tree's. */
+  private working(where: string): number {
+    return (this.store()?.edges().all ?? []).filter((edge) => placeOf(edge.asked.place) === where && this.occupies(edge)).length
   }
 
-  private limit(): number {
-    return this.deps.finLimit?.() ?? FIN_LIMIT
+  /** What a place's Fins at once are held to: a device's own count, or the cloud's plan and spend (`placeFull`). */
+  private placeLimit(where: string): FinPlaceLimit {
+    if (where === "cloud") return { place: "cloud", ...this.deps.cloudLimits?.() }
+    return { place: "device", atOnce: this.deps.finLimit?.() ?? FIN_LIMIT }
+  }
+
+  /** Why a place takes no more now, with `more` already starting there; undefined while it has room. */
+  private full(where: string, more = 0): string | undefined {
+    return placeFull(this.placeLimit(where), this.working(where) + more)
   }
 
   /** A Fin at work holds a place against the budgets; one only waiting for its own Fins or its move holds none, or they'd wait for it. */
@@ -2134,9 +2153,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     return (kind === "working" || kind === "starting") && this.childReading(edge).awaiting === undefined
   }
 
-  /** Spawns waiting for a place under the person's limit, every tree's. */
-  private waitingForRoom(): number {
-    return this.store()?.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full").length ?? 0
+  /** Spawns waiting for room in a place, every tree's; with none named, in every place. */
+  private waitingForRoom(where?: string): number {
+    return this.store()?.queuedSpawns().filter((spawn) => {
+      const queued = parseQueued(spawn.record)
+      return queued?.why === "place-full" && (where === undefined || placeOf(queued.input.place) === where)
+    }).length ?? 0
   }
 
   private treeCounts(root: string): TreeCounts {

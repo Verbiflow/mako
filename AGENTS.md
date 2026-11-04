@@ -238,11 +238,16 @@ harness that offers it, and otherwise runs it on the harness's nearest mode
 within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
 which; only a mode wider than the Apex's is refused. It starts
 here only (`place` other than `here` is refused). It never waits unasked:
-past the person's limit of Fins at once, every tree's (`FIN_LIMIT`, 16,
-1 to `FIN_LIMIT_MAX` in Settings › Fins), or past a tree's running budget,
-a start is refused with the count unless it passes `queue: true`, when it
-waits behind every spawn that waits for a place ("Queued: 3 ahead, your
-limit of Fins at once is in use"). Past the started budget it is refused
+past its place's bound or a tree's running budget, a start is refused with
+the count unless it passes `queue: true`, when it waits behind every spawn
+that waits for that place ("Queued: 3 ahead, your limit of Fins at once is
+in use"). Each place has its own bound (`placeFull`): a device the person's
+count of Fins at once on it, every tree's (`FIN_LIMIT`, 16, 1 to
+`FIN_LIMIT_MAX` in Settings › Fins, kept by that device's host since it
+protects that machine), and the cloud, where each Fin has a machine of its
+own, only the person's plan and daily spend ceiling (`AgentsDeps.cloudLimits`,
+`FinChoicesReading.cloud`, for when cloud placement lands). The tree's
+running budget is the fan-out cap across places. Past the started budget it is refused
 (`TREE_BUDGET`); a cycle is refused and there's no depth limit. `after:
 [names]` starts it once each of the Apex's Fins named (queued ones too) has
 finished; one that failed or was stopped holds it, its Apex is woken with

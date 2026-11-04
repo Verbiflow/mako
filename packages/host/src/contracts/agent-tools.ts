@@ -85,7 +85,7 @@ export interface AgentsStarted {
   /** The Fins it starts after (`after`) that haven't finished yet, by name. */
   after?: string[]
   tree: { running: number; started: number; of: { running: number; started: number } }
-  /** The person's Fins at work on this Mac, every tree's, and how many run at once (`FIN_LIMIT` unless they set another). */
+  /** The person's Fins at work on this device, every tree's, and how many run on it at once (`FIN_LIMIT` unless they set another). */
   atOnce?: { working: number; of: number }
   /** Set while this Mac is busy (`macLoad`): it starts anyway, and says so, so heavy work goes one at a time. */
   mac?: string
@@ -367,7 +367,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
   `Pass \`model\`, \`reasoning\` or \`fast\` only as the person said them ("Codex on high", "the fast one"); left out, a ${FIN_WORD} runs on what the person uses.`,
   `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report or ask, and a message to it has to stop its run.`,
-  `Up to the person's limit of ${FIN_WORD}s run at once (${FIN_LIMIT} unless they set another); past it a start is refused unless you pass \`queue: true\`, which starts it when one ends.`,
+  `A device runs up to the person's limit of ${FIN_WORD}s at once (${FIN_LIMIT} unless they set another for it); past it a start is refused unless you pass \`queue: true\`, which starts it when one ends.`,
   `To run work in order, pass \`after: [<${FIN_WORD} names>]\`: it starts once those finish, and if one fails or is stopped you're woken to decide instead.`,
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
@@ -488,7 +488,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         wake: "What wakes you: decisions (default: it finished, failed, is blocked or asks), finish (only its result; its questions go to the person), or never (nothing; read it with agents_read; its questions go to the person).",
         timeoutMs: `For wait: how long to hold for its result here, at most ${WAIT_LIMIT_MS} (the default).`,
         after: `Only to order work: your ${FIN_WORD}s, by name or Thread (queued ones too), that must finish first. It waits until each has; if one fails or is stopped it doesn't start, and you're woken to decide.`,
-        queue: `true: if the person's limit of ${FIN_WORD}s at once (${FIN_LIMIT} unless they set another) or this tree's running budget is full, it waits for one to end. Absent: a full limit refuses the start, saying so.`,
+        queue: `true: if its place is full (a device's limit of ${FIN_WORD}s at once, ${FIN_LIMIT} unless the person set another, or the cloud's plan) or this tree's running budget is, it waits for one to end. Absent: a full place refuses the start, saying so.`,
         clientKey: `Your own key for this spawn: a repeat with it answers the same ${FIN_WORD}.`,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },

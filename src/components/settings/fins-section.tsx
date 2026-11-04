@@ -3,7 +3,7 @@ import { FinRules } from "./fin-rules"
 import { toast } from "sonner"
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, MinusIcon, PlusIcon, ZapIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
-import { FIN_LIMIT, FIN_LIMIT_MAX, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
+import { cloudWords, FIN_LIMIT, FIN_LIMIT_MAX, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
 import { ModelList, ModelOptionRows, ModelSummary, type ModelChoice } from "@/components/composer/agent-model-picker"
 import { IconAction, SettingRow } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
@@ -56,16 +56,21 @@ export function FinsSection() {
   )
 }
 
-/** How many Fins run at once, every Apex's: past it a start is refused unless its Apex asks it to wait. */
+/**
+ * How many Fins run at once on this Mac, every Apex's: the count protects this machine, so each device keeps its own.
+ * Cloud Fins each get a machine, so the person's plan bounds them instead, once a host serves them.
+ */
 function FinLimit() {
   const reading = useFinDefaults((state) => state.reading)
   if (!reading) return null
   const limit = reading.limit ?? FIN_LIMIT
+  const cloud = reading.cloud
   const save = (next: number) => void setFinLimit(next).catch((error: Error) => toast.error(error.message || "That limit couldn't be saved. Try again."))
   return (
+    <>
     <SettingRow
-      title="Fins at once"
-      description={`How many of your Fins run at the same time, across every Apex. Past it, an Apex waits for one to end only when it asks to. 1 to ${FIN_LIMIT_MAX}; ${FIN_LIMIT} unless you change it.`}
+      title="Fins at once on this Mac"
+      description={`How many of your Fins this Mac runs at the same time, across every Apex, so it stays responsive. Past it, an Apex waits for one to end only when it asks to. 1 to ${FIN_LIMIT_MAX}; ${FIN_LIMIT} unless you change it.`}
     >
       <div role="group" aria-label="Fins at once" className="flex shrink-0 items-center gap-1">
         <IconAction label="One fewer" disabled={limit <= 1} onClick={() => save(limit - 1)}>
@@ -77,6 +82,12 @@ function FinLimit() {
         </IconAction>
       </div>
     </SettingRow>
+    {cloud ? (
+      <SettingRow title="Fins at once in the cloud" description="Each cloud Fin runs on a machine of its own, so your plan sets how many run at once, and your daily spend ceiling caps them.">
+        <span className="shrink-0 text-ui text-muted-foreground">{cloudWords(cloud)}</span>
+      </SettingRow>
+    ) : null}
+    </>
   )
 }
 

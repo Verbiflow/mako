@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { CheckIcon, ChevronRightIcon, MinusIcon, PlusIcon } from "lucide-react"
 import { errorMessage } from "@mako/host/contracts/error-message"
-import { FIN_LIMIT_MAX, FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
+import { cloudWords, FIN_LIMIT_MAX, FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { modelByIdentity, optionDefault, settingsWithVariant, type ModelOption, type SessionSettings, type SettingValue } from "@mako/sessions/settings"
 import { cn } from "@/lib/utils"
@@ -104,9 +104,9 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
   return (
     <>
       {limit !== undefined ? (
-        <Group footer={`How many of your Fins run at the same time on ${mac}, across every Apex. Past it, an Apex waits for one to end only when it asks to.`}>
+        <Group footer={`How many of your Fins ${mac} runs at the same time, across every Apex, so it stays responsive. Past it, an Apex waits for one to end only when it asks to.${reading?.cloud ? " Cloud Fins each run on a machine of their own, so your plan sets theirs." : ""}`}>
           <Row
-            label="Fins at once"
+            label={`Fins at once on ${mac}`}
             end={
               <span role="group" aria-label="Fins at once" className="flex shrink-0 items-center gap-1">
                 <button type="button" aria-label="One fewer" disabled={limit <= 1} onClick={() => setLimit(limit - 1)} className="pressable flex size-9 items-center justify-center rounded-full text-muted-foreground disabled:opacity-40">
@@ -119,6 +119,7 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
               </span>
             }
           />
+          {reading?.cloud ? <Row label="Fins at once in the cloud" end={<span className="shrink-0 text-ui text-faint">{cloudWords(reading.cloud)}</span>} /> : null}
         </Group>
       ) : null}
       {reading ? <RulesGroup policy={reading.policy} profiles={profiles} signedIn={signedIn} onSave={savePolicy} {...(opened?.startsWith("rule:") && { opened: opened.slice(5) })} /> : null}

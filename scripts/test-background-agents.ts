@@ -28,7 +28,7 @@ import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
 import { openCodeModes } from "@mako/host/harnesses/opencode/access"
 import { ThreadStore } from "@mako/host/threads/store"
 import { AgentsWorld, noConversations, type Heard, type Script } from "./lib/agents-world.ts"
-import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
+import { cloudWords, placeFull, type FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
@@ -226,6 +226,15 @@ async function finLimit(): Promise<void> {
   assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 12 }, 2), { why: "14 cores, 36 GB, 8 cores of other work", busy: true }, "the person's own work counts first")
   assert.equal(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).busy, true, "a Mac out of swap is busy")
 
+  // Each place has its own bound: a device its count, the cloud the person's plan and spend, never a device's count.
+  assert.equal(placeFull({ place: "device", atOnce: 16 }, 15), undefined)
+  assert.equal(placeFull({ place: "device", atOnce: 16 }, 16), "16 of the 16 Fins this device runs at once are at work")
+  assert.equal(placeFull({ place: "cloud" }, 500), undefined, "a cloud with no plan bound holds nothing: each Fin has a machine of its own")
+  assert.equal(placeFull({ place: "cloud", atOnce: 40 }, 40), "40 of the 40 cloud Fins the person's plan runs at once are at work")
+  assert.equal(placeFull({ place: "cloud", atOnce: 40, dailySpendCents: 2_000, spentTodayCents: 2_000 }, 3), "today's cloud spend reached the person's ceiling of $20.00")
+  assert.equal(cloudWords({}), "By your plan")
+  assert.equal(cloudWords({ atOnce: 8, dailySpendCents: 2_000 }), "8 at once · $20.00 a day")
+
   // A busy Mac and a limit of two: the Mac only warns, and the limit refuses unless the Apex asks to wait.
   let working = 0
   const w = new AgentsWorld({
@@ -246,10 +255,10 @@ async function finLimit(): Promise<void> {
     await waitFor(() => working === 2, "both Fins at work")
     const refused = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3-refused", cwd: w.root })
     assert.ok("refused" in refused && refused.refused === "budget", "past the limit a start is refused, never queued unasked")
-    assert.equal(refused.why, "2 of the person's 2 Fins at once are at work. Pass queue: true to start it when one ends, or after: to start it after one of yours.")
+    assert.equal(refused.why, "2 of the 2 Fins this device runs at once are at work. Pass queue: true to start it when one ends, or after: to start it after one of yours.")
     const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
     assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "with queue it waits")
-    assert.equal(three.why, "2 of the person's 2 Fins at once are at work; it starts when one ends (0 ahead).")
+    assert.equal(three.why, "2 of the 2 Fins this device runs at once are at work; it starts when one ends (0 ahead).")
     assert.deepEqual(three.atOnce, { working: 2, of: 2 }, "the answer carries the limit")
     const four = await w.agents.start(other.caller, { brief, name: "four", queue: true, clientKey: "4", cwd: w.root })
     assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), `another tree's spawn waits behind it: first come, first started: ${JSON.stringify(four)}`)

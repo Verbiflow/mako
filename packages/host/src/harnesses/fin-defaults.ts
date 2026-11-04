@@ -29,7 +29,7 @@ const same = (left: SessionSettings | undefined, right: SessionSettings | undefi
 /**
  * The person's model choices for Fins, by harness (`contracts/fin-tuning.ts`): what they chose for them in Settings ›
  * Fins, the model they last started or sent with on each harness themselves, which "what I use" means there, and how
- * many Fins run at once. One
+ * many Fins run at once on this device (each device keeps its own: the count protects its machine). One
  * file in the user root, so every host of this person (the app, its profiles) reads the same, and the web app reads it
  * through this Mac.
  */
