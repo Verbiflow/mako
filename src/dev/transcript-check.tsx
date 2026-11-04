@@ -134,7 +134,7 @@ const eventBlocks = reduceLiveUpdates([], [
   configWarning,
   mcpFailure("wisprflow", "sign-in required"),
   mcpFailure("axiom", "sign-in required"),
-  { kind: "event", label: "Context compacted", detail: "Automatic · 182k → 24k tokens · took 8s", body: "The conversation so far: fixing variant matching." },
+  { kind: "event", label: "Context compacted", detail: "Automatic · 182K → 24K tokens · took 8s", body: "The conversation so far: fixing variant matching." },
   { kind: "event", label: "Turn failed", detail: "stream disconnected before completion", tone: "error" },
 ])
 const eventExchanges = toExchanges(live(eventBlocks, "codex"))

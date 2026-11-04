@@ -43,6 +43,7 @@ function parseClaudeEvent(
   if (tokenTotal(counts) === 0) return null
   const hour = claudeHourCacheWrites(usage)
   if (hour) counts.cacheWrite1h = hour
+  if (usage.speed === "fast") counts.fast = true
   const timestamp = validTimestamp(root.timestamp, fallbackTime)
   const messageId = stringValue(message.id)
   const requestId = stringValue(root.requestId)

@@ -494,7 +494,7 @@ function ModelRow({
       </span>
       {model.contextWindow ? (
         <span className="shrink-0 text-label text-faint tabular">
-          {formatTokens(model.contextWindow).replace(/\.0(?=[kM])/, "").toUpperCase()}
+          {formatTokens(model.contextWindow)}
         </span>
       ) : null}
       <button

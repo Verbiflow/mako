@@ -1,8 +1,8 @@
 import { useState, type KeyboardEvent } from "react"
 import type { UsageWindow } from "@mako/host/contracts/automations-usage-updates"
-import { formatTokens } from "@/lib/format"
+import { formatTokens, formatUsd } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { axisLabel, axisMoney, niceScale, periodLabel, readout, sumOf, valueOf, type UsageMetric, type UsageSeries } from "./usage-figures"
+import { axisLabel, niceScale, periodLabel, readout, sumOf, valueOf, type UsageMetric, type UsageSeries } from "./usage-figures"
 
 const PLOT_HEIGHT = "h-44"
 
@@ -30,7 +30,7 @@ export function UsageChart({
   }))
   const peak = Math.max(0, ...periods.map((period) => valueOf(period.total, metric)))
   const scale = niceScale(peak)
-  const format = (value: number) => (metric === "cost" ? axisMoney(value) : formatTokens(value))
+  const format = (value: number) => (metric === "cost" ? formatUsd(value) : formatTokens(value))
   const shown = active === null ? undefined : columns[active]
   const step = (event: KeyboardEvent<HTMLDivElement>) => {
     const last = periods.length - 1

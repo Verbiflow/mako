@@ -45,13 +45,13 @@ assert.deepEqual(grok({ sessionUpdate: "auto_compact_started", tokens_used: 4038
 assert.equal(grokNotification(GROK, { sessionId: "grok-session", update: { sessionUpdate: "auto_compact_started" } })?.id, undefined)
 assert.deepEqual(notices({ sessionUpdate: "auto_compact_completed", tokens_before: 403803, tokens_after: 21289, elapsed_ms: 94952, summary_preview: null }), [
   { kind: "activity", activity: null },
-  { kind: "event", event: { label: "Context compacted", detail: "Automatic · 404k → 21k tokens · took 1m 34s" } },
+  { kind: "event", event: { label: "Context compacted", detail: "Automatic · 404K → 21.3K tokens · took 1m 34s" } },
 ])
 assert.deepEqual(grokNotification("session/update", { sessionId: "grok-session", update: { sessionUpdate: "auto_compact_started" } })?.kind,
   "session/update/auto_compact_started", "Grok's own kinds sent on ACP's method, which the SDK refuses, decode the same")
 assert.deepEqual(notices({ sessionUpdate: "auto_compact_completed", tokens_before: 1000, tokens_after: 200, summary_preview: "Kept the plan" }), [
   { kind: "activity", activity: null },
-  { kind: "event", event: { label: "Context compacted", detail: "Automatic · 1k → 200 tokens", body: "Kept the plan" } },
+  { kind: "event", event: { label: "Context compacted", detail: "Automatic · 1K → 200 tokens", body: "Kept the plan" } },
 ])
 assert.deepEqual(notices({ sessionUpdate: "auto_compact_failed", error: "Summarizer timed out" }), [
   { kind: "activity", activity: null },

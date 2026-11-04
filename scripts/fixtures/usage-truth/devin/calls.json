@@ -1,0 +1,98 @@
+[
+ {
+  "node_id": 30,
+  "created_at": 1793085798,
+  "metadata": {
+   "request_id": "2786ddbd-3c66-4dd1-a837-d5adc708d917",
+   "created_at": "2026-10-27T07:23:18.214848Z",
+   "generation_model": "swe-2-high",
+   "metrics": {
+    "ttft_ms": 2359,
+    "total_time_ms": 2373,
+    "input_tokens": 15676,
+    "output_tokens": 37,
+    "cache_read_tokens": 640,
+    "cache_creation_tokens": null,
+    "tpot_ms": 0.3783783783783784,
+    "tokens_per_sec": 2642.8571428571427
+   }
+  }
+ },
+ {
+  "node_id": 31,
+  "created_at": 1793085798,
+  "metadata": {
+   "request_id": "2786ddbd-3c66-4dd1-a837-d5adc708d917",
+   "created_at": "2026-10-27T07:23:18.214848Z",
+   "generation_model": "swe-2-high",
+   "metrics": {
+    "ttft_ms": 2359,
+    "total_time_ms": 2373,
+    "input_tokens": 15676,
+    "output_tokens": 37,
+    "cache_read_tokens": 640,
+    "cache_creation_tokens": null,
+    "tpot_ms": 0.3783783783783784,
+    "tokens_per_sec": 2642.8571428571427
+   }
+  }
+ },
+ {
+  "node_id": 32,
+  "created_at": 1793085814,
+  "metadata": {
+   "request_id": "2786ddbd-3c66-4dd1-a837-d5adc708d917",
+   "created_at": "2026-10-27T07:23:18.214848Z",
+   "generation_model": "swe-2-high",
+   "metrics": {
+    "ttft_ms": 2359,
+    "total_time_ms": 2373,
+    "input_tokens": 15676,
+    "output_tokens": 37,
+    "cache_read_tokens": 640,
+    "cache_creation_tokens": null,
+    "context_input_tokens": null,
+    "tpot_ms": 0.3783783783783784,
+    "tokens_per_sec": 2642.8571428571427
+   }
+  }
+ },
+ {
+  "node_id": 30,
+  "created_at": 1793086361,
+  "metadata": {
+   "request_id": "55931f45-8e22-4140-9d2f-cd2d3fbd76d5",
+   "created_at": "2026-10-27T07:32:17.129714Z",
+   "generation_model": "swe-2-high",
+   "metrics": {
+    "ttft_ms": 2313,
+    "total_time_ms": 2350,
+    "input_tokens": 15740,
+    "output_tokens": 136,
+    "cache_read_tokens": 640,
+    "cache_creation_tokens": null,
+    "tpot_ms": 0.27205882352941174,
+    "tokens_per_sec": 3675.675675675676
+   }
+  }
+ },
+ {
+  "node_id": 31,
+  "created_at": 1793086361,
+  "metadata": {
+   "request_id": "55931f45-8e22-4140-9d2f-cd2d3fbd76d5",
+   "created_at": "2026-10-27T07:32:17.129714Z",
+   "generation_model": "swe-2-high",
+   "metrics": {
+    "ttft_ms": 2313,
+    "total_time_ms": 2350,
+    "input_tokens": 15740,
+    "output_tokens": 136,
+    "cache_read_tokens": 640,
+    "cache_creation_tokens": null,
+    "tpot_ms": 0.27205882352941174,
+    "tokens_per_sec": 3675.675675675676
+   }
+  }
+ }
+]

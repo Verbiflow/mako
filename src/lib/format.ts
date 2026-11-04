@@ -1,3 +1,5 @@
+export { formatTokens, formatUsd } from "@mako/sessions/amounts"
+
 const time = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
@@ -94,12 +96,6 @@ function toDate(value?: string | number) {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
-export function formatTokens(count: number) {
-  if (count < 1000) return String(count)
-  if (count < 1_000_000)
-    return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`
-  return `${(count / 1_000_000).toFixed(1)}M`
-}
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -108,13 +104,7 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(bytes < 100 * 1024 ** 3 ? 1 : 0)} GB`
 }
 
-export function formatCost(value: number) {
-  if (!value) return "$0.00"
-  if (value < 0.01) return "<$0.01"
-  return `$${value.toFixed(value < 10 ? 2 : 1)}`
-}
 
-/** Model pricing arrives per-token; humans read per-million. */
 /**
  * A model's price, which arrives already denominated per million tokens.
  *
@@ -128,13 +118,6 @@ export function formatRate(perMillion: number) {
   if (perMillion >= 100) return `$${perMillion.toFixed(0)}`
   if (perMillion >= 1) return `$${perMillion.toFixed(2)}`
   return `$${perMillion.toFixed(3)}`
-}
-
-export function formatContextWindow(tokens: number) {
-  if (!tokens) return "—"
-  if (tokens >= 1_000_000)
-    return `${(tokens / 1_000_000).toFixed(tokens % 1_000_000 ? 1 : 0)}M`
-  return `${Math.round(tokens / 1000)}K`
 }
 
 export function workspaceName(cwd?: string) {
