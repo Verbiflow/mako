@@ -24,13 +24,14 @@ export async function localFile(path: string, signal?: AbortSignal): Promise<Res
  * names this version of the file, so the renderer may keep what it loaded
  * instead of asking again on every mount. `crossOrigin`: an asset of a
  * sandboxed page, whose opaque origin needs CORS to load its fonts and
- * module scripts; its URL is the capability.
+ * module scripts; its URL is the capability. `fitted`: a page its owning
+ * host already fitted, kept as it came.
  */
 export async function fileResponse(
   source: Response,
   path: string,
   request: Request,
-  options: { cacheable?: boolean; crossOrigin?: boolean } = {}
+  options: { cacheable?: boolean; crossOrigin?: boolean; fitted?: boolean } = {}
 ): Promise<Response> {
   const headers = new Headers(source.headers)
   headers.set("accept-ranges", "bytes")
@@ -46,7 +47,7 @@ export async function fileResponse(
   }
   if (options.cacheable && !/^(?:video|audio)\//.test(mime ?? "")) headers.set("cache-control", "private, max-age=3600")
   if (options.crossOrigin) headers.set("access-control-allow-origin", "*")
-  if (mime === "text/html" && Number(headers.get("content-length")) <= FITTED_PAGE_LIMIT) {
+  if (mime === "text/html" && !options.fitted && Number(headers.get("content-length")) <= FITTED_PAGE_LIMIT) {
     await source.body?.cancel()
     const page = fitPage(await readFile(path))
     headers.set("content-length", String(page.length))

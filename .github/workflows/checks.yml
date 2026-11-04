@@ -57,6 +57,8 @@ jobs:
       # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
       - run: npm run test:device-join
       - run: npm run test:cloud-conversations
+      # A picture or page another host read (a cloud Thread's machine, another device, another host here) loads in this host's windows.
+      - run: npx tsx scripts/test-owned-files.ts
       - run: npx tsx scripts/test-cloud-returns.ts
 
   # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
