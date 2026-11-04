@@ -334,14 +334,14 @@ const childrenOfFins = new WeakMap<readonly ListedFin[], readonly NativeAgent[]>
 
 /**
  * The roster entries a row's Fins stand for, on a device that isn't their Apex's owner: the same selectors read them
- * (`rollup`, `pipsOf`, `childLine`), so every device counts and names them as the owner does. The same array while
- * the row's Fins are.
+ * (`rollup`, `pipsOf`, `childLine`), in `orderedChildren`' order, so every device counts, orders and names them as
+ * the owner does. The same array while the row's Fins are.
  */
 export function finsAsChildren(fins: readonly ListedFin[] | undefined): readonly NativeAgent[] {
   if (!fins?.length) return NO_CHILDREN
   const held = childrenOfFins.get(fins)
   if (held) return held
-  const children = fins.map((fin): NativeAgent => {
+  const children = orderedChildren(fins.map((fin): NativeAgent => {
     const at = Date.parse(fin.startedAt)
     return {
       nativeId: `mako-child:${fin.thread}`,
@@ -355,7 +355,7 @@ export function finsAsChildren(fins: readonly ListedFin[] | undefined): readonly
       startedAt: at,
       child: { thread: fin.thread, name: fin.name, origin: "started", state: fin.state },
     }
-  })
+  }))
   childrenOfFins.set(fins, children)
   return children
 }
