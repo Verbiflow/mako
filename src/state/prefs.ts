@@ -55,7 +55,7 @@ export interface Prefs {
   railMode: RailMode
   railScope: RailScope
   railSortBy: RailSortBy
-  railGrouping: "project" | "recent" | "status" | "archived"
+  railGrouping: "project" | "recent" | "archived"
   providerModes: PreferenceStringMap
   /**
    * Enter during a running turn steers it when the provider can; Cmd/Ctrl+Enter
@@ -420,7 +420,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
       defaults.agentHarnessFilter
     ),
     composerHarness: readComposerHarness(value.composerHarness),
-    railGrouping: readChoice(value.railGrouping, ["project", "recent", "status", "archived"], defaults.railGrouping),
+    railGrouping: readChoice(value.railGrouping, ["project", "recent", "archived"], defaults.railGrouping),
     landWith: readStringRecord(value.landWith),
     removeLandedOnArchive: readBoolean(value.removeLandedOnArchive, defaults.removeLandedOnArchive),
     providerModes: readStringRecord(value.providerModes),

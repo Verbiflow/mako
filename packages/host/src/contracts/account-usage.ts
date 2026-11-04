@@ -52,6 +52,34 @@ export function limitResetAt(usage: AccountUsage | undefined, now: number): numb
   return latest
 }
 
+/**
+ * Whether the account is at a limit now, and until when (`limitResetAt`): undefined while no window is spent, `until`
+ * null when a spent one names no reset.
+ */
+export function spentUntil(usage: AccountUsage | undefined, now: number): { until: number | null } | undefined {
+  if (usage?.status !== "ok") return undefined
+  const spent = usage.windows.some((window) => window.usedPercent >= 100 && (window.resetsAt === null || window.resetsAt > now))
+  return spent ? { until: limitResetAt(usage, now) } : undefined
+}
+
+/** A harness whose account in use is at its limit (`HarnessAccounts.limited`): which account, until when, and another of the harness's accounts with room. */
+export interface HarnessLimit {
+  account: string
+  until: number | null
+  instead?: string
+}
+
+/** "1:00 PM PST", or "Wed 1:00 PM PST" past today: when a limit resets, in this host's time zone. */
+export function resetWords(until: number, now: number): string {
+  const day = (at: number) => new Date(at).toDateString()
+  return new Date(until).toLocaleString("en-US", {
+    ...(day(until) !== day(now) && { weekday: "short" }),
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  })
+}
+
 /** The windows as they stand at `now`: one past its reset has emptied. */
 export function windowsAt(windows: readonly UsageWindow[], now: number): UsageWindow[] {
   return windows.map((window) =>

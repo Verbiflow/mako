@@ -12,6 +12,7 @@ import {
 import type { HarnessDescriptor } from "@/lib/types"
 import { section as agents } from "@/components/settings/sections/agents"
 import { section as models } from "@/components/settings/sections/models"
+import { section as fins } from "@/components/settings/sections/fins"
 import { section as usage } from "@/components/settings/sections/usage"
 import { section as appearance } from "@/components/settings/sections/appearance"
 import { section as notifications } from "@/components/settings/sections/notifications"
@@ -39,6 +40,7 @@ import { Keys } from "@/components/ui/kit"
 const SECTIONS: readonly SettingsSection[] = [
   agents,
   models,
+  fins,
   usage,
   appearance,
   notifications,

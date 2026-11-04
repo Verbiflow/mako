@@ -15,6 +15,7 @@ import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import type { AccessChoices } from "@mako/host/contracts/access-choices"
+import type { FinChoicesReading } from "@mako/host/contracts/fin-tuning"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
@@ -474,15 +475,20 @@ export function installMockBridge() {
       directs: () => [...directCalls],
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
-      /** The Apex's turn runs again, as a wake would start it. */
+      /**
+       * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
+       * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
+       * roster untouched.
+       */
       setRunning(running: boolean) {
         const snapshot = liveSnapshots.get(APEX_CONVERSATION)
         if (!snapshot) return
         const session: LiveSessionState = { ...(acpSessions.get(APEX_CONVERSATION) ?? snapshot.session), status: running ? "running" : "ready" }
         acpSessions.set(APEX_CONVERSATION, session)
-        const next = { ...snapshot, session, revision: snapshot.revision + 1 }
+        const requests = running ? snapshot.requests : snapshot.requests.map((request) => (request.status === "dispatching" ? { ...request, status: "completed" as const } : request))
+        const next = { ...snapshot, session, requests, revision: snapshot.revision + 1 }
         liveSnapshots.set(APEX_CONVERSATION, next)
-        emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session } })
+        emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session, requests } })
       },
     })
   }
@@ -813,6 +819,20 @@ export function installMockBridge() {
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   let planBuilds: PlanBuilds = {}
   let accessChoices: AccessChoices = {}
+  // Codex's Fins chosen in Settings › Fins; the rest as the person uses each harness.
+  let finChoices: FinChoicesReading = {
+    chosen: { codex: { model: "gpt-6.1-sol", options: { effort: "high", fast: true } } },
+    used: { claude: { model: "claude-opus-5-5", options: { effort: "high" } }, cursor: { model: "composer-2.5", options: { fast: true } }, devin: { model: "swe-2", options: { effort: "max" } } },
+    // The person's rules, as someone who keeps the frontend on Claude would write them.
+    policy: {
+      rules: [
+        { id: "rule-frontend", when: "UI, CSS and anything someone looks at: components, motion, visual polish", target: { harness: "claude", settings: { model: "claude-opus-5-5", options: { effort: "high" } } } },
+        { id: "rule-backend", when: "Anything that isn't frontend: APIs, migrations, the host, tests", target: { harness: "codex", settings: { model: "gpt-6.1-sol", options: { effort: "high" } } } },
+        { id: "rule-quick", when: "Quick lookups, renames and one-line fixes", target: { harness: "cursor", settings: { model: "composer-2.5", options: { fast: true } } } },
+      ],
+      otherwise: { harness: "claude" },
+    },
+  }
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
     boot: async () => boot,
@@ -987,6 +1007,18 @@ export function installMockBridge() {
     adoptAccessChoices: async (modes) => {
       accessChoices = { ...Object.fromEntries(Object.entries(modes).map(([harness, mode]) => [harness, { mode }])), ...accessChoices }
       return accessChoices
+    },
+    finDefaults: async () => finChoices,
+    chooseFinDefault: async (harness, settings) => {
+      const chosen = { ...finChoices.chosen }
+      if (settings) chosen[harness] = settings
+      else delete chosen[harness]
+      finChoices = { ...finChoices, chosen }
+      return finChoices
+    },
+    saveFinPolicy: async (policy) => {
+      finChoices = { ...finChoices, policy }
+      return finChoices
     },
     planBuilds: async () => planBuilds,
     recordPlanBuild: async (planId, build) => {
