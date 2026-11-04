@@ -155,7 +155,7 @@ function HarnessOrderRow({
       ) : null}
       <GripVerticalIcon className="size-3.5 shrink-0 text-faint opacity-60 transition-opacity duration-150 group-hover/row:opacity-100" />
       <span className="w-4 shrink-0 text-right text-label text-faint tabular">{index + 1}</span>
-      <span className={cn("flex size-7 shrink-0 items-center justify-center bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", !signedIn && !pending && "opacity-50")}>
+      <span className={cn("flex size-7 shrink-0 items-center justify-center bg-fill-hover", !signedIn && !pending && "opacity-50")}>
         <HarnessIcon harness={harness} className="size-3.5" />
       </span>
       <div className="min-w-0 flex-1">

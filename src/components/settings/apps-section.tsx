@@ -113,7 +113,7 @@ function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
           ))}
         </ListCard>
       ) : (
-        <div className="bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+        <div className="bg-raised">
           <Blank title="No projects yet" body="Start a Thread in a project folder and it shows up here." />
         </div>
       )}
@@ -214,7 +214,7 @@ function NotSetUp({ setup }: { setup: ProjectAppSetup }) {
     Object.values(state.byCwd).find((view) => view.kind === "setting-up" && view.root === setup.root)
   )
   return (
-    <div className="bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <div className="bg-raised">
       <Blank
         title={underWay?.kind === "setting-up" ? `“${underWay.thread.title}” is setting it up` : `${setup.project} isn’t set up to run yet`}
         body={
@@ -552,7 +552,7 @@ function RecipeSource({ state }: { state: ReadyRecipe }) {
       ? `${state.version ? `Version ${state.version}, saved` : "Saved"} in Mako${state.savedAt ? ` ${ago(state.savedAt)}` : ""}, for every branch${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
       : "Committed with the project as .mako/recipe.json, so it changes with the branch."
   return (
-    <div className="flex items-center gap-3 border-t border-hairline pt-4">
+    <div className="flex items-center gap-3 pt-4">
       <p className="min-w-0 flex-1 text-label leading-relaxed text-faint">
         {where}
         {state.ignored ? " A committed .mako/recipe.json is ignored while this one exists." : ""}
@@ -601,7 +601,7 @@ function Command({ className, children }: { className?: string; children: ReactN
 
 function FileName({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex h-6 items-center bg-raised px-2 font-mono text-label text-foreground/85 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <span className="inline-flex h-6 items-center bg-raised px-2 font-mono text-label text-foreground/85">
       {children}
     </span>
   )

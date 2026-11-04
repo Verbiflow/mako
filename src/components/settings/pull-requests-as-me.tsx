@@ -1,12 +1,11 @@
 import { useState, type FormEvent } from "react"
 import { ArrowUpRightIcon, CircleAlertIcon, KeyRoundIcon } from "lucide-react"
-import { Action, ListCard, ListCardRow, SettingRow, Toggle } from "@/components/ui/kit"
+import { FIELD, Action, ListCard, ListCardRow, SettingRow, Toggle } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
 
-const inputClass =
-  "h-8 min-w-0 flex-1 bg-raised px-2.5 font-mono text-ui text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-faint focus:outline-none focus-visible:ring-border"
+const inputClass = cn(FIELD, "flex-1 font-mono placeholder:font-sans")
 
 /**
  * Settings › Git › Pull requests in the cloud: "Open pull requests as me", off by default. Turning it on asks for the
@@ -127,7 +126,7 @@ function TokenForm({ busy, error, replacing, onCancel, onOpenGitHub, onSave, onE
           <ArrowUpRightIcon />
         </Action>
       </div>
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 bg-raised/60 px-3 py-2 text-label ring-1 ring-hairline">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 bg-raised/60 px-3 py-2 text-label">
         {PERSON_TOKEN_PERMISSIONS.map((permission) => (
           <div key={permission.name} className="contents">
             <dt className="text-foreground/90">{permission.name}</dt>

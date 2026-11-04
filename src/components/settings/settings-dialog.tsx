@@ -157,8 +157,8 @@ export function SettingsDialog({
           )}
         >
           <DialogPrimitive.Title className="sr-only">Settings</DialogPrimitive.Title>
-          <header className="drag-region flex h-[38px] shrink-0 items-center border-b border-hairline">
-            <div className="flex h-full w-64 shrink-0 items-center border-r border-hairline pr-2 pl-[86px]">
+          <header className="drag-region flex h-[38px] shrink-0 items-center">
+            <div className="flex h-full w-64 shrink-0 items-center border-r pr-2 pl-[86px]">
               <DialogPrimitive.Close className="pressable no-drag flex h-7 items-center gap-1.5 px-2 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground">
                 <ArrowLeftIcon className="size-3.5" />
                 Back
@@ -168,9 +168,9 @@ export function SettingsDialog({
           </header>
 
           <div className="flex min-h-0 flex-1">
-            <nav className="flex w-64 shrink-0 flex-col border-r border-hairline">
+            <nav className="flex w-64 shrink-0 flex-col border-r">
               <div className="p-3 pb-1">
-                <label className="flex h-8 items-center gap-2 bg-raised/70 px-2.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
+                <label className="flex h-8 items-center gap-2 bg-raised px-2.5 focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
                   <SearchIcon className="size-3.5 shrink-0 text-faint" />
                   <input
                     ref={searchRef}
@@ -242,7 +242,7 @@ export function SettingsDialog({
                 )}
               </div>
 
-              <p className="shrink-0 border-t border-hairline px-5 py-2.5 text-label text-faint">
+              <p className="shrink-0 px-5 py-2.5 text-label text-faint">
                 {version ? `Mako ${version}` : "Mako"}
               </p>
             </nav>

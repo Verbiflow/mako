@@ -76,8 +76,8 @@ function FinRow({ harness, profile }: { harness: string; profile: HarnessProfile
   const words = elsewhere?.settings ? finTuningWords(models, elsewhere.settings) : undefined
   const gone = chosen?.model && models.length && !finTuningWords(models, chosen) ? chosen.model : undefined
   return (
-    <div role="listitem" className={cn("flex items-center gap-3 bg-shell/55 px-3 py-2.5", !signedIn && !pending && "text-muted-foreground")}>
-      <span className={cn("flex size-7 shrink-0 items-center justify-center bg-raised", !signedIn && !pending && "opacity-50")}>
+    <div role="listitem" className={cn("flex items-center gap-3 bg-raised px-3 py-2.5", !signedIn && !pending && "text-muted-foreground")}>
+      <span className={cn("flex size-7 shrink-0 items-center justify-center bg-fill-hover", !signedIn && !pending && "opacity-50")}>
         <HarnessIcon harness={harness} className="size-3.5" />
       </span>
       <div className="min-w-0 flex-1">

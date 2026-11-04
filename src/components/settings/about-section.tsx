@@ -15,7 +15,7 @@ export function AboutSection() {
         <img
           src={appIcon}
           alt=""
-          className="size-14 ring-1 ring-hairline"
+          className="size-14 bg-raised"
         />
         <span className="min-w-0">
           <span className="block text-title font-semibold">Mako</span>

@@ -162,7 +162,7 @@ function BrowserChoice({
         <div
           id={instructionsId}
           hidden={!expanded}
-          className="mx-3 border-t border-hairline py-3 pr-3 pl-12 text-label leading-relaxed text-muted-foreground"
+          className="mx-3 py-3 pr-3 pl-12 text-label leading-relaxed text-muted-foreground"
         >
           <p>Aside’s text-selection popup can interrupt browser control.</p>
           <ol className="mt-2 list-decimal space-y-1 pl-4">
@@ -211,7 +211,7 @@ export function BrowserConnections() {
       {browsers.length ? (
         <fieldset
           disabled={saving}
-          className="mt-3 min-w-0 space-y-0.5 border border-hairline p-1"
+          className="mt-3 min-w-0 space-y-0.5 p-1 bg-raised"
         >
           <legend className="sr-only">Browser for new tasks</legend>
           {browsers.map((browser) => (
@@ -260,7 +260,7 @@ export function BrowserConnections() {
         </details>
       ) : null}
       {setup ? (
-        <div className="mt-3 border-l border-hairline py-1 pl-4 text-label leading-relaxed text-muted-foreground">
+        <div className="mt-3 border-l py-1 pl-4 text-label leading-relaxed text-muted-foreground">
           <p className="font-medium text-foreground">
             Add the Mako Browser extension
             {selected ? ` in ${browserTitle(selected)}` : ""}
@@ -279,7 +279,7 @@ export function BrowserConnections() {
             aria-label="Browser extension folder"
             readOnly
             value={setup.directory}
-            className="mt-3 w-full border border-hairline bg-transparent px-2 py-1.5 font-mono text-code"
+            className="mt-3 w-full bg-transparent px-2 py-1.5 font-mono text-code"
             onFocus={(event) => event.currentTarget.select()}
           />
           <p className="mt-2">

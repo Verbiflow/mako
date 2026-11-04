@@ -45,7 +45,7 @@ function SetupCard({ setup }: { setup: SimulatorSetup }) {
   const [details, setDetails] = useState(false)
   const settled = setup.phase === "ready" || setup.phase === "unavailable"
   return (
-    <section data-simulators={setup.phase} className="border border-hairline bg-raised/40 px-5 pt-5 pb-2">
+    <section data-simulators={setup.phase} className="bg-raised/40 px-5 pt-5 pb-2">
       <div className="flex items-center gap-4">
         <SimulatorMark state={said.mark} />
         <div className="min-w-0 flex-1">
@@ -69,7 +69,7 @@ function SetupCard({ setup }: { setup: SimulatorSetup }) {
           </Collapse>
         </>
       ) : (
-        <div className="mt-5 border-t border-hairline">
+        <div className="mt-5">
           <Steps setup={setup} />
         </div>
       )}
@@ -103,7 +103,7 @@ type MarkState = "idle" | "working" | "ready" | "broken"
 /** A phone, wearing the line's state as an app icon wears a badge. */
 function SimulatorMark({ state }: { state: MarkState }) {
   return (
-    <span data-simulators-mark={state} className="relative flex size-11 shrink-0 items-center justify-center bg-background text-muted-foreground shadow-xs ring-1 ring-hairline" aria-hidden>
+    <span data-simulators-mark={state} className="relative flex size-11 shrink-0 items-center justify-center bg-background text-muted-foreground shadow-xs" aria-hidden>
       <SmartphoneIcon className="size-5" strokeWidth={1.6} />
       {state === "idle" ? null : (
         <span
@@ -111,7 +111,7 @@ function SimulatorMark({ state }: { state: MarkState }) {
             "absolute -right-1 -bottom-1 flex size-[18px] items-center justify-center rounded-full shadow-xs",
             state === "ready" && "bg-positive text-background",
             state === "broken" && "bg-caution text-background",
-            state === "working" && "bg-background text-muted-foreground ring-1 ring-hairline"
+            state === "working" && "bg-background text-muted-foreground"
           )}
         >
           {state === "ready" ? <CheckIcon className="size-[10px]" strokeWidth={3.2} /> : state === "broken" ? <span className="text-label leading-none font-medium">!</span> : <Spinner className="size-[11px]" />}
@@ -218,7 +218,7 @@ function StepRow({ setup, step, index, primary }: { setup: SimulatorSetup; step:
   const busy = setup.steps.some((other) => other.state === "working" && other.id !== "xcode")
   const offered = step.fix && step.id !== "agents" && (step.state === "yours" || step.state === "stuck" || (step.id === "xcode" && step.state === "working"))
   return (
-    <li data-simulators-step={step.id} data-state={step.state} className="flex items-start gap-3 border-b border-hairline py-3.5 last:border-b-0">
+    <li data-simulators-step={step.id} data-state={step.state} className="flex items-start gap-3 py-3.5">
       <StepGlyph state={step.state} index={index} />
       <div className="min-w-0 flex-1">
         <p className={cn("text-ui font-medium", step.state === "later" ? "text-faint" : "text-foreground")}>{said.title}</p>
@@ -256,10 +256,10 @@ function StepGlyph({ state, index }: { state: SetupStep["state"]; index: number 
       className={cn(
         "mt-px flex size-6 shrink-0 items-center justify-center rounded-full text-label tabular-nums",
         state === "done" && "bg-positive/12 text-positive",
-        state === "working" && "bg-background text-muted-foreground ring-1 ring-hairline",
+        state === "working" && "bg-background text-muted-foreground",
         state === "yours" && "bg-background text-foreground ring-1 ring-foreground/25",
         state === "stuck" && "bg-caution/12 text-caution",
-        state === "later" && "text-faint ring-1 ring-hairline"
+        state === "later" && "text-faint bg-raised"
       )}
     >
       {state === "done" ? <CheckIcon className="size-3" strokeWidth={3} /> : state === "stuck" ? <AlertTriangleIcon className="size-3" /> : state === "working" ? <Spinner className="size-3" /> : index + 1}

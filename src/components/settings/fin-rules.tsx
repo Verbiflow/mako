@@ -90,7 +90,7 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
             onRemove={() => setDraft(undefined)}
           />
         ) : null}
-        <div role="listitem" className="flex items-center gap-3 bg-shell/55 px-3 py-2.5">
+        <div role="listitem" className="flex items-center gap-3 bg-raised px-3 py-2.5">
           <span aria-hidden style={SEA_MARK} className="flex size-5 shrink-0 items-center justify-center text-label font-medium">∗</span>
           <span className="min-w-0 flex-1 text-ui text-muted-foreground">{policy.rules.length ? "When no rule fits" : "Every Fin, until you add a rule"}</span>
           <TargetPicker
@@ -184,7 +184,7 @@ function RuleRow({ index, rule, last, focus, profiles, signedIn, onChange, onMov
     }
   }
   return (
-    <div role="listitem" data-fin-rule={index + 1} className="group/rule flex items-start gap-3 bg-shell/55 px-3 py-2.5 transition-colors duration-150 focus-within:bg-fill-hover">
+    <div role="listitem" data-fin-rule={index + 1} className="group/rule flex items-start gap-3 bg-raised px-3 py-2.5 transition-colors duration-150 focus-within:bg-fill-hover">
       <span aria-hidden className="mt-1 flex size-5 shrink-0 items-center justify-center bg-fill-selected text-label font-medium text-foreground/80 tabular">{index + 1}</span>
       <textarea
         aria-label={`Rule ${index + 1}: what work it's for`}
