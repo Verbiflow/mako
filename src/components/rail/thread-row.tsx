@@ -39,6 +39,7 @@ import { useTabs, type TabInfo } from "@/state/tabs"
 import { acpForThread, activeAcp, useAcp } from "@/state/acp"
 import { keptSessionText } from "@/lib/kept-session"
 import { sameThreadStatus, threadStatus, threads, useThreads } from "@/state/threads"
+import { threadLiveKey } from "@/state/thread-status"
 
 /** The detach control for an attached background tab; lives in the row's hover pill. */
 const Detach = memo(function Detach({ path }: { path: string }) {
@@ -123,6 +124,8 @@ export const ThreadRow = memo(function ThreadRow({
   const [editing, setEditing] = useState<string | null>(null)
   // A thread whose CLI is being driven from here right now wears a pulse —
   // the same promise a tab's dot makes: something is working behind this row.
+  // Its status also reads the live store; this repaints the row when those facts move, so it never stays stale.
+  useAcp((state) => threadLiveKey(state, ref))
   const ownStatus = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
   const foldState = useThreads(
     (state) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, state)) : null),

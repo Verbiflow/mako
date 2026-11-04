@@ -70,7 +70,9 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
       reason: "Devin has no command that only reviews: its `/loop` reviews the diff and fixes it. It has a read-only review subagent, which Mako's prompt hands the review to.",
       reviewer: "Hand the review to your review subagent: call `run_subagent` with the `subagent_review` profile, and report what it finds.",
     },
-    steering: { kind: "supported", hears: "at its next step, once its running command returns (Devin hands a long one back after about 10 s)", via: "A prompt sent while a turn runs is read at its next step.", wire: "concurrent-prompt" },
+    // Measured 2026-11-03 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model heard it
+    // 6.0 s later, when Devin handed the command back; a Stop ended the turn in 0.1 s. The person's steer restarts it.
+    steering: { kind: "supported", landing: "restart", hears: "at its next step, once its running command returns (Devin hands a long one back after about 10 s)", via: "A prompt sent while a turn runs is read at its next step.", wire: "concurrent-prompt" },
     access: {
       native: { edits: "accept-edits", auto: "smart", chat: "ask", plan: "plan", full: "bypass" },
       default: "edits",
@@ -92,7 +94,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
         // launch runs is what Mako stamps the session's records with, which a restore weighs (`restoreGate`).
         versionArgs: ["--version"],
         configureEnvironment: configureDevinEnvironment,
-        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true),
+        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true, options.routesCalls === true),
         async prepareApprovals({ previous, publish }) {
           const { DevinApprovalObserver, readDevinApprovalDecisions } = await adapters.devinApprovals.load("devin approvals")
           if (options.nativePath && options.resume) {

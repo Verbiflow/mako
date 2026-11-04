@@ -41,6 +41,8 @@ import type { LiveMoves } from "./live-moves.js"
 import type { NativeSourceIdentity, SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { RoutedThread } from "../contracts/native-routing.js"
+import type { CallThread } from "../contracts/native-calls.js"
+import { checkoutOf, worktreeAt } from "../contracts/worktree-paths.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { WorkspaceSnapshots } from "../workspaces/index.js"
@@ -60,9 +62,10 @@ export interface ProviderConnection {
 
 /**
  * Why Mako stops a provider's turn, as the host log says it: the person's Stop, a handoff of the Thread to another
- * machine, a goal at its token budget, or a conversation Mako can't save.
+ * machine, a goal at its token budget, a conversation Mako can't save, or the person's message steered into a turn
+ * whose harness would have held it (`steer`).
  */
-export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved"
+export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved" | "steer"
 
 /** How each Stop Mako sends ends the turn it stops: only the person's own reads as `stopped`. */
 export const STOPPED_FOR = {
@@ -70,6 +73,7 @@ export const STOPPED_FOR = {
   "handed-off": "handed-off",
   "goal-budget": "goal-budget",
   "not-saved": "not-saved",
+  steer: "steered",
 } as const satisfies Record<ProviderStop, InterruptionReason>
 export type StoppedFor = (typeof STOPPED_FOR)[ProviderStop]
 
@@ -168,6 +172,31 @@ export function launchRouting(dependencies: Pick<Dependencies, "agents">, sessio
   const agents = dependencies.agents
   if (!tools || !agents) return undefined
   return () => ({ role: agents()?.isApex(session) ? "apex" : "thread" })
+}
+
+/**
+ * A launch's native calls (`ProviderStartOptions.nativeCalls`): only a Thread
+ * given Mako's tools has them to route to. Read at each call, so a
+ * worktree_move or a recipe published mid-session counts from then on.
+ */
+export function launchCalls(dependencies: Pick<Dependencies, "threads">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
+  if (!tools?.makoUrl) return undefined
+  return () => callThreadOf(dependencies.threads, conversation, cwd, environment)
+}
+
+/** The Thread a conversation's calls run in, as routing reads it now: its folder, its worktree and main checkout, its recipe. */
+export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined): CallThread {
+  const recipe = environment?.recipe
+  const thread = store?.journalPlacement(conversation)?.thread
+  const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
+  const checkout = found && checkoutOf(found.worktree)
+  return {
+    folder: cwd,
+    ...found && checkout && { worktree: checkout, main: checkout === found.worktree.path ? found.worktree.repoRoot : found.worktree.project },
+    ...recipe?.kind === "ready" && { recipe: { kind: "ready" as const, processes: recipe.processes.map((process) => process.name) } },
+    ...recipe?.kind === "none" && { recipe: { kind: "none" as const } },
+    computer: true,
+  }
 }
 
 /** What a conversation's Fins are to its turns and its roster (`Agents`). */

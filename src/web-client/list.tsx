@@ -535,7 +535,7 @@ function ApexLineOr({ thread, children }: { thread: string; children: ReactNode 
   if (!pips) return children
   const label = rollupLabel(pipsCounts(pips))
   return (
-    <span role="img" aria-label={label} data-fin-pips={pips} className="flex h-4 min-w-0 items-center gap-2 text-label">
+    <span role="img" aria-label={label} data-fin-pips={pips} data-fin-counts={label} className="flex h-4 min-w-0 items-center gap-2 text-label">
       <FinPips pips={pips} />
       <span className="tabular min-w-0 truncate text-faint">{finsWord(pips.length)}</span>
     </span>

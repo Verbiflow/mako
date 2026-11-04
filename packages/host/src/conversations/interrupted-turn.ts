@@ -10,6 +10,7 @@ import {
   type LiveSnapshot,
 } from "../contracts/live-conversations.js"
 import type { Entry } from "@mako/sessions/entries"
+import { checkoutLines, type RepositoryChanges } from "../contracts/resume-account.js"
 
 /**
  * A turn cut short by a crash or a dropped connection leaves the agent
@@ -101,9 +102,10 @@ export function recordCutOffCalls(
   requestId: string,
   steps: TurnSteps | undefined,
   directory: string
-): Pick<Interruption, "calls" | "moreCalls"> {
+): Pick<Interruption, "calls" | "moreCalls" | "since"> {
   const calls: InterruptedCall[] = []
   let more = 0
+  let since: number | undefined
   for (const block of turnBlocks(blocks, requestId)) {
     if (block.type !== "tool") continue
     const result = block.unfinished || !liveToolFinished(block.status)
@@ -112,6 +114,7 @@ export function recordCutOffCalls(
         ? "unseen"
         : undefined
     if (!result) continue
+    if (block.at !== undefined) since = Math.min(since ?? block.at, block.at)
     if (calls.length === MAX_INTERRUPTED_CALLS) {
       more++
       continue
@@ -123,7 +126,7 @@ export function recordCutOffCalls(
     }
     calls.push(call)
   }
-  return more ? { calls, moreCalls: more } : { calls }
+  return { calls, ...more && { moreCalls: more }, ...since !== undefined && { since } }
 }
 
 /**
@@ -180,7 +183,20 @@ function cause(reason: Interruption["reason"]): string {
       return "the goal reached its token budget, so Mako stopped you"
     case "machine-lost":
       return "the cloud machine you were working on was lost, and Mako moved this conversation to a new one"
+    case "steered":
+      return "the user sent the message below while you worked, and Mako stopped your turn so you read it at once"
   }
+}
+
+/**
+ * The account's closing words on what moved in the checkout from when the
+ * first of its calls started (`checkoutSince`): commits, pushes, files.
+ */
+export function checkoutAccount(changes: readonly RepositoryChanges[]): string {
+  const lines = checkoutLines(changes)
+  return lines.length
+    ? `In the checkout since the first of those calls started:\n${lines.join("\n")}`
+    : "Nothing moved in the checkout since the first of those calls started: no commit, push or file change."
 }
 
 /**
@@ -192,7 +208,7 @@ export function pendingInterruption(
   requests: readonly LiveRequest[],
   current: string,
   now = Date.now()
-): { requestId: string; account: string } | undefined {
+): { requestId: string; account: string; since?: number } | undefined {
   const index = requests.findIndex((request) => request.id === current)
   const previous = requests
     .slice(0, index < 0 ? requests.length : index)
@@ -203,7 +219,7 @@ export function pendingInterruption(
   // A continuation already says the turn was cut short; with no calls to
   // report, the account would only repeat it.
   if (!interruption.calls.length && requests[index]?.continues?.requestId === previous.id) return undefined
-  return { requestId: previous.id, account: interruptionAccount(previous, interruption, now) }
+  return { requestId: previous.id, account: interruptionAccount(previous, interruption, now), ...interruption.since !== undefined && { since: interruption.since } }
 }
 
 function interruptionAccount(request: LiveRequest, interruption: Interruption, now: number): string {
@@ -229,7 +245,9 @@ function interruptionAccount(request: LiveRequest, interruption: Interruption, n
     )
   if (interruption.moreCalls)
     lines.push(`${interruption.moreCalls} more ${interruption.moreCalls === 1 ? "call" : "calls"} from that turn ended the same way.`)
-  if (none.length && interruption.reason !== "host-quit")
+  if (none.length && interruption.reason === "steered")
+    lines.push("A call from that turn described as interrupted or cancelled by the user was stopped for this message, not because the user wanted it undone.")
+  else if (none.length && interruption.reason !== "host-quit")
     lines.push("If a call from that turn is described as interrupted or cancelled by the user, that is wrong: the user did not stop it.")
   return lines.join("\n")
 }

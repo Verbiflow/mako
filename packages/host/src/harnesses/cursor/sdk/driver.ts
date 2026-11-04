@@ -123,6 +123,8 @@ interface Live {
   state: LiveSessionState
   client: CursorSdkLiveClient
   emit: ProviderStartOptions["emit"]
+  /** The Thread its shell commands are routed by, read at open and at each send (`ProviderStartOptions.nativeCalls`). */
+  calls: ProviderStartOptions["nativeCalls"]
   /** Tells the host's auth that Cursor refused the key this session ran under. */
   onRejected(message: string): void
   models: SessionModel[]
@@ -344,6 +346,12 @@ function received(engine: Engine, live: Live, event: SdkEvent): void {
       return
     case "compaction":
       deliver(engine, live, live.decoder.archived(event))
+      return
+    case "resumed":
+      if (!claimTurn(engine, live, event.turn)) return
+      hostWarn("cursor-sdk", "the SDK resumed the run from an older checkpoint and told the model of the calls it missed", { conversation: live.state.id, calls: event.calls })
+      // The words joined the running turn as a steer does, and the saved conversation keeps them as its message.
+      engine.emitUpdate(live, { kind: "user", text: event.text, steeringFor: live.state.nativeRunId })
       return
     case "side-delta":
       live.sides.get(event.side)?.(event.text)
@@ -714,6 +722,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       const live: Live = {
         client,
         emit: options.emit,
+        calls: options.nativeCalls,
         onRejected: rejected,
         models: [],
         turn: null,
@@ -825,6 +834,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           model: selection,
           mcpServers: servers,
           noTask: launchSpawnsOff("cursor", "disallowedTools task", options.conversationId, options.nativeRouting) || undefined,
+          calls: options.nativeCalls?.(),
           importFrom,
           forkFrom: fork && { agentId: fork.nativeId, runId: fork.runId },
         }))
@@ -923,6 +933,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           images: images.length > 0 ? images : undefined,
           model: selection,
           plan,
+          calls: live.calls?.(),
         })
         dispatch.report({ kind: "accepted", source: "native-response", referenceId: sent.runId })
         if (live.turn === turn) engine.patch(live, { nativeRunId: sent.runId })
@@ -940,8 +951,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // sent while a `task` subagent worked was held until the subagent
     // returned 136 s later, then delivered. The SDK answers a steer it holds
     // when its run ends (`revert_to_followup`), and its words go as the next
-    // message: the queued one it came from is put back, else the client sends it.
-    steering: { kind: "supported", lands: "interrupt", answersOnEnd: true, hears: "at once, cutting a running command short; a running subagent finishes first", via: "A message sent while a run works cuts a running command short and the model continues with it; a running subagent finishes first. One the run ends before taking goes as the next message.", async steer(id, input): Promise<ProviderSteerResult> {
+    // message: the queued one it came from is put back, else the client sends it. On 2026-11-03 a cloud Thread's steer
+    // was held 88 s, to its turn's end: the person's steer that isn't delivered within a second restarts the turn.
+    steering: { kind: "supported", lands: "interrupt", landing: "confirm", answersOnEnd: true, hears: "at once, cutting a running command short; a running subagent finishes first", via: "A message sent while a run works cuts a running command short and the model continues with it; a running subagent finishes first. One the run ends before taking goes as the next message.", async steer(id, input): Promise<ProviderSteerResult> {
       const live = requireLive(id)
       if (live.state.status !== "running" || live.state.nativeRunId !== input.expectedRunId)
         return { kind: "not-accepted", reason: "The Cursor turn had already changed, so it goes as the next message." }

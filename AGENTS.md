@@ -2164,6 +2164,19 @@ deliberate action and never rides along with a commit.
   (a diff's file headers, a table) and controls (an input's or a button's
   outline). Structural panes keep square edges; rounded `.card` surfaces are
   reserved for content within a pane.
+- **One count and one vocabulary for an Apex's Fins.** Every surface (the
+  composer's chip, the crew card, the rail's pips, the Agents panel, the stop
+  card, the phone's row) counts from the Thread's one roster
+  (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
+  `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
+  (`packages/host/src/contracts/children.ts`). They are Fins, never agents,
+  and they stand as needs you, working, queued, idle, failed or done; an idle
+  Fin is open for its next message, so it is neither working nor done and is
+  never background work. A Fin's step reads as a phrase (`readableStep`:
+  "Running gh pr checks 340", "Reading desk.tsx"), never the raw command or a
+  home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
+  without this; `npm run test:fin-counts-ui` draws every surface from one
+  roster and requires the same numbers, and `test:fin-words` holds the words.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, an agent's tile (its harness's
   glyph on the raised plane) on its reply's byline, and the sender's tile on
@@ -3486,12 +3499,25 @@ Steering is a capability with a kind, not a command. `step` folds the message
 into the running turn at the agent's next step (Claude, Codex, Grok through
 `_x.ai/interject`, OpenCode, Devin); `interrupt` cancels the current step and
 continues with the message (Cursor). `hears` says when the agent hears one, as
-`npx tsx scripts/probe-steer-semantics.ts [<harness>...] [--cursor]` reads it on
+`npx tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts [<harness>...] [--cursor]` reads it on
 each real harness against the scripted model (Cursor on its own): a 15 s
 command steered 4 s in. Claude, OpenCode and Grok hear it once the command
 returns; Codex's command yields to the model at once and carries on; Devin
 hears it when its command hands back, which it does by itself after about 10 s;
-Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six.
+A message the person sends into a running turn lands within about a second on
+every harness, by its driver's `landing`, measured with the probe's `--lands`
+(through Mako's own host): `native` uses the harness's own steer (Codex);
+`confirm` uses it when the harness confirms delivery within `STEER_LANDS_MS`
+(Cursor, which holds a steer through a running subagent: 61 s in the probe,
+88 s on a cloud Thread on 2026-11-03); otherwise, and for `restart` (Claude,
+OpenCode, Grok, Devin), `LiveConversations.steerByRestart` stops the turn
+(`steered`) and sends the message next, its control note telling the agent
+what the stopped turn left (`pendingInterruption`). A harness whose Stop ends
+its process opens again for it (`sendAfterStop`). An agent's `agents_send`
+steer and a question's answer go natively (`SteerSender`).
+`test-steer-landing.ts` covers each landing, the cloud path and the person's
+case. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.

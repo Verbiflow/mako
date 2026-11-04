@@ -8,7 +8,7 @@ import "../lib/scratch-git.mjs"
 //     built and checked at $0 (CI runs this on every change).
 //   npm run eval:orch-tools -- --replay claude|codex --model <id> [--case <ids>] [--samples 2] [--routing on|off|both] [--out <dir>] [--baseline <results.jsonl>]
 //     the replay against the model's own API (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` from the environment).
-//   npm run eval:orch-tools:live -- <harness...> [--model <id>] [--case <ids>] [--samples 2] [--routing on|off|both] [--out <dir>]
+//   npm run eval:orch-tools:live -- <harness...> [--model <id>] [--case <ids>] [--samples 2] [--routing on|off|both] [--turn-seconds 180] [--out <dir>]
 //     each real harness through Mako's driver (the host's build: Cursor's runs from its dist) in a scratch
 //     home on the person's sign-in for it, against the `mako` stub. Each turn is on that harness's plan.
 //   npm run eval:orch-tools -- --template <kept request.json> claude|codex|codex-lead
@@ -18,6 +18,8 @@ import "../lib/scratch-git.mjs"
 // `<out>/results.jsonl`, with the budget per harness, model and routing in
 // `<out>/summary.md`, each run's time and, where its tokens are priced, cost.
 import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { appendFile, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -66,6 +68,27 @@ async function record(result: CaseResult) {
   await appendFile(join(out, "results.jsonl"), `${JSON.stringify(result)}\n`)
 }
 
+/**
+ * The scratch project as a real repository, as the cases describe it: `main`
+ * with the project, and the Thread's branch two commits ahead, unpushed, so an
+ * agent that looks finds the work a case talks about.
+ */
+const execFileAsync = promisify(execFile)
+
+async function gitHistory(project: string): Promise<void> {
+  const git = (...args: string[]) => execFileAsync("git", ["-C", project, "-c", "user.name=Eval", "-c", "user.email=eval@example.com", "-c", "commit.gpgsign=false", ...args])
+  await git("init", "-q", "-b", "main")
+  await git("add", "-A")
+  await git("commit", "-q", "-m", "acme-app")
+  await git("checkout", "-q", "-b", "mako/thread-work")
+  await writeFile(join(project, "src", "login.ts"), "export function redirectAfterLogin(next: string | undefined) {\n  return next?.startsWith(\"/\") ? next : \"/\"\n}\n")
+  await git("add", "-A")
+  await git("commit", "-q", "-m", "Fix login redirect")
+  await writeFile(join(project, "CHANGELOG.md"), "- The login redirect stays on this site.\n")
+  await git("add", "-A")
+  await git("commit", "-q", "-m", "Changelog for the login redirect")
+}
+
 /** Two samples, and a third when they disagree. */
 async function sampled(run: () => Promise<Sample & { seconds?: number; tokens?: { input: number; output: number } }>, orchCase: OrchCase) {
   const passes: boolean[] = [], failures: string[][] = [], samples: Sample[] = []
@@ -73,14 +96,14 @@ async function sampled(run: () => Promise<Sample & { seconds?: number; tokens?: 
   let seconds = 0
   while (passes.length < samplesWanted || needsThird(passes)) {
     const began = Date.now()
-    const { steps, shell, text, ended, ...measured } = await run()
+    const { steps, shell, ran, text, ended, ...measured } = await run()
     seconds += measured.seconds ?? Math.round((Date.now() - began) / 1000)
     tokens.input += measured.tokens?.input ?? 0
     tokens.output += measured.tokens?.output ?? 0
-    const failed = grade(orchCase, { steps, shell, text, ended })
+    const failed = grade(orchCase, { steps, shell, ...ran && { ran }, text, ended })
     passes.push(!failed.length)
     failures.push(failed)
-    samples.push({ steps, shell, text: text.slice(0, 2000), ended })
+    samples.push({ steps, shell, ...ran && { ran }, text: text.slice(0, 2000), ended })
     if (passes.length >= 3) break
   }
   return { passes, failures, seconds, tokens, samples }
@@ -92,7 +115,7 @@ async function summarize(results: CaseResult[]) {
     const name = `${result.harness} · ${result.model} · routing ${result.routing}`
     groups.set(name, [...groups.get(name) ?? [], result])
   }
-  const lines = ["| run | route | front door | don't spawn | no polling | stay native | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+  const lines = ["| run | route | front door | don't spawn | no polling | stay native | mako tools | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
   for (const [name, group] of groups) {
     const rates = budget(group)
     const cell = (line: string) => {
@@ -100,7 +123,7 @@ async function summarize(results: CaseResult[]) {
       return entry.rate === undefined ? "–" : `${Math.round(entry.rate * 100)}% (${entry.passed}/${entry.of})${entry.met ? "" : " ✗"}`
     }
     const usd = group.reduce((sum, result) => sum + (result.usd ?? 0), 0)
-    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
+    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${cell("mako tools")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
   }
   const failing = results.filter((result) => !result.error && result.passes.filter(Boolean).length * 2 <= result.passes.length)
   const errors = results.filter((result) => result.error)
@@ -252,7 +275,6 @@ try {
     // Devin's launch links the person's config folder, and fails where there is none.
     await mkdir(join(scratch.home, ".config"), { recursive: true })
     const project = join(root, "project")
-    await mkdir(join(project, ".git"), { recursive: true })
     await mkdir(join(project, "src"), { recursive: true })
     await writeFile(join(project, "README.md"), "# acme-app\n\nWhere the client and server recieve their config.\n")
     await writeFile(join(project, "src", "config.ts"), "export function parseConfig(text: string) {\n  return JSON.parse(text)\n}\n")
@@ -263,7 +285,8 @@ try {
     await writeFile(join(project, "src", "router.ts"), "export type Route = { path: string; handle: (request: { path: string }) => { status: number; body: string } }\nexport const routes: Route[] = []\n")
     await writeFile(join(project, "src", "parser.ts"), "export function parse(text: string) {\n  return text.split(\",\").map((part) => part.trim())\n}\n")
     await writeFile(join(project, "src", "logger.ts"), "export function log(message: string) {\n  console.log(new Date().toISOString(), message)\n}\n")
-    await writeFile(join(project, "package.json"), `${JSON.stringify({ name: "acme-app", private: true, scripts: { test: "node --test" } }, null, 2)}\n`)
+    await writeFile(join(project, "package.json"), `${JSON.stringify({ name: "acme-app", private: true, scripts: { test: "node --test", dev: "vite" } }, null, 2)}\n`)
+    await gitHistory(project)
     const results: CaseResult[] = []
     try {
       const installs = await Promise.all([
@@ -286,7 +309,7 @@ try {
           const result: CaseResult = { id: orchCase.id, area: orchCase.area, kind: orchCase.kind, harness, model, routing, passes: [], failures: [], seconds: 0, tokens: { input: 0, output: 0 } }
           const began = Date.now()
           try {
-            Object.assign(result, await sampled(() => liveSample({ harness, driver, stub, orchCase, routing, env, project, ...option("--model") && { model: option("--model") } }), orchCase))
+            Object.assign(result, await sampled(() => liveSample({ harness, driver, stub, orchCase, routing, env, project, ...option("--model") && { model: option("--model") }, ...option("--turn-seconds") && { turnSeconds: Number(option("--turn-seconds")) } }), orchCase))
           } catch (error) {
             result.error = error instanceof Error ? error.message : String(error)
             result.seconds = Math.round((Date.now() - began) / 1000)

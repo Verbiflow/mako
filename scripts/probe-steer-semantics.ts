@@ -11,18 +11,25 @@ import "./lib/scratch-git.mjs"
 //   whether that next request already carries the message (the next step) or
 //   it came only after the turn (turn end);
 // - stop: how long until the turn is no longer running, and whether the
-//   command's output ever reached the model.
+//   command's output ever reached the model;
+// - lands: what Mako does with a message the person sends into the turn
+//   (`SteerCapability.landing`: the harness's own steer, that steer when it's
+//   confirmed within `STEER_LANDS_MS`, else a stop and the message sent as the
+//   next one), and how long until the model heard it.
 //
 // Cursor has no stand-in for its model: `--cursor` runs it on the person's
-// sign-in, copied into a scratch home, against its real model.
+// sign-in, copied into a scratch home, against its real model. `--lands` runs
+// only that kind, and fails a message heard more than `LANDS_BUDGET_MS` after
+// it was sent; CI runs it on the harnesses it installs.
 //
-//   npx tsx scripts/probe-steer-semantics.ts [<harness>...] [--cursor] [--evidence <dir>]
+//   npx tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts [<harness>...] [--cursor] [--lands] [--evidence <dir>]
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { installClaude } from "@mako/host/harnesses/claude/index"
 import { installCodex } from "@mako/host/harnesses/codex/index"
 import { installDevin } from "@mako/host/harnesses/devin/index"
@@ -44,6 +51,8 @@ const named = args.filter((arg) => !arg.startsWith("--"))
 
 const SLEEP_S = 15
 const STEER_AFTER_MS = 4000
+/** How soon after the person sends it a landed message must reach the model (`--lands`): `STEER_LANDS_MS`, and slack for a slow runner. */
+const LANDS_BUDGET_MS = 2_000
 /** What only the command's output says: its own text, which the history echoes, says `$((40+2))`. */
 const DONE = "SLEPT-42"
 const ECHO_DONE = "SLEPT-$((40+2))"
@@ -72,7 +81,7 @@ function offered(heard: string): Set<string> {
 interface Heard { at: number; steered: boolean; slept: boolean; tail: string }
 interface Probe {
   harness: string
-  kind: "steer" | "stop" | "baseline"
+  kind: "steer" | "stop" | "baseline" | "lands"
   /** Milliseconds from the command's start. */
   commandStarted: number
   acted?: number
@@ -114,6 +123,7 @@ async function probe(harness: string, kind: Probe["kind"], sandbox: Sandbox, dri
     }
   }
   const session = () => result.events.findLast((event) => event.type === "live-session")?.session
+  if (kind === "lands") return hosted(harness, driver, sandbox, env, shell.mode, nonce, result, () => began, model.close)
   try {
     await driver.start(sandbox.project, admitted(harness, {
       conversationId: id, emit,
@@ -162,6 +172,60 @@ async function probe(harness: string, kind: Probe["kind"], sandbox: Sandbox, dri
   return result
 }
 
+/**
+ * The person's message into the running turn through Mako's own host (`LiveConversations.act`), which lands it by the
+ * harness's `landing`: its own steer, that steer once confirmed within `STEER_LANDS_MS`, or a stop and the message as
+ * the next one (whose process a harness that ends it on Stop opens again). Read from what the model is asked next.
+ */
+async function hosted(harness: string, raw: ProviderLiveDriver, sandbox: Sandbox, env: NodeJS.ProcessEnv, modeId: string | undefined, nonce: string, result: Probe, began: () => number, close: () => Promise<void>): Promise<Probe> {
+  const driver: ProviderLiveDriver = { ...raw, start: (cwd, options) => raw.start(cwd, admitted(harness, { ...options, mcpSnapshot: options.mcpSnapshot ?? (async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] })) }, { env })) }
+  const root = await mkdtemp(join(tmpdir(), "mako-steer-probe-host-"))
+  let owner: LiveConversations | undefined
+  const id = randomUUID(), first = randomUUID()
+  try {
+    // The probe's turns run where no approval stops them (`SHELLS`' modes); one that asks is allowed, as the driver-level runs do.
+    // Its session is the probe's own, made here: a stop that ended the process resumes it, as the app's host would.
+    owner = new LiveConversations({ root, appPath: root, driver: (provider) => provider === harness ? driver : undefined, history: async () => null, resumeVerdict: async () => ({ kind: "resumable", record: "same" }), emit: (event) => {
+      if (event.type !== "live-batch") return
+      const pending = owner?.snapshot(id)?.permissions.find((permission) => !permission.gone)
+      const option = pending?.options?.find((candidate) => /allow/i.test(`${candidate.kind} ${candidate.optionId}`)) ?? pending?.options?.[0]
+      if (pending && option) void owner?.permission(id, pending.id, { kind: "choice", optionId: option.optionId }).catch(() => {})
+    } })
+    await owner.start(harness, sandbox.project, { conversationId: id, ...modeId && { modeId } })
+    owner.submit(id, first, "Run the sleep command, then say done.")
+    const startBy = Date.now() + 60_000
+    while (!began() && Date.now() < startBy) await delay(50)
+    if (!began()) {
+      const held = owner.snapshot(id)
+      throw new Error(`${harness} never asked the stand-in: session ${held?.session.status}/${held?.session.connection} ${held?.session.error ?? ""}; requests ${held?.requests.map((request) => `${request.status}${request.error ? ` (${request.error})` : ""}`).join(", ")}`)
+    }
+    await delay(STEER_AFTER_MS)
+    for (let i = 0; !owner.snapshot(id)?.requests.find((request) => request.id === first)?.nativeRun && i < 100; i++) await delay(20)
+    result.acted = Date.now() - began()
+    const receipt = await owner.act(id, { kind: "steer", id: randomUUID(), requestId: first, text: `${nonce}: before you answer, say you heard this.`, attachments: [] })
+    result.answered = Date.now() - began()
+    const steering = raw.steering
+    result.outcome = `${steering.kind === "supported" ? steering.landing ?? "native" : "none"}, ${receipt.state.kind}`
+    const settleBy = Date.now() + 90_000
+    while (Date.now() < settleBy && !result.heard.some((heard) => heard.steered)) await delay(50)
+    result.turnEnded = Date.now() - began()
+    if (process.env["PROBE_DEBUG"]) {
+      const held = owner.snapshot(id)
+      console.log(JSON.stringify({ session: { status: held?.session.status, connection: held?.session.connection, error: held?.session.error, lastStop: held?.session.lastStop }, requests: held?.requests.map((request) => ({ text: request.text.slice(0, 40), status: request.status, error: request.error, interruption: request.interruption?.reason })) }, null, 1))
+    }
+  } finally {
+    owner?.stop()
+    await Promise.resolve(raw.close(id)).catch(() => {})
+    await close()
+    await rm(root, { recursive: true, force: true }).catch(() => {})
+    if (evidence) {
+      await mkdir(evidence, { recursive: true })
+      await writeFile(join(evidence, `${harness}-lands.json`), sandbox.scrub(JSON.stringify({ ...result, events: [] }, null, 1)))
+    }
+  }
+  return result
+}
+
 /** The probe in one line: when it was taken, whether the command was cut short, when the model heard it. */
 function verdict(run: Probe): string {
   const seconds = (ms: number | undefined) => ms === undefined ? "never" : `${(ms / 1000).toFixed(1)} s`
@@ -171,6 +235,11 @@ function verdict(run: Probe): string {
     return `no message: next request at ${seconds(next?.at)}, ${next?.slept ? "with the command's output" : "without the command's output"}; turn ended ${seconds(run.turnEnded)}`
   if (run.kind === "stop")
     return `stop at ${seconds(run.acted)}: answered ${seconds(run.answered)}, turn ended ${seconds(run.turnEnded)}; the command ${run.heard.some((heard) => heard.slept) ? "finished and its output reached the model" : "never reported its output"}`
+  if (run.kind === "lands") {
+    const heard = run.heard.find((candidate) => candidate.steered)
+    const late = !heard || heard.at - run.acted! > LANDS_BUDGET_MS
+    return `${late ? `FAILED over ${LANDS_BUDGET_MS} ms: ` : ""}sent at ${seconds(run.acted)} (${run.outcome}): the model heard it ${heard ? `at ${seconds(heard.at)}, ${seconds(heard.at - run.acted!)} after it was sent` : "never"}`
+  }
   const firstSteered = run.heard.findIndex((heard) => heard.steered)
   const where = firstSteered === -1 ? "never in this turn" : firstSteered === 0 ? "in the very next model request" : `in model request ${firstSteered + 1} after the command`
   return `steer at ${seconds(run.acted)}: ${run.outcome} at ${seconds(run.answered)}; next request at ${seconds(next?.at)}, command ${cut === undefined ? "not seen" : cut ? "cut short" : "ran to its end"}; the model heard it ${where}; turn ended ${seconds(run.turnEnded)}`
@@ -178,6 +247,7 @@ function verdict(run: Probe): string {
 
 const drivers = sealedDrivers([installClaude, installCodex, installOpenCode, installGrok, installDevin])
 const harnesses = named.length ? named : cursor ? [] : [...SHELLS.keys()]
+const kinds = args.includes("--lands") ? ["lands"] as const : ["baseline", "steer", "stop", "lands"] as const
 const lines: string[] = []
 for (const harness of harnesses) {
   const driver = drivers.get(harness)
@@ -186,7 +256,7 @@ for (const harness of harnesses) {
     lines.push(`${harness}: skipped, not installed`)
     continue
   }
-  for (const kind of ["baseline", "steer", "stop"] as const) {
+  for (const kind of kinds) {
     // Codex's app-server serves every conversation of its engine and outlives one's close, so its scratch folder can
     // still be in use as the run ends: what the run read stands either way.
     let run: Probe | undefined
@@ -211,7 +281,7 @@ if (cursor) {
   try {
     await mkdir(join(root, "project", ".git"), { recursive: true })
     const driver = sealedDrivers([installCursor]).get("cursor")!
-    for (const kind of ["steer", "stop"] as const) {
+    for (const kind of args.includes("--lands") ? ["lands", "lands-held"] as const : ["steer", "stop", "lands", "steer-held", "lands-held"] as const) {
       const run = await cursorProbe(kind, driver, join(root, "project"), scratch.env)
       lines.push(`cursor ${kind}: ${run}`)
       console.log(lines.at(-1))
@@ -222,8 +292,15 @@ if (cursor) {
   }
 }
 
-/** Cursor on its real model: asked to run the sleep, steered or stopped while it runs, read from its events alone. */
-async function cursorProbe(kind: "steer" | "stop", driver: ProviderLiveDriver, project: string, env: NodeJS.ProcessEnv): Promise<string> {
+/**
+ * Cursor on its real model: asked to run the sleep, steered, stopped or sent a message the way Mako lands the
+ * person's (`land`) while it runs, read from its events alone. `-held`: the sleep runs in a subagent, which Cursor
+ * holds a steer through until it returns.
+ */
+async function cursorProbe(kind: "steer" | "stop" | "lands" | "steer-held" | "lands-held", driver: ProviderLiveDriver, project: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const held = kind.endsWith("-held")
+  const sleepS = held ? 60 : SLEEP_S
+  if (kind === "lands" || kind === "lands-held") return cursorHosted(held, sleepS, driver, project, env)
   const id = randomUUID()
   const nonce = `STEER-${randomUUID().slice(0, 8)}`
   const events: { at: number; event: LiveDriverEvent }[] = []
@@ -232,47 +309,105 @@ async function cursorProbe(kind: "steer" | "stop", driver: ProviderLiveDriver, p
   const updates = () => events.flatMap(({ at, event }) => (event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : []).map((update) => ({ at, update })))
   const session = () => events.findLast(({ event }) => event.type === "live-session")?.event
   const status = () => { const last = session(); return last?.type === "live-session" ? last.session : undefined }
+  // The model's words come in pieces: the nonce is answered once what it wrote so far holds it.
+  const answeredAt = () => {
+    let written = ""
+    for (const { at, update } of updates()) {
+      if (update.kind !== "text") continue
+      written += update.text
+      if (written.includes(nonce)) return { at }
+    }
+    return undefined
+  }
   try {
     await driver.start(project, admitted("cursor", { conversationId: id, emit, mcpSnapshot: async () => ({ cwd: project, generatedAt: Date.now(), servers: [], providers: [] }) }, { env }))
-    void driver.prompt(id, `Run exactly this shell command in the foreground and wait for it: \`sleep ${SLEEP_S} && echo ${ECHO_DONE}\`. Then reply with one short sentence.`, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    const command = `sleep ${sleepS} && echo ${ECHO_DONE}`
+    void driver.prompt(id, held
+      ? `Start one subagent with your task tool and have it run exactly this shell command in the foreground and wait for it: \`${command}\`. Wait for the subagent to finish, then reply with one short sentence.`
+      : `Run exactly this shell command in the foreground and wait for it: \`${command}\`. Then reply with one short sentence.`, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     const toolBy = Date.now() + 90_000
     let toolAt: number | undefined
     while (Date.now() < toolBy && toolAt === undefined) {
-      toolAt = updates().find(({ update }) => update.kind === "tool" && JSON.stringify(update).includes("sleep"))?.at
+      toolAt = updates().find(({ update }) => update.kind === "tool" && (held ? /task|subagent|sleep/i : /sleep/).test(JSON.stringify(update)))?.at
       await delay(100)
     }
     if (toolAt === undefined) return "FAILED the model never ran the sleep"
     await delay(STEER_AFTER_MS)
     const acted = Date.now() - began
     let outcome: string
-    if (kind === "steer") {
+    const words = `${nonce}: reply with exactly this word and nothing else: ${nonce}`
+    if (kind === "steer" || kind === "steer-held") {
       const steering = driver.steering
       const runId = status()?.nativeRunId
       if (steering.kind !== "supported" || !runId) return "FAILED no steering or no run"
-      outcome = await steering.steer(id, { id: randomUUID(), expectedRunId: runId, text: `${nonce}: reply with exactly this word and nothing else: ${nonce}`, attachments: [] })
+      outcome = await steering.steer(id, { id: randomUUID(), expectedRunId: runId, text: words, attachments: [] })
         .then((taken) => taken.kind === "accepted" ? "accepted" : `not accepted: ${taken.reason}`, (error) => `threw: ${error instanceof Error ? error.message : String(error)}`)
     } else {
       await driver.cancel(id)
       outcome = "stop sent"
     }
     const answered = Date.now() - began
-    const settleBy = Date.now() + 120_000
+    const settleBy = Date.now() + 180_000
     let ended: number | undefined
     while (Date.now() < settleBy) {
       const now = status()?.status
-      if (now !== "running" && now !== "starting") { ended = Date.now() - began; break }
+      // A landed message runs a turn of its own, after the one it stopped: it's over once the model answered it.
+      const answeredIt = answeredAt() !== undefined
+      if (now !== "running" && now !== "starting" && (!kind.startsWith("lands") || answeredIt || Date.now() - began - acted > 60_000)) { ended = Date.now() - began; break }
       await delay(100)
     }
     const toolDone = updates().find(({ update }) => update.kind === "tool" && JSON.stringify(update).includes("sleep") && /completed|failed|canceled/.test(update.status ?? ""))
-    const heard = updates().find(({ update }) => update.kind !== "user" && JSON.stringify(update).includes(nonce))
+    const heard = answeredAt()
     const s = (ms: number | undefined) => ms === undefined ? "never" : `${((ms - toolAt!) / 1000).toFixed(1)} s`
-    return `${kind} at ${s(acted)} into the command: ${outcome} at ${s(answered)}; the command ended at ${s(toolDone?.at)}${toolDone && toolDone.at - toolAt < SLEEP_S * 1000 ? " (cut short)" : ""}; ${kind === "steer" ? `the model answered it at ${s(heard?.at)}; ` : ""}turn ended at ${s(ended)}`
+    const after = heard ? `, ${((heard.at - acted) / 1000).toFixed(1)} s after it was sent` : ""
+    return `${kind} at ${s(acted)} into the command: ${outcome} at ${s(answered)}; the command ended at ${s(toolDone?.at)}${toolDone && toolDone.at - toolAt < sleepS * 1000 ? " (cut short)" : ""}; ${kind !== "stop" ? `the model answered it at ${s(heard?.at)}${after}; ` : ""}turn ended at ${s(ended)}`
   } finally {
     await Promise.resolve(driver.close(id)).catch(() => {})
     if (evidence) {
       await mkdir(evidence, { recursive: true })
       await writeFile(join(evidence, `cursor-${kind}.json`), JSON.stringify(events, null, 1))
     }
+  }
+}
+
+/**
+ * The person's message into a running Cursor turn through Mako's own host, which lands it by `confirm`: Cursor's own
+ * steer when it confirms delivery within `STEER_LANDS_MS`, else a stop and the message as the next one. Read from the
+ * conversation's transcript as the host keeps it, polled.
+ */
+async function cursorHosted(held: boolean, sleepS: number, raw: ProviderLiveDriver, project: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const driver: ProviderLiveDriver = { ...raw, start: (cwd, options) => raw.start(cwd, admitted("cursor", { ...options, mcpSnapshot: options.mcpSnapshot ?? (async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] })) }, { env })) }
+  const root = await mkdtemp(join(tmpdir(), "mako-steer-probe-host-"))
+  const owner = new LiveConversations({ root, appPath: root, driver: (provider) => provider === "cursor" ? driver : undefined, history: async () => null, resumeVerdict: async () => ({ kind: "resumable", record: "same" }), emit: () => {} })
+  const id = randomUUID(), first = randomUUID()
+  const nonce = `STEER-${randomUUID().slice(0, 8)}`
+  const blocks = () => owner.snapshot(id)?.blocks ?? []
+  try {
+    await owner.start("cursor", project, { conversationId: id })
+    const command = `sleep ${sleepS} && echo ${ECHO_DONE}`
+    owner.submit(id, first, held
+      ? `Start one subagent with your task tool and have it run exactly this shell command in the foreground and wait for it: \`${command}\`. Wait for the subagent to finish, then reply with one short sentence.`
+      : `Run exactly this shell command in the foreground and wait for it: \`${command}\`. Then reply with one short sentence.`)
+    const toolBy = Date.now() + 90_000
+    while (Date.now() < toolBy && !blocks().some((block) => block.type === "tool" && (held ? /task|subagent|sleep/i : /sleep/).test(JSON.stringify(block)))) await delay(100)
+    if (Date.now() >= toolBy) return "FAILED the model never ran the sleep"
+    await delay(STEER_AFTER_MS)
+    const sent = Date.now()
+    const receipt = await owner.act(id, { kind: "steer", id: randomUUID(), requestId: first, text: `${nonce}: reply with exactly this word and nothing else: ${nonce}`, attachments: [] })
+    const answered = Date.now() - sent
+    const heardBy = Date.now() + 120_000
+    let heard: number | undefined
+    while (Date.now() < heardBy && heard === undefined) {
+      if (blocks().some((block) => block.type === "text" && block.text.includes(nonce))) heard = Date.now() - sent
+      else await delay(50)
+    }
+    const restarted = owner.snapshot(id)?.requests.find((request) => request.id === first)?.interruption?.reason === "steered"
+    const s = (ms: number | undefined) => ms === undefined ? "never" : `${(ms / 1000).toFixed(1)} s`
+    return `lands${held ? "-held" : ""}: ${receipt.state.kind} ${s(answered)} after it was sent, ${restarted ? "its turn stopped and the message sent next" : "Cursor's own steer"}; the model answered it ${s(heard)} after it was sent`
+  } finally {
+    owner.stop()
+    await Promise.resolve(raw.close(id)).catch(() => {})
+    await rm(root, { recursive: true, force: true }).catch(() => {})
   }
 }
 

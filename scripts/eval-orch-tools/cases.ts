@@ -7,7 +7,10 @@ import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import type { Report } from "@mako/host/contracts/agents"
 import { apexAsk } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import { controlNote } from "@mako/host/control/launch"
+import { controlLine, controlNote } from "@mako/host/control/launch"
+import type { CallThread } from "@mako/host/contracts/native-calls"
+import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
+import { threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { digest } from "@mako/host/conversations/agent-wakes"
 import { briefText } from "@mako/host/conversations/agents"
 
@@ -29,15 +32,16 @@ const PriorTurn = z.object({
   toolCalls: z.array(z.object({ tool: z.string(), input: z.json(), result: z.json() })).optional(),
 })
 
-export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver"] as const
+export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver", "worktree", "pull-request", "app", "browser"] as const
 
-/** The budget each area counts toward, per harness and model: route ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%. */
+/** The budget each area counts toward, per harness and model: route ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%, Mako's own tools for worktrees, pull requests, the app and the browser ≥ 90%. */
 export const BUDGET = {
   route: { areas: ["route", "headless-shell", "place"], floor: 0.9 },
   "front door": { areas: ["front-door", "answer", "deliver"], floor: 0.9 },
   "don't spawn": { areas: ["dont-spawn", "native-child"], floor: 0.95 },
   "no polling": { areas: ["no-polling"], floor: 0.95 },
   "stay native": { areas: ["stay-native"], floor: 0.85 },
+  "mako tools": { areas: ["worktree", "pull-request", "app", "browser"], floor: 0.9 },
 } as const satisfies Record<string, { areas: readonly (typeof AREAS)[number][]; floor: number }>
 
 /** One of an Apex's Fins, in minutes ago rather than clock times, so a case reads the same on any day. */
@@ -98,6 +102,14 @@ export const OrchCase = z.object({
     children: z.array(EvalChild).optional(),
     /** Asks of those Fins that wake the Apex: the case's agent reads the wake the host sends, after the person's message (`prompt`) as an earlier turn. */
     asks: z.array(EvalAsk).optional(),
+    /** Where the Thread works and its project's recipe: the note ahead of the prompt says so as the host does (`threadEnvironmentInstructions`), and routing reads it (`CallThread`). */
+    /** What the stub answers a Mako tool in this case, where its default (`FAMILY_ANSWERS`) would contradict the prompt. */
+    answers: z.record(z.string(), z.string()).optional(),
+    thread: z.object({
+      place: z.enum(["main", "worktree"]),
+      recipe: z.enum(["ready", "none"]),
+      processes: z.array(z.string()).optional(),
+    }).optional(),
     /** Reports of those Fins that finished, waking the Apex the same way. */
     finished: z.array(EvalFinished).optional(),
   }),
@@ -107,6 +119,8 @@ export const OrchCase = z.object({
     calls: z.array(ExpectedCall).optional(),
     /** No call may match any. */
     callsMustNot: z.array(ExpectedCall).optional(),
+    /** At least one call matches one of these. */
+    callsAny: z.array(ExpectedCall).optional(),
     /** None of these tools is called. */
     notCalls: z.array(z.string()).optional(),
     minCalls: z.record(z.string(), z.number()).optional(),
@@ -210,12 +224,46 @@ export function priorTurns(orchCase: OrchCase): z.infer<typeof PriorTurn>[] {
   return orchCase.setup.asks?.length || orchCase.setup.finished?.length ? [...prior, { role: "user", text: orchCase.prompt }] : prior
 }
 
+const NOTE_FOLDERS = { main: "/Users/person/app", worktree: "/Users/person/.mako/worktrees/app-1/thread-work" }
+
+/** The case's Thread as the host's note describes it: its ports and folder, and its recipe. */
+function caseEnvironment(thread: NonNullable<OrchCase["setup"]["thread"]>): ThreadEnvironment {
+  return {
+    app: AppKeySchema.parse("folder-0123456789abcdef"),
+    host: "thread-work.thread.localhost",
+    port: 20540,
+    ports: 10,
+    dataDir: "/Users/person/.mako/thread-data/thread-work",
+    recipe: thread.recipe === "ready" ? { kind: "ready", processes: (thread.processes ?? ["web"]).map((name, index) => ({ name, port: 20540 + index })), checks: ["quick", "full"] } : { kind: "none" },
+    ...thread.recipe === "ready" && { values: { PORT: "20540" } },
+  }
+}
+
+/** The note the host sends ahead of the case's prompt, for a case that says where its Thread works. */
+export function threadNote(orchCase: OrchCase): string | undefined {
+  const thread = orchCase.setup.thread
+  if (!thread) return undefined
+  const control = controlLine({ bin: "/Applications/Mako.app/Contents/Resources", command: "/Applications/Mako.app/Contents/Resources/mako-control", sessionFile: "/tmp/mako-control-session" })
+  return controlNote([control, threadEnvironmentInstructions(caseEnvironment(thread))])
+}
+
+/** The case's Thread as routing reads it, in the scratch `project` the sample runs in. */
+export function caseCallThread(orchCase: OrchCase, project: string): CallThread {
+  const thread = orchCase.setup.thread
+  return {
+    folder: project,
+    ...thread?.place === "worktree" && { worktree: project, main: NOTE_FOLDERS.main },
+    ...thread && { recipe: thread.recipe === "ready" ? { kind: "ready", processes: thread.processes ?? ["web"] } : { kind: "none" } },
+    computer: true,
+  }
+}
+
 /** What the graded turn opens with: a Fin's brief, the wake its Fins send, or the person's message behind the note an Apex's Fins send ahead of it. */
 export function turnText(orchCase: OrchCase): string {
   if (orchCase.setup.role === "fin") return briefText({ objective: orchCase.prompt }, FIN_NAME)
   const wake = wakeText(orchCase)
   if (wake) return wake
-  const note = frontDoorText(orchCase)
+  const note = [threadNote(orchCase), frontDoorText(orchCase)].filter(Boolean).join("\n\n")
   return note ? `${note}\n\n${orchCase.prompt}` : orchCase.prompt
 }
 
@@ -237,6 +285,8 @@ export interface Sample {
   /** The calls of each model step that made any, in order. */
   steps: Call[][]
   shell: string[]
+  /** The shell commands that ran: `shell` less those Mako's routing refused. */
+  ran?: string[]
   text: string
   /** The turn ended (the model stopped calling tools) rather than running out of steps. */
   ended: boolean
@@ -268,6 +318,8 @@ export function grade(orchCase: OrchCase, sample: Sample): string[] {
   const failures: string[] = []
   for (const expected of expect.calls ?? [])
     if (!calls.some((call) => matches(call, expected))) failures.push(`calls ${expected.tool}${expected.args ? ` ${JSON.stringify(expected.args)}` : ""}`)
+  if (expect.callsAny && !calls.some((call) => expect.callsAny!.some((expected) => matches(call, expected))))
+    failures.push(`callsAny ${expect.callsAny.map((expected) => expected.tool).join(" | ")}`)
   for (const forbidden of expect.callsMustNot ?? [])
     if (calls.some((call) => matches(call, forbidden))) failures.push(`callsMustNot ${forbidden.tool} ${JSON.stringify(forbidden.args ?? {})}`)
   for (const tool of expect.notCalls ?? []) if (count(tool)) failures.push(`notCalls ${tool}`)
@@ -278,7 +330,7 @@ export function grade(orchCase: OrchCase, sample: Sample): string[] {
     if (!sample.ended || !last.some((call) => call.tool === expect.endsTurnAfter)) failures.push(`endsTurnAfter ${expect.endsTurnAfter}`)
   }
   for (const source of expect.shellMustNot ?? []) {
-    const command = sample.shell.find((line) => pattern(source).test(line))
+    const command = (sample.ran ?? sample.shell).find((line) => pattern(source).test(line))
     if (command !== undefined) failures.push(`shellMustNot ${source}: ${command.slice(0, 120)}`)
   }
   for (const source of expect.textMust ?? []) if (!pattern(source).test(sample.text)) failures.push(`textMust ${source}`)

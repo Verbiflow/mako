@@ -700,7 +700,13 @@ export function createClaudeSdkDriver(
       const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
         hostWarn(CLAUDE_AUTH_LOG, "Native authentication failure", { conversation: conversationId, ...fields }),
       dependencies.inspectCredentials)
-      const routing = options.nativeRouting && { thread: options.nativeRouting, teams: (config.env ?? process.env).CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === "1", conversation: conversationId }
+      const teams = (config.env ?? process.env).CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === "1"
+      const routing = (options.nativeRouting || options.nativeCalls) && {
+        ...options.nativeRouting && { thread: options.nativeRouting },
+        ...options.nativeCalls && { calls: options.nativeCalls },
+        teams,
+        conversation: conversationId,
+      }
       const callHooks = claudeCallHooks(new CallBounds(conversationId), routing)
       let query: ClaudeQuery
       try { query = await dependencies.query({
@@ -721,7 +727,7 @@ export function createClaudeSdkDriver(
             PreToolUse: [...(config.hooks?.PreToolUse ?? []), { hooks: [callHooks.pre] }],
             PostToolUse: [...(config.hooks?.PostToolUse ?? []), { hooks: [callHooks.post] }],
             PostToolUseFailure: [...(config.hooks?.PostToolUseFailure ?? []), { hooks: [callHooks.post] }],
-            ...routing && { SubagentStart: [...(config.hooks?.SubagentStart ?? []), { hooks: [claudeSubagentStart] }] },
+            ...routing?.thread && { SubagentStart: [...(config.hooks?.SubagentStart ?? []), { hooks: [claudeSubagentStart] }] },
           },
           spawnClaudeCodeProcess: (options) => {
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
@@ -909,8 +915,9 @@ export function createClaudeSdkDriver(
       dispatch.report({ kind: "submitted", source: "sdk-input", correlationId: uuid })
     },
     // Seen with the Agent SDK 0.3.314 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model
-    // heard it in the request after the command returned, and a Stop ended the turn in 0.2 s.
-    steering: { kind: "supported", lands: "step", hears: "at its next step, once the command or subagent it's running returns", via: "A message sent while a turn runs joins the running query and is read at its next step.", async steer(id, input) {
+    // heard it in the request after the command returned, and a Stop ended the turn in 0.2 s. Measured again
+    // 2026-11-03: heard 11.2 s after the steer, stopped in 0.1 s. The person's steer restarts the turn.
+    steering: { kind: "supported", lands: "step", landing: "restart", hears: "at its next step, once the command or subagent it's running returns", via: "A message sent while a turn runs joins the running query and is read at its next step.", async steer(id, input) {
       const live = requireLive(id)
       const content = await claudeInputContent(input.text, input.attachments)
       if (

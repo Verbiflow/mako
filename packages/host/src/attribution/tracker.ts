@@ -102,9 +102,48 @@ const GIT_LOOKBACK_MS = 2_000
 const RECENT_KEPT = 4096
 const LOG_EVERY_MS = 10_000
 const SLOW_FLUSH_MS = 50
-/** Attribution holds the host's one thread at most this long, give or take one change, before sockets and timers get a turn. */
+/** Attribution holds the host's one thread at most this long a turn, give or take one change per job, before sockets and timers get one. */
 const SLICE_MS = 8
 const yieldTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
+/** A tracker's sliced jobs under way: each root's journaling, a reattribution pass, settling. */
+interface Slicing {
+  jobs: number
+}
+
+/**
+ * One job's share of a turn. A turn wakes every job waiting on it back to
+ * back, so their slices add up: each takes `SLICE_MS` split between them,
+ * and at least one unit of work.
+ */
+class Slice {
+  private started = performance.now()
+  private open = true
+  private readonly slicing: Slicing
+
+  constructor(slicing: Slicing) {
+    this.slicing = slicing
+    slicing.jobs++
+  }
+
+  get spent(): boolean {
+    return performance.now() - this.started >= SLICE_MS / Math.max(1, this.slicing.jobs)
+  }
+
+  async next(): Promise<void> {
+    await yieldTurn()
+    this.restart()
+  }
+
+  /** A turn of its own began. */
+  restart(): void {
+    this.started = performance.now()
+  }
+
+  done(): void {
+    if (this.open) this.slicing.jobs--
+    this.open = false
+  }
+}
 const DAY_MS = 86_400_000
 /** A command's named paths the journal keeps, for the Thread's working set. */
 const STORED_NAMED = 64
@@ -269,8 +308,10 @@ export class LaptopTracker implements AttributionTracker {
   readonly evidence: Evidence
   private readonly pending = new Map<number, Pending>()
   private settleTimer?: ReturnType<typeof setTimeout>
-  /** The next slice of a backlog settling. */
-  private settleSlice?: ReturnType<typeof setImmediate>
+  private readonly slicing: Slicing = { jobs: 0 }
+  /** A backlog settling: its share of each turn, and its next slice. */
+  private settleSlice?: Slice
+  private settleNext?: ReturnType<typeof setImmediate>
   private reattribution?: Promise<void>
   /** The reaches the pass under way weighs, and the last seq it got to. */
   private round?: { reaches: readonly Reach[]; done: number }
@@ -966,29 +1007,34 @@ export class LaptopTracker implements AttributionTracker {
     // Changes found after lost events could have happened any time in the gap, which memory may no longer hold.
     const gapEvidence = state.gap && prepared.some(({ how }) => how !== "event") ? evidenceOf(this.store.activityBetween(state.gap.from - TRAIL_MS, at), this.evidence.worked) : undefined
     // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
-    for (let index = 0; ; ) {
-      const slice = performance.now()
-      this.store.transaction(() => {
-        for (; index < prepared.length && performance.now() - slice < SLICE_MS; index++) {
-          const { item, how, before } = prepared[index]!
-          const t = performance.now()
-          const from = renamed.get(item.path)
-          const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence)
-          if (seq) timing.entries++
-          const spent = performance.now() - t
-          if (spent > slowest) {
-            slowest = spent
-            timing.slowest = item.path
+    const slice = new Slice(this.slicing)
+    try {
+      for (let index = 0; ; ) {
+        const begun = performance.now()
+        this.store.transaction(() => {
+          for (let first = true; index < prepared.length && (first || !slice.spent); first = false, index++) {
+            const { item, how, before } = prepared[index]!
+            const t = performance.now()
+            const from = renamed.get(item.path)
+            const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence)
+            if (seq) timing.entries++
+            const spent = performance.now() - t
+            if (spent > slowest) {
+              slowest = spent
+              timing.slowest = item.path
+            }
           }
-        }
-        if (index < prepared.length) return
-        state.root.seenAt = at
-        this.store.saveRoot(state.root)
-      })
-      if (index >= prepared.length) break
-      timing.writeMs += performance.now() - slice
-      await yieldTurn()
-      started = performance.now()
+          if (index < prepared.length) return
+          state.root.seenAt = at
+          this.store.saveRoot(state.root)
+        })
+        if (index >= prepared.length) break
+        timing.writeMs += performance.now() - begun
+        await slice.next()
+        started = performance.now()
+      }
+    } finally {
+      slice.done()
     }
     timing.writeMs += performance.now() - started
     timing.lagMs = this.now() - heardAt
@@ -1708,28 +1754,31 @@ export class LaptopTracker implements AttributionTracker {
     this.reattribution = (async () => {
       // Evidence comes in bursts (a hook's bounds, then the stream's report of the same call): one pass takes the burst.
       await yieldTurn()
-      for (let reaches = this.evidence.takeReaches(); reaches.length && !this.closed; reaches = this.evidence.takeReaches()) {
-        this.round = { reaches, done: 0 }
-        let started = performance.now()
-        for (const pending of this.pending.values()) {
-          if (performance.now() - started >= SLICE_MS) {
-            await yieldTurn()
-            if (this.closed) return
-            started = performance.now()
-          }
-          this.round.done = pending.seq
-          if (!this.pending.has(pending.seq) || !reaches.some((reach) => reachesChange(reach, pending.change, pending.author))) continue
-          const author = attribute(pending.change, this.evidence)
-          if (author.certainty === "exact") this.evidence.proved(author.author, pending.change.path, pending.change.changedAt)
-          if (JSON.stringify(author) === JSON.stringify(pending.author)) continue
-          pending.author = author
-          this.store.updateAuthor(pending.seq, author, false)
-          // A call that named the file ran the Git command that wrote it: its work, as `git checkout -- file` is.
-          if (pending.git && (author.certainty === "exact" || author.certainty === "named")) {
-            pending.git = false
-            this.store.markGit(pending.seq, false)
+      const slice = new Slice(this.slicing)
+      try {
+        for (let reaches = this.evidence.takeReaches(); reaches.length && !this.closed; reaches = this.evidence.takeReaches()) {
+          this.round = { reaches, done: 0 }
+          for (const pending of this.pending.values()) {
+            if (slice.spent) {
+              await slice.next()
+              if (this.closed) return
+            }
+            this.round.done = pending.seq
+            if (!this.pending.has(pending.seq) || !reaches.some((reach) => reachesChange(reach, pending.change, pending.author))) continue
+            const author = attribute(pending.change, this.evidence)
+            if (author.certainty === "exact") this.evidence.proved(author.author, pending.change.path, pending.change.changedAt)
+            if (JSON.stringify(author) === JSON.stringify(pending.author)) continue
+            pending.author = author
+            this.store.updateAuthor(pending.seq, author, false)
+            // A call that named the file ran the Git command that wrote it: its work, as `git checkout -- file` is.
+            if (pending.git && (author.certainty === "exact" || author.certainty === "named")) {
+              pending.git = false
+              this.store.markGit(pending.seq, false)
+            }
           }
         }
+      } finally {
+        slice.done()
       }
     })()
       .catch((error: Error) => this.log("reattribution failed", { error: error.message }))
@@ -1765,12 +1814,13 @@ export class LaptopTracker implements AttributionTracker {
 
   /** Close every change no new evidence can reach. */
   private settle(force = false): void {
-    if ((this.holds || this.closed) && !force) return
-    clearImmediate(this.settleSlice)
+    clearImmediate(this.settleNext)
+    this.settleNext = undefined
+    const slice = this.settleSlice ?? new Slice(this.slicing)
     this.settleSlice = undefined
+    if ((this.holds || this.closed) && !force) return slice.done()
     const now = this.now()
     const live = this.evidence.liveSince(now)
-    const started = performance.now()
     let stale = false
     let more = false
     this.store.transaction(() => {
@@ -1783,14 +1833,20 @@ export class LaptopTracker implements AttributionTracker {
         }
         this.store.updateAuthor(pending.seq, pending.author, true)
         this.pending.delete(pending.seq)
-        if (!force && performance.now() - started >= SLICE_MS) {
+        if (!force && slice.spent) {
           more = true
           break
         }
       }
     })
     // A backlog settles a slice at a time.
-    if (more) this.settleSlice = setImmediate(() => this.settle())
+    if (more) {
+      this.settleSlice = slice
+      this.settleNext = setImmediate(() => {
+        slice.restart()
+        this.settle()
+      })
+    } else slice.done()
     if (stale) this.reattribute()
     if (!more && !this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
   }

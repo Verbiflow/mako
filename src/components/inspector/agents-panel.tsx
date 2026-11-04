@@ -10,9 +10,9 @@ import { descriptorFor } from "@/state/descriptors"
 import { capabilityText } from "@mako/host/contracts/harness-capabilities"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import { isActiveNativeAgent, isProviderWork, type NativeWork } from "@mako/host/contracts/native-agents"
-import { rollup, rollupLine, rosterChildren } from "@mako/host/contracts/children"
+import { rollup, rollupChip, rollupLabel, rosterChildren } from "@mako/host/contracts/children"
 import { ApexFinsSection } from "@/components/inspector/apex-fins-section"
-import { apexConversation, openFinInApex, useApexView } from "@/state/apex-fins"
+import { apexConversation, openFinInApex, threadRollup, useApexView } from "@/state/apex-fins"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ToolGlyph } from "@/components/transcript/tool-views"
@@ -162,7 +162,10 @@ export function ConversationAgents({
   const background = useAcp((state) => {
     const live = liveConversation(state, conversation)
     const work = live ? backgroundWork(live.session, live.nativeAgents) : null
-    return { waiting: work ? backgroundWorkText(work) : undefined, unnamed: work?.unnamed ?? 0, stopping: live?.canceling ?? false }
+    // The Fins section counts the Fins; this line says what else the session waits on.
+    const named = work?.named.filter((agent) => !agent.child) ?? []
+    const rest = work && (named.length || work.unnamed) ? { ...work, named, count: named.length + work.unnamed } : null
+    return { waiting: rest ? backgroundWorkText(rest) : undefined, unnamed: work?.unnamed ?? 0, stopping: live?.canceling ?? false }
   }, shallowEqual)
   return (
     <AgentRoster
@@ -231,8 +234,9 @@ function AgentRoster({
         }
       />
     )
-  const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient).length + unnamed
-  const finished = agents.filter((agent) => !isActiveNativeAgent(agent)).length
+  // Fins are counted by their own section, as every surface counts them (`rollup`); this line is the rest.
+  const running = agents.filter((agent) => !agent.child && isActiveNativeAgent(agent) && !agent.ambient).length + unnamed
+  const finished = agents.filter((agent) => !agent.child && !isActiveNativeAgent(agent)).length
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label text-faint">
@@ -415,12 +419,14 @@ export function AgentsToggle() {
   const reading = useAcp((state) => {
     const live = activeLiveAcp(state)
     const agents = live?.nativeAgents?.agents ?? []
-    // An Apex's Fins say how they stand by the rollup; the rest of the roster counts as it runs.
-    const children = rollup(rosterChildren(live?.nativeAgents))
+    // An Apex's Fins say how they stand by the Thread's one rollup, as the crew card, the pips and the phone read it;
+    // the rest of the roster counts as it runs.
+    const children = live?.threadId ? threadRollup(state, live.threadId) : rollup(rosterChildren(live?.nativeAgents))
     const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient && !agent.child)
     return {
       total: agents.length,
-      fins: children.total ? rollupLine(children) : "",
+      fins: children.total ? rollupChip(children) : "",
+      finsLabel: children.total ? rollupLabel(children) : "",
       running: running.length,
       // The harnesses at work, as one string so a step elsewhere in the roster re-renders nothing.
       harnesses: [...new Set(running.filter((agent) => (agent.work ?? "agent") === "agent").map((agent) => agent.provider))].slice(0, SHOWN_MARKS).join(" "),
@@ -434,8 +440,9 @@ export function AgentsToggle() {
     <button
       type="button"
       data-agents-toggle
+      data-fin-counts={reading.finsLabel || undefined}
       onClick={() => stage.toggle("agents")}
-      title={reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
+      title={reading.finsLabel ? `${reading.finsLabel}; open the Agents panel` : reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
       className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
     >
       {marks.length ? (

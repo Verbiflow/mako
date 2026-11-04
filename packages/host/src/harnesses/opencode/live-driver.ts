@@ -1,3 +1,4 @@
+import { configureOpenCodeCalls } from "./call-plugin.js"
 import { realpath } from "node:fs/promises"
 import { OpenCodeCallBounds } from "./call-bounds.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -812,6 +813,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const launchAccess = openCodeLaunchAccess(options.modeId, options.launchModeId)
       configureOpenCodePermissions(env, launchAccess)
       configureOpenCodeRouting(env, options.conversationId, options.nativeRouting)
+      const tools = options.conversationTools
+      await configureOpenCodeCalls(env, options.conversationId, options.nativeCalls && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env, versions))
@@ -1011,7 +1014,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       }
       await live.interactions.respond(requestId, response, dispatch)
     },
-    steering: { kind: "supported", lands: "step", hears: "at its next step, once the command it's running returns", via: "A prompt sent while the session is busy is read at its next step.", async steer(id, input) {
+    // Measured 2026-11-03 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model heard it
+    // 11.1 s later, once the command returned; a Stop ended the turn in 0.1 s. The person's steer restarts it.
+    steering: { kind: "supported", lands: "step", landing: "restart", hears: "at its next step, once the command it's running returns", via: "A prompt sent while the session is busy is read at its next step.", async steer(id, input) {
       const live = sessions.get(id)
       const turn = live?.turn
       if (!live?.root || live.closed || live.state.status !== "running" || !turn || turn.kind === "compaction" || live.state.nativeRunId !== input.expectedRunId)
