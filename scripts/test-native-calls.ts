@@ -14,7 +14,7 @@ import { configureOpenCodeCalls } from "@mako/host/harnesses/opencode/call-plugi
 import { pathToFileURL } from "node:url"
 import { codexHookHash } from "@mako/host/harnesses/codex/authoring"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
-import { NATIVE_OVERRIDE, routeNativeTool, routeShellCall, shellLine, shellWords, type CallThread } from "@mako/host/contracts/native-calls"
+import { NATIVE_CALL_POLICY, NATIVE_OVERRIDE, routeNativeTool, routeShellCall, shellLine, shellWords, type CallThread } from "@mako/host/contracts/native-calls"
 
 const main = "/Users/p/proj"
 const worktree = "/Users/p/.mako/worktrees/proj-1/fix-login"
@@ -263,5 +263,8 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
     await rm(root, { recursive: true, force: true })
   }
 }
+
+assert.equal(NATIVE_CALL_POLICY.shell(inWorktree, { command: "gh pr create", cwd: worktree }).kind, "deny", "the policy as one value answers as its functions do")
+assert.equal(NATIVE_CALL_POLICY.tool(inMain, { tool: "EnterWorktree" }).kind, "deny")
 
 console.log(`native calls: ${CASES.length} shell cases and the native tools pass`)

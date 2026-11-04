@@ -456,3 +456,11 @@ export function routeNativeTool(thread: CallThread, call: NativeTool, names: Too
 export type NativeCallsCapability =
   | { kind: "per-call"; via: string; families: readonly CallFamily[]; verified: { version: string; how: string } }
   | { kind: "words"; reason: string }
+
+/** The per-call policy as one value, for a layer that hands it to each harness's adapter (`CallPolicy`). */
+export interface NativeCallPolicy {
+  shell(thread: CallThread, call: { command: string; cwd?: string }, names?: ToolNames): CallRoute
+  tool(thread: CallThread, call: NativeTool, names?: ToolNames): CallRoute
+}
+
+export const NATIVE_CALL_POLICY: NativeCallPolicy = { shell: routeShellCall, tool: routeNativeTool }
