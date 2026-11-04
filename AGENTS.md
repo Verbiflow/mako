@@ -359,6 +359,18 @@ the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
 there. `npm run test:orch-comms` covers all three.
+An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
+(`AgentsApexes`): every tree's top Apex but its own whose conversation is
+open here, each with its title, harness, whether it works and its last step,
+folder and branch, its Fins' `rollup`, and a digest of its open Fins' last
+reports and its own last reply's first paragraph. Reading wakes no one.
+`agents_send` `to: apex:<title or Thread>` messages one: Mako's words
+(`fromApex`, `apexNote`), never the person's, after its turn unless steered;
+the transcript draws it as a card from that Apex. The turn that answers it
+sends its reply back once, as the sender's wake (`Notice.reply`), and that
+wake sends nothing on. At most three go from one Apex to another an hour
+(`rate-limited`). The rule for when to message is in
+`ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
 
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where

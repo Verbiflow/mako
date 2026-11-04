@@ -559,6 +559,7 @@ export type AgentRefusalReason =
   | "budget"
   | "cycle"
   | "unknown-child"
+  | "unknown-apex"
   | "unknown-harness"
   | "unknown-model"
   | "limited"
@@ -566,6 +567,7 @@ export type AgentRefusalReason =
   | "no-parent"
   | "conflict"
   | "stale-owner"
+  | "rate-limited"
   | "unavailable"
 export interface AgentRefused {
   refused: AgentRefusalReason

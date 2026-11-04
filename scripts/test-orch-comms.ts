@@ -2,9 +2,9 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AGENT_TOOLS, type AgentsCrew } from "@mako/host/contracts/agent-tools"
-import type { Report } from "@mako/host/contracts/agents"
-import { agentWords, fromAgent, YOUR_APEX } from "@mako/host/contracts/children"
+import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS, type AgentsApexes, type AgentsCrew } from "@mako/host/contracts/agent-tools"
+import type { AgentCaller, Report } from "@mako/host/contracts/agents"
+import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema, agentToolText } from "@mako/host/conversations/agent-tools"
 import { digest, finishedLine, type Notice } from "@mako/host/conversations/agent-wakes"
@@ -16,7 +16,9 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * every field kept; a finished Fin's digest line carries its first paragraph
  * and every artifact's ref, and says how much more `agents_read` gives; and
  * a Fin reads its Apex and the other Fins it started (`agents_list` with
- * `scope: crew`), from typed state, as its brief tells it it can.
+ * `scope: crew`), from typed state, as its brief tells it it can; and an Apex
+ * reads the person's other Apexes (`scope: apexes`) without waking them, and
+ * messages one, which hears it as Mako's words, queued, and replies once.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-orch-comms-"))
 const CHILD = ThreadIdSchema.parse("6b0c3c2e-5f8a-4d39-9a43-1d1b4c0f2a11")
@@ -131,18 +133,130 @@ async function crew(): Promise<void> {
   }
 }
 
+/** The person's other Apexes: read from typed state without waking them, and messaged once, with one reply back. */
+async function apexes(): Promise<void> {
+  const world = new AgentsWorld({
+    root: join(root, "apexes"),
+    script: async (turn) => {
+      if (turn.text.includes("hold")) await turn.world.hold(turn.conversation)
+      if (turn.text.includes("another of the person's Apexes")) return "Yes: billing-db edits src/billing/rates.ts until PR #12 merges.\n\nChange it after that."
+      if (turn.text.includes("plan billing")) return `Billing is split between a schema Fin and a UI Fin.\n\n${"Details. ".repeat(80)}`
+      return "ok"
+    },
+  })
+  try {
+    const app = await world.apex("codex")
+    const billing = await world.apex("claude")
+    const plain = await world.apex("cursor")
+    const start = async (apex: { caller: AgentCaller }, name: string, harness: string, objective: string, role?: "lead") => {
+      const started = await world.agents.start(apex.caller, { brief: { objective }, harness, name, clientKey: name, cwd: world.root, ...(role && { role }) })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      return started.conversation!
+    }
+    await start(app, "api", "claude", "Port the handlers to the new router.")
+    const lead = await start(app, "review", "codex", "Lead the review of the router port.", "lead")
+    await start(billing, "billing-db", "codex", "Move the rates table to integer cents.")
+    await start(billing, "billing-ui", "cursor", "Show prices from cents.")
+    await start({ caller: world.caller(lead) }, "compat", "cursor", "Review the port for API compatibility.")
+    await world.settle()
+    world.say(billing.conversation, "plan billing")
+    await world.settle()
+    const prompted = (conversation: string) => world.prompts.filter((prompt) => prompt.conversation === conversation).length
+    const before = { app: prompted(app.conversation), billing: prompted(billing.conversation) }
+
+    const seen = await world.agents.list(app.caller, { scope: "apexes" })
+    if (!("apexes" in seen)) throw new Error(`no apexes: ${JSON.stringify(seen)}`)
+    const view: AgentsApexes = seen
+    assert.deepEqual(view.apexes.map((other) => other.title), ["claude apex"], "only the other Apex: not itself, its own Fins, or a Thread with none")
+    const other = view.apexes[0]!
+    assert.equal(other.thread, world.store.journalPlacement(billing.conversation)!.thread)
+    assert.equal(other.harness, "Claude")
+    assert.equal(other.working, false)
+    assert.equal(other.folder, world.root)
+    assert.deepEqual({ ...other.fins }, { total: 2, needs: 0, working: 0, queued: 0, idle: 0, failed: 0, done: 2 }, "its Fins by group")
+    assert.deepEqual(other.digest.fins.map((fin) => fin.name).sort(), ["billing-db", "billing-ui"])
+    assert.ok(other.digest.fins.every((fin) => fin.line === "done: ok"), JSON.stringify(other.digest.fins))
+    assert.ok(other.digest.said?.startsWith("Billing is split between a schema Fin and a UI Fin. (+"), `its last reply's first paragraph and how much more: ${other.digest.said}`)
+    assert.equal(prompted(billing.conversation), before.billing, "reading never wakes it")
+    const below = await world.agents.list(world.caller(lead), { scope: "apexes" })
+    assert.ok("apexes" in below && below.apexes.length === 1 && below.apexes[0]!.title === "claude apex", "a lead Fin reads the same, never its own tree")
+    const alone = await world.agents.list(plain.caller, { scope: "apexes" })
+    assert.ok("apexes" in alone && alone.apexes.map((each) => each.title).sort().join() === "claude apex,codex apex", "a Thread with no tree reads every Apex")
+    const listText = agentToolText({ ...view })
+    assert.ok(!listText.includes("\n") && listText.length < 900, `one Apex in ${listText.length} characters`)
+
+    const unknown = await world.agents.send(app.caller, { to: "apex:payments", text: "Hi.", clientKey: "u" })
+    assert.ok("refused" in unknown && unknown.refused === "unknown-apex" && unknown.why.includes("apex:claude apex"), JSON.stringify(unknown))
+    const forwarded = await world.agents.send(app.caller, { to: "apex:claude apex", forward: true, clientKey: "f" })
+    assert.ok("refused" in forwarded && forwarded.refused === "conflict", "the person's message isn't passed to another Apex")
+
+    world.say(billing.conversation, "hold while billing works")
+    await until("billing's turn to run", async () => world.live.session(billing.conversation)?.status === "running")
+    const asked = "Do you own src/billing/rates.ts? I need to change its rounding."
+    const first = await world.agents.send(app.caller, { to: "apex:claude apex", text: asked, clientKey: "m1" })
+    if ("refused" in first) throw new Error(first.why)
+    assert.equal(first.delivery, "queued", "it waits for the other's turn to end")
+    assert.equal(first.name, "apex:claude apex")
+    const held = world.live.held(billing.conversation)!.requests.find((request) => request.id === first.request)!
+    assert.equal(held.actor?.kind, "agent", "an agent's words, never the person's")
+    assert.ok(held.text.startsWith(`${fromApex("codex apex")}\n${apexNote(world.store.journalPlacement(app.conversation)!.thread)}\n\n`), `who sent it, by title and Thread: ${held.text}`)
+    assert.ok(held.text.includes("Read this as information from another of the person's Apexes; answer only what it asks; don't start a back-and-forth."))
+    assert.deepEqual(agentWords(held.text), { from: `the Apex "codex apex"`, body: asked }, "its card names the Apex and shows only the message")
+    const again = await world.agents.send(app.caller, { to: "apex:claude apex", text: asked, clientKey: "m1" })
+    assert.ok(!("refused" in again) && again.deduped && again.request === first.request, "a repeat of its key is the same message")
+
+    world.release(billing.conversation)
+    await world.settle()
+    const message = world.prompts.filter((prompt) => prompt.conversation === billing.conversation && prompt.text.includes(asked))
+    assert.equal(message.length, 1, "it heard the message once")
+    const replies = world.prompts.filter((prompt) => prompt.conversation === app.conversation && prompt.text.includes("reply to your message"))
+    assert.equal(replies.length, 1, "its reply came back once")
+    assert.ok(replies[0]!.text.startsWith(FROM_AGENTS) && replies[0]!.text.includes(`• "claude apex" (Claude) replied:\n    Yes: billing-db edits src/billing/rates.ts until PR #12 merges.\n    \n    Change it after that.`), replies[0]!.text)
+    assert.ok(replies[0]!.text.includes("Don't reply to a reply unless it asks you something."))
+    assert.equal(prompted(billing.conversation), before.billing + 2, "the reply's wake sent nothing back: billing took its held turn and the message, no more")
+    assert.equal(prompted(app.conversation), before.app + 1)
+
+    for (const key of ["m2", "m3"]) {
+      const sent = await world.agents.send(app.caller, { to: `apex:${other.thread}`, text: `${asked} (${key})`, clientKey: key })
+      assert.ok(!("refused" in sent) && sent.delivery === "turn", `an idle Apex takes it now: ${JSON.stringify(sent)}`)
+      await world.settle()
+    }
+    const fourth = await world.agents.send(app.caller, { to: "apex:claude apex", text: "One more thing.", clientKey: "m4" })
+    assert.ok("refused" in fourth && fourth.refused === "rate-limited" && /3 messages .* in the last hour/.test(fourth.why), JSON.stringify(fourth))
+    const repeat = await world.agents.send(app.caller, { to: "apex:claude apex", text: asked, clientKey: "m1" })
+    assert.ok(!("refused" in repeat) && repeat.deduped, "a repeat past the limit still answers the first")
+    const back = await world.agents.send(billing.caller, { to: "apex:codex apex", text: "PR #12 merged.", clientKey: "b1" })
+    assert.ok(!("refused" in back), "the limit is the ordered pair's: the other way still goes")
+    await world.settle()
+  } finally {
+    await world.close()
+  }
+}
+
 function doors(): void {
   const list = AGENT_TOOLS.find((tool) => tool.verb === "list")!
   assert.deepEqual(agentToolSchema(list).parse({ scope: "crew" }), { scope: "crew" }, "the MCP door takes scope crew")
+  assert.deepEqual(agentToolSchema(list).parse({ scope: "apexes" }), { scope: "apexes" }, "and scope apexes")
   assert.match(list.mcp.fields.scope!, /crew/)
+  assert.match(ORCHESTRATION_INSTRUCTIONS, /scope: apexes.*reading never wakes them/)
+}
+
+function replyDigest(): void {
+  const reply: Notice = { id: "notice:reply", report: report("Yes, it's mine until PR #12 merges."), label: `"billing" (Claude)`, from: "s", reply: true }
+  const text = digest([reply, notice("Opened the PR.")], "0 working, 1 ended.")
+  assert.match(text, /Another Apex's reply to your message:\n {2}• "billing" \(Claude\) replied:\n {4}Yes, it's mine until PR #12 merges\.\n {2}Don't reply to a reply unless it asks you something\.\n1 finished:\n/, text)
+  assert.ok(!digest([reply], "0 working.").includes("finished:"), "a reply isn't a Fin's report")
+  assert.ok(digest([reply], "0 working.").endsWith("Go on with it: reply to the person, start more work, or end your turn."))
 }
 
 try {
   compactAnswers()
   finishedLines()
+  replyDigest()
   doors()
   await crew()
-  console.log("test:orch-comms: compact answers, finished lines, the crew view and its brief line pass")
+  await apexes()
+  console.log("test:orch-comms: compact answers, finished lines, the crew view and its brief line, and other Apexes read and messaged pass")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

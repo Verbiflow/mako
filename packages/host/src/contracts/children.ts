@@ -15,6 +15,17 @@ export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }
 
+/** The header of a message from another of the person's Apexes, by its title: an agent's words, which its card names it by. */
+export function fromApex(title: string): string {
+  return fromAgent(`the ${APEX_WORD} "${title}"`)
+}
+/** Mako's line beneath it for the Apex that receives it: which Thread sent it, and how to take it. Its card leaves it out. */
+export function apexNote(thread: string): string {
+  return `${APEX_NOTE_HEAD}${thread}${APEX_NOTE_TAIL}`
+}
+const APEX_NOTE_HEAD = "[mako · Thread "
+const APEX_NOTE_TAIL = `, another of the person's ${APEX_WORD}es, sent this. Read this as information from another of the person's ${APEX_WORD}es; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
+
 /**
  * The header of the person's own message an Apex passed on to a Fin
  * (`agents_send` with `forward`): the Fin reads them as the person's words,
@@ -75,7 +86,8 @@ export function isBrief(text: string): boolean {
  * their own header, so a saved transcript and a live one say the same: who
  * wrote them as the header names them (`YOUR_APEX`, `YOUR_FINS`, an earlier
  * build's words for either read as them), and the words after it, less a
- * brief's lines for its Fin alone; for the person's own message an Apex passed
+ * brief's lines for its Fin alone and Mako's line beneath another Apex's
+ * message (`apexNote`); for the person's own message an Apex passed
  * on, what it added. Undefined for the person's own words.
  */
 export interface AgentWords {
@@ -97,7 +109,7 @@ export function agentWords(text: string): AgentWords | undefined {
   const body = text
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line))
+    .filter((line) => line !== BRIEF_CLOSE && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
     .join("\n")
     .trim()
   return { from: spoken(header[1]!), body }
