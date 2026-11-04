@@ -12,7 +12,7 @@ import { localHost, type HostTransport } from "./transport.js"
 export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--fast|--standard] [--rule <n>] [--access <tier>]
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
                     [--wait [--timeout <ms>]] [--wake decisions|finish|never]
-  mako agents list [--tree]
+  mako agents list [--tree | --crew]
   mako agents read <fin> [--transcript]
   mako agents report <status> <summary> [--question <q>] [--key <k>]
   mako agents wait [fin…] [--timeout <ms>]
@@ -69,6 +69,7 @@ const OPTIONS = {
   name: { type: "string" },
   key: { type: "string" },
   tree: { type: "boolean" },
+  crew: { type: "boolean" },
   transcript: { type: "boolean" },
   question: { type: "string" },
   wait: { type: "boolean" },
@@ -112,7 +113,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       }
     }
     case "list":
-      return { tool: tool("list"), input: values.tree ? { scope: "tree" } : {} }
+      return { tool: tool("list"), input: values.crew ? { scope: "crew" } : values.tree ? { scope: "tree" } : {} }
     case "read":
       if (!first) throw new Error("agents read needs a Fin")
       return { tool: tool("read"), input: { child: first, ...(values.transcript && { view: "transcript" }) } }

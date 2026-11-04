@@ -284,8 +284,8 @@ export function digest(notices: readonly Notice[], counts: string): string {
   if (finished.length) {
     lines.push(`${finished.length} finished:`)
     for (const { label, report } of finished) {
-      const artifacts = report.artifacts?.length ? ` ${report.artifacts.map((artifact) => artifact.label ?? artifact.ref).join(", ")}.` : ""
-      lines.push(`  • ${label} ${report.status}: ${reportPhase(report) ?? (report.status === "done" ? "it finished." : "it failed.")}${artifacts}`)
+      lines.push(`  • ${label} ${report.status}: ${finishedLine(report)}`)
+      for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
     }
   }
   lines.push(counts)
@@ -294,6 +294,22 @@ export function digest(notices: readonly Notice[], counts: string): string {
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return lines.join("\n")
 }
+
+/**
+ * A finished report as its digest line says it: its first paragraph past any heading, on one line, at most
+ * `FINISHED_CHARS`, and how much more `agents_read` gives when there is more.
+ */
+export function finishedLine(report: Report): string {
+  const summary = report.summary.trim()
+  if (!summary) return report.status === "done" ? "it finished." : "it failed."
+  const paragraphs = summary.split(/\n\s*\n/).map((paragraph) => paragraph.split("\n").filter((line) => !/^\s*(#{1,6}\s|[-*_]{3,}\s*$)/.test(line)).join("\n").trim()).filter(Boolean)
+  const first = (paragraphs[0] ?? summary).replace(/\s+/g, " ")
+  if (paragraphs.length <= 1 && first.length <= FINISHED_CHARS) return first
+  const shown = first.length > FINISHED_CHARS ? `${first.slice(0, FINISHED_CHARS - 1).trimEnd()}…` : first
+  return `${shown} (+${Math.max(1, summary.length - shown.length).toLocaleString("en-US")} chars)`
+}
+/** The most of a finished report's first paragraph its digest line carries. */
+const FINISHED_CHARS = 480
 
 /** The window before a delivery: short once a result the Apex waited for is among what waits. */
 function coalesceMs(notices: readonly Notice[]): number {
