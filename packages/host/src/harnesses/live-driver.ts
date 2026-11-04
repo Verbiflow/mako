@@ -22,6 +22,7 @@ import type { AccountLaunch } from "./accounts.js"
 import type { UsageAmendment } from "./account-usage-readings.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
+import type { CallThread } from "../contracts/native-calls.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
@@ -335,6 +336,13 @@ export interface ProviderStartOptions extends LiveStartOptions {
    * native spawn is the harness's own.
    */
   nativeRouting?: () => RoutedThread
+  /**
+   * The Thread as native calls read it now (`routeShellCall`,
+   * `routeNativeTool`): where the harness asks before a call, its shell
+   * commands and own tools that Mako has tools for are routed. Absent where
+   * the host serves no Mako tools.
+   */
+  nativeCalls?: () => CallThread
   /**
    * Nobody is at this host to sign a harness in (a cloud machine, whose sign-ins come from the account): a start that
    * would ask a person to sign in fails at once, saying the harness isn't signed in, instead of waiting for an answer.

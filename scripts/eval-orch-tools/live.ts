@@ -5,7 +5,8 @@ import { setTimeout as delay } from "node:timers/promises"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
-import { priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
+import { routeShellCall } from "@mako/host/contracts/native-calls"
+import { caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
 import { bareName, isShell, makoTool, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
@@ -19,6 +20,9 @@ import type { StubMako } from "./stub-mako.ts"
  * print and exit. Cursor has no asking mode; the stubs are what stands
  * between it and a real run.
  */
+
+/** The harnesses whose driver routes each shell call (`NativeCallsCapability` per-call): a command routing denies there never ran. */
+const ROUTED_CALLS = new Set(["claude", "cursor", "grok", "devin", "codex", "opencode"])
 
 /** Each harness's mode that asks before a command runs; Cursor has only full access. */
 export const ASKING_MODE = new Map([["claude", "default"], ["codex", "access:ask"], ["opencode", "access:ask"], ["grok", "access:ask"], ["devin", "accept-edits"]])
@@ -62,6 +66,8 @@ function prompt(orchCase: OrchCase): string {
 export async function liveSample(input: {
   harness: string; driver: ProviderLiveDriver; stub: StubMako; orchCase: OrchCase; routing: "on" | "off"
   env: NodeJS.ProcessEnv; project: string; model?: string
+  /** How long a turn may run before the sample counts as an error: 180 s unless the run says (`--turn-seconds`). */
+  turnSeconds?: number
 }): Promise<Sample & { seconds: number }> {
   const { harness, driver, stub, orchCase, routing, env, project } = input
   const id = randomUUID()
@@ -84,19 +90,27 @@ export async function liveSample(input: {
   const status = () => events.findLast((event) => event.type === "live-session")?.session.status
   try {
     const mode = ASKING_MODE.get(harness)
+    const grant = stub.grant(id)
+    if (routing === "on") stub.routes(id, caseCallThread(orchCase, project))
+    if (orchCase.setup.answers) stub.answers(id, orchCase.setup.answers)
     await driver.start(project, admitted(harness, {
       conversationId: id, emit, ...mode && { modeId: mode }, ...input.model && { tuning: { model: input.model } },
-      conversationTools: stub.grant(id),
+      conversationTools: grant,
       mcpSnapshot: async () => ({ cwd: project, generatedAt: Date.now(), servers: [], providers: [] }),
-      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }) },
+      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }), nativeCalls: () => caseCallThread(orchCase, project) },
     }, { env }))
     await driver.prompt(id, prompt(orchCase), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
-    const deadline = Date.now() + 180_000
+    const seconds = input.turnSeconds ?? 180
+    const deadline = Date.now() + seconds * 1000
     while (Date.now() < deadline && !(status() !== "running" && status() !== "starting" && Date.now() - quiet > 5000)) await delay(250)
-    if (Date.now() >= deadline) throw new Error("the turn didn't settle in three minutes")
+    if (Date.now() >= deadline) throw new Error(`the turn didn't settle in ${seconds} s`)
   } finally {
     await Promise.resolve(driver.close(id)).catch(() => {})
   }
+  // A turn its harness failed before the model did anything (a usage limit, a sign-in) grades nothing: it's an error, left out of every rate.
+  const failed = events.findLast((event) => event.type === "live-session" && event.session.status === "failed")
+  if (failed?.type === "live-session" && !updates(events).some((update) => update.kind === "tool" || update.kind === "text"))
+    throw new Error(`the turn failed before the model acted: ${failed.session.error ?? "no reason given"}`)
   // A tool's later updates (its status, its output) repeat its id: the call is the last of them that names it.
   const named = new Map<string, { raw: string; args: ToolArgs }>()
   for (const update of updates(events)) if (update.kind === "tool" && update.name) named.set(update.id, { raw: update.name, args: update.input === undefined ? named.get(update.id)?.args ?? {} : toolArgs(update.input) })
@@ -118,9 +132,12 @@ export async function liveSample(input: {
     const key = update.id ?? ""
     texts.set(key, update.replace ? update.text : (texts.get(key) ?? "") + update.text)
   }
+  const shell = [...tools.filter(({ raw }) => isShell(harness, raw)).map(({ args }) => shellCommand(args)), ...refused]
+  const routes = routing === "on" && ROUTED_CALLS.has(harness)
   return {
     steps,
-    shell: [...tools.filter(({ raw }) => isShell(harness, raw)).map(({ args }) => shellCommand(args)), ...refused],
+    shell,
+    ran: routes ? shell.filter((command) => routeShellCall(caseCallThread(orchCase, project), { command, cwd: project }).kind !== "deny") : shell,
     text: [...texts.values()].join("\n"),
     ended: status() !== "failed",
     seconds: Math.round((Date.now() - began) / 1000),

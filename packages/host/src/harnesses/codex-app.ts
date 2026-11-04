@@ -77,7 +77,7 @@ import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
-import { codexRoutingConfig } from "./codex/routing.js"
+import { codexCallsConfig, codexRoutingConfig, type CodexCallGate } from "./codex/routing.js"
 import type { RoutedThread } from "../contracts/native-routing.js"
 import { approvalRoot, type HarnessContext } from "./host.js"
 
@@ -112,6 +112,8 @@ type Live = {
   mcpSnapshot: McpRegistrySnapshot
   /** The Thread as native routing reads it (`ProviderStartOptions.nativeRouting`), read when the thread opens. */
   nativeRouting?: () => RoutedThread
+  /** Where Codex's hook posts each gated call, where the launch routes calls (`ProviderStartOptions.nativeCalls`). */
+  callGate?: CodexCallGate
   nextRequestId: number
   pending: Map<string, PendingRpc>
   serverRequests: Map<string, PendingServerRequest>
@@ -243,6 +245,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       instructions: conversationInstructions(options.conversationTools),
       mcpSnapshot,
       nativeRouting: options.nativeRouting,
+      ...options.nativeCalls && options.conversationTools?.makoUrl && { callGate: { url: options.conversationTools.makoUrl.replace(/\/mako$/, "/calls/before"), token: options.conversationTools.token } },
       nextRequestId: 0,
       pending: new Map(),
       serverRequests: new Map(),
@@ -703,7 +706,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     const tuning = threadTuning(
       live.tuning,
       codexMcpConfig(live.mcpSnapshot, live.makoServers),
-      codexRoutingConfig(live.id, live.nativeRouting)
+      { ...codexRoutingConfig(live.id, live.nativeRouting), ...codexCallsConfig(live.id, live.callGate) }
     )
     const open = () => {
       if (fork)

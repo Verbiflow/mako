@@ -3,10 +3,12 @@ import { attentionLine } from "@mako/host/contracts/notifications"
 import { CloudIcon, LaptopIcon } from "lucide-react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
-import { ThreadRollup } from "@/components/rail/rollup-badge"
+import { ApexCrewLine } from "@/components/rail/fin-pips"
+import { useIsApex } from "@/state/fin-pips"
+import { ApexAsks } from "@/components/rail/apex-asks"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
-import { ROW_ACTIONS, ROW_SURFACE, SessionCount } from "@/components/rail/thread-row"
+import { APEX_SURFACE, ROW_ACTIONS, ROW_SURFACE, RowLine, SessionCount } from "@/components/rail/thread-row"
 import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { copyAge, formatRelative, workspaceName } from "@/lib/format"
@@ -51,6 +53,7 @@ export function LiveAgentRow({
   // Lit by the same rule as `ThreadRow`: a thread open in the viewer is the
   // selection; otherwise the live conversation on screen is.
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
+  const apex = useIsApex(thread)
   const viewedMember = useThreads((state) => {
     const path = state.opening?.ref.path ?? state.viewing?.ref.path
     return path === undefined ? undefined : Boolean(folded?.members.some((member) => member.kind === "native" && member.ref.path === path))
@@ -117,6 +120,7 @@ export function LiveAgentRow({
     archiveTargets,
   }
   return (
+    <>
     <ThreadContextMenu {...menu}>
       <div
         role="button"
@@ -138,8 +142,10 @@ export function LiveAgentRow({
         data-active={lit || undefined}
         aria-current={lit || undefined}
         onClick={open}
-        className={cn("pressable", ROW_SURFACE, indent ? "pl-2" : "pl-1.5")}
+        data-apex-row={apex || undefined}
+        className={cn("pressable", ROW_SURFACE, apex && APEX_SURFACE, indent ? "pl-2" : "pl-1.5")}
       >
+        <RowLine apex={apex}>
         <ThreadMark
           status={status}
           state={!otherSession && presence.status === "starting" ? "starting" : undefined}
@@ -154,7 +160,6 @@ export function LiveAgentRow({
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
         {presence.elsewhere && (!routed || presence.elsewhere === CLOUD_WHERE) ? <ElsewhereMark where={presence.elsewhere} /> : null}
         {folded ? <SessionCount count={folded.members.length} /> : null}
-        <ThreadRollup thread={thread} />
         {/* The branch its owner's worktree is on, as a row this Mac made one for wears it. */}
         {presence.worktreeBranch ? <WorktreeMark worktree={{ branch: presence.worktreeBranch }} summary={undefined} /> : null}
         {!indent ? (
@@ -179,8 +184,12 @@ export function LiveAgentRow({
         ) : (
           <ThreadStatusEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} />
         )}
+        </RowLine>
+        {apex ? <ApexCrewLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
+    {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
+    </>
   )
 }
 

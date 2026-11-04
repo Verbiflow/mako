@@ -23,6 +23,7 @@ import { Prose } from "@/components/transcript/markdown"
 import { AgentWordsCard } from "@/components/transcript/agent-words"
 import { RoutedLine } from "@/components/transcript/routed-line"
 import { agentWords } from "@mako/host/contracts/children"
+import { resumeAccountLine } from "@mako/host/contracts/resume-account"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AgentMark, LeadSlot, ToolRow } from "@/components/transcript/tool-row"
 import { readPersonTokenProblem } from "@mako/host/contracts/github-person"
@@ -63,6 +64,7 @@ import {
   turnRequest,
   type Exchange as ExchangeData,
   type PlacedSection,
+  type ResumedAccount,
 } from "@/lib/exchanges"
 import type { SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { EventNotes } from "./event-notes"
@@ -229,6 +231,8 @@ function TurnExchange({
       <RoutedLine key={section.id} routed={section.routed} landed={section.landed} />
     ) : section.kind === "continued" ? (
       <TurnWentOn key={section.id} continued={section.continued} message={section.message} provider={provider} />
+    ) : section.kind === "resumed" ? (
+      <ResumedLine key={section.id} resumed={section.resumed} message={section.message} />
     ) : section.kind === "prose" ? (
       <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
     ) : section.kind === "shown" || section.kind === "made" ? (
@@ -267,7 +271,8 @@ function TurnExchange({
           return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline />
             : note.kind === "shown" || note.kind === "made" ? <TurnMedia key={note.id} media={note.media} shown={note.kind === "shown"} />
               : note.kind === "routed" ? <RoutedLine key={note.id} routed={note.routed} landed={note.landed} />
-              : note.kind === "continued" ? <TurnWentOn key={note.id} continued={note.continued} message={note.message} provider={provider} /> : null
+              : note.kind === "continued" ? <TurnWentOn key={note.id} continued={note.continued} message={note.message} provider={provider} />
+              : note.kind === "resumed" ? <ResumedLine key={note.id} resumed={note.resumed} message={note.message} /> : null
         })}
       >
         {sections.slice(fold.start, fold.end).map((section, offset, hidden) =>
@@ -432,6 +437,27 @@ function TurnWentOn({ continued, message, provider }: { continued: SavedContinua
       action={<ShowOriginal origins={[message.origin]} />}
     >
       {diagnosing && said ? <p className="text-faint">{said}</p> : null}
+    </EventLine>
+  )
+}
+
+/**
+ * Where the turn went on from a point older than calls it had already run,
+ * and Mako told the agent of each: one quiet line, the words it read behind
+ * Show original.
+ */
+function ResumedLine({ resumed, message }: { resumed: ResumedAccount; message: ChatMessage }) {
+  const diagnosing = usePrefs((prefs) => prefs.showOriginals)
+  const said = textOf(message.blocks).trim()
+  return (
+    <EventLine
+      icon={RefreshCwIcon}
+      time={message.timestamp}
+      data-turn-resumed={resumed.cause}
+      words={{ title: resumeAccountLine(resumed) }}
+      action={<ShowOriginal origins={[message.origin]} />}
+    >
+      {diagnosing && said ? <p className="whitespace-pre-wrap text-faint">{said}</p> : null}
     </EventLine>
   )
 }
