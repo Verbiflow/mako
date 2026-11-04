@@ -7,6 +7,7 @@ import {
 } from "@mako/host/contracts/children"
 import { FinMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { LiveMark } from "@/components/ui/live-mark"
 import { cn } from "@/lib/utils"
 import { activeAcp, useAcp } from "@/state/acp"
 import { useThreadAsks, useThreadChildren } from "@/state/apex-fins"
@@ -109,7 +110,9 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
       className="flex flex-col gap-1.5"
     >
       <p className="flex min-w-0 items-center gap-1.5 text-label">
-        <HarnessIcon harness={ask.harness} className="size-3.5 shrink-0" />
+        <LiveMark kind="fin" state="needs" size={18} cut="var(--surface)">
+          <HarnessIcon harness={ask.harness} />
+        </LiveMark>
         <span className="min-w-0 truncate font-medium text-foreground">
           {ask.title}
         </span>

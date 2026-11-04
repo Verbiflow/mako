@@ -366,7 +366,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
     <>
       {parts.map((part, index) =>
         part.hit ? (
-          <mark key={index} className="rounded-[2px] bg-foreground/20 text-foreground">
+          <mark key={index} className=" bg-foreground/20 text-foreground">
             {part.text}
           </mark>
         ) : (

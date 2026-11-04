@@ -193,7 +193,7 @@ export function recordCutOff(resident: Resident, requestId: string, root: string
   const blocks = reduceLiveUpdates(resident.snapshot.blocks, resident.updates)
   // A harness that ends its process on Stop never reports the calls it was running.
   const stopped = interruption.reason === "stopped"
-  const closing = closeCutOffCalls(blocks, requestId, stopped ? "canceled" : "failed")
+  const closing = closeCutOffCalls(blocks, requestId, stopped || interruption.reason === "steered" ? "canceled" : "failed")
   resident.updates.push(...closing)
   // The person who stopped the turn knows what it left; the agent is told only of a turn cut short.
   const record = stopped ? {} : recordCutOffCalls(reduceLiveUpdates(blocks, closing), requestId, steps, join(root, "context", "interrupted", requestId))

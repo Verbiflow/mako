@@ -5,7 +5,7 @@ import { observePhaseLockedAnimation } from "@/lib/visible-animation"
 import { apexPips, pipsCounts, type Pips } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp"
 
-const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "queued"], ["f", "failed"], ["d", "done"]])
+const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "queued"], ["i", "idle"], ["f", "failed"], ["d", "done"]])
 const MAX_PIPS = 16
 
 /**
@@ -44,7 +44,7 @@ export const ApexCrewLine = memo(function ApexCrewLine({ thread }: { thread: str
   if (!pips) return null
   const label = rollupLabel(pipsCounts(pips))
   return (
-    <span role="img" aria-label={label} data-tip={label} data-fin-pips={pips} className="flex h-3.5 w-full min-w-0 items-center gap-2 pl-7">
+    <span role="img" aria-label={label} data-tip={label} data-fin-pips={pips} data-fin-counts={label} className="flex h-3.5 w-full min-w-0 items-center gap-2 pl-7">
       <FinPips pips={pips} />
       <span className="tabular min-w-0 truncate text-label text-faint">{finsWord(pips.length)}</span>
     </span>

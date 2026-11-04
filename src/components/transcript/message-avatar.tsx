@@ -1,5 +1,6 @@
 import { Avatar } from "@/components/ui/avatar"
-import { ApexMark } from "@/components/ui/apex-mark"
+import { LiveMark } from "@/components/ui/live-mark"
+import type { LiveMarkKind } from "@/lib/live-mark-state"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
 import { cn } from "@/lib/utils"
@@ -22,15 +23,23 @@ export function PersonAvatar({ className }: { className?: string }) {
   )
 }
 
-/** An agent's tile: its harness when known, else the Apex mark. */
-export function AgentAvatar({ harness, label, className }: { harness?: string; label?: string; className?: string }) {
+/**
+ * An agent's square: Mako's fin, still (the two-tone fin for a Thread, the plain fin for a Fin), its harness as the
+ * corner badge when known.
+ */
+export function AgentAvatar({ harness, kind = "thread", label, className }: { harness?: string; kind?: LiveMarkKind; label?: string; className?: string }) {
   return (
-    <span
-      data-message-avatar="agent"
-      title={label}
-      className={cn("flex size-6 shrink-0 items-center justify-center rounded-[3px] bg-raised [&>svg]:size-3.5 [&>span]:size-3.5", className)}
-    >
-      {harness ? <HarnessIcon harness={harness} /> : <ApexMark />}
+    <span data-message-avatar="agent" data-avatar-kind={kind} title={label} className={cn("flex size-6 shrink-0 items-center justify-center bg-raised", className)}>
+      <StillMark harness={harness} kind={kind} cut="var(--raised)" label={label} />
     </span>
+  )
+}
+
+/** A Thread or Fin named inline where its state isn't the point ("To Dictation fallback"): its fin, still, the harness its badge. */
+export function StillMark({ harness, kind = "fin", size = 20, cut, label, className }: { harness?: string; kind?: LiveMarkKind; size?: number; cut?: string; label?: string; className?: string }) {
+  return (
+    <LiveMark state="idle" kind={kind} size={size} cut={cut} className={cn("live-mark-still", className)} label={label}>
+      {harness ? <HarnessIcon harness={harness} /> : null}
+    </LiveMark>
   )
 }

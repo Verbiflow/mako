@@ -25,6 +25,9 @@ export interface WatchSubscription {
 /** Settles once the root is watched; rejects when it can't be. */
 export type WatchBackend = (root: string, ignore: readonly string[], listener: WatchListener) => Promise<WatchSubscription>
 
+/** The host's backend: every watch in one child, which `recover` starts again once fseventsd has, so every watch hears `dropped` and rescans. */
+export type ChildWatchBackend = WatchBackend & { recover(): void }
+
 type ParcelCallback = (error: Error | null, events: WatchEvent[]) => void
 type ParcelSubscribe = (root: string, callback: ParcelCallback, options: { ignore: string[] }) => Promise<WatchSubscription>
 
@@ -42,8 +45,10 @@ const STABLE_MS = 60_000
 const MAX_CRASHES = 5
 /**
  * A silence restarts the child at most this often. A restart ends a parcel
- * deadlock; a silence soon after one is fseventsd's, which a restart only
- * answers with every stream registered again and every root rescanned.
+ * deadlock; a silence soon after one is fseventsd's, which restarting the
+ * child only answers with every stream registered again and every root
+ * rescanned. Restarting fseventsd itself is what ends that, offered by
+ * `file-events-service.ts`.
  */
 const RECYCLE_EVERY_MS = 10 * 60_000
 
@@ -66,9 +71,11 @@ interface ChildWatch {
  * silence restarted it within `RECYCLE_EVERY_MS`. A silent fseventsd
  * outlives the restart; the watches stay muted until a canary is heard
  * again. A canary heard later than `SLOW_DELIVERY_MS` tells every watch it's
- * `late`. `readings` hears all of it, for the log and Diagnostics.
+ * `late`. `readings` hears all of it, each beat too, for the log,
+ * Diagnostics and the read of fseventsd's health. `recover` restarts the
+ * child after fseventsd started over: every watch hears `dropped`.
  */
-export function childBackend(script = defaultChildScript(), readings = new WatchReadings()): WatchBackend {
+export function childBackend(script = defaultChildScript(), readings = new WatchReadings()): ChildWatchBackend {
   const watches = new Map<number, ChildWatch>()
   let child: ChildProcess | undefined
   let startedAt = 0
@@ -82,7 +89,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   let recycled = false
   let recycledAt = -Infinity
   /** Children this backend ended itself, and why, for the line their exit writes. */
-  const ended = new WeakMap<ChildProcess, "idle" | "silence">()
+  const ended = new WeakMap<ChildProcess, "idle" | "silence" | "recovery">()
 
   const post = (request: WatcherRequest) => {
     if (child?.connected) child.send(request)
@@ -141,6 +148,8 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
 
   const onReply = (reply: WatcherReply) => {
     if (reply.t === "delivery") return onDelivery(reply.ok, reply.lagMs)
+    if (reply.t === "beat") return readings.beat(reply.lagMs)
+    if (!("id" in reply)) return
     const watch = watches.get(reply.id)
     if (!watch) return
     switch (reply.t) {
@@ -215,7 +224,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     for (const [id, watch] of watches) post({ t: "sub", id, root: watch.root, ignore: watch.ignore })
   }
 
-  return (root, ignore, listener) => {
+  const backend: WatchBackend = (root, ignore, listener) => {
     clearTimeout(idle)
     const id = nextId++
     return new Promise<WatchSubscription>((resolve, reject) => {
@@ -228,6 +237,16 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
       } else if (!restart) start("first")
     })
   }
+  // Streams registered with the fseventsd that's gone may never hear again: a new child registers each with the new one.
+  const recover = () => {
+    if (!child || !watches.size) return
+    const stale = child
+    child = undefined
+    ended.set(stale, "recovery")
+    stale.kill()
+    start("recovery")
+  }
+  return Object.assign(backend, { recover })
 }
 
 /** What changed on disk in a stretch of time, from the file system's own history. */
@@ -242,6 +261,23 @@ export interface FileHistory {
    * paths under an `exclude` folder inside a root are never read at all.
    */
   since(mark: HistoryMark, roots: readonly string[], options?: { ignore?: readonly string[]; exclude?: readonly string[] }): Promise<{ paths: string[]; lost: string[]; ignored: number[] }>
+  /** fseventsd started over: reads under way end, reported as failed, and the next starts a reader afresh. */
+  recover?(): void
+}
+
+/**
+ * Whether fseventsd started over since a time, as the host has seen its
+ * process id change (`file-events-service.ts`). A read of history across a
+ * restart may miss what the daemon held but hadn't written, so every root
+ * of it is reported lost. Each answer looks at the daemon again first.
+ */
+export interface DaemonRestarts {
+  restartedSince(ms: number): Promise<boolean>
+}
+
+/** A mark's time, parcel's nanoseconds of wall-clock time, in milliseconds. */
+export function markMs(mark: HistoryMark): number {
+  return Number(BigInt(mark.at) / 1_000_000n)
 }
 
 /** A mark is asked for on the way to starting an app, so it waits less than a read of history. */
@@ -255,8 +291,10 @@ const HISTORY_MS = 120_000
  * since the mark, which would stall every watch sharing the child, and a
  * stuck read is ended by killing this child alone. Each request that runs
  * out of time ends the child and every request in it; the next starts one.
+ * A read whose mark is from before fseventsd last started over (`daemon`)
+ * reports every root lost, whatever it found.
  */
-export function childHistory(script = defaultChildScript(), readings = new WatchReadings()): FileHistory {
+export function childHistory(script = defaultChildScript(), readings = new WatchReadings(), daemon?: DaemonRestarts): FileHistory {
   let child: ChildProcess | undefined
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
@@ -330,6 +368,8 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   return {
     async mark() {
       if (!onMac()) throw new Error("The file system's history is read through FSEvents, on macOS only.")
+      // Looked at first, so a restart before this mark is never taken for one after it.
+      await daemon?.restartedSince(Date.now()).catch(() => false)
       const reply = await ask({ t: "mark", id: nextId++ }, MARK_MS)
       if (reply.t !== "marked") throw failed(reply)
       return reply.mark
@@ -342,9 +382,43 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
       )
       if (reply.t !== "history") throw failed(reply)
       readings.historyRead(performance.now() - asked, reply.paths.length + reply.ignored.reduce((sum, count) => sum + count, 0), { caughtUpMs: reply.caughtUpMs, readMs: reply.readMs })
-      return { paths: reply.paths, lost: reply.lost, ignored: reply.ignored }
+      const crossed = daemon ? await daemon.restartedSince(markMs(mark)).catch(() => false) : false
+      return { paths: reply.paths, lost: crossed ? roots.filter((root) => existsSync(root)) : reply.lost, ignored: reply.ignored }
+    },
+    recover() {
+      if (child) end(child, new Error("macOS's file-change service started over during the read"))
     },
   }
+}
+
+/**
+ * Delivery measured now, in a child of its own that ends with it: how late
+ * `beats` writes to a fresh folder are heard, one after another. Empty when
+ * none was heard, or the child couldn't run.
+ */
+export function probeDelivery(script = defaultChildScript(), beats = 5): Promise<number[]> {
+  return new Promise((settle) => {
+    const child = fork(script, [], {
+      execPath: headlessNodeExecutable(),
+      execArgv: script.endsWith(".ts") ? process.execArgv : [],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+    })
+    const done = (lags: number[]) => {
+      clearTimeout(timer)
+      child.kill()
+      settle(lags)
+    }
+    const timer = setTimeout(() => done([]), beats * 11_000 + 5_000)
+    child.on("message", (raw) => {
+      const reply = WatcherReplySchema.safeParse(raw)
+      if (reply.success && reply.data.t === "probed") done(reply.data.lagsMs)
+      else if (reply.success && reply.data.t === "failed") done([])
+    })
+    child.once("exit", () => done([]))
+    child.once("error", () => done([]))
+    child.send({ t: "probe", id: 1, beats } satisfies WatcherRequest)
+  })
 }
 
 function defaultChildScript(): string {

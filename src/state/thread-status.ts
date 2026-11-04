@@ -1,5 +1,5 @@
 import { toast } from "sonner"
-import { acpForThread, acpStore } from "@/state/acp-state"
+import { acpForThread, acpStore, type AcpState } from "@/state/acp-state"
 import type { ThreadRef, ThreadRunState } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { workspaceName } from "@/lib/format"
@@ -140,6 +140,25 @@ export function threadStatus(
   if (ref.locked) return { kind: "external-open", app: ref.harness }
   if (ref.active === false) return IDLE_STATUS
   return state.observed[ref.path] ? OBSERVED_STATUS : IDLE_STATUS
+}
+
+/**
+ * The facts `threadStatus` reads from the live store, as one string. A row's status selector subscribes to the
+ * Threads store; a row that also subscribes to this repaints when its live conversation's state, approval, Fin asks
+ * or background work move (a Fin answered elsewhere, its last one going idle) and not on every streamed token.
+ */
+export function threadLiveKey(state: AcpState, ref: ThreadRef): string {
+  const owned = acpForThread(state, ref)
+  if (!owned) return ""
+  if (owned.kind !== "live") return owned.kind
+  return [
+    owned.session.connection,
+    owned.session.status,
+    owned.permission?.id ?? "",
+    finAskLine(owned) ?? "",
+    owned.waitingOn ?? "",
+    backgroundWork(owned.session, owned.nativeAgents)?.count ?? 0,
+  ].join("|")
 }
 
 export const OBSERVED_IDLE_MS = 60_000

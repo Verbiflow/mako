@@ -10,6 +10,7 @@ import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
+import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
@@ -340,6 +341,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "store-formats") {
     applyStoreFormats(event.formats)
+    return
+  }
+  if (event.type === "file-events-service") {
+    applyFileEvents(event.service)
     return
   }
   if (event.type === "thread-titles") {
@@ -772,6 +777,8 @@ async function loadGroups() {
   }
   // Which shared stores a newer Mako changed; the rail and Diagnostics say so. An older host without the method has none to say.
   await loadStoreFormats().catch(() => undefined)
+  // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
+  await loadFileEvents().catch(() => undefined)
   try {
     await loadThreadTitles()
   } catch (error) {

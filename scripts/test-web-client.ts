@@ -243,7 +243,7 @@ test("a row says one fact under its title: what it waits on, that it failed or w
   ]
   const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
   const said = (id: number, named = false) => rowDetail(threads.find((thread) => thread.id === uuid(id))!, named)
-  assert.deepEqual(said(110), { text: "Approve: npm test", tone: "caution" })
+  assert.deepEqual(said(110), { text: "Approve: npm test", tone: "attention" })
   assert.deepEqual(said(111), { text: "Failed", tone: "negative" })
   assert.deepEqual(said(112), { text: "Working", tone: "working" })
   assert.deepEqual(said(113), { text: "web", tone: "faint", place: "device" }, "one Mac: its name goes without saying")

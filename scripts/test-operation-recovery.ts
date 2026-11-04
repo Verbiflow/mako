@@ -54,6 +54,7 @@ for (const kind of ["compact", "steer", "steer-queued"] as const) {
   const compact: LiveAction = { input: { kind: "compact", id }, digest: "digest", bindingId: id, createdAt: 1, state: { kind: "accepted" } }
   assert.equal(actionNoticeCurrent(compact, []), true, "a compaction in progress shows until it completes")
   assert.equal(actionNoticeCurrent({ ...compact, state: { kind: "completed" } }, []), false)
-  assert.match(describeActionRecovery({ ...steer, state: { kind: "dispatching" } }).title, /waiting for the agent/)
+  assert.match(describeActionRecovery({ ...steer, state: { kind: "dispatching" } }).title, /^Steering$/)
+  assert.match(describeActionRecovery({ ...steer, state: { kind: "dispatching" } }).guidance, /within a second/)
 }
 console.log("PASS: all-six plus future-provider transfer receipts, exact request correlation and every action outcome")

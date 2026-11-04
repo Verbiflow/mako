@@ -109,7 +109,7 @@ function Gauge({ level, className }: { level: ThinkingLevel; className?: string 
         <span
           key={index}
           className={cn(
-            "w-[2px] rounded-[1px] transition-colors duration-150",
+            "w-[2px] transition-colors duration-150",
             index < filled ? "bg-foreground" : "bg-foreground/20"
           )}
           style={{ height: 4 + index * 2 }}

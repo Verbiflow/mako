@@ -84,7 +84,7 @@
   }
   .rv-file-head {
     @apply sticky top-0 z-10 flex min-h-11 items-center bg-surface;
-    border-radius: 11px 11px 0 0;
+    border-radius: 0;
   }
   .rv-file[data-open] .rv-file-head {
     @apply border-b border-hairline;

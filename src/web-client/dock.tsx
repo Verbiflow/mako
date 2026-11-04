@@ -363,7 +363,7 @@ function ApprovalCard({ permission, conversation, harness }: { permission: LiveP
     <div className="web-ask-body" aria-busy={busy || undefined} data-busy={busy || undefined}>
       <p className="web-ask-asker">{permission.kind === "authentication" ? `${harness} asks you to sign in` : `${harness} asks to run`}</p>
       <p className="web-ask-title">
-        {permission.kind ? <ToolGlyph kind={tool.kind} className="size-4 shrink-0 text-caution" /> : <ShieldQuestionIcon className="size-4 shrink-0 text-caution" />}
+        {permission.kind ? <ToolGlyph kind={tool.kind} className="size-4 shrink-0 text-attention" /> : <ShieldQuestionIcon className="size-4 shrink-0 text-attention" />}
         <span className={cn("min-w-0 break-words", !makoTool && !permission.detail && "font-mono")}>{title}</span>
       </p>
       <div className="web-ask-scroll">

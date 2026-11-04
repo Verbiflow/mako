@@ -47,6 +47,7 @@ import type { RestorePlan } from "@mako/host/contracts/restore-plan"
 import type { HarnessBehind, ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import type { StoreFormats } from "@mako/host/contracts/store-formats"
+import type { FileEventsSample, FileEventsService } from "@mako/host/contracts/file-events-service"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
@@ -528,6 +529,17 @@ export function installMockBridge() {
   }
   const ownStores: StoreFormats = { stores: newerStores.stores.map((row) => ({ store: row.store, access: "write", build: row.build, writableBy: row.build, readableBy: row.build })) }
   if (storesLater) setTimeout(() => emit({ type: "store-formats", formats: { stores: [newerStores.stores[0]!, ...ownStores.stores.slice(1)] } }), 1500)
+  /**
+   * `?app=fseventsd`: macOS's file-change service degraded as it was seen
+   * after a month up, 10.5 GB resident and the canary 2.6 s late; Restart it
+   * walks the steps and ends restarted. `?app=fseventsd-restarted` opens on
+   * that outcome. Any other scene reads a healthy service.
+   */
+  let mockFileEvents = mockFileEventsService(scene)
+  const setFileEvents = (next: FileEventsService) => {
+    mockFileEvents = next
+    emit({ type: "file-events-service", service: next })
+  }
   let mockUpdate: "current" | "ready" = "current"
   const outdatedCodexReading = () => ({
     provider: "codex",
@@ -3299,6 +3311,16 @@ export function installMockBridge() {
       },
     }),
     continueReadings: async () => mockContinues.readings(),
+    fileEventsService: async () => mockFileEvents,
+    fileEventsRestart: async () => {
+      const before = mockFileEvents
+      setFileEvents({ ...before, restarting: "restarting" })
+      await new Promise((resolve) => setTimeout(resolve, 2_500))
+      setFileEvents({ ...before, restarting: "measuring" })
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+      setFileEvents(mockFileEventsService("fseventsd-restarted"))
+      return mockFileEvents
+    },
     makoFootprint: async () => ({
       at: new Date().toISOString(),
       processes: [
@@ -3314,7 +3336,7 @@ export function installMockBridge() {
         roots: [{ root: "/Users/mock/Code/mako", watches: 2 }, { root: "/Users/mock/Code/notes", watches: 1 }],
         streams: 3,
         child: { pid: 506, since: Date.now() - 3 * 3_600_000 },
-        starts: { first: 1, crash: 0, silence: 1 },
+        starts: { first: 1, crash: 0, silence: 1, recovery: 0 },
         delivery: { ok: true, lagMs: 9_400, since: Date.now() - 2 * 3_600_000 },
         eventsLastHour: 1_284,
         droppedLastHour: 3,
@@ -3859,4 +3881,76 @@ function mockFailure(text: string): { kind: ProviderFailureKind | "uncertain" | 
   const kind = PROVIDER_FAILURE_KINDS.find((candidate) => candidate === named)
   if (!kind) return undefined
   return { kind, error: MOCK_FAILURES.get(kind), started: /after it started/i.test(text), unsent: kind === "missing-folder" || kind === "wrong-account" || kind === "launch-failed" }
+}
+
+/** fseventsd as `?app=fseventsd` and `?app=fseventsd-restarted` read it, and healthy for every other scene. */
+function mockFileEventsService(scene: string | null): FileEventsService {
+  const now = Date.now()
+  const GB = 1024 ** 3
+  const MB = 1024 ** 2
+  const context = { watched: 6, streams: 7, childStarts: 0, historyReads: 9, turnsRunning: 2, wakes: 0 }
+  // A day of samples, every 15 minutes, of a daemon that has grown for a month and is still growing.
+  const degradedDay: FileEventsSample[] = Array.from({ length: 96 }, (_, index) => ({
+    at: now - (96 - index) * 15 * 60_000,
+    pid: 338,
+    residentBytes: Math.round((9.8 + (0.7 * index) / 95) * GB),
+    lagMs: 2_350 + ((index * 37) % 500),
+    beats: 6,
+    state: "degraded",
+    context: { ...context, turnsRunning: index % 5, historyReads: 6 + (index % 7), wakes: index === 40 ? 1 : 0 },
+  }))
+  if (scene === "fseventsd")
+    return {
+      state: "degraded",
+      degraded: { since: now - 47 * 60_000, lag: true, memory: true },
+      lagMs: 2_600,
+      slowestMs: 4_200,
+      beats: 6,
+      pid: 338,
+      residentBytes: Math.round(10.5 * GB),
+      readAt: now - 20_000,
+      history: degradedDay,
+    }
+  if (scene === "fseventsd-restarted") {
+    const at = now - 40_000
+    return {
+      state: "healthy",
+      lagMs: 54,
+      slowestMs: 61,
+      beats: 5,
+      pid: 19_513,
+      residentBytes: Math.round(8.2 * MB),
+      readAt: now - 5_000,
+      history: [
+        ...degradedDay.slice(-5),
+        { at, pid: 19_513, residentBytes: Math.round(8.2 * MB), lagMs: 54, beats: 5, state: "healthy", why: "restarted", context },
+      ],
+      restart: {
+        at,
+        outcome: "restarted",
+        before: { lagMs: 2_600, residentBytes: Math.round(10.5 * GB) },
+        after: { lagMs: 54, residentBytes: Math.round(8.2 * MB) },
+        evidence: "/Users/mock/Library/Application Support/Mako/crashes/fseventsd-2026-11-03T22-41-07-512Z",
+        historyKept: true,
+      },
+    }
+  }
+  return {
+    state: "healthy",
+    lagMs: 52,
+    slowestMs: 66,
+    beats: 6,
+    pid: 19_513,
+    residentBytes: Math.round(11.8 * MB),
+    readAt: now - 30_000,
+    history: Array.from({ length: 96 }, (_, index) => ({
+      at: now - (96 - index) * 15 * 60_000,
+      pid: 19_513,
+      residentBytes: Math.round((8.4 + (3.4 * index) / 95) * MB),
+      lagMs: 48 + ((index * 13) % 18),
+      beats: 6,
+      state: "healthy" as const,
+      context: { ...context, turnsRunning: index % 4 },
+    })),
+  }
 }

@@ -146,11 +146,16 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.link-bead[data-state="offline"]::before', { animation: "link-bead-breathe", reduced: "global" }],
   // A side question's mark pulses only while it's being answered.
   [".side-panel-glyph", { animation: "side-glyph", reduced: /\.side-panel-glyph\s*\{\s*animation:\s*none;/ }],
-  // The live mark: a comet while it works, a breath while it needs you, a drift while a Fin asks its Apex. Each rests
+  // The live mark: the fin's own gesture for each state (bob, glide and wake, brace, breathe, drift). Each rests
   // on the gate (`observePhaseLockedAnimation`), which also stills it under reduced motion.
-  [".live-mark-comet", { animation: "live-mark-turn", reduced: "global" }],
-  ['.live-mark[data-live-mark="needs"] > .live-mark-ring', { animation: "live-mark-breathe", reduced: "global" }],
-  ['.live-mark[data-live-mark="lead"] > .live-mark-ring', { animation: "live-mark-turn", reduced: "global" }],
+  ['.live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
+  ['.live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body', { animation: "live-mark-glide", reduced: "global" }],
+  [".live-mark-wake", { animation: "live-mark-wake", reduced: "global" }],
+  ['.live-mark[data-live-mark="working"][data-motion="tool"] .live-mark-body', { animation: "live-mark-brace", reduced: "global" }],
+  ['.live-mark[data-live-mark="background"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
+  ['.live-mark[data-live-mark="starting"] .live-mark-body', { animation: "live-mark-breathe", reduced: "global" }],
+  ['.live-mark[data-live-mark="needs"] .live-mark-water', { animation: "live-mark-breathe", reduced: "global" }],
+  ['.live-mark[data-live-mark="lead"] .live-mark-body', { animation: "live-mark-drift", reduced: "global" }],
   // An Apex's working pips: one veil per row sweeping on `transform`, on the same gate.
   [".fin-pips-veil", { animation: "fin-pips-wave", reduced: /\.fin-pips-veil\s*\{\s*display:\s*none;/ }],
   // The crew card's bar: the working stretch alone sweeps, only while it is on screen (`observeVisibleAnimation`) and motion is allowed.

@@ -390,6 +390,8 @@ function continuedTitle({ reason, sender, stayed }: SavedContinuation, provider:
       return sender === "mako" ? "Mako continued the turn it stopped at the goal's token budget" : sender === "person" ? "You continued the turn Mako stopped at the goal's token budget" : "The turn Mako stopped at the goal's token budget continued"
     case "machine-lost":
       return sender === "person" ? "You picked the interrupted step up again" : `The last step was interrupted; ${provider} picked it up again`
+    case "steered":
+      return sender === "person" ? "You continued the turn Mako stopped for your message" : "The turn Mako stopped for your message continued"
   }
 }
 

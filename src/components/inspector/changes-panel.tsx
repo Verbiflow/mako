@@ -700,7 +700,7 @@ function StageCell({
         )}
       >
         <span aria-hidden className={cn(
-          "pointer-events-none flex size-3.5 items-center justify-center rounded-[4px] ring-1 ring-inset transition-colors duration-100",
+          "pointer-events-none flex size-3.5 items-center justify-center ring-1 ring-inset transition-colors duration-100",
           state === "off" ? "ring-foreground/35 hover:ring-foreground/55" : "bg-foreground/80 ring-foreground/80"
         )}>
           {state === "on" ? (

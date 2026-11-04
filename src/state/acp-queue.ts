@@ -138,7 +138,8 @@ async function attemptSend(
 }
 
 /** What became of a steer: the turn took it (or may have), the host refused it before the harness heard it, or its answer was lost. */
-type Steered = "steered" | "refused" | "unknown"
+/** How a steer went: into the turn, refused (with why, when the person should hear it), or not known yet. */
+type Steered = "steered" | { refused: string | undefined } | "unknown"
 
 /**
  * A message into the running turn, kept in the outbox under the composer's request ID like any send, which its action
@@ -167,26 +168,45 @@ async function attemptSteer(id: string, text: string, attachments: PromptAttachm
     settleMessage(requestId)
     return true
   }
-  // Kept in the outbox: the host is asked again once it's back (`restorePendingMessages`).
-  if (steered === "unknown") return true
+  // Kept in the outbox: the host is asked again once it's back (`restorePendingMessages`), which never sends it twice.
+  if (steered === "unknown") {
+    if (!unknownSteers.has(requestId)) toast("Mako lost its link to this conversation while steering. Your message is kept and goes once the link is back.")
+    unknownSteers.add(requestId)
+    return true
+  }
+  unknownSteers.delete(requestId)
+  if (steered.refused) toast(steered.refused)
   return attemptSend(id, text, attachments, requestId, current.replyBindingId)
 }
+
+/** The steers whose outcome the person was told is unknown, told once each. */
+const unknownSteers = new Set<string>()
 
 async function steerOnce(id: string, input: Extract<LiveActionInput, { kind: "steer" }>): Promise<Steered> {
   try {
     const action = await getMako().liveAction(id, input)
-    if (action.state.kind === "not-accepted") return "refused"
+    if (action.state.kind === "not-accepted") return { refused: action.state.reason }
     if (action.state.kind === "uncertain" || action.state.kind === "failed") toast.error(action.state.reason)
     return "steered"
   } catch (error) {
     const snapshot = await readLiveSnapshot(id).catch(() => null)
     if (snapshot) applyLiveSnapshot(snapshot)
     const receipt = snapshot?.control?.actions?.find((action) => action.input.id === input.id)
-    if (receipt) return receipt.state.kind === "not-accepted" ? "refused" : "steered"
+    if (receipt) return receipt.state.kind === "not-accepted" ? { refused: receipt.state.reason } : "steered"
     // It came first as a message of its own: that is where its words went.
     if (snapshot?.requests.some((request) => request.id === input.id)) return "steered"
-    return error instanceof Error && isHostReconnectingError(error) ? "unknown" : "refused"
+    if (error instanceof Error && isHostReconnectingError(error)) return "unknown"
+    return { refused: steerRefusal(error instanceof Error ? error.message : String(error)) }
   }
+}
+
+/**
+ * What the person hears of a steer the host refused before taking it, which then goes as the next message: nothing
+ * when the turn it was for had just ended, as a message sent then would have gone the same way.
+ */
+function steerRefusal(reason: string): string | undefined {
+  if (/no longer running|has not started yet/i.test(reason)) return undefined
+  return `Mako couldn't steer your message into the running turn (${reason.replace(/[.\s]+$/, "")}), so it goes as the next message.`
 }
 
 /**
