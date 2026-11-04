@@ -1,0 +1,77 @@
+[
+ {
+  "id": "msg_fixture1",
+  "role": "assistant",
+  "modelID": "muse-spark-1.3-contributor-free",
+  "providerID": "opencode",
+  "cost": 0,
+  "tokens": {
+   "total": 25691,
+   "input": 1209,
+   "output": 60,
+   "reasoning": 1781,
+   "cache": {
+    "write": 0,
+    "read": 22641
+   }
+  },
+  "time": {
+   "created": 1788900757645,
+   "completed": 1788900772587
+  },
+  "path": {
+   "cwd": "/work/project",
+   "root": "/work/project"
+  }
+ },
+ {
+  "id": "msg_fixture2",
+  "role": "assistant",
+  "modelID": "muse-spark-1.3-contributor-free",
+  "providerID": "opencode",
+  "cost": 0,
+  "tokens": {
+   "total": 23820,
+   "input": 2164,
+   "output": 57,
+   "reasoning": 1006,
+   "cache": {
+    "write": 0,
+    "read": 20593
+   }
+  },
+  "time": {
+   "created": 1788900723042,
+   "completed": 1788900732369
+  },
+  "path": {
+   "cwd": "/work/project",
+   "root": "/work/project"
+  }
+ },
+ {
+  "id": "msg_fixture3",
+  "role": "assistant",
+  "modelID": "muse-spark-1.3-contributor-free",
+  "providerID": "opencode",
+  "cost": 0,
+  "tokens": {
+   "total": 22810,
+   "input": 1654,
+   "output": 321,
+   "reasoning": 1778,
+   "cache": {
+    "write": 0,
+    "read": 19057
+   }
+  },
+  "time": {
+   "created": 1788900657903,
+   "completed": 1788900677936
+  },
+  "path": {
+   "cwd": "/work/project",
+   "root": "/work/project"
+  }
+ }
+]

@@ -51,46 +51,46 @@ export function PaneComposer() {
   const harness = liveHarness ?? ref?.harness
   const title = harness ? harnessTitle(harness) : "the agent"
   const placeholder = running
-    ? `Queue a message for ${title}`
-    : liveHarness
-      ? `Reply — ${title} answers live`
-      : `Reply — ${title} answers`
+    ? `Queue for ${title}`
+    : "Ask anything"
 
   return (
     <div
       data-composer
       data-pane-reply
       onPointerDown={(event) => event.preventDefault()}
-      className="flex max-h-[55dvh] min-h-0 shrink-0 cursor-text flex-col border-t border-hairline bg-surface"
+      className="flex max-h-[55dvh] min-h-0 shrink-0 cursor-text flex-col bg-surface"
     >
-      <div className="relative min-h-0 max-h-[min(320px,35dvh)] overflow-hidden">
-        <textarea
-          readOnly
-          tabIndex={-1}
-          value={shown}
-          rows={1}
-          placeholder={placeholder}
-          spellCheck={false}
-          aria-label={`Reply to ${title}`}
-          className="composer-input pointer-events-none relative block min-h-20 w-full resize-none overflow-hidden bg-transparent px-4 pt-4 pb-2 font-sans text-prose leading-[1.6] text-foreground placeholder:text-faint focus:outline-none"
-        />
-      </div>
-      <div className="flex min-h-11 shrink-0 items-center gap-1 px-3 pb-3 [&_button]:pointer-events-none">
-        <ComposerAdditions meta={meta} disabled={false} attachFiles={async () => {}} onAttach={noop} onReference={noop} />
-        <div
-          ref={routingRow}
-          className="composer-routing flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
-        >
-          <ComposerRouting />
-        </div>
-        <div className="ml-2 flex shrink-0 items-center gap-1">
-          <ComposerActionButton
-            action={running ? (draft.trim() ? "queue" : "stop") : "send"}
-            ready={draft.trim().length > 0}
-            stopping={false}
-            onSend={noop}
-            onStop={noop}
+      <div className="composer-box relative mx-3 mb-3 flex min-h-0 flex-col bg-raised">
+        <div className="relative min-h-0 max-h-[min(320px,35dvh)] overflow-hidden">
+          <textarea
+            readOnly
+            tabIndex={-1}
+            value={shown}
+            rows={1}
+            placeholder={placeholder}
+            spellCheck={false}
+            aria-label={`Reply to ${title}`}
+            className="composer-input pointer-events-none relative block min-h-12 w-full resize-none overflow-hidden bg-transparent px-4 pt-3.5 pb-1.5 font-sans text-prose leading-[1.6] text-foreground placeholder:text-faint focus:outline-none"
           />
+        </div>
+        <div className="flex min-h-11 shrink-0 items-center gap-0.5 px-2 pb-2 [&_button]:pointer-events-none">
+          <ComposerAdditions meta={meta} disabled={false} attachFiles={async () => {}} onAttach={noop} onReference={noop} />
+          <div
+            ref={routingRow}
+            className="composer-routing flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
+          >
+            <ComposerRouting />
+          </div>
+          <div title={running ? (draft.trim() ? "Queue" : "Stop") : "Send"} className="ml-2 flex shrink-0 items-center gap-1">
+            <ComposerActionButton
+              action={running ? (draft.trim() ? "queue" : "stop") : "send"}
+              ready={draft.trim().length > 0}
+              stopping={false}
+              onSend={noop}
+              onStop={noop}
+            />
+          </div>
         </div>
       </div>
     </div>

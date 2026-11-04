@@ -738,8 +738,8 @@ assert.equal(agentActivity({...activityBase,blocks:[],native:{kind:"retrying",si
 assert.deepEqual(agentActivity({...activityBase,blocks:[],native:{kind:"waiting",since:3,label:"Reviewing the approval"}}),{kind:"working",label:"Reviewing the approval",since:3})
 const markerExchange = (...notes: TranscriptEvent[]) => renderToStaticMarkup(<Exchange exchange={{id:"marker",prompt:{id:"marker",role:"user",blocks:[{type:"text",text:"Go"}]},response:[],
   system:notes.map((note,index) => ({after:0,message:{id:`note-${index}`,role:"system",blocks:[{type:"text",text:note.label}],note}}))}} />)
-const compactedMarkup = markerExchange({label:"Context compacted",detail:"Automatic · 182k → 24k tokens",body:"## Kept\nThe plan"})
-assert.match(compactedMarkup, /Context compacted<\/span><span class="[^"]*">Automatic · 182k → 24k tokens/, "the marker reads its label and detail on one line")
+const compactedMarkup = markerExchange({label:"Context compacted",detail:"Automatic · 182K → 24K tokens",body:"## Kept\nThe plan"})
+assert.match(compactedMarkup, /Context compacted<\/span><span class="[^"]*">Automatic · 182K → 24K tokens/, "the marker reads its label and detail on one line")
 assert.match(compactedMarkup, /<button[^>]*aria-expanded="false"/, "a marker with a body opens onto it")
 assert.doesNotMatch(compactedMarkup, /The plan/, "the body stays unmounted until it is opened")
 const failedMarkup = markerExchange({label:"Turn failed",detail:"Server overloaded",tone:"error"})
@@ -819,13 +819,13 @@ publish()
 const details = (usage: LiveSessionUsage, harness: string, requests: readonly LiveRequest[] = conversation.requests ?? []) =>
   renderToStaticMarkup(<UsageDetails usage={usage} harness={harness} conversationId={conversation.session.id} requests={requests} />)
 const readingMarkup = details(conversation.session.usage!, "claude")
-assert.match(readingMarkup, /164k of 200k tokens in the window now/)
+assert.match(readingMarkup, /164K of 200K tokens in the window now/)
 assert.match(readingMarkup, />82%</)
 assert.match(readingMarkup, /Spent in this conversation/)
 assert.match(readingMarkup, /1 turn/)
-assert.match(readingMarkup, /Cache read.*410k/)
-assert.match(readingMarkup, /Output.*2\.1k reasoning.*9\.4k/)
-assert.match(readingMarkup, /Total.*459k/)
+assert.match(readingMarkup, /Cache read.*410K/)
+assert.match(readingMarkup, /Output.*2\.1K reasoning.*9\.4K/)
+assert.match(readingMarkup, /Total.*459K/)
 assert.match(readingMarkup, /Cost, as Claude Code priced it.*\$0\.42/)
 assert.doesNotMatch(readingMarkup, /≈|data-cost-estimate/, "a reported cost is never shown as an estimate")
 const meterMarkup = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
@@ -848,7 +848,7 @@ assert.match(renderToStaticMarkup(<UsageDetails usage={conversation.session.usag
 // doesn't (Devin) shows no fill until the next reply, only what the context held before.
 const unmeasured = details({ compactedFrom: 164_000, size: 200_000 }, "devin", [])
 assert.match(unmeasured, />Compacted</)
-assert.match(unmeasured, /data-context-compacted[^>]*>Held 164k of 200k tokens before compacting\. Devin doesn&#x27;t say what a compaction left/)
+assert.match(unmeasured, /data-context-compacted[^>]*>Held 164K of 200K tokens before compacting\. Devin doesn&#x27;t say what a compaction left/)
 assert.doesNotMatch(unmeasured, />\d+%<|in the window now/, "no number of the old context passes for the new one")
 // Before the first reply, a harness that measures says when it will, never that it can't.
 const pending = details({}, "claude", [])
@@ -887,7 +887,7 @@ assert.doesNotMatch(undeclared, /\$0\.03|data-unrecorded-spend/)
 assert.match(undeclared, /Codex reports tokens only and prices none of them\./)
 // The harness's own count for its session stands apart, said to include turns outside Mako.
 const native = details({ used: 1_000, size: 200_000, native: { tokens: { input: 5_000, cacheRead: 90_000, cacheWrite: 0, output: 5_000 }, cost: 1.5 } }, "opencode", [])
-assert.match(native, /data-harness-total[^>]*>.*OpenCode’s own count for this session.*100k.*\$1\.50.*It includes turns run outside Mako\./)
+assert.match(native, /data-harness-total[^>]*>.*OpenCode’s own count for this session.*100K.*\$1\.50.*It includes turns run outside Mako\./)
 const readingUsage = conversation.session.usage
 const readingRequests = conversation.requests
 conversation.harness = "unmeasured"

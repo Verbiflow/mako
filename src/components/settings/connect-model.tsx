@@ -9,7 +9,7 @@ import type {
   UtilityProviderInfo,
 } from "@/lib/types"
 import { SearchSelect } from "@/components/ui/search-select"
-import { formatContextWindow } from "@/lib/format"
+import { formatTokens } from "@/lib/format"
 import {
   KeyRoundIcon,
   RefreshCwIcon,
@@ -284,7 +284,7 @@ export function ConnectModel({
                 options={(catalog?.models ?? []).map((entry) => ({
                   value: entry.id,
                   label: entry.name,
-                  detail: `${entry.id}${entry.contextTokens ? ` · ${formatContextWindow(entry.contextTokens)} context tokens` : ""}`,
+                  detail: `${entry.id}${entry.contextTokens ? ` · ${formatTokens(entry.contextTokens)} context tokens` : ""}`,
                   keywords: entry.id,
                 }))}
                 onChange={(next) => {

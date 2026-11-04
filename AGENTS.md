@@ -1225,7 +1225,14 @@ passed off as one, and neither is a bill. Every model call Mako makes itself
 (commit drafts, connection checks) is a helper run in
 `usage/helper-runs/`, with what asked for it, and Settings › Usage lists each
 purpose as a source. `npm run usage -- <conversation>` prints one
-conversation's ledger with where each number came from.
+conversation's ledger with where each number came from. Every surface says
+a token count and a dollar amount through `@mako/sessions/amounts`
+(`formatTokens`: K, M, B, T in three figures; `formatUsd`: cents below $10,
+whole dollars grouped above), and a figure is "at API prices", never "spent":
+a subscription is billed by its plan. The usage ledger keeps each event's
+reader, so a harness that gains its own history drops what Mako's journals
+measured of it; `scripts/test-usage-truth.ts` holds every harness's real
+records to totals worked out by hand.
 
 ## The hot path
 

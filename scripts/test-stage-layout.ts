@@ -151,6 +151,7 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body', { animation: "live-mark-glide", reduced: "global" }],
   [".live-mark-wake", { animation: "live-mark-wake", reduced: "global" }],
+  [".live-mark-glint > i", { animation: "live-mark-glint", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="tool"] .live-mark-body', { animation: "live-mark-brace", reduced: "global" }],
   ['.live-mark[data-live-mark="background"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
   ['.live-mark[data-live-mark="starting"] .live-mark-body', { animation: "live-mark-breathe", reduced: "global" }],
@@ -256,15 +257,15 @@ assert.equal(composerEnterAction({ canSteer: true, steerOnEnter: false }), "queu
 assert.equal(composerEnterAction({ canSteer: false, steerOnEnter: true }), "queue")
 assert.equal(
   composerRunningPlaceholder("Claude", "steer", true),
-  "Steer Claude — Cmd+Enter queues instead"
+  "Steer Claude · ⌘↩ queues"
 )
 assert.equal(
   composerRunningPlaceholder("Claude", "queue", true),
-  "Queue a message for Claude — Cmd+Enter steers instead"
+  "Queue for Claude · ⌘↩ steers"
 )
 assert.equal(
   composerRunningPlaceholder("Grok", "queue", false),
-  "Queue a message for Grok"
+  "Queue for Grok"
 )
 // The composer carries no Queue/Steer control at all: the placeholder and the
 // button's icon say what Enter does, and the preference is a Settings row.

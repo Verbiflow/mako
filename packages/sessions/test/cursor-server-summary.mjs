@@ -112,7 +112,7 @@ try {
   const marker = drawn.find((entry) => typeof entry !== "string")
   const expected = compactionEvent({ summary: "Read one.txt so far.", tokensBefore: 188_331, tokensAfter: 100_947 })
   assert.equal(marker.label, expected.label)
-  assert.equal(marker.detail, "188k → 101k tokens", "it says what the context held before and after, as the live marker ends up saying")
+  assert.equal(marker.detail, "188K → 101K tokens", "it says what the context held before and after, as the live marker ends up saying")
   assert.equal(marker.detail, expected.detail)
   assert.equal(marker.body, "Read one.txt so far.")
   assert.deepEqual(marker.source, { harness: "cursor", record: window }, "it cites the window, as the live marker does")

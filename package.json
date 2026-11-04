@@ -186,7 +186,7 @@
     "test:mobile-behavior": "node scripts/test-mobile-behavior.ts",
     "mobile-behavior": "node scripts/mobile-behavior/run.ts",
     "test:usage-worker": "npm run build:electron && node scripts/test-usage-worker.mjs",
-    "test:usage": "tsx scripts/test-usage.ts && tsx scripts/test-usage-warnings.ts && tsx --tsconfig tsconfig.app.json scripts/test-harness-usage.ts && tsx --tsconfig tsconfig.app.json scripts/test-usage-declarations.ts && tsx scripts/test-request-spend.ts && tsx scripts/test-turn-spend.ts && tsx scripts/test-usage-attribution.ts",
+    "test:usage": "tsx scripts/test-usage.ts && tsx scripts/test-usage-warnings.ts && tsx --tsconfig tsconfig.app.json scripts/test-harness-usage.ts && tsx --tsconfig tsconfig.app.json scripts/test-usage-declarations.ts && tsx scripts/test-request-spend.ts && tsx scripts/test-turn-spend.ts && tsx scripts/test-usage-attribution.ts && tsx --tsconfig tsconfig.app.json scripts/test-usage-truth.ts",
     "test:terminal-ui": "node scripts/test-terminal-ui.mjs",
     "test:terminal-live-ui": "npm run build:electron && node scripts/test-terminal-live-ui.mjs",
     "test:terminal": "npm run build:electron && tsx scripts/test-terminal-protocol.ts && tsx scripts/test-terminal-writer.ts && tsx --tsconfig tsconfig.app.json scripts/test-terminal-state.ts && tsx scripts/test-terminal-macos.ts && node scripts/test-terminal-backpressure.mjs && tsx scripts/test-terminal-daemon.ts",

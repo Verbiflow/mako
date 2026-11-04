@@ -286,7 +286,7 @@ const markers = draw(streamed([
   marker({ label: "Interrupted", detail: "replaced by a newer message" }),
   { kind: "text", id: "a2", text: "Continuing." },
 ]))
-assert.match(text(markers), /Context compacted Automatic · 182k → 24k tokens · took 8s/)
+assert.match(text(markers), /Context compacted Automatic · 182K → 24K tokens · took 8s/)
 assert.match(text(markers), /Model changed gpt-6-astra → gpt-5\.5 · capacity/)
 assert.match(text(markers), /Interrupted replaced by a newer message/)
 assert.equal(markers.match(/role="note" data-event-line/g)?.length, 2, "quiet markers are notes, one line each")

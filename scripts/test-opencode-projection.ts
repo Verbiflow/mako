@@ -492,7 +492,7 @@ process.stdin.on("end", () => process.exit(0))
     // OpenCode stores an automatic compaction under its start's id, message-prefixed.
     const stored = compacting.id.replace(/^evt_/, "msg_")
     assert.deepEqual(await until("the compaction", () => markers().find(marker => marker.label === "Context compacted")),
-      { kind: "event", id: stored, source: { harness: "opencode", record: stored }, label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
+      { kind: "event", id: stored, source: { harness: "opencode", record: stored }, label: "Context compacted", detail: "Automatic · from 151K tokens", body: "Summary of the work so far." })
     assert.equal(markers().filter(marker => marker.label === "Context compacted").length, 1, "a replayed end draws no second marker")
 
     const retrying = event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" })

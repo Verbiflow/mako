@@ -113,7 +113,7 @@ let closedByMako = 0
  * replays nothing (an empty `opening`/`opened` pair): a harness whose resume
  * replays no history (Claude, OpenCode) writes no opening of its own, and its
  * decoder must not carry the previous launch's state (OpenCode's context
- * meter, which words a compaction "from 13k tokens").
+ * meter, which words a compaction "from 13K tokens").
  */
 const LAUNCHED = JSON.stringify({ opening: true })
 const OPENED = JSON.stringify({ opened: true })
