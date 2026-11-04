@@ -1,0 +1,43 @@
+import type { McpHttpServerConfig } from "@anthropic-ai/claude-agent-sdk"
+import { instructionText, replacement, type LayerAdapter } from "../../contracts/mako-layer.js"
+import { MAKO_TOOL_TIMEOUT_MS } from "../../tools/index.js"
+import { bearerServers } from "../mako-layer.js"
+
+export interface ClaudeLayerFragment {
+  /** Appended to the `claude_code` preset, which Claude Code keeps out of its transcript. */
+  append?: string
+  /** Mako's servers, beside the person's own. */
+  servers: Record<string, McpHttpServerConfig>
+  /** `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for the teams the person asked for: never in an Apex, whose team is its Fins. */
+  agentTeams(requested: boolean | undefined): "1" | "0" | undefined
+}
+
+export const claudeLayer: LayerAdapter<ClaudeLayerFragment> = {
+  harness: "claude",
+  capabilities: {
+    instructions: { kind: "native", via: "system-append", how: "`systemPrompt.append` on the `claude_code` preset", inUse: true },
+    toolServing: { kind: "native", via: "http-mcp", how: "`mcpServers` of type http with the grant as a bearer header; `createSdkMcpServer` would serve them in-process", inUse: true },
+    removal: { kind: "native", via: "tool-list", how: "`disallowedTools` and `tools` on the query; today only agent teams are taken out, by environment", inUse: false },
+    interception: { kind: "native", via: "pre-tool-hook", how: "the `PreToolUse` callback, which denies a spawn with a message naming `agents_start`", inUse: true },
+    subagents: { kind: "native", via: "declared", how: "the query's `agents` definitions; today `SubagentStart` adds Mako's paragraph to native ones", inUse: false },
+    hooks: { kind: "native", via: "sdk-hooks", how: "SDK hooks for transcript, compaction, attribution and routing", inUse: true },
+    modelRoute: {
+      "native-login": { kind: "native", via: "login", how: "the person's own `claude` login, one of their accounts, signed in through Anthropic's flow", inUse: true },
+      anthropic: { kind: "native", via: "base-url-env", how: "`ANTHROPIC_BASE_URL` and a key in the launch's environment", inUse: false },
+      "openai-chat": { kind: "fallback", via: "other-harness", loses: "Claude Code speaks only Anthropic's API" },
+      "openai-responses": { kind: "fallback", via: "other-harness", loses: "Claude Code speaks only Anthropic's API" },
+    },
+    personSetup: "kept",
+  },
+  apply(layer) {
+    const servers: Record<string, McpHttpServerConfig> = {}
+    for (const { name, url, authorization } of bearerServers(layer))
+      servers[name] = { type: "http", url, headers: { Authorization: authorization }, timeout: MAKO_TOOL_TIMEOUT_MS }
+    const teamsOut = replacement(layer, "agent-team") === "remove"
+    return {
+      ...instructionText(layer) !== undefined && { append: instructionText(layer) },
+      servers,
+      agentTeams: (requested) => requested === undefined ? undefined : requested && !teamsOut ? "1" : "0",
+    }
+  },
+}

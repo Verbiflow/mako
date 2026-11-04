@@ -242,6 +242,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
     requests: grokRequests,
     clientCapabilities: { _meta: GROK_FOLDER_TRUST_CAPABILITY },
     nativeRouting: { kind: "at-launch", via: "`GROK_SUBAGENTS=0` and `GROK_WORKFLOWS=0` in the agent's environment, which remove `spawn_subagent` and `workflow`. An Apex's `/goal` then runs on Grok's `update_goal` driver, whose `goal_updated` Mako reads as it reads the workflow driver's.", verified: { version: "1.0.70", how: "harness:native-tools records each mode as a lead without `spawn_subagent` or `workflow` (2026-11-02); test:native-routing-live: a lead offered neither, an ordinary Thread's child ran and was observed; test-grok-goal-live --apex: a goal set, completed and cleared on the update_goal driver" } },
+    layer: GROK_LAYER,
     steering: { kind: "supported", hears: "at its next step, once the command it's running returns", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
     launchOptionIds: ["effort"],
     access: {
@@ -288,6 +289,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { GrokApprovalObserver, grokPermissionFile, readGrokApprovalDecisions } from "./approval-observer.js"
 import { gitRoot } from "../../tools/index.js"
+import { GROK_LAYER } from "./layer.js"
 
 /** Grok's `/goal <objective> [--budget <tokens>]`. */
 function grokGoal(objective: string, tokenBudget: number | undefined): string {

@@ -18,6 +18,7 @@ import { devinCheckpoint, devinFork } from "./fork.js"
 import { devinSideQuestions } from "./side-questions.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { adapters } from "../heavy.js"
+import { DEVIN_LAYER } from "./layer.js"
 
 /** Devin's ACP source, reading Devin's store as `stores` opens it. */
 export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
@@ -50,6 +51,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
     ...DEVIN_ACP_HOOKS,
     clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
     nativeRouting: { kind: "at-launch", via: "`subagents_enabled: false` in the copy of the person's `config.json` its launch's own config folder holds, which removes `run_subagent` and `read_subagent`; leaving out `cognition.ai/subagentSupport` doesn't.", verified: { version: "3000.11.234", how: "harness:native-tools records each mode as a lead without them on 3000.11.234 and 3000.10.23, and with them when the capability is left out (2026-11-01); test:native-routing-live: a lead's call was refused as unavailable, an ordinary Thread's child ran and was observed" } },
+    layer: DEVIN_LAYER,
     agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", child: devinChildUpdate, observe: input => new DevinAgents(input) },
     observeBackground: devinBackground,
     providerTurns: devinProviderTurns,

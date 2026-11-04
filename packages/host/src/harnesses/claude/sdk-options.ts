@@ -2,8 +2,10 @@ import { applyControlEnvironment } from "../../control/index.js"
 import { applyThreadEnvironment } from "../../workspaces/index.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { ClaudeSdkConfiguration } from "./sdk-driver.js"
-import { acpMcpServers, MAKO_TOOL_TIMEOUT_MS } from "../../tools/index.js"
-import { conversationInstructions, conversationServers, type AdmittedStartOptions } from "../live-driver.js"
+import { acpMcpServers } from "../../tools/index.js"
+import type { AdmittedStartOptions } from "../live-driver.js"
+import { layerOf } from "../mako-layer.js"
+import { claudeLayer } from "./layer.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
 import { claudeRuntime } from "./runtime.js"
 import type { ProviderLaunchTrace } from "../provider-launch.js"
@@ -21,9 +23,9 @@ export async function claudeSdkOptions(
     throw new Error("The configured Claude Code executable is unavailable")
   const tuning = ClaudeTuningSchema.parse(input.tuning?.options ?? {})
   const initialMode = ClaudeModeSchema.safeParse(input.modeId)
-  // An Apex's team is its Fins: Mako never turns Claude's agent teams on in one.
-  if (tuning.agentTeams !== undefined)
-    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = tuning.agentTeams && input.nativeRouting?.().role !== "apex" ? "1" : "0"
+  const layer = claudeLayer.apply(layerOf(input), input.conversationId)
+  const agentTeams = layer.agentTeams(tuning.agentTeams)
+  if (agentTeams !== undefined) env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = agentTeams
   // Without it, `/code-review` reports its findings only as prose; with it,
   // the review runs inline and reports them through `ReportFindings`.
   env.CLAUDE_CODE_REPORT_FINDINGS = "1"
@@ -55,10 +57,8 @@ export async function claudeSdkOptions(
       }
     }
   }
-  if (input.conversationTools)
-    for (const { name, url } of conversationServers(input.conversationTools))
-      mcpServers[name] = { type: "http", url, headers: { Authorization: `Bearer ${input.conversationTools.token}` }, timeout: MAKO_TOOL_TIMEOUT_MS }
-  const appended = conversationInstructions(input.conversationTools)
+  Object.assign(mcpServers, layer.servers)
+  const appended = layer.append
   return { account, options: {
     cwd,
     env,

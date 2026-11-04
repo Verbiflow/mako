@@ -26,7 +26,7 @@ import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
-import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
+import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
 import { discoverOpenCodeCatalog } from "./profile.js"
 import { openCodeBinaryTarget } from "./updates.js"
@@ -34,6 +34,8 @@ import { openCodeProcessProbeFor } from "./process-probe.js"
 import type { OpenCodeServers } from "./servers.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
 import { configureOpenCodePermissions, configureOpenCodeRouting } from "./permissions.js"
+import { opencodeLayer } from "./layer.js"
+import { layerOf } from "../mako-layer.js"
 import {
   OPENCODE_DEFAULT_MODE,
   openCodeAgentForMode,
@@ -59,6 +61,7 @@ import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
 import { openCodeCheckpoint, openCodeForkDeclined, inspectOpenCodeSession } from "./resume.js"
 import { acpMcpServers } from "../../tools/index.js"
 import { SIDE_QUESTION_ASIDE, untilStopped, withEarlierExchanges } from "../../contracts/live-side-questions.js"
+
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
 
@@ -251,10 +254,7 @@ async function mcpServers(options: ProviderStartOptions): Promise<Array<{ name: 
           headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) } })
     }
   }
-  const tools = options.conversationTools
-  if (tools)
-    for (const { name, url } of conversationServers(tools))
-      servers.push({ name, config: { type: "remote", url, headers: { Authorization: `Bearer ${tools.token}` }, oauth: false } })
+  servers.push(...opencodeLayer.apply(layerOf({ conversationTools: options.conversationTools }), options.conversationId).servers)
   return servers
 }
 
@@ -726,6 +726,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     approvalAnswerDigest: openCodeApprovalDigest,
     nativeAgents: { kind: "observed", via: "`subagent` task calls and the child sessions they start." },
     nativeRouting: { kind: "at-launch", via: "A deny on the `subagent` permission, last in the Build and Plan agents' rules in `OPENCODE_CONFIG_CONTENT`, which removes the tool.", verified: { version: "2.2.3", how: "harness:native-tools records Build and Plan as a lead without `subagent`, where a deny on `task` left it (2026-11-01); test:native-routing-live: a lead offered none, an ordinary Thread's child ran and was observed" } },
+    layer: opencodeLayer.capabilities,
     questions: { kind: "request", via: "The `question` tool's form, answered with `form.reply`." },
     contextBreakdown: { kind: "unavailable", reason: "OpenCode reports token totals per message, not what fills the context." },
     modeSwitching: { kind: "native", via: "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`." },

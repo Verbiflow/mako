@@ -92,6 +92,10 @@ for (const { provider, absent } of harnesses) {
   const prefetch = providerHost.liveDrivers.get(provider)?.startPrefetch
   assert.ok(prefetch, `${provider} declares what its start runs first (startPrefetch)`)
   assert.ok(prefetch.via.trim(), `${provider} explains its startPrefetch`)
+  // Every harness takes the Mako layer through its adapter, and says how for each capability.
+  const layer = providerHost.liveDrivers.get(provider)?.layer
+  assert.ok(layer, `${provider} declares how it takes the Mako layer (layer)`)
+  assert.equal(layer.personSetup, "kept", `${provider} keeps the person's own setup under the Mako layer`)
   const runner = providerHost.nativeRunners.get(provider)
   if (runner) {
     assert.ok(runner.transport.trim(), `${provider} declares its actual headless transport`)

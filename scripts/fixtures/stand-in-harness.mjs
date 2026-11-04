@@ -88,6 +88,21 @@ export async function installStandIn({ load, providerHost, context, store }) {
     compaction: { kind: "unavailable", reason: "The stand-in agent never compacts." },
     goals: { kind: "mako", reason: "The stand-in agent has no goal of its own." },
     review: { kind: "mako", reason: "The stand-in agent has no review of its own." },
+    layer: {
+      instructions: { kind: "fallback", via: "prompt-note", loses: "The stand-in agent has no slot for instructions of its own." },
+      toolServing: { kind: "native", via: "http-mcp", how: "`session/new` MCP servers, the grant as a bearer header", inUse: true },
+      removal: { kind: "absent", reason: "The stand-in agent has one tool and no switch for it." },
+      interception: { kind: "absent", reason: "The stand-in agent takes no hooks." },
+      subagents: { kind: "absent", reason: "The stand-in agent starts no subagents." },
+      hooks: { kind: "absent", reason: "The stand-in agent takes no hooks." },
+      modelRoute: {
+        "native-login": { kind: "native", via: "login", how: "its scripted agent needs no sign-in", inUse: true },
+        anthropic: { kind: "absent", reason: "The stand-in agent runs no model." },
+        "openai-chat": { kind: "absent", reason: "The stand-in agent runs no model." },
+        "openai-responses": { kind: "absent", reason: "The stand-in agent runs no model." },
+      },
+      personSetup: "kept",
+    },
     sideQuestions: {
       kind: "native",
       via: "Its `_stand-in/btw`, which streams the answer on a side chain and keeps it out of the session.",

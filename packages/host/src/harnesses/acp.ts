@@ -4,7 +4,7 @@ import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/ap
 import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
-import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
+import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction, compactionOutcome } from "./acp-compaction.js"
@@ -64,7 +64,8 @@ import { readRuntimeVersion } from "./runtime-updates.js"
 import { parseVersion } from "../contracts/runtime-version.js"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { launchSpawnsOff } from "./native-routing.js"
+import { acpLayer } from "./acp-layer.js"
+import { layerOf } from "./mako-layer.js"
 import { bindProviderPid } from "../base/provider-children.js"
 import { errorMessage } from "../base/error-message.js"
 import { objectValue } from "../base/json-values.js"
@@ -338,7 +339,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       tuning: options.tuning,
     }
     if (launchAccess) launchOptions.access = launchAccess
-    if (source.nativeRouting.kind !== "words" && launchSpawnsOff(harness, source.nativeRouting.via, options.conversationId, options.nativeRouting))
+    const adapter = acpLayer(harness, source.layer, source.nativeRouting)
+    if (adapter.apply(layerOf({ nativeRouting: options.nativeRouting }), options.conversationId).spawnsOff())
       launchOptions.nativeSpawnsOff = true
     const spec = await trace.step("runtime-discovery", () => source.launch(launchOptions))
     if (!spec) throw new Error(`${harness} does not speak ACP here yet`)
@@ -366,10 +368,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     if (options.fork && fork?.kind !== "native") throw new Error(`${harness} has no native fork`)
 
     const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
-    const tools = options.conversationTools
-    const makoMcp: McpServer[] = tools
-      ? conversationServers(tools).map(({ name, url }) => ({ type: "http", name, url, headers: [{ name: "Authorization", value: `Bearer ${tools.token}` }] }))
-      : []
+    const makoMcp = adapter.apply(layerOf({ conversationTools: options.conversationTools }), options.conversationId).servers
     preparedServers.push(...makoMcp)
     const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
     const approvals = await trace.step("observation", () => spec.prepareApprovals?.({

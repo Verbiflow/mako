@@ -21,7 +21,7 @@ import type {
   ProviderSteerResult,
 } from "./live-driver.js"
 import { resolveCodexExecutable } from "./codex/executable.js"
-import { SHUTDOWN_GRACE_MS, conversationInstructions, conversationServers, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
+import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
 import { codexGoalObservation } from "./codex/goals.js"
 import { reviewDisplayText, type ReviewTarget } from "../contracts/live-reviews.js"
 import type { ReviewTarget as CodexReviewTarget } from "./codex/generated/v2/ReviewTarget.js"
@@ -77,7 +77,9 @@ import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
+import { codexLayer } from "./codex/layer.js"
 import { codexRoutingConfig } from "./codex/routing.js"
+import { layerOf } from "./mako-layer.js"
 import type { RoutedThread } from "../contracts/native-routing.js"
 import { approvalRoot, type HarnessContext } from "./host.js"
 
@@ -212,6 +214,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         return
       }
     }
+    const started = codexLayer.apply(layerOf({ conversationTools: options.conversationTools }), id)
     const live: Live = {
       id,
       cwd: workingDir,
@@ -239,8 +242,8 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       },
       tuning: options.tuning,
       emit,
-      makoServers: options.conversationTools ? conversationServers(options.conversationTools) : [],
-      instructions: conversationInstructions(options.conversationTools),
+      makoServers: started.servers,
+      instructions: started.instructions,
       mcpSnapshot,
       nativeRouting: options.nativeRouting,
       nextRequestId: 0,

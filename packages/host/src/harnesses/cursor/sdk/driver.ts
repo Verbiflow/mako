@@ -23,7 +23,6 @@ import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LivePermissionRespon
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import { acpMcpServers, unlaunchableMcpServers, migrateRetiredMakoMcpFile } from "../../../tools/index.js"
 import {
-  conversationServers,
   UNATTENDED_SIGN_IN,
   type ProviderLiveDriver,
   type ProviderStartOptions,
@@ -50,7 +49,9 @@ import type {
 } from "./wire.js"
 import { cursorSdkExitReason } from "./wire.js"
 import type { CursorCheckpointCollector } from "./checkpoint-collector.js"
-import { launchSpawnsOff } from "../../native-routing.js"
+import { layerOf } from "../../mako-layer.js"
+import { cursorLayer } from "../layer.js"
+
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill"> & Partial<Pick<CursorSdkClient, "adopt">>
 const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
@@ -224,9 +225,7 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
       }
     }
   }
-  if (options.conversationTools)
-    for (const { name, url } of conversationServers(options.conversationTools))
-      servers[name] = { type: "http", url, headers: { Authorization: `Bearer ${options.conversationTools.token}` } }
+  Object.assign(servers, cursorLayer.apply(layerOf({ conversationTools: options.conversationTools }), options.conversationId).servers)
   return servers
 }
 
@@ -576,6 +575,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },
     nativeAgents: { kind: "observed", via: "`task` tool calls and the subagent runs they start." },
     nativeRouting: { kind: "at-launch", via: "`disallowedTools: [\"task\"]` on the SDK's `Agent.create` and every `Agent.resume`, which removes the task tool.", verified: { version: "1.2.0", how: "test:native-routing-cursor (2026-11-01), real turns asking for a subagent: a lead called no task tool and said it had none, as did that lead resumed; an ordinary Thread's task ran and its subagent was observed" } },
+    layer: cursorLayer.capabilities,
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
     contextBreakdown: {
       kind: "itemized",
@@ -824,7 +824,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           name: options.title,
           model: selection,
           mcpServers: servers,
-          noTask: launchSpawnsOff("cursor", "disallowedTools task", options.conversationId, options.nativeRouting) || undefined,
+          noTask: cursorLayer.apply(layerOf({ nativeRouting: options.nativeRouting }), options.conversationId).noTask(),
           importFrom,
           forkFrom: fork && { agentId: fork.nativeId, runId: fork.runId },
         }))
