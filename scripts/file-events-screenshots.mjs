@@ -61,19 +61,31 @@ async function shoot() {
       await pause(50)
     }
   }
-  const text = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? ""`)
-  const pressButton = (within, name) => evaluate(`[...document.querySelectorAll(${JSON.stringify(`${within} button`)})].find((button) => button.innerText.trim() === ${JSON.stringify(name)}).click()`)
+  /** `fn` run in the page with `args` passed as values, never written into its code. */
+  const call = async (fn, ...args) => {
+    const { result: global } = await page.debugger.sendCommand("Runtime.evaluate", { expression: "globalThis" })
+    const { result, exceptionDetails } = await page.debugger.sendCommand("Runtime.callFunctionOn", {
+      objectId: global.objectId, functionDeclaration: fn.toString(), arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true,
+    })
+    if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text)
+    return result.value
+  }
+  const text = (selector) => call((query) => document.querySelector(query)?.innerText ?? "", selector)
+  const pressButton = (within, name) => call((query, label) => [...document.querySelectorAll(`${query} button`)].find((button) => button.innerText.trim() === label).click(), within, name)
   const capture = async (name, selector) => {
     await evaluate("document.fonts.ready")
     await evaluate("document.activeElement?.blur()")
-    if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: "center" })`)
+    if (selector) await call((query) => document.querySelector(query).scrollIntoView({ block: "center" }), selector)
     await pause(450)
     const box = selector
-      ? await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: Math.max(0, Math.floor(r.x) - 16), y: Math.max(0, Math.floor(r.y) - 16), width: Math.ceil(r.width) + 32, height: Math.ceil(r.height) + 32 } })()`)
+      ? await call((query) => {
+        const r = document.querySelector(query).getBoundingClientRect()
+        return { x: Math.max(0, Math.floor(r.x) - 16), y: Math.max(0, Math.floor(r.y) - 16), width: Math.ceil(r.width) + 32, height: Math.ceil(r.height) + 32 }
+      }, selector)
       : undefined
     await writeFile(join(out, name), (await page.capturePage(box)).toPNG())
   }
-  const settings = (section) => evaluate(`window.dispatchEvent(new CustomEvent("mako:settings", { detail: ${JSON.stringify(section)} }))`)
+  const settings = (section) => call((detail) => window.dispatchEvent(new CustomEvent("mako:settings", { detail })), section)
   const closeSettings = () => evaluate(`window.dispatchEvent(new CustomEvent("mako:close-settings"))`)
   const load = async (scene) => {
     await window.loadURL(`${process.env.MAKO_FILE_EVENTS_URL}?mock${scene ? `&app=${scene}` : ""}`)
