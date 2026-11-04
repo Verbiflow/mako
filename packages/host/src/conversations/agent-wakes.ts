@@ -260,7 +260,9 @@ const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
 /** The digest in its fixed shape: the results waited for, in full; then decisions; then what finished; then how the rest stand. */
 export function digest(notices: readonly Notice[], counts: string): string {
   const results = notices.filter((notice) => notice.settledOnly)
-  const decisions = notices.filter((notice) => !notice.settledOnly && DECIDES.has(notice.report.status))
+  const asks = notices.filter((notice) => !notice.settledOnly && DECIDES.has(notice.report.status))
+  const decisions = asks.filter((notice) => notice.report.for !== "person")
+  const persons = asks.filter((notice) => notice.report.for === "person")
   const finished = notices.filter((notice) => !notice.settledOnly && (notice.report.status === "done" || notice.report.status === "failed"))
   const lines = [FROM_AGENTS]
   if (results.length) {
@@ -281,6 +283,10 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
     lines.push("  agents_answer answers each, or leaves it to the person with person: true.")
   }
+  if (persons.length) {
+    lines.push(`${persons.length} ${persons.length === 1 ? "waits" : "wait"} on the person:`)
+    for (const { label, report } of persons) lines.push(`  • ${label}: ${report.question ?? reportPhase(report) ?? "it waits on the person."}`)
+  }
   if (finished.length) {
     lines.push(`${finished.length} finished:`)
     for (const { label, report } of finished) {
@@ -289,7 +295,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
   }
   lines.push(counts)
-  lines.push(results.length && !decisions.length && !finished.length
+  lines.push(results.length && !decisions.length && !persons.length && !finished.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return lines.join("\n")

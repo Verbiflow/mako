@@ -227,7 +227,12 @@ handler, and reaches the agent three ways from the one projection
 <verb>` and `mako mcp`, the caller named by `MAKO_SESSION_ID`. A start
 commits the Fin's Thread, its edge, its Session and its first request (the
 brief, the Apex's words, not the person's) together
-(`LiveStartOptions.parent`), at an access tier no higher than its Apex's,
+(`LiveStartOptions.parent`), at an access tier no higher than its Apex's.
+A harness with no mode at or below the tier asked (Cursor's one mode is
+full) sends a Fin that named no harness, model or rule to the person's next
+harness that offers it, and otherwise runs it on the harness's nearest mode
+within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
+which; only a mode wider than the Apex's is refused. It starts
 here only (`place` other than `here` is refused); past a tree's running
 budget it queues with why, past its started budget it is refused with the
 count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
@@ -253,7 +258,15 @@ written again after its end reads as working while that Session is still
 being written, and a digest drops the end the host inferred for it
 (`AgentWakes.current`). A stop closes the edge with
 its reason (`closedReason`) before it cancels the turn. The cut turn then reports
-nothing and wakes no one, and the Fin reads as stopped in those words. A Fin
+nothing and wakes no one, and the Fin reads as stopped in those words. A
+Fin's harness asking (`askApex`) wakes its Apex, told whether it may
+answer: an approval under an Apex below full access is the person's at once,
+and the Apex hears so in the digest's "waits on the person" (`Report.told`).
+One the Apex may answer that it leaves for `APEX_ANSWER_MS` (a minute) goes
+to the person too (`escalate`), as an Apex mid-turn on a harness that hears
+a digest only at its turn's end would leave it; the Apex hears they were
+asked, and the first answer is the one the Fin hears. A digest drops an ask
+its Fin no longer waits on (`test:orch-answer`). A Fin
 that ends a turn without `agents_report` while its own Fins work, or while a
 `worktree_move` it asked for is pending (`movePending`), hasn't finished.
 Its turn's end writes no report, and it reads as working with "Waiting for
@@ -1470,6 +1483,22 @@ the conversation. `npm run test:send-race` sends from the Mac, a phone and
 another Mac at once, through the protocol's gateway, with lost replies, cut
 links, messages taken twice from the account and restarts, and holds each to
 landing once, one turn at a time, in arrival order, with nothing left queued.
+The outbox never turns the person away for a host that can't take a message
+yet (`sendTo`, `steerTo`, `delivery-policy.ts`): a message is drawn and kept at
+once, and one conversation's messages reach the host one at a time, in the
+order sent. A host that's away (the composer sends to a live conversation
+while disconnected), slow (an answer past `DELIVERY_PATIENCE_MS`, or the
+bridge's `HostCallTimeoutError`) or busy (a rewind, a provider switch, a turn
+still ending, a move in transit; `waitsFor`) leaves it waiting, with that
+reason on its row in the queue ("Waiting · …", with Send now and Remove), and
+later messages wait behind it; it goes by itself under its one ID. A steer
+shows as steering until the turn takes it; a host busy with the previous steer
+is asked again for `STEER_BUSY_MS` before the words go next, and a steer whose
+outcome is unknown no longer holds the next one (`LiveActions.submit`).
+`npm run test:durable-outbox` holds it to that against a scripted host: away,
+busy, 5 s stalls, a lost answer, duplicate tries, steers mid-turn and a reload
+mid-delivery; `test:steer-landing` checks a message queues and a steer lands
+mid-turn on each of the six harnesses by its own driver's landing.
 A refused message comes back
 into the field only if the field is empty, else it's kept under the composer
 with Retry (`outbox.ts`). Under each sent message the phone says where it is,

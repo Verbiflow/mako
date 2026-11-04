@@ -23,6 +23,13 @@ import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { LiveAction } from "@mako/host/contracts/live-actions"
+import { sealedDrivers } from "./fixtures/sealed-drivers.ts"
+import { installClaude } from "@mako/host/harnesses/claude/index"
+import { installCodex } from "@mako/host/harnesses/codex/index"
+import { installCursor } from "@mako/host/harnesses/cursor/index"
+import { installDevin } from "@mako/host/harnesses/devin/index"
+import { installGrok } from "@mako/host/harnesses/grok/index"
+import { installOpenCode } from "@mako/host/harnesses/opencode/index"
 
 const root = mkdtempSync(join(tmpdir(), "mako-steer-landing-"))
 
@@ -247,6 +254,31 @@ try {
     } finally { w.close() }
   }
   console.log("PASS: native: Codex's own steer, and an agent's steer on any harness")
+
+  // Mid-turn on every harness, by the landing its real driver declares: the person's message queues and their steer
+  // lands within a second; neither is refused, and a steer right behind another isn't either.
+  const declared = sealedDrivers([installClaude, installCodex, installCursor, installDevin, installGrok, installOpenCode])
+  assert.equal(declared.size, 6)
+  for (const [provider, driver] of declared) {
+    assert.equal(driver.steering.kind, "supported", `${provider} takes a message into its running turn`)
+    const landing = driver.steering.kind === "supported" ? driver.steering.landing : undefined
+    const w = await world(provider, landing, `mid-turn-${provider}`)
+    try {
+      await w.running()
+      if (landing === undefined || landing === "native") setTimeout(() => w.answer.resolve({ kind: "accepted" }), 10)
+      const queued = randomUUID()
+      assert.equal(w.owner.submit(w.id, queued, "after this turn").status, "queued", `${provider}: a message mid-turn queues`)
+      const sent = performance.now()
+      const receipt = await w.owner.act(w.id, { kind: "steer", id: randomUUID(), requestId: w.first, text: "into this turn", attachments: [] })
+      assert.equal(receipt.state.kind, "accepted", `${provider}: the steer is taken`)
+      assert.ok(performance.now() - sent < STEER_LANDS_MS + 500, `${provider}: within a second`)
+      if (landing === "restart" || landing === "confirm") {
+        await until(() => w.prompts.length === 2)
+        assert.ok(w.prompts[1]!.text.endsWith("into this turn"), `${provider}: the steer goes first, ahead of what was queued`)
+      }
+    } finally { w.close() }
+  }
+  console.log("PASS: mid-turn on all six harnesses, by each driver's own landing: a message queues and a steer lands within a second")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

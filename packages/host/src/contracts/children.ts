@@ -24,9 +24,20 @@ export function passedOn(name: string): string {
   return `[mako · the person's words, passed on by ${name} (agent)]`
 }
 
-/** What an Apex hears its Fin's harness ask, with how it answers: an approval is allowed or refused, a question answered. */
-export function apexAsk(line: string, approval: boolean): string {
-  return `${line}. ${approval ? "Allow it with agents_answer allow: true, refuse it with allow: false" : "Answer it with agents_answer"}, leave it to the person with person: true, or stop it with agents_stop.`
+/**
+ * What an Apex hears its Fin's harness ask, with how it answers: an approval is allowed or refused, a question
+ * answered. `asked` is why the person was asked too, in the Apex's words: it may still answer, and the Fin hears
+ * whichever answer comes first.
+ */
+export function apexAsk(line: string, approval: boolean, asked?: string): string {
+  const how = approval ? "allow it with agents_answer allow: true, refuse it with allow: false" : "answer it with agents_answer"
+  if (asked) return `${line}. Mako asked the person too, since ${asked}: they can answer it from their Inbox. You may still ${how}, or stop it with agents_stop; the first answer is the one it hears.`
+  return `${line}. ${how[0]!.toUpperCase()}${how.slice(1)}, leave it to the person with person: true, or stop it with agents_stop.`
+}
+
+/** What an Apex below full access hears of its Fin's approval: the person's alone, who was asked. */
+export function personsApproval(line: string, tier: string): string {
+  return `${line}. Only the person can answer this approval: you're on ${tier}, and only an ${APEX_WORD} on full access answers its ${FIN_WORD}s' approvals. Mako asked them in their Inbox and on their devices. Don't answer it; stop it with agents_stop if it's no longer needed.`
 }
 
 /** An answer to a Fin's question, beneath its header: the question it answers, then the answer. */
