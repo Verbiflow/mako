@@ -9,7 +9,7 @@ import { threadTitle } from "@/state/thread-titles"
 /**
  * A project's cloud access as Settings reads and changes it, the same on the desktop and in a browser: each reaches the
  * account its own way (the Mac through its host, a browser through the gateway), and neither keeps a token. Once saved
- * a token is never read back; Settings shows the account it acts in, when it lapses and who used it.
+ * a token is never read back; Settings shows the account it acts in, when it lapses and which cloud Threads were given it.
  */
 export interface CloudAccessTransport {
   /** The project's grants; `repository` is its GitHub URL, as every call here takes it. */
@@ -40,7 +40,7 @@ export type CloudAccessPhase =
   | { kind: "ready"; grants: CloudAccessGrant[] }
   | { kind: "failed"; message: string }
 
-/** "Recent use", read when the person opens it. */
+/** "Recent hand-overs", read when the person opens it. */
 export type CloudAccessUsesPhase =
   | { kind: "unread" }
   | { kind: "loading" }
@@ -124,9 +124,12 @@ export function grantAccount(grant: CloudAccessGrant): string {
   return grant.account.name ?? grant.account.id
 }
 
-/** "Last used by a cloud Thread 4 minutes ago", or "Not used yet". */
-export function lastUsedWords(grant: CloudAccessGrant, now = Date.now()): string {
-  return grant.lastGiven ? `Last used by a cloud Thread ${copyAge(Date.parse(grant.lastGiven.at), now)}` : "Not used yet"
+/**
+ * "Given to a cloud Thread 4 minutes ago", or "Not given to a cloud Thread yet". `lastGiven` is when the token was
+ * handed to a cloud Thread's machine, not each command run with it, so it never says "used".
+ */
+export function givenWords(grant: CloudAccessGrant, now = Date.now()): string {
+  return grant.lastGiven ? `Given to a cloud Thread ${copyAge(Date.parse(grant.lastGiven.at), now)}` : "Not given to a cloud Thread yet"
 }
 
 /** A use's Thread as a row names it: its title where this device knows it, else its ID. */

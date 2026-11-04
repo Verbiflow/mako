@@ -7,7 +7,7 @@ import { webSync } from "./sync-readings"
 import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { CLOUD_ACCESS_CATALOG, CLOUD_ACCESS_HINT, CLOUD_ACCESS_SERVICES, type CloudAccessGrant, type CloudAccessService } from "@mako/host/contracts/cloud-access"
 import { CloudAccess } from "@/components/settings/cloud-access"
-import { grantAccount, lastUsedWords, useCloudAccess, usedByName, type CloudAccessBusy, type CloudAccessTransport, type CloudAccessUsesPhase } from "@/state/cloud-access"
+import { grantAccount, givenWords, useCloudAccess, usedByName, type CloudAccessBusy, type CloudAccessTransport, type CloudAccessUsesPhase } from "@/state/cloud-access"
 import { listedRepositories, webCloudAccess } from "./cloud-access"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
@@ -390,7 +390,7 @@ function TouchService({ service, grant, busy, error, onOpen, onSave, onRemove, o
       <div className="min-w-0">
         <p className="truncate text-ui"><span className="font-medium">{info.name}</span><span className="text-muted-foreground"> · {grantAccount(grant)}</span></p>
         <p className={cn("text-label", expiry.lapsed ? "text-negative" : "text-faint")}>{expiry.lapsed ? `${expiry.text}. Replace it to use ${info.name} again.` : expiry.text}</p>
-        <p className="text-label text-faint">{lastUsedWords(grant)}</p>
+        <p className="text-label text-faint">{givenWords(grant)}</p>
       </div>
       {removing ? (
         <div className="flex flex-col gap-2 pt-1">
@@ -427,7 +427,7 @@ function TouchRecentUse({ uses, transport, onOpen }: { uses: CloudAccessUsesPhas
         className="web-row flex h-12 w-full items-center gap-2 px-4 text-left text-ui"
       >
         <ChevronRightIcon className={cn("size-4 text-muted-foreground transition-transform duration-150", open && "rotate-90")} />
-        Recent use
+        Recent hand-overs
       </button>
       {open ? (
         <div className="px-4 pb-3">
@@ -448,7 +448,7 @@ function TouchRecentUse({ uses, transport, onOpen }: { uses: CloudAccessUsesPhas
               ))}
             </ul>
           ) : (
-            <p className="text-label text-faint">No cloud Thread has used these yet.</p>
+            <p className="text-label text-faint">No cloud Thread has been given these yet.</p>
           )}
         </div>
       ) : null}

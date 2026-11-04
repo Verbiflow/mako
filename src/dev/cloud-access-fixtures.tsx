@@ -1,7 +1,7 @@
 // Explicit deterministic fixture page for a project's cloud access in the web app's Settings, without a gateway: a
 // laptop browser's (`?view=web`, the desktop's own part) or a phone's touch layout (`?view=phone`). `?theme=light`,
 // `?scene=none|connected|lapsed|refused`, `?step=connect` to open Cloudflare's two steps (and, with `scene=refused`,
-// save a token the service refuses), and `?uses=open` to open Recent use. The desk's own Settings › Apps shows the
+// save a token the service refuses), and `?uses=open` to open Recent hand-overs. The desk's own Settings › Apps shows the
 // same scenes under `?mock&invited&cloud-access=…`.
 import { useEffect } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"

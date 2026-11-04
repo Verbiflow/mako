@@ -9,7 +9,7 @@ import {
   type CloudAccessGrant,
 } from "@mako/host/contracts/cloud-access"
 import type { JsonValue } from "@mako/host/contracts/json"
-import { grantAccount, lastUsedWords } from "../src/state/cloud-access"
+import { grantAccount, givenWords } from "../src/state/cloud-access"
 import { listedRepositories, webCloudAccess } from "../src/web-client/cloud-access"
 import type { Gateway } from "../src/web-client/gateway"
 
@@ -91,7 +91,7 @@ assert.deepEqual(
 // A connected row's words.
 assert.equal(grantAccount(grant), "acc-1")
 assert.equal(grantAccount({ ...grant, account: { id: "acc-1", name: "Acme" } }), "Acme")
-assert.equal(lastUsedWords(grant, Date.parse("2026-11-03T10:00:00.000Z")), "Last used by a cloud Thread 5 minutes ago")
-assert.equal(lastUsedWords({ ...grant, lastGiven: null }), "Not used yet")
+assert.equal(givenWords(grant, Date.parse("2026-11-03T10:00:00.000Z")), "Given to a cloud Thread 5 minutes ago")
+assert.equal(givenWords({ ...grant, lastGiven: null }), "Not given to a cloud Thread yet")
 
 console.log("Cloud access: the answers parsed and refused as the contract says, every service named, a browser's calls on the account's routes, its projects listed once each, and a connected row's words")

@@ -628,7 +628,7 @@ export function installMockBridge() {
   const titles = new Map<string, ThreadTitleEntry>()
   if (scene === "busy") titles.set(BUSY_THREAD, { thread: BUSY_THREAD, title: BUSY_TITLE, source: "user" })
   if (scene === "apex") titles.set(APEX_THREAD, { thread: APEX_THREAD, title: APEX_TITLE, source: "user" })
-  // The cloud Threads Settings › Apps' "Recent use" names.
+  // The cloud Threads Settings › Apps' "Recent hand-overs" names.
   for (const [thread, title] of Object.entries(CLOUD_ACCESS_THREADS)) titles.set(thread, { thread, title, source: "frozen" })
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false

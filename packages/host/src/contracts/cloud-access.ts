@@ -21,7 +21,7 @@ export type CloudAccessService = z.infer<typeof CloudAccessServiceSchema>
 /** A project as the account knows it: its GitHub repository's URL. */
 export const CloudAccessRepositorySchema = z.string().max(200).regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
 
-/** One service's grant for one project, as any device sees it: never the token, only what it acts in and who used it. */
+/** One service's grant for one project, as any device sees it: never the token, only what it acts in and when it was last given to a cloud Thread. */
 export const CloudAccessGrantSchema = z.object({
   service: CloudAccessServiceSchema,
   repository: z.string(),

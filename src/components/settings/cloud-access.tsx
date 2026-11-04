@@ -5,7 +5,7 @@ import { Action, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { copyAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { grantAccount, lastUsedWords, useCloudAccess, usedByName, type CloudAccessBusy, type CloudAccessTransport, type CloudAccessUsesPhase } from "@/state/cloud-access"
+import { grantAccount, givenWords, useCloudAccess, usedByName, type CloudAccessBusy, type CloudAccessTransport, type CloudAccessUsesPhase } from "@/state/cloud-access"
 import { expiryWords } from "@/state/github-token"
 
 const inputClass =
@@ -14,8 +14,8 @@ const inputClass =
 /**
  * A project's "Access" in Mako Cloud (Settings › Apps › a project, under its carried files): one row per service, each
  * connected with a token the person makes on the service's own page, which the cloud checks before it keeps it for the
- * project's cloud Threads. Connected, a row says the account it acts in, when it lapses and when a cloud Thread last
- * used it; removing it, confirmed in place, reaches running cloud Threads within a minute. The desktop's, and a
+ * project's cloud Threads. Connected, a row says the account it acts in, when it lapses and when it was last given
+ * to a cloud Thread; removing it, confirmed in place, reaches running cloud Threads within a minute. The desktop's, and a
  * laptop browser's Settings too.
  */
 export function CloudAccess({ transport, repository }: { transport: CloudAccessTransport; repository: string }) {
@@ -114,7 +114,7 @@ function ServiceRow({ service, grant, busy, error, onOpen, onSave, onRemove, onE
             <span className="text-muted-foreground"> · {grantAccount(grant)}</span>
           </p>
           <p className={cn("mt-0.5 text-label", expiry.lapsed ? "text-negative" : "text-faint")}>{expiry.lapsed ? `${expiry.text}. Replace it to use ${info.name} again.` : expiry.text}</p>
-          <p className="text-label text-faint">{lastUsedWords(grant)}</p>
+          <p className="text-label text-faint">{givenWords(grant)}</p>
           <p className="mt-0.5 truncate font-mono text-label text-faint" title={grant.variables.join(", ")}>{grant.variables.join(" ")}</p>
         </div>
         {removing ? null : (
@@ -228,7 +228,7 @@ function TokenForm({ service, busy, error, replacing, onOpen, onCancel, onEdit, 
   )
 }
 
-/** "Recent use": the latest hand-overs to cloud Threads, read when the person opens it. */
+/** "Recent hand-overs": the latest to cloud Threads, read when the person opens it. */
 function RecentUse({ uses, transport, onOpen }: { uses: CloudAccessUsesPhase; transport: CloudAccessTransport; onOpen: () => void }) {
   const [open, setOpen] = useState(false)
   return (
@@ -243,7 +243,7 @@ function RecentUse({ uses, transport, onOpen }: { uses: CloudAccessUsesPhase; tr
         }}
       >
         <ChevronRightIcon className={cn("size-3.5 transition-transform duration-150 ease-(--ease-out)", open && "rotate-90")} />
-        Recent use
+        Recent hand-overs
       </button>
       {open ? (
         <div className="mt-2 pl-5">
@@ -262,7 +262,7 @@ function RecentUse({ uses, transport, onOpen }: { uses: CloudAccessUsesPhase; tr
               ))}
             </ul>
           ) : (
-            <p className="text-label text-faint">No cloud Thread has used these yet.</p>
+            <p className="text-label text-faint">No cloud Thread has been given these yet.</p>
           )}
         </div>
       ) : null}
