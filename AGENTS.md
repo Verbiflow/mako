@@ -130,8 +130,12 @@ conversations?.live`) rather than a domain importing another's files.
   many Fins the log blamed worktree summaries and live reads while Git
   spawns held the thread. `npm run bench:host-load` runs a real host on a
   world of that day's size (52 Threads' worktrees, 95 apps, Fins editing,
-  building and writing transcripts, three windows polling) and fails on
-  slow health checks and reads; CI runs it as `host-load`.
+  building and writing transcripts, three windows polling). A shared
+  runner's speed varies by several times between runs, so its limits are
+  calibrated in the same run by a yardstick process timed beside the host;
+  it fails only on a clear regression (a loop held for seconds, or several
+  times the yardstick's waits), never on a fixed number of milliseconds, and
+  writes every number to the job's summary. CI runs it as `host-load`.
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the

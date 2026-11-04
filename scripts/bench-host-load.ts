@@ -1,6 +1,6 @@
 import { execFileSync, fork, spawn, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
@@ -22,10 +22,15 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  * half minute and as focus moves between them, the apps' marks and each followed folder's app every four seconds).
  * Meanwhile a prober of its own asks `/health` every 20 ms and reads a list every 100 ms, each timed to its answer.
  *
- * It fails (exit 1) when one health check in a hundred waited past `--health-p99-ms` (100) or one read in a hundred
- * past `--read-p99-ms` (500), when any waited past `--max-ms` (1000), or when one failed. A host answering as it
- * should waits about 50 ms on one health check in a hundred here, and the host that stalled waited 600 ms, with reads
- * of ten seconds: the limits sit between the two, so a slow runner doesn't fail it and a regression can't pass. `--cpu-prof <dir>` keeps the host's CPU profile and
+ * A shared runner's speed varies by several times between runs, so the limits are calibrated in the same run: a
+ * yardstick process beside the host, under the same contention and running none of Mako's code
+ * (`host-load-yardstick.mjs`), times its own event loop while the host is probed. It fails (exit 1) only on a clear
+ * regression: a health check waiting two seconds (the stalled host held its loop for 3-5 s at a time), one in a hundred
+ * waiting past `--times` (30) times the yardstick's one in a hundred (at least 150 ms), one read in a hundred past ten
+ * times that, or a probe failing. On one CI runner in one job, at this scale, the yardstick waited 14 ms on one tick in
+ * a hundred; the host before #358 waited 3.3 s on one health check in a hundred and 20 s on a read, and the host
+ * after it 74 ms and 605 ms: each limit is several times from either. Every number goes to the job's summary
+ * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` judges without failing. `--cpu-prof <dir>` keeps the host's CPU profile and
  * prints the longest slices it held the loop for, named by the host's own functions; `--out <file>` keeps the report;
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
  *
@@ -40,9 +45,8 @@ const { values } = parseArgs({
     "cpu-prof": { type: "string" },
     "home-from": { type: "string" },
     "budget-ms": { type: "string", default: "50" },
-    "health-p99-ms": { type: "string", default: "100" },
-    "read-p99-ms": { type: "string", default: "500" },
-    "max-ms": { type: "string", default: "1000" },
+    times: { type: "string", default: "30" },
+    "report-only": { type: "boolean", default: false },
     windows: { type: "string", default: "3" },
     root: { type: "string" },
     out: { type: "string" },
@@ -61,7 +65,13 @@ const scale: WorldScale = z.enum(["today", "ci", "tiny"]).transform((name) => SC
 const hostScript = resolve(values.host ?? join(import.meta.dirname, "../packages/host/dist/mako-host.js"))
 if (!existsSync(hostScript)) throw new Error(`${hostScript} isn't built: npx tsgo -b packages/host`)
 const budget = Number(values["budget-ms"])
-const maxMs = Number(values["max-ms"])
+const times = Number(values.times)
+/** A health check this slow is the loop held for seconds, as the day it stalled: a failure on any runner. */
+const HELD_MS = 2_000
+/** One health check in a hundred may wait this long whatever the yardstick says: below it a runner's noise decides. */
+const HEALTH_FLOOR_MS = 150
+/** A read does work of its own (a hundred worktrees looked at), so it may take this many health checks' limits. */
+const READ_TIMES = 10
 
 const root = realpathSync(values.root ? (mkdirSync(values.root, { recursive: true }), values.root) : mkdtempSync(join(tmpdir(), "mako-host-load-")))
 say(`world: ${root}`)
@@ -144,6 +154,9 @@ try {
 
   say(`warming up for ${values.warmup} s with ${fins.length} Fins at work`)
   await delay(Number(values.warmup) * 1000)
+  const yardstickOut = join(root, "yardstick.json")
+  const yardstick = spawn(process.execPath, [join(import.meta.dirname, "lib/host-load-yardstick.mjs"), yardstickOut, "300"], { stdio: ["ignore", "inherit", "inherit"] })
+  children.push(yardstick)
   const probeOut = join(root, "probe.json")
   const prober = spawn(process.execPath, ["--import", "tsx", join(import.meta.dirname, "lib/host-load-probe.ts"), socket, probeOut, "mako:worktrees", "20", "100", "30000"], {
     stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, TSX_TSCONFIG_PATH: join(import.meta.dirname, "../tsconfig.scripts.json") },
@@ -152,8 +165,10 @@ try {
   say(`probing for ${values.seconds} s`)
   await delay(Number(values.seconds) * 1000)
   const proberDone = new Promise((done) => prober.once("exit", done))
+  const yardstickDone = new Promise((done) => yardstick.once("exit", done))
   prober.kill("SIGTERM")
-  await proberDone
+  yardstick.kill("SIGTERM")
+  await Promise.all([proberDone, yardstickDone])
   const health = z.object({ eventLoop: z.unknown().optional(), jobs: z.unknown().optional() }).loose().parse(
     await (await import("@mako/host/transport/connection")).runtimeRequest({ socket, path: "/health", read: (body: string) => JSON.parse(body), timeoutMs: 30_000 }).catch(() => ({})),
   )
@@ -186,16 +201,37 @@ try {
   const text = JSON.stringify(report, null, 2)
   if (values.out) writeFileSync(values.out, text)
   process.stdout.write(`${text}\n`)
+  const Measured = z.object({ n: z.number(), p50: z.number(), p99: z.number(), max: z.number() })
+  const measured = z.object({ late: Measured, spawn: Measured, chunk: Measured }).parse(JSON.parse(readFileSync(yardstickOut, "utf8")))
+  const healthLimit = Math.max(HEALTH_FLOOR_MS, times * measured.late.p99)
+  const readLimit = READ_TIMES * healthLimit
   const failures: string[] = []
-  const limits = { health: { p99: Number(values["health-p99-ms"]), max: maxMs }, reads: { p99: Number(values["read-p99-ms"]), max: maxMs } }
   for (const name of ["health", "reads"] as const) {
     const result = answers[name]
     if (result.failed) failures.push(`${name}: ${result.failed} of ${result.n} failed or passed the probe's timeout`)
-    if ((result.p99 ?? Infinity) > limits[name].p99) failures.push(`${name}: one in a hundred waited ${result.p99} ms or more (budget ${limits[name].p99} ms); ${result.overBudget} of ${result.n} waited past ${budget} ms`)
-    if ((result.max ?? Infinity) > limits[name].max) failures.push(`${name}: the longest wait was ${result.max} ms (budget ${limits[name].max} ms)`)
   }
+  if ((answers.health.max ?? Infinity) >= HELD_MS) failures.push(`a health check waited ${answers.health.max} ms: the loop was held for seconds`)
+  if ((answers.health.p99 ?? Infinity) > healthLimit) failures.push(`one health check in a hundred waited ${answers.health.p99} ms, past ${healthLimit} ms (${times} times the yardstick's ${measured.late.p99} ms)`)
+  if ((answers.reads.p99 ?? Infinity) > readLimit) failures.push(`one read in a hundred waited ${answers.reads.p99} ms, past ${readLimit} ms`)
+  const row = (name: string, result: { p50: number | null; p99: number | null; max: number | null }, limit: string) => `| ${name} | ${result.p50} | ${result.p99} | ${result.max} | ${limit} |`
+  const table = [
+    `### bench:host-load (${values.scale}${values.host ? `, ${values.host}` : ""}): ${failures.length ? "failed" : "passed"}`,
+    "",
+    "| | p50 ms | p99 ms | max ms | fails at |",
+    "|---|---|---|---|---|",
+    row("host health check", answers.health, `p99 > ${healthLimit}, max >= ${HELD_MS}`),
+    row("host read (`mako:worktrees`)", answers.reads, `p99 > ${readLimit}`),
+    row("yardstick's own loop (calibration)", measured.late, "-"),
+    row("yardstick's spawn of git", measured.spawn, "-"),
+    row("yardstick's 2,000-row JSON round trip", measured.chunk, "-"),
+    "",
+    `Loop held in slices of 50 ms or more: ${report.slices ? `${report.slices.count} slices, ${report.slices.totalMs} ms` : "not profiled"}.`,
+    ...failures.map((failure) => `- **${failure}**`),
+  ].join("\n")
+  say(table)
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${table}\n`)
   for (const failure of failures) say(`FAIL ${failure}`)
-  await finish(failures.length ? 1 : 0)
+  await finish(failures.length && !values["report-only"] ? 1 : 0)
 } catch (error) {
   say(`bench:host-load failed: ${error instanceof Error ? error.stack : String(error)}`)
   host?.kill("SIGKILL")

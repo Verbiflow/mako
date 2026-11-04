@@ -252,9 +252,9 @@ jobs:
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run probe:steer-lands -- claude codex
 
   # Whether the host keeps answering while many Fins work (`bench:host-load`): a real host on 52 Threads' worktrees,
-  # 95 apps and a busy process table, its Fins editing, building and writing transcripts, three windows polling. It
-  # fails when one health check or read in a hundred, or any one, waits past the bench's limits, and prints what held
-  # the loop.
+  # 95 apps and a busy process table, its Fins editing, building and writing transcripts, three windows polling. Its
+  # limits are calibrated by a yardstick process timed beside it on this runner; it fails only on a clear regression
+  # (a loop held for seconds, or several times the yardstick's waits) and writes every number to the job's summary.
   host-load:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -270,7 +270,7 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npx tsgo -b packages/host
-      - run: npm run bench:host-load -- --scale ci --cpu-prof "$RUNNER_TEMP/host-load-profile"
+      - run: npm run bench:host-load -- --scale today --cpu-prof "$RUNNER_TEMP/host-load-profile"
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.
