@@ -1,3 +1,4 @@
+import { NATIVE_OVERRIDE } from "../contracts/native-calls.js"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { JsonValue } from "@mako/control"
 import { randomBytes } from "node:crypto"
@@ -47,12 +48,28 @@ const MAKO_INSTRUCTIONS = [
   "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
   "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save saves a draft only this Thread runs, and recipe_publish proves it and publishes it to every Thread. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
+  `Mako refuses the shell routes around these tools, \`git worktree add\`, a new branch in the main checkout, \`gh pr create\` and \`gh pr merge\`, a dev server when the project has a recipe, an agent CLI such as \`claude -p\` or \`codex exec\`, and harness browser or screen tools beside mako-computer, and the refusal names the tool to call. ${NATIVE_OVERRIDE} before a command runs it anyway: only when the Mako tool failed or can't do what was asked, not because the command was named.`,
   `show: ${SHOW_MEDIA_LINE}`,
   "thread_history: this Thread's earlier turns, every session and harness of it, and the threads its messages referenced, read whole: list, read, search, and any tool output in full. Use it instead of guessing what was said or done before, and when a transcript points to it.",
   ORCHESTRATION_INSTRUCTIONS,
 ].join("\n")
 
 type Route = "computer" | "mako"
+
+/**
+ * A harness's command hook posting one tool call (`/calls/<pre|post|before>`):
+ * what it prints back, decided for the grant's conversation. A hook that gets
+ * no answer goes on, so a failure here never stops a call.
+ */
+export type CallGate = (conversationId: string, event: CallGateEvent, body: JsonValue) => JsonValue
+
+/** `pre` and `post` hook a call before and after it runs; `before` is a harness that reads a note before the call as well as a deny. */
+export type CallGateEvent = "pre" | "post" | "before"
+
+function gatePath(url: string | undefined): CallGateEvent | undefined {
+  const path = url?.split("?", 1)[0]
+  return path === "/calls/pre" ? "pre" : path === "/calls/post" ? "post" : path === "/calls/before" ? "before" : undefined
+}
 
 /** By path alone: OpenCode adds its own query (`?codemode=false`) to every server's address. */
 function routeOf(url: string | undefined): Route | undefined {
@@ -85,7 +102,8 @@ async function readBody(request: IncomingMessage, maxBytes: number) {
 export async function startConversationMcp(
   owner: AgentOwner,
   control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
-  makoTools: readonly MakoTools[] = []
+  makoTools: readonly MakoTools[] = [],
+  gate?: CallGate
 ) {
   const scopes = new Map<string, Scope>()
   const serveMako = makoTools.length > 0
@@ -95,6 +113,17 @@ export async function startConversationMcp(
       const scope = token ? scopes.get(token) : undefined
       if (!scope || scope.revoked || scope.expiresAt < Date.now()) {
         response.writeHead(401).end()
+        return
+      }
+      const gated = gatePath(request.url)
+      if (gated) {
+        if (!gate || request.method !== "POST" || request.headers.origin) {
+          response.writeHead(405).end()
+          return
+        }
+        const body = z.json().parse(JSON.parse(await readBody(request, 1024 * 1024)))
+        owner.authorizeAgent(scope.conversationId, scope.bindingId)
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(gate(scope.conversationId, gated, body)))
         return
       }
       const route = routeOf(request.url)

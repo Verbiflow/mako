@@ -3,10 +3,12 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { setFlagsFromString } from "node:v8"
+import { runInNewContext } from "node:vm"
 import { join } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
-import type { ActivityMark, Attribution, ReportedEffect, TrackerFileSystem } from "@mako/protocol"
+import type { ActivityMark, Attribution, MakoWrite, ReportedCall, ReportedEffect, TrackerFileSystem } from "@mako/protocol"
 import { FakeClock, FakeEventSource, FakeFileSystem } from "@mako/protocol/attribution-conformance"
 import type { ChildSource } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
@@ -1848,12 +1850,13 @@ test("cached attribution spans follow late marks, exact bounds and pruning", () 
 
 /**
  * The longest the event loop went without a turn while `work` ran, in
- * milliseconds: by the process's own CPU time when that's less, so a busy
- * machine scheduling something else meanwhile doesn't count as our slice.
+ * milliseconds of this thread's own CPU time, wall time when that's less: a
+ * busy machine running something else meanwhile, or the collector's helper
+ * threads, aren't our slice.
  */
 async function longestSlice(work: () => Promise<void>): Promise<number> {
   const cpu = () => {
-    const used = process.cpuUsage()
+    const used = process.threadCpuUsage()
     return (used.user + used.system) / 1000
   }
   let last = performance.now(), lastCpu = cpu(), longest = 0, running = true
@@ -1877,6 +1880,36 @@ async function longestSlice(work: () => Promise<void>): Promise<number> {
   return longest
 }
 
+/** A full collection, so what the test's setup left behind isn't collected inside a slice it measures. */
+const collect: () => void = (() => {
+  setFlagsFromString("--expose-gc")
+  return runInNewContext("gc")
+})()
+
+/** What `calibrate` takes on the Mac the slice budget was set on. */
+const CALIBRATION_MS = 12
+/**
+ * A fixed piece of work like attribution's (strings, maps, small objects),
+ * in milliseconds: the best of several runs, so the budget scales with the
+ * machine the test runs on.
+ */
+function calibrate(): number {
+  let best = Infinity
+  for (let run = 0; run < 7; run++) {
+    const begun = performance.now()
+    const spans = new Map<string, { start: number; end: number }>()
+    let length = 0
+    for (let i = 0; i < 60_000; i++) {
+      const key = `s${i % 20}\u0000c${i}`
+      spans.set(key, { start: i, end: i + 1 })
+      length += JSON.stringify(spans.get(key)).length
+    }
+    assert.ok(length > 0)
+    best = Math.min(best, performance.now() - begun)
+  }
+  return best
+}
+
 /** A file system answering on the event loop's next turn, as the disk does, rather than all at once as memory can. */
 function onTheLoop(fs: FakeFileSystem): TrackerFileSystem {
   const later = <T>(value: Promise<T>) => value.then((found) => new Promise<T>((resolve) => setImmediate(() => resolve(found))))
@@ -1888,6 +1921,9 @@ test("no attribution slice blocks the event loop long on a 1,500-change backlog 
   const storage = mkdtempSync(join(tmpdir(), "mako-attribution-slice-"))
   const tracker = await LaptopTracker.open({ fs: onTheLoop(fs), events, clock, storage, device: "slice" })
   const release = tracker.hold()
+  // 50 ms on the Mac the budget was set on, up to four times that on a slower one: a stall of seconds fails anywhere.
+  const scale = () => Math.min(4, Math.max(1, calibrate() / CALIBRATION_MS))
+  const before = scale()
   const sessions = 20
   try {
     fs.write("/w/base", "base\n")
@@ -1907,9 +1943,11 @@ test("no attribution slice blocks the event loop long on a 1,500-change backlog 
     clock.advance(10_000)
     // The watcher hears a burst in a few batches; the writes themselves are the test's own work.
     for (let i = 0; i < 1500; i++) fs.write(`/w/pkg-${i % 50}/file-${i}.txt`, `change ${i}\n`)
+    collect()
     const backlog = await longestSlice(() => tracker.settled())
     const changedAt = clock.now()
     clock.advance(1000)
+    collect()
     const evidence = await longestSlice(async () => {
       for (let i = 0; i < 50; i++) {
         tracker.reported({ thread: "t0", session: "s0", turn: "turn-0", call: `late-${i}`, status: "completed", startedAt: changedAt, endedAt: changedAt + 1,
@@ -1926,15 +1964,18 @@ test("no attribution slice blocks the event loop long on a 1,500-change backlog 
     clock.advance(60_000)
     release()
     const last = tracker.changes(0, 5000).at(-1)!.seq
+    collect()
     const settling = await longestSlice(async () => {
       tracker.sweep()
       // Changes settle in seq order: the last one settles last.
       for (let turns = 0; !tracker.store.entry(last)?.settled && turns < 100_000; turns++) await new Promise<void>((resolve) => setImmediate(resolve))
     })
     assert.equal(tracker.store.entries(0, 5000).filter((item) => !item.settled).length, 0)
-    assert.ok(backlog < 50, `journaling the backlog blocked the event loop for ${backlog.toFixed(1)} ms`)
-    assert.ok(evidence < 50, `attributing the backlog again blocked the event loop for ${evidence.toFixed(1)} ms`)
-    assert.ok(settling < 50, `settling the backlog blocked the event loop for ${settling.toFixed(1)} ms`)
+    const budget = 50 * Math.min(before, scale())
+    console.log(`longest slice: journaling ${backlog.toFixed(1)} ms, attributing again ${evidence.toFixed(1)} ms, settling ${settling.toFixed(1)} ms; budget ${budget.toFixed(1)} ms`)
+    assert.ok(backlog < budget, `journaling the backlog blocked the event loop for ${backlog.toFixed(1)} ms, over ${budget.toFixed(1)}`)
+    assert.ok(evidence < budget, `attributing the backlog again blocked the event loop for ${evidence.toFixed(1)} ms, over ${budget.toFixed(1)}`)
+    assert.ok(settling < budget, `settling the backlog blocked the event loop for ${settling.toFixed(1)} ms, over ${budget.toFixed(1)}`)
   } finally {
     release()
     await tracker.close()
@@ -1971,21 +2012,26 @@ test("attributing again only what new evidence reaches gives every change the au
   // Random sessions mark turns, calls and background work, report effects
   // (exact bounds, detached work, refusals), run scripts and Mako writes;
   // after each, the changes its reach takes in are attributed again, as the
-  // tracker does. Every change must then stand where a full pass puts it.
+  // tracker does. Every change must then stand where a full pass puts it,
+  // and where one puts it that reads every span afresh, so no cached span
+  // is stale either.
   let seed = 7
   const random = () => ((seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31) / 2 ** 31)
   const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)]!
   const paths = ["/w/a.ts", "/w/src/b.ts", "/w/src/c.ts", "/w/lib/d.ts", "/v/e.ts"]
   for (let trial = 0; trial < 150; trial++) {
     const evidence = new Evidence()
+    const fresh = new Evidence(undefined, { cached: false })
+    const both = (act: (each: Evidence) => void) => [evidence, fresh].forEach(act)
     const sessions = ["s0", "s1", "s2"]
     const changes: { change: Parameters<typeof attribute>[0]; author: Attribution }[] = []
     const open: { session: string; kind: "turn" | "call" | "background"; id: string }[] = []
-    const writes: ReturnType<Evidence["makoStart"]>[] = []
+    const writes: [ReturnType<Evidence["makoStart"]>, ReturnType<Evidence["makoStart"]>][] = []
     let now = 1_000_000
     let ids = 0
     const proved = (item: (typeof changes)[number]) => {
-      if (item.author.certainty === "exact") evidence.proved(item.author.author, item.change.path, item.change.changedAt)
+      const author = item.author
+      if (author.certainty === "exact") both((each) => each.proved(author.author, item.change.path, item.change.changedAt))
     }
     for (let step = 0; step < 60; step++) {
       now += Math.floor(random() * 4_000)
@@ -2006,7 +2052,8 @@ test("attributing again only what new evidence reaches gives every change the au
         const id = ending?.id ?? `${kind}-${ids++}`
         const at = now - Math.floor(random() * 2_000)
         const named = random() < 0.4 ? [pick(paths)] : undefined
-        evidence.mark({ kind, id, edge: ending ? "end" : "start", at, thread, session: ending?.session ?? session, turn: kind === "turn" ? undefined : "turn-x", checkout: "/w", cwd: pick(["/w", "/w/src", "/v"]), named, ...(random() < 0.1 && { readOnly: true as const }) })
+        const mark: ActivityMark = { kind, id, edge: ending ? "end" : "start", at, thread, session: ending?.session ?? session, turn: kind === "turn" ? undefined : "turn-x", checkout: "/w", cwd: pick(["/w", "/w/src", "/v"]), named, ...(random() < 0.1 && { readOnly: true as const }) }
+        both((each) => each.mark(mark))
         if (!ending) open.push({ session, kind, id })
       } else if (roll < 0.8) {
         const call = random() < 0.5 && ids ? `call-${Math.floor(random() * ids)}` : `call-${ids++}`
@@ -2022,14 +2069,23 @@ test("attributing again only what new evidence reaches gives every change the au
         ]
         const effects = pick(choices)
         const exact = random() < 0.5 ? { start, end, ...(random() < 0.1 && { detached: true as const }) } : undefined
-        evidence.report({ thread, session, call, status: pick(["completed", "completed", "running", "refused"] as const), startedAt: start, ...(random() < 0.8 && { endedAt: end }), ...(exact && { exact }), checkout: "/w", effects })
-        if (random() < 0.2) evidence.ran(session, call, [{ text: `writeFileSync("${pick(paths)}")`, folders: ["/w"] }])
+        const report: ReportedCall = { thread, session, call, status: pick(["completed", "completed", "running", "refused"] as const), startedAt: start, ...(random() < 0.8 && { endedAt: end }), ...(exact && { exact }), checkout: "/w", effects }
+        both((each) => each.report(report))
+        if (random() < 0.2) {
+          const ran = [{ text: `writeFileSync("${pick(paths)}")`, folders: ["/w"] }]
+          both((each) => each.ran(session, call, ran))
+        }
       } else if (roll < 0.9) {
-        writes.push(evidence.makoStart({ kind: pick(["git", "editor"] as const), operation: "git stash pop", paths: [pick(["/w", "/w/src", "/v"])] }, now - Math.floor(random() * 1_000)))
+        const write: MakoWrite = { kind: pick(["git", "editor"] as const), operation: "git stash pop", paths: [pick(["/w", "/w/src", "/v"])] }
+        const at = now - Math.floor(random() * 1_000)
+        writes.push([evidence.makoStart(write, at), fresh.makoStart(write, at)])
       } else if (writes.length) {
-        evidence.makoEnd(writes.splice(Math.floor(random() * writes.length), 1)[0]!, now)
+        const [own, other] = writes.splice(Math.floor(random() * writes.length), 1)[0]!
+        evidence.makoEnd(own, now)
+        fresh.makoEnd(other, now)
       }
       // A pass, rounds until no reach is left, as the tracker runs it.
+      fresh.takeReaches()
       for (let reach = evidence.takeReaches(); reach.length; reach = evidence.takeReaches())
         for (const item of changes) {
           if (!reach.some((each) => reaches(each, item.change, item.author))) continue
@@ -2037,7 +2093,8 @@ test("attributing again only what new evidence reaches gives every change the au
           proved(item)
         }
       for (const [index, item] of changes.entries()) {
-        const full = attribute(item.change, evidence)
+        const full = attribute(item.change, fresh)
+        assert.deepEqual(attribute(item.change, evidence), full, `trial ${trial}, step ${step}: a cached span for change ${index} on ${item.change.path} is stale`)
         assert.deepEqual(item.author, full, `trial ${trial}, step ${step}: change ${index} on ${item.change.path} at ${item.change.changedAt} is stale`)
       }
     }

@@ -154,9 +154,12 @@ export class Evidence {
   private touched: Reach[] = []
   /** Where each Thread's work has been, over its whole history: never pruned with the rest. */
   readonly worked: WorkingSets
+  /** Off, every span is read afresh: the reference the caches are checked against. */
+  private readonly cached: boolean
 
-  constructor(worked = new WorkingSets()) {
+  constructor(worked = new WorkingSets(), options: { cached?: boolean } = {}) {
     this.worked = worked
+    this.cached = options.cached ?? true
   }
 
   /** The reaches of evidence since the last call, handed over once. */
@@ -204,7 +207,8 @@ export class Evidence {
     if (mark.standing) interval.standing = true
     if (mark.edge === "start") interval.start = Math.min(interval.start, mark.at)
     else interval.end = Math.max(mark.at, interval.start)
-    this.clearSpans()
+    // Only this interval's span moved, and its call's, which reads its marks.
+    this.forget(interval, call)
     this.touch(mark.session, { interval, call: mark.kind === "call" ? mark.id : undefined }, [...was, ...this.extentsOf(interval), call && this.callSpan(call)])
     return interval
   }
@@ -222,8 +226,12 @@ export class Evidence {
     if (exact) merged.exact = exact
     if (known?.endedAt !== undefined && merged.endedAt !== undefined) merged.endedAt = Math.max(known.endedAt, merged.endedAt)
     this.reports.set(id, merged)
-    this.sessionOf(call.session).reports.set(id, merged)
-    this.clearSpans()
+    const own = this.sessionOf(call.session)
+    own.reports.set(id, merged)
+    // Only this call's spans moved, and its Session's turns' when a hook now bounds its calls or no longer does.
+    this.forget(marked, known)
+    this.exactSessions.delete(call.session)
+    if (exactBefore !== this.exactSession(call.session)) for (const interval of own.intervals.values()) if (interval.kind === "turn") this.intervalSpans.delete(interval)
     this.touch(call.session, { call: call.call }, [...was, this.callSpan(merged), ...(marked ? this.extentsOf(marked) : []), exact && { start: exact.start, end: exact.detached ? null : exact.end }])
     // A turn's span is exact once a hook bounds its Session's calls, and `between` reads every one of them.
     if (exactBefore !== this.exactSession(call.session)) this.touchTurns(call.session)
@@ -287,9 +295,11 @@ export class Evidence {
    * person's own hooks (a formatter after an edit) between the two.
    */
   callSpan(report: ReportedCall): Span | undefined {
+    if (!this.cached) return this.readCallSpan(report)
     if (this.callSpans.has(report)) return this.callSpans.get(report)
     const span = this.readCallSpan(report)
-    this.callSpans.set(report, span)
+    // A caller's own copy is never told when its marks move: only the report kept here is cached.
+    if (this.reports.get(key(report.session, report.call)) === report) this.callSpans.set(report, span)
     return span
   }
 
@@ -306,6 +316,7 @@ export class Evidence {
 
   /** When an interval ran: a call's exact bounds when a hook marked them; a turn's are exact when its session's calls are. */
   span(interval: Interval): Span {
+    if (!this.cached) return this.readSpan(interval)
     const known = this.intervalSpans.get(interval)
     if (known) return known
     const span = this.readSpan(interval)
@@ -325,12 +336,18 @@ export class Evidence {
 
   /** Whether a hook marks this session's calls (`ReportedCall.exact`). */
   private exactSession(session: string): boolean {
-    const known = this.exactSessions.get(session)
+    const known = this.cached ? this.exactSessions.get(session) : undefined
     if (known !== undefined) return known
     let exact = false
     for (const report of this.sessions.get(session)?.reports.values() ?? []) if (report.exact && !report.exact.detached) { exact = true; break }
     this.exactSessions.set(session, exact)
     return exact
+  }
+
+  /** An interval's span and its call's, read again when next asked. */
+  private forget(interval: Interval | undefined, report: ReportedCall | undefined): void {
+    if (interval) this.intervalSpans.delete(interval)
+    if (report) this.callSpans.delete(report)
   }
 
   /** Every pending change asks about the same spans; only new marks, reports or pruning change them. */

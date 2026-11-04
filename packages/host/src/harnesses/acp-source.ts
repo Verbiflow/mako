@@ -2,6 +2,7 @@ import type { z } from "zod"
 import type { AcpDecoderHooks, AcpPlanDecoder as AcpUpdatePlans } from "@mako/sessions/acp-decoder"
 import type { LayerCapabilities } from "../contracts/mako-layer.js"
 import type { NativeRoutingCapability } from "../contracts/native-routing.js"
+import type { CallThread } from "../contracts/native-calls.js"
 import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -40,6 +41,8 @@ export interface AcpLaunchOptions {
   cwd: string
   /** Native routing has the Thread's own spawns off (`nativeSpawnsOff`), for the source's `nativeRouting` control. */
   nativeSpawnsOff?: boolean
+  /** The launch routes the agent's calls (`ProviderStartOptions.nativeCalls`), for a source that gates them by a hook of its own. */
+  routesCalls?: boolean
 }
 
 export interface AcpLaunch {
@@ -256,6 +259,8 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   nativeModes?: readonly AcpNativeMode[]
   launchOptionIds?: readonly string[]
   sessionMetadata?(tuning: SessionSettings): NewSessionRequest["_meta"]
+  /** How the agent asks Mako before its tool calls, where it can: Mako answers each from the Thread's routing (`ProviderStartOptions.nativeCalls`). */
+  callHooks?: AcpCallHooks
   available(appPath: string): boolean
   launch(options: AcpLaunchOptions): Promise<AcpLaunch | null>
 }
@@ -370,6 +375,18 @@ export interface AcpAsk {
  * and the answer each choice sends back. Pure. Mako answers any other
  * method, or one that does not parse, method-not-found.
  */
+/**
+ * An agent's hooks a client registers over ACP: `meta` goes into the `_meta`
+ * of `session/new`, `session/load` and `session/resume`, and each matching
+ * call arrives as a `method` request that Mako answers at once, with no one
+ * asked. A hook that isn't answered in time fails open.
+ */
+export interface AcpCallHooks {
+  meta: JsonObject
+  method: string
+  answer(params: JsonObject, thread: CallThread): JsonObject
+}
+
 export interface AcpVendorRequests {
   methods: ReadonlySet<string>
   decode(method: string, params: JsonObject): AcpVendorRequest | undefined

@@ -18,7 +18,7 @@ export const claudeLayer: LayerAdapter<ClaudeLayerFragment> = {
     instructions: { kind: "native", via: "system-append", how: "`systemPrompt.append` on the `claude_code` preset", inUse: true },
     toolServing: { kind: "native", via: "http-mcp", how: "`mcpServers` of type http with the grant as a bearer header; `createSdkMcpServer` would serve them in-process", inUse: true },
     removal: { kind: "native", via: "tool-list", how: "`disallowedTools` and `tools` on the query; today only agent teams are taken out, by environment", inUse: false },
-    interception: { kind: "native", via: "pre-tool-hook", how: "the `PreToolUse` callback, which denies a spawn with a message naming `agents_start`", inUse: true },
+    interception: { kind: "native", via: "pre-tool-hook", how: "the `PreToolUse` callback, which denies a routed spawn or native call with a message naming Mako's tool", inUse: true },
     subagents: { kind: "native", via: "declared", how: "the query's `agents` definitions; today `SubagentStart` adds Mako's paragraph to native ones", inUse: false },
     hooks: { kind: "native", via: "sdk-hooks", how: "SDK hooks for transcript, compaction, attribution and routing", inUse: true },
     modelRoute: {

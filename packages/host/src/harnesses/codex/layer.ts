@@ -26,7 +26,7 @@ export const codexLayer: LayerAdapter<CodexLayerFragment> = {
     instructions: { kind: "native", via: "developer-context", how: "`turn/start` `additionalContext` as an application entry; `developerInstructions` on the thread would carry it once. Never `baseInstructions`, which replaces Codex's own", inUse: true },
     toolServing: { kind: "native", via: "http-mcp", how: "`config.mcp_servers` on the thread, the grant read from the environment", inUse: true },
     removal: { kind: "native", via: "config-switch", how: "`config` switches on the thread; today `agents.enabled` and `features.multi_agent_v2`, which take spawning out", inUse: true },
-    interception: { kind: "fallback", via: "words", loses: "nothing refuses a native call yet; the instructions name Mako's tools" },
+    interception: { kind: "native", via: "pre-tool-hook", how: "`PreToolUse` command hooks in the thread's config, trusted in the same layer, posting each shell or browser call to Mako (`codexCallsConfig`)", inUse: true },
     subagents: { kind: "fallback", via: "words", loses: "Codex declares no agents Mako can define; the instructions say when to start a Fin" },
     hooks: { kind: "native", via: "config-hooks", how: "app-server events, and hooks in the thread's config", inUse: true },
     modelRoute: {

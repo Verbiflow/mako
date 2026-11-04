@@ -11,7 +11,7 @@ import { promptFingerprint } from "./live-assets.js"
 import { LiveJournal, LiveRequestSchema } from "./live-journal.js"
 import { releaseHold } from "./live-ledger.js"
 import { snapshotFacts } from "./live-moves.js"
-import { launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { launchCalls, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
 
@@ -250,6 +250,7 @@ export class LiveLaunches {
           conversationTools,
           threadEnvironment,
           nativeRouting: launchRouting(dependencies, id, conversationTools),
+          nativeCalls: launchCalls(dependencies, id, cwd, conversationTools, threadEnvironment),
           unattended: dependencies.unattended,
         }))
       })

@@ -1,3 +1,4 @@
+import { configureOpenCodeCalls } from "./call-plugin.js"
 import { realpath } from "node:fs/promises"
 import { OpenCodeCallBounds } from "./call-bounds.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -813,6 +814,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const launchAccess = openCodeLaunchAccess(options.modeId, options.launchModeId)
       configureOpenCodePermissions(env, launchAccess)
       configureOpenCodeRouting(env, options.conversationId, options.nativeRouting)
+      const tools = options.conversationTools
+      await configureOpenCodeCalls(env, options.conversationId, options.nativeCalls && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env, versions))
