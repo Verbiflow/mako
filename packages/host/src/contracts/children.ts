@@ -367,6 +367,8 @@ export function readableStep(step: string | undefined): string | undefined {
 export function childLine(state: ChildState): string | undefined {
   switch (state.kind) {
     case "queued":
+      if (state.held) return `Not started: ${state.held} didn't finish`
+      if (state.after?.length) return `Starts after ${state.after.join(", ")}`
       return state.ahead ? `Queued: ${state.ahead} ahead` : "Queued: next to start"
     case "starting":
       return "Starting"

@@ -60,6 +60,14 @@ export const FinPolicySchema = z.object({
 })
 export type FinPolicy = z.infer<typeof FinPolicySchema>
 
+/**
+ * How many of the person's Fins run at once on this Mac, every tree's, unless they set another (Settings › Fins), at
+ * most `FIN_LIMIT_MAX`. A start past it is refused unless its Apex asks it to wait (`agents_start` `queue`).
+ */
+export const FIN_LIMIT = 16
+export const FIN_LIMIT_MAX = 20
+export const FinLimitSchema = z.number().int().min(1).max(FIN_LIMIT_MAX)
+
 /** What the host keeps of the person's model choices for Fins (`mako:fin-defaults`). */
 export interface FinChoicesReading {
   /** Settings › Fins, by harness. */
@@ -68,6 +76,8 @@ export interface FinChoicesReading {
   used: Readonly<Record<string, SessionSettings>>
   /** The person's rules for which work goes where. */
   policy: FinPolicy
+  /** Fins at once (`FIN_LIMIT` unless they set another); absent from a host before it. */
+  limit?: number
 }
 
 /**

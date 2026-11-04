@@ -80,7 +80,7 @@ import {
 import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
-import { finPolicyNote, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
+import { FIN_LIMIT, finPolicyNote, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -93,14 +93,14 @@ import { AgentWakes, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type P
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
-import { macSlots, type MacReading, type MacSlots } from "./mac-capacity.js"
+import { macLoad, type MacLoad, type MacReading } from "./mac-capacity.js"
 
 const NONE: readonly NativeAgent[] = []
 /** How long a start waits to read whether a harness's account is at its limit before taking it as having room. */
 const LIMIT_READ_MS = 3_000
 /** A Fin's own Fins in these states are work it still waits on. */
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
-/** How often Fins waiting for this Mac's room look for it. */
+/** How often what waits looks again, for a limit the person raised or a Fin that ended unseen. */
 const ROOM_EVERY_MS = 10_000
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
 export const APEX_ANSWER_MS = 60_000
@@ -178,7 +178,9 @@ export interface AgentsDeps {
   /** The person's rules for which work goes to which harness and model (Settings › Fins). */
   finPolicy?(): FinPolicy | undefined
   budget?: TreeBudget
-  /** This Mac's cores, memory and load (`MacCapacity`): Fins past what it runs at once wait. Without it, only the tree's budget holds. */
+  /** How many of the person's Fins run at once, every tree's (Settings › Fins); `FIN_LIMIT` without it. */
+  finLimit?(): number
+  /** This Mac's cores, memory and load (`MacCapacity`): a start's answer says when it's busy, and it starts anyway. */
   capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
   /** `APEX_ANSWER_MS`, shorter in tests. */
@@ -230,8 +232,22 @@ interface QueuedStart {
   harness: string
   /** Absent from a build before models were decided at admission: decided at its start. */
   tuned?: Tuned
-  /** What held it: the tree's running budget, or this Mac's room (`place-full`). A record from before says neither. */
+  /** What held it: the tree's running budget, or the person's limit of Fins at once (`place-full`). Absent: only `after`, or a record from before. */
   why?: Extract<QueueReason, "tree-running" | "place-full">
+  /** The Apex's Fins it starts after, each once it has finished: a Fin by its Thread, or a spawn queued too by its op. */
+  after?: AfterRef[]
+}
+
+interface AfterRef {
+  name: string
+  child?: string
+  op?: string
+}
+
+/** How a spawn's `after` stands: the names still to finish, and the first that won't, which holds it. */
+interface AfterStand {
+  pending: string[]
+  held?: { name: string; outcome: "failed" | "stopped"; reason?: string; session?: string }
 }
 
 const QueuedStartSchema = z.object({
@@ -247,7 +263,11 @@ const QueuedStartSchema = z.object({
     rule: z.object({ n: z.number().optional(), when: z.string() }).optional(),
   }).optional(),
   why: z.enum(["tree-running", "place-full"]).optional(),
+  after: z.array(z.object({ name: z.string(), child: z.string().optional(), op: z.string().optional() })).optional(),
 }) satisfies z.ZodType<QueuedStart>
+
+/** A queued spawn's notice that a Fin it was to start after didn't finish: `after:<op>`; once its Apex heard it, it's dropped. */
+const HELD_PREFIX = "after:"
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
 type TreeCounts = { [Count in keyof TreeBudget]: number }
@@ -316,10 +336,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   private latest = new Map<string, Report>()
   private seen: unknown
   private draining = false
+  private drainAgain = false
   private stopped = false
   private readonly stopRoomWatch: () => void
-  /** This Mac's room as admission last read it, which every answer carries. */
-  private mac: MacSlots | undefined
+  /** This Mac's load as a start last read it, which every answer carries while it's busy. */
+  private mac: MacLoad | undefined
 
   constructor(deps: AgentsDeps) {
     this.deps = deps
@@ -344,16 +365,18 @@ export class Agents implements AgentOperations, ConversationChildren {
         deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor)
       },
       steer: (conversation, id, text) => this.steer(conversation, id, text),
-      assign: (reports, request) => this.store()?.assignWake(reports, request),
-      delivered: (reports, at) => this.store()?.markReportsDelivered(reports, at),
+      assign: (reports, request) => this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request),
+      delivered: (reports, at) => {
+        this.store()?.markReportsDelivered(reports.filter((id) => !id.startsWith(HELD_PREFIX)), at)
+        for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.dropHeld(id.slice(HELD_PREFIX.length))
+      },
       counts: (conversation) => this.counts(conversation),
       current: (notice) => this.current(notice),
       now: deps.now,
     })
-    // The Mac frees up without a Fin ending, as the person's own build finishes: what waits for its room goes then.
-    this.stopRoomWatch = deps.capacity ? deps.jobs.every("start the Fins this Mac has room for", ROOM_EVERY_MS, () => {
-      if (this.waitingForRoom() > 0) void this.drain()
-    }) : () => {}
+    this.stopRoomWatch = deps.jobs.every("start the Fins there's room for", ROOM_EVERY_MS, () => {
+      if (this.store()?.queuedSpawns().length) void this.drain()
+    })
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
@@ -698,19 +721,104 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree).length
     if (counts.started + queued >= this.budget.started)
       return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
-    // Past the Mac's room it waits behind every Fin that waits for room already, whichever tree's.
-    const mac = await this.macSlots()
-    const why = counts.running >= this.budget.running ? "tree-running" : mac && (mac.working >= mac.slots || this.waitingForRoom() > 0) ? "place-full" : undefined
-    if (why) {
-      const queued: QueuedStart = { lead: apex, input, tier, harness, tuned, why }
-      store.queueSpawn({ op, tree, record: JSON.stringify(queued), at: this.now() })
-      hostLog("agents", "start queued", { op, why, running: counts.running, budget: this.budget.running, ...mac && { working: mac.working, slots: mac.slots, mac: mac.why } })
+    const after = this.afterOf(apex, input.after ?? [])
+    if ("refused" in after) return this.refuse(op, after.refused, after.why)
+    await this.readMac()
+    // It waits only as its Apex asked: for the Fins it starts after, or with `queue` for a place, behind every spawn that waits for one already.
+    const working = this.working()
+    const limit = this.limit()
+    const why = after.length ? undefined : counts.running >= this.budget.running ? "tree-running" : working >= limit || this.waitingForRoom() > 0 ? "place-full" : undefined
+    if (why && !input.queue) {
+      const waiting = this.waitingForRoom()
+      return this.refuse(op, "budget", why === "tree-running"
+        ? `This tree runs ${counts.running} of its ${this.budget.running} Threads at once. Pass queue: true to start it when one ends.`
+        : `${working} of the person's ${limit} ${FIN_WORD}s at once are at work${waiting ? ` and ${waiting} wait for one to end` : ""}. Pass queue: true to start it when one ends, or after: to start it after one of yours.`)
+    }
+    if (why || after.length) {
+      const record: QueuedStart = { lead: apex, input, tier, harness, tuned, ...(why && { why }), ...(after.length && { after }) }
+      store.queueSpawn({ op, tree, record: JSON.stringify(record), at: this.now() })
+      hostLog("agents", "start queued", { op, ...(why && { why }), ...(after.length && { after: after.map((ref) => ref.name).join(" ") }), running: counts.running, budget: this.budget.running, working, limit })
       this.forget(apex.thread)
       const answer = this.queuedAnswer(op, apex, false)
-      if (why === "place-full") void this.drain()
+      void this.drain()
       return answer
     }
     return this.launch(op, { lead: apex, input, tier, harness, tuned })
+  }
+
+  /**
+   * The Fins a start names in `after`, the Apex's own or its spawns queued: those not finished yet, each once. One
+   * that ended without finishing refuses the start now, so its Apex decides while it can.
+   */
+  private afterOf(apex: Apex, refs: readonly string[]): AfterRef[] | AgentRefused {
+    const found = new Map<string, AfterRef>()
+    for (const ref of refs) {
+      const edge = this.resolve(apex, ref, false)
+      if (edge) {
+        const state = this.stateOf(edge)
+        if (state.kind === "ended" && state.outcome !== "done")
+          return { refused: "conflict", why: `${FIN_WORD} ${edge.name} ${state.outcome === "stopped" ? "was stopped" : "failed"}, so nothing starts after it: leave it out of after, or start it again first.` }
+        if (state.kind !== "ended") found.set(edge.child, { name: edge.name, child: edge.child })
+        continue
+      }
+      const name = finName(ref)
+      const spawn = this.queuedOfApex(apex).find(({ spawn, queued }) => namedUuid(spawn.op) === ref || (queued.input.name ?? queued.input.title) === name)
+      if (!spawn) return unknownFin(ref)
+      found.set(spawn.spawn.op, { name: spawn.queued.input.name ?? spawn.queued.input.title ?? name, op: spawn.spawn.op })
+    }
+    return [...found.values()]
+  }
+
+  /** This Apex's spawns that wait, oldest first. */
+  private queuedOfApex(apex: Pick<Apex, "thread">): { spawn: ReturnType<ThreadStore["queuedSpawns"]>[number]; queued: QueuedStart }[] {
+    return (this.store()?.queuedSpawns() ?? []).flatMap((spawn) => {
+      const queued = parseQueued(spawn.record)
+      return queued?.lead.thread === apex.thread ? [{ spawn, queued }] : []
+    })
+  }
+
+  /**
+   * How a spawn's `after` stands now: a Fin done is finished; one failed or stopped, or a spawn of them that was
+   * dropped or refused before it started, holds it; the rest it waits for.
+   */
+  private afterStand(queued: QueuedStart): AfterStand {
+    const store = this.store()!
+    const pending: string[] = []
+    for (const ref of queued.after ?? []) {
+      const edge = ref.child ? store.edges().of(ref.child) : ref.op ? store.edges().byOp(ref.op) : undefined
+      if (!edge) {
+        if (ref.op && store.queuedSpawns().some((spawn) => spawn.op === ref.op)) pending.push(ref.name)
+        else return { pending, held: { name: ref.name, outcome: "stopped", reason: "it never started" } }
+        continue
+      }
+      const state = this.stateOf(edge)
+      if (state.kind === "ended" && state.outcome !== "done") {
+        const session = store.thread(edge.child)?.sessions[0]
+        return { pending, held: { name: edge.name, outcome: state.outcome, ...(state.reason && { reason: state.reason }), ...(session && { session }) } }
+      }
+      if (state.kind !== "ended") pending.push(edge.name)
+    }
+    return { pending }
+  }
+
+  /**
+   * A spawn a Fin it was to start after didn't finish for: its Apex is told, to decide, and the spawn is dropped once
+   * it heard (`AgentWakes`'s `delivered`). Told again by each host until then, under one id.
+   */
+  private tellHeld(op: string, queued: QueuedStart, held: NonNullable<AfterStand["held"]>): void {
+    const conversation = this.frontOf(queued.lead.thread, queued.lead.session)
+    if (!conversation) return
+    const name = queued.input.name ?? queued.input.title ?? "queued"
+    const report: Report = {
+      id: `${HELD_PREFIX}${op}`,
+      child: ThreadIdSchema.parse(namedUuid(op)),
+      status: "failed",
+      summary: `It didn't start: it was to start after ${held.name}, which ${held.outcome === "stopped" ? "was stopped" : "failed"}${held.reason ? ` (${held.reason})` : ""}. Start it again with agents_start, without after or after another ${FIN_WORD}, if it should still run.`,
+      implicit: true,
+      ownerGeneration: this.generation,
+      at: this.now(),
+    }
+    this.wakes.notice(conversation, this.rootOf(queued.lead.thread), { id: `notice:${report.id}`, report, label: `"${name}" (${this.deps.harnessLabel(queued.harness)})`, from: held.session ?? queued.lead.session })
   }
 
   async link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult> {
@@ -1041,7 +1149,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()!
     const why = input.reason ?? `its ${APEX_WORD} stopped it`
     const one = input.child === "all" ? undefined : this.resolve(apex, input.child, false)
-    if (input.child !== "all" && !one) return unknownFin(input.child)
+    if (input.child !== "all" && !one) {
+      const name = finName(input.child)
+      const waiting = this.queuedOfApex(apex).find(({ spawn, queued }) => namedUuid(spawn.op) === input.child || (queued.input.name ?? queued.input.title) === name)
+      if (!waiting) return unknownFin(input.child)
+      this.unqueued(waiting.spawn.op, apex.thread)
+      hostLog("agents", "end", { op: waiting.spawn.op, outcome: "stopped", queued: true })
+      // What was to start after it is its Apex's to decide now.
+      void this.drain()
+      return { stopped: [waiting.queued.input.name ?? waiting.queued.input.title ?? name] }
+    }
     const targets = one ? [one] : store.edges().children(apex.thread)
     const stopped: string[] = []
     // What waits goes first, so an end below doesn't start it.
@@ -1320,24 +1437,33 @@ export class Agents implements AgentOperations, ConversationChildren {
     return chosen ?? snapshot.session.settings ?? binding?.tuning
   }
 
-  /** Starts what the running budget held, oldest first, while each tree has room. */
+  /**
+   * Starts what waits, oldest first: each once the Fins it starts after finished, while its tree's budget and the
+   * person's limit have room. One a Fin it was to start after didn't finish for is its Apex's to decide (`tellHeld`).
+   */
   private async drain(): Promise<void> {
     const store = this.store()
-    if (!store || this.draining || this.stopped) return
+    if (!store || this.stopped) return
+    // An end during a drain is looked at by another, after it: a Fin that was to start after it doesn't wait for the watch.
+    if (this.draining) return void (this.drainAgain = true)
     this.draining = true
     try {
-      const mac = store.queuedSpawns().length ? await this.macSlots() : undefined
-      let room = mac ? mac.slots - mac.working : Number.POSITIVE_INFINITY
+      let room = this.limit() - this.working()
       for (const spawn of store.queuedSpawns()) {
+        const queued = parseQueued(spawn.record)
+        if (queued?.after?.length) {
+          const stand = this.afterStand(queued)
+          if (stand.held) this.tellHeld(spawn.op, queued, stand.held)
+          if (stand.held || stand.pending.length) continue
+        }
         const counts = this.treeCounts(spawn.tree)
         if (counts.running >= this.budget.running) continue
-        // First come, first started: once the Mac is full, a later spawn of another tree doesn't go ahead of this one.
-        if (room <= 0) break
+        // First come, first started: once the limit is in use, a later spawn of another tree doesn't go ahead of this one.
+        if (room <= 0) continue
         room -= 1
-        const queued = parseQueued(spawn.record)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
         if (queued && !store.edges().byOp(spawn.op)) {
-          hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at })
+          hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at, ...(queued.after?.length && { after: queued.after.map((ref) => ref.name).join(" ") }) })
           await this.launch(spawn.op, queued)
         }
         store.unqueueSpawn(spawn.op)
@@ -1346,6 +1472,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       hostWarn("agents", "queued starts could not be released; they wait for the next end", { error: errorMessage({ error }) })
     } finally {
       this.draining = false
+      if (this.drainAgain) {
+        this.drainAgain = false
+        void this.drain()
+      }
     }
   }
 
@@ -1365,9 +1495,17 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(edge.tuned?.rule && { rule: ruleWords(edge.tuned.rule) }),
       ...(edge.tuned?.rerouted && { limited: { harness: edge.tuned.rerouted.from, ...(edge.tuned.rerouted.until !== undefined && { until: edge.tuned.rerouted.until }), ...(edge.tuned.rerouted.instead && { instead: edge.tuned.rerouted.instead }) } }),
       tree: { ...counts, of: { ...this.budget } },
-      ...this.mac && { mac: { working: this.mac.working, slots: this.mac.slots, why: this.mac.why } },
+      ...this.placeWords(),
       ...(deduped && { deduped: true as const }),
       next: afterStart(edge.asked.wake ?? "decisions"),
+    }
+  }
+
+  /** The person's limit as it stands, and this Mac's load while it's busy, as every start's answer carries them. */
+  private placeWords(): Pick<AgentsStarted, "atOnce" | "mac"> {
+    return {
+      atOnce: { working: this.working(), of: this.limit() },
+      ...this.mac?.busy && { mac: `This Mac is busy (${this.mac.why}): it starts anyway, so run builds and test suites one at a time.` },
     }
   }
 
@@ -1377,18 +1515,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queue = store.queuedSpawns().filter((spawn) => spawn.tree === tree)
     const queued = parseQueued(queue.find((spawn) => spawn.op === op)?.record ?? "")
     const counts = this.treeCounts(tree)
-    const mac = this.mac
     const forRoom = queued?.why === "place-full"
-    const forTheMac = store.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full")
-    const ahead = (forRoom ? forTheMac : queue).findIndex((spawn) => spawn.op === op)
+    const forTheLimit = store.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full")
+    const ahead = Math.max(0, (forRoom ? forTheLimit : queue).findIndex((spawn) => spawn.op === op))
+    const stand = queued?.after?.length ? this.afterStand(queued) : undefined
+    const pending = stand?.pending ?? []
     return {
       name: queued?.input.name ?? queued?.input.title ?? "queued",
       state: "queued",
-      why: forRoom && mac
-        ? `This Mac is busy: it runs ${mac.slots} Fins at once now (${mac.why}) and ${mac.working} are at work; it starts when one ends or the Mac frees up (${Math.max(0, ahead)} ahead).`
-        : `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${Math.max(0, ahead)} ahead).`,
+      why: stand?.held
+        ? `It won't start: ${stand.held.name} ${stand.held.outcome === "stopped" ? "was stopped" : "failed"}, and you're told to decide.`
+        : pending.length
+          ? `It starts once ${pending.join(", ")} ${pending.length === 1 ? "finishes" : "finish"}; if one fails or is stopped it doesn't start, and you're woken to decide.`
+          : forRoom
+            ? `${this.working()} of the person's ${this.limit()} ${FIN_WORD}s at once are at work; it starts when one ends (${ahead} ahead).`
+            : `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${ahead} ahead).`,
+      ...(pending.length && { after: pending }),
       tree: { ...counts, of: { ...this.budget } },
-      ...mac && { mac: { working: mac.working, slots: mac.slots, why: mac.why } },
+      ...this.placeWords(),
       ...(deduped && { deduped: true as const }),
       next: afterStart(queued?.input.wake ?? "decisions"),
     }
@@ -1965,17 +2109,23 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** How a tree stands against its budgets: Threads at work now, and Threads it started. */
-  /** This Mac's room now, every tree's working Fins counted; undefined without a reading of it. */
-  private async macSlots(): Promise<MacSlots | undefined> {
+  /** This Mac's load now, every tree's working Fins counted; undefined without a reading of it. */
+  private async readMac(): Promise<MacLoad | undefined> {
     const reading = await this.deps.capacity?.read().catch((error: Error) => {
-      hostWarn("agents", "this Mac's capacity couldn't be read; only the tree's budget holds", { error: errorMessage({ error }) })
+      hostWarn("agents", "this Mac's load couldn't be read; a start says nothing of it", { error: errorMessage({ error }) })
       return undefined
     })
-    if (!reading) return undefined
-    const edges = this.store()?.edges().all ?? []
-    const working = edges.filter((edge) => this.occupies(edge)).length
-    this.mac = macSlots(reading, working)
+    this.mac = reading ? macLoad(reading, this.working()) : undefined
     return this.mac
+  }
+
+  /** The person's Fins at work on this host, every tree's. */
+  private working(): number {
+    return (this.store()?.edges().all ?? []).filter((edge) => this.occupies(edge)).length
+  }
+
+  private limit(): number {
+    return this.deps.finLimit?.() ?? FIN_LIMIT
   }
 
   /** A Fin at work holds a place against the budgets; one only waiting for its own Fins or its move holds none, or they'd wait for it. */
@@ -1984,7 +2134,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     return (kind === "working" || kind === "starting") && this.childReading(edge).awaiting === undefined
   }
 
-  /** Spawns waiting for this Mac's room, every tree's. */
+  /** Spawns waiting for a place under the person's limit, every tree's. */
   private waitingForRoom(): number {
     return this.store()?.queuedSpawns().filter((spawn) => parseQueued(spawn.record)?.why === "place-full").length ?? 0
   }
@@ -2040,6 +2190,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (queued?.lead.thread !== thread) return []
       const reason: QueueReason = queued.why ?? "tree-running"
       const ahead = spawns.slice(0, at).filter((other) => (reason === "place-full" ? parseQueued(other.record)?.why === "place-full" : other.tree === spawn.tree)).length
+      const stand = queued.after?.length ? this.afterStand(queued) : undefined
       const placeholder: ThreadParent = {
         child: ThreadIdSchema.parse(namedUuid(spawn.op)),
         parent: ThreadIdSchema.parse(thread),
@@ -2052,7 +2203,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         startedBy: { kind: "agent", session: SessionIdSchema.parse(queued.lead.session) },
         createdAt: spawn.at,
       }
-      return [childEntry(placeholder, { source: "live", queued: { reason, ahead } }, {})]
+      return [childEntry(placeholder, { source: "live", queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }) } }, {})]
     })
   }
 
@@ -2480,6 +2631,22 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   private forget(thread: string): void {
     this.rosters.delete(thread)
+  }
+
+  /** A spawn left the queue without starting: its Apex's roster drops it. */
+  private unqueued(op: string, thread: string): void {
+    this.store()?.unqueueSpawn(op)
+    this.forget(thread)
+    for (const conversation of this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, false)
+  }
+
+  /** Its Apex heard that a Fin it was to start after didn't finish (`tellHeld`): it's the Apex's to start again. */
+  private dropHeld(op: string): void {
+    const spawn = this.store()?.queuedSpawns().find((queued) => queued.op === op)
+    const queued = spawn && parseQueued(spawn.record)
+    if (!queued) return
+    hostLog("agents", "end", { op, outcome: "stopped", queued: true, why: "a Fin it was to start after didn't finish" })
+    this.unqueued(op, queued.lead.thread)
   }
 
   private store(): ThreadStore | undefined {

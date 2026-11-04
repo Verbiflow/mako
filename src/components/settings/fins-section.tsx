@@ -1,17 +1,18 @@
 import { useEffect } from "react"
 import { FinRules } from "./fin-rules"
 import { toast } from "sonner"
-import { AlertCircleIcon, CheckIcon, ChevronDownIcon, ZapIcon } from "lucide-react"
+import { AlertCircleIcon, CheckIcon, ChevronDownIcon, MinusIcon, PlusIcon, ZapIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
-import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
+import { FIN_LIMIT, FIN_LIMIT_MAX, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
 import { ModelList, ModelOptionRows, ModelSummary, type ModelChoice } from "@/components/composer/agent-model-picker"
+import { IconAction, SettingRow } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import type { HarnessProfile } from "@/lib/types"
 import { harnessDefaults } from "@/state/composer-settings"
-import { chooseFinDefault, loadFinDefaults, useFinDefaults } from "@/state/fin-defaults"
+import { chooseFinDefault, loadFinDefaults, setFinLimit, useFinDefaults } from "@/state/fin-defaults"
 import { useHarnessOrder } from "@/state/harness-order"
 import { providers, useProviders } from "@/state/providers"
 
@@ -32,6 +33,7 @@ export function FinsSection() {
   const failed = useFinDefaults((state) => state.failed)
   return (
     <div className="flex flex-col gap-8">
+      <FinLimit />
       <FinRules order={order} profiles={profiles} />
       <section className="flex flex-col gap-3">
       <div>
@@ -51,6 +53,30 @@ export function FinsSection() {
       {failed ? <p className="text-label text-caution">This Mac's choices for Fins couldn't be read. Reopen Settings to try again.</p> : null}
       </section>
     </div>
+  )
+}
+
+/** How many Fins run at once, every Apex's: past it a start is refused unless its Apex asks it to wait. */
+function FinLimit() {
+  const reading = useFinDefaults((state) => state.reading)
+  if (!reading) return null
+  const limit = reading.limit ?? FIN_LIMIT
+  const save = (next: number) => void setFinLimit(next).catch((error: Error) => toast.error(error.message || "That limit couldn't be saved. Try again."))
+  return (
+    <SettingRow
+      title="Fins at once"
+      description={`How many of your Fins run at the same time, across every Apex. Past it, an Apex waits for one to end only when it asks to. 1 to ${FIN_LIMIT_MAX}; ${FIN_LIMIT} unless you change it.`}
+    >
+      <div role="group" aria-label="Fins at once" className="flex shrink-0 items-center gap-1">
+        <IconAction label="One fewer" disabled={limit <= 1} onClick={() => save(limit - 1)}>
+          <MinusIcon />
+        </IconAction>
+        <output aria-live="polite" className="tabular w-7 text-center text-ui font-medium">{limit}</output>
+        <IconAction label="One more" disabled={limit >= FIN_LIMIT_MAX} onClick={() => save(limit + 1)}>
+          <PlusIcon />
+        </IconAction>
+      </div>
+    </SettingRow>
   )
 }
 

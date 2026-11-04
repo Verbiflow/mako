@@ -7,7 +7,7 @@ import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuning, type FinTuningInput } from "@mako/host/contracts/fin-tuning"
 import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
 import { resetWords, spentUntil } from "@mako/host/contracts/account-usage"
-import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
+import { FIN_LIMIT, FIN_LIMIT_MAX, finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
@@ -172,7 +172,7 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
   try {
     const file = join(folder, "fin-defaults.json")
     const store = new FinDefaultsStore(file)
-    assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] } }, "nothing chosen: every harness's Fins run as the person does")
+    assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] }, limit: FIN_LIMIT }, "nothing chosen: every harness's Fins run as the person does, 16 at once")
     store.use("cursor", { model: "composer-2.5", options: { fast: "true" } })
     store.use("cursor", { options: { effort: "high" } })
     store.choose("codex", { model: "gpt-6.1-sol", options: { effort: "high" } })
@@ -180,6 +180,7 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
       chosen: { codex: { model: "gpt-6.1-sol", options: { effort: "high" } } },
       used: { cursor: { model: "composer-2.5", options: { fast: "true" } } },
       policy: { rules: [] },
+      limit: FIN_LIMIT,
     }, "another host reads the same, and a send that names no model changes nothing")
     store.choose("codex", null)
     assert.deepEqual(store.reading().chosen, {}, "Same as you again")
@@ -195,6 +196,16 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
     const stored = JSON.parse(readFileSync(file, "utf8"))
     writeFileSync(file, JSON.stringify({ ...stored, policy: { ...stored.policy, rules: [...stored.policy.rules, { id: "c", when: 7 }] } }))
     assert.deepEqual(new FinDefaultsStore(file).reading().policy.rules.map((each) => each.id), ["a", "b"], "a rule this build can't read is left out, never the others")
+    assert.equal(store.setLimit(4).limit, 4)
+    assert.equal(new FinDefaultsStore(file).reading().limit, 4, "the limit is every host's")
+    assert.deepEqual(new FinDefaultsStore(file).reading().policy.rules.map((each) => each.id), ["a", "b"], "and setting it keeps the rest")
+    assert.throws(() => store.setLimit(0))
+    assert.throws(() => store.setLimit(FIN_LIMIT_MAX + 1))
+    assert.throws(() => store.setLimit(2.5))
+    assert.equal(store.setLimit(FIN_LIMIT).limit, FIN_LIMIT)
+    assert.equal("limit" in JSON.parse(readFileSync(file, "utf8")), false, "the default is kept as none chosen")
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), limit: 99 }))
+    assert.equal(new FinDefaultsStore(file).reading().limit, FIN_LIMIT, "a limit this build can't take is the default, never the rest unread")
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

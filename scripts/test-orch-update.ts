@@ -158,7 +158,8 @@ async function launchCut(): Promise<void> {
 async function sixLeads(): Promise<void> {
   let host = 1
   let burst = 1
-  const world = new AgentsWorld({ root: join(root, "six"), script: async (turn) => {
+  // The second burst's 18 Fins are at work at once, past the default limit.
+  const world = new AgentsWorld({ root: join(root, "six"), finLimit: () => HARNESSES.length * 3, script: async (turn) => {
     if (!turn.text.includes("You're fin:") && !turn.text.includes("Continue")) return "Noted."
     if (burst === 2 && host === 1) await turn.world.hold(turn.conversation)
     return `Done: ${turn.harness} finished burst ${burst}.`

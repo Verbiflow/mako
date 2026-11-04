@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "no
 import { dirname } from "node:path"
 import { z } from "zod"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
-import { FinPolicySchema, FinRuleSchema, FinTargetSchema, type FinChoicesReading, type FinDefaults, type FinPolicy } from "../contracts/fin-tuning.js"
+import { FIN_LIMIT, FinLimitSchema, FinPolicySchema, FinRuleSchema, FinTargetSchema, type FinChoicesReading, type FinDefaults, type FinPolicy } from "../contracts/fin-tuning.js"
 import type { MethodTable } from "../base/methods.js"
 
 const HarnessSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
@@ -16,8 +16,9 @@ const StoredSchema = z.object({
   policy: z
     .object({ rules: z.array(FinRuleSchema.optional().catch(undefined)).catch([]), otherwise: FinTargetSchema.optional().catch(undefined) })
     .default({ rules: [] }),
+  limit: FinLimitSchema.optional().catch(undefined),
 })
-type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy }
+type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number }
 
 function kept(entries: Readonly<Record<string, SessionSettings | undefined>>): Record<string, SessionSettings> {
   return Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, SessionSettings] => entry[1] !== undefined))
@@ -27,7 +28,8 @@ const same = (left: SessionSettings | undefined, right: SessionSettings | undefi
 
 /**
  * The person's model choices for Fins, by harness (`contracts/fin-tuning.ts`): what they chose for them in Settings ›
- * Fins, and the model they last started or sent with on each harness themselves, which "what I use" means there. One
+ * Fins, the model they last started or sent with on each harness themselves, which "what I use" means there, and how
+ * many Fins run at once. One
  * file in the user root, so every host of this person (the app, its profiles) reads the same, and the web app reads it
  * through this Mac.
  */
@@ -41,8 +43,17 @@ export class FinDefaultsStore {
   }
 
   reading(): FinChoicesReading {
-    const { chosen, used, policy } = this.#read()
-    return { chosen: { ...chosen }, used: { ...used }, policy }
+    const { chosen, used, policy, limit } = this.#read()
+    return { chosen: { ...chosen }, used: { ...used }, policy, limit: limit ?? FIN_LIMIT }
+  }
+
+  /** How many Fins run at once (`FIN_LIMIT`, the default, is kept as none chosen). */
+  setLimit(limit: number): FinChoicesReading {
+    const parsed = FinLimitSchema.parse(limit)
+    const stored = this.#read()
+    const next = parsed === FIN_LIMIT ? undefined : parsed
+    if (stored.limit !== next) this.#write({ chosen: stored.chosen, used: stored.used, policy: stored.policy, ...(next !== undefined && { limit: next }) })
+    return this.reading()
   }
 
   /** Fins on `harness` run on `settings`, or with none, on what the person uses there. */
@@ -93,7 +104,7 @@ export class FinDefaultsStore {
     try {
       const parsed = StoredSchema.parse(JSON.parse(readFileSync(this.#file, "utf8")))
       const rules = parsed.policy.rules.filter((rule) => rule !== undefined)
-      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used), policy: { rules, ...(parsed.policy.otherwise && { otherwise: parsed.policy.otherwise }) } }
+      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used), policy: { rules, ...(parsed.policy.otherwise && { otherwise: parsed.policy.otherwise }) }, ...(parsed.limit !== undefined && { limit: parsed.limit }) }
     } catch {
       // A file this build can't read is replaced at the next choice; until then Fins run on what the person uses.
     }
@@ -116,4 +127,5 @@ export function declareFinDefaultMethods(methods: MethodTable, store: FinDefault
   methods.handle("mako:fin-defaults", () => store.reading())
   methods.handle("mako:fin-default-choose", (harness: string, settings: SessionSettings | null) => store.choose(harness, settings))
   methods.handle("mako:fin-policy-save", (policy: FinPolicy) => store.savePolicy(policy))
+  methods.handle("mako:fin-limit-set", (limit: number) => store.setLimit(limit))
 }

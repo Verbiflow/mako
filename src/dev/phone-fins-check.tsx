@@ -29,6 +29,8 @@ const call: MacCall = async <Result,>(channel: string, args: readonly unknown[])
       ? await mako.chooseFinDefault(String(args[0]), SessionSettingsSchema.nullable().parse(args[1] ?? null))
       : channel === "mako:fin-policy-save"
         ? await mako.saveFinPolicy(FinPolicySchema.parse(args[0]))
+      : channel === "mako:fin-limit-set"
+        ? await mako.setFinLimit(Number(args[0]))
       : channel === "mako:harness-tuning"
         ? await mako.harnessTuning(String(args[0]))
         : undefined

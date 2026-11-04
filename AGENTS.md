@@ -237,20 +237,23 @@ full) sends a Fin that named no harness, model or rule to the person's next
 harness that offers it, and otherwise runs it on the harness's nearest mode
 within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
 which; only a mode wider than the Apex's is refused. It starts
-here only (`place` other than `here` is refused); past a tree's running
-budget it queues with why, past its started budget it is refused with the
-count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
-this Mac's room it queues too, behind every Fin of any tree that waits for
-room ("Queued: this Mac is busy, 3 ahead"): `macSlots` gives the person a
-seventh of the cores and 4 GB, and each working Fin `FIN_LOAD` (2) cores of
-load and `FIN_MEMORY`, measured 2026-11-03 when 13 Fins at once held a 14-core
-Mac's load at 26.8 and its host and sync daemon timed out the person's
-requests; load the working Fins don't account for is the person's own work,
-a Mac always runs one, and one out of swap or short of disk runs none.
-`MAKO_FIN_SLOTS` sets the count instead, as a test's host does whatever
-machine runs it. The start's answer carries
-the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
-Mac frees up (`test:background-agents`). One a
+here only (`place` other than `here` is refused). It never waits unasked:
+past the person's limit of Fins at once, every tree's (`FIN_LIMIT`, 16,
+1 to `FIN_LIMIT_MAX` in Settings › Fins), or past a tree's running budget,
+a start is refused with the count unless it passes `queue: true`, when it
+waits behind every spawn that waits for a place ("Queued: 3 ahead, your
+limit of Fins at once is in use"). Past the started budget it is refused
+(`TREE_BUDGET`); a cycle is refused and there's no depth limit. `after:
+[names]` starts it once each of the Apex's Fins named (queued ones too) has
+finished; one that failed or was stopped holds it, its Apex is woken with
+why (`tellHeld`, `after:<op>`) and the spawn is dropped once it heard, and
+one already ended that way refuses the start. This Mac's load is a warning
+only: `macLoad` says it's busy when the working Fins, `FIN_LOAD` (2) cores
+and `FIN_MEMORY` each, take what the person's own work leaves, or it's out
+of swap or disk, and the start's answer says so (`mac`) beside the limit
+(`atOnce`). `MAKO_FIN_SLOTS` sets the limit instead, as a test's host does.
+What waits goes as Fins end, and every 10 s for a limit raised
+(`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
 across the host), its end written once. Linking it again with another pid

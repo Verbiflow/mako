@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
-import { CheckIcon, ChevronRightIcon, PlusIcon } from "lucide-react"
+import { CheckIcon, ChevronRightIcon, MinusIcon, PlusIcon } from "lucide-react"
 import { errorMessage } from "@mako/host/contracts/error-message"
-import { FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
+import { FIN_LIMIT_MAX, FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { modelByIdentity, optionDefault, settingsWithVariant, type ModelOption, type SessionSettings, type SettingValue } from "@mako/sessions/settings"
 import { cn } from "@/lib/utils"
@@ -90,9 +90,37 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
     })
   }
 
+  const setLimit = (limit: number) => {
+    const before = reading
+    if (before) setReading({ ...before, limit })
+    call<FinChoicesReading>("mako:fin-limit-set", [limit]).then(setReading, (error) => {
+      setReading(before)
+      toast.error(errorMessage({ error }))
+    })
+  }
+
   const signedIn = WEB_HARNESSES.filter((harness) => profiles[harness]?.available)
+  const limit = reading?.limit
   return (
     <>
+      {limit !== undefined ? (
+        <Group footer={`How many of your Fins run at the same time on ${mac}, across every Apex. Past it, an Apex waits for one to end only when it asks to.`}>
+          <Row
+            label="Fins at once"
+            end={
+              <span role="group" aria-label="Fins at once" className="flex shrink-0 items-center gap-1">
+                <button type="button" aria-label="One fewer" disabled={limit <= 1} onClick={() => setLimit(limit - 1)} className="pressable flex size-9 items-center justify-center rounded-full text-muted-foreground disabled:opacity-40">
+                  <MinusIcon className="size-4" />
+                </button>
+                <output aria-live="polite" className="tabular w-7 text-center text-ui font-medium">{limit}</output>
+                <button type="button" aria-label="One more" disabled={limit >= FIN_LIMIT_MAX} onClick={() => setLimit(limit + 1)} className="pressable flex size-9 items-center justify-center rounded-full text-muted-foreground disabled:opacity-40">
+                  <PlusIcon className="size-4" />
+                </button>
+              </span>
+            }
+          />
+        </Group>
+      ) : null}
       {reading ? <RulesGroup policy={reading.policy} profiles={profiles} signedIn={signedIn} onSave={savePolicy} {...(opened?.startsWith("rule:") && { opened: opened.slice(5) })} /> : null}
       <Group
       title="Fins, per harness"

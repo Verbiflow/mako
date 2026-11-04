@@ -865,6 +865,7 @@ export function installMockBridge() {
       ],
       otherwise: { harness: "claude" },
     },
+    limit: 16,
   }
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
@@ -1053,6 +1054,10 @@ export function installMockBridge() {
     },
     saveFinPolicy: async (policy) => {
       finChoices = { ...finChoices, policy }
+      return finChoices
+    },
+    setFinLimit: async (limit) => {
+      finChoices = { ...finChoices, limit }
       return finChoices
     },
     planBuilds: async () => planBuilds,

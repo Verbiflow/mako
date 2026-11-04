@@ -21,7 +21,7 @@ import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
 import { END_CONFIRM_MS, lastStep } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
-import { FIN_LOAD, macSlots } from "@mako/host/conversations/mac-capacity"
+import { macLoad } from "@mako/host/conversations/mac-capacity"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
 import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
 import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
@@ -218,54 +218,121 @@ async function explicitReports(): Promise<void> {
   }
 }
 
-async function macRoom(): Promise<void> {
+async function finLimit(): Promise<void> {
   const GB = 1024 ** 3
   // The person's Mac as it stood when Fins took it over: 14 cores, 36 GB, 13 Fins at work and the load at 26.8.
-  assert.deepEqual(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 26.8 }, 13).slots, 5, "13 Fins at once is more than this Mac runs")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0 }, 0).slots, 6, "an idle 14-core Mac runs six")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).slots, 2, "the person's own work takes its cores first")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 8 * GB, load: 0 }, 0).slots, 4, "memory bounds it too")
-  assert.equal(macSlots({ cores: 4, memoryBytes: 16 * GB, load: 6 }, 0).slots, 1, "a small, busy Mac still runs one at a time")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).slots, 0, "a Mac out of swap takes none")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).why, "14 cores, 36 GB, 8 cores of other work")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 26.8 }, 13), { why: "14 cores, 36 GB", busy: true }, "13 Fins at once is more than this Mac takes easily")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 0 }, 0), { why: "14 cores, 36 GB" }, "an idle Mac isn't busy")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 12 }, 2), { why: "14 cores, 36 GB, 8 cores of other work", busy: true }, "the person's own work counts first")
+  assert.equal(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).busy, true, "a Mac out of swap is busy")
 
-  // A 6-core Mac: room for two Fins with nothing else at work. Each working Fin's load is FIN_LOAD.
-  let others = 0
+  // A busy Mac and a limit of two: the Mac only warns, and the limit refuses unless the Apex asks to wait.
   let working = 0
   const w = new AgentsWorld({
-    root: join(root, "mac-room"),
+    root: join(root, "fin-limit"),
     script: (turn) => turn.text.includes("You're fin:") ? (working++, turn.world.hold(turn.conversation).then(() => (working--, "stopped"))) : "ok",
-    capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, load: working * FIN_LOAD + others }) },
+    capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, load: 20 }) },
+    finLimit: () => 2,
   })
   try {
     const apex = await w.apex("opencode")
     const other = await w.apex("claude")
     const brief = { objective: "Hold" }
     const one = await w.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
+    assert.ok(!("refused" in one) && one.state !== "queued", JSON.stringify(one))
+    assert.match(one.mac ?? "", /^This Mac is busy \(6 cores, 16 GB, 20 cores of other work\): it starts anyway/, "a busy Mac is said, and it starts")
     const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
-    assert.ok(!("refused" in one) && !("refused" in two) && one.mac?.slots === 2, JSON.stringify(one))
+    assert.ok(!("refused" in two) && two.state !== "queued", JSON.stringify(two))
     await waitFor(() => working === 2, "both Fins at work")
-    const three = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3", cwd: w.root })
-    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past this Mac's room a spawn queues, whatever the tree's budget")
-    assert.equal(three.why, "This Mac is busy: it runs 2 Fins at once now (6 cores, 16 GB) and 2 are at work; it starts when one ends or the Mac frees up (0 ahead).")
-    assert.deepEqual(three.mac, { working: 2, slots: 2, why: "6 cores, 16 GB" }, "the Apex sees the Mac's room in the answer")
-    const four = await w.agents.start(other.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
-    assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), `another tree's spawn waits behind it: the Mac's room is first come, first started: ${JSON.stringify(four)}`)
+    const refused = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3-refused", cwd: w.root })
+    assert.ok("refused" in refused && refused.refused === "budget", "past the limit a start is refused, never queued unasked")
+    assert.equal(refused.why, "2 of the person's 2 Fins at once are at work. Pass queue: true to start it when one ends, or after: to start it after one of yours.")
+    const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
+    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "with queue it waits")
+    assert.equal(three.why, "2 of the person's 2 Fins at once are at work; it starts when one ends (0 ahead).")
+    assert.deepEqual(three.atOnce, { working: 2, of: 2 }, "the answer carries the limit")
+    const four = await w.agents.start(other.caller, { brief, name: "four", queue: true, clientKey: "4", cwd: w.root })
+    assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), `another tree's spawn waits behind it: first come, first started: ${JSON.stringify(four)}`)
     const waiting = (apexConversation: string) => w.agents.roster(apexConversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
-    assert.deepEqual(waiting(apex.conversation), ["Queued: this Mac is busy, 0 ahead"])
-    assert.deepEqual(waiting(other.conversation), ["Queued: this Mac is busy, 1 ahead"])
-    // The person starts a build of their own: it takes the cores a Fin that ends would have freed.
-    others = 2
+    assert.deepEqual(waiting(apex.conversation), ["Queued: 0 ahead, your limit of Fins at once is in use"])
+    assert.deepEqual(waiting(other.conversation), ["Queued: 1 ahead, your limit of Fins at once is in use"])
     await w.agents.stop(apex.caller, { child: "one" })
-    await waitFor(() => working === 1, "one ended")
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    assert.equal(w.store.queuedSpawns().length, 2, "a Mac busy with the person's own work starts nothing more")
-    others = 0
+    await waitFor(() => w.store.queuedSpawns().length === 1 && working === 2, "the first waiting spawn to start once one ended")
+    assert.ok(w.store.edges().byOp(`start:${w.store.journalPlacement(apex.conversation)!.session}:3`), "first come, first started")
     await w.agents.stop(apex.caller, { child: "two" })
-    await waitFor(() => w.store.queuedSpawns().length === 0 && working === 2, "both waiting spawns to start once the build ended and a Fin did")
-    assert.deepEqual(w.store.edges().all.map((edge) => edge.name).sort(), ["four", "one", "three", "two"], "first come, first started")
+    await waitFor(() => w.store.queuedSpawns().length === 0 && working === 2, "the second once another ended")
+    assert.deepEqual(w.store.edges().all.map((edge) => edge.name).sort(), ["four", "one", "three", "two"])
     await w.agents.stop(apex.caller, { child: "all" })
     await w.agents.stop(other.caller, { child: "all" })
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
+ * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
+ */
+async function afterOrder(): Promise<void> {
+  const w = world("after", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    if (turn.text.includes("Lint it")) {
+      await turn.world.agents.report(turn.caller, { status: "failed", summary: "Lint found 3 errors.", clientKey: "lint" })
+      return "Lint failed."
+    }
+    if (turn.text.includes("Hold")) await turn.world.hold(turn.conversation)
+    return "Done."
+  })
+  try {
+    const apex = await w.apex("claude")
+    const fin = (name: string) => w.store.edges().children(w.store.journalPlacement(apex.conversation)!.thread).find((edge) => edge.name === name)
+    const build = await w.agents.start(apex.caller, { brief: { objective: "Hold the build" }, name: "build", clientKey: "build", cwd: w.root })
+    assert.ok(!("refused" in build), JSON.stringify(build))
+    const deploy = await w.agents.start(apex.caller, { brief: { objective: "Deploy it" }, name: "deploy", after: ["build"], clientKey: "deploy", cwd: w.root })
+    assert.ok(!("refused" in deploy) && deploy.state === "queued" && !deploy.child, JSON.stringify(deploy))
+    assert.deepEqual(deploy.after, ["build"])
+    assert.equal(deploy.why, "It starts once build finishes; if one fails or is stopped it doesn't start, and you're woken to decide.")
+    const announce = await w.agents.start(apex.caller, { brief: { objective: "Announce it" }, name: "announce", after: ["fin:deploy"], clientKey: "announce", cwd: w.root })
+    assert.ok(!("refused" in announce) && announce.state === "queued" && announce.after?.[0] === "deploy", "a queued spawn can be waited on too")
+    const waiting = () => w.agents.roster(apex.conversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
+    assert.deepEqual(waiting(), ["Starts after build finishes", "Starts after deploy finishes"], "the crew card says what each waits on")
+    const unknown = await w.agents.start(apex.caller, { brief: { objective: "x" }, after: ["nobody"], clientKey: "x", cwd: w.root })
+    assert.ok("refused" in unknown && unknown.refused === "unknown-child")
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(fin("deploy"), undefined, "nothing starts before what it's after finished")
+    w.release(build.conversation!)
+    await waitFor(() => fin("announce") !== undefined, "deploy, then announce, to start in order")
+    await w.settle()
+    for (const name of ["build", "deploy", "announce"]) {
+      const read = await w.agents.read(apex.caller, { child: name })
+      assert.ok("state" in read && read.state.kind === "ended" && read.state.outcome === "done", `${name} finished: ${JSON.stringify(read)}`)
+    }
+    const at = (name: string) => fin(name)!.createdAt ?? 0
+    assert.ok(at("build") <= at("deploy") && at("deploy") <= at("announce"), "each started after the one before it")
+
+    // A Fin that fails holds what was to start after it: the Apex is woken to decide, and the spawn is dropped.
+    const lint = await w.agents.start(apex.caller, { brief: { objective: "Lint it" }, name: "lint", clientKey: "lint", cwd: w.root })
+    assert.ok(!("refused" in lint))
+    const ship = await w.agents.start(apex.caller, { brief: { objective: "Ship it" }, name: "ship", after: ["lint"], clientKey: "ship", cwd: w.root })
+    assert.ok(!("refused" in ship) && ship.state === "queued")
+    await w.settle()
+    assert.equal(fin("ship"), undefined, "it never started")
+    assert.equal(w.store.queuedSpawns().length, 0, "dropped once its Apex heard")
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.match(wake, /"ship" \(Claude\) failed: It didn't start: it was to start after lint, which failed/, "its Apex is told why, to decide")
+    const late = await w.agents.start(apex.caller, { brief: { objective: "Ship it" }, name: "ship", after: ["lint"], clientKey: "ship-2", cwd: w.root })
+    assert.ok("refused" in late && late.refused === "conflict" && /lint failed/.test(late.why), "after a Fin that already failed is refused at once")
+
+    // Stopping a queued spawn by name drops it, and what waited on it is held the same way.
+    const hold = await w.agents.start(apex.caller, { brief: { objective: "Hold again" }, name: "hold", clientKey: "hold", cwd: w.root })
+    assert.ok(!("refused" in hold))
+    await w.agents.start(apex.caller, { brief: { objective: "Second" }, name: "second", after: ["hold"], clientKey: "second", cwd: w.root })
+    await w.agents.start(apex.caller, { brief: { objective: "Third" }, name: "third", after: ["second"], clientKey: "third", cwd: w.root })
+    const stopped = await w.agents.stop(apex.caller, { child: "second" })
+    assert.deepEqual("stopped" in stopped && stopped.stopped, ["second"])
+    await waitFor(() => w.store.queuedSpawns().length === 0, "third to be dropped once its Apex heard second was stopped")
+    assert.match(w.prompts.filter((prompt) => prompt.conversation === apex.conversation).at(-1)?.text ?? "", /"third" \(Claude\) failed: It didn't start: it was to start after second, which was stopped \(it never started\)/)
+    await w.agents.stop(apex.caller, { child: "all" })
   } finally {
     await w.close()
   }
@@ -287,8 +354,10 @@ async function refusals(): Promise<void> {
     const one = await w.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
     const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in one) && !("refused" in two))
-    const three = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3", cwd: w.root })
-    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past the running budget a spawn queues")
+    const unasked = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3-unasked", cwd: w.root })
+    assert.ok("refused" in unasked && unasked.refused === "budget" && /runs 2 of its 2 Threads at once\. Pass queue: true/.test(unasked.why), "past the running budget a spawn is refused unless it asks to wait")
+    const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
+    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past the running budget a spawn that asks to wait queues")
     assert.match(three.why ?? "", /runs 2 of its 2 at once/)
     assert.equal(w.agents.roster(apex.conversation).length, 3, "a queued spawn shows, saying why")
     const four = await w.agents.start(apex.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
@@ -393,9 +462,9 @@ async function stopAllUnqueues(): Promise<void> {
     const apex = await w.apex("grok")
     const brief = { objective: "Hold" }
     await w.agents.start(apex.caller, { brief, name: "runs", clientKey: "1", cwd: w.root })
-    const waits = await w.agents.start(apex.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
+    const waits = await w.agents.start(apex.caller, { brief, name: "waits", queue: true, clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in waits) && waits.state === "queued")
-    const again = await w.agents.start(apex.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
+    const again = await w.agents.start(apex.caller, { brief, name: "waits", queue: true, clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in again) && again.deduped && again.state === "queued", "a repeated queued spawn is the same spawn")
     const all = await w.agents.stop(apex.caller, { child: "all" })
     assert.deepEqual("stopped" in all && [...all.stopped].sort(), ["runs", "waits"], "stopping all also drops what's queued")
@@ -979,7 +1048,8 @@ try {
   await startsAndWakes()
   await explicitReports()
   await refusals()
-  await macRoom()
+  await finLimit()
+  await afterOrder()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()

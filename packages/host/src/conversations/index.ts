@@ -33,6 +33,7 @@ import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
+import { FIN_LIMIT } from "../contracts/fin-tuning.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { HostTelemetry } from "../usage/index.js"
@@ -314,7 +315,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
       },
-      capacity: new MacCapacity({ ...finSlots() !== undefined && { fixed: finSlots() } }),
+      finLimit: () => finSlots() ?? deps.finDefaults?.reading().limit ?? FIN_LIMIT,
+      capacity: new MacCapacity(),
     })
     agents.resume()
   }

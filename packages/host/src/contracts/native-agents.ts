@@ -51,7 +51,15 @@ export type FinAsk = z.infer<typeof FinAskSchema>
  * phone) reads that one computation and never infers it from `state`'s words.
  */
 export const ChildStateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("queued"), reason: z.enum(["tree-running", "place-full", "device-offline"]), ahead: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal("queued"),
+    reason: z.enum(["tree-running", "place-full", "device-offline"]),
+    ahead: z.number().int().nonnegative(),
+    /** The Fins it starts after that haven't finished, by name: while any is listed, `reason` is what it waits for next. */
+    after: z.array(note).max(20).optional(),
+    /** The one of them that failed or was stopped: it won't start, and its Apex is told to decide. */
+    held: note.optional(),
+  }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
   z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional() }),
   z.object({ kind: z.literal("idle") }),
