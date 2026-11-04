@@ -292,6 +292,10 @@ export class ThreadProcesses {
   private readonly now: () => number
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly projects = new Map<AppKey, string>()
+  /** Each app's checkout as read or written here: every window's marks ask for all of them every few seconds. */
+  private readonly checkouts = new Map<AppKey, string | undefined>()
+  /** The last process table asked about, indexed (`membersOf`). */
+  private indexed: { rows: Row[]; index: TableIndex } | undefined
   /** The peak written for each run, by `<app>:<up>`, so a look writes only what grew. */
   private readonly peaks = new Map<string, { bytes: number; steady: boolean }>()
   /** Each process's last footprint reading, by `<pid>:<start>`, with its resident size then. */
@@ -329,8 +333,8 @@ export class ThreadProcesses {
       for (const spec of specs) {
         const key = runKey(spec.kind, spec.name)
         const current = runs[key]
-        if (current && members(rows, current).length) continue
-        if (spec.kind === "prepare" && Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length)) {
+        if (current && this.membersOf(rows, current).length) continue
+        if (spec.kind === "prepare" && Object.values(runs).some((record) => record.kind === "process" && this.membersOf(rows, record).length)) {
           refused.push({ name: spec.name, reason: "Stop the running app before preparing the checkout again." })
           continue
         }
@@ -338,7 +342,7 @@ export class ThreadProcesses {
           refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, app) })
           continue
         }
-        if (spec.kind === "process" && !Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length)) {
+        if (spec.kind === "process" && !Object.values(runs).some((record) => record.kind === "process" && this.membersOf(rows, record).length)) {
           const up = this.now()
           await writeFile(join(this.folder(app), "up"), String(up), { mode: 0o600 })
           await this.dependencies.cameUp?.(this.folder(app), up).catch(() => {})
@@ -391,7 +395,7 @@ export class ThreadProcesses {
         const failure = ReadyFailureSchema.safeParse(await readFile(this.file(app, key, "unready"), "utf8").then((text) => JSON.parse(text), () => undefined))
         if (failure.success) status.readyFailure = failure.data
       }
-      const held = members(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
+      const held = this.membersOf(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
       if (held) status.memoryBytes = held
       return status
     }))
@@ -504,7 +508,7 @@ export class ThreadProcesses {
   async footprint(app: AppKey, folders: string[]): Promise<{ pids: number[]; commands: string[]; leftovers: Leftover[]; since?: number; records: string; folder: string }> {
     const runs = await this.runs(app)
     const rows = await processTable()
-    const pids = new Set(Object.values(runs).flatMap((record) => members(rows, record).map((row) => row.pid)))
+    const pids = new Set(Object.values(runs).flatMap((record) => this.membersOf(rows, record).map((row) => row.pid)))
     const since = await this.upAt(app)
     const leftovers: Leftover[] = []
     if (since !== undefined) {
@@ -545,7 +549,7 @@ export class ThreadProcesses {
       if (!app.success) continue
       const runs = await this.runs(app.data).catch(() => ({}))
       for (const record of Object.values(runs)) {
-        const pid = members(rows, record).find((row) => listeners.includes(row.pid))?.pid
+        const pid = this.membersOf(rows, record).find((row) => listeners.includes(row.pid))?.pid
         if (pid !== undefined) return { pid, command: commandOf(rows, pid), app: app.data, run: { kind: record.kind, name: record.name } }
       }
     }
@@ -556,16 +560,24 @@ export class ThreadProcesses {
   async touch(app: AppKey, checkout?: string): Promise<void> {
     await mkdir(this.folder(app), { recursive: true, mode: 0o700 })
     await writeFile(join(this.folder(app), "used"), String(this.now()), { mode: 0o600 })
-    if (checkout && this.checkoutOf(app) !== checkout) await writeFile(join(this.folder(app), "checkout"), checkout, { mode: 0o600 })
+    if (checkout && this.checkoutOf(app) !== checkout) {
+      await writeFile(join(this.folder(app), "checkout"), checkout, { mode: 0o600 })
+      this.checkouts.set(app, checkout)
+    }
   }
 
-  /** The folder an app last ran in, to name it. */
+  /** The folder an app last ran in, to name it: read from its file once, then as this host writes it. */
   checkoutOf(app: AppKey): string | undefined {
+    if (this.checkouts.has(app)) return this.checkouts.get(app)
+    let checkout: string | undefined
     try {
-      return readFileSync(join(this.folder(app), "checkout"), "utf8") || undefined
+      checkout = readFileSync(join(this.folder(app), "checkout"), "utf8") || undefined
     } catch {
-      return undefined
+      checkout = undefined
     }
+    // An app without a checkout yet is read again until it has one.
+    if (checkout) this.checkouts.set(app, checkout)
+    return checkout
   }
 
   async usedAt(app: AppKey): Promise<number> {
@@ -588,7 +600,7 @@ export class ThreadProcesses {
       const alive: ActiveApp["runs"] = []
       const pids: number[] = []
       for (const record of Object.values(runs)) {
-        const held = members(rows, record)
+        const held = this.membersOf(rows, record)
         if (!held.length) continue
         alive.push({ kind: record.kind, name: record.name })
         pids.push(...held.map((row) => row.pid))
@@ -667,8 +679,8 @@ export class ThreadProcesses {
   async paused<T>(app: AppKey, work: () => Promise<T>): Promise<T> {
     const runs = Object.values(await this.runs(app))
     const rows = await processTable()
-    const held = runs.flatMap((record) => members(rows, record))
-    const groups = [...new Set(runs.filter((record) => members(rows, record).length).map((record) => record.pid))]
+    const held = runs.flatMap((record) => this.membersOf(rows, record))
+    const groups = [...new Set(runs.filter((record) => this.membersOf(rows, record).length).map((record) => record.pid))]
     const signal = (name: NodeJS.Signals) => {
       for (const group of groups) {
         try {
@@ -765,6 +777,12 @@ export class ThreadProcesses {
     return shared.rows
   }
 
+  /** A run's processes in `rows`, through the index of the table last asked about (`TableIndex`). */
+  private membersOf(rows: Row[], record: Run): Row[] {
+    if (this.indexed?.rows !== rows) this.indexed = { rows, index: new TableIndex(rows) }
+    return this.indexed.index.members(record)
+  }
+
   /** A process started or was signalled: the next look reads the table again. */
   private tableChanged(): void {
     this.sharedTable = undefined
@@ -805,7 +823,7 @@ export class ThreadProcesses {
     }
     if (!apps.some((entry) => entry.runs.some((record) => groupAlive(record.pid)))) return { found }
     const [rows, containerLook] = await Promise.all([this.sharedProcessTable(), this.containerLook()])
-    const held = apps.map(({ app, runs }) => ({ app, runs: runs.map((record) => ({ record, rows: members(rows, record) })) }))
+    const held = apps.map(({ app, runs }) => ({ app, runs: runs.map((record) => ({ record, rows: this.membersOf(rows, record) })) }))
     const footprints = await this.footprintsOf(held.flatMap((entry) => entry.runs.flatMap((one) => one.rows)))
     const bytesOf = (row: Row) => footprints.get(row.pid)?.bytes ?? row.rssKb * 1024
     const peakOf = (row: Row) => footprints.get(row.pid)?.peakBytes ?? bytesOf(row)
@@ -936,6 +954,7 @@ export class ThreadProcesses {
   async discard(app: AppKey): Promise<void> {
     await this.stop(app)
     await this.locked(app, () => rm(this.folder(app), { recursive: true, force: true }))
+    this.checkouts.delete(app)
   }
 
   /** Names what holds a port, for an agent that expected it free. */
@@ -956,7 +975,7 @@ export class ThreadProcesses {
   }
 
   private async state(app: AppKey, key: string, record: Run, rows: Row[]): Promise<RunState> {
-    if (members(rows, record).length) {
+    if (this.membersOf(rows, record).length) {
       if (record.ready !== undefined) return (await stat(this.file(app, key, "ready")).catch(() => undefined)) ? { kind: "running" } : { kind: "starting" }
       if (record.port === undefined || (await this.dependencies.listening(record.port))) return { kind: "running" }
       return { kind: "starting" }
@@ -1227,25 +1246,47 @@ async function processTable(): Promise<Row[]> {
  * different process under the leader's pid means the group is gone.
  */
 function members(rows: Row[], record: Run): Row[] {
-  const found = new Map<number, Row>()
-  const children = new Map<number, Row[]>()
-  for (const row of rows) {
-    if (row.pid === record.pid && row.startedMs !== record.startedMs) return []
-    if (row.startedMs < record.startedMs || row.pid === process.pid || row.pid <= 1) continue
-    if (row.pgid === record.pid) found.set(row.pid, row)
-    const siblings = children.get(row.ppid)
-    if (siblings) siblings.push(row)
-    else children.set(row.ppid, [row])
+  return new TableIndex(rows).members(record)
+}
+
+/**
+ * A process table looked up by pid, group and parent, built once per table: a busy Mac's table is long, and every
+ * look asks for each run of every app.
+ */
+class TableIndex {
+  private readonly byPid = new Map<number, Row>()
+  private readonly byGroup = new Map<number, Row[]>()
+  private readonly byParent = new Map<number, Row[]>()
+
+  constructor(rows: Row[]) {
+    const add = (map: Map<number, Row[]>, key: number, row: Row) => {
+      const known = map.get(key)
+      if (known) known.push(row)
+      else map.set(key, [row])
+    }
+    for (const row of rows) {
+      this.byPid.set(row.pid, row)
+      if (row.pid === process.pid || row.pid <= 1) continue
+      add(this.byGroup, row.pgid, row)
+      add(this.byParent, row.ppid, row)
+    }
   }
-  // One pass over the table, then down the tree: a busy Mac's table is long, and every look asks for each run.
-  const queue = [...found.values()]
-  for (let at = 0; at < queue.length; at += 1)
-    for (const child of children.get(queue[at]!.pid) ?? [])
-      if (!found.has(child.pid)) {
-        found.set(child.pid, child)
-        queue.push(child)
-      }
-  return [...found.values()]
+
+  /** A run's group and every descendant that started after it; none when its pid now names another process. */
+  members(record: Run): Row[] {
+    const leader = this.byPid.get(record.pid)
+    if (leader && leader.startedMs !== record.startedMs) return []
+    const later = (row: Row) => row.startedMs >= record.startedMs
+    const found = new Map((this.byGroup.get(record.pid) ?? []).filter(later).map((row) => [row.pid, row]))
+    const queue = [...found.values()]
+    for (let at = 0; at < queue.length; at += 1)
+      for (const child of this.byParent.get(queue[at]!.pid) ?? [])
+        if (later(child) && !found.has(child.pid)) {
+          found.set(child.pid, child)
+          queue.push(child)
+        }
+    return [...found.values()]
+  }
 }
 
 async function stopTree(record: Run): Promise<void> {
