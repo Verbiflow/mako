@@ -647,7 +647,7 @@ export function queuedWords(state: Extract<ChildState, { kind: "queued" }>): str
   return `Queued: ${state.ahead} ahead`
 }
 
-function entryState(state: ChildState): NativeAgent["state"] {
+export function entryState(state: ChildState): NativeAgent["state"] {
   switch (state.kind) {
     case "queued":
       return { kind: "waiting", reason: queuedWords(state) }

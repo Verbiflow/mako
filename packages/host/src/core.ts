@@ -3,6 +3,7 @@ import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
+import { listedFins } from "./contracts/children.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -531,6 +532,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
         },
         asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
+        fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
         now: Date.now,
       }))
     },
@@ -548,6 +550,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined,
         promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
         asking: (conversation) => finAsking(late.conversations?.agents?.personAsk(conversation)),
+        fins: (conversation) => listedFins(late.conversations?.agents?.roster(conversation)),
       })
     },
     // A change goes to the account within a fraction of a second, on the link this host serves then, named as the tick's

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -95,6 +95,42 @@ export const ListedAskingSchema = z
   .strict()
 export type ListedAsking = z.infer<typeof ListedAskingSchema>
 
+/** The most Fins a row says: a tree's started budget. */
+export const LISTED_FINS = 100
+const finNote = z.string().max(200)
+
+/**
+ * Where one of a Session's Fins stands, as its owner's roster says it (`ChildState` in the host's contracts), without
+ * the ask a blocked one carries: the row's `asking` says that.
+ */
+export const ListedFinStateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("queued"), reason: z.enum(["tree-running", "place-full", "device-offline"]), ahead: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }).strict(),
+  z.object({ kind: z.literal("working"), step: finNote.optional(), phase: finNote.optional() }).strict(),
+  z.object({ kind: z.literal("idle") }).strict(),
+  z.object({ kind: z.literal("blocked"), question: finNote, on: z.enum(["lead", "person", "approval"]) }).strict(),
+  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: finNote.optional() }).strict(),
+])
+export type ListedFinState = z.infer<typeof ListedFinStateSchema>
+
+/**
+ * One of a Session's Fins as every device lists it (link version 19 on): an Apex's Fins have no rows of their own, so
+ * its row says them, written by its owner alone and moving with it. Names and states only: a Fin's brief, reports and
+ * transcript are read from the owner.
+ */
+export const ListedFinSchema = z
+  .object({
+    /** Its Thread, or for a start still held the Thread it will have. */
+    thread: ThreadIdSchema,
+    name: z.string().min(1).max(200),
+    harness: HarnessSchema,
+    title: z.string().max(200).optional(),
+    state: ListedFinStateSchema,
+    startedAt: z.iso.datetime(),
+  })
+  .strict()
+export type ListedFin = z.infer<typeof ListedFinSchema>
+
 /** The harnesses a Session ran in before its current one, oldest first, as its rail row wears them: at most this many. */
 export const LISTED_LINEAGE = 8
 const GenerationSchema = z.number().int().positive()
@@ -177,6 +213,8 @@ export const ReportedSessionSchema = z
     forkOf: z.uuid().optional(),
     /** What one of its Fins asks the person, said with `state: "waiting"` (`ListedAskingSchema`, link version 18 on). */
     asking: ListedAskingSchema.optional(),
+    /** Its Fins, as its owner's roster orders them (`ListedFinSchema`, link version 19 on); absent while it has none. */
+    fins: z.array(ListedFinSchema).min(1).max(LISTED_FINS).optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -198,6 +236,8 @@ export const ListedSessionSchema = ReportedSessionSchema.extend({
   listedAt: z.iso.datetime(),
   /** Its Thread continuing in the cloud while its owner is off, as the account carries it (`continues.ts`); never reported. */
   continued: ListedContinueSchema.optional(),
+  /** Read leniently: Fins a newer build says in a way this one can't read are passed over, never the row. */
+  fins: z.array(ListedFinSchema).min(1).max(LISTED_FINS).optional().catch(undefined),
 }).strip()
 export type ListedSession = z.infer<typeof ListedSessionSchema>
 
@@ -288,11 +328,17 @@ export type SessionListings = z.infer<typeof SessionListingsSchema>
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= ASKING_VERSION) return [...rows]
+  if (version >= FINS_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // Before version 19 a gateway knows no `fins`: the row says nothing of its Session's Fins but their asks.
+    delete older.fins
+    if (version >= ASKING_VERSION) {
+      kept.push(older)
+      continue
+    }
     // Before version 18 a gateway knows no `asking`: the row stands where its Session does under its Fins' asks.
     if (older.asking) {
       older.state = older.asking.under
@@ -359,6 +405,11 @@ function sameAsking(left: ListedAsking | undefined, right: ListedAsking | undefi
   return left === right || (left !== undefined && right !== undefined && JSON.stringify(left) === JSON.stringify(right))
 }
 
+/** Whether two rows say the same Fins, in the same order and standing. */
+export function sameFins(left: readonly ListedFin[] | undefined, right: readonly ListedFin[] | undefined): boolean {
+  return left === right || (left !== undefined && right !== undefined && JSON.stringify(left) === JSON.stringify(right))
+}
+
 export function sameRunsOn(left: RunsOn, right: RunsOn): boolean {
   return left.kind === "device" ? right.kind === "device" && left.deviceId === right.deviceId : right.kind === "cloud" && left.threadId === right.threadId
 }
@@ -381,6 +432,7 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.waitingOn === right.waitingOn &&
     left.waitingFor === right.waitingFor &&
     sameAsking(left.asking, right.asking) &&
+    sameFins(left.fins, right.fins) &&
     left.folder === right.folder &&
     left.createdAt === right.createdAt &&
     left.activityAt === right.activityAt &&

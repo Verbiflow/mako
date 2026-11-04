@@ -32,9 +32,10 @@ export const PROTOCOL_VERSION = 1
  * its owner is off clones (`continues.ts`), and says a runtime that agreed it takes such a continue back as a move when
  * it returns. 17 lets a `sessions` row say the Session it was forked from (`forkOf`). 18 lets a `sessions` row say
  * what one of its Session's Fins asks the person (`asking`), which the row waits on, and where the Session stands
- * under it. Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * under it. 19 lets a `sessions` row say its Session's Fins (`fins`): every device shows an Apex's tree as its owner
+ * does. Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 18
+export const LINK_VERSION = 19
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -107,6 +108,12 @@ export const FORKS_VERSION = 17
  * agreed less hears the row as it stands under the ask, and none of it.
  */
 export const ASKING_VERSION = 18
+
+/**
+ * The first link version whose `sessions` rows may say their Session's Fins (`fins`): a link that agreed less hears the
+ * row without them, as before.
+ */
+export const FINS_VERSION = 19
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake
