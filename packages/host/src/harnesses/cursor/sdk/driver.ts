@@ -123,6 +123,8 @@ interface Live {
   state: LiveSessionState
   client: CursorSdkLiveClient
   emit: ProviderStartOptions["emit"]
+  /** The Thread its shell commands are routed by, read at open and at each send (`ProviderStartOptions.nativeCalls`). */
+  calls: ProviderStartOptions["nativeCalls"]
   /** Tells the host's auth that Cursor refused the key this session ran under. */
   onRejected(message: string): void
   models: SessionModel[]
@@ -720,6 +722,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       const live: Live = {
         client,
         emit: options.emit,
+        calls: options.nativeCalls,
         onRejected: rejected,
         models: [],
         turn: null,
@@ -831,6 +834,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           model: selection,
           mcpServers: servers,
           noTask: launchSpawnsOff("cursor", "disallowedTools task", options.conversationId, options.nativeRouting) || undefined,
+          calls: options.nativeCalls?.(),
           importFrom,
           forkFrom: fork && { agentId: fork.nativeId, runId: fork.runId },
         }))
@@ -929,6 +933,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           images: images.length > 0 ? images : undefined,
           model: selection,
           plan,
+          calls: live.calls?.(),
         })
         dispatch.report({ kind: "accepted", source: "native-response", referenceId: sent.runId })
         if (live.turn === turn) engine.patch(live, { nativeRunId: sent.runId })
