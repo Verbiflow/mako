@@ -85,7 +85,7 @@ const EvalApex = z.object({
   step: z.string().optional(),
   folder: z.string().optional(),
   branch: z.string().optional(),
-  fins: z.object({ needs: z.number(), working: z.number(), queued: z.number(), failed: z.number(), done: z.number() }),
+  fins: z.object({ needs: z.number(), working: z.number(), queued: z.number(), idle: z.number().default(0), failed: z.number(), done: z.number() }),
   digest: z.object({ fins: z.array(z.object({ name: z.string(), line: z.string() })), more: z.number().optional(), said: z.string().optional() }),
 })
 
@@ -290,7 +290,7 @@ export function apexesAnswer(orchCase: OrchCase): AgentsApexes {
     apexes: (orchCase.setup.apexes ?? []).map((apex) => ({
       thread: namedUuid(`${orchCase.id}:${apex.title}`),
       ...apex,
-      fins: { total: apex.fins.needs + apex.fins.working + apex.fins.queued + apex.fins.failed + apex.fins.done, ...apex.fins },
+      fins: { total: apex.fins.needs + apex.fins.working + apex.fins.queued + apex.fins.idle + apex.fins.failed + apex.fins.done, ...apex.fins },
     })),
   }
 }

@@ -173,7 +173,7 @@ async function apexes(): Promise<void> {
     assert.equal(other.harness, "Claude")
     assert.equal(other.working, false)
     assert.equal(other.folder, world.root)
-    assert.deepEqual({ ...other.fins }, { total: 2, needs: 0, working: 0, queued: 0, failed: 0, done: 2 }, "its Fins by group")
+    assert.deepEqual({ ...other.fins }, { total: 2, needs: 0, working: 0, queued: 0, idle: 0, failed: 0, done: 2 }, "its Fins by group")
     assert.deepEqual(other.digest.fins.map((fin) => fin.name).sort(), ["billing-db", "billing-ui"])
     assert.ok(other.digest.fins.every((fin) => fin.line === "done: ok"), JSON.stringify(other.digest.fins))
     assert.ok(other.digest.said?.startsWith("Billing is split between a schema Fin and a UI Fin. (+"), `its last reply's first paragraph and how much more: ${other.digest.said}`)
