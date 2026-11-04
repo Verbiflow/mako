@@ -23,6 +23,7 @@ const DECODED = new Set([
   "delta/subagent-call",
   "delta/unhandled",
   "settled",
+  "resumed",
   "result",
 ])
 /** Known and deliberately shown as nothing: the prompt's echo, bookkeeping, and the child's own logs. */
@@ -84,6 +85,8 @@ export const cursorDecoderSource: ProviderDecoderSource = {
         if (event.event === "result")
           return decoder.finish(event.result.status, event.result.error?.message, event.result.settled)
         if (event.event === "settled") return decoder.settle(event.calls)
+        // The words the SDK's resume sent join the turn as a steer does (`driver.ts`).
+        if (event.event === "resumed") return [{ kind: "update", update: { kind: "user", text: event.text } }]
         const decoded = decoder.decode(event)
         for (const item of decoded) if (item.kind === "state" && item.patch.settings) state = { settings: item.patch.settings }
         return decoded

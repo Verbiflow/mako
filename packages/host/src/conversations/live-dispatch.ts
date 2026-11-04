@@ -8,7 +8,8 @@ import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
-import { pendingInterruption, TurnSteps } from "./interrupted-turn.js"
+import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
+import { checkoutSince } from "../base/checkout-since.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { contextPrompt } from "./live-context.js"
@@ -271,14 +272,16 @@ export class LiveDispatch {
     }
     const drewIt = !shown && Boolean(text || request.attachments.length)
     const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
+    const cwd = resident.snapshot.session.cwd
     void checkpoints
-      .prompt(resident, current, () => {
+      .prompt(resident, current, async () => {
         const active = this.access.control(resident).activeBindingId
         if (review) return review.run(active, review.target, request.tuning, dispatch)
+        const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
         const text = asWritten ? request.text : [
           controlNote([
             ...(dependencies.controlInstructions?.(active, resident.snapshot.session.id) ?? []),
-            ...(told ? [told.account] : []),
+            ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
             ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), request.text),

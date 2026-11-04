@@ -180,6 +180,8 @@ export interface Interruption {
    */
   calls?: InterruptedCall[]
   moreCalls?: number
+  /** When the first of `calls` started (epoch ms): what moved in the checkout since is told with them (`checkoutSince`). */
+  since?: number
   /** When the next prompt told the agent about `calls` (epoch ms). It is told once. */
   told?: number
   /**
