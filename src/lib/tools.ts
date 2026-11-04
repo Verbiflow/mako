@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { normalizeToolOutput } from "@mako/sessions/tool-output"
-import { commandExitCode, identifyTool, makoToolWords, toolArguments, toolKindWork, type HarnessName, type MakoToolWords, type ToolArguments as CallArguments, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
+import { commandExitCode, identifyTool, makoToolWords, toolArguments, toolFacts, type ToolFacts, toolKindWork, type HarnessName, type MakoToolWords, type ToolArguments as CallArguments, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
 import type { Block, ChatMessage } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
 import type { Entry } from "@mako/sessions/entries"
@@ -291,16 +291,34 @@ export function makoCallWords(call: ToolCall, harness?: HarnessName): MakoToolWo
   return makoToolWords(call.tool.tool, toolArguments(toolInputText(call.arguments)), call.isError || call.pending ? undefined : call.result, harness)
 }
 
+const facts = new WeakMap<ToolIdentity, ToolFacts>()
+
+/** A call's facts (`toolFacts`), read once per identity, which is resolved once per block. */
+export function callFacts(call: ToolCall): ToolFacts {
+  const known = facts.get(call.tool)
+  if (known) return known
+  const input = toolInputText(call.arguments)
+  const read = toolFacts(call.tool, toolArguments(input), input)
+  facts.set(call.tool, read)
+  return read
+}
+
 /** "+12 −3" for an edit, "+12" for a write: the lines its arguments add and remove. */
-export function changedLinesNote(tool: ToolIdentity): string | undefined {
-  if (tool.added === undefined && tool.removed === undefined) return undefined
-  const parts = [tool.added ? `+${tool.added}` : undefined, tool.removed ? `−${tool.removed}` : undefined].filter(Boolean)
+export function changedLinesNote(read: ToolFacts): string | undefined {
+  const parts = [read.added ? `+${read.added}` : undefined, read.removed ? `−${read.removed}` : undefined].filter(Boolean)
   return parts.length ? parts.join(" ") : undefined
 }
 
 /** What a row adds after its target, in the label face: a read's range, an edit's lines. */
-export function toolFacts(tool: ToolIdentity): string | undefined {
-  return tool.range ?? changedLinesNote(tool)
+export function factsNote(call: ToolCall): string | undefined {
+  const read = callFacts(call)
+  return read.range ?? changedLinesNote(read)
+}
+
+/** What a call acts on, as a row names it: a patch of several files by how many. */
+export function callTarget(call: ToolCall): string {
+  const files = callFacts(call).files
+  return files ? `${files} files` : toolTarget(call.tool)
 }
 
 /**

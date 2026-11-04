@@ -120,13 +120,6 @@ export interface ToolIdentity {
   /** A Mako tool's words while it runs and once it returned, from its arguments alone (`makoToolWords`); `label` names it. */
   running?: string
   done?: string
-  /** The lines a read asked for: ":120–180", or ":120+" to the end. */
-  range?: string
-  /** The lines an edit or write adds and removes, from its arguments, where they hold the text. */
-  added?: number
-  removed?: number
-  /** The files a patch touches, when it touches more than one. */
-  files?: number
 }
 
 export interface ToolSource {
@@ -458,21 +451,32 @@ function fill(identity: ToolIdentity, kind: ToolKind, args: JsonRecord | undefin
   if (url) identity.url = url
   const target = targetFor(kind, identity, args, keys, input)
   if (target) identity.target = target
-  if (kind === "read") {
+}
+
+/** What a row says of a call after its target: the lines a read asked for, and the lines and files a change touches. */
+export interface ToolFacts {
+  /** ":120–180", or ":120+" to the end. */
+  range?: string
+  added?: number
+  removed?: number
+  /** The files a patch touches, when it touches more than one. */
+  files?: number
+}
+
+/**
+ * A call's facts, from its arguments (`args`, or `input` when they aren't a
+ * JSON object, as a raw patch isn't). Only a row that draws them reads them,
+ * so a decoder identifying every call never counts a patch's lines.
+ */
+export function toolFacts(identity: Pick<ToolIdentity, "kind">, args: ToolArguments | undefined, input: string | undefined): ToolFacts {
+  if (identity.kind === "read") {
     const range = readRange(args)
-    if (range) identity.range = range
+    return range ? { range } : {}
   }
-  if (kind === "edit" || kind === "write") {
-    const lines = changedLines(kind, args, input)
-    if (lines) {
-      identity.added = lines.added
-      identity.removed = lines.removed
-      if (lines.files > 1) {
-        identity.files = lines.files
-        identity.target = `${lines.files} files`
-      }
-    }
-  }
+  if (identity.kind !== "edit" && identity.kind !== "write") return {}
+  const lines = changedLines(identity.kind, args, input)
+  if (!lines) return {}
+  return { added: lines.added, removed: lines.removed, ...lines.files > 1 && { files: lines.files } }
 }
 
 const Whole = z.union([z.number().int(), z.string().trim().regex(/^-?\d+$/).transform(Number)])

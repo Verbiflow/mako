@@ -1,6 +1,6 @@
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import { liveVerb } from "@/state/agent-activity"
-import { makoCallWords, toolFacts, toolLabel, toolTarget } from "@/lib/tools"
+import { callTarget, factsNote, makoCallWords, toolLabel } from "@/lib/tools"
 import { harnessLabel } from "@/lib/harness-label"
 import type { ToolCall } from "@/extend/slots"
 
@@ -53,8 +53,8 @@ export function stepWords(call: ToolCall, running: boolean): string {
   const mako = makoCallWords(call, harnessLabel)
   const verb = running ? liveVerb(kind) : DONE_VERBS[kind]
   const label = NAMED_BY_LABEL.has(kind) ? toolLabel(call.tool) : ""
-  const target = toolTarget(call.tool)
-  const said = mako ? (running ? mako.running : call.isError ? mako.label : mako.done) : [verb, label, target, toolFacts(call.tool)].filter(Boolean).join(" ")
+  const target = callTarget(call)
+  const said = mako ? (running ? mako.running : call.isError ? mako.label : mako.done) : [verb, label, target, factsNote(call)].filter(Boolean).join(" ")
   return said.charAt(0).toLowerCase() + said.slice(1)
 }
 

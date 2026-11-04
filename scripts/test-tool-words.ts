@@ -3,7 +3,7 @@
 // harness's recorded shape; a read's range and an edit's size from their
 // arguments; and a turn's failed count that leaves out what a retry fixed.
 import assert from "node:assert/strict"
-import { commandExitCode, identifyTool, MAKO_TOOL_NAMES, makoToolWords, toolPhrase, type ToolArguments } from "@mako/sessions/tool-identity"
+import { commandExitCode, identifyTool, MAKO_TOOL_NAMES, makoToolWords, toolArguments, toolFacts, toolPhrase, type ToolArguments } from "@mako/sessions/tool-identity"
 import { codexCommandOutput } from "@mako/sessions/codex-presentation"
 import { CursorSdkProjection } from "@mako/sessions/cursor-sdk-content"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
@@ -164,7 +164,7 @@ console.log("tool words: every harness's exit code")
 
 // A read's range, from each harness's arguments.
 {
-  const range = (harness: string, name: string, args: ToolArguments) => identifyTool({ harness, name, input: JSON.stringify(args) }).range
+  const range = (harness: string, name: string, args: ToolArguments) => toolFacts(identifyTool({ harness, name, input: JSON.stringify(args) }), args, JSON.stringify(args)).range
   assert.equal(range("claude", "Read", { file_path: "/a.ts", offset: 120, limit: 61 }), ":120–180")
   assert.equal(range("claude", "Read", { file_path: "/a.ts", offset: 120 }), ":120+")
   assert.equal(range("claude", "Read", { file_path: "/a.ts" }), undefined)
@@ -182,7 +182,8 @@ console.log("tool words: every harness's read range")
 {
   const lines = (harness: string, name: string, input: string) => {
     const identity = identifyTool({ harness, name, input })
-    return [changedLinesNote(identity), identity.files, identity.target]
+    const read = toolFacts(identity, toolArguments(input), input)
+    return [changedLinesNote(read), read.files, read.files ? `${read.files} files` : identity.target]
   }
   const json = JSON.stringify
   assert.deepEqual(lines("claude", "Edit", json({ file_path: "/a.ts", old_string: "a\nb\nc", new_string: "a\nB\nC\nD" })), ["+3 −2", undefined, "/a.ts"])

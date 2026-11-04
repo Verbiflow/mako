@@ -32,7 +32,7 @@ import {
   WaitBody,
   WriteBody,
 } from "@/components/transcript/tool-views"
-import { toolFacts } from "@/lib/tools"
+import { callFacts, factsNote } from "@/lib/tools"
 
 /**
  * The desk's own contributions, registered through exactly the same public
@@ -118,18 +118,21 @@ export function installBuiltins(): () => void {
     // A file row says how much it read or changed after the file, in the label face: ":120–180", "+12 −3".
     ...(["edit", "delete", "move"] as const).map((kind) =>
       registerToolKindView(kind, {
-        summary: (call: ToolCall) => (call.tool.files ? filesSummary(call.tool.files, toolFacts(call.tool)) : fileSummary(call, toolFacts(call.tool))),
+        summary: (call: ToolCall) => {
+          const files = callFacts(call).files
+          return files ? filesSummary(files, factsNote(call)) : fileSummary(call, factsNote(call))
+        },
         body: EditBody,
         openPath: (call: ToolCall) => call.tool.path,
       })
     ),
     registerToolKindView("write", {
-      summary: (call: ToolCall) => fileSummary(call, toolFacts(call.tool)),
+      summary: (call: ToolCall) => fileSummary(call, factsNote(call)),
       body: WriteBody,
       openPath: (call: ToolCall) => call.tool.path,
     }),
     registerToolKindView("read", {
-      summary: (call: ToolCall) => fileSummary(call, toolFacts(call.tool)),
+      summary: (call: ToolCall) => fileSummary(call, factsNote(call)),
       openPath: (call: ToolCall) => call.tool.path,
     }),
     registerToolKindView("plan-exit", {
