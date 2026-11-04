@@ -1345,7 +1345,7 @@ async function staleEndsStayOut(): Promise<void> {
     const child = ThreadIdSchema.parse(linked.child)
     run.kill("SIGTERM")
     await waitFor(() => w.store.edges().of(child)?.run?.ended !== undefined, "its end", END_CONFIRM_MS + 20_000)
-    assert.equal(w.store.reportsOf(child, 0).at(-1)?.status, "failed")
+    assert.equal(w.store.reportsOf(child, 0).at(-1)?.status, "blocked", "a run whose process ended unexplained is a cut its Apex decides on")
     session()
     w.release(apex.conversation)
     await w.settle()

@@ -276,6 +276,7 @@
     "test:thread-move-tool": "npm run -s build --workspace @mako/client && tsx scripts/test-thread-move-tool.ts",
     "test:orch-update": "tsx scripts/test-orch-update.ts",
     "test:orch-crash": "tsx scripts/test-orch-crash.ts",
+    "test:orch-recovery": "tsx scripts/test-orch-recovery.ts",
     "test:agents-wake": "tsx scripts/test-agents-wake.ts",
     "test:fins-reach-released-apex": "tsx scripts/test-fins-reach-released-apex.ts",
     "test:fins-fresh-on-return-ui": "node scripts/test-fins-fresh-on-return-ui.mjs",

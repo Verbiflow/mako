@@ -1180,13 +1180,19 @@ export class LiveConversations {
     }
   }
 
+  /** Whether `id` is switching provider or reopening its session (`transfer`): a message waits for it to settle. */
+  switching(id: string): boolean {
+    const resident = this.records.load(id)
+    return resident ? Boolean(this.transfers.pending(resident)) : false
+  }
+
   /** Whether the host before this one left a message of `id` waiting, paused or running: an exit pauses them, a crash cuts the turn. */
   leftUnsettled(id: string): boolean {
     return this.records.leftUnsettled(id)
   }
 
   /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. `brief`: the Fin's brief it carries again. */
-  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string }): LiveSnapshot {
+  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string; note?: string }): LiveSnapshot {
     this.autoContinue.continueNow(id, input)
     return this.records.require(id).snapshot
   }

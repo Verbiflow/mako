@@ -128,9 +128,10 @@ export class LiveAutoContinue {
    * to another machine continues where the Thread runs next. `continues` names the request that was cut short, which
    * may be in another host's journal; `stopped` is the background work the cut stopped, else what that request kept
    * of it (`Interruption.stopped`). `stayed`: the move didn't happen and the turn goes on where it was, which its words
-   * say (`continueTurnPrompt`). Asked again under the same `requestId`, it changes nothing.
+   * say (`continueTurnPrompt`). `note`: the account of what moved since the cut, beneath those words
+   * (`finResumedText`). Asked again under the same `requestId`, it changes nothing.
    */
-  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string }): void {
+  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string; note?: string }): void {
     const resident = this.access.resident(id)
     if (!resident) throw new Error("This conversation is no longer available")
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
@@ -143,7 +144,7 @@ export class LiveAutoContinue {
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
-      text: brief ? `${BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
+      text: brief ? `${BRIEF_AGAIN}\n\n${brief.text}` : `${continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true })}${input.note ? `\n\n${input.note}` : ""}`,
       attachments: [],
       tuning,
       status: "queued",
