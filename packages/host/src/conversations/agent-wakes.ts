@@ -1,6 +1,7 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
 import { APEX_WORD, reportPhase, type Report } from "../contracts/agents.js"
+import { appendFinReports, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -23,6 +24,8 @@ export interface Notice {
   report: Report
   /** The Fin as the digest names it: `"name" (Harness)`. */
   label: string
+  /** Who wrote it as the person's card of it names them (`FinReportCard`): its name and its harness's ID, when known. */
+  fin: { name: string; harness?: string }
   /** The Fin's own Session, which the wake's request names as its actor: an agent's words, never the person's. */
   from: string
   /** The request already named to carry it, by a host that stopped before it was sent (`ThreadStore.assignWake`). */
@@ -269,18 +272,24 @@ export function digest(notices: readonly Notice[], counts: string): string {
   const persons = asks.filter((notice) => notice.report.for === "person")
   const finished = fins.filter((notice) => notice.report.status === "done" || notice.report.status === "failed")
   const lines = [FROM_AGENTS]
+  // Every entry the digest writes has its twin here, from the same record, in the same order.
+  const cards: FinReportCard[] = []
   if (results.length) {
     lines.push(results.length === 1 ? "The result you waited for:" : `The ${results.length} results you waited for:`)
-    for (const { label, report } of results) {
+    for (const notice of results) {
+      const { label, report } = notice
       const summary = report.summary.trim() || (report.status === "done" ? "It finished." : "It failed.")
       const text = summary.length > RESULT_CHARS ? `${summary.slice(0, RESULT_CHARS)}… (agents_read gives the rest)` : summary
       lines.push(`  • ${label} ${report.status}:`, ...text.split("\n").map((line) => `    ${line}`))
+      cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
       for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
     }
   }
   if (replies.length) {
     lines.push(replies.length === 1 ? `Another ${APEX_WORD}'s reply to your message:` : `${replies.length} other ${APEX_WORD}es' replies to your messages:`)
-    for (const { label, report } of replies) {
+    for (const notice of replies) {
+      const { label, report } = notice
+      cards.push(card(notice, opening(report.summary)))
       const said = report.summary.trim()
       const text = said.length > RESULT_CHARS ? `${said.slice(0, RESULT_CHARS)}… (+${(said.length - RESULT_CHARS).toLocaleString("en-US")} chars)` : said
       lines.push(`  • ${label} ${report.status === "done" ? "replied" : "failed"}:`, ...text.split("\n").map((line) => `    ${line}`))
@@ -289,8 +298,11 @@ export function digest(notices: readonly Notice[], counts: string): string {
   }
   if (decisions.length) {
     lines.push(`${decisions.length} ${decisions.length === 1 ? "needs" : "need"} a decision:`)
-    for (const { label, report } of decisions) {
-      lines.push(`  • ${label} is ${report.status === "blocked" ? "blocked" : "asking"}: ${report.question ?? reportPhase(report) ?? "it asks for a decision."}`)
+    for (const notice of decisions) {
+      const { label, report } = notice
+      const asked = report.question ?? reportPhase(report) ?? "it asks for a decision."
+      lines.push(`  • ${label} is ${report.status === "blocked" ? "blocked" : "asking"}: ${asked}`)
+      cards.push(card(notice, asked))
       if (report.options?.length)
         lines.push(`    options: ${report.options.map((option, index) => `${option.label}${index === report.recommended ? " (recommended)" : ""}`).join(" · ")}`)
     }
@@ -298,12 +310,18 @@ export function digest(notices: readonly Notice[], counts: string): string {
   }
   if (persons.length) {
     lines.push(`${persons.length} ${persons.length === 1 ? "waits" : "wait"} on the person:`)
-    for (const { label, report } of persons) lines.push(`  • ${label}: ${report.question ?? reportPhase(report) ?? "it waits on the person."}`)
+    for (const notice of persons) {
+      const asked = notice.report.question ?? reportPhase(notice.report) ?? "it waits on the person."
+      lines.push(`  • ${notice.label}: ${asked}`)
+      cards.push(card(notice, asked))
+    }
   }
   if (finished.length) {
     lines.push(`${finished.length} finished:`)
-    for (const { label, report } of finished) {
+    for (const notice of finished) {
+      const { label, report } = notice
       lines.push(`  • ${label} ${report.status}: ${finishedLine(report)}`)
+      cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
       for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
     }
   }
@@ -311,7 +329,35 @@ export function digest(notices: readonly Notice[], counts: string): string {
   lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
-  return lines.join("\n")
+  return appendFinReports(lines.join("\n"), cards)
+}
+
+/** A notice's report as the person's card of it reads, with the line its digest entry gave it. */
+function card(notice: Notice, line: string): FinReportCard {
+  const { report } = notice
+  return {
+    report: report.id,
+    fin: report.child,
+    name: notice.fin.name,
+    ...(notice.fin.harness && { harness: notice.fin.harness }),
+    ...(notice.reply && { apex: true as const }),
+    status: report.status,
+    line: line.slice(0, 4_000),
+    ...(report.options?.length && { options: report.options }),
+    ...(report.recommended !== undefined && { recommended: report.recommended }),
+    ...(report.artifacts?.length && { artifacts: report.artifacts }),
+    ...(report.for === "person" && { forPerson: true as const }),
+  }
+}
+
+/** A summary's paragraphs, less its headings and rules. */
+function paragraphsOf(summary: string): string[] {
+  return summary.trim().split(/\n\s*\n/).map((paragraph) => paragraph.split("\n").filter((line) => !/^\s*(#{1,6}\s|[-*_]{3,}\s*$)/.test(line)).join("\n").trim()).filter(Boolean)
+}
+
+/** A summary's first paragraph past any heading, on one line, whole. */
+function opening(summary: string): string {
+  return (paragraphsOf(summary)[0] ?? summary.trim()).replace(/\s+/g, " ")
 }
 
 /**
@@ -327,8 +373,8 @@ export function finishedLine(report: Report): string {
 /** Words as a line of a digest carries them: the first paragraph past any heading, at most `FINISHED_CHARS`, and how much more there is. */
 export function firstParagraph(text: string): string {
   const summary = text.trim()
-  const paragraphs = summary.split(/\n\s*\n/).map((paragraph) => paragraph.split("\n").filter((line) => !/^\s*(#{1,6}\s|[-*_]{3,}\s*$)/.test(line)).join("\n").trim()).filter(Boolean)
-  const first = (paragraphs[0] ?? summary).replace(/\s+/g, " ")
+  const paragraphs = paragraphsOf(summary)
+  const first = opening(summary)
   if (paragraphs.length <= 1 && first.length <= FINISHED_CHARS) return first
   const shown = first.length > FINISHED_CHARS ? `${first.slice(0, FINISHED_CHARS - 1).trimEnd()}…` : first
   return `${shown} (+${Math.max(1, summary.length - shown.length).toLocaleString("en-US")} chars)`

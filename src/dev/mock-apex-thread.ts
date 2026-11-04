@@ -1,7 +1,8 @@
 import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { childEntry, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
 import type { FinTuningWords } from "@mako/host/contracts/fin-tuning"
-import { BRIEF_CLOSE, briefIntro, fromAgent, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
+import { BRIEF_CLOSE, briefIntro, fromAgent, FROM_AGENTS, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
+import { appendFinReports } from "@mako/host/contracts/fin-reports"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "@/lib/types"
@@ -240,6 +241,24 @@ const SHEET_MOTION = 1
 export const DIRECT_WORDS = "Keep the keyboard's own mic as the fallback, and say nothing when it takes over."
 const DIRECT_AT = Date.now() - 2 * 60_000
 const DICTATION = 3
+const WAKE_AT = Date.now() - 90_000
+/** A wake as the host writes one (`digest`): the Apex's words, then the same reports as data, which the person reads as each Fin's message. */
+const WAKE_TEXT = appendFinReports(
+  [
+    FROM_AGENTS,
+    "1 waits on the person:",
+    `  • "push-wording" (Codex): Which tone for the quiet-hours notice? Plain or friendly?`,
+    "1 finished:",
+    `  • "swipe" (Codex) done: Swipe to archive now springs back below the threshold; PR on your branch.`,
+    "    pull-request: https://github.com/acme/phone/pull/214",
+    "5 working, 2 queued, 1 idle, 2 ended.",
+    "agents_read gives a report in full. Reply to the person, start more work, or end your turn.",
+  ].join("\n"),
+  [
+    { report: "report:push-wording:tone", fin: childThread(0), name: "Quiet-hours push wording", harness: "codex", status: "needs-input", line: "Which tone for the quiet-hours notice? Plain or friendly?", options: [{ label: "Plain", detail: "Pushes are held until 7:00." }, { label: "Friendly", detail: "Quiet hours: we'll tell you at 7:00." }], recommended: 0, forPerson: true },
+    { report: "report:swipe:done", fin: childThread(9), name: "Thread list swipe", harness: "codex", status: "done", line: "Swipe to archive now springs back below the threshold; PR on your branch.", artifacts: [{ kind: "pull-request", ref: "https://github.com/acme/phone/pull/214" }] },
+  ]
+)
 
 /**
  * The Apex's own conversation: the person's first ask, a message it passed on to Sheet motion, one the person wrote
@@ -248,6 +267,7 @@ const DICTATION = 3
 export function apexSnapshot(): LiveSnapshot {
   const first = { id: "1ead1ead-7000-4000-8000-000000000001", createdAt: STARTED, text: "Split the phone polish list into Threads and see them through. Ask me only for what you can't decide.", attachments: [], status: "completed" as const }
   const routed = { id: "1ead1ead-7000-4000-8000-000000000002", createdAt: ROUTED_AT, text: ROUTED_WORDS, attachments: [], status: "completed" as const }
+  const wake = { id: "1ead1ead-7000-4000-8000-000000000004", createdAt: WAKE_AT, text: WAKE_TEXT, attachments: [], status: "completed" as const }
   const request = { id: "1ead1ead-7000-4000-8000-000000000003", createdAt: Date.now() - 60_000, text: "How are the queued ones doing?", attachments: [], status: "dispatching" as const }
   const sent = { to: "sheet-motion", forward: true, clientKey: "sheet-keyboard" }
   const landed = { child: childThread(SHEET_MOTION), name: "sheet-motion", request: ROUTED_REQUEST, delivery: "steer" }
@@ -274,7 +294,7 @@ export function apexSnapshot(): LiveSnapshot {
     sessionId: APEX_SESSION,
     base: null,
     permissions: [],
-    requests: [first, routed, request],
+    requests: [first, routed, wake, request],
     blocks: [
       { type: "user", text: first.text, requestId: first.id },
       { type: "text", text: "Twelve pieces, each its own Thread. I'll start them as the tree allows and read their reports as they come." },
@@ -283,6 +303,8 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "tool", id: "apex-send", name: "mcp__mako__agents_send", toolKind: "other", title: "mako: agents send", input: JSON.stringify(sent), output: JSON.stringify(landed, null, 2), status: "completed" },
       { type: "text", text: "That's Sheet motion's: it's measuring the container in split view now, so it takes this at its next step." },
       { type: "event", label: `You wrote to ${CHILDREN[DICTATION]!.name} directly`, body: DIRECT_WORDS, direct: { to: CHILDREN[DICTATION]!.name, fin: childThread(DICTATION), request: DIRECT_REQUEST, received: DIRECT_RECEIVED, delivery: "steer", at: DIRECT_AT } },
+      { type: "user", text: wake.text, requestId: wake.id },
+      { type: "text", text: "Push wording's tone is yours to pick; Thread list swipe finished with its PR." },
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],

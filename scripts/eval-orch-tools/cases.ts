@@ -226,7 +226,7 @@ export function wakeText(orchCase: OrchCase): string | undefined {
   const notices = [
     ...asks.map((ask) => ({ child: childOf(ask.name), report: askReport(ask, childOf(ask.name)) })),
     ...finished.map((done) => ({ child: childOf(done.name), report: finishedReport(done) })),
-  ].map(({ child, report }) => ({ id: randomUUID(), report, label: `"${child.name}" (${child.harness})`, from: randomUUID() }))
+  ].map(({ child, report }) => ({ id: randomUUID(), report, label: `"${child.name}" (${child.harness})`, fin: { name: child.name, harness: child.harness }, from: randomUUID() }))
   const tally = (states: readonly EvalChild["state"][]) => children.filter((child) => states.includes(child.state)).length
   return digest(notices, `${tally(["working"])} working, ${tally(["blocked"])} blocked, ${tally(["done", "failed", "stopped"])} ended.`)
 }

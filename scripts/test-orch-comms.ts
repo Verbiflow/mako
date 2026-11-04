@@ -8,6 +8,7 @@ import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } fro
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema, agentToolText } from "@mako/host/conversations/agent-tools"
 import { digest, finishedLine, type Notice } from "@mako/host/conversations/agent-wakes"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
 /**
@@ -26,7 +27,7 @@ const CHILD = ThreadIdSchema.parse("6b0c3c2e-5f8a-4d39-9a43-1d1b4c0f2a11")
 function report(summary: string, extra: Partial<Report> = {}): Report {
   return { id: `report:${CHILD}:${summary.length}`, child: CHILD, status: "done", summary, ownerGeneration: 1, at: 1, ...extra }
 }
-const notice = (summary: string, extra: Partial<Report> = {}): Notice => ({ id: `notice:${summary.length}`, report: report(summary, extra), label: `"docs" (Codex)`, from: "s" })
+const notice = (summary: string, extra: Partial<Report> = {}): Notice => ({ id: `notice:${summary.length}`, report: report(summary, extra), label: `"docs" (Codex)`, fin: { name: "docs", harness: "codex" }, from: "s" })
 
 async function until(what: string, done: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -242,11 +243,37 @@ function doors(): void {
 }
 
 function replyDigest(): void {
-  const reply: Notice = { id: "notice:reply", report: report("Yes, it's mine until PR #12 merges."), label: `"billing" (Claude)`, from: "s", reply: true }
+  const reply: Notice = { id: "notice:reply", report: report("Yes, it's mine until PR #12 merges."), label: `"billing" (Claude)`, fin: { name: "billing", harness: "claude" }, from: "s", reply: true }
   const text = digest([reply, notice("Opened the PR.")], "0 working, 1 ended.")
   assert.match(text, /Another Apex's reply to your message:\n {2}• "billing" \(Claude\) replied:\n {4}Yes, it's mine until PR #12 merges\.\n {2}Don't reply to a reply unless it asks you something\.\n1 finished:\n/, text)
   assert.ok(!digest([reply], "0 working.").includes("finished:"), "a reply isn't a Fin's report")
-  assert.ok(digest([reply], "0 working.").endsWith("Go on with it: reply to the person, start more work, or end your turn."))
+  assert.ok(readFinReports(digest([reply], "0 working.")).text.endsWith("Go on with it: reply to the person, start more work, or end your turn."))
+}
+
+/** Every entry the digest writes has its structured twin after it, from the same record, in its order: the person's card reads that, never the words. */
+function digestTwins(): void {
+  const result: Notice = { ...notice("The migration ran on a copy. 3 rows were fixed.", { id: "report:result" }), id: "notice:result", settledOnly: true }
+  const reply: Notice = { id: "notice:reply", report: report("Yes, it's mine.", { id: "report:reply" }), label: `"billing" (Claude)`, fin: { name: "billing", harness: "claude" }, from: "s", reply: true }
+  const decision: Notice = { ...notice("Open the PR?", { id: "report:decision", status: "needs-input", question: "Open the PR for composer A as shown?", options: [{ label: "Open the PR" }, { label: "Change something first" }], recommended: 0 }), id: "notice:decision", label: `"ux-v2" (Cursor)`, fin: { name: "ux-v2", harness: "cursor" } }
+  const person: Notice = { ...notice("Which tone?", { id: "report:person", status: "blocked", question: "Plain or friendly?", for: "person" }), id: "notice:person" }
+  const done: Notice = { ...notice("## Summary\n\nOpened #369.\n\nMore detail.", { id: "report:done", artifacts: [{ kind: "pull-request", ref: "https://github.com/Verbiflow/mako/pull/369" }] }), id: "notice:done" }
+  const failed: Notice = { ...notice("The gateway refused the test account.", { id: "report:failed", status: "failed" }), id: "notice:failed" }
+  const text = digest([done, person, failed, decision, reply, result], "7 working, 1 queued, 25 ended.")
+  const { text: words, reports } = readFinReports(text)
+  assert.ok(text.startsWith(words) && text.length > words.length, "the words first, unchanged, the data after them")
+  assert.ok(words.endsWith("Reply to the person, start more work, or end your turn."), "the digest's own last line ends the words")
+  const entries = words.split("\n").filter((line) => line.startsWith("  • "))
+  assert.equal(reports.length, entries.length, `one twin per entry: ${entries.length} entries, ${reports.length} twins`)
+  assert.deepEqual(reports.map((card) => card.report), ["report:result", "report:reply", "report:decision", "report:person", "report:done", "report:failed"], "in the digest's order")
+  entries.forEach((entry, index) => assert.ok(entry.includes(`"${reports[index]!.name}"`), `entry ${index} and its twin name the same one: ${entry}`))
+  const [, apex, asks, theirs, finished] = reports
+  assert.equal(apex!.apex, true, "a reply is another Apex's")
+  assert.deepEqual([asks!.status, asks!.harness, asks!.line, asks!.options?.map((option) => option.label), asks!.recommended], ["needs-input", "cursor", "Open the PR for composer A as shown?", ["Open the PR", "Change something first"], 0])
+  assert.equal(theirs!.forPerson, true, "an ask left to the person says so")
+  assert.equal(finished!.line, "Opened #369.", "a finished one's line is its first paragraph past the heading")
+  assert.equal(finished!.artifacts?.[0]?.ref, "https://github.com/Verbiflow/mako/pull/369")
+  for (const card of reports) assert.doesNotMatch(JSON.stringify(card), /agents_(answer|read)|end your turn|person: true/, "no words for the Apex in a card")
+  assert.equal(readFinReports(`${words}\n\n<mako-reports>\n{"version":2,"reports":[]}\n</mako-reports>`).reports.length, 0, "a block it can't read stays words")
 }
 
 try {
@@ -254,9 +281,10 @@ try {
   finishedLines()
   replyDigest()
   doors()
+  digestTwins()
   await crew()
   await apexes()
-  console.log("test:orch-comms: compact answers, finished lines, the crew view and its brief line, and other Apexes read and messaged pass")
+  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, the crew view and its brief line, and other Apexes read and messaged pass")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

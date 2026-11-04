@@ -136,6 +136,8 @@ interface ApexAsk {
   requests: string[]
   thread: string
   label: string
+  /** The Apex as the sender's card of its reply names it. */
+  fin: { name: string; harness?: string }
 }
 
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
@@ -873,7 +875,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       recent.push(now)
       this.apexSends.set(pair, recent)
       const harness = this.deps.live.session(conversation)?.harness
-      const ask: ApexAsk = { sender, conversation, requests, thread: target.thread, label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})` }
+      const ask: ApexAsk = { sender, conversation, requests, thread: target.thread, label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})`, fin: { name: target.title ?? target.thread, ...(harness && { harness }) } }
       for (const id of requests) this.apexAsks.set(`${conversation}:${id}`, ask)
     }
     const answer: AgentsSent = { child: target.thread, name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
@@ -1582,6 +1584,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       id: `notice:${edge.child}:${report.id}`,
       report,
       label: `"${edge.name}" (${this.deps.harnessLabel(this.harnessOf(edge))})`,
+      fin: { name: edge.name, harness: this.harnessOf(edge) },
       from: store.thread(edge.child)?.sessions[0] ?? edge.parentSession,
       ...(wake && { wake }),
       ...(edge.asked.mode === "wait" && (report.status === "done" || report.status === "failed") && { settledOnly: true as const }),
@@ -2327,6 +2330,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       id: `notice:reply:${conversation}:${request}`,
       report: { id: `reply:${conversation}:${request}`, child: ThreadIdSchema.parse(ask.thread), status: done ? "done" : "failed", summary: said.slice(0, 16_000), ownerGeneration: this.generation, at: this.now() },
       label: ask.label,
+      fin: ask.fin,
       from,
       reply: true,
     })
