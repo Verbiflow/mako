@@ -77,7 +77,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
   const options = card.options ?? []
   const made = (card.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request" || artifact.kind === "link")
   return (
-    <div data-fin-report={card.status} data-fin={card.fin} className="flex w-full items-start justify-end gap-2.5">
+    <div data-fin-report={card.status} data-fin={card.fin} className="flex w-full items-end justify-end gap-2.5">
       <div className="max-w-[min(82%,64ch)] bg-raised px-3.5 pt-2 pb-2.5">
         <p className="flex min-w-0 items-baseline gap-1.5 text-label text-faint">
           {fin && thread ? (
@@ -162,7 +162,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
           </div>
         ) : null}
       </div>
-      <AgentAvatar harness={card.harness} kind={card.apex ? "thread" : "fin"} label={card.name} className="mt-0.5" />
+      <AgentAvatar harness={card.harness} kind={card.apex ? "thread" : "fin"} label={card.name} />
     </div>
   )
 })

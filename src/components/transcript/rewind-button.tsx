@@ -1,5 +1,6 @@
 import { useState } from "react"
-import { RotateCcwIcon } from "lucide-react"
+import { Undo2Icon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import type { RewindWriter } from "@mako/host/contracts/workspace-snapshots"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { acp, useAcp } from "@/state/acp"
@@ -20,9 +21,12 @@ type PreviewState =
 export function RewindButton({
   requestId,
   position = "after",
+  iconOnly = false,
 }: {
   requestId: string
   position?: "before" | "after"
+  /** The glyph alone, its name in its tooltip, as a prompt's actions are. */
+  iconOnly?: boolean
 }) {
   const scope = useConversationScope()
   const snapshots = useAcp(
@@ -101,13 +105,18 @@ export function RewindButton({
               ? "Why this can't be rewound"
               : "The workspace checkpoint is still being saved"
         }
-        className="pressable flex items-center gap-1 px-1 hover:text-foreground disabled:opacity-40 aria-disabled:opacity-40 aria-disabled:hover:opacity-70"
+        aria-label={iconOnly ? "Rewind" : undefined}
+        className={cn(
+          "pressable flex items-center hover:text-foreground disabled:opacity-40 aria-disabled:opacity-40 aria-disabled:hover:opacity-70",
+          iconOnly ? "size-7 justify-center hover:bg-fill-hover" : "gap-1 px-1"
+        )}
         onClick={() => {
           setOpen(true)
           if (!refused) void load()
         }}
       >
-        <RotateCcwIcon className="size-3" /> Rewind
+        <Undo2Icon className={iconOnly ? "size-3.5" : "size-3"} />
+        {iconOnly ? null : " Rewind"}
       </button>
       <Dialog
         open={open}
@@ -278,6 +287,6 @@ function WritersLabel({ writers, thread }: { writers: RewindWriter[] | undefined
 
 export function PromptRewindButton({ requestId }: { requestId?: string }) {
   return requestId ? (
-    <RewindButton requestId={requestId} position="before" />
+    <RewindButton requestId={requestId} position="before" iconOnly />
   ) : null
 }
