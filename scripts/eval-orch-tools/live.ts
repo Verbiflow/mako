@@ -107,6 +107,10 @@ export async function liveSample(input: {
   } finally {
     await Promise.resolve(driver.close(id)).catch(() => {})
   }
+  // A turn its harness failed before the model did anything (a usage limit, a sign-in) grades nothing: it's an error, left out of every rate.
+  const failed = events.findLast((event) => event.type === "live-session" && event.session.status === "failed")
+  if (failed?.type === "live-session" && !updates(events).some((update) => update.kind === "tool" || update.kind === "text"))
+    throw new Error(`the turn failed before the model acted: ${failed.session.error ?? "no reason given"}`)
   // A tool's later updates (its status, its output) repeat its id: the call is the last of them that names it.
   const named = new Map<string, { raw: string; args: ToolArgs }>()
   for (const update of updates(events)) if (update.kind === "tool" && update.name) named.set(update.id, { raw: update.name, args: update.input === undefined ? named.get(update.id)?.args ?? {} : toolArgs(update.input) })

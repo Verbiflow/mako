@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
+import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsCrew, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
 import { startConversationMcp, type MakoTools } from "@mako/host/tools/conversation-mcp"
@@ -12,7 +12,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { registerWorkspaceTools, type WorkspaceTools } from "@mako/host/workspaces/tools"
 import { registerEnvironmentTools, type EnvironmentTools } from "@mako/host/workspaces/environment-tools"
 import { registerPullRequestTools, type PullRequestTools } from "@mako/host/git/pull-request-tools"
-import { ToolArgs, type Call } from "./cases.ts"
+import { FIN_NAME, ToolArgs, type Call } from "./cases.ts"
 
 /**
  * Mako's own `mako` server for the eval: the conversation server a Thread's
@@ -39,6 +39,7 @@ const toolOf = (channel: AgentToolDefinition["channel"]) => AGENT_TOOLS.find((to
 
 /** What the stub answers a call, given the children it started for the same conversation. */
 const Named = z.object({ name: z.string().optional() }).catch({})
+const Scoped = z.object({ scope: z.string().optional() }).catch({})
 const Sent = z.object({ to: z.string().optional(), deliver: z.enum(["queue", "steer", "interrupt"]).optional() }).catch({})
 /** What a send answers for a working Fin on Claude, by how it was asked to go, as the host words it. */
 const SENT = {
@@ -59,6 +60,14 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
     const child: AgentsStarted = { child: randomUUID(), name, state: "working", tree: { ...tree, running: tree.running + 1, started: tree.started + 1 }, next: AFTER_START }
     started.push(child)
     return { ...child }
+  }
+  if (tool === "agents_list" && Scoped.parse(args).scope === "crew") {
+    const crew: AgentsCrew = {
+      you: FIN_NAME,
+      apex: { title: "acme-app router", harness: "Codex", working: true, step: "Read src/router.ts" },
+      crew: [{ name: "router", harness: "Claude", state: { kind: "working", step: "Edit src/utils.ts" }, topic: "Port the handlers in src/handlers to the new router.", branch: "router-port" }],
+    }
+    return { ...crew }
   }
   if (tool === "agents_list") {
     const listed: AgentsListResult = {

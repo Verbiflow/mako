@@ -56,9 +56,12 @@ export function agentToolSchema(tool: AgentToolDefinition): z.ZodType {
 export const AgentAnswerSchema = z.looseObject({ refused: z.string().optional() })
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>
 
-/** What a door says back: the operation's answer as JSON; a refusal's first line names it, so an agent reads why before the fields. */
+/**
+ * What a door says back: the operation's answer as JSON on one line, every field kept (indentation was a third of a
+ * list's tokens); a refusal's first line names it, so an agent reads why before the fields.
+ */
 export function agentToolText(answer: AgentAnswer): string {
-  const json = JSON.stringify(answer, null, 2)
+  const json = JSON.stringify(answer)
   return answer.refused === undefined ? json : `refused: ${answer.refused}\n${json}`
 }
 

@@ -12,6 +12,7 @@ import type { CallThread } from "@mako/host/contracts/native-calls"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { digest } from "@mako/host/conversations/agent-wakes"
+import { briefText } from "@mako/host/conversations/agents"
 
 /**
  * The cases of `eval:orch-tools`, in T3 Code's MCP tool-use schema rewritten
@@ -67,6 +68,14 @@ const EvalAsk = z.object({
 })
 type EvalAsk = z.infer<typeof EvalAsk>
 
+/** A Fin's report that it finished, as `agents_report` takes one. */
+const EvalFinished = z.object({
+  name: z.string(),
+  status: z.enum(["done", "failed"]),
+  summary: z.string(),
+  artifacts: z.array(z.object({ kind: z.enum(["branch", "commit", "pull-request", "file", "screenshot", "test-run", "link"]), ref: z.string(), label: z.string().optional() })).optional(),
+})
+
 export const OrchCase = z.object({
   id: z.string(),
   area: z.enum(AREAS),
@@ -101,6 +110,8 @@ export const OrchCase = z.object({
       recipe: z.enum(["ready", "none"]),
       processes: z.array(z.string()).optional(),
     }).optional(),
+    /** Reports of those Fins that finished, waking the Apex the same way. */
+    finished: z.array(EvalFinished).optional(),
   }),
   prompt: z.string(),
   expect: z.object({
@@ -145,6 +156,8 @@ export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE]): OrchCase[] 
 }
 
 const NOW = Date.UTC(2026, 10, 1, 18)
+/** A `fin` case's agent, as its brief names it. */
+export const FIN_NAME = "rename"
 const minutesAgo = (minutes: number) => NOW - minutes * 60_000
 
 function frontDoorChild(child: EvalChild): FrontDoorChild {
@@ -184,23 +197,31 @@ function askReport(ask: EvalAsk, child: EvalChild): Report {
   }
 }
 
-/** The wake a case's asks send its Apex, as the host writes it (`digest`). */
+/** The wake a case's asks and finished reports send its Apex, as the host writes it (`digest`). */
 export function wakeText(orchCase: OrchCase): string | undefined {
-  const { asks, children = [] } = orchCase.setup
-  if (!asks?.length) return undefined
-  const notices = asks.map((ask) => {
-    const child = children.find((each) => each.name === ask.name)
-    if (!child) throw new Error(`${orchCase.id}: ${ask.name} asks, but isn't one of its children`)
-    return { id: randomUUID(), report: askReport(ask, child), label: `"${child.name}" (${child.harness})`, from: randomUUID() }
-  })
+  const { asks = [], finished = [], children = [] } = orchCase.setup
+  if (!asks.length && !finished.length) return undefined
+  const childOf = (name: string) => {
+    const child = children.find((each) => each.name === name)
+    if (!child) throw new Error(`${orchCase.id}: ${name} reports, but isn't one of its children`)
+    return child
+  }
+  const notices = [
+    ...asks.map((ask) => ({ child: childOf(ask.name), report: askReport(ask, childOf(ask.name)) })),
+    ...finished.map((done) => ({ child: childOf(done.name), report: finishedReport(done) })),
+  ].map(({ child, report }) => ({ id: randomUUID(), report, label: `"${child.name}" (${child.harness})`, from: randomUUID() }))
   const tally = (states: readonly EvalChild["state"][]) => children.filter((child) => states.includes(child.state)).length
   return digest(notices, `${tally(["working"])} working, ${tally(["blocked"])} blocked, ${tally(["done", "failed", "stopped"])} ended.`)
+}
+
+function finishedReport(done: z.infer<typeof EvalFinished>): Report {
+  return { id: randomUUID(), child: ThreadIdSchema.parse(randomUUID()), status: done.status, summary: done.summary, ...(done.artifacts && { artifacts: done.artifacts }), ownerGeneration: 1, at: NOW }
 }
 
 /** The case's Thread before the turn it grades: its earlier turns, and the person's message when its Fins' wake is the turn. */
 export function priorTurns(orchCase: OrchCase): z.infer<typeof PriorTurn>[] {
   const prior = orchCase.setup.priorTurns ?? []
-  return orchCase.setup.asks?.length ? [...prior, { role: "user", text: orchCase.prompt }] : prior
+  return orchCase.setup.asks?.length || orchCase.setup.finished?.length ? [...prior, { role: "user", text: orchCase.prompt }] : prior
 }
 
 const NOTE_FOLDERS = { main: "/Users/person/app", worktree: "/Users/person/.mako/worktrees/app-1/thread-work" }
@@ -237,8 +258,9 @@ export function caseCallThread(orchCase: OrchCase, project: string): CallThread 
   }
 }
 
-/** What the graded turn opens with: the wake its Fins send, or the person's message behind the note an Apex's Fins send ahead of it. */
+/** What the graded turn opens with: a Fin's brief, the wake its Fins send, or the person's message behind the note an Apex's Fins send ahead of it. */
 export function turnText(orchCase: OrchCase): string {
+  if (orchCase.setup.role === "fin") return briefText({ objective: orchCase.prompt }, FIN_NAME)
   const wake = wakeText(orchCase)
   if (wake) return wake
   const note = [threadNote(orchCase), frontDoorText(orchCase)].filter(Boolean).join("\n\n")
