@@ -25,12 +25,13 @@ export interface TurnStop {
 }
 
 /**
- * A turn that ended where the person chose: their own Stop, or their goal's
- * token budget. It's said quietly and nothing offers to continue it; a goal
- * at its budget goes on only when it's set again with more.
+ * A turn that ended where the person chose: their own Stop, their goal's
+ * token budget, or their message steered in by stopping it. It's said quietly
+ * and nothing offers to continue it; a goal at its budget goes on only when
+ * it's set again with more, and a steered turn goes on as the message's.
  */
 export function endedAsChosen(reason: InterruptionReason): boolean {
-  return reason === "stopped" || reason === "goal-budget"
+  return reason === "stopped" || reason === "goal-budget" || reason === "steered"
 }
 
 /**
@@ -172,6 +173,7 @@ const TURN_STOP_LABELS = {
   "not-saved": () => "Stopped when Mako couldn't save",
   "goal-budget": () => "Stopped at the goal's token budget",
   "machine-lost": () => "Interrupted",
+  steered: () => "Stopped for your message",
 } satisfies Record<InterruptionReason, (provider: string) => string>
 
 /**

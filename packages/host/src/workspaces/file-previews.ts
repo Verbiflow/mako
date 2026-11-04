@@ -40,10 +40,21 @@ export interface FilePreviewOptions {
   now?: number
 }
 
+/**
+ * The host that read a file this host serves on its behalf: a cloud Thread's machine or another device, through the
+ * gateway, or another host on this Mac, by its socket. Each signs its URLs with a secret of its own.
+ */
+export type FileOwner =
+  | { kind: "thread"; threadId: string }
+  | { kind: "device"; deviceId: string }
+  | { kind: "socket"; socket: string }
+
 /** A signed file URL's verdict. */
 export type FilePreviewGrant =
   /** `entry`: the signed file itself, rather than an asset of its page. */
   | { kind: "file"; path: string; entry: boolean }
+  /** A file another host signed (`ownedFilePreviewUrl`): its owner's URL for what was asked, as that host serves it. */
+  | { kind: "owned"; owner: FileOwner; url: string; entry: boolean }
   /** Not a URL this host signed, or its signature doesn't hold. */
   | { kind: "invalid" }
   /** Signed here, but no longer honoured: expired, or the file changed or moved since. */
@@ -67,16 +78,34 @@ export function filePreviewUrl(path: string, identity: FileIdentity, options: Fi
   return `mako-file://asset/${payload}/${signature}/${encodeURIComponent(basename(path))}`
 }
 
+/**
+ * A URL another host signed (`mako-file://asset/…`), as this host serves it: signed here for that owner, so every
+ * client of this host loads it as one of its own, and the bytes are fetched from the owner when it's first loaded.
+ * Undefined for anything that isn't such a URL. An asset of a page and a rendition are asked of the owner as asked here.
+ */
+export function ownedFilePreviewUrl(owner: FileOwner, url: string, options: { now?: number } = {}): string | undefined {
+  if (!URL.canParse(url)) return undefined
+  const parsed = new URL(url)
+  if (parsed.protocol !== "mako-file:" || parsed.hostname !== "asset") return undefined
+  const [remotePayload, remoteSignature, ...rest] = parsed.pathname.slice(1).split("/")
+  if (!remotePayload || !remoteSignature || !rest[0]) return undefined
+  const expires = (options.now ?? Date.now()) + FILE_PREVIEW_TTL_MS
+  const where = owner.kind === "thread" ? owner.threadId : owner.kind === "device" ? owner.deviceId : owner.socket
+  const fields = [OWNED, owner.kind, where, `${remotePayload}/${remoteSignature}`, decodeURIComponent(rest[0]), expires]
+  const payload = Buffer.from(JSON.stringify(fields)).toString("base64url")
+  const signature = createHmac("sha256", secret).update(payload).digest("hex")
+  return `mako-file://asset/${payload}/${signature}/${rest.join("/")}${parsed.search}`
+}
+
 /** A signed payload: path, expiry, device, inode, size, modification time, and whether it grants the folder. */
 const SignedFields = z.tuple([z.string().min(1), z.number(), z.number(), z.number(), z.number(), z.number(), z.union([z.literal(0), z.literal(1)])])
+const OWNED = "owned"
+/** An owned file's payload: its owner, the owner's own payload and signature, the file's name, and the expiry. */
+const OwnedFields = z.tuple([z.literal(OWNED), z.enum(["thread", "device", "socket"]), z.string().min(1), z.string().min(1), z.string().min(1), z.number()])
 
-interface Signed {
-  path: string
-  expires: number
-  identity: FileIdentity
-  folder: boolean
-  rest: string[]
-}
+type Signed =
+  | { kind: "file"; path: string; expires: number; identity: FileIdentity; folder: boolean; rest: string[] }
+  | { kind: "owned"; owner: FileOwner; remote: string; name: string; expires: number; rest: string[] }
 
 function readSigned(url: string): Signed | null {
   let parsed: URL
@@ -91,10 +120,18 @@ function readSigned(url: string): Signed | null {
   const expected = createHmac("sha256", secret).update(payload).digest()
   if (!timingSafeEqual(expected, Buffer.from(signature, "hex"))) return null
   try {
-    const fields = SignedFields.safeParse(JSON.parse(Buffer.from(payload, "base64url").toString()))
+    const decoded: unknown = JSON.parse(Buffer.from(payload, "base64url").toString())
+    const parts = rest.map((part) => decodeURIComponent(part))
+    const owned = OwnedFields.safeParse(decoded)
+    if (owned.success) {
+      const [, kind, where, remote, name, expires] = owned.data
+      const owner: FileOwner = kind === "thread" ? { kind, threadId: where } : kind === "device" ? { kind, deviceId: where } : { kind, socket: where }
+      return { kind: "owned", owner, remote, name, expires, rest: parts }
+    }
+    const fields = SignedFields.safeParse(decoded)
     if (!fields.success) return null
     const [path, expires, dev, ino, size, mtimeMs, folder] = fields.data
-    return { path, expires, identity: { dev, ino, size, mtimeMs }, folder: folder === 1, rest: rest.map((part) => decodeURIComponent(part)) }
+    return { kind: "file", path, expires, identity: { dev, ino, size, mtimeMs }, folder: folder === 1, rest: parts }
   } catch {
     return null
   }
@@ -111,6 +148,19 @@ export async function verifyFilePreview(url: string, now = Date.now()): Promise<
   if (!signed) return { kind: "invalid" }
   if (now > signed.expires) return { kind: "refused", reason: "expired" }
   const parts = signed.rest.filter(Boolean)
+  if (signed.kind === "owned") {
+    if (parts.length > PAGE_ASSET_DEPTH + 1 || parts.some((part) => part === "." || part === ".." || /[\\/\0]/.test(part)))
+      return { kind: "refused", reason: "outside" }
+    const asked = parts.length ? parts : [signed.name]
+    const rendition = new URL(url).searchParams.get("rendition")
+    const query = rendition ? `?rendition=${encodeURIComponent(rendition)}` : ""
+    return {
+      kind: "owned",
+      owner: signed.owner,
+      url: `mako-file://asset/${signed.remote}/${asked.map((part) => encodeURIComponent(part)).join("/")}${query}`,
+      entry: asked.length === 1 && asked[0] === signed.name,
+    }
+  }
   const entry = parts.length === 0 || (parts.length === 1 && parts[0] === basename(signed.path))
   if (entry) {
     const info = await stat(signed.path).catch(() => null)

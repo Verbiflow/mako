@@ -3,6 +3,7 @@ import type { AgentHost } from "./agent-host.js"
 import { fileIdentity, verifyFilePreview } from "./file-previews.js"
 import { fileResponse, localFile } from "./file-response.js"
 import type { MediaRenditions } from "./media-renditions.js"
+import type { OwnedFiles } from "./owned-files.js"
 import { workspacePreviewPath } from "./preview-path.js"
 
 /**
@@ -15,12 +16,16 @@ import { workspacePreviewPath } from "./preview-path.js"
  *   person on it. Never hand it to the gateway: anything that can reach it can read any file the person can.
  */
 
-/** A signed file, or a smaller picture of it (`?rendition=poster|thumbnail`); anything else is not found. */
-export async function readSignedFile(request: Request, renditions: MediaRenditions): Promise<Response> {
+/**
+ * A signed file, or a smaller picture of it (`?rendition=poster|thumbnail`), or one another host signed that this one
+ * serves for it (`owned`); anything else is not found.
+ */
+export async function readSignedFile(request: Request, renditions: MediaRenditions, owned?: OwnedFiles): Promise<Response> {
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
   const grant = await verifyFilePreview(request.url)
   if (grant.kind === "refused") return new Response(`Refused: ${grant.reason}`, { status: 403 })
   if (grant.kind === "invalid") return new Response("Not found", { status: 404 })
+  if (grant.kind === "owned") return owned ? owned.serve(grant, request) : new Response("Not found", { status: 404 })
   // A thumbnail that can't be made is the file itself.
   const kind = new URL(request.url).searchParams.get("rendition")
   if (grant.entry && (kind === "poster" || kind === "thumbnail")) {
@@ -33,10 +38,10 @@ export async function readSignedFile(request: Request, renditions: MediaRenditio
 }
 
 /** What the desktop window reads: a signed file, or else a path its open workspace resolves. Never the gateway's. */
-export async function readWindowFile(request: Request, withHost: <T>(run: (host: Pick<AgentHost, "resolvePath">) => T | Promise<T>) => Promise<T>, renditions: MediaRenditions): Promise<Response> {
+export async function readWindowFile(request: Request, withHost: <T>(run: (host: Pick<AgentHost, "resolvePath">) => T | Promise<T>) => Promise<T>, renditions: MediaRenditions, owned?: OwnedFiles): Promise<Response> {
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
   const path = workspacePreviewPath(request.url)
-  if (!path) return readSignedFile(request, renditions)
+  if (!path) return readSignedFile(request, renditions, owned)
   try {
     return await withHost(async (host) => {
       const absolute = await host.resolvePath(path)

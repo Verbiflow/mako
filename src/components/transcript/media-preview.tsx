@@ -144,24 +144,30 @@ function MediaPlaceholder({ name }: { name: string }) {
 export function MediaUnavailable({
   name,
   reason,
+  path,
   onRetry,
   onOpen,
 }: {
   name: string
   reason: ReactNode
+  /** Where the file was looked for, said unless the reason already says it. */
+  path?: string
   onRetry?: () => void
   onOpen?: () => void
 }) {
   const message = z.string().safeParse(reason)
   useAssetPreview(undefined, "preview", message.success ? message.data : "This attachment is unavailable")
+  const where = path && !(message.success && message.data.includes(path)) ? path : undefined
   return (
     <span
       className="inline-flex max-w-full items-center gap-2 asset-surface py-1.5 pr-1.5 pl-2.5 text-ui [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
       data-media-unavailable
+      title={path}
     >
       <ImageOffIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
       <span className="min-w-0 truncate text-muted-foreground">{name}</span>
       <span className="min-w-0 truncate text-label text-faint">{reason}</span>
+      {where ? <span className="min-w-0 truncate text-label text-faint" dir="rtl"><bdi>{where}</bdi></span> : null}
       {onRetry ? (
         <button
           type="button"

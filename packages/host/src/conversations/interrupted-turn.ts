@@ -183,6 +183,8 @@ function cause(reason: Interruption["reason"]): string {
       return "the goal reached its token budget, so Mako stopped you"
     case "machine-lost":
       return "the cloud machine you were working on was lost, and Mako moved this conversation to a new one"
+    case "steered":
+      return "the user sent the message below while you worked, and Mako stopped your turn so you read it at once"
   }
 }
 
@@ -243,7 +245,9 @@ function interruptionAccount(request: LiveRequest, interruption: Interruption, n
     )
   if (interruption.moreCalls)
     lines.push(`${interruption.moreCalls} more ${interruption.moreCalls === 1 ? "call" : "calls"} from that turn ended the same way.`)
-  if (none.length && interruption.reason !== "host-quit")
+  if (none.length && interruption.reason === "steered")
+    lines.push("A call from that turn described as interrupted or cancelled by the user was stopped for this message, not because the user wanted it undone.")
+  else if (none.length && interruption.reason !== "host-quit")
     lines.push("If a call from that turn is described as interrupted or cancelled by the user, that is wrong: the user did not stop it.")
   return lines.join("\n")
 }

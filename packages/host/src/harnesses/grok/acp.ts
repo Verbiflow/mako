@@ -244,7 +244,9 @@ export function createGrokAcpSource(): ProviderAcpSource {
     callHooks: GROK_CALL_HOOKS,
     clientCapabilities: { _meta: GROK_FOLDER_TRUST_CAPABILITY },
     nativeRouting: { kind: "at-launch", via: "`GROK_SUBAGENTS=0` and `GROK_WORKFLOWS=0` in the agent's environment, which remove `spawn_subagent` and `workflow`. An Apex's `/goal` then runs on Grok's `update_goal` driver, whose `goal_updated` Mako reads as it reads the workflow driver's.", verified: { version: "1.0.70", how: "harness:native-tools records each mode as a lead without `spawn_subagent` or `workflow` (2026-11-02); test:native-routing-live: a lead offered neither, an ordinary Thread's child ran and was observed; test-grok-goal-live --apex: a goal set, completed and cleared on the update_goal driver" } },
-    steering: { kind: "supported", hears: "at its next step, once the command it's running returns", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
+    // Measured 2026-11-03 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model heard it
+    // 11.1 s later, once the command returned; a Stop ended the turn in 0.1 s. The person's steer restarts it.
+    steering: { kind: "supported", landing: "restart", hears: "at its next step, once the command it's running returns", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
     launchOptionIds: ["effort"],
     access: {
       unlisted: [{ id: "plan", name: "Plan", description: "Reads and writes only its plan file until you approve the plan." }],
