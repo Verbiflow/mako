@@ -27,6 +27,14 @@
 // `mako:cursor-sdk-log` event, where the Cursor child keeps that account.
 // A cached streaming tool's source failure reaches every active and later
 // replay reader in the SDK itself since 1.0.40 (`scripts/test-cursor-tool-stream.mjs`).
+// Separately, the SDK's retry loop resumes a run whose stream broke from the
+// last checkpoint the backend sent, with an empty resume action. The calls
+// the client ran after that checkpoint keep their effects, but the resumed
+// model can't see them: it redid an edit under other names and disowned a
+// commit it had made. The patched loop awaits the process's resume hook
+// before each retry, and when the hook gives words, sends them as a user
+// message on that checkpoint instead (on a resend of the turn's own message,
+// after its words), so the model goes on from what happened.
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -132,11 +140,27 @@ function transcripts({ writer, store, write, fs, child }) {
 /** `logger` is the backend every local run's context logs to. */
 const runLog = logger => [`${logger}={log(){}}`, `${logger}={log(e,t){process.emit("mako:cursor-sdk-log",t)}}`]
 
+/**
+ * `proto` is the agent protocol module the retry loop builds its actions
+ * from: `QFf` a conversation action, `Vtf` a user message action, `RGk` a user
+ * message, `xyI` its mode. The hook (`CURSOR_SDK_RESUME_HOOK` in the Cursor
+ * child) is asked with the attempt, the action the SDK would send and the
+ * run's request id (`Run.requestId`), and answers `{ text, plan }` or
+ * nothing; a hook that throws changes nothing.
+ */
+const resumeAccount = proto => [
+  "try{return await s.runAttempt({state:m,action:g,",
+  "try{return await s.runAttempt({state:m,action:w>0?await(async()=>{let t;try{t=await globalThis[Symbol.for(\"mako:cursor-sdk-resume\")]?.({attempt:w,action:g.action.case,requestId:a})}catch{}" +
+    `if("string"!=typeof t?.text||!t.text)return g;const u=e=>new ${proto}.QFf({action:{case:"userMessageAction",value:new ${proto}.Vtf(e)}});` +
+    `if("resumeAction"===g.action.case)return u({userMessage:new ${proto}.RGk({text:t.text,mode:t.plan?${proto}.xyI.PLAN:${proto}.xyI.AGENT})});` +
+    `if("userMessageAction"===g.action.case){const e=g.action.value;return u({...e,userMessage:new ${proto}.RGk({...e.userMessage,text:(e.userMessage?.text??"")+"\\n\\n"+t.text})})}return g})():g,`,
+]
+
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
   { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
-  { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), runLog("BF")], change: "incremental transcripts and the run log" },
-  { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), runLog("qF")], change: "incremental transcripts and the run log" },
+  { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), runLog("BF"), resumeAccount("jr")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), runLog("qF"), resumeAccount("Ur")], change: "incremental transcripts, the run log and the resume account" },
   { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
   { target: "dist/cjs/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
 ]
@@ -144,7 +168,7 @@ export const CURSOR_SDK_PATCHES = [
 function assertVersion(read) {
   const { version } = JSON.parse(read("package.json"))
   if (version !== VERSION)
-    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes, the store's lock wait and the run log, then port or delete this patch.`)
+    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes, the store's lock wait, the run log and the resume account, then port or delete this patch.`)
 }
 
 /** Checks every replacement, including the SDK bytes inside the built archive. */

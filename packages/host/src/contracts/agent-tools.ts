@@ -106,8 +106,8 @@ export interface AgentsLinkInput {
 export type AgentsLinkResult = { child: string; name: string; origin: ChildOrigin; deduped?: true } | AgentRefused
 
 export interface AgentsListInput {
-  /** `tree` adds every descendant, each under its parent. */
-  scope?: "children" | "tree"
+  /** `tree` adds every descendant, each under its parent; `crew`, from a Fin, is its Apex and the other Fins it started (`AgentsCrew`). */
+  scope?: "children" | "tree" | "crew"
 }
 export interface AgentStrip {
   child: string
@@ -128,7 +128,28 @@ export interface AgentStrip {
   report?: { status: ReportStatus; line: string; at: number }
   startedAt: number
 }
-export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentRefused
+/**
+ * A Fin's view of the work it's part of (`agents_list` with `scope: crew`):
+ * its Apex as it stands now, and the other Fins that Apex started, each as
+ * the front door's note names it. Typed facts the host holds, never a
+ * transcript, so it costs no read of one.
+ */
+export interface AgentsCrew {
+  /** The caller's own name among them. */
+  you: string
+  apex: {
+    title?: string
+    harness?: string
+    working: boolean
+    /** The last thing its transcript shows it doing, while it works. */
+    step?: string
+    /** What it was asked, its first sentence, when it is a Fin too. */
+    asked?: string
+  }
+  crew: CrewMate[]
+}
+export type CrewMate = Omit<FrontDoorChild, "direct">
+export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentRefused
 
 export interface AgentsReadInput {
   /** The Fin's name or Thread ID. */
@@ -441,8 +462,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_list",
-      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Reports wake you on their own, so read this when you need the whole picture, not to wait.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s; or tree, which adds every ${FIN_WORD} below them.` },
+      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing.`,
+      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported.` },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
