@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { basename, relative, resolve, sep } from "node:path"
 import { z } from "zod"
 import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "../contracts/git-actions.js"
-import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, type PersonOf, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
+import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, rerunFailedChecks, type PersonOf, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
 import { authorWords, MAKO_GITHUB_APP } from "../contracts/github-person.js"
 import { toolText } from "../base/tool-text.js"
 import type { Git } from "@mako/git"
@@ -43,6 +43,7 @@ export interface PullRequestTools {
   status(conversationId: string, options?: { logs?: boolean; repository?: string }): Promise<string>
   open(conversationId: string, draft: PullRequestDraft & { repository?: string }): Promise<string>
   merge(conversationId: string, options?: { method?: MergeMethod; repository?: string; as?: "app" }): Promise<string>
+  rerun(conversationId: string, options?: { repository?: string }): Promise<string>
 }
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`
@@ -133,6 +134,16 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
       deps.changed()
       return `${place.repositories.length > 1 ? `${one.name}: ` : ""}${pull.state === "merged" ? "Merged" : "Asked GitHub to merge"} #${pull.number} into ${pull.base} (${used}${author ? `, ${authorWords(author)}` : ""}). The branch is kept.`
     },
+    async rerun(conversationId, { repository } = {}) {
+      const place = await deps.place(conversationId)
+      const one = meant(place, repository) ?? await onlyOne(place, "pull")
+      const runs = await rerunFailedChecks(deps.git, one.root)
+      if (runs) deps.changed()
+      const named = place.repositories.length > 1 ? `${one.name}: ` : ""
+      return runs
+        ? `${named}Re-running the failed jobs of ${plural(runs, "GitHub Actions run")} on the pushed commit. pull_request_status shows them as they go.`
+        : `${named}No GitHub Actions run on the pushed commit has failed, so nothing was re-run.`
+    },
   }
 }
 
@@ -219,5 +230,14 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     ({ method, repository, as }) => reply(() => tools.merge(conversationId(), { method, repository, as }))
+  )
+  server.registerTool(
+    "pull_request_rerun",
+    {
+      description: `${full ? "Call when a check failed for a reason outside the branch's change, such as a flaky test or a runner that went away, or when the user asks" : "Call when the user asks"} to re-run this branch's failed checks: Re-run in the Git sidebar. Re-runs the failed jobs of each failed GitHub Actions run on the pushed commit; fix a failure the change caused instead. ${ONE_PER_REPOSITORY} in the project folder itself it re-runs the only open one's.`,
+      inputSchema: z.object({ repository: REPOSITORY }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    ({ repository }) => reply(() => tools.rerun(conversationId(), { repository }))
   )
 }

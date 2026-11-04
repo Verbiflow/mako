@@ -129,6 +129,7 @@ jobs:
       - run: npm run test:orch-deliver
       - run: npm run test:agents-doors
       - run: npm run test:agents-cli
+      - run: npm run test:thread-move-tool
       - run: npm run test:orch-update
       - run: npm run test:orch-crash
 

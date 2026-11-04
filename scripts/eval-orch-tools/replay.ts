@@ -4,7 +4,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import { NATIVE_CHILD_INSTRUCTIONS, routeNativeSpawn, type RoutedThread } from "@mako/host/contracts/native-routing"
 import { ClaudeAgentInput, claudeSpawn } from "@mako/host/harnesses/claude/routing"
 import { priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
-import { bareName, isShell, shellCommand } from "./names.ts"
+import { bareName, isShell, makoTool, shellCommand } from "./names.ts"
 import { startedAlready, stubAnswer, type StubMako } from "./stub-mako.ts"
 import { readTemplate } from "./templates.ts"
 
@@ -12,7 +12,7 @@ import { readTemplate } from "./templates.ts"
  * T3 Code's method for Claude and Codex: the harness's own captured prompt
  * and tools (`templates/`), Mako's `mako` server as it describes itself, the
  * case's Thread, and the model's decisions, step by step. Nothing runs:
- * `agents_*` get the stub's answers, a native spawn its routed deny (an Apex,
+ * `agents_*` and `thread_move` get the stub's answers, a native spawn its routed deny (an Apex,
  * routing on) or a finished subagent, the shell the case's mocks or nothing.
  * Routing on is the control (Claude's deny, Codex's Apex tools) and the
  * native-Fin words; off leaves Mako's instructions alone.
@@ -49,7 +49,7 @@ function answerer(harness: ReplayHarness, orchCase: OrchCase, routing: Routing) 
   const started: AgentsStarted[] = startedAlready((orchCase.setup.children ?? []).map((child) => child.name))
   const thread: RoutedThread = { role: role(orchCase) }
   return (tool: string, raw: string, args: ToolArgs): string => {
-    if (tool.startsWith("agents_")) return JSON.stringify(stubAnswer(tool, args, started))
+    if (makoTool(tool)) return JSON.stringify(stubAnswer(tool, args, started))
     if (tool === "native_spawn") {
       if (harness === "claude" && routing === "on") {
         const spawn = claudeSpawn(raw, ClaudeAgentInput.parse(args), false)

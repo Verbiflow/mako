@@ -5,22 +5,25 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
+import { registerThreadTools, ThreadMoveAnswerSchema } from "@mako/host/conversations/thread-move-tool"
+import { AFTER_MOVE, THREAD_MOVE_TOOL } from "@mako/host/contracts/thread-tools"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { ToolArgs, type Call } from "./cases.ts"
 
 /**
  * Mako's own `mako` server for the eval: the conversation server a Thread's
  * agent reaches, with every `agents_*` tool as `registerAgentTools` projects
- * it from `AGENT_TOOLS` (so the shapes can't drift), answered by a door that
- * records each call and starts nothing. A start answers as a running child
- * would; a list, the children started so far.
+ * it from `AGENT_TOOLS`, and `thread_move` as `registerThreadTools` projects
+ * it (so the shapes can't drift), answered by a door that records each call
+ * and starts nothing. A start answers as a running child would; a list, the
+ * children started so far; a move, as a handoff under way.
  */
 export interface StubMako {
   /** The grant one launch's agent gets (`ConversationTools`). */
   grant(conversation: string): { token: string; computerUrl: string; makoUrl?: string }
-  /** The `agents_*` calls so far, by bare tool name. */
+  /** The `agents_*` and `thread_move` calls so far, by bare tool name. */
   calls(conversation: string): Call[]
-  /** What an agent reads first: the server's instructions and its `agents_*` tools. */
+  /** What an agent reads first: the server's instructions, its `agents_*` tools and `thread_move`. */
   describe(): Promise<{ instructions: string; tools: { name: string; description: string; inputSchema: JsonValue }[] }>
   close(): Promise<void>
 }
@@ -43,6 +46,7 @@ export function startedAlready(names: readonly string[]): AgentsStarted[] {
 }
 
 export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[]): AgentAnswer {
+  if (tool === THREAD_MOVE_TOOL.mcp.name) return { outcome: "handing-off", move: randomUUID(), next: AFTER_MOVE.handingOff }
   const tree = { running: started.length, started: started.length, of: { running: 8, started: 32 } }
   if (tool === "agents_start") {
     const name = Named.parse(args).name ?? `child-${started.length + 1}`
@@ -94,6 +98,14 @@ export async function startStubMako(): Promise<StubMako> {
       },
       caller: () => ({ kind: "agent", session: conversationId() }),
       filled: () => ({}),
+    }), (server, conversationId) => registerThreadTools(server, {
+      invoke: async (_channel, [, input]) => {
+        const conversation = conversationId()
+        const args = ToolArgs.parse(JSON.parse(JSON.stringify(input ?? {})))
+        calls.set(conversation, [...calls.get(conversation) ?? [], { tool: THREAD_MOVE_TOOL.mcp.name, args }])
+        return ThreadMoveAnswerSchema.parse(stubAnswer(THREAD_MOVE_TOOL.mcp.name, args, []))
+      },
+      caller: () => ({ kind: "agent", session: conversationId() }),
     })],
   )
   const grants = new Map<string, ReturnType<typeof servers.mint>>()
@@ -113,7 +125,7 @@ export async function startStubMako(): Promise<StubMako> {
         const listed = await client.listTools()
         return {
           instructions: client.getInstructions() ?? "",
-          tools: listed.tools.filter((tool) => tool.name.startsWith("agents_")).map((tool) => ({ name: tool.name, description: tool.description ?? "", inputSchema: z.json().parse(tool.inputSchema) })),
+          tools: listed.tools.filter((tool) => tool.name.startsWith("agents_") || tool.name === THREAD_MOVE_TOOL.mcp.name).map((tool) => ({ name: tool.name, description: tool.description ?? "", inputSchema: z.json().parse(tool.inputSchema) })),
         }
       } finally {
         await client.close()
