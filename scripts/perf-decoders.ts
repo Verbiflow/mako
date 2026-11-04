@@ -55,7 +55,7 @@ import { projectLive, type LiveProjection } from "../src/state/live-projection"
 import { PAIRS_FOLDER, PairSchema, liveUpdates, storeReader } from "./decode-compare"
 import { decoders, FIXTURE_ROOT, readRecording, replayed, type Recording } from "./native-decoding"
 import { hotspots, keptPairStores, profiled, timing, type Timing, type Work } from "./performance-measure"
-import { committed, concluded, decoderRows, percent, printTable, ROUNDS, settle, type Suspect } from "./perf-reference"
+import { allowedRegression, committed, concluded, decoderRows, percent, printTable, ROUNDS, settle, type Suspect } from "./perf-reference"
 import type { Entry, RecordRef } from "@mako/sessions/entries"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { nativeStream } from "@mako/host/harnesses/native-stream"
@@ -64,7 +64,7 @@ import { MAX_STREAM_DIFFERENCES, mergeStream, recordSpan } from "@mako/sessions/
 import { usageWindow } from "@mako/host/contracts/automations-usage-updates"
 
 const BASELINE = join(import.meta.dirname, "perf-decoders-baseline.json")
-const ALLOWED_REGRESSION = 1.25
+const ALLOWED_REGRESSION = allowedRegression()
 
 const { values } = parseArgs({
   options: {

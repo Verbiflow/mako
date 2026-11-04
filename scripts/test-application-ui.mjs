@@ -278,18 +278,21 @@ async function review() {
   const sourceScenes = {
     behind: "21 new changes on origin/main",
     current: "You're already on 079f9b31",
-    changes: "so Mako won't move it",
-    uncommitted: "Includes 41 uncommitted changes",
+    changes: "that this build leaves out",
+    uncommitted: "Leaves out 41 uncommitted changes",
     branch: "The checkout is on approval-bar",
+    ahead: "main has 2 commits origin/main doesn't",
     offline: "Couldn't reach origin",
     installing: "Installing dependencies…",
     installRefused: "so Mako won't run npm install there for you",
     installFailed: "npm install didn't finish within 10 minutes",
-    building: "Building 079f9b31",
-    ready: "Moved main forward from",
+    building: "Building origin/main 079f9b31",
+    ready: "from origin/main in a clean copy; your checkout wasn't touched",
     busy: "other work kept 12.6 of 14 cores busy",
     remeasuring: "Measuring performance again",
-    slower: "this row is slower than the code its baseline measured",
+    slower: "a timing clearly slower than the code before it",
+    codeFailed: "It fails the same way for anyone on this commit",
+    machineFailed: "This is the Mac, not the code.",
     installed: "21 changes in this build",
   }
   for (const theme of ["light", "dark"]) {
@@ -324,8 +327,15 @@ async function review() {
   await until(`import('/src/dev/application-check.tsx').then(f => f.calls.waited + f.calls.stopped === ${installs + 1})`)
   const built = await fixture("return f.calls.build")
   await fixture("f.sourceScene('behind')")
-  await click("Update to main 079f9b31 (21 new changes)")
+  await click("Update to origin/main 079f9b31 (21 new changes)")
   await until(`import('/src/dev/application-check.tsx').then(f => f.calls.build === ${built + 1})`)
+  assert.equal(await fixture("return f.calls.builtFrom.at(-1)"), "upstream", "Build builds the upstream, clean")
+  // Behind with another session's files: the checkout as it is stands beside Build, and builds only when chosen.
+  await fixture("f.sourceScene('changes')")
+  await reveal("Build main 9a7a5c0c with 4 uncommitted changes")
+  await click("Build main 9a7a5c0c with 4 uncommitted changes")
+  await until(`import('/src/dev/application-check.tsx').then(f => f.calls.build === ${built + 2})`)
+  assert.equal(await fixture("return f.calls.builtFrom.at(-1)"), "checkout")
   await fixture("f.sourceScene('current')")
   assert.equal(
     await evaluate("[...document.querySelectorAll('[data-testid=updates-section] button')].some(b => /^(Build|Update)/.test(b.textContent.trim()))"),

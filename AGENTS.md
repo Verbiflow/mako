@@ -4248,11 +4248,16 @@ room for regressions to add up unnoticed on a quiet machine until a slower
 one goes over and compares the row with that old commit. Devin's saved open
 crossed at a person's update that way, +69% over its baseline's commit, from
 two changes neither over budget: a subagent analysis on every read, and the
-media `_meta` parses below. `npm run update:local` runs no `test:performance`; Settings >
-Updates does, in a copy without `.git` (`updates/checkout.noindex`, named so
-Spotlight skips its 50,000 dependency files), alone after `test:application`
-and `test:renderer-assets` so it doesn't time them, and names its source in
-`MAKO_BUILD_SOURCE` for the export. It names a file in
+media `_meta` parses below. `npm run update:local` runs no performance check;
+Settings › Updates runs `test:update-performance` (`test-update-performance.ts`):
+only `perf:decoders` and the budgets, never the harness's unit tests or the
+rest of `test:performance`, alone after `test:application` and
+`test:renderer-assets` so it doesn't time them, at a gross 1.5× line
+(`MAKO_PERFORMANCE_ALLOWED`, `allowedRegression`) rather than CI's 25%, and
+skipping a comparison none of whose inputs (its imports followed into the
+packages' sources, its fixtures and baselines, the lockfile) changed since the
+installed build (`MAKO_UPDATE_CHANGED`). It names its source in
+`MAKO_BUILD_SOURCE` for the export, and a file in
 `MAKO_PERFORMANCE_VERDICT` (`contracts/performance-verdict.ts`) that each
 comparing script appends its rows to: a slower row fails the update by name,
 and unsure rows leave it built, verified and `ready` with `performance` set,
@@ -4314,9 +4319,23 @@ do not relax dependency-link isolation to make copying pass.
 `npm run test:checkout-copy` exercises the real Electron filesystem with an ASAR
 fixture; pass the checkout path to verify real dependencies, or `-- --app <app>`
 to check signed-bundle staging. `npm run test:settings-build -- <checkout>` runs
-the complete Settings build service against a private profile without installing.
-They preserve npm security configuration, run build,
-lint and regression checks, and verify the existing signing identity. Public
+the complete Settings build service against a private profile without installing
+(`-- --from upstream|checkout` picks the source; it prints each step's time).
+They preserve npm security configuration, run the update's checks, and verify
+the existing signing identity. The checks are `UPDATE_CHECKS`
+(`application/local-update-checks.ts`): `build` alone, then `test:application`
+and `test:renderer-assets` together, then `test:update-performance` alone,
+only what protects the install; lint, typecheck and the whole performance
+suite gate every change in CI instead. They run through `runUpdateChecks`, in
+the environment `updateEnvironment` builds from the few variables
+`updaterInherited` lets through, and CI's `update-checks` job (macOS,
+`scripts/ci-update-checks.ts`) runs that same function in that same
+environment: an update once failed three times on a test that broke only
+under the updater's verdict variable, which nothing at review set. Add a
+variable the updater sets there, never in a check alone. A failed build says
+whose it is (`local-update-failures.ts`: the code, the Mac, or the checkout),
+what to do next, and the failing command's last lines apart; each step's time
+is logged (`build ready`, `build failed`) and carried on the ready build. Public
 release updates remain separate from local builds. `package-mac.mjs` stamps the
 actual packaged inputs with a build ID, timestamp and source revision, and
 the uncommitted files the build took (`makoBuild.uncommitted`, below).
@@ -4335,28 +4354,41 @@ Packaged tests must check full host shutdown as well as client Quit/reopen;
 `BrowserWindow.close()` is asynchronous, so final client exit belongs to the
 last window's `closed` event.
 
-A local build never takes the checkout on trust. Before anything is copied,
-`local-update-source.ts` fetches the remote's default branch (15 s, no
-credential prompts; offline is said and the last fetch is used) and reads the
-checkout against it. Only a checkout on the branch that tracks it, behind it,
-with no changes to tracked files, is fast-forwarded (`fastForward` in
-`@mako/git`: `merge --ff-only --no-autostash` under the repository's write
-queue, refused if HEAD moved since the reading); anything else (changes,
-diverged, another branch, detached, no remote) is built as it is and the
-reading says why. Nothing is stashed, no branch is switched, and untracked
-files stay (Git refuses rather than overwrite one). A build that would carry
-the installed, clean revision doesn't run: Settings says "You're already on
-<rev>". The installed revision is the bundle's `makoBuild`; the available one
-is the reading's upstream. Settings › Updates and `npm run update:local` say
-it in the same words (`contracts/update-source-text.ts`), and what a build
-brought (`build-changes.json`, keyed by build id) shows under the revision
-once that build runs. A checkout 21 commits behind once built and installed
-the revision already running, and the update read as done. `npm run
-test:update-source` covers it against scratch repositories and a local bare
-remote, and draws every state.
+A local build never takes the checkout on trust, and Settings never changes
+it. Before anything is copied, `local-update-source.ts` fetches the remote's
+default branch (15 s, no credential prompts; offline is said and the last
+fetch is used) and reads the checkout against it. The reading's plan offers
+two builds and recommends one (`UpdateSourcePlan`): the upstream's newest
+commit, checked out clean in Mako's own clone (`upstream-copy.ts`,
+`updates/upstream.noindex`: `clone --shared`, so no history is copied, and
+`checkout --force` plus `clean -ffd` per build, so nothing untracked goes in
+while `node_modules` and the compile output carry over; the recording
+encoder is carried from the checkout, packaging checks its recipe), or the
+checkout as it is. The upstream is recommended whenever the checkout is
+behind, or has uncommitted files and no commits of its own; the checkout
+when it has its own commits on top. Settings shows the recommended one as
+Build and the other beside it. Nothing is stashed, no branch is switched or
+moved. `update:local` builds in place, so it alone fast-forwards
+(`forwardable`, `bringForward`: `fastForward` in `@mako/git`,
+`merge --ff-only --no-autostash`, refused if HEAD moved since the reading),
+after asking. A build that would carry the installed, clean revision doesn't
+run: Settings says "You're already on <rev>". The installed revision is the
+bundle's `makoBuild`; the available one is the reading's upstream. Settings ›
+Updates and `npm run update:local` read it with the same words
+(`contracts/update-source-text.ts`), and what a build brought
+(`build-changes.json`, keyed by build id) shows under the revision once that
+build runs. A checkout 21 commits behind once built and installed the
+revision already running; one 35 behind, with another session's 8
+uncommitted files, built that old code three times and failed on a test main
+had fixed. `npm run test:update-source` covers it against scratch
+repositories and a local bare remote, draws every state, and
+`test-update-behind-dirty.ts` runs Settings' builder end to end on a checkout
+behind and dirty, the checkout byte-for-byte untouched.
 
 Built as it is, the checkout goes in with every uncommitted file in it, other
-agents' work in progress included, and nobody should be surprised by that.
+agents' work in progress included, and nobody should be surprised by that:
+each file names who changed it, from the change journal (`writers`,
+`rewindWriters`: Thread titles, "you").
 `readUncommitted` (`local-update-source.ts`, `git status -z` with renames)
 names each tracked change and untracked, non-ignored file (edited, added,
 deleted, renamed from, untracked, conflicted; the first 200 by name, the rest
@@ -4373,13 +4405,15 @@ the build it made and the app installed. A build from an older updater has
 `dirty` only and says just "with uncommitted changes". Nothing answers the
 install question for the person: `update:local` takes no `--yes`.
 
-Then the checkout's node_modules must hold what its package-lock.json lists
+Then the build's node_modules must hold what its package-lock.json lists
 (`local-update-dependencies.ts`: each lockfile entry against npm's
 `node_modules/.package-lock.json`, by version; optional and peer entries
-aside). When it doesn't, as after a fast-forward or a pull that changed the
-lockfile, Settings (phase `installing`, "Installing dependencies…") and
-`update:local` run `npm install --no-audit --no-fund --no-save` in the
-checkout with the npm and Node the build uses, before anything is copied:
+aside). When it doesn't, as when the upstream's lockfile moved or a pull
+changed the checkout's, Settings (phase `installing`, "Installing
+dependencies…") runs `npm install --no-audit --no-fund --no-save` in its own
+copy, never the checkout (a fresh clean copy starts from the checkout's
+node_modules, cloned), and `update:local` runs it in the checkout it builds
+in place, with the npm and Node the build uses:
 never `npm ci` (it deletes node_modules under whatever else reads it), and
 `--no-save` so package.json and package-lock.json stay as Git has them. It's
 refused while any package.json or package-lock.json has uncommitted
