@@ -151,7 +151,7 @@ function FilesPicture() {
       <span className="flex flex-col gap-1 p-1.5">
         {rows.map((row, index) => (
           <span key={index} className="flex h-2 items-center gap-1" style={{ paddingInlineStart: row.depth * 8 }}>
-            <span className={cn("size-1.5 rounded-[2px] ring-1 ring-inset", index === 1 ? "bg-foreground/60 ring-foreground/60" : "ring-foreground/30")} />
+            <span className={cn("size-1.5 ring-1 ring-inset", index === 1 ? "bg-foreground/60 ring-foreground/60" : "ring-foreground/30")} />
             <span className={cn("h-1 rounded-full", row.dir ? "w-8 bg-foreground/20" : "w-12 bg-foreground/30")} />
           </span>
         ))}

@@ -4,9 +4,9 @@ import { FinPips } from "@/components/rail/fin-pips"
 import { apexPips, pipsCounts } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
-import { childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
+import { childLine, childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
 import { ApexMark } from "@/components/ui/apex-mark"
-import { finMarkState } from "@/lib/live-mark-state"
+import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
@@ -445,12 +445,12 @@ function TopChips({ count, open, onInbox }: { count: number; open: boolean; onIn
         aria-current={open ? "page" : undefined}
         aria-label={count ? `Inbox, ${count} ${count === 1 ? "needs" : "need"} you` : "Inbox"}
         onClick={onInbox}
-        className={cn("pressable flex h-9 shrink-0 items-center gap-2 rounded-full pr-2 pl-3 text-ui font-medium text-foreground", open ? "bg-fill-selected" : "bg-raised")}
+        className={cn("pressable flex h-9 shrink-0 items-center gap-2 pr-2 pl-3 text-ui font-medium text-foreground", open ? "bg-fill-selected" : "bg-raised")}
       >
         <InboxIcon aria-hidden className="size-4 text-muted-foreground" />
         Inbox
         {count ? (
-          <span data-inbox-count={count} className="tabular flex h-5 min-w-5 items-center justify-center rounded-full bg-caution/15 px-1.5 text-label font-medium text-caution">
+          <span data-inbox-count={count} className="tabular flex h-5 min-w-5 items-center justify-center bg-caution/15 px-1.5 text-label font-medium text-caution">
             {count}
           </span>
         ) : (
@@ -473,7 +473,7 @@ export function FinAskRow({ fin, onOpen }: { fin: WebFinAsk; onOpen?: () => void
       className="web-row group relative flex w-full items-center text-left"
     >
       <span className="web-row-mark">
-        <LiveMark state={finMarkState(state)} label={childWord(state)}>
+        <LiveMark kind="fin" state={finMarkState(state)} motion={motionOf(childLine(state))} label={childWord(state)}>
           <WebHarnessIcon harness={fin.ask.harness} />
         </LiveMark>
       </span>

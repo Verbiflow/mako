@@ -97,7 +97,7 @@
   }
 
   .web-icon-button {
-    @apply relative flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground;
+    @apply relative flex size-11 shrink-0 items-center justify-center text-muted-foreground;
   }
   .web-icon-button:disabled {
     @apply opacity-40;
@@ -287,7 +287,7 @@
    * a sheet is.
    */
   .web-fab {
-    @apply relative flex size-[50px] shrink-0 items-center justify-center rounded-full bg-popover text-foreground;
+    @apply relative flex size-[50px] shrink-0 items-center justify-center bg-popover text-foreground;
     box-shadow:
       var(--elevation-floating),
       inset 0 1px 0 0 var(--glass-rim);
@@ -330,7 +330,7 @@
     animation: web-rise 240ms var(--ease-out) both;
   }
   .web-step {
-    @apply flex size-6 shrink-0 items-center justify-center rounded-full bg-fill-selected text-label font-semibold text-foreground;
+    @apply flex size-6 shrink-0 items-center justify-center bg-fill-selected text-label font-semibold text-foreground;
   }
 
   .web-field {
@@ -392,7 +392,7 @@
     @apply absolute inset-x-0 flex flex-col bg-popover text-popover-foreground;
     bottom: 0;
     max-height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 12px);
-    border-radius: 20px 20px 0 0;
+    border-radius: 0;
     box-shadow:
       0 -0.5px 0 var(--glass-rim),
       0 -16px 48px -16px rgb(0 0 0 / 0.45);
@@ -409,7 +409,7 @@
   .web-sheet[data-form="pop"],
   .web-sheet[data-form="dialog"] {
     background: var(--popover);
-    border-radius: 12px;
+    border-radius: 0;
     box-shadow: var(--elevation-overlay);
     padding: 6px 0;
   }
@@ -542,7 +542,7 @@
     @apply mx-auto flex w-full max-w-content px-2 pt-1.5 pb-2;
   }
   .web-composer-field {
-    @apply grid min-w-0 flex-1 items-end rounded-[22px] bg-raised p-1;
+    @apply grid min-w-0 flex-1 items-end bg-raised p-1;
     grid-template-columns: auto minmax(0, 1fr) auto;
     box-shadow: inset 0 0 0 1px var(--hairline);
     transition: box-shadow 160ms ease;
@@ -558,7 +558,7 @@
     grid-column: 2;
   }
   .web-composer-field[data-tools] {
-    @apply flex flex-col items-stretch rounded-[20px] p-1.5;
+    @apply flex flex-col items-stretch p-1.5;
   }
   .web-composer-add {
     @apply size-9 text-muted-foreground;
@@ -593,7 +593,7 @@
     @apply flex min-w-0 flex-1 items-center gap-0.5;
   }
   .web-send {
-    @apply relative flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
+    @apply relative flex size-9 shrink-0 items-center justify-center bg-foreground text-surface;
   }
   /* 36px drawn, 44px under a finger. */
   .web-send::after,
@@ -677,7 +677,7 @@
     animation: web-pop 200ms var(--ease-out) both;
   }
   .web-attachment-remove {
-    @apply absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-black/65 text-white;
+    @apply absolute top-1 right-1 flex size-5 items-center justify-center bg-black/65 text-white;
   }
 
   .web-switch {
@@ -803,7 +803,7 @@
   align-items: center;
   height: 34px;
   max-width: calc(100% - 64px);
-  border-radius: 999px;
+  border-radius: 0;
   visibility: hidden;
   opacity: 0;
   transform: translate3d(0, 6px, 0) scale(0.96);
@@ -849,7 +849,7 @@
   animation: web-breathe 1.6s ease-in-out infinite;
 }
 .web-jump {
-  @apply flex size-[34px] shrink-0 items-center justify-center rounded-full text-foreground;
+  @apply flex size-[34px] shrink-0 items-center justify-center text-foreground;
   visibility: hidden;
   opacity: 0;
   transform: translate3d(-14px, 0, 0) scale(0.9);
@@ -881,7 +881,7 @@
   max-width: calc(var(--container-content) - 16px);
   max-height: calc(var(--app-height, 100dvh) * 0.6);
   overflow: hidden;
-  border-radius: 18px;
+  border-radius: 0;
   background: var(--raised);
   box-shadow:
     0 0 0 1px var(--hairline),
@@ -1068,7 +1068,7 @@
   width: min(300px, calc(100vw - 24px));
   flex-direction: column;
   padding: 6px;
-  border-radius: 16px;
+  border-radius: 0;
   transform-origin: 100% 100%;
   animation: web-choices-in 180ms var(--ease-out) both;
 }
@@ -1123,7 +1123,7 @@
   animation: web-rise 180ms var(--ease-out) both;
 }
 .web-recording-stop {
-  @apply relative flex size-9 shrink-0 items-center justify-center rounded-full text-negative;
+  @apply relative flex size-9 shrink-0 items-center justify-center text-negative;
   background: color-mix(in oklab, var(--negative) 16%, transparent);
   transition: transform 160ms var(--ease-out);
 }

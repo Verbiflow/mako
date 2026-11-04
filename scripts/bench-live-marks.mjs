@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url"
  *
  * - `scripts/live-marks.html?bench=500`: 500 rows in a 600 px scroller, eight in ten of them moving.
  * - the desk on the mock bridge with 500 more Apexes (`?mock&app=apex&apexes=500`), its rail as the app draws it,
- *   then the same desk with its marks stopped, so what else on it moves is not counted against them.
+ *   watched in one load with its marks stopped and then moving, so what else on it moves is not counted against them.
  *
  * Over the window it reads the renderer's own counters (`Performance.getMetrics`: style recalculations, layouts,
  * script and task time) and React's commits, counted by a stand-in for the devtools hook. The marks move on the
@@ -101,15 +101,21 @@ async function bench() {
   await send("Page.enable")
   await send("Page.addScriptToEvaluateOnNewDocument", { source: COMMIT_COUNTER })
   await send("Performance.enable", { timeDomain: "threadTicks" })
-  for (const [name, path, still] of [
-    ["500 moving marks", "/scripts/live-marks.html?bench=500"],
-    ["desk, 500 more Apexes", "/?mock&app=apex&apexes=500"],
-    ["same desk, marks still", "/?mock&app=apex&apexes=500", true],
+  // The desk is watched twice in one load, its marks stopped and then moving, so only the marks differ between them.
+  for (const [name, path, mode] of [
+    ["500 moving marks", "/scripts/live-marks.html?bench=500", "load"],
+    ["desk, 500 more Apexes, marks still", "/?mock&app=apex&apexes=500", "still"],
+    ["the same desk, marks moving", "/?mock&app=apex&apexes=500", "resume"],
   ]) {
-    await window.loadURL(`${base}${path}`)
-    // Settled: the page has mounted, its first data has landed, and the visibility gate has seen every mark.
-    await new Promise((done) => setTimeout(done, 4_000))
-    if (still) await page.executeJavaScript(`for (const animation of document.getAnimations()) if (animation.effect?.target?.closest?.(".live-mark")) animation.pause(); 0`)
+    if (mode !== "resume") {
+      await window.loadURL(`${base}${path}`)
+      // Settled: the page has mounted, its first data has landed (the desk's five hundred Apexes take longer), and the
+      // visibility gate has seen every mark.
+      await new Promise((done) => setTimeout(done, mode === "load" ? 4_000 : 8_000))
+    }
+    // Stopped by a rule, not by pausing each animation, so taking the rule away hands every mark back to the gate.
+    if (mode === "still") await page.executeJavaScript(`(() => { const rule = document.createElement("style"); rule.id = "bench-still"; rule.textContent = ".live-mark * { animation-play-state: paused !important; }"; document.head.append(rule); return 0 })()`)
+    if (mode === "resume") await page.executeJavaScript(`(() => { document.getElementById("bench-still")?.remove(); return 0 })()`)
     const metrics = async () => Object.fromEntries((await send("Performance.getMetrics")).metrics.map((metric) => [metric.name, metric.value]))
     const before = await metrics()
     const commitsBefore = await page.executeJavaScript("window.__benchCommits")
@@ -139,7 +145,7 @@ async function bench() {
     results.push(result)
   }
   console.table(results)
-  const [stress, desk, deskStill] = results
+  const [stress, deskStill, desk] = results
   assert.equal(stress.reactCommits, 0, "500 moving marks render nothing in React while they move")
   // Chrome updates style once per loop of a CSS animation, whatever the count; per frame would be 300 to 600 here.
   assert.ok(stress.styleRecalcs <= WATCH_MS / 50, `moving marks cause no style pass per frame (${stress.styleRecalcs} in ${WATCH_MS} ms)`)

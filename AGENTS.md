@@ -2084,8 +2084,12 @@ deliberate action and never rides along with a commit.
   a pane's sections by tone and spacing, never a hairline. The composer's
   input is one raised box inset from its pane. Hairlines stay for content
   (a diff's file headers, a table) and controls (an input's or a button's
-  outline). Structural panes keep square edges; rounded `.card` surfaces are
-  reserved for content within a pane.
+  outline). **Every corner is square**, as the fin is: the radius tokens
+  (`--radius-*`) are all 0, so panes, rows, tabs, cards, fields, buttons,
+  menus, dialogs, toasts, the composer, the prompt bubble and avatars meet
+  at square corners. Only what means a dot (status dots, the unread sphere,
+  a switch's knob, a sheet's grab handle) is round, through `rounded-full`;
+  a device frame drawn to its hardware keeps the hardware's corners.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
   composer's chip, the crew card, the rail's pips, the Agents panel, the stop
   card, the phone's row) counts from the Thread's one roster
@@ -2119,25 +2123,29 @@ deliberate action and never rides along with a commit.
   text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
   sea, hue appears only where it carries meaning: diff add/remove, error,
   warning.
-- **Every Thread and Fin wears one live mark** (`LiveMark`,
-  `src/components/ui/live-mark.tsx`; states in `src/lib/live-mark-state.ts`):
-  its agent's glyph, and round it a ring that carries the state. A comet
-  runs round it while it works (in sea on the open Thread, in the text
-  colour elsewhere), the same comet slower and quieter while its turn is done
-  and background work runs, a caution ring breathes while it needs the
-  person, a dotted ring drifts while a Fin asks its Apex, a dashed ring holds
-  while it's queued, and a dot is cut out of it for a failure (negative, low
-  right) or an answer to read (the unread sphere, high right). The rail, the
-  tabs, the Agents panel, the crew card and the phone draw this one mark,
-  and a row's one trailing slot says "Needs you", "Failed" or its age. Its
-  motion is `transform` and `opacity` on HTML boxes only (an SVG element's
-  own transform runs on the main thread: a drifting dotted ring once cost
-  588 ms in 3 s for 22 marks), every moving layer runs on the shared clock
-  and rests off screen (`observePhaseLockedAnimation`), and no React state
-  moves it. `npm run bench:live-marks` holds 500 moving marks and the desk
-  at 500 more Apexes to no React commit, no layout and no style pass per
-  frame, the marks scrolled away paused, and every running mark in phase;
-  `scripts/live-marks.html` draws every state.
+- **Every Thread and Fin wears Mako's fin, doing what it does** (`LiveMark`,
+  `src/components/ui/live-mark.tsx`; states, kinds and motions in
+  `src/lib/live-mark-state.ts`). A Thread is the two-tone fin of the app icon,
+  a Fin the plain fin, and the harness a small square badge in the corner:
+  the harness is secondary, the brand's fin is who. The fin itself moves, one
+  calm gesture a state, as Grok Bot's character does rather than a spinner
+  beside an icon: thinking it bobs, writing it glides with a short wake,
+  running a tool it braces in two steps (`motionOf` reads which from the
+  status line or step), its turn done with work still running it bobs at
+  half speed, needing you it turns caution over a breathing waterline,
+  asking its Apex it drifts, failed it lists over in negative; queued, idle
+  and open elsewhere are still and dimmed, and an answer to read wears the
+  unread sphere. The open Thread's face takes the sea, the pane's one accent.
+  The rail, the tabs, the Agents panel, the crew card, the Inbox, the folder
+  chip, the asks and the phone draw this one mark, and avatars draw it still.
+  Its motion is `transform` and `opacity` on HTML boxes only (an SVG
+  element's own transform runs on the main thread), every moving layer runs
+  on the shared clock and rests off screen (`observePhaseLockedAnimation`,
+  whose play-state rule must stay as specific as the state rules' shorthand
+  or they reset it), and no React state moves it. `npm run bench:live-marks`
+  holds 500 moving marks, and the desk at 500 more Apexes watched in one load
+  with its marks stopped and then moving, to no React commit, no layout and
+  no style pass per frame; `scripts/live-marks.html` draws every state.
 - **Three UI type sizes only** — `text-label` (12), `text-ui` (14),
   `text-title` (16) — plus prose (16) and code (12). Weights come off
   Geist's variable axis as 440/530/640 through the standard `font-normal`/

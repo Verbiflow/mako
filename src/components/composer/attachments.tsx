@@ -240,7 +240,7 @@ function Miniature({
     )
   }
   if (origin === "git-conflicts") {
-    const band = "h-1.5 shrink-0 rounded-[2px]"
+    const band = "h-1.5 shrink-0"
     const ours = "bg-[color-mix(in_oklab,var(--added)_60%,transparent)]"
     const theirs =
       "bg-[color-mix(in_oklab,var(--terminal-blue)_60%,transparent)]"

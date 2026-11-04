@@ -194,31 +194,22 @@
   --color-removed: var(--removed);
 
   /*
-   * Corners follow role. Structure is square: panes, the rail, the stage,
-   * the composer dock, tab strips, tables, anything meeting a pane edge.
-   * Everything placed on it is rounded, and the radius shrinks with depth:
-   * floating surfaces (dialogs, menus, popovers, toasts, notice cards) xl;
-   * file chips, draft tiles and file cards use the separate sharp asset
-   * token; media in the conversation (pictures, videos, pages) is content
-   * like code and takes the soft media token;
-   * other cards in a pane or the transcript (code, tool output, the
-   * commit editor, settings cards) lg; controls, fields and one-line strips
-   * md; marks (keycaps, inline code, badges) sm; pills and dots full. The
-   * prompt bubble keeps its xl with a tighter tail corner.
-   *
-   * Git is structure too. Everything inside a `[data-corners="square"]`
-   * region (the Changes panel, the confirm dialog) meets at square corners:
-   * cards, fields, buttons, rows, toolbars. Only dots and pills stay round.
-   * Menus portaled out of a region keep the floating radius.
+   * Mako is sharp: every corner is square, as the fin is. Panes, rows, tabs,
+   * cards, fields, buttons, menus, dialogs, the composer, the prompt bubble,
+   * avatars and marks meet at square corners; only what means a dot (status
+   * dots, the unread sphere, a switch's knob) is round, through
+   * `rounded-full`. The tokens stay so a surface can be named by role, and
+   * every one of them is 0. (Until November 2026 corners grew with depth, 4
+   * to 18 px; the person asked for the sharp look in most places.)
    */
   --radius-asset: 0px;
-  --radius-media: var(--radius-lg);
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
-  --radius-2xl: 14px;
-  --radius-3xl: 18px;
+  --radius-media: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
 
   /*
    * Two content measures for the whole desk: reading surfaces (transcript,
@@ -708,7 +699,7 @@ diffs-container {
     width: 16px;
     height: 16px;
     place-items: center;
-    border-radius: 4px;
+    border-radius: 0;
     background: var(--raised);
     color: var(--foreground);
     box-shadow: inset 0 0 0 0.5px var(--hairline);
@@ -727,19 +718,19 @@ diffs-container {
    */
   .card {
     background: var(--surface);
-    border-radius: 10px;
+    border-radius: 0;
     box-shadow: var(--elevation-card);
   }
 
   .card-floating {
     background: var(--popover);
-    border-radius: 10px;
+    border-radius: 0;
     box-shadow: var(--elevation-floating);
   }
 
   .overlay-panel {
     background: var(--popover);
-    border-radius: 10px;
+    border-radius: 0;
     box-shadow: var(--elevation-overlay);
   }
 
@@ -1207,22 +1198,23 @@ diffs-container {
   animation: session-tab-arrive var(--duration-menu) var(--ease-out) both;
 }
 /*
- * The live mark (`LiveMark`): the agent's glyph at 60% of the box, and round
- * it a ring that carries the state. Every moving part turns or fades a layer
- * of its own (`transform`, `opacity`), so the compositor runs it and a frame
- * costs the main thread nothing. The comet is a conic gradient masked to the
- * ring, its tail fading in to a bright head; the dotted and dashed rings are
- * one static SVG circle each. Each moving layer starts on the shared clock
- * and rests off screen through the gate (`observePhaseLockedAnimation`);
- * paused there, under reduced motion, it stands as a still arc.
+ * The live mark (`LiveMark`): Mako's fin, the two-tone fin of the app icon for
+ * a Thread and the plain fin for a Fin, with its harness as a square badge in
+ * the corner. The fin itself carries the state, one calm gesture a state: it
+ * bobs while thinking, glides with a wake while writing, braces in two steps
+ * on a tool, turns caution over a breathing waterline when it needs you,
+ * drifts while asking its Apex and lists over when it failed. Square, like
+ * every mark of Mako's. Every moving part is a box of its own that moves on
+ * `transform` or `opacity`, so the compositor runs it and a frame costs the
+ * main thread nothing; each runs on the shared clock and rests off screen
+ * through the gate (`observePhaseLockedAnimation`). Under reduced motion it
+ * stands still in its state's pose.
  */
 /* A container sizes the marks in it with `--live-mark-size`, inherited, so it can from any cascade layer. */
 .live-mark {
   --lm-size: var(--live-mark-size, 20px);
-  --lm-stroke: calc(var(--lm-size) * 0.075);
-  --lm-ink: color-mix(in oklab, var(--foreground) 82%, transparent);
-  --lm-track: transparent;
-  --lm-period: 1.15s;
+  --lm-ink: color-mix(in oklab, var(--foreground) 88%, transparent);
+  --lm-face: color-mix(in oklab, var(--foreground) 42%, transparent);
   position: relative;
   display: inline-flex;
   width: var(--lm-size);
@@ -1231,127 +1223,190 @@ diffs-container {
   align-items: center;
   justify-content: center;
 }
-.live-mark-glyph {
+.live-mark-body {
+  position: relative;
   display: flex;
-  width: calc(var(--lm-size) * 0.6);
-  height: calc(var(--lm-size) * 0.6);
-  transition: opacity 200ms var(--ease-out), filter 200ms var(--ease-out);
+  width: 80%;
+  height: 80%;
+  color: var(--lm-ink);
+  transform-origin: 22% 92%;
+  transition: opacity 200ms var(--ease-out), color 200ms var(--ease-out);
 }
-.live-mark-glyph > svg,
-.live-mark-glyph > span {
-  width: 100%;
-  height: 100%;
+.live-mark[data-kind="fin"] .live-mark-body {
+  width: 66%;
+  height: 66%;
 }
-.live-mark-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  pointer-events: none;
-  box-shadow: inset 0 0 0 var(--lm-stroke) var(--lm-track);
-}
-.live-mark-dots {
+.live-mark-body > svg {
   width: 100%;
   height: 100%;
   overflow: visible;
-  fill: none;
-  stroke-linecap: round;
 }
-.live-mark-comet {
+.live-mark-face {
+  fill: var(--lm-face);
+}
+.live-mark[data-lit] {
+  --lm-ink: var(--foreground);
+  --lm-face: var(--sea);
+}
+/* The harness, secondary: a square badge cut out of the corner. */
+.live-mark-badge {
   position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: conic-gradient(transparent 0turn 0.5turn, color-mix(in oklab, var(--lm-ink) 18%, transparent) 0.62turn, var(--lm-ink) 0.995turn, transparent 1turn);
-  mask: radial-gradient(farthest-side, transparent calc(100% - var(--lm-stroke) - 0.5px), #000 calc(100% - var(--lm-stroke)));
-  animation: live-mark-turn var(--lm-period) linear infinite;
+  right: -2px;
+  bottom: -2px;
+  display: flex;
+  width: 46%;
+  height: 46%;
+  align-items: center;
+  justify-content: center;
+  background: var(--raised);
+  box-shadow: 0 0 0 1.5px var(--lm-cut, var(--shell));
 }
-
-.live-mark[data-live-mark="working"] {
-  --lm-track: color-mix(in oklab, var(--foreground) 11%, transparent);
+.live-mark-badge > svg,
+.live-mark-badge > span {
+  width: 80%;
+  height: 80%;
 }
-/* The open Thread's comet: the pane's one accent moment. */
-.live-mark[data-live-mark="working"][data-lit] {
-  --lm-ink: var(--sea);
-  --lm-track: color-mix(in oklab, var(--sea) 18%, transparent);
+/* The line the fin rides: a Thread at work, or anyone waiting on the person. */
+.live-mark-water,
+.live-mark-wake {
+  position: absolute;
+  bottom: 4%;
+  height: max(1px, calc(var(--lm-size) * 0.07));
+  pointer-events: none;
 }
-/* The turn ended and its Fins or a watcher still run: the same comet, quieter and at half speed. */
-.live-mark[data-live-mark="background"] {
-  --lm-ink: color-mix(in oklab, var(--foreground) 48%, transparent);
-  --lm-track: color-mix(in oklab, var(--foreground) 9%, transparent);
-  --lm-period: 2.3s;
+.live-mark-water {
+  left: 6%;
+  right: 6%;
+  background: color-mix(in oklab, var(--foreground) 20%, transparent);
 }
-.live-mark[data-live-mark="starting"] {
-  --lm-ink: color-mix(in oklab, var(--foreground) 45%, transparent);
-  --lm-track: color-mix(in oklab, var(--foreground) 9%, transparent);
-  --lm-period: 1.6s;
+.live-mark-wake {
+  left: -12%;
+  width: 62%;
+  overflow: hidden;
+  background: repeating-linear-gradient(to right, color-mix(in oklab, var(--foreground) 55%, transparent) 0 18%, transparent 18% 34%);
 }
-.live-mark[data-live-mark="starting"] .live-mark-glyph {
-  opacity: 0.6;
+.live-mark[data-lit] .live-mark-wake {
+  background: repeating-linear-gradient(to right, var(--sea) 0 18%, transparent 18% 34%);
 }
-/* Needs you: the whole ring in caution, breathing slowly enough to read as waiting, never below 40%. */
+.live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body {
+  animation: live-mark-bob 2.4s ease-in-out infinite;
+}
+.live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body {
+  animation: live-mark-glide 1.4s ease-in-out infinite;
+}
+.live-mark-wake {
+  animation: live-mark-wake 0.7s linear infinite;
+}
+.live-mark[data-live-mark="working"][data-motion="tool"] .live-mark-body {
+  animation: live-mark-brace 0.9s steps(2, jump-none) infinite;
+}
+/* Its turn done, work it waits on still running: the thinking bob at half speed, quieter. */
+.live-mark[data-live-mark="background"] .live-mark-body {
+  opacity: 0.7;
+  animation: live-mark-bob 4.8s ease-in-out infinite;
+}
+.live-mark[data-live-mark="starting"] .live-mark-body {
+  animation: live-mark-breathe 1.6s ease-in-out infinite;
+}
 .live-mark[data-live-mark="needs"] {
-  --lm-track: var(--caution);
+  --lm-ink: var(--caution);
+  --lm-face: color-mix(in oklab, var(--caution) 55%, transparent);
 }
-.live-mark[data-live-mark="needs"] > .live-mark-ring {
+.live-mark[data-live-mark="needs"] .live-mark-water {
+  background: var(--caution);
   animation: live-mark-breathe 2.4s ease-in-out infinite;
 }
-/* A Fin asking its Apex: a dotted ring that drifts. The Apex will answer, not the person. */
-.live-mark[data-live-mark="lead"] .live-mark-dots {
-  stroke: color-mix(in oklab, var(--foreground) 55%, transparent);
-  stroke-width: 1.6;
-  stroke-dasharray: 0.01 3.63;
+.live-mark[data-live-mark="lead"] .live-mark-body {
+  opacity: 0.7;
+  animation: live-mark-drift 3.2s ease-in-out infinite;
 }
-.live-mark[data-live-mark="lead"] > .live-mark-ring {
-  animation: live-mark-turn 7s linear infinite;
+.live-mark[data-live-mark="queued"] .live-mark-body {
+  opacity: 0.35;
 }
-.live-mark[data-live-mark="queued"] .live-mark-dots {
-  stroke: color-mix(in oklab, var(--foreground) 30%, transparent);
-  stroke-width: 1.2;
-  stroke-dasharray: 2.4 2.45;
+.live-mark[data-live-mark="idle"] .live-mark-body,
+.live-mark[data-live-mark="open"] .live-mark-body {
+  opacity: 0.62;
 }
-.live-mark[data-live-mark="queued"] .live-mark-glyph {
-  opacity: 0.45;
-  filter: grayscale(1);
+.live-mark[data-lit][data-live-mark="idle"] .live-mark-body {
+  opacity: 1;
 }
-/* Open in another app with no turn there: a still hairline ring. */
-.live-mark[data-live-mark="open"] {
-  --lm-stroke: 1px;
-  --lm-track: color-mix(in oklab, var(--foreground) 30%, transparent);
+.live-mark[data-live-mark="failed"] {
+  --lm-ink: var(--negative);
+  --lm-face: color-mix(in oklab, var(--negative) 55%, transparent);
 }
-/* A failure or an answer to read: a dot cut out of the mark. */
+.live-mark[data-live-mark="failed"] .live-mark-body {
+  transform: rotate(16deg) translateY(10%);
+}
+/* An answer to read: the unread sphere at the fin's shoulder, cut out of the mark. */
 .live-mark-dot {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--negative);
-  box-shadow: 0 0 0 2px var(--lm-cut, var(--shell));
-}
-.live-mark-dot > .review-dot {
-  display: block;
-}
-.live-mark[data-live-mark="unread"] > .live-mark-dot {
   top: -1px;
-  bottom: auto;
+  right: -1px;
   display: flex;
   width: 9px;
   height: 9px;
   align-items: center;
   justify-content: center;
   background: var(--lm-cut, var(--shell));
-  box-shadow: none;
 }
-/* After every shorthand above, which would reset it: the gate's play state. */
-.live-mark-comet,
-.live-mark[data-live-mark="needs"] > .live-mark-ring,
-.live-mark[data-live-mark="lead"] > .live-mark-ring {
+.live-mark-dot > .review-dot {
+  display: block;
+}
+/* A mark that names who rather than how (an avatar, a card's header): the fin at full ink. */
+.live-mark.live-mark-still .live-mark-body {
+  opacity: 1;
+}
+/*
+ * After every shorthand above and as specific as the most specific of them (a state, a motion), which would otherwise
+ * reset it: the gate's play state.
+ */
+.live-mark[data-live-mark][data-kind] .live-mark-body,
+.live-mark[data-live-mark][data-kind] .live-mark-wake,
+.live-mark[data-live-mark][data-kind] .live-mark-water {
   animation-play-state: var(--visible-animation-state, running);
   will-change: var(--visible-animation-will-change, auto);
 }
-@keyframes live-mark-turn {
+@keyframes live-mark-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  50% {
+    transform: translateY(-9%) rotate(-4deg);
+  }
+}
+@keyframes live-mark-glide {
+  0%,
+  100% {
+    transform: translateX(-5%);
+  }
+  50% {
+    transform: translateX(5%);
+  }
+}
+@keyframes live-mark-wake {
+  from {
+    transform: translateX(0);
+  }
   to {
-    transform: rotate(1turn);
+    transform: translateX(-34%);
+  }
+}
+@keyframes live-mark-brace {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(-10deg);
+  }
+}
+@keyframes live-mark-drift {
+  0%,
+  100% {
+    transform: translateX(-4%);
+  }
+  50% {
+    transform: translateX(4%);
   }
 }
 @keyframes live-mark-breathe {
@@ -1385,7 +1440,7 @@ diffs-container {
   width: 6px;
   height: 6px;
   flex-shrink: 0;
-  border-radius: 999px;
+  border-radius: 0;
 }
 .fin-pip[data-pip="needs"] {
   background: var(--caution);
@@ -1557,7 +1612,7 @@ diffs-container {
 .ref-token {
   --ref-bg: var(--ref-fill);
   --ref-air: 2px;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--ref-bg);
   box-shadow: var(--ref-air) 0 0 var(--ref-bg), calc(var(--ref-air) * -1) 0 0 var(--ref-bg);
   color: var(--foreground);
@@ -2444,7 +2499,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 [data-sonner-toast][data-styled="false"] {
   width: var(--width);
   background: var(--popover);
-  border-radius: 10px;
+  border-radius: 0;
   box-shadow: var(--elevation-overlay);
 }
 [data-sonner-toast][data-styled="false"][data-expanded="false"][data-front="false"] > * {
@@ -2573,7 +2628,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   height: 28px;
   padding: 0 10px;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: 0;
   color: var(--foreground);
   font-size: var(--text-ui);
   font-weight: 500;
@@ -2620,7 +2675,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: 0;
   color: var(--muted-foreground);
   font-size: var(--text-label);
   background: color-mix(in oklab, var(--foreground) 6%, transparent);

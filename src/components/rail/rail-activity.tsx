@@ -1,12 +1,14 @@
 import type { ThreadFolder } from "@/lib/thread-folders"
-import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
+import { LiveMark } from "@/components/ui/live-mark"
+import type { LiveMarkState } from "@/lib/live-mark-state"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export function FolderActivity({ folder }: { folder: ThreadFolder }) {
   const running = folder.running + folder.active
-  const state: ActivityState = folder.needsInput ? "waiting" : folder.failed ? "failed" : running ? "working" : folder.unread ? "complete" : "idle"
+  const state = folder.needsInput ? "waiting" : folder.failed ? "failed" : running ? "working" : folder.unread ? "complete" : "idle"
   if (state === "idle") return null
-  const label = folder.needsInput ? `${folder.needsInput} ${folder.needsInput === 1 ? "needs" : "need"} input`
+  const mark: LiveMarkState = state === "waiting" ? "needs" : state === "failed" ? "failed" : state === "working" ? "working" : "unread"
+  const label = folder.needsInput ? `${folder.needsInput} ${folder.needsInput === 1 ? "needs" : "need"} you`
     : folder.failed ? `${folder.failed} failed`
     : running ? `${running} running` : `${folder.unread} to review`
   const description = [
@@ -18,7 +20,7 @@ export function FolderActivity({ folder }: { folder: ThreadFolder }) {
   ].filter(Boolean).join(", ")
   return (
     <span data-folder-activity={state} title={description} aria-label={`${folder.name}: ${description}`} className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-      <ActivityMark state={state} size={20} />
+      <LiveMark state={mark} size={16} />
       <span>{label}</span>
     </span>
   )

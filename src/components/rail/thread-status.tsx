@@ -4,7 +4,7 @@ import { formatRelative } from "@/lib/format"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import type { ThreadStatus } from "@/state/threads"
 import { LiveMark } from "@/components/ui/live-mark"
-import { threadMarkState, threadStatusLabel, type LiveMarkState } from "@/lib/live-mark-state"
+import { motionOf, threadMarkState, threadStatusLabel, type LiveMarkState } from "@/lib/live-mark-state"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { railAnnouncement, type RailAsk } from "@/lib/rail-announcement"
 import { unreadReview, type FoldedSession } from "@/lib/thread-fold"
@@ -13,7 +13,7 @@ import { unreadReview, type FoldedSession } from "@/lib/thread-fold"
 const REVIEW_FRESH_MS = 2_000
 
 /**
- * A Thread's live mark: its agent's glyph, and around it what it's doing (`LiveMark`). One mark at the start of a row
+ * A Thread's live mark: Mako's two-tone fin doing what the Thread does, its harness a corner badge (`LiveMark`). One mark at the start of a row
  * or tab says who and how; there's no second status mark at its end. An answer that finished after the mark was
  * painted is news and its dot arrives; a row scrolling back into view with an old answer paints it still.
  */
@@ -23,6 +23,7 @@ export function ThreadMark({ status, state, harness, lit, cut, size, label, clas
   return (
     <LiveMark
       state={state ?? threadMarkState(status)}
+      motion={motionOf(status.kind === "working" ? status.detail : undefined)}
       lit={lit}
       fresh={status.kind === "review" && status.at >= mountedAt - REVIEW_FRESH_MS}
       cut={cut}

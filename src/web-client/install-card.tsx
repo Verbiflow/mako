@@ -21,7 +21,7 @@ export function InstallCard() {
   return (
     <>
       <aside aria-label="Add to Home Screen" className="web-install flex items-start gap-3 rounded-2xl p-3.5">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-[11px] bg-shell ring-1 ring-hairline">
+        <span className="flex size-10 shrink-0 items-center justify-center bg-shell ring-1 ring-hairline">
           <MakoMark className="size-5" />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">

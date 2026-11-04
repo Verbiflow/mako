@@ -3,6 +3,7 @@ import { CheckIcon, XIcon } from "lucide-react"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { WebHarnessIcon } from "./harness-icon"
+import { LiveMark } from "@/components/ui/live-mark"
 import { noteAnswered } from "./install"
 
 /**
@@ -36,7 +37,9 @@ export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: strin
     <div className="web-ask" data-ask="fin" data-fin-ask={ask.ask.kind} data-fin={ask.fin} data-in-inbox={from ? true : undefined}>
       <div className="web-ask-body" aria-busy={sent ? true : undefined} data-busy={sent ? true : undefined}>
         <p className="web-ask-asker flex items-center gap-1.5">
-          <WebHarnessIcon harness={ask.harness} className="size-3.5 shrink-0" />
+          <LiveMark kind="fin" state="needs" size={18}>
+            <WebHarnessIcon harness={ask.harness} />
+          </LiveMark>
           <span className="min-w-0 truncate">{from ? `${from} › ${ask.title}` : `${ask.title} asks`}</span>
           {more ? <span className="shrink-0 text-faint">· {more === 1 ? `1 more ${FIN_WORD} asks` : `${more} more ${FIN_WORD}s ask`}</span> : null}
         </p>
