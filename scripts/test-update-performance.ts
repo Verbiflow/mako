@@ -65,7 +65,8 @@ function workspaceSource(specifier: string): string | null {
     for (const [pattern, value] of Object.entries(exports.data.exports)) {
       if (!pattern.endsWith("/*")) continue
       const prefix = pattern.slice(0, -1)
-      if (wanted.startsWith(prefix)) target = value.replace("*", wanted.slice(prefix.length))
+      // As Node resolves a subpath pattern: every `*` in the target takes the matched part.
+      if (wanted.startsWith(prefix)) target = value.replaceAll("*", wanted.slice(prefix.length))
     }
   if (!target) return null
   const base = join(folder, target.replace(/^\.\/dist\//, "src/").replace(/\.js$/, ""))
