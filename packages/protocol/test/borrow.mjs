@@ -15,6 +15,7 @@ import {
   grantExpiry,
   inScope,
   liveLeases,
+  reachesBorrower,
   selects,
   standingGrants,
   step,
@@ -81,7 +82,7 @@ function grant(random, id, at) {
   const grantScope = scope(random)
   const lifetimes = [{ until: "revoked" }, { until: "expires", at: at + random.int(6) * HOUR }, { until: "once" }]
   if (grantScope.level === "thread") lifetimes.push({ until: "thread-ends" })
-  return {
+  const made = {
     id,
     resource: { kind, ref: random.pick(PATTERNS[kind]) },
     source,
@@ -95,6 +96,8 @@ function grant(random, id, at) {
     grantedAt: at,
     version: 1,
   }
+  if (source.kind === "device" && random.next() < 0.3) made.within = "source-device"
+  return made
 }
 
 /** The values the sources hold, which no decision, log line, push or listing may ever contain. */
@@ -135,6 +138,7 @@ function walk(seed, steps, tally) {
       const holding = random.next() < 0.3 ? { version: sha(canary(random)), at: at - random.int(10) * HOUR } : undefined
       const need = { kind, ref: random.pick(REFS[kind]), for: borrower(random, random.next() < 0.05 ? "acct-b" : ACCOUNT), why: `needs it ${value.slice(0, 2)}`, correlationId }
       if (holding) need.holding = holding
+      if (random.next() < 0.2) need.mode = random.pick(KIND_MODES[kind])
       input = { type: "borrow", need, at, lease: `l${index}`, ask: `a${index}`, content: random.next() < 0.9 ? { version: sha(value), size: random.int(200_000) } : undefined }
     } else if (roll < 0.68 && Object.keys(before.asks).length) {
       const ask = random.pick(Object.keys(before.asks))
@@ -177,6 +181,7 @@ function walk(seed, steps, tally) {
       const lease = state.leases[event.lease].lease
       const held = state.grants[lease.grant].grant
       assert.ok(inScope(held.scope, lease.borrower), `${where}: a lease outside its grant's scope`)
+      assert.ok(reachesBorrower(held, lease.borrower), `${where}: a lease to another place than its grant keeps to`)
       assert.ok(selects(held.resource, lease.resource.kind, lease.resource.ref), `${where}: a lease its grant doesn't select`)
       assert.equal(lease.borrower.account, ACCOUNT, `${where}: a lease to another account`)
       assert.ok(!seenLeaseIds.has(lease.id), `${where}: a lease ID issued twice`)
@@ -376,6 +381,22 @@ describe("borrowing: exact cases", () => {
     assert.equal(liveLeases(narrowed.state).length, 0)
     assert.ok(narrowed.effects.some((effect) => effect.effect === "push" && effect.push.push === "ended"))
     assert.ok(narrowed.effects.some((effect) => effect.effect === "unreferenced"))
+  })
+
+  test("a grant that keeps to its device reaches only borrowers there, and a need's mode picks the grant", () => {
+    const here = { ...mac, place: { kind: "device", device: "mac" } }
+    const local = base({ id: "local-copy", source: { kind: "device", device: "mac" }, resource: { kind: "tree", ref: "**" }, within: "source-device", secret: false })
+    const linked = base({ id: "local-link", source: { kind: "device", device: "mac" }, resource: { kind: "tree", ref: "**" }, within: "source-device", mode: "live", secret: false })
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: local, at: 1 }).state
+    state = step(state, { type: "grant", grant: linked, at: 1 }).state
+    state = step(state, { type: "device", device: "mac", online: true, at: 1 }).state
+    const away = step(state, { type: "borrow", need: need({ kind: "tree", ref: "node_modules" }), at: 2, lease: "l1", ask: "a1" })
+    assert.equal(away.answer.refusal.refused, "out-of-scope", "a cloud machine doesn't reach a grant that keeps to the Mac")
+    const live = step(state, { type: "borrow", need: need({ kind: "tree", ref: "node_modules", for: here, mode: "live" }), at: 2, lease: "l2", ask: "a2" })
+    assert.equal(live.effects.find((effect) => effect.effect === "ask").ask.grant, "local-link")
+    const copy = step(state, { type: "borrow", need: need({ kind: "tree", ref: "node_modules", for: here, mode: "copy" }), at: 2, lease: "l3", ask: "a3" })
+    assert.equal(copy.effects.find((effect) => effect.effect === "ask").ask.grant, "local-copy")
+    assert.throws(() => base({ within: "source-device" }), "only a device's grant keeps to it")
   })
 
   test("one seal context for every borrowed value", () => {
