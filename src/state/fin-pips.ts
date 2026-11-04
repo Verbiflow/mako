@@ -5,7 +5,7 @@ import { useAcp, type AcpState } from "@/state/acp"
 
 /**
  * One letter per Fin, in `orderedChildren`' order: `n` needs the person, `w` working, `l` working while it asks its
- * Apex, `q` queued, `f` failed, `d` done. A string, so a row's selector compares it by value and repaints only when a
+ * Apex, `q` queued, `i` idle, `f` failed, `d` done. A string, so a row's selector compares it by value and repaints only when a
  * pip changes.
  */
 export type Pips = string
@@ -21,7 +21,7 @@ function pipOf(agent: NativeAgent): string {
 
 /** As the roster lists them; from its counts alone while this window holds only the host's rollup. */
 export function pipsOf(children: readonly NativeAgent[], counts: Rollup): Pips {
-  if (!children.length) return "n".repeat(counts.needs) + "w".repeat(counts.working) + "q".repeat(counts.queued) + "f".repeat(counts.failed) + "d".repeat(counts.done)
+  if (!children.length) return "n".repeat(counts.needs) + "w".repeat(counts.working) + "q".repeat(counts.queued) + "i".repeat(counts.idle) + "f".repeat(counts.failed) + "d".repeat(counts.done)
   let held = byChildren.get(children)
   if (held === undefined) {
     held = children.map(pipOf).join("")
@@ -51,5 +51,5 @@ export function useNeedsYouFins(thread: string | undefined): readonly NativeAgen
 /** The pips counted as `rollup` counts their Fins: one asking its Apex is working. */
 export function pipsCounts(pips: Pips): Rollup {
   const count = (letter: string) => pips.split(letter).length - 1
-  return { total: pips.length, needs: count("n"), working: count("w") + count("l"), queued: count("q"), failed: count("f"), done: count("d") }
+  return { total: pips.length, needs: count("n"), working: count("w") + count("l"), queued: count("q"), idle: count("i"), failed: count("f"), done: count("d") }
 }
