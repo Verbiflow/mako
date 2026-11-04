@@ -1176,8 +1176,9 @@ says what the tool is about. A new tool of the server needs a line there, and
 page (`src/dev/tool-words-fixture.ts`, `tool-rows.html?rows=words`). A row's
 facts sit in its label face: a failed command's exit code (its command
 effect's, else the text its shell declares as `exitText`), a read's range
-(":120–180") and an edit's lines ("+12 −3") from the identity
-(`range`, `added`, `removed`, `files`). A turn's folded summary counts a
+(":120–180") and an edit's lines ("+12 −3"), read by `toolFacts` only for a
+row that draws them: `identifyTool` runs for every call a decoder reads, and
+counting a patch's lines there slowed every harness's decoding. A turn's folded summary counts a
 failure only while no later call of the same kind with the same normalized
 arguments went through (`unfixedFailures`); the failed row still says failed.
 
