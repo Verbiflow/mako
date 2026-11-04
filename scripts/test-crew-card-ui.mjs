@@ -247,7 +247,17 @@ async function check() {
     "the bar is split by every group that's here"
   )
 
-  // Every Fin, scrolled into view: the rows rank by group, needs-you never behind a later one.
+  // What needs the person and what's live is listed; the done and idle ones fold into one quiet line.
+  const live = await collectRows()
+  assert.equal(live.length, 9, "the needs-you, working and queued Fins are listed")
+  assert.ok(live.every((row) => row.group !== "done" && row.group !== "idle"), "no settled Fin among them")
+  assert.equal(await evaluate("document.querySelector('[data-crew-settled]')?.innerText.trim()"), "2 done · 1 idle", "the settled ones are one line")
+  await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); el.scrollTop = el.scrollHeight; return true })()")
+  await settle()
+  await evaluate("document.querySelector('[data-crew-settled]').click(); true")
+  await until("document.querySelector('[data-crew-settled]')?.dataset.crewSettled === 'open'", "the settled line opening")
+
+  // Every Fin, once it's open, scrolled into view: the rows rank by group, needs-you never behind a later one.
   const rows12 = await collectRows()
   console.log(
     "ROWS",
