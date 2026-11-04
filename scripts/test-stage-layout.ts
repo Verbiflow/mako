@@ -256,15 +256,15 @@ assert.equal(composerEnterAction({ canSteer: true, steerOnEnter: false }), "queu
 assert.equal(composerEnterAction({ canSteer: false, steerOnEnter: true }), "queue")
 assert.equal(
   composerRunningPlaceholder("Claude", "steer", true),
-  "Steer Claude — Cmd+Enter queues instead"
+  "Steer Claude · ⌘↩ queues"
 )
 assert.equal(
   composerRunningPlaceholder("Claude", "queue", true),
-  "Queue a message for Claude — Cmd+Enter steers instead"
+  "Queue for Claude · ⌘↩ steers"
 )
 assert.equal(
   composerRunningPlaceholder("Grok", "queue", false),
-  "Queue a message for Grok"
+  "Queue for Grok"
 )
 // The composer carries no Queue/Steer control at all: the placeholder and the
 // button's icon say what Enter does, and the preference is a Settings row.

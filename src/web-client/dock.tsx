@@ -2,7 +2,8 @@ import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternal
 import { FinOfApexNote } from "./apex-fins"
 import { FinAskCard } from "./fin-ask"
 import { FinsNeedYou } from "@/components/composer/fin-asks"
-import { sendDirect, useAddressee, useThreadAsks } from "@/state/apex-fins"
+import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/state/apex-fins"
+import { FIN_WORD } from "@mako/host/contracts/agents"
 import { useCrewCardVisible } from "@/state/crew-card-view"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
@@ -113,6 +114,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   const [sure, setSure] = useState(false)
   const asksFirst = elsewhere && !sure ? elsewhere : undefined
   const addressee = useAddressee((state) => state.to[conversation])
+  const isApex = useThreadRollup(threadId).total > 0
   const send = async (text: string, attachments: PromptAttachment[], id: string): Promise<boolean> => {
     // A question waiting: the words are its answer, not a message.
     if ((ask?.kind === "question" || typedFin) && attachments.length === 0 && typed.current?.(text)) return true
@@ -140,7 +142,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   const waits = useReadingCopy() !== null
   // Where the line over the field names the Session, the placeholder doesn't say its harness again.
   const whom = sendsTo ? "" : ` ${harness}`
-  const placeholder = ask?.kind === "question" || typedFin ? "Tap an answer above, or type your own" : addressee ? `Message ${addressee.title} straight` : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer${whom}` : `Queue a message${sendsTo ? "" : ` for ${harness}`}`) : `Message${whom}`
+  const placeholder = ask?.kind === "question" || typedFin ? "Tap an answer above, or type your own" : addressee ? `Message ${addressee.title}` : waits ? WAITING_PLACEHOLDER : running ? (steering.canSteer && steerByDefault ? `Steer${whom}` : `Queue${sendsTo ? "" : ` for ${harness}`}`) : isApex ? `Ask anything, or @ a ${FIN_WORD}` : "Ask anything"
   return (
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : fin ? "fin" : undefined}>
       <div aria-hidden className="web-dock-fade" />

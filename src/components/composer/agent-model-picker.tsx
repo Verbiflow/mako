@@ -106,7 +106,7 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
             "hover:bg-fill-hover data-[state=open]:bg-fill-selected"
           )}
         >
-          <HarnessIcon harness={harness} className="size-3.5" />
+          <HarnessIcon harness={harness} tinted={false} className="size-3.5 text-muted-foreground" />
           <ModelSummary choice={composerChoice(view)} label={view.modelLabel} />
           <ChevronDownIcon className="size-3 shrink-0 text-faint/70" />
         </button>
@@ -173,7 +173,7 @@ export function ModelSummary({ choice, label }: { choice: ModelChoice; label: st
   return (
     <>
       <span className="truncate">{label}</span>
-      {effort ? <span className="shrink-0 text-faint">{effort}</span> : null}
+      {effort ? <span className="shrink-0 font-normal text-faint">{effort}</span> : null}
       {fast ? <ZapIcon aria-label="Fast" className="size-3 shrink-0 fill-current text-foreground/70" /> : null}
       {choice.resolved.issues.length ? (
         <AlertCircleIcon aria-label="Check model settings" className="size-3 shrink-0 text-caution" />
