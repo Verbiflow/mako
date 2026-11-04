@@ -111,7 +111,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 18)
+    assert.equal(SUPPORTED_VERSIONS.max, 19)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -279,8 +279,10 @@ describe("wire", () => {
     for (const frame of [
       { type: "operation", generation: 2, operation: withInput },
       { type: "fence", threadId: "th-1", generation: 2 },
+      { type: "borrow", threadId: "th-1", seq: 3, push: { push: "ended", lease: "l-1", why: "revoked" } },
     ])
       assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame(frame)), frame)
+    assert.throws(() => decodeGatewayFrame(encodeGatewayFrame({ type: "borrow", threadId: "th-1", seq: 3, push: { push: "ended", lease: "l-1", why: "revoked", value: "x" } })), "a borrow frame holds no value")
     const event = {
       v: PROTOCOL_VERSION,
       stream: "thread:th-1",
@@ -2309,7 +2311,7 @@ describe("a Session continued in the cloud while its device is off", () => {
 
   test("an Apex's row waits on its Fin's ask from link 18; an older link hears where the Apex stands under it", () => {
     assert.equal(ASKING_VERSION, 18)
-    assert.equal(LINK_VERSION, ASKING_VERSION)
+    assert.ok(LINK_VERSION >= ASKING_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     const asking = {
       ...reported, state: "waiting", waitingFor: "question", waitingOn: "release: Which branch?",
