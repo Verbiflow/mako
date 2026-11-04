@@ -5,6 +5,7 @@ import { rowWaitingFor } from "@mako/protocol/attention"
 import { continueRefusal } from "@mako/protocol/continues"
 import type { ListedContinueChoice } from "./live-conversations.js"
 import type { LiveSummary } from "./live-conversations.js"
+import { finsAsChildren, rollup } from "./children.js"
 
 /**
  * A Session of the account's list as a window lists it, before anything of its owner is read: the one mapping every
@@ -62,6 +63,11 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
   // Another app's window on it says nothing while its device can't be reached.
   if (row.openElsewhere && row.state === "idle" && !quiet) rail.openElsewhere = true
   if (Object.keys(rail).length) summary.rail = rail
+  // Its Fins as its owner last said them, a quiet device's included: read-only here, and as old as `quietSince` says.
+  if (row.fins) {
+    summary.fins = row.fins
+    summary.children = rollup(finsAsChildren(row.fins))
+  }
   return summary
 }
 

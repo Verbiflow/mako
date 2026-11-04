@@ -615,6 +615,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         sessionId: summary.sessionId ?? previous.sessionId,
         parent: summary.parent ?? previous.parent,
         children: summary.children,
+        fins: summary.fins,
         permission: null,
         failureSeen: carriedFailureSeen(previous, summary.session),
       })
@@ -658,6 +659,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       sessionId: summary.sessionId,
       parent: summary.parent,
       children: summary.children,
+      fins: summary.fins,
       revision: summary.revision,
       hydrated: false,
       createdAt: summary.createdAt,
