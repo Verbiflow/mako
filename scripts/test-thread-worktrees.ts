@@ -403,6 +403,22 @@ assert.ok(lonePlacement)
 threads.attachWorktree({ path: forked.path, thread: lonePlacement.thread, repoRoot: shop, project: shop, branch: forked.branch, base: git(shop, "rev-parse", "HEAD") })
 assert.equal((await worktrees.prepareFork(loneId, loneFork, shop, "Fork elsewhere")).path, forked.path, "a repeated request finds its first worktree")
 await assert.rejects(worktrees.prepareFork(loneId, randomUUID(), shop, "Another"), /already works in its own worktree/)
+// An agent's move can name its new branch and the commit it starts from; a name that exists, a base that doesn't, or a base under uncommitted changes is refused before anything is made.
+{
+  const namedId = randomUUID()
+  started(namedId)
+  const before = git(shop, "rev-parse", "HEAD~1")
+  await worktrees.wantBranch(namedId, shop, { branch: "alt", base: "HEAD~1" })
+  const named = await worktrees.prepareFork(namedId, randomUUID(), shop, "Named move")
+  assert.equal(named.branch, "alt", "the branch is the name the agent gave, as given")
+  assert.equal(git(named.path, "rev-parse", "HEAD"), before, "and starts where it said")
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { branch: "alt" }), /alt already exists in shop\. worktree_move makes a new branch/)
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { branch: "bad..name" }), /isn't a name Git allows/)
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { base: "no-such-ref" }), /no-such-ref isn't a commit, branch or tag in shop/)
+  writeFileSync(join(shop, "web", "index.ts"), "edited\n")
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { branch: "fresh", base: "HEAD~1" }), /uncommitted changes/)
+  git(shop, "checkout", "--", "web/index.ts")
+}
 // Another of that Thread's Sessions moving in joins its worktree, in the same folder.
 assert.equal(await worktrees.joinFolder(loneId, randomUUID(), join(shop, "web")), join(forked.path, "web"))
 assert.equal(await worktrees.joinFolder(loneId, randomUUID(), shop), forked.path)
