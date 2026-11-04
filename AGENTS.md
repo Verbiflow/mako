@@ -273,6 +273,16 @@ its files (`branchSince`). Its turns report and wake the Apex again, and a
 repeat of the message resumes it once. Archiving its Thread is the one
 end: one at work stops in those words, once (`Agents.archived`), and
 nothing resumes it until the person restores it (`test:fin-resume`). A
+stop also pauses what was queued for the Fin (`halt`), and a stop of one
+stopped already ends whatever still runs there. A paused message first in
+line holds the ones behind it (the person editing it keeps its place), and
+nobody presses Resume on a Fin's queue, so a message that reaches a Fin
+sends on what its stop or an exit paused behind it (`resumeFin`); a stopped
+Fin that is an Apex hears its own Fins' digests only then (`ready`). A Fin
+reads working only from `LiveConversations.atWork`: a turn running, a
+message being sent, or the next in line (`nextQueued`) about to go, never a
+message nothing will send; a stopped Fin never reads working, and only
+working Fins hold room against the Mac and the tree (`test:fin-states`). A
 Fin's harness asking (`askApex`) wakes its Apex, told whether it may
 answer: an approval under an Apex below full access is the person's at once,
 and the Apex hears so in the digest's "waits on the person" (`Report.told`).

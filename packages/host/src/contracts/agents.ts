@@ -282,11 +282,16 @@ export function reportPhase(report: Report | undefined): string | undefined {
  */
 export function childState(edge: ThreadParent, thread: ChildThread, journal: ChildJournal): ChildState {
   if (thread.queued) return { kind: "queued", reason: thread.queued.reason, ahead: thread.queued.ahead }
+  const latest = journal.latest
+  // A stop after its last report is how it ended, in the words of whoever stopped it, whatever its harness still winds down.
+  if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
+    const reason = edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
+    return { kind: "ended", outcome: "stopped", ...(reason && { reason }) }
+  }
   if (thread.starting) return { kind: "starting", step: thread.starting }
   if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }
-  const latest = journal.latest
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
-  if (thread.working) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
+  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
     return {
       kind: "blocked",
@@ -294,11 +299,6 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
       on: latest.for !== "person" && reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person",
       ask: reportAsk(latest),
     }
-  // A stop after its last report is how it ended, in the words of whoever stopped it.
-  if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
-    const reason = edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
-    return { kind: "ended", outcome: "stopped", ...(reason && { reason }) }
-  }
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
   if (latest?.status === "done") return { kind: "ended", outcome: "done" }

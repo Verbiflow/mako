@@ -369,7 +369,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
     throw new Error("There's no conversation here")
   }
   return {
-    session: () => undefined, held: () => undefined, snapshot: () => null, editQueued: none, transfer: none, submit: none,
+    session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, snapshot: () => null, editQueued: none, transfer: none, submit: none,
     act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }

@@ -144,7 +144,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "atWork" | "resumeHeld" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -387,8 +387,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       // A Fin that finished is read in only when the last host left a message of it waiting, paused or running.
       if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) this.resumePaused(edge)
     }
-    for (const apex of new Set(edges.all.map((edge) => edge.parent)))
+    for (const apex of new Set(edges.all.map((edge) => edge.parent))) {
+      // A stopped Fin's wait for it to resume (`resumeFin`).
+      if (edges.of(apex)?.closedAt !== undefined) continue
       for (const conversation of this.conversationsOfThread(apex)) if (this.deps.live.leftUnsettled(conversation)) this.resumeWakes(conversation)
+    }
     void this.drain()
   }
 
@@ -614,8 +617,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!edge) return
     // The person writing in a stopped Fin's own Thread resumes it, as a message from its Apex does.
     const closedAt = edge.closedAt
-    if (closedAt !== undefined && !this.deps.archived?.(conversation) && this.deps.live.held(conversation)?.requests.some((request) => (request.createdAt ?? 0) > closedAt && (!request.actor || request.actor.kind === "person")))
-      return void this.reopen(edge, "the person")
+    const persons = closedAt === undefined || this.deps.archived?.(conversation) ? undefined
+      : this.deps.live.held(conversation)?.requests.find((request) => (request.createdAt ?? 0) > closedAt && (!request.actor || request.actor.kind === "person"))
+    if (persons) {
+      this.reopen(edge, "the person")
+      return this.resumeFin(conversation, persons.id)
+    }
     this.childMoved(edge, true)
   }
 
@@ -1630,18 +1637,41 @@ export class Agents implements AgentOperations, ConversationChildren {
    * rather than as a failure that wakes the Apex, which asked for it.
    */
   private async end(edge: ThreadParent, why: string): Promise<boolean> {
-    if (edge.closedAt) return false
+    const conversation = this.conversationOf(edge.child)
+    // Stopped already: a turn or a message still going there is what a stop now ends.
+    if (edge.closedAt) {
+      if (!conversation || !(await this.halt(edge, conversation))) return false
+      hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why, again: true })
+      this.childMoved(edge, false)
+      void this.drain()
+      return true
+    }
     const store = this.store()!
     const closed = store.keepEdge({ ...edge, closedAt: this.now(), closedReason: why.slice(0, 2000) })
     this.runs.stop(edge.child, why.slice(0, 2000))
-    const conversation = this.conversationOf(edge.child)
-    const status = conversation ? this.deps.live.session(conversation)?.status : undefined
-    if (conversation && (status === "running" || status === "starting"))
-      await this.deps.live.cancel(conversation).catch((error) => hostWarn("agents", "a Fin's turn could not be stopped", { op: edge.op, error: errorMessage({ error }) }))
+    if (conversation) await this.halt(edge, conversation)
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why })
     this.childMoved(closed, false)
     void this.drain()
     return true
+  }
+
+  /** A stopped Fin's turn stops and its waiting messages pause, as the person's Stop pauses them; whether either was there. */
+  private async halt(edge: ThreadParent, conversation: string): Promise<boolean> {
+    const status = this.deps.live.session(conversation)?.status
+    const turn = status === "running" || status === "starting" || Boolean(this.deps.live.held(conversation)?.requests.some((request) => request.status === "dispatching"))
+    if (turn) await this.deps.live.cancel(conversation).catch((error) => hostWarn("agents", "a Fin's turn could not be stopped", { op: edge.op, error: errorMessage({ error }) }))
+    let paused = 0
+    for (const request of this.deps.live.held(conversation)?.requests ?? []) {
+      if (request.status !== "queued") continue
+      try {
+        this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "pause" } })
+        paused += 1
+      } catch (error) {
+        hostWarn("agents", "a stopped Fin's message couldn't be paused", { op: edge.op, request: request.id, error: errorMessage({ error }) })
+      }
+    }
+    return turn || paused > 0
   }
 
   // ── What a Fin shows ──
@@ -1657,8 +1687,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!session) return { source: "live" }
     const held = live.held(conversation)
     const waiting = live.waitingOn(conversation)
-    // A request sent and not yet answered is work, before its harness says it runs.
-    const busy = session.status === "running" || Boolean(held?.requests.some((request) => request.status === "queued" || request.status === "dispatching"))
+    // A request sent and not yet answered is work, before its harness says it runs; one nothing will send isn't.
+    const busy = live.atWork(conversation)
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
     // A turn that ended on its own Fins' work or its move is still at work, on that.
     const waits = !busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined
@@ -2030,9 +2060,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private ready(conversation: string): ParentReady {
     const session = this.deps.live.session(conversation)
     if (!session) return "gone"
-    const busy = session.status === "running" || session.status === "starting" ||
-      Boolean(this.deps.live.held(conversation)?.requests.some((request) => request.status === "queued" || request.status === "dispatching"))
-    if (!busy) return "idle"
+    // A stopped Fin hears its own Fins' news once it's resumed (`reopen`), not as turns of a Fin its Apex paused.
+    const child = this.childOfConversation(conversation)
+    if (child && this.store()?.edges().of(child)?.closedAt !== undefined) return "queue"
+    if (!this.deps.live.atWork(conversation)) return "idle"
     return this.deps.live.steersAtStep(conversation) ? "steer" : "queue"
   }
 
@@ -2081,6 +2112,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         : { delivery: "turn", hears: `${name} already has it.`, deduped: true }
     const queue = (why?: string): Delivered => {
       this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor)
+      this.resumeFin(conversation, request)
       return ready === "idle"
         ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
         : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message${why ? `: ${why}` : "."}` }
@@ -2090,10 +2122,12 @@ export class Agents implements AgentOperations, ConversationChildren {
       return { delivery: "turn", hears: `${taken.cut ? `Mako stopped ${name}'s run and resumed` : "Mako resumed"} its session here; ${name} takes it as its next turn.` }
     }
     if (ready === "idle") return queue()
-    if (want === "interrupt")
-      return this.deps.live.interrupt(conversation, request, text, attachments, actor)
-        ? { delivery: "interrupt", hears: `Mako stopped ${name}'s turn; this message starts its next one, ahead of anything queued for it.` }
-        : queue(`it had no turn running to stop, and something was already queued ahead of this.`)
+    if (want === "interrupt") {
+      if (!this.deps.live.interrupt(conversation, request, text, attachments, actor))
+        return queue(`it had no turn running to stop, and something was already queued ahead of this.`)
+      this.resumeFin(conversation, request)
+      return { delivery: "interrupt", hears: `Mako stopped ${name}'s turn; this message starts its next one, ahead of anything queued for it.` }
+    }
     if (want === "queue") return queue()
     const queued = queue()
     const steered = await this.steerInto(conversation, name, request, text, attachments)
@@ -2131,6 +2165,27 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.forget(edge.parent)
     this.childMoved(open, false)
     return open
+  }
+
+  /**
+   * A message reached a Fin (`first`): what its stop or an exit paused goes
+   * on behind it, its Apex's messages and its own Fins' digests, since
+   * nobody presses Resume on a Fin's queue; a paused one first in line would
+   * hold every message behind it. Then the digests that waited for a stopped
+   * Fin to resume (`ready`).
+   */
+  private resumeFin(conversation: string, first: string): void {
+    const paused = (this.deps.live.held(conversation)?.requests ?? []).filter((request) =>
+      request.status === "held" && !request.signIn && !request.wake && request.actor?.kind === "agent")
+    if (paused.length) {
+      try {
+        this.deps.live.resumeHeld(conversation, paused.map((request) => request.id), first)
+        hostLog("agents", "resumed", { conversation, first, requests: paused.length })
+      } catch (error) {
+        hostWarn("agents", "a Fin's paused messages wait for Resume", { conversation, error: errorMessage({ error }) })
+      }
+    }
+    this.wakes.settled(conversation)
   }
 
   /**

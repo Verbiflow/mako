@@ -3,6 +3,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
+import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
@@ -21,6 +22,17 @@ import { turnStart, usageMark } from "./live-settlement.js"
 
 /** How often in a row a message the harness refused for a turn of its own is sent again at once (`turnInProgress`). */
 const TURN_IN_PROGRESS_RETRIES = 3
+
+/**
+ * The message a conversation sends next once nothing holds it back, or undefined when none would go: a paused one
+ * first in line pauses those behind it (a message being edited keeps its place), and after a failure only the newest
+ * goes, since failure doesn't drain old queued work by itself.
+ */
+export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">): LiveRequest | undefined {
+  const waiting = snapshot.requests.filter((request) => request.status === "queued" || request.status === "held")
+  const request = snapshot.session.status === "failed" ? waiting.at(-1) : waiting[0]
+  return request?.status === "queued" ? request : undefined
+}
 
 type DispatchAccess = Pick<LiveAccess,
   "dependencies" | "epoch" | "admission" | "control" | "flush" | "storageFailed" | "moves" | "switchAccount" |
@@ -137,13 +149,8 @@ export class LiveDispatch {
       )
     )
       return
-    // Failure does not silently drain old queued work. A new explicit submission can retry.
-    const queued = resident.snapshot.requests.filter(
-      (request) => request.status === "queued" || request.status === "held"
-    )
-    const request =
-      resident.snapshot.session.status === "failed" ? queued.at(-1) : queued[0]
-    if (!request || request.status === "held") return
+    const request = nextQueued(resident.snapshot)
+    if (!request) return
     if (this.leaveRemovedFolder(resident)) return
     if (request.accountSwitch) {
       void this.access.switchAccount(resident, request).catch((error) => {
