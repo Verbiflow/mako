@@ -19,8 +19,9 @@ import { HarnessAccounts } from "./accounts.js"
 import { AccountRoot } from "./accounts-common.js"
 import { join } from "node:path"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
-import type { DomainSecrets } from "../base/host-secrets.js"
+import { detachedSecrets, type DomainSecrets } from "../base/host-secrets.js"
 import { unwatchedWork, type HostWork } from "../base/event-loop.js"
+import { ModelConnections, modelConnectionsPath } from "./model-connections.js"
 
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
@@ -55,6 +56,8 @@ export interface ProviderHost {
   discovery: DiscoveryProcesses
   /** The installed version each launch would start, bound to the runtime readings once the harnesses open. */
   launchReadings: LaunchReadings
+  /** The gateways, local servers and endpoints the person connected, which harnesses that accept any provider launch with. */
+  modelConnections: ModelConnections
 }
 
 /** What the host a harness serves gives it: where its files go, its secrets and the person's screen. */
@@ -84,8 +87,12 @@ export function approvalRoot(context: Pick<HarnessContext, "dataRoot">): string 
 
 export type ProviderModule = (host: ProviderHost, context: HarnessContext) => void
 
-/** A host with no harness installed yet, keeping its accounts in its user root's (`AccountRoot`). */
-export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<HarnessContext, "userRoot"> & { work?: HostWork }): ProviderHost {
+/**
+ * A host with no harness installed yet, keeping its accounts and model
+ * connections in its user root's (`AccountRoot`); without `secrets`, a
+ * connection's key lasts only as long as the process.
+ */
+export function createProviderHost({ userRoot, secrets = detachedSecrets(), work = unwatchedWork }: Pick<HarnessContext, "userRoot"> & { secrets?: DomainSecrets; work?: HostWork }): ProviderHost {
   const accountCapabilities = new ProviderRegistry<ProviderAccountCapability>()
   const accounts = new HarnessAccounts(accountCapabilities, new AccountRoot(userRoot))
   const harnesses = new ProviderRegistry<HarnessRecord>()
@@ -121,5 +128,6 @@ export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<Harn
     accounts,
     discovery: new DiscoveryProcesses(),
     launchReadings,
+    modelConnections: new ModelConnections(modelConnectionsPath(userRoot), secrets.secrets),
   }
 }

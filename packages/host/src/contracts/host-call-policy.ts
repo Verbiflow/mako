@@ -185,6 +185,10 @@ const reads = [
   "mako:session-reader-history",
   "mako:daemon-login",
   "mako:utility-model-settings",
+  /** Read from one small file; never a key. */
+  "mako:model-connections",
+  /** Asks Ollama's and LM Studio's usual ports on this Mac what they have loaded. */
+  "mako:model-connection-local",
   "mako:harness-order-saved",
   /** Reads Settings › Fins and what the person used on each harness from one small file. */
   "mako:fin-defaults",

@@ -48,6 +48,7 @@ import type {
   UtilityCatalog,
 } from "./utility-models.js"
 import type { UtilityTask } from "./utility-work.js"
+import type { LocalModelServer, ModelConnectionCheck, ModelConnectionCheckInput, ModelConnectionInput, ModelConnectionsSnapshot, ModelConnectionTest, ModelConnectionView } from "./model-connections.js"
 import type { RewindInput, RewindPreview } from "./workspace-snapshots.js"
 import type {
   DesktopNotification,
@@ -563,6 +564,21 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AccountUsage>("mako:account-usage", harness, name),
     useResetCredit: (harness: AccountProvider, name: string, attempt: string) =>
       invokeTrustedHost<ResetCreditOutcome>("mako:account-reset", harness, name, attempt),
+
+    /* Model connections: gateways, local servers and endpoints, kept once and served through OpenCode. */
+    modelConnections: () => invokeTrustedHost<ModelConnectionsSnapshot>("mako:model-connections"),
+    checkModelConnection: (input: ModelConnectionCheckInput) =>
+      invokeTrustedHost<ModelConnectionCheck>("mako:model-connection-check", input),
+    addModelConnection: (input: ModelConnectionInput) =>
+      invokeTrustedHost<ModelConnectionView>("mako:model-connection-add", input),
+    enableModelConnection: (id: string, enabled: boolean) =>
+      invokeTrustedHost<void>("mako:model-connection-enable", id, enabled),
+    removeModelConnection: (id: string) =>
+      invokeTrustedHost<void>("mako:model-connection-remove", id),
+    testModelConnection: (id: string) =>
+      invokeTrustedHost<ModelConnectionTest>("mako:model-connection-test", id),
+    localModelServers: () =>
+      invokeTrustedHost<LocalModelServer[]>("mako:model-connection-local"),
 
     /* The Agents settings section. */
     harnessProfiles: (force?: boolean) =>

@@ -26,6 +26,8 @@ import type { ObservedAccountCapability } from "../account-capability.js"
 import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { claudeOAuthUsage } from "../claude/accounts.js"
+import type { ServedConnection } from "../model-connections.js"
+import { applyOpenCodeConnections } from "./connections.js"
 
 interface OpenCodeCredential {
   type: OpenCodeAuthType
@@ -446,8 +448,12 @@ export const openCodeCloudSignIn: CloudSignInCapability = {
   },
 }
 
-/** OpenCode's logins, read from its database as `stores` opens it. */
-export function openCodeAccountCapability(stores: NativeStores): ObservedAccountCapability {
+/**
+ * OpenCode's logins, read from its database as `stores` opens it. Every
+ * launch and discovery also gets the person's model connections (`served`) as
+ * providers of its own.
+ */
+export function openCodeAccountCapability(stores: NativeStores, served: () => Promise<readonly ServedConnection[]> = async () => []): ObservedAccountCapability {
   return {
     provider: "opencode",
     mode: "observed",
@@ -460,7 +466,7 @@ export function openCodeAccountCapability(stores: NativeStores): ObservedAccount
       return stored ? accountsFrom(stored.credentials, stored.path) : []
     },
     // One active login per provider inside OpenCode's own database; nothing to select.
-    accountEnv: async (_selection, base) => ({ ...base }),
+    accountEnv: async (_selection, base) => applyOpenCodeConnections({ ...base }, await served().catch(() => [])),
     selectedAccount: () => ({ name: "default" }),
     // The access token is refreshed in place; a login's account is what names it.
     credentialRevision: async (_name, env = process.env) => {

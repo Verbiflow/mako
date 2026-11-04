@@ -1230,6 +1230,35 @@ const inputs = {
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
       z.literal("app").optional(),
     ]),
+  "mako:model-connection-add": () =>
+    z.tuple([
+      z.object({
+        name: z.string().optional(),
+        models: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string().optional(),
+            contextTokens: z.number().optional(),
+          })
+        ),
+        provider: z.string(),
+        baseUrl: z.string().optional(),
+        apiKey: z.string().optional(),
+      }),
+    ]),
+  "mako:model-connection-check": () =>
+    z.tuple([
+      z.object({
+        provider: z.string(),
+        baseUrl: z.string().optional(),
+        apiKey: z.string().optional(),
+      }),
+    ]),
+  "mako:model-connection-enable": () => z.tuple([z.string(), z.boolean()]),
+  "mako:model-connection-local": () => z.tuple([]),
+  "mako:model-connection-remove": () => z.tuple([z.string()]),
+  "mako:model-connection-test": () => z.tuple([z.string()]),
+  "mako:model-connections": () => z.tuple([]),
   "mako:move-arrive": () =>
     z.tuple([
       z.object({
@@ -2661,6 +2690,13 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-sync-preview", "tools"],
   ["mako:measure-update-again", "application"],
   ["mako:merge-pull", "git"],
+  ["mako:model-connection-add", "harnesses"],
+  ["mako:model-connection-check", "harnesses"],
+  ["mako:model-connection-enable", "harnesses"],
+  ["mako:model-connection-local", "harnesses"],
+  ["mako:model-connection-remove", "harnesses"],
+  ["mako:model-connection-test", "harnesses"],
+  ["mako:model-connections", "harnesses"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],
   ["mako:move-follow", "conversations"],
