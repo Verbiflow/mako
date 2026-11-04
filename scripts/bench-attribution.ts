@@ -194,7 +194,7 @@ try {
     writeFileSync(big, lines.join(""))
     await wait(60)
   }
-  // An fseventsd that delivers in batches hears the edits seconds later: wait until they've come and stopped.
+  // A degraded fseventsd delivers the edits seconds later: wait until they've come and stopped.
   for (let heard = before, still = 0, until = Date.now() + 60_000; Date.now() < until && still < 4; await wait(500)) {
     await tracker.settled()
     const now = tracker.recent().length

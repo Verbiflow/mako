@@ -117,7 +117,7 @@ export function UsageChart({
                   {shown.parts.map(({ entry, amount }) =>
                     valueOf(amount, metric) > 0 ? (
                       <div key={entry.key} className="flex items-center gap-1.5 tabular-nums">
-                        <span aria-hidden className={cn("size-2 shrink-0 rounded-[2px]", entry.ink)} />
+                        <span aria-hidden className={cn("size-2 shrink-0", entry.ink)} />
                         <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.label}</span>
                         <span>{readout(amount, metric)}</span>
                       </div>

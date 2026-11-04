@@ -135,7 +135,7 @@ function readableError(message: string): string {
 function MediaPlaceholder({ name }: { name: string }) {
   return (
     <span className="inline-flex h-8 items-center gap-2 text-ui text-faint">
-      <Skeleton className="size-3.5 rounded-[3px]" />
+      <Skeleton className="size-3.5" />
       {name}
     </span>
   )

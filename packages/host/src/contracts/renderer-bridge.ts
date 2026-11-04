@@ -69,6 +69,7 @@ import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-acc
 import type { SyncStatus } from "./sync-status.js"
 import type { SyncReadings } from "./sync-readings.js"
 import type { MakoFootprint } from "./mako-footprint.js"
+import type { FileEventsService } from "./file-events-service.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
 import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult } from "./simulators.js"
@@ -78,6 +79,7 @@ import type { GitHubTokenListing } from "./github-person.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { ContinueReading } from "./cloud-continues.js"
+import type { ThreadMoveAsk } from "./thread-tools.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -453,6 +455,9 @@ export function createMakoBridge(transport: BridgeTransport) {
      * answers how that move went. Its steps arrive as `thread-move-step` events.
      */
     threadMove: (conversationId: string, move: string, handOff?: ThreadHandOff) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move, handOff),
+    /** Agents' asks to move their Thread to the cloud (`thread_move` below full access); `thread-move-asks` events follow them. */
+    threadMoveAsks: () => invokeTrustedHost<ThreadMoveAsk[]>("mako:thread-move-asks"),
+    answerThreadMoveAsk: (id: string, allow: boolean) => invokeTrustedHost<void>("mako:thread-move-ask-answer", id, allow),
     /** What the Thread of a conversation's harnesses here and in the cloud mean for moving it either way, before it moves. */
     threadHarnessCheck: (conversationId: string) => invokeTrustedHost<ThreadHarnessCheck>("mako:thread-harness-check", conversationId),
     /** This Mac's Threads whose agents are working, each with why it couldn't go to the cloud now, if it couldn't. */
@@ -490,6 +495,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     syncReadings: () => invokeTrustedHost<SyncReadings>("mako:sync-readings"),
     /** What Mako itself costs this Mac now: its processes, its file watching and its rescans, for Diagnostics. */
     makoFootprint: () => invokeTrustedHost<MakoFootprint>("mako:mako-footprint"),
+    /** macOS's file-change service as this host reads it; the host pushes `file-events-service` as it changes. */
+    fileEventsService: () => invokeTrustedHost<FileEventsService>("mako:file-events-service"),
+    /** Restarts fseventsd through macOS's password dialog, evidence first, and answers with how it went. */
+    fileEventsRestart: () => invokeTrustedHost<FileEventsService>("mako:file-events-restart"),
     /** Each continue in the cloud this Mac pressed or its list says, latest first, for Diagnostics. */
     continueReadings: () => invokeTrustedHost<ContinueReading[]>("mako:continue-readings"),
     cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),

@@ -6,6 +6,7 @@ import { heavy } from "@mako/host/base/heavy-packages"
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS, SESSION_VARIABLE, WAIT_LIMIT_MS, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import { AgentAnswerSchema, agentToolText, registerAgentTools, type AgentToolDoor } from "@mako/host/conversations/agent-tools"
+import { registerThreadTools, ThreadMoveAnswerSchema } from "@mako/host/conversations/thread-move-tool"
 import { z } from "zod"
 import { localHost, type HostTransport } from "./transport.js"
 
@@ -19,7 +20,7 @@ export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--mo
   mako agents send <fin> [words…] [--forward] [--key <k>]
   mako agents stop <fin|all> [--reason <words>]
   mako agents link <harness> <session> [--pid <n>]
-  mako mcp [--cwd <folder>]   the same operations as an MCP server on stdio
+  mako mcp [--cwd <folder>]   the same operations, and thread_move, as an MCP server on stdio
 
   A brief file ending .json is a brief ({objective, doneWhen, boundaries, output}); any other is its objective.
   The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell: an Apex, and each Thread it starts
@@ -175,6 +176,7 @@ async function serveAgentsMcp(transport: HostTransport, cwd: string): Promise<vo
   const { McpServer, StdioServerTransport } = await heavy.mcpStdio.load("mako mcp")
   const server = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: ORCHESTRATION_INSTRUCTIONS })
   registerAgentTools(server, door(transport, cwd))
+  registerThreadTools(server, { invoke: async (channel, args) => ThreadMoveAnswerSchema.parse(await transport.call(channel, args)), caller })
   const ended = new Promise<void>((resolve) => process.stdin.once("end", resolve))
   await server.connect(new StdioServerTransport())
   await ended

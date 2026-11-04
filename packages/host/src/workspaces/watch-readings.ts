@@ -6,8 +6,14 @@ const HOUR_MS = 3_600_000
 const MINUTE_MS = 60_000
 const SLOW_READ_MS = 5_000
 
-/** Why the watcher child was started: the first watch, a crash, or a silence it was restarted for. */
-export type ChildStart = "first" | "crash" | "silence"
+/** Why the watcher child was started: the first watch, a crash, a silence it was restarted for, or fseventsd started over. */
+export type ChildStart = "first" | "crash" | "silence" | "recovery"
+
+/** Who else hears the canary: the read of fseventsd's health (`file-events-service.ts`). */
+export interface DeliveryListener {
+  beat(lagMs: number): void
+  delivered(ok: boolean): void
+}
 
 /**
  * What the host's file watching costs and how macOS delivers to it, as the
@@ -21,7 +27,9 @@ export class WatchReadings {
   private readonly watches = new Map<number, { root: string; ignore: string }>()
   private child?: { pid?: number; since: number }
   private historyChild?: { pid?: number; since: number }
-  private starts: WatchFootprint["starts"] = { first: 0, crash: 0, silence: 0 }
+  private starts: WatchFootprint["starts"] = { first: 0, crash: 0, silence: 0, recovery: 0 }
+  private readonly listeners = new Set<DeliveryListener>()
+  private readsEver = 0
   private delivery: WatchFootprint["delivery"] = { ok: true, since: Date.now() }
   private readonly events = new HourCounts()
   private readonly drops = new HourCounts()
@@ -49,7 +57,7 @@ export class WatchReadings {
     this.log("watcher child started", { pid: pid ?? 0, why, watches: this.watches.size, streams: this.streams() })
   }
 
-  stopped(pid: number | undefined, code: number | null, signal: string | null, why: "idle" | "silence" | "exit"): void {
+  stopped(pid: number | undefined, code: number | null, signal: string | null, why: "idle" | "silence" | "recovery" | "exit"): void {
     const ran = this.child ? Date.now() - this.child.since : 0
     this.child = undefined
     this.log("watcher child stopped", { pid: pid ?? 0, why, code: code ?? -1, signal: signal ?? "", ranMs: ran })
@@ -60,6 +68,23 @@ export class WatchReadings {
     this.historyChild = pid === undefined ? undefined : { pid, since: Date.now() }
   }
 
+  /** Follows every beat and change of delivery from now; returns the unfollow. */
+  follow(listener: DeliveryListener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  /** One beat of the canary, heard `lagMs` after it was written. */
+  beat(lagMs: number): void {
+    for (const listener of this.listeners) listener.beat(lagMs)
+  }
+
+  /** Children started and history reads since the host did, and what's watched now, for the samples fseventsd's health keeps. */
+  totals() {
+    const { first, crash, silence, recovery } = this.starts
+    return { childStarts: first + crash + silence + recovery, historyReads: this.readsEver, watched: new Set([...this.watches.values()].map((watch) => watch.root)).size, streams: this.streams() }
+  }
+
   /** Delivery as the child's canary heard it: `ok` false once it went unheard, with how late the slowest recent beat came. */
   delivered(ok: boolean, lagMs: number | undefined): void {
     const before = this.delivery
@@ -67,6 +92,7 @@ export class WatchReadings {
     if (before.ok !== ok) this.log(ok ? "file events are heard again" : "file events go unheard; polling instead", { silentMs: ok ? Date.now() - before.since : 0, ...(lagMs !== undefined && { lagMs }) })
     else if (lagMs !== undefined && slow(lagMs) !== slow(before.lagMs)) this.log(slow(lagMs) ? "file events arrive late" : "file events arrive on time again", { lagMs })
     this.delivery = { ok, lagMs: lagMs ?? (ok ? before.lagMs : undefined), since: before.ok === ok ? before.since : Date.now() }
+    if (before.ok !== ok) for (const listener of this.listeners) listener.delivered(ok)
   }
 
   /** How late a change may be heard now: the canary's lag, and while that's slow, the calm poll's spacing (`CALM_POLL_MS`). */
@@ -94,6 +120,7 @@ export class WatchReadings {
   /** A read of history took `ms` from asking to answer, of which the child spent `caughtUpMs` waiting for the history to catch up and `readMs` replaying it. */
   historyRead(ms: number, paths: number, split: { caughtUpMs?: number; readMs?: number }): void {
     this.reads.add()
+    this.readsEver += 1
     this.readPaths.add(paths)
     const now = Date.now()
     if (!this.slowestRead || this.slowestRead.at < now - HOUR_MS || ms >= this.slowestRead.ms) this.slowestRead = { ms, at: now }

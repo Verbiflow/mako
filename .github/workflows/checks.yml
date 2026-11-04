@@ -101,6 +101,8 @@ jobs:
       # every script's scratch repositories away from the one it was started in.
       - run: npm run test:attribution
       - run: npm run test:workspace-snapshots
+      # fseventsd's health and its restart, against fakes: what's degraded, the samples, the evidence, recovery.
+      - run: npx tsx scripts/test-file-events-service.ts
 
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
   # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief
@@ -131,8 +133,11 @@ jobs:
       - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
       - run: npm run test:orch-deliver
+      # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
+      - run: npm run test:steer-landing
       - run: npm run test:agents-doors
       - run: npm run test:agents-cli
+      - run: npm run test:thread-move-tool
       - run: npm run test:orch-update
       - run: npm run test:orch-crash
 
@@ -216,9 +221,35 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run bench:sync-latency
 
+  # A message the person sends into a running turn reaches the model within `LANDS_BUDGET_MS`, through Mako's own host,
+  # on the real harnesses this runner has (Claude Code from its SDK, Codex at the tested build), each against the
+  # probe's stand-in model with a 15 s command running (`probe-steer-semantics.ts --lands`).
+  steer-latency:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+      - uses: ./.github/actions/codex-sandbox
+      - name: Steer latency on Claude Code and Codex
+        run: |
+          version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
+          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
+          PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run probe:steer-lands -- claude codex
+
   # Whether the host keeps answering while many Fins work (`bench:host-load`): a real host on 52 Threads' worktrees,
   # 95 apps and a busy process table, its Fins editing, building and writing transcripts, three windows polling. It
-  # fails when health checks or reads wait past 50 ms more than the bench allows, and prints what held the loop.
+  # fails when one health check or read in a hundred, or any one, waits past the bench's limits, and prints what held
+  # the loop.
   host-load:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

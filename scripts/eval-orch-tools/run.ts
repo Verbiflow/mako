@@ -1,7 +1,8 @@
 import "../lib/scratch-git.mjs"
 // eval:orch-tools — whether agents route background, parallel and writing
-// work through Mako's `agents_*`, and keep the rest in their own turn, on
-// each harness. Cases: `cases.ndjson` (T3 Code's schema, for `agents_*`).
+// work through Mako's `agents_*`, move their own Thread to the cloud with
+// `thread_move` when asked to continue there, and keep the rest in their own
+// turn, on each harness. Cases: `cases.ndjson` (T3 Code's schema, for `agents_*`).
 //
 //   npm run eval:orch-tools -- --dry-run [--out <dir>]
 //     every case's first request for Claude and Codex, routing on and off,
@@ -151,12 +152,15 @@ const stub = await startStubMako()
 try {
   const described: Described = await stub.describe()
   assert.ok(described.tools.some((tool) => tool.name === "agents_start"), "the mako server lists agents_start")
+  assert.ok(described.tools.some((tool) => tool.name === "thread_move"), "the mako server lists thread_move")
+  assert.match(described.instructions, /^thread_move: /m, "the mako server says what thread_move is for")
   if (flag("--dry-run")) {
     let bodies = 0, bytes = 0
     for (const harness of REPLAY_HARNESSES) for (const orchCase of cases.filter((each) => runsOn(each, harness))) for (const routing of routings) {
       const body = firstRequest(harness, orchCase, routing, described, DEFAULT_MODEL[harness])
       const text = JSON.stringify(body)
       assert.ok(text.includes("agents_start"), `${harness} ${orchCase.id}: the request names agents_start`)
+      assert.ok(text.includes("thread_move"), `${harness} ${orchCase.id}: the request names thread_move`)
       assert.ok(text.includes(JSON.stringify(orchCase.prompt).slice(1, -1)), `${harness} ${orchCase.id}: the request carries the prompt`)
       if (orchCase.setup.asks?.length)
         assert.ok(text.includes("agents_answer") && text.includes(JSON.stringify(wakeText(orchCase)).slice(1, -1)), `${harness} ${orchCase.id}: the request carries its Fins' wake`)
@@ -220,6 +224,15 @@ try {
       ["deliver-finished-no-interrupt", sample([[sendAs("docs", "interrupt")]]), false],
       ["deliver-already-steered-answers", { ...sample([]), text: "Yes: it hears it at its next step, once the migration command returns." }, true],
       ["deliver-already-steered-answers", sample([[sendAs("payments", "steer")]]), false],
+      ["move-continue-in-cloud", sample([[{ tool: "thread_move", args: { to: "cloud", clientKey: "k" } }]]), true],
+      ["move-continue-in-cloud", sample([[start({ place: "cloud" })]]), false],
+      ["move-continue-in-cloud", sample([[{ tool: "shell", args: {} }]], ["git push -u origin mako/csv-streaming"]), false],
+      ["move-closing-laptop", sample([[{ tool: "thread_move", args: { to: "cloud", clientKey: "k" } }]]), true],
+      ["move-closing-laptop", sample([[start()]]), false],
+      ["move-not-for-own-branch", sample([[{ tool: "thread_move", args: { to: "cloud", clientKey: "k" } }]]), false],
+      ["move-not-for-parallel-review", sample([[start()]]), true],
+      ["move-not-for-parallel-review", sample([[{ tool: "native_spawn", args: {} }]]), true],
+      ["move-not-for-parallel-review", sample([[{ tool: "thread_move", args: { to: "cloud", clientKey: "k" } }]]), false],
     ]
     for (const [id, synthetic, passes] of graded) {
       const orchCase = byId.get(id)

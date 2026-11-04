@@ -451,6 +451,8 @@ const inputs = {
   "mako:element-pick-targets": () => z.tuple([]),
   "mako:element-pick-wait": () => z.tuple([z.string(), z.number()]),
   "mako:external-editors": () => z.tuple([]),
+  "mako:file-events-restart": () => z.tuple([]),
+  "mako:file-events-service": () => z.tuple([]),
   "mako:fin-default-choose": () =>
     z.tuple([
       z.string(),
@@ -2254,6 +2256,8 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:thread-move-ask-answer": () => z.tuple([z.string(), z.boolean()]),
+  "mako:thread-move-asks": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
@@ -2301,6 +2305,18 @@ const inputs = {
       z
         .object({ cwd: z.string().optional(), harness: z.string().optional() })
         .optional(),
+    ]),
+  "mako:threads-move": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        to: z.union([z.literal("cloud"), z.literal("back")]),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
     ]),
   "mako:transcript-document": () =>
     z.tuple([
@@ -2531,6 +2547,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:element-pick-targets", "control"],
   ["mako:element-pick-wait", "control"],
   ["mako:external-editors", "workspaces"],
+  ["mako:file-events-restart", "workspaces"],
+  ["mako:file-events-service", "workspaces"],
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
@@ -2764,6 +2782,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
   ["mako:thread-move", "conversations"],
+  ["mako:thread-move-ask-answer", "conversations"],
+  ["mako:thread-move-asks", "conversations"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],
@@ -2780,6 +2800,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-titles-import", "threads"],
   ["mako:thread-unfollow", "threads"],
   ["mako:threads", "threads"],
+  ["mako:threads-move", "conversations"],
   ["mako:transcript-document", "conversations"],
   ["mako:unread-records", "threads"],
   ["mako:unwatch-file", "workspaces"],

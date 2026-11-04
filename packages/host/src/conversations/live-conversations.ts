@@ -51,7 +51,7 @@ import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/at
 import type { SessionSettings } from "@mako/sessions/settings"
 import { steerHeard } from "../harnesses/index.js"
 import { LiveAccounts } from "./live-accounts.js"
-import { LiveActions } from "./live-actions.js"
+import { LiveActions, type SteerInput, type SteerSender } from "./live-actions.js"
 import { LiveApprovals } from "./live-approvals.js"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { LiveAutoContinue } from "./live-auto-continue.js"
@@ -107,6 +107,8 @@ const startingWork = (id: string): LifecycleWork => ({ id, token: id, title: "St
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
+  /** The steers whose words `steerByRestart` is sending as a message of their own, under their receipt's ID. */
+  private readonly restarting = new Set<string>()
   /** Each conversation's last write as `lastMoved` read it, at the revision it read it. */
   private readonly moved = new Map<string, { revision: number; at: number | undefined }>()
   /** By conversation: when the last message that arrived for it is admitted or refused (`admitInOrder`). */
@@ -293,9 +295,9 @@ export class LiveConversations {
     this.approvals = new LiveApprovals(access)
     this.questions = new LiveQuestions(access, {
       continue: (id, bindingId, requestId, text, displayText) => { this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText) },
-      steer: (id, input) => this.act(id, input),
+      steer: (id, input) => this.act(id, input, "native"),
     })
-    this.actions = new LiveActions(access)
+    this.actions = new LiveActions(access, (id, running, input) => this.steerByRestart(id, running, input))
     this.transfers = new LiveTransfers(access)
     this.sources = new LiveSources(access)
     this.launches = new LiveLaunches(access)
@@ -376,9 +378,12 @@ export class LiveConversations {
 
   summaries(): LiveSummary[] {
     const agents = this.dependencies.agents?.()
-    return this.records.listing().map((summary) => {
+    const listing = this.records.listing()
+    const away = this.threads.runningElsewhere(listing.map((summary) => summary.session.id))
+    return listing.map((summary) => {
       const children = agents ? rollup(agents.roster(summary.session.id)) : undefined
-      return { ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id), ...(children?.total && { children }) }
+      const elsewhere = away.get(summary.session.id)
+      return { ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id), ...(children?.total && { children }), ...(elsewhere && { elsewhere }) }
     })
   }
 
@@ -703,7 +708,7 @@ export class LiveConversations {
       return existing
     }
     // A message is taken once under its ID, as a steer into a turn or as a message of its own (`steerTo` in the window).
-    if (conversationControl(resident).actions?.some((action) => action.input.id === requestId && action.state.kind !== "not-accepted"))
+    if (!this.restarting.has(requestId) && conversationControl(resident).actions?.some((action) => action.input.id === requestId && action.state.kind !== "not-accepted"))
       throw new Error("This message already went into the running turn.")
     this.moves.assertAdmits(resident)
     if (this.transfers.pending(resident))
@@ -928,9 +933,10 @@ export class LiveConversations {
     return this.checkpoints.rewind(id, input)
   }
 
-  act(id: string, input: LiveActionInput) {
+  /** A provider action. A steer the person sends lands at once (`SteerSender`); an agent's goes as its harness takes it. */
+  act(id: string, input: LiveActionInput, sender: SteerSender = "person") {
     this.admission.assert()
-    return this.actions.submit(id, input)
+    return this.actions.submit(id, input, sender)
   }
 
   acknowledgeAction(id: string, actionId: string): Promise<void> {
@@ -1202,19 +1208,57 @@ export class LiveConversations {
     const running = this.activeRequest(id)
     this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor)
     if (!running) return false
+    this.stopFor(id, running, requestId, "person")
+    return true
+  }
+
+  /**
+   * A person's steer sent by stopping the running turn (`SteerLanding`): its words go as the next message, ahead of
+   * what was queued, and the stop reads as `steered`, so that message tells the agent what the stopped turn left
+   * (`pendingInterruption`). A queued message steered goes as itself, from wherever the steer's receipt had put it.
+   */
+  private steerByRestart(id: string, running: string, input: SteerInput): void {
+    const own = input.kind === "steer-queued" ? input.queuedRequestId : input.id
+    if (input.kind === "steer") {
+      // Its receipt may already be the steer's, as one unconfirmed in time is: these words are that steer's own.
+      this.restarting.add(input.id)
+      try {
+        this.submit(id, input.id, input.text, input.attachments, undefined, undefined, input.displayText)
+      } finally {
+        this.restarting.delete(input.id)
+      }
+    }
+    this.stopFor(id, running, own, "steer")
+  }
+
+  /**
+   * The message a stop was for goes once the stop settled. A harness that ends its process on Stop (Claude Code) left
+   * nothing to send it to: its session opens again under its native ID, as a message to a sleeping one does.
+   */
+  private sendAfterStop(id: string): void {
+    const resident = this.records.get(id)
+    if (!resident?.snapshot.requests.some((request) => request.status === "queued")) return
+    if (!resident.driver && !resident.opening && this.hibernation.reopens(resident)) void this.hibernation.wake(resident)
+    else this.dispatch.drain(resident)
+  }
+
+  /** Stops `running` and sends `requestId` next, ahead of what was queued, which follows it in order. */
+  private stopFor(id: string, running: string, requestId: string, why: ProviderStop): void {
     const resident = this.records.require(id)
-    const waiting = new Set(resident.snapshot.requests.filter((request) => request.status === "queued").map((request) => request.id))
-    void this.stopRequest(id, running).catch((error) => hostWarn("live", "an interrupt couldn't stop the turn; its message waits for the turn's end", { conversation: id, error: errorMessage({ error }) }))
+    const waiting = new Set(resident.snapshot.requests.filter((request) => request.status === "queued" && request.id !== requestId).map((request) => request.id))
+    void this.stopRequest(id, running, why).then(
+      () => this.sendAfterStop(id),
+      (error) => hostWarn("live", "an interrupt couldn't stop the turn; its message waits for the turn's end", { conversation: id, why, error: errorMessage({ error }) }))
     // The stop held what was queued, as the person's Stop does; an interrupt sends it on, its own message first. That
     // order is kept in memory alone (the journal keeps requests as they came): it must hold only until this message
     // starts, and a host that restarts holds its queue anyway.
-    const requests = resident.snapshot.requests.map((request) => waiting.has(request.id) && request.status === "held" ? { ...request, status: "queued" as const } : request)
+    const requests = resident.snapshot.requests.map((request) =>
+      request.id === requestId || (waiting.has(request.id) && request.status === "held") ? { ...request, status: "queued" as const } : request)
     const own = requests.find((request) => request.id === requestId)
     const rest = requests.filter((request) => request.id !== requestId)
     const ahead = rest.findIndex((request) => request.status === "queued" || request.status === "held")
     resident.snapshot = { ...resident.snapshot, requests: own && ahead !== -1 ? [...rest.slice(0, ahead), own, ...rest.slice(ahead)] : requests }
     this.flush(resident)
-    return true
   }
 
   async cancelRequest(id: string, requestId: string, why: ProviderStop = "person"): Promise<void> {

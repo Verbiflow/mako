@@ -22,7 +22,7 @@ export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, SAMPLE_EVERY_MS, TraceRefresh } from "./app-probe.js"
-import { childHistory } from "./watch-backend.js"
+import { childHistory, type DaemonRestarts } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -67,8 +67,9 @@ export { ConversationFiles } from "./files.js"
 export type { AgentHost, TabServices } from "./agent-host.js"
 export type { HostPool } from "./pool.js"
 export { WorkspaceSnapshots, type CheckpointComparison } from "./snapshots.js"
-export { applyThreadEnvironment, threadEnvironmentInstructions } from "./thread-environment.js"
-export { childBackend } from "./watch-backend.js"
+export { applyThreadEnvironment, CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions } from "./thread-environment.js"
+export { childBackend, probeDelivery, type FileHistory } from "./watch-backend.js"
+export { administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd } from "./file-events-service.js"
 export { WatchReadings } from "./watch-readings.js"
 export { watchTree } from "./tree-watcher.js"
 export { watchOutsideGitDir } from "./git-dir-watch.js"
@@ -125,6 +126,8 @@ export interface WorkspacesDeps {
   ledger?: () => MoveLedger | undefined
   /** What the file system's history reads cost, for Diagnostics. */
   watchReadings?: WatchReadings
+  /** When fseventsd started over, so a read of history across it is reported lost. */
+  daemonRestarts?: DaemonRestarts
 }
 
 export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
@@ -140,7 +143,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   const environments = store && shared
     ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
-  const fileHistory = childHistory(undefined, deps.watchReadings)
+  const fileHistory = childHistory(undefined, deps.watchReadings, deps.daemonRestarts)
   const whoseApp = (app: AppKey): string | undefined => {
     const thread = ThreadIdSchema.safeParse(app)
     if (thread.success) {

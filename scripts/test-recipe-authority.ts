@@ -11,6 +11,7 @@ import { environmentTools } from "@mako/host/workspaces/environment-tools"
 import { portListening } from "@mako/host/workspaces/thread-environment"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+import { reapApps } from "./lib/reap-apps.ts"
 import { RecipeAccounts, RecipeSchema, placedProofs, publishedVersion, readVersion, recipePath, recipeVersions, saveDraft, syncedWith, versionHistory, type RecipeWhere } from "@mako/host/workspaces/thread-recipe"
 
 /**
@@ -101,6 +102,7 @@ createServer((_, response) => response.end("ok")).listen(Number(process.env.PORT
 process.on("SIGTERM", () => process.exit(0))
 `)
 const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
+const reap = reapApps(processes)
 const traces = new TraceRefresh()
 async function freeBlock(from: number): Promise<number> {
   for (let base = from; base < from + 2_000; base += 10) {
@@ -208,5 +210,6 @@ try {
 
   console.log(`PASS: a project's recipe kept by the account: one numbering for a laptop and a machine, a machine's proof in the laptop's history, a publish over another's refused with what was published, writes refused and reads kept while out of reach, another history set aside (${authority.calls} calls)`)
 } finally {
+  await reap()
   rmSync(root, { recursive: true, force: true })
 }

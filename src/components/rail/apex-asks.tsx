@@ -37,7 +37,7 @@ const AskingFin = memo(function AskingFin({ apex, apexTitle, agent, indent }: { 
     >
       <FinMark agent={agent} state={state} lit={lit} cut={lit ? "var(--raised)" : undefined} />
       <span className={cn("min-w-0 flex-1 truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>{agent.title}</span>
-      <span className="shrink-0 text-label font-medium text-caution">Needs you</span>
+      <span className="shrink-0 text-label font-medium text-attention">Needs you</span>
     </button>
   )
 })

@@ -5,6 +5,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsCrew, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
+import { registerThreadTools, ThreadMoveAnswerSchema } from "@mako/host/conversations/thread-move-tool"
+import { AFTER_MOVE, THREAD_MOVE_TOOL } from "@mako/host/contracts/thread-tools"
 import { startConversationMcp, type MakoTools } from "@mako/host/tools/conversation-mcp"
 import type { CallThread } from "@mako/host/contracts/native-calls"
 import { callGateAnswer, HookCall } from "@mako/host/harnesses/call-gate"
@@ -17,9 +19,10 @@ import { FIN_NAME, ToolArgs, type Call } from "./cases.ts"
 /**
  * Mako's own `mako` server for the eval: the conversation server a Thread's
  * agent reaches, with every `agents_*` tool as `registerAgentTools` projects
- * it from `AGENT_TOOLS` (so the shapes can't drift), answered by a door that
- * records each call and starts nothing. A start answers as a running child
- * would; a list, the children started so far.
+ * it from `AGENT_TOOLS`, and `thread_move` as `registerThreadTools` projects
+ * it (so the shapes can't drift), answered by a door that records each call
+ * and starts nothing. A start answers as a running child would; a list, the
+ * children started so far; a move, as a handoff under way.
  */
 export interface StubMako {
   /** The grant one launch's agent gets (`ConversationTools`). */
@@ -28,7 +31,7 @@ export interface StubMako {
   routes(conversation: string, thread: CallThread): void
   /** A case's own answers to Mako's tools, over `FAMILY_ANSWERS`. */
   answers(conversation: string, answers: Record<string, string>): void
-  /** The `agents_*` calls so far, by bare tool name. */
+  /** The `agents_*` and `thread_move` calls so far, by bare tool name. */
   calls(conversation: string): Call[]
   /** What an agent reads first: the server's instructions and its tools. */
   describe(): Promise<{ instructions: string; tools: { name: string; description: string; inputSchema: JsonValue }[] }>
@@ -54,6 +57,7 @@ export function startedAlready(names: readonly string[]): AgentsStarted[] {
 }
 
 export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[]): AgentAnswer {
+  if (tool === THREAD_MOVE_TOOL.mcp.name) return { outcome: "handing-off", move: randomUUID(), next: AFTER_MOVE.handingOff }
   const tree = { running: started.length, started: started.length, of: { running: 8, started: 32 } }
   if (tool === "agents_start") {
     const name = Named.parse(args).name ?? `child-${started.length + 1}`
@@ -108,6 +112,7 @@ const FAMILY_ANSWERS = new Map<string, string>([
   ["pull_request_status", "pull request: #42 Fix login redirect (open)\nchecks: 4 passed, 1 failed\nfailed: lint (eslint: src/login.ts:12 no-unused-vars)\nreviews: none"],
   ["pull_request_open", "Pushed mako/thread-work and opened https://github.com/acme/app/pull/42."],
   ["pull_request_merge", "Merged #42 into main (squash)."],
+  ["pull_request_rerun", "Re-running the failed jobs of 1 GitHub Actions run on the pushed commit. pull_request_status shows them as they go."],
   ["app_status", "address: http://thread.localhost:20540\nprocesses: web stopped, api stopped\nrecipe: ready (web on 20540, api on 20541); checks quick, full"],
   ["app_start", "Started web on 20540 and api on 20541: http://thread.localhost:20540 answers 200."],
   ["app_stop", "Stopped web and api."],
@@ -174,6 +179,14 @@ export async function startStubMako(): Promise<StubMako> {
       },
       caller: () => ({ kind: "agent", session: conversationId() }),
       filled: () => ({}),
+    }), (server, conversationId) => registerThreadTools(server, {
+      invoke: async (_channel, [, input]) => {
+        const conversation = conversationId()
+        const args = ToolArgs.parse(JSON.parse(JSON.stringify(input ?? {})))
+        record(conversation, THREAD_MOVE_TOOL.mcp.name, args)
+        return ThreadMoveAnswerSchema.parse(stubAnswer(THREAD_MOVE_TOOL.mcp.name, args, []))
+      },
+      caller: () => ({ kind: "agent", session: conversationId() }),
     })],
     (conversation, event, body) => {
       const thread = threads.get(conversation)

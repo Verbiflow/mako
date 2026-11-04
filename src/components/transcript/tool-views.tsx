@@ -222,7 +222,7 @@ const STANDING_WORDS = {
 /** The dot beside it: sea only while it works, the diff hues once it has an outcome. */
 const STANDING_DOTS = {
   working: "animate-live bg-sea",
-  waiting: "bg-caution",
+  waiting: "bg-attention",
   done: "bg-added",
   failed: "bg-removed",
   stopped: "bg-foreground/25",

@@ -110,7 +110,7 @@ try {
   const listed: Record<string, Awaited<ReturnType<Client["listTools"]>>["tools"]> = {}
   for (const [door, client] of Object.entries(doors)) {
     listed[door] = (await client.listTools()).tools
-    assert.deepEqual(listed[door]!.map((tool) => tool.name).sort(), AGENT_TOOLS.map((tool) => tool.mcp.name).sort(), `${door} lists every tool`)
+    assert.deepEqual(listed[door]!.map((tool) => tool.name).filter((name) => name.startsWith("agents_")).sort(), AGENT_TOOLS.map((tool) => tool.mcp.name).sort(), `${door} lists every tool`)
     for (const tool of AGENT_TOOLS) {
       const schema = listed[door]!.find((listedTool) => listedTool.name === tool.mcp.name)!.inputSchema
       const fields = generatedFields(tool)
@@ -119,7 +119,8 @@ try {
     }
   }
   // The in-memory door keeps the undefined fields the wire drops.
-  assert.deepEqual(listed["mako mcp"], JSON.parse(JSON.stringify(listed["in-thread"])), "both MCP doors list the same tools, schemas and words")
+  const agentsOnly = (tools: (typeof listed)[string]) => tools.filter((tool) => tool.name.startsWith("agents_"))
+  assert.deepEqual(agentsOnly(listed["mako mcp"]!), JSON.parse(JSON.stringify(agentsOnly(listed["in-thread"]!))), "both MCP doors list the same tools, schemas and words")
 
   const command = async (...args: string[]) => {
     const { stdout } = await run(process.execPath, [cli, "agents", ...args, "--socket", socket, "--cwd", cwd, "--json"], { env: { ...process.env, MAKO_SESSION_ID: session } }).catch((error: { stdout?: string; code?: number }) => {
