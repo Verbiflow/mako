@@ -129,6 +129,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     threadId: snapshot.threadId ?? existing?.threadId,
     sessionId: snapshot.sessionId ?? existing?.sessionId,
     parent: snapshot.parent ?? existing?.parent,
+    // An Apex listed from another device keeps its row's Fins once opened, until its own roster says them.
+    fins: snapshot.fins ?? existing?.fins,
     createdAt: snapshot.createdAt,
     updatedAt: Date.now(),
     kind: "live",
@@ -595,7 +597,12 @@ export function hydrateLiveSummaries(
 function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
   for (const summary of summaries) {
     const previous = acpStore.get().conversations[summary.session.id]
-    if (previous?.hydrated && !reconnect) continue
+    if (previous?.hydrated && !reconnect) {
+      // Opened here, it reads its owner's stream; its Fins still come from the list while this window holds no roster of them.
+      if (previous.kind === "live" && summary.elsewhere !== undefined && previous.fins !== summary.fins)
+        replaceAcpConversation(summary.session.id, { ...previous, fins: summary.fins, children: summary.children ?? previous.children })
+      continue
+    }
     if (reconnect && previous?.kind === "live") {
       replaceAcpConversation(summary.session.id, {
         ...previous,
