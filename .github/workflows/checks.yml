@@ -110,6 +110,27 @@ jobs:
       # fseventsd's health and its restart, against fakes: what's degraded, the samples, the evidence, recovery.
       - run: npx tsx scripts/test-file-events-service.ts
 
+  # The Files view's index (`test-file-index.ts`): the tree a folder at a time, names found as they're typed, text
+  # search stopping at a screenful, and a real repository kept current path by path. Then how fast it finds things
+  # against the old way in the same run, on this checkout and 100,000 generated files (`bench-file-search.ts`): every
+  # number goes to the job's summary, and it fails only on a gross regression, never on a fixed number of milliseconds.
+  file-search:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-index.ts
+      - run: npx tsx --tsconfig tsconfig.scripts.json scripts/bench-file-search.ts --files 100000
+
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
   # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief
   # still sends the brief once (`test:orch-update`); and with the host killed at thirteen points on all six harnesses

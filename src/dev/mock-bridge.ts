@@ -1,4 +1,5 @@
 import { fixtureHarnesses } from "./harness-fixtures"
+import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
@@ -1177,6 +1178,9 @@ export function installMockBridge() {
       binary: false,
       truncated: false,
     }),
+    filesFolders: async (paths: string[], options?: FileFoldersOptions) => mockFileIndex().folders(paths, options),
+    filesFind: async (query: string, limit?: number) => mockFileIndex().find(query, limit),
+    filesGrep: async (query: string) => mockGrep(query),
     listFiles: async () =>
       [
         "src/components/composer/composer.tsx",
@@ -2608,6 +2612,9 @@ export function installMockBridge() {
       if (!snapshot) throw new Error("Missing mock session")
       return { ...snapshot, threadPath: path }
     },
+    liveFilesFolders: async (_id: string, paths: string[], options?: FileFoldersOptions) => mockFileIndex().folders(paths, options),
+    liveFilesFind: async (_id: string, query: string, limit?: number) => mockFileIndex().find(query, limit),
+    liveFilesGrep: async (_id: string, query: string) => mockGrep(query),
     readLiveFile: async (_id: string, path: string) => ({
       path,
       contents: "Mock file",
@@ -3955,4 +3962,15 @@ function mockFileEventsService(scene: string | null): FileEventsService {
       context: { ...context, turnsRunning: index % 4 },
     })),
   }
+}
+
+/** The browser mock's project: the paths its `listFiles` names, browsable and searchable as a host's index is. */
+const MOCK_PATHS = ["src/components/composer/composer.tsx", "src/components/rail/session-rail.tsx", "src/components/transcript/turn.tsx", "src/state/store.ts", "src/state/session.ts", "src/index.css", "electron/host.ts", "electron/shared.ts", "package.json", "README.md"]
+let mockIndex: FileIndexCore | undefined
+function mockFileIndex(): FileIndexCore {
+  mockIndex ??= new FileIndexCore(MOCK_PATHS)
+  return mockIndex
+}
+function mockGrep(query: string): FileGrepResults {
+  return { query, files: [{ path: "src/state/session.ts", lines: [{ line: 1, text: `// ${query}` }], more: 0 }], total: 1, more: false, ms: 1 }
 }

@@ -1,3 +1,4 @@
+import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
 import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
@@ -397,6 +398,10 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-bind", id, path),
     readLiveFile: (id: string, path: string, purpose?: FileReadPurpose) =>
       invokeTrustedHost<FileContents>("mako:read-live-file", id, path, purpose),
+    /** The same, of a conversation's folder, answered by the host it runs on. */
+    liveFilesFolders: (id: string, paths: string[], options?: FileFoldersOptions) => invokeTrustedHost<FileFolders>("mako:live-files-folders", id, paths, options),
+    liveFilesFind: (id: string, query: string, limit?: number) => invokeTrustedHost<FileFindResults>("mako:live-files-find", id, query, limit),
+    liveFilesGrep: (id: string, query: string, options?: FileGrepOptions) => invokeTrustedHost<FileGrepResults>("mako:live-files-grep", id, query, options),
     liveAttach: (path: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
@@ -795,6 +800,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     createWorkspaceText: (cwd: string, path: string, text: string) =>
       invokeTrustedHost<string>("mako:create-workspace-text", cwd, path, text),
     listFiles: () => invokeTrustedHost<WorkspaceFile[]>("mako:list-files"),
+    /** The Files view's folders of this window's workspace, from the host's index of it. */
+    filesFolders: (paths: string[], options?: FileFoldersOptions) => invokeTrustedHost<FileFolders>("mako:files-folders", paths, options),
+    filesFind: (query: string, limit?: number) => invokeTrustedHost<FileFindResults>("mako:files-find", query, limit),
+    filesGrep: (query: string, options?: FileGrepOptions) => invokeTrustedHost<FileGrepResults>("mako:files-grep", query, options),
     readFile: (path: string) =>
       invokeTrustedHost<FileContents>("mako:read-file", path),
     watchFile: (path: string) =>

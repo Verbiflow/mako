@@ -114,6 +114,13 @@ const reads = [
   "mako:thread-continuation-resolve",
   "mako:thread-owner-resolve",
   "mako:list-files",
+  "mako:files-folders",
+  "mako:files-find",
+  "mako:live-files-folders",
+  "mako:live-files-find",
+  /** A text search changes nothing; a newer one in the same folder stops the last. */
+  "mako:files-grep",
+  "mako:live-files-grep",
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",

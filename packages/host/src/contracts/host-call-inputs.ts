@@ -334,7 +334,10 @@ const inputs = {
     z.tuple([z.union([z.null(), z.string()])]),
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
-  "mako:build-update": () => z.tuple([z.enum(["upstream", "checkout"]).optional()]),
+  "mako:build-update": () =>
+    z.tuple([
+      z.union([z.literal("upstream"), z.literal("checkout")]).optional(),
+    ]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -458,6 +461,26 @@ const inputs = {
   "mako:external-editors": () => z.tuple([]),
   "mako:file-events-restart": () => z.tuple([]),
   "mako:file-events-service": () => z.tuple([]),
+  "mako:files-find": () => z.tuple([z.string(), z.number().optional()]),
+  "mako:files-folders": () =>
+    z.tuple([
+      z.array(z.string()),
+      z
+        .object({ limit: z.number().optional(), since: z.number().optional() })
+        .optional(),
+    ]),
+  "mako:files-grep": () =>
+    z.tuple([
+      z.string(),
+      z
+        .object({
+          regex: z.boolean().optional(),
+          caseSensitive: z.boolean().optional(),
+          wholeWord: z.boolean().optional(),
+          limit: z.number().optional(),
+        })
+        .optional(),
+    ]),
   "mako:fin-default-choose": () =>
     z.tuple([
       z.string(),
@@ -734,6 +757,29 @@ const inputs = {
           z.object({ kind: z.literal("resume") }),
         ]),
       }),
+    ]),
+  "mako:live-files-find": () =>
+    z.tuple([z.string(), z.string(), z.number().optional()]),
+  "mako:live-files-folders": () =>
+    z.tuple([
+      z.string(),
+      z.array(z.string()),
+      z
+        .object({ limit: z.number().optional(), since: z.number().optional() })
+        .optional(),
+    ]),
+  "mako:live-files-grep": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z
+        .object({
+          regex: z.boolean().optional(),
+          caseSensitive: z.boolean().optional(),
+          wholeWord: z.boolean().optional(),
+          limit: z.number().optional(),
+        })
+        .optional(),
     ]),
   "mako:live-fork": () =>
     z.tuple([
@@ -2583,6 +2629,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:external-editors", "workspaces"],
   ["mako:file-events-restart", "workspaces"],
   ["mako:file-events-service", "workspaces"],
+  ["mako:files-find", "workspaces"],
+  ["mako:files-folders", "workspaces"],
+  ["mako:files-grep", "workspaces"],
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
@@ -2652,6 +2701,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-continue-turn", "conversations"],
   ["mako:live-earlier", "conversations"],
   ["mako:live-edit-queued", "conversations"],
+  ["mako:live-files-find", "conversations"],
+  ["mako:live-files-folders", "conversations"],
+  ["mako:live-files-grep", "conversations"],
   ["mako:live-fork", "conversations"],
   ["mako:live-goal", "conversations"],
   ["mako:live-hold-until", "conversations"],

@@ -45,6 +45,8 @@ import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { ReviewLayer } from "./review-layer"
+import { FilesLayer } from "./files-layer"
+import { closeFiles, filesOpenStore, openFiles } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
@@ -152,6 +154,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           <InboxView />
         </main>
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -211,6 +214,13 @@ function toggleChanges(): void {
   openReview({ conversation: live.key, scope: { kind: "thread" } })
 }
 
+/** The open Session's folder beside its transcript, where Changes goes, or away again. */
+function toggleFiles(): void {
+  if (filesOpenStore.get().open) return closeFiles()
+  const live = activeLiveAcp(acpStore.get())
+  if (live) openFiles({ conversation: live.key })
+}
+
 /**
  * The desk's commands, in its own registry, so its palette lists them with their keys and the keyboard layer runs them:
  * the palette, New, Settings, the rail, the composer, Stop, the next Thread that needs you, the next and previous
@@ -254,6 +264,7 @@ function useDeskKeys({ threads, selected, open, newThread, settings }: { threads
       },
       // The desk's own command for Changes: the open Session's turns, beside its transcript, and away again.
       { id: "view.changes", title: "Show changed files", section: "View", keywords: "review diff turn right sidebar", when: () => Boolean(reviewOpenStore.get().open ?? activeLiveAcp(acpStore.get())), run: toggleChanges },
+      { id: "view.files", title: "Browse files", section: "View", keywords: "files tree folder find file search code source explorer", when: () => Boolean(filesOpenStore.get().open ?? activeLiveAcp(acpStore.get())), run: toggleFiles },
       { id: "view.settings", title: "Settings", section: "View", keys: "mod+,", keywords: "preferences notifications theme sign out", run: () => latest.current.settings() },
       { id: "session.new", title: "New thread", section: "Session", keys: NEW_THREAD_KEYS, keywords: "start create", run: () => latest.current.newThread() },
       { id: "session.focus-composer", title: "Focus the composer", section: "Session", keys: "mod+l", run: () => document.querySelector<HTMLTextAreaElement>("main textarea:not([readonly]):not([disabled])")?.focus() },
