@@ -35,6 +35,7 @@ import type {
   AdmittedLiveDriver,
   ConversationTools,
 } from "../harnesses/index.js"
+import type { ControlInstructions, ControlSaid } from "./control-cadence.js"
 import type { LiveJournal } from "./live-journal.js"
 import type { JournalReclaims } from "./journal-reclaim.js"
 import type { LiveMoves } from "./live-moves.js"
@@ -164,6 +165,11 @@ export interface Resident {
   stoppingWork?: string[]
   /** The running turn's steps and results in the order they arrived; see `TurnSteps`. */
   steps?: TurnSteps
+  /**
+   * The standing lines of Mako's note its process last heard (`standingLines`). Forgotten when the harness compacts
+   * or rewinds its history and when a send fails, so the next prompt carries them all again.
+   */
+  controlSaid?: ControlSaid
 }
 
 
@@ -233,11 +239,12 @@ export interface Dependencies {
   /** The Threads each conversation's Thread leads (`Agents`). */
   agents?(): ConversationChildren | undefined
   /**
-   * The lines of Mako's note sent ahead of each prompt: Local Control and the
-   * values the conversation's process started with. The note wraps them with
-   * anything Mako has to tell about the conversation itself.
+   * The lines of Mako's note ahead of a prompt: Local Control and the values
+   * the conversation's process started with, which its process hears once
+   * and then as they change (`standingLines`), and notices, each said once.
+   * The note wraps them with anything Mako has to tell about the conversation itself.
    */
-  controlInstructions?(bindingId: string, conversationId: string): string[]
+  controlInstructions?(bindingId: string, conversationId: string): ControlInstructions
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
   suspendTools?(bindingId: string, conversationId: string): void | Promise<void>

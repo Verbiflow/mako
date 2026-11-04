@@ -1,7 +1,7 @@
 import { carriedUsage } from "../harnesses/index.js"
 import type { LiveBatch, LiveDriverEvent, LiveRequest } from "../contracts/live-conversations.js"
 import { GoalObservationSchema } from "../contracts/live-goals.js"
-import type { NativeActivity, NativeActivityObservation } from "../contracts/native-activity.js"
+import { CONTEXT_COMPACTED, type NativeActivity, type NativeActivityObservation } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, NativeAgentObservationSchema, observeNativeAgent, type TurnEnd } from "../contracts/native-agents.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
@@ -236,6 +236,7 @@ export class LiveEvents {
       if (gone && previousStatus !== "running")
         resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: false, ownTurn: false, gone }) }
     } else if (event.type === "live-rewound") {
+      resident.controlSaid = undefined
       this.access.nativeRewound(resident, event.run)
     } else if (event.type === "live-goal") {
       this.access.goalObserved(resident, event.goal === null ? null : GoalObservationSchema.parse(event.goal))
@@ -258,6 +259,7 @@ export class LiveEvents {
         }),
       }
     } else if (event.type === "live-activity") {
+      if (event.activity?.kind === "compacting") resident.controlSaid = undefined
       const nativeActivity = observeNativeActivity(
         resident.snapshot.nativeActivity,
         resident.snapshot.session.status === "running" && !replaying ? event.activity : null
@@ -317,6 +319,8 @@ export class LiveEvents {
       resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
     for (const update of prepared) {
       if (dispatching && update.kind === "user") continue
+      // What the harness kept of its history may have dropped Mako's note.
+      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) resident.controlSaid = undefined
       resident.steps?.observe(update)
       if (queueLiveUpdate(resident, update) === "full") {
         this.access.keep(resident)

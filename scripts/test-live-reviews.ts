@@ -88,7 +88,7 @@ function reviewHost(review: ReviewCapability, options: { hold?: true } = {}) {
     driver: () => driver,
     history: async () => null,
     emit: () => {},
-    controlInstructions: () => [NOTE],
+    controlInstructions: () => ({ standing: { control: NOTE }, notices: [] }),
   })
   return {
     id,
