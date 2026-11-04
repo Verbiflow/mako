@@ -1709,8 +1709,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         return "This checkout's install outputs are its own already (installed or cloned here, or this is the main checkout), so installing here touches nothing else. Install as you normally would."
       const running = (await deps.processes.status(current.environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
       const owned = await ownPackages(git, current.checkout, steps)
+      const copied = owned.filter((item) => item.cloned).map((item) => item.entry)
+      const unlinked = owned.filter((item) => !item.cloned).map((item) => item.entry)
+      const install = [...new Set(steps.map((step) => step.command))].join(", then ")
       return [
-        `${owned.join(", ")} ${owned.length === 1 ? "is" : "are"} now this checkout's own: a copy of the main checkout's, so installing here no longer touches the main checkout. Install, add, remove or upgrade packages as you normally would.`,
+        copied.length ? `${copied.join(", ")} ${copied.length === 1 ? "is" : "are"} now this checkout's own: a copy of the main checkout's, so installing here no longer touches the main checkout. Install, add, remove or upgrade packages as you normally would.` : undefined,
+        unlinked.length ? `${unlinked.join(", ")} no longer ${unlinked.length === 1 ? "links" : "link"} to the main checkout's, and ${unlinked.length === 1 ? "is" : "are"} gone here: this volume can't copy them cheaply, so run the install (${install}) to make ${unlinked.length === 1 ? "it" : "them"} in full before using ${unlinked.length === 1 ? "it" : "them"}.` : undefined,
         running ? "The running app still has the old outputs loaded; app_restart it after installing." : undefined,
       ].filter(Boolean).join(" ")
     },
