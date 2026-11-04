@@ -140,6 +140,8 @@ export const GrantSchema = z
     ask: AskSchema,
     /** Whether what it covers is a secret: a secret lands only in memory-backed files, never in a snapshot or a log. */
     secret: z.boolean(),
+    /** Only for borrowers on the source device itself (a worktree reading its own Mac's main checkout), never another place. */
+    within: z.literal("source-device").optional(),
     /** The name the person gave it or knows it by ("Cloudflare for parley"); the ref when absent. */
     label: z.string().max(200).optional(),
     grantedBy: ActorSchema,
@@ -160,6 +162,7 @@ export const GrantSchema = z
     if (grant.mode === "relay" && grant.source.kind !== "device") context.addIssue({ code: "custom", message: "Only a device relays" })
     if (grant.lifetime.until === "thread-ends" && grant.scope.level !== "thread")
       context.addIssue({ code: "custom", message: "A grant that ends with its Thread is scoped to that Thread" })
+    if (grant.within && grant.source.kind !== "device") context.addIssue({ code: "custom", message: "Only a device's grant keeps to the device" })
     if (grant.scope.account !== accountOf(grant.grantedBy, grant.scope.account))
       context.addIssue({ code: "custom", message: "A grant is given within its own account" })
   })
@@ -185,6 +188,8 @@ export const NeedSchema = z
     why: z.string().min(1).max(500),
     correlationId: Id,
     holding: HoldingSchema.optional(),
+    /** The mode the borrower needs, when it needs one (a link where it would otherwise get a copy); a grant in another mode doesn't answer it. */
+    mode: ModeSchema.optional(),
   })
   .strict()
 export type Need = z.infer<typeof NeedSchema>
@@ -408,6 +413,13 @@ export function selects(selector: ResourceSelector, kind: Kind, ref: string): bo
   return pathPattern(selector.ref).test(ref)
 }
 
+/** Whether a grant reaches a borrower: inside its scope, and on its source device when it keeps to it. */
+export function reachesBorrower(grant: Grant, borrower: Borrower): boolean {
+  if (!inScope(grant.scope, borrower)) return false
+  if (!grant.within) return true
+  return grant.source.kind === "device" && borrower.place.kind === "device" && borrower.place.device === grant.source.device
+}
+
 /** Whether a borrower is inside a scope. */
 export function inScope(scope: Scope, borrower: Borrower): boolean {
   if (scope.account !== borrower.account) return false
@@ -496,8 +508,8 @@ function clone(state: BrokerState): BrokerState {
 
 /** The grant that decides a need, by the narrowest scope and then the newest; or why none does. */
 export function chooseGrant(state: BrokerState, need: Need, at: number): { grant: GrantState } | { refusal: Refusal } {
-  const matching = Object.values(state.grants).filter((held) => selects(held.grant.resource, need.kind, need.ref))
-  const reaching = matching.filter((held) => inScope(held.grant.scope, need.for))
+  const matching = Object.values(state.grants).filter((held) => selects(held.grant.resource, need.kind, need.ref) && (!need.mode || held.grant.mode === need.mode))
+  const reaching = matching.filter((held) => reachesBorrower(held.grant, need.for))
   const standing = reaching.filter((held) => !held.ended && !lapsed(held.grant, at))
   if (standing.length) {
     standing.sort(
@@ -530,7 +542,7 @@ function askOffer(need: Need): AskOffer {
     borrower: need.for,
     why: need.why,
     scope: { level: "thread", account: need.for.account, thread: need.for.thread },
-    mode: KIND_MODES[need.kind][0]!,
+    mode: need.mode ?? KIND_MODES[need.kind][0]!,
   }
 }
 
@@ -655,7 +667,7 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
         for (const ask of Object.values(state.asks)) {
           if (ask.grant !== grant.id || reaches(known.grant, grant, ask.need)) continue
           delete state.asks[ask.ask]
-          decide(state, effects, ask.need, { refusal: { refused: inScope(grant.scope, ask.need.for) ? "revoked" : "out-of-scope" } }, input.at)
+          decide(state, effects, ask.need, { refusal: { refused: reachesBorrower(grant, ask.need.for) ? "revoked" : "out-of-scope" } }, input.at)
         }
       if (lapsed(grant, input.at)) endGrant(state, effects, grant.id, { at: input.at, why: "expired", by: { kind: "mako" } })
       return done()
@@ -777,7 +789,7 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
 
 /** Whether a changed grant still covers what its earlier version gave or was asked for. */
 function reaches(before: Grant, after: Grant, need: Pick<Need, "kind" | "ref" | "for">): boolean {
-  return sameReach(before, after) && inScope(after.scope, need.for) && selects(after.resource, need.kind, need.ref)
+  return sameReach(before, after) && before.within === after.within && reachesBorrower(after, need.for) && selects(after.resource, need.kind, need.ref)
 }
 
 function offline(source: SourceRef, lastSeen: number | null, need: Need): Refusal {
