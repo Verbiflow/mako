@@ -11,6 +11,7 @@ import type { CodexEngine } from "../codex-app.js"
 import type { HarnessContext } from "../host.js"
 import { fileResumeEvidence } from "../native-continuation.js"
 import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
+import { codexLayer } from "./layer.js"
 
 export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server account/read" } as const
 
@@ -48,6 +49,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     },
     nativeAgents: { kind: "observed", via: "`spawn_agent` calls and the agent threads they start." },
     nativeRouting: { kind: "at-launch", via: "`agents.enabled = false` in the config `thread/start`, `thread/resume` and `thread/fork` carry, which removes `spawn_agent` and the other multi-agent tools whatever the model declares.", verified: { version: "0.166.0", how: "harness:native-tools records every model as a lead without them (2026-11-01); test:native-routing-live: a lead, and that lead resumed in a new app-server, offered no `spawn_agent`, an ordinary Thread's child ran and was observed" } },
+    layer: codexLayer.capabilities,
     modelRoutes: { kind: "planned", wires: ["openai-chat", "openai-responses"], via: "A provider in `config.model_providers` (its `base_url`, `wire_api` and `env_key`) and `modelProvider` on `thread/start`; no adapter uses it yet." },
     contextBreakdown: { kind: "unavailable", reason: "The app-server reports token totals and the context window, not what fills it." },
     modeSwitching: { kind: "native", via: "Each mode is an approval policy and sandbox, sent with each turn." },

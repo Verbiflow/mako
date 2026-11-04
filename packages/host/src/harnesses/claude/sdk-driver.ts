@@ -60,6 +60,7 @@ import { claudeAcknowledged, claudeCommandLifecycle, claudeOwnTurnEnded, claudeT
 import { fileResumeEvidence } from "../native-continuation.js"
 import { claudeSessionCheckpoint } from "./session-checkpoint.js"
 import { claudeProcessProbe } from "./process-probe.js"
+import { claudeLayer } from "./layer.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
 export const CLAUDE_MODES: LiveSessionMode[] = [
@@ -585,6 +586,7 @@ export function createClaudeSdkDriver(
     questions: { kind: "request", via: "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input." },
     nativeAgents: { kind: "observed", via: "Agent and Workflow tool calls and their sidechain messages." },
     nativeRouting: { kind: "per-call", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`; SubagentStart adds the native-child paragraph.", verified: { version: "2.1.314", how: "test:native-routing-live (2026-11-01): as a lead the scripted model's `Agent` call was denied and the model read the message next, no subagent observed; as an ordinary Thread the child ran, was observed and heard the paragraph" } },
+    layer: claudeLayer.capabilities,
     modelRoutes: { kind: "planned", wires: ["anthropic"], via: "`ANTHROPIC_BASE_URL` and a key in one launch's environment, the account profile's own sign-in left as it is; no adapter uses it yet." },
     modeSwitching: { kind: "native", via: "Claude Code's permission modes, set on the running query with `setPermissionMode`." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel." },

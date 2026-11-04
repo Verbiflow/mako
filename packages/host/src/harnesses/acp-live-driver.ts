@@ -68,6 +68,7 @@ export function createAcpLiveDriver(
     approvalAnswerDigest: source.approvalAnswerDigest,
     nativeAgents: source.agents.kind === "observed" ? { kind: "observed", via: source.agents.via } : source.agents,
     nativeRouting: source.nativeRouting,
+    layer: source.layer,
     modelRoutes: source.modelRoutes,
     questions: source.questions,
     fork: fork.kind === "native" ? { kind: fork.kind, point: fork.point, via: fork.via } : fork,
