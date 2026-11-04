@@ -101,6 +101,8 @@ jobs:
       # every script's scratch repositories away from the one it was started in.
       - run: npm run test:attribution
       - run: npm run test:workspace-snapshots
+      # fseventsd's health and its restart, against fakes: what's degraded, the samples, the evidence, recovery.
+      - run: npx tsx scripts/test-file-events-service.ts
 
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
   # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief

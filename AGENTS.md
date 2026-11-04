@@ -1961,8 +1961,11 @@ Everything the host watches goes through one watcher child
 (`workspaces/watch-backend.ts`): one FSEvents stream per distinct folder and
 ignore list, which parcel shares, plus the child's canary. The canary calls
 delivery silent only after 30 s with nothing heard, and reports how late beats
-arrive otherwise: an fseventsd with a backlog delivers in batches, 15 s apart
-on a Mac a month up, with nothing lost. A silence makes every watch poll
+arrive otherwise: a degraded fseventsd delivers in batches, seconds apart,
+with nothing lost. That is a fault, not a busy Mac. One a month up held 24 GB
+(10.5 GB resident) and delivered every app's events 2.6 s late at the median;
+`sudo killall fseventsd` brought it back to 11.5 ms and a few megabytes, and
+it stayed there through three times the traffic. A silence makes every watch poll
 (`pollTree`) and restarts the child, at most once every 10 minutes. The
 tracker rescans a root for lost events at once after a quiet while, then 2 s
 after the last, doubling to 10 minutes while losses keep coming; roots take
@@ -1982,6 +1985,43 @@ every watch, restarted the child and rescanned every root about once a
 minute, all day: 45 million files stat-ed in two days. `npm run
 bench:mako-footprint` runs a scripted stretch of work against budgets
 (`--drops <s>`, `--slow-delivery`).
+
+The daemon's own health is read apart from any watch
+(`workspaces/file-events-service.ts`, `contracts/file-events-service.ts`),
+without root: every canary beat goes to the host (`beat`), and fseventsd is
+degraded once the median of the last six (a minute at the 10 s beat, four at
+least) is past 250 ms, or the canary is unheard, or two readings a minute
+apart of its resident memory (`ps -o rss=`) are past 1 GB. Healthy, a beat
+takes 15 to 60 ms (60 when parcel's 50 ms debounce holds it) and the daemon
+holds under 50 MB; the 5 s `SLOW_DELIVERY_MS` is only when watches
+start polling around it. A sample every 15 minutes, and at each change of
+state or daemon, keeps memory, lag and what Mako did since (watches and
+streams, watcher starts, history reads, turns running, wakes) in
+`<data root>/file-events/fseventsd.jsonl` for a week. Degraded, the desk says
+so above the panes (`FileEventsNotice`) with the numbers, and Settings ›
+Diagnostics shows the readings and the day's samples (`FileEventsReadout`).
+"Restart it" (`mako:file-events-restart`) runs one privileged step through
+macOS's administrator password dialog (`osascript … with administrator
+privileges`): into a folder root makes itself, a 5 s `sample`, `vmmap
+--summary`, `footprint` and two hours of fseventsd's `log show`, then `killall
+fseventsd`, which launchd answers by starting it again, then the folder handed
+to the person. Mako copies it into its crash-report folder as
+`fseventsd-<time>/` with `clients.txt` (the sample's
+`com.apple.fseventsd.client.<pid>` threads: who subscribed, gone or not) and
+`summary.json` (the zones' allocation counts, before and after, the day's
+samples), starts the watcher child over (`recover`: every watch hears
+`dropped` and rescans) and ends history reads under way, and measures
+delivery again with a probe (`probeDelivery`, five beats in a child of its
+own). A new fseventsd pid, from Mako's restart or anyone's, is a restart: a
+history read whose mark is from before one reports every root `lost`
+(`DaemonRestarts`), and app proofs say links weren't checked rather than
+passing. A history read waits for its sentinel with replays spaced from 20 ms
+doubling to 500 ms: each replay is a stream fseventsd registers, and at a
+steady 20 ms a daemon 2.6 s behind was asked 130 times a read.
+`scripts/test-file-events-service.ts` covers it against fakes, and
+`test-watch-backend.ts` through a real child whose canary is held 400 ms
+late. Tests that start apps reap them in `finally` and on a signal
+(`scripts/lib/reap-apps.ts`): they're detached, so they outlived failed runs.
 
 ## Git
 

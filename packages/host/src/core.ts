@@ -29,7 +29,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, WatchReadings, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -188,6 +188,8 @@ interface LateParts {
   machineTracker?: MachineTracker
   /** Turning the cloud on, as one line: told when what it reads changes. */
   turnOn?: CloudTurnOnFollower
+  /** The file system's history, for fseventsd's restart to end reads across it. */
+  fileHistory?: FileHistory
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -278,6 +280,26 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const conversationFiles = new ConversationFiles(git, previews)
   const watchReadings = new WatchReadings((message, fields) => hostLog("watch", message, fields))
   const watchBackend = childBackend(undefined, watchReadings)
+  const fileEvents = new FileEventsServiceWatch({
+    mac: onMac(),
+    readDaemon: readFseventsd,
+    privileged: administratorPrompt,
+    probe: () => probeDelivery(),
+    recover: () => {
+      watchBackend.recover()
+      late.fileHistory?.recover?.()
+    },
+    activity: () => ({ ...watchReadings.totals(), turnsRunning: (late.conversations?.live.summaries() ?? []).filter(({ session }) => session.status === "running").length }),
+    emit: (service) => emit({ type: "file-events-service", service }),
+    log: (message, fields) => hostLog("watch", message, fields),
+    historyFile: join(environment.dataRoot, "file-events", "fseventsd.jsonl"),
+    evidenceRoot: crashes.directory,
+    history: () => late.fileHistory,
+    uid: process.getuid?.() ?? -1,
+  })
+  watchReadings.follow(fileEvents)
+  if (onMac()) shell.jobs.every("read fseventsd's health", 60_000, () => fileEvents.tick(), { firstAfterMs: 5_000 })
+  declareFileEventsMethods(methods, fileEvents)
   const workspaceClients = new WorkspaceClients(emit, { git, previews, watch: watchBackend, attachments: join(environment.userRoot, "attachments") })
   /** Start the first tab once, however many callers race for it. */
   const ready = (): Promise<HostPool> => workspaceClients.ready(hostClient())
@@ -377,7 +399,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     cleanup: (path) => late.movers?.appTools?.cleanup(path),
     ledger: () => late.attribution,
     watchReadings,
+    daemonRestarts: fileEvents,
   })
+  late.fileHistory = workspaces.fileHistory
   // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
   const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => late.attribution?.effects(reported.conversation, reported.call))
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
@@ -411,6 +435,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }, (error: Error) => hostWarn("attribution", "the journal could not open; changes aren't attributed this run", { error: error.message }))
   const wake = watchWake(shell.jobs, (source) => {
     hostLog("host", "woke", { source })
+    fileEvents.woke()
     web()?.terminal({ type: "wake" })
     late.cloud?.wake()
     late.cloudConversations?.wake()

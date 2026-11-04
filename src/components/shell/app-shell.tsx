@@ -1,4 +1,5 @@
 import { HostConnectionNotice } from "./host-connection-notice"
+import { FileEventsNotice } from "./file-events-notice"
 import { ApplicationDialog, ApplicationNotice } from "@/components/settings/application-dialog"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -100,6 +101,7 @@ export function AppShell() {
           <TitleBar />
           <HostConnectionNotice />
           <ApplicationNotice />
+          <FileEventsNotice />
           <div className="relative z-10 flex min-h-0 flex-1">
             {railOpen ? (
               <>
