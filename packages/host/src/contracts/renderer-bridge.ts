@@ -30,6 +30,7 @@ import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
   LifecycleCommand,
+  UpdateBuildFrom,
   UpdateInstallation,
 } from "./app-lifecycle.js"
 import type { QueuedPromptEdit } from "./live-queue.js"
@@ -941,7 +942,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Fetches the source checkout's upstream and reads where the checkout stands; `force` fetches even within a minute of the last. */
     checkUpdateSource: (force: boolean) =>
       invokeTrustedHost<UpdateInstallation>("mako:check-update-source", force),
-    buildUpdate: () => invokeTrustedHost<void>("mako:build-update"),
+    /** Builds an update from `from`, or from what the source's reading recommends. */
+    buildUpdate: (from?: UpdateBuildFrom) => invokeTrustedHost<void>("mako:build-update", ...from ? [from] : []),
     /** Measures a built update's performance again, after a Mac too busy to measure it. */
     measureUpdateAgain: () => invokeTrustedHost<void>("mako:measure-update-again"),
     updateState: () => invokeTrustedHost<UpdateState>("mako:update-state"),

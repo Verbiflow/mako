@@ -329,7 +329,7 @@ const inputs = {
     z.tuple([z.union([z.null(), z.string()])]),
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
-  "mako:build-update": () => z.tuple([]),
+  "mako:build-update": () => z.tuple([z.enum(["upstream", "checkout"]).optional()]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),

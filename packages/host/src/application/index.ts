@@ -6,6 +6,7 @@ import {
   type LifecycleCommand,
   type LifecycleAction,
   type LifecycleWork,
+  type UpdateBuildFrom,
 } from "../contracts/app-lifecycle.js"
 import type { Updates } from "./updates.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -154,12 +155,12 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
   const operationPending = () =>
     lifecycle.snapshot().operation.kind !== "idle" &&
     lifecycle.snapshot().operation.kind !== "error"
-  methods.handle("mako:build-update", () => {
+  methods.handle("mako:build-update", (from?: UpdateBuildFrom) => {
     if (operationPending())
       throw new Error(
         "Cancel the pending operation before starting another build."
       )
-    updates.build()
+    updates.build(from)
   })
   methods.handle("mako:measure-update-again", () => {
     if (operationPending())

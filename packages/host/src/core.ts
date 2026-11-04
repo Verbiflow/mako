@@ -18,7 +18,7 @@ import { heavy } from "./base/heavy-packages.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import { readPower } from "./base/power.js"
-import { SessionIdSchema, type ThreadId } from "./contracts/thread-identity.js"
+import { SessionIdSchema, ThreadIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import type { Domain } from "./base/host-domains.js"
@@ -364,6 +364,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     environment,
     git,
     emit,
+    // Whose each uncommitted file of the update's source is: the person sees another Thread's half-done work before building it.
+    writers: (paths) => {
+      const threadTitle = (id: string) => {
+        const parsed = ThreadIdSchema.safeParse(id)
+        return (parsed.success ? store?.thread(parsed.data)?.title : undefined) || "an untitled Thread"
+      }
+      const found = late.attribution?.rewindWriters(paths, 0)
+      if (!found) return undefined
+      return Object.fromEntries(Object.entries(found).map(([path, writers]) => [path, writers.flatMap((writer) =>
+        writer.kind === "thread" ? [threadTitle(writer.thread)] : writer.kind === "person" ? ["you"] : [])]))
+    },
     desktop: {
       state: () => control.desktop.update(),
       check: () => control.desktop.ask("update-check", {}),

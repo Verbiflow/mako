@@ -202,6 +202,27 @@ jobs:
       # The host's live delivery, the window's reduction, usage and tool identity (`test-performance-budgets.ts`), the same way.
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --reference HEAD^1
 
+  # The local updater's own checks (`UPDATE_CHECKS`), through the function Settings › Updates runs, on a Mac, in the
+  # environment it builds: the variables it sets (its verdict file and gross line for the performance check alone, the
+  # build's identity and source) and none it doesn't. A check that fails only the updater's way fails here, before
+  # merge, rather than on someone's update. Each step's time goes to the job's summary.
+  update-checks:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          # A row over budget is measured beside the commit its baseline recorded, exported from this history.
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npx tsgo -b packages/host
+      - run: npx tsx scripts/ci-update-checks.ts
+
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
   # the owner's Codex at the tested build sealed against the bench's stand-in model.

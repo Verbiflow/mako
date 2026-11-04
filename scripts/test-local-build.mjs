@@ -8,13 +8,14 @@ import { Git } from "@mako/git"
 import { LocalUpdates } from "@mako/host/application/local-updates"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
 
-const USAGE = "Use npm run test:settings-build -- [<checkout>] [--keep] [--as-installed-updater]"
+const USAGE = "Use npm run test:settings-build -- [<checkout>] [--keep] [--as-installed-updater] [--from upstream|checkout]"
 
 async function buildFromSettings() {
   const root = process.env.MAKO_BUILD_TEST_ROOT
   const source = process.env.MAKO_BUILD_TEST_SOURCE
   const identity = process.env.MAKO_BUILD_TEST_IDENTITY
   const asInstalled = process.env.MAKO_BUILD_TEST_AS_INSTALLED === "1"
+  const from = process.env.MAKO_BUILD_TEST_FROM || undefined
   const phases = []
   let finish
   const settled = new Promise((resolve) => { finish = resolve })
@@ -24,9 +25,9 @@ async function buildFromSettings() {
     if (!updater.building && (state.kind === "ready" || state.kind === "error")) finish(state)
   }, null, { buildSource: !asInstalled })
   await updater.select(source)
-  updater.start()
+  updater.start(from)
   const result = await settled
-  await writeFile(join(root, "result.json"), JSON.stringify({ source, asInstalledUpdater: asInstalled, phases, result }, null, 2))
+  await writeFile(join(root, "result.json"), JSON.stringify({ source, from: from ?? "recommended", asInstalledUpdater: asInstalled, phases, result }, null, 2))
   assert.equal(result.kind, "ready", result.message)
   const candidate = await updater.prepared()
   console.log(`Settings build verified without installation: ${candidate.app}`)
@@ -54,12 +55,16 @@ export async function finishRehearsal(root, { keep, log = console.log, unregiste
 /** Parse the command line; the checkout defaults to this one. */
 export function rehearsalOptions(args) {
   const flags = new Set(["--keep", "--as-installed-updater"])
-  const positional = args.filter((arg) => !flags.has(arg))
+  const at = args.indexOf("--from")
+  const from = at === -1 ? undefined : args[at + 1]
+  assert.ok(from === undefined || from === "upstream" || from === "checkout", USAGE)
+  const positional = args.filter((arg, index) => !flags.has(arg) && (at === -1 || (index !== at && index !== at + 1)))
   assert.ok(positional.length <= 1 && positional.every((arg) => !arg.startsWith("--")), USAGE)
   return {
     source: resolve(positional[0] ?? "."),
     keep: args.includes("--keep"),
     asInstalledUpdater: args.includes("--as-installed-updater"),
+    ...from && { from },
   }
 }
 
@@ -76,6 +81,7 @@ async function rehearse(args) {
       MAKO_BUILD_TEST_SOURCE: options.source,
       MAKO_BUILD_TEST_IDENTITY: identity,
       MAKO_BUILD_TEST_AS_INSTALLED: options.asInstalledUpdater ? "1" : "0",
+      MAKO_BUILD_TEST_FROM: options.from ?? "",
     }
     delete env.ELECTRON_RUN_AS_NODE
     if (options.asInstalledUpdater) console.log("Rehearsing an installed updater that does not pass MAKO_BUILD_SOURCE to the checks.")

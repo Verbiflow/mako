@@ -49,6 +49,15 @@ const QUIET_POLL_MS = 10_000
  * updater runs two scripts that compare inside one check.
  */
 export const BUSY_MEASURE_MS = 5 * 60_000
+/**
+ * How much slower than its reference a row may be before it fails: CI's
+ * 25% unless the updater names its gross line (`MAKO_PERFORMANCE_ALLOWED`,
+ * `local-update-checks.ts`).
+ */
+export function allowedRegression(env: NodeJS.ProcessEnv = process.env, fallback = 1.25): number {
+  const named = Number(env.MAKO_PERFORMANCE_ALLOWED)
+  return Number.isFinite(named) && named > 1 ? named : fallback
+}
 /** Each side of the interval misses the true median at most this often: the sign test's 95%, one-sided. */
 const MISS = 0.05
 
