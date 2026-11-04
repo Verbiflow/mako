@@ -17,6 +17,7 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { AFTER_START } from "@mako/host/contracts/agent-tools"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
 import { probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
@@ -109,9 +110,12 @@ exit 2
   for (const deadline = Date.now() + 30_000; ; ) {
     const history = await mako("history", apex)
     const digests = history.flatMap((line) => (line.kind === "user" && line.text?.startsWith(FROM_AGENTS) ? [line.text] : []))
-    const heard = names.map((name) => digests.join("\n").split(`"${name}"`).length - 1)
+    // The words name each report once; the same report rides after them as data, for the person's card of it.
+    const read = digests.map(readFinReports)
+    const heard = names.map((name) => read.map((each) => each.text).join("\n").split(`"${name}"`).length - 1)
     if (heard.every((count) => count > 0)) {
       assert.deepEqual(heard, names.map(() => 1), "each child's report reaches the Apex once")
+      assert.deepEqual(names.map((name) => read.flatMap((each) => each.reports).filter((card) => card.name === name).length), names.map(() => 1), "and once as data")
       assert.ok(digests.length <= names.length, "in at most a wake a burst")
       break
     }
