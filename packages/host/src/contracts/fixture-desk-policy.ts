@@ -22,6 +22,8 @@ const fixtureReads = [
   "mako:sync-readings",
   /** Reads `ps` and memory: a fixture desk watches and writes nothing of its own. */
   "mako:mako-footprint",
+  /** Answers from memory; the restart stays refused. */
+  "mako:file-events-service",
   /** Answers from memory: a fixture desk presses no continue. */
   "mako:continue-readings",
   /** Answers from memory: a fixture desk turns no cloud on. */

@@ -527,7 +527,7 @@ export class LaptopTracker implements AttributionTracker {
   /**
    * Rescan for lost events, one at a time: losses heard while one waits are
    * its own, one heard while it runs gets one more after it. While losses
-   * keep coming (an overloaded fseventsd) each next rescan waits twice as
+   * keep coming (a degraded fseventsd) each next rescan waits twice as
    * long after the last, up to ten minutes; a loss after a quiet while is
    * rescanned at once. The gap stays open meanwhile, so what changed in it
    * is attributed as found in it. Roots take turns (see `rescanTurn`).

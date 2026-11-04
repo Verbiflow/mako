@@ -614,17 +614,23 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const mark = await deps.history.mark().catch(() => undefined)
     if (mark) linkMarks.set(app, { mark, reach })
   }
-  /** What changed in the main checkout inside what links reach since the app came up; nothing when there's nothing linked to watch. */
-  const linkWrites = async (app: AppKey): Promise<{ root: string; paths: string[] } | undefined> => {
+  /**
+   * What changed in the main checkout inside what links reach since the app
+   * came up; nothing when there's nothing linked to watch. `lost` is set when
+   * the history dropped events there, or fseventsd started over since, so
+   * `paths` may be missing some.
+   */
+  const linkWrites = async (app: AppKey): Promise<{ root: string; paths: string[]; lost: boolean } | undefined> => {
     const marked = linkMarks.get(app)
     if (!marked || !deps.history) return undefined
     const found = await deps.history.since(marked.mark, reachRoots(marked.reach)).catch(() => undefined)
-    return found && { root: marked.reach.root, paths: throughLinks(marked.reach, found.paths) }
+    return found && { root: marked.reach.root, paths: throughLinks(marked.reach, found.paths), lost: found.lost.length > 0 }
   }
   const writtenText = (paths: string[]) => (paths.length > 8 ? `${paths.slice(0, 8).join(", ")} and ${paths.length - 8} more` : paths.join(", "))
   const linkWritesSummary = async (app: AppKey, read: Read, checkout: string) => {
     if (read.kind !== "ready" || !linkMarks.has(app) || !(await appUp(app))) return undefined
     const written = await Promise.race([linkWrites(app), new Promise<undefined>((settle) => setTimeout(() => settle(undefined), LINK_WRITES_WAIT_MS).unref())])
+    if (written?.lost && !written.paths.length) return `Since this app came up, macOS's file-change history lost events in the main checkout (${written.root}), so whether anything wrote through the links isn't known.`
     if (!written?.paths.length) return undefined
     const here = written.root === checkout
     return `Since this app came up, ${writtenText(written.paths)} changed in the main checkout (${written.root}), inside what worktrees link to${here ? "" : ", through this checkout's links or another's"}. That changes every linked Thread's copy. If this app or an agent here wrote it, set "link": false for that entry in the recipe${here ? "" : ", and make this checkout's own first: app_own_packages for install outputs, worktree_bring with the entry and no link for carry"}.`
@@ -1340,7 +1346,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const linksWritten = async (current: Ready, steps: RecipeProofStep[]): Promise<string | undefined> => {
     const written = await linkWrites(current.environment.app)
     if (!written) return undefined
-    steps.push({ name: "links", passed: !written.paths.length })
+    steps.push({ name: "links", passed: !written.paths.length && !written.lost })
+    if (!written.paths.length && written.lost) return `while it was proven, macOS's file-change history lost events in the main checkout (${written.root}), so Mako can't tell whether anything wrote through the links. recipe_publish again proves the draft afresh.`
     if (!written.paths.length) return undefined
     const here = written.root === current.checkout
     return [

@@ -11,10 +11,11 @@ import { environmentTools } from "@mako/host/workspaces/environment-tools"
 import { portListening, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { perThreadValues, publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "@mako/host/workspaces/thread-recipe"
-import { childHistory } from "@mako/host/workspaces/watch-backend"
+import { childHistory, type FileHistory } from "@mako/host/workspaces/watch-backend"
 import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, missingEntries, ownPackages } from "@mako/host/workspaces/worktree-carry"
 import { parse as parseYaml } from "yaml"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+import { reapApps } from "./lib/reap-apps.ts"
 
 const gitRunner = new Git()
 
@@ -58,6 +59,7 @@ const worktree = (name: string, ui: string) => {
 }
 
 const install = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: true }
+const reap = reapApps(new ThreadProcesses({ root: join(root, "records"), listening: portListening }))
 try {
   // Every install step starts in the checkout's root, whatever the one before it changed into.
   const steps = join(root, "steps")
@@ -226,8 +228,18 @@ try {
     assert.match(dirty, /Set "link": false/)
     assert.match(parseYaml(await inProve.status("c3")).writesThroughLinks, /^Since this app came up, node_modules\/left-pad\/index\.js changed in the main checkout/, "app_status says so while the app runs")
     await inProve.stop("c3")
+    // A history that lost events there, or a fseventsd restart since the app came up, can't prove nothing wrote: said, never passed.
+    const losing: FileHistory = { mark: () => history.mark(), since: async (mark, roots, options) => ({ ...(await history.since(mark, roots, options)), lost: [...roots] }) }
+    const inLost = environmentTools({ git: gitRunner, cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history: losing })
+    rmSync(join(provingEnvironment.dataDir, "up"), { force: true })
+    await inLost.save("c4", RecipeSchema.parse({ ...server(false), verify: { run: "node -e \"require('@scope/ui')\"" } }), "Only reads its packages, with the history incomplete")
+    const unproven = await inLost.publish("c4")
+    assert.match(unproven, /macOS's file-change history lost events in the main checkout \(.*\/shop\), so Mako can't tell whether anything wrote through the links/, unproven)
+    assert.match(parseYaml(await inLost.status("c4")).writesThroughLinks, /lost events in the main checkout .* whether anything wrote through the links isn't known/, "app_status says so too")
+    await inLost.stop("c4")
   }
-  console.log("package links: linked in under 2 seconds with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were; any outputs link entry by entry; a proof that writes through the links fails, one that only runs them passes")
+  console.log("package links: linked in under 2 seconds with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were; any outputs link entry by entry; a proof that writes through the links fails, one that only runs them passes, and one whose history lost events says links weren't checked")
 } finally {
+  await reap()
   rmSync(root, { recursive: true, force: true })
 }

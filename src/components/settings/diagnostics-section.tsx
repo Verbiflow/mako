@@ -21,6 +21,8 @@ import { syncStatus, useSyncStatus } from "@/state/sync-status"
 import type { SyncReadings } from "@mako/host/contracts/sync-readings"
 import type { MakoFootprint } from "@mako/host/contracts/mako-footprint"
 import { FootprintReadout } from "@/components/settings/footprint-readout"
+import { FileEventsReadout } from "@/components/settings/file-events-readout"
+import { loadFileEvents, useFileEvents } from "@/state/file-events"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
 import { changedStores } from "@/lib/store-formats"
 import { loadStoreFormats, useStoreFormats } from "@/state/store-formats"
@@ -49,6 +51,7 @@ export function DiagnosticsSection() {
   const [footprint, setFootprint] = useState<MakoFootprint | null>(null)
   const [continues, setContinues] = useState<ContinueReading[]>([])
   const stores = useStoreFormats((state) => state.stores)
+  const fileEventsService = useFileEvents((state) => state.service)
   // The sync daemon's status, as the rail and Settings › Account read it.
   const sending = useSyncStatus((state) => state.status)
   useEffect(() => syncStatus.watch(), [])
@@ -67,6 +70,7 @@ export function DiagnosticsSection() {
     void diagnostics.unreadRecords().then(setUnread).catch(() => setUnread(null))
     void diagnostics.syncReadings().then(setSync).catch(() => setSync(null))
     void diagnostics.footprint().then(setFootprint).catch(() => setFootprint(null))
+    void loadFileEvents().catch(() => undefined)
     void diagnostics.continueReadings().then(setContinues).catch(() => setContinues([]))
     // Asked again here, so a store another Mako changed since the window opened is said.
     void loadStoreFormats().catch(() => undefined)
@@ -175,6 +179,8 @@ export function DiagnosticsSection() {
       ) : null}
 
       {reader ? <SessionReaderRow history={reader} /> : null}
+
+      {fileEventsService && fileEventsService.state !== "unknown" ? <FileEventsReadout service={fileEventsService} /> : null}
 
       {footprint ? <FootprintReadout footprint={footprint} /> : null}
 
