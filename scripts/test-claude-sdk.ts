@@ -486,7 +486,7 @@ for (const confirmed of [true, false]) {
       "the retry counts down to when Claude tries again")
     assert.deepEqual(
       compactEvents.flatMap((event) => event.type === "live-update" ? [event.update] : []),
-      [{ kind: "event", id: boundary, source: { harness: "claude", record: boundary }, label: "Context compacted", detail: "Manual · 1k → 200 tokens · took 8s", body: "Kept: the parser plan." }],
+      [{ kind: "event", id: boundary, source: { harness: "claude", record: boundary }, label: "Context compacted", detail: "Manual · 1K → 200 tokens · took 8s", body: "Kept: the parser plan." }],
       "the boundary is a transcript event with its trigger, tokens, Claude's own duration and the hook's summary, not assistant text"
     )
   }
@@ -944,7 +944,7 @@ console.log("PASS: A monitor's event and a command that settled mid-turn are dra
   send({ type: "system", subtype: "compact_boundary", ...ids, compact_metadata: { trigger: "auto", pre_tokens: 6200, post_tokens: 900 } })
   await delay(0)
   assert.equal(session()?.usage?.used, 900, "compaction empties the meter to what it kept")
-  assert.equal(markers().at(-1)?.detail, "Automatic · 6k → 900 tokens")
+  assert.equal(markers().at(-1)?.detail, "Automatic · 6.2K → 900 tokens")
 
   await prompt()
   count = markers().length

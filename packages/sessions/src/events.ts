@@ -5,6 +5,8 @@
  */
 
 import { z } from "zod"
+import { formatTokens } from "./amounts.js"
+
 /**
  * The native record a marker stands for, and where what it shows was read,
  * so a marker can be traced to its record (`npm run decode -- --events`):
@@ -300,8 +302,8 @@ export function compactionEvent(compaction: Compaction = {}): TranscriptEvent {
   const { trigger, tokensBefore, tokensAfter, durationMs } = compaction
   const tokens = tokensBefore
     ? tokensAfter !== undefined
-      ? `${tokenCount(tokensBefore)} → ${tokenCount(tokensAfter)} tokens`
-      : `from ${tokenCount(tokensBefore)} tokens`
+      ? `${formatTokens(tokensBefore)} → ${formatTokens(tokensAfter)} tokens`
+      : `from ${formatTokens(tokensBefore)} tokens`
     : undefined
   const took =
     durationMs !== undefined && durationMs >= 1000
@@ -436,8 +438,3 @@ export function eventText(
 
 const TRIGGER = { automatic: "Automatic", manual: "Manual" } as const
 
-function tokenCount(tokens: number): string {
-  if (tokens < 1000) return String(tokens)
-  if (tokens < 1_000_000) return `${Math.round(tokens / 1000)}k`
-  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
-}
