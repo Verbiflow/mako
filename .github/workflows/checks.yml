@@ -271,10 +271,10 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npx tsgo -b packages/host
       - run: npm run bench:host-load -- --scale today --cpu-prof "$RUNNER_TEMP/host-load-profile"
-      - name: main's host on the same runner, for calibration
+      - name: The host before #358 on the same runner, for calibration
         if: always()
         run: |
-          git fetch --no-tags --depth=1 origin main
+          git fetch --no-tags --depth=1 origin cfe762f88bc9738db22469eb449b6b014b9e9968
           git worktree add "$RUNNER_TEMP/main" FETCH_HEAD
           ln -s "$PWD/node_modules" "$RUNNER_TEMP/main/node_modules"
           (cd "$RUNNER_TEMP/main" && npx tsgo -b packages/host)
