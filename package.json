@@ -279,6 +279,7 @@
     "probe:steer-lands": "tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts --lands",
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
     "test:crew-card-ui": "node scripts/test-crew-card-ui.mjs",
+    "test:fin-view-keeps-ui": "node scripts/test-fin-view-keeps-ui.mjs",
     "test:orch-ui": "node scripts/test-orch-ui.mjs",
     "test:animations-ui": "node scripts/test-animations-ui.mjs",
     "test:fin-words": "tsx scripts/test-fin-words.ts",

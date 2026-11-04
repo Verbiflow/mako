@@ -395,68 +395,53 @@ async function check() {
   assert.ok(phonePopover.height <= 120)
   await both("phone-stop")
 
-  // What the Fins ask the person stands over the Apex's composer on the desk, each answered there in a click as the
-  // person's own answer, under a request ID; the rail marks the Apex with the first; an answered ask leaves.
+  // What the Fins ask the person is answered in the crew card on the desk, which stays through the Apex's turn, each in
+  // a click as the person's own answer, under a request ID; the rail marks the Apex with the first; an answered ask
+  // leaves. An ask is drawn in one place: the composer holds none while the card is on screen.
   window.setContentSize(1440, 900)
   await window.loadURL(`${base}?mock&app=apex`)
-  await until("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length === 2", "the Fins' asks over the Apex's composer")
+  await until("document.querySelectorAll('[data-crew] [data-fin-ask]').length === 2", "the Fins' asks in the crew card through the Apex's turn")
+  assert.equal(await evaluate("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length"), 0, "and none over the composer as well")
   const deskAsks = await evaluate(`(() => ({
-    rows: [...document.querySelectorAll('[data-fin-asks] [data-fin-ask]')].map((row) => ({ kind: row.dataset.finAsk, fin: row.dataset.fin, text: row.innerText.replace(/\\s+/g, ' '), recommended: row.querySelector('[data-recommended]')?.innerText.replace(/\\s+/g, ' ') })),
+    rows: [...document.querySelectorAll('[data-crew] [data-fin-ask]')].map((row) => ({ kind: row.dataset.finAsk, fin: row.dataset.fin, text: row.innerText.replace(/\\s+/g, ' '), recommended: row.querySelector('[data-recommended]')?.innerText.replace(/\\s+/g, ' ') })),
     marks: [...document.querySelectorAll('.thread-jump-scope [role=img][aria-label]')].map((mark) => mark.getAttribute('aria-label')),
   }))()`)
   console.log("DESK ASKS", JSON.stringify(deskAsks))
   const finName = (fin) => evaluate(`window.apexScene.children().find((agent) => agent.child?.thread === ${JSON.stringify(fin)})?.child?.name`)
   const report = deskAsks.rows.find((row) => row.kind === "report")
   assert.equal(await finName(report?.fin), "push-wording")
-  assert.match(report.text, /^Quiet-hours push wording Needs your answer Which tone for the quiet-hours notice\? Plain or friendly\? Pick the tone the phone ships with\. Plain · recommended Friendly/)
-  assert.equal(report.recommended, "Plain · recommended")
+  assert.match(report.text, /Quiet-hours push wording.*Which tone for the quiet-hours notice\? Plain or friendly\?.*Plain.*Friendly/)
+  assert.match(report.recommended ?? "", /^Plain/)
   const approval = deskAsks.rows.find((row) => row.kind === "approval")
   assert.equal(await finName(approval?.fin), "sheet-motion")
-  assert.match(approval.text, /Needs approval Approve: npm ci Allow once Refuse$/)
+  assert.match(approval.text, /Approve: npm ci Allow once Refuse/)
   assert.ok(deskAsks.marks.includes("Quiet-hours push wording: Which tone for the quiet-hours notice? Plain or friendly?") || deskAsks.marks.includes("Sheet motion on iPad: Approve: npm ci"), "the rail marks the Apex with its Fin's ask")
   await both("desk-asks", "orch-gaps-")
-  await click('[data-fin-ask=report] [data-fin-answer="0"]')
+  await click('[data-crew] [data-fin-ask=report] [data-fin-answer="0"]')
   await until("window.apexScene.responds().length === 1", "the person's answer reaching the Apex's host")
   const deskAnswer = await evaluate("window.apexScene.responds()[0]")
   assert.deepEqual({ fin: deskAnswer.fin, ask: deskAnswer.ask, option: deskAnswer.option }, { fin: report.fin, ask: "report:push-wording:tone", option: 0 })
   assert.equal(deskAnswer.conversation, "1ead1ead-2000-4000-8000-000000001ead", "to the Apex's conversation")
   assert.match(deskAnswer.request, /^[0-9a-f-]{36}$/)
-  await until("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length === 1", "the answered ask leaving the desk")
+  await until("document.querySelectorAll('[data-crew] [data-fin-ask]').length === 1", "the answered ask leaving the desk")
   await both("desk-asks-answered", "orch-gaps-")
 
-  // On the phone, in the Apex's dock: its Fins' asks one at a time, a tap or a word answering each.
+  // On the phone the same: the crew card stays through the Apex's turn and holds its Fins' asks, each a tap; the dock
+  // holds none of them while the card is drawn.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('.web-dock [data-ask=fin]'))", "a Fin's ask in the Apex's dock")
-  const phoneAsk = await evaluate(`(() => { const card = document.querySelector('.web-dock [data-ask=fin]'); return { kind: card.dataset.finAsk, fin: card.dataset.fin, text: card.innerText.replace(/\\s+/g, ' '), placeholder: document.querySelector('.web-dock textarea')?.placeholder } })()`)
-  console.log("PHONE ASK", JSON.stringify(phoneAsk))
-  assert.match(phoneAsk.text, /1 more Fin asks/)
+  await until("document.querySelectorAll('[data-crew] [data-fin-ask]').length === 2", "the Fins' asks in the phone's crew card")
+  assert.equal(await evaluate("Boolean(document.querySelector('.web-dock [data-ask=fin]'))"), false, "none in the dock as well")
   await both("phone-ask", "orch-gaps-")
-  const tapped = phoneAsk.kind === "approval" ? '[data-fin-answer="allow"]' : '[data-fin-answer="0"]'
-  await click(`.web-dock [data-ask=fin] ${tapped}`)
+  await click('[data-crew] [data-fin-ask=approval] [data-fin-answer="allow"]')
   await until("window.apexScene.responds().length === 1", "the phone's tap reaching the Apex's host")
-  assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, phoneAsk.fin)
-  await until(`document.querySelector('.web-dock [data-ask=fin]')?.dataset.fin !== ${JSON.stringify(phoneAsk.fin)}`, "the next Fin's ask after the tap")
-  const next = await evaluate(`(() => { const card = document.querySelector('.web-dock [data-ask=fin]'); return card && { kind: card.dataset.finAsk, fin: card.dataset.fin, placeholder: document.querySelector('.web-dock textarea')?.placeholder } })()`)
-  console.log("PHONE NEXT ASK", JSON.stringify(next))
-  if (next?.kind === "report") {
-    assert.equal(next.placeholder, "Tap an answer above, or type your own")
-    await both("phone-ask-words", "orch-gaps-")
-    const turns = await evaluate("window.apexScene.asked()")
-    await evaluate("document.querySelector('.web-dock textarea').focus(); true")
-    await type("Friendly")
-    await until("document.querySelector('.web-dock [data-send-action=send]')?.getAttribute('aria-label') === 'Send answer'", "the send button answering the Fin")
-    await click(".web-dock [data-send-action=send]")
-    await until("window.apexScene.responds().length === 2", "the phone's typed answer reaching the Apex's host")
-    const typedAnswer = await evaluate("window.apexScene.responds()[1]")
-    assert.deepEqual({ fin: await finName(typedAnswer.fin), answer: typedAnswer.answer }, { fin: "push-wording", answer: "Friendly" })
-    assert.equal(await evaluate("window.apexScene.asked()"), turns, "a typed answer is no turn of the Apex's")
-  } else if (next) {
-    await click(`.web-dock [data-ask=fin] [data-fin-answer="allow"]`)
-    await until("window.apexScene.responds().length === 2", "the second tap reaching the Apex's host")
-  }
-  await until("!document.querySelector('.web-dock [data-ask=fin]')", "no Fin's ask left in the dock")
+  assert.equal(await finName((await evaluate("window.apexScene.responds()[0]")).fin), "sheet-motion")
+  await click('[data-crew] [data-fin-ask=report] [data-fin-answer="1"]')
+  await until("window.apexScene.responds().length === 2", "the second tap reaching the Apex's host")
+  const tapped = await evaluate("window.apexScene.responds()[1]")
+  assert.deepEqual({ fin: await finName(tapped.fin), option: tapped.option }, { fin: "push-wording", option: 1 })
+  await until("!document.querySelector('[data-crew] [data-fin-ask]')", "no Fin's ask left in the card")
   await both("phone-ask-answered", "orch-gaps-")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])

@@ -436,19 +436,24 @@ function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled
  * An Apex's crew, at the end of its transcript: what needs the person and what's live, needs-you first, the settled
  * ones folded into one line, its asks answered in place through the
  * same action the Agents panel and the dock use. Replaces `BackgroundWorkLine` while the Thread has Fins; `fallback`
- * (the background-work line) draws instead for a Thread with none. Past about twenty rows it scrolls inside itself;
+ * (the background-work line) draws instead for a Thread with none. It stays through whatever its Apex's session does
+ * (a turn, starting, waking, reconnecting): the Fins are theirs, not the session's. Past about twenty rows it scrolls inside itself;
  * rows are drawn as they scroll into view, so a crew of forty costs what a screenful does. Each row reads its own
  * Fin's entry alone, so a step changing repaints that row, not this card.
  */
 export function CrewCard({
   compact = false,
   fallback = null,
+  thread: shownThread,
 }: {
   compact?: boolean
   fallback?: ReactNode
+  /** The Thread whose Fins it shows, where that isn't the conversation in scope: a saved transcript's own. */
+  thread?: string
 }) {
   const scope = useConversationScope()
-  const thread = useAcp((state) => scopedAcp(state, scope)?.threadId)
+  const scoped = useAcp((state) => scopedAcp(state, scope)?.threadId)
+  const thread = shownThread ?? scoped
   const conversation = useAcp((state) =>
     thread ? apexConversation(state, thread)?.key : undefined
   )

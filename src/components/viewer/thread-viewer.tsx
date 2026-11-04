@@ -24,6 +24,7 @@ import { createExchangeBuilder } from "./exchange-builder"
 import { ShieldQuestionIcon } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
+import { CrewCard } from "./crew-card"
 import { releasedExchanges } from "@/state/transcript-residency"
 
 /**
@@ -237,7 +238,8 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
         </p>
       }
       footer={
-        waitingForInput ? (
+        <>
+        {waitingForInput ? (
           <div className="animate-enter flex items-center gap-2 px-0.5 text-ui text-attention">
             <ShieldQuestionIcon className="size-3.5 shrink-0" />
             <span>
@@ -257,7 +259,10 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
                 : `${harnessLabel(thread.ref.harness)} is working…`}
             />
           </div>
-        ) : null
+        ) : null}
+        {/* An Apex's saved transcript, or one its session is starting from, keeps its Fins on screen. */}
+        {thread.ref.threadId ? <CrewCard thread={thread.ref.threadId} /> : null}
+        </>
       }
     />
   )

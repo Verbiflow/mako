@@ -1212,7 +1212,7 @@ diffs-container {
  * The live mark (`LiveMark`): Mako's fin, the two-tone fin of the app icon for
  * a Thread and the plain fin for a Fin, with its harness as a square badge in
  * the corner. The fin itself carries the state, one calm gesture a state: it
- * bobs while thinking, glides with a wake while writing, braces in two steps
+ * bobs while thinking, glides while writing, braces in two steps
  * on a tool, turns the attention hue over a breathing waterline when it needs you,
  * drifts while asking its Apex and lists over when it failed. Square, like
  * every mark of Mako's. Every moving part is a box of its own that moves on
@@ -1286,8 +1286,7 @@ diffs-container {
   background: none;
 }
 /* The line the fin rides: a Thread at work, or anyone waiting on the person. */
-.live-mark-water,
-.live-mark-wake {
+.live-mark-water {
   position: absolute;
   bottom: 4%;
   height: max(1px, calc(var(--lm-size) * 0.07));
@@ -1298,23 +1297,11 @@ diffs-container {
   right: 6%;
   background: color-mix(in oklab, var(--foreground) 20%, transparent);
 }
-.live-mark-wake {
-  left: -12%;
-  width: 62%;
-  overflow: hidden;
-  background: repeating-linear-gradient(to right, color-mix(in oklab, var(--foreground) 55%, transparent) 0 18%, transparent 18% 34%);
-}
-.live-mark[data-lit] .live-mark-wake {
-  background: repeating-linear-gradient(to right, var(--sea) 0 18%, transparent 18% 34%);
-}
 .live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body {
   animation: live-mark-bob 2s ease-in-out infinite;
 }
 .live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body {
   animation: live-mark-glide 1.4s ease-in-out infinite;
-}
-.live-mark-wake {
-  animation: live-mark-wake 0.7s linear infinite;
 }
 /*
  * Work in progress, on the fin itself: a band of the brand's sea (`--fin-glint`) crosses it, clipped to its outline,
@@ -1411,7 +1398,6 @@ diffs-container {
  * reset it: the gate's play state.
  */
 .live-mark[data-live-mark][data-kind] .live-mark-body,
-.live-mark[data-live-mark][data-kind] .live-mark-wake,
 .live-mark[data-live-mark][data-kind] .live-mark-water,
 .live-mark[data-live-mark][data-kind] .live-mark-glint > i {
   animation-play-state: var(--visible-animation-state, running);
@@ -1442,14 +1428,6 @@ diffs-container {
   }
   50% {
     transform: translateX(5%);
-  }
-}
-@keyframes live-mark-wake {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-34%);
   }
 }
 @keyframes live-mark-brace {
