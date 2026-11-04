@@ -112,7 +112,7 @@ function InboxPane() {
           ) : null}
           {model.asks.length ? (
             <section aria-label="Needs you" data-inbox-section="needs">
-              <h2 className="flex h-7 items-center text-label font-medium text-caution">Needs you</h2>
+              <h2 className="flex h-7 items-center text-label font-medium text-attention">Needs you</h2>
               <ul className="flex flex-col gap-2">
                 {model.asks.map((item) => (
                   <li key={item.key}>

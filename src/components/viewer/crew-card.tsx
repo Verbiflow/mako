@@ -28,8 +28,8 @@ import {
 } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { ApexMark } from "@/components/ui/apex-mark"
 import { FinMark } from "@/components/stage/child-tabs"
+import { LiveMark } from "@/components/ui/live-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { useTickingText } from "@/components/ui/second-clock"
 import { observeVisibleAnimation } from "@/lib/visible-animation"
@@ -58,7 +58,7 @@ const HEADINGS = {
 
 const BAR_GROUPS: readonly ChildGroup[] = CHILD_GROUPS
 const BAR_TONE = {
-  needs: "bg-caution",
+  needs: "bg-attention",
   working: "bg-muted-foreground",
   queued: "bg-faint/50",
   idle: "bg-faint",
@@ -112,7 +112,7 @@ function CrewBar({
     <span
       aria-hidden
       className={cn(
-        "crew-bar flex h-1 overflow-hidden rounded-full bg-foreground/10",
+        "crew-bar flex h-1 gap-0.5 overflow-hidden",
         className
       )}
     >
@@ -188,10 +188,10 @@ const NeedsRow = memo(function NeedsRow({
       data-fin-ask={ask?.kind}
       data-fin={agent.child.thread}
       aria-busy={sent ? true : undefined}
-      className="rounded-lg bg-[color-mix(in_oklab,var(--caution)_7%,transparent)] px-3 py-2.5 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--caution)_22%,transparent)]"
+      className="bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
     >
       <div className="flex items-center gap-2">
-        <FinMark agent={agent} state={state} cut="var(--surface)" />
+        <FinMark agent={agent} state={state} cut="var(--raised)" />
         <button
           type="button"
           onClick={() => onOpen(agent)}
@@ -236,7 +236,7 @@ const NeedsRow = memo(function NeedsRow({
                 data-chosen={sent?.allow === false || undefined}
                 onClick={() => send({ allow: false })}
                 className={cn(
-                  "pressable flex items-center gap-1.5 rounded-md px-2.5 text-label font-medium text-foreground/85 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover disabled:opacity-50",
+                  "pressable flex items-center gap-1.5 bg-raised px-2.5 text-label font-medium text-foreground/85 hover:bg-fill-selected disabled:opacity-50",
                   compact ? "h-9" : "h-7"
                 )}
               >
@@ -263,7 +263,7 @@ const NeedsRow = memo(function NeedsRow({
                     compact ? "h-9" : "h-7",
                     primary
                       ? "bg-foreground text-background hover:bg-foreground/90"
-                      : "text-foreground/85 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover"
+                      : "bg-raised text-foreground/85 hover:bg-fill-selected"
                   )}
                 >
                   {option.label}
@@ -361,7 +361,7 @@ const CrewLineRow = memo(function CrewLineRow({
         compact ? "min-h-11 py-1.5" : "h-8"
       )}
     >
-      <FinMark agent={agent} state={state} cut="var(--raised)" />
+      <FinMark agent={agent} state={state} cut="var(--surface)" />
       <span
         className={cn(
           "flex min-w-0 flex-1",
@@ -478,15 +478,15 @@ export function CrewCard({
       data-crew={counts.total}
       data-compact={compact || undefined}
       aria-label={`${apexTitle}'s ${FIN_WORD}s`}
-      className="mt-1 flex animate-in flex-col overflow-hidden rounded-xl bg-surface shadow-[inset_0_0_0_1px_var(--hairline)] duration-200 ease-[var(--ease-out)] fade-in-0"
+      className="mt-2 flex animate-in flex-col duration-200 ease-[var(--ease-out)] fade-in-0"
     >
       <header
         className={cn(
-          "flex items-center gap-3 border-b border-hairline",
-          compact ? "px-3 py-2.5" : "px-4 py-3"
+          "flex items-center gap-2.5",
+          compact ? "px-1.5 py-2" : "px-1.5 py-2"
         )}
       >
-        <ApexMark className="size-4 shrink-0 text-muted-foreground" />
+        <LiveMark state="idle" className="live-mark-still" cut="var(--surface)" />
         <span data-fin-counts={rollupLabel(counts)} className="shrink-0 text-ui font-medium whitespace-nowrap text-foreground">
           {finsWord(counts.total)}
         </span>
@@ -509,7 +509,7 @@ export function CrewCard({
       <div
         ref={scroller}
         data-crew-scroller
-        className="max-h-[420px] overflow-y-auto p-3"
+        className="max-h-[420px] overflow-y-auto py-1"
       >
         <div
           className="relative"
@@ -533,7 +533,7 @@ export function CrewCard({
                     <span
                       className={
                         row.group === "needs"
-                          ? "font-medium text-caution"
+                          ? "font-medium text-attention"
                           : "font-medium text-muted-foreground"
                       }
                     >

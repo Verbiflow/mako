@@ -238,7 +238,7 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
       }
       footer={
         waitingForInput ? (
-          <div className="animate-enter flex items-center gap-2 px-0.5 text-ui text-caution">
+          <div className="animate-enter flex items-center gap-2 px-0.5 text-ui text-attention">
             <ShieldQuestionIcon className="size-3.5 shrink-0" />
             <span>
               Waiting for your answer in {harnessLabel(thread.ref.harness)}.

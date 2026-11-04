@@ -1127,7 +1127,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
           className="peer sr-only"
         />
         <span aria-hidden className={cn(
-          "flex size-3.5 items-center justify-center rounded-[4px] ring-1 ring-inset transition-colors duration-100 peer-focus-visible:outline-2 peer-focus-visible:outline-ring",
+          "flex size-3.5 items-center justify-center ring-1 ring-inset transition-colors duration-100 peer-focus-visible:outline-2 peer-focus-visible:outline-ring",
           viewed ? "bg-foreground/70 ring-foreground/70" : "ring-foreground/35"
         )}>
           {viewed ? <CheckIcon className="size-2.5 text-background" strokeWidth={3} /> : null}

@@ -6,7 +6,7 @@ import { CLOUD_WHERE, type WebThread } from "./threads"
 /** What a row says under its title, and in which tone. */
 export interface RowDetail {
   text: string
-  tone: "caution" | "negative" | "working" | "faint"
+  tone: "attention" | "negative" | "working" | "faint"
   /** Where it runs, as a glyph at the line's head: only on a row that says where. */
   place?: "cloud" | "device"
   /** How long its run has gone, after "Working", in figures that hold their width as they count. */
@@ -44,7 +44,7 @@ export function workingFor(ms: number): string {
  */
 export function rowDetail(thread: WebThread, named: boolean, context: RowContext = {}): RowDetail {
   if (thread.archived) return { text: `Archived ${formatRelative(Date.parse(thread.archived.archivedAt))}`, tone: "faint" }
-  if (thread.standing === "waiting") return { text: attentionLine(thread.waitingFor ?? "needs-you", thread.waitingOn), tone: "caution" }
+  if (thread.standing === "waiting") return { text: attentionLine(thread.waitingFor ?? "needs-you", thread.waitingOn), tone: "attention" }
   if (thread.standing === "failed") return { text: "Failed", tone: "negative" }
   if (thread.standing === "working") {
     const since = context.workingSince

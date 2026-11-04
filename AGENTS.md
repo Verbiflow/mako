@@ -1961,11 +1961,8 @@ Everything the host watches goes through one watcher child
 (`workspaces/watch-backend.ts`): one FSEvents stream per distinct folder and
 ignore list, which parcel shares, plus the child's canary. The canary calls
 delivery silent only after 30 s with nothing heard, and reports how late beats
-arrive otherwise: a degraded fseventsd delivers in batches, seconds apart,
-with nothing lost. That is a fault, not a busy Mac. One a month up held 24 GB
-(10.5 GB resident) and delivered every app's events 2.6 s late at the median;
-`sudo killall fseventsd` brought it back to 11.5 ms and a few megabytes, and
-it stayed there through three times the traffic. A silence makes every watch poll
+arrive otherwise: an fseventsd with a backlog delivers in batches, 15 s apart
+on a Mac a month up, with nothing lost. A silence makes every watch poll
 (`pollTree`) and restarts the child, at most once every 10 minutes. The
 tracker rescans a root for lost events at once after a quiet while, then 2 s
 after the last, doubling to 10 minutes while losses keep coming; roots take
@@ -1985,43 +1982,6 @@ every watch, restarted the child and rescanned every root about once a
 minute, all day: 45 million files stat-ed in two days. `npm run
 bench:mako-footprint` runs a scripted stretch of work against budgets
 (`--drops <s>`, `--slow-delivery`).
-
-The daemon's own health is read apart from any watch
-(`workspaces/file-events-service.ts`, `contracts/file-events-service.ts`),
-without root: every canary beat goes to the host (`beat`), and fseventsd is
-degraded once the median of the last six (a minute at the 10 s beat, four at
-least) is past 250 ms, or the canary is unheard, or two readings a minute
-apart of its resident memory (`ps -o rss=`) are past 1 GB. Healthy, a beat
-takes 15 to 60 ms (60 when parcel's 50 ms debounce holds it) and the daemon
-holds under 50 MB; the 5 s `SLOW_DELIVERY_MS` is only when watches
-start polling around it. A sample every 15 minutes, and at each change of
-state or daemon, keeps memory, lag and what Mako did since (watches and
-streams, watcher starts, history reads, turns running, wakes) in
-`<data root>/file-events/fseventsd.jsonl` for a week. Degraded, the desk says
-so above the panes (`FileEventsNotice`) with the numbers, and Settings ›
-Diagnostics shows the readings and the day's samples (`FileEventsReadout`).
-"Restart it" (`mako:file-events-restart`) runs one privileged step through
-macOS's administrator password dialog (`osascript … with administrator
-privileges`): into a folder root makes itself, a 5 s `sample`, `vmmap
---summary`, `footprint` and two hours of fseventsd's `log show`, then `killall
-fseventsd`, which launchd answers by starting it again, then the folder handed
-to the person. Mako copies it into its crash-report folder as
-`fseventsd-<time>/` with `clients.txt` (the sample's
-`com.apple.fseventsd.client.<pid>` threads: who subscribed, gone or not) and
-`summary.json` (the zones' allocation counts, before and after, the day's
-samples), starts the watcher child over (`recover`: every watch hears
-`dropped` and rescans) and ends history reads under way, and measures
-delivery again with a probe (`probeDelivery`, five beats in a child of its
-own). A new fseventsd pid, from Mako's restart or anyone's, is a restart: a
-history read whose mark is from before one reports every root `lost`
-(`DaemonRestarts`), and app proofs say links weren't checked rather than
-passing. A history read waits for its sentinel with replays spaced from 20 ms
-doubling to 500 ms: each replay is a stream fseventsd registers, and at a
-steady 20 ms a daemon 2.6 s behind was asked 130 times a read.
-`scripts/test-file-events-service.ts` covers it against fakes, and
-`test-watch-backend.ts` through a real child whose canary is held 400 ms
-late. Tests that start apps reap them in `finally` and on a signal
-(`scripts/lib/reap-apps.ts`): they're detached, so they outlived failed runs.
 
 ## Git
 
@@ -2162,8 +2122,12 @@ deliberate action and never rides along with a commit.
   a pane's sections by tone and spacing, never a hairline. The composer's
   input is one raised box inset from its pane. Hairlines stay for content
   (a diff's file headers, a table) and controls (an input's or a button's
-  outline). Structural panes keep square edges; rounded `.card` surfaces are
-  reserved for content within a pane.
+  outline). **Every corner is square**, as the fin is: the radius tokens
+  (`--radius-*`) are all 0, so panes, rows, tabs, cards, fields, buttons,
+  menus, dialogs, toasts, the composer, the prompt bubble and avatars meet
+  at square corners. Only what means a dot (status dots, the unread sphere,
+  a switch's knob, a sheet's grab handle) is round, through `rounded-full`;
+  a device frame drawn to its hardware keeps the hardware's corners.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
   composer's chip, the crew card, the rail's pips, the Agents panel, the stop
   card, the phone's row) counts from the Thread's one roster
@@ -2197,25 +2161,29 @@ deliberate action and never rides along with a commit.
   text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
   sea, hue appears only where it carries meaning: diff add/remove, error,
   warning.
-- **Every Thread and Fin wears one live mark** (`LiveMark`,
-  `src/components/ui/live-mark.tsx`; states in `src/lib/live-mark-state.ts`):
-  its agent's glyph, and round it a ring that carries the state. A comet
-  runs round it while it works (in sea on the open Thread, in the text
-  colour elsewhere), the same comet slower and quieter while its turn is done
-  and background work runs, a caution ring breathes while it needs the
-  person, a dotted ring drifts while a Fin asks its Apex, a dashed ring holds
-  while it's queued, and a dot is cut out of it for a failure (negative, low
-  right) or an answer to read (the unread sphere, high right). The rail, the
-  tabs, the Agents panel, the crew card and the phone draw this one mark,
-  and a row's one trailing slot says "Needs you", "Failed" or its age. Its
-  motion is `transform` and `opacity` on HTML boxes only (an SVG element's
-  own transform runs on the main thread: a drifting dotted ring once cost
-  588 ms in 3 s for 22 marks), every moving layer runs on the shared clock
-  and rests off screen (`observePhaseLockedAnimation`), and no React state
-  moves it. `npm run bench:live-marks` holds 500 moving marks and the desk
-  at 500 more Apexes to no React commit, no layout and no style pass per
-  frame, the marks scrolled away paused, and every running mark in phase;
-  `scripts/live-marks.html` draws every state.
+- **Every Thread and Fin wears Mako's fin, doing what it does** (`LiveMark`,
+  `src/components/ui/live-mark.tsx`; states, kinds and motions in
+  `src/lib/live-mark-state.ts`). A Thread is the two-tone fin of the app icon,
+  a Fin the plain fin, and the harness a small square badge in the corner:
+  the harness is secondary, the brand's fin is who. The fin itself moves, one
+  calm gesture a state, as Grok Bot's character does rather than a spinner
+  beside an icon: thinking it bobs, writing it glides with a short wake,
+  running a tool it braces in two steps (`motionOf` reads which from the
+  status line or step), its turn done with work still running it bobs at
+  half speed, needing you it turns caution over a breathing waterline,
+  asking its Apex it drifts, failed it lists over in negative; queued, idle
+  and open elsewhere are still and dimmed, and an answer to read wears the
+  unread sphere. The open Thread's face takes the sea, the pane's one accent.
+  The rail, the tabs, the Agents panel, the crew card, the Inbox, the folder
+  chip, the asks and the phone draw this one mark, and avatars draw it still.
+  Its motion is `transform` and `opacity` on HTML boxes only (an SVG
+  element's own transform runs on the main thread), every moving layer runs
+  on the shared clock and rests off screen (`observePhaseLockedAnimation`,
+  whose play-state rule must stay as specific as the state rules' shorthand
+  or they reset it), and no React state moves it. `npm run bench:live-marks`
+  holds 500 moving marks, and the desk at 500 more Apexes watched in one load
+  with its marks stopped and then moving, to no React commit, no layout and
+  no style pass per frame; `scripts/live-marks.html` draws every state.
 - **Three UI type sizes only** — `text-label` (12), `text-ui` (14),
   `text-title` (16) — plus prose (16) and code (12). Weights come off
   Geist's variable axis as 440/530/640 through the standard `font-normal`/
@@ -3499,25 +3467,12 @@ Steering is a capability with a kind, not a command. `step` folds the message
 into the running turn at the agent's next step (Claude, Codex, Grok through
 `_x.ai/interject`, OpenCode, Devin); `interrupt` cancels the current step and
 continues with the message (Cursor). `hears` says when the agent hears one, as
-`npx tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts [<harness>...] [--cursor]` reads it on
+`npx tsx scripts/probe-steer-semantics.ts [<harness>...] [--cursor]` reads it on
 each real harness against the scripted model (Cursor on its own): a 15 s
 command steered 4 s in. Claude, OpenCode and Grok hear it once the command
 returns; Codex's command yields to the model at once and carries on; Devin
 hears it when its command hands back, which it does by itself after about 10 s;
-Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six.
-A message the person sends into a running turn lands within about a second on
-every harness, by its driver's `landing`, measured with the probe's `--lands`
-(through Mako's own host): `native` uses the harness's own steer (Codex);
-`confirm` uses it when the harness confirms delivery within `STEER_LANDS_MS`
-(Cursor, which holds a steer through a running subagent: 61 s in the probe,
-88 s on a cloud Thread on 2026-11-03); otherwise, and for `restart` (Claude,
-OpenCode, Grok, Devin), `LiveConversations.steerByRestart` stops the turn
-(`steered`) and sends the message next, its control note telling the agent
-what the stopped turn left (`pendingInterruption`). A harness whose Stop ends
-its process opens again for it (`sendAfterStop`). An agent's `agents_send`
-steer and a question's answer go natively (`SteerSender`).
-`test-steer-landing.ts` covers each landing, the cloud path and the person's
-case. Enter steers a steerable running turn and
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.

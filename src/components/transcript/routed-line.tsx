@@ -3,7 +3,8 @@ import { toast } from "sonner"
 import { CornerDownRightIcon, MoveRightIcon, ReplyIcon } from "lucide-react"
 import type { Routed, RoutedAnswer } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { childStateOf } from "@mako/host/contracts/children"
+import { FinMark } from "@/components/stage/child-tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
@@ -66,7 +67,7 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
         title={target ? `Open ${name}` : undefined}
         className="pressable flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-ui text-foreground hover:bg-fill-hover disabled:pointer-events-none"
       >
-        {target ? <HarnessIcon harness={target.provider} className="size-3.5 shrink-0" /> : null}
+        {target ? <FinMark agent={target} state={childStateOf(target)} read cut="var(--surface)" size={16} /> : null}
         <span className="min-w-0 truncate">{name}</span>
       </button>
       {routed.direct ? <span className="shrink-0">· direct</span> : null}
@@ -104,7 +105,7 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
                 onClick={() => void redirect(agent)}
                 className="pressable flex h-8 items-center gap-2 rounded-md px-2 text-left text-ui text-foreground hover:bg-fill-hover"
               >
-                <HarnessIcon harness={agent.provider} className="size-3.5 shrink-0" />
+                <FinMark agent={agent} state={childStateOf(agent)} read cut="var(--popover)" size={16} />
                 <span className="min-w-0 truncate">{agent.title}</span>
               </button>
             ))}
