@@ -8,7 +8,7 @@ import { objectValue, stringValue } from "../base/json-values.js"
 import { hostWarn } from "../base/host-log.js"
 import { USAGE_WINDOWS, type UsageAmount, type UsagePeriod, type UsageSummary, type UsageTotals, type UsageWindow, type UsageWindowId } from "../contracts/automations-usage-updates.js"
 import { HELPER_RUNS } from "./helper-runs.js"
-import { UsageLedger } from "./ledger.js"
+import { JOURNALS, UsageLedger } from "./ledger.js"
 import { priceEstimate } from "./pricing.js"
 import {
   DAYS,
@@ -103,10 +103,11 @@ async function summarize(
     scanSource(ledger, "Mako", home, since, unread, (scan) => scan.jsonl([join(home.userRoot, "sessions")], BUILT_IN)),
     ...harnesses.flatMap(({ label, history }) => history ? [scanSource(ledger, label, home, since, unread, (scan) => history.scan(scan))] : []),
     conversationsRoot && recorded.size
-      ? scanSource(ledger, "Mako journals", home, since, unread, (scan) => scanRecorded(scan, conversationsRoot, recorded))
+      ? scanSource(ledger, JOURNALS, home, since, unread, (scan) => scanRecorded(scan, conversationsRoot, recorded))
       : undefined,
     helperRuns ? scanSource(ledger, "Mako helpers", home, since, unread, (scan) => scan.jsonl([helperRuns], HELPER_RUNS)) : undefined,
   ])
+  ledger.keepRecorded(new Set(recorded.values()))
   ledger.forgetBefore(since)
   for (const { source, path, reason } of unread.slice(0, 20)) hostWarn("usage", "Usage record unread", { source, path, reason })
   if (unread.length > 20) hostWarn("usage", "More usage records unread", { count: unread.length - 20 })
@@ -390,7 +391,7 @@ function aggregate(
     // An estimate made when the call was recorded keeps its table; otherwise today's.
     const at = Date.parse(event.timestamp)
     const tokens = tokenTotal(event)
-    const priced = event.reportedCost === undefined ? event.estimate ?? priceEstimate(event.model, event) : null
+    const priced = event.reportedCost === undefined ? event.estimate ?? priceEstimate(event.model, event, at) : null
     const estimate = priced?.amount ?? null
     const modelKey = `${event.source}\u0000${event.model}`
     for (const window of windows) {
