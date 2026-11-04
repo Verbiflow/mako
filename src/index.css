@@ -1214,7 +1214,7 @@ diffs-container {
 .live-mark {
   --lm-size: var(--live-mark-size, 20px);
   --lm-ink: color-mix(in oklab, var(--foreground) 88%, transparent);
-  --lm-face: color-mix(in oklab, var(--foreground) 42%, transparent);
+  --lm-face: color-mix(in oklab, var(--foreground) 40%, var(--shell));
   position: relative;
   display: inline-flex;
   width: var(--lm-size);
@@ -1310,7 +1310,7 @@ diffs-container {
 }
 .live-mark[data-live-mark="needs"] {
   --lm-ink: var(--caution);
-  --lm-face: color-mix(in oklab, var(--caution) 55%, transparent);
+  --lm-face: color-mix(in oklab, var(--caution) 55%, var(--shell));
 }
 .live-mark[data-live-mark="needs"] .live-mark-water {
   background: var(--caution);
@@ -1332,7 +1332,7 @@ diffs-container {
 }
 .live-mark[data-live-mark="failed"] {
   --lm-ink: var(--negative);
-  --lm-face: color-mix(in oklab, var(--negative) 55%, transparent);
+  --lm-face: color-mix(in oklab, var(--negative) 55%, var(--shell));
 }
 .live-mark[data-live-mark="failed"] .live-mark-body {
   transform: rotate(16deg) translateY(10%);
