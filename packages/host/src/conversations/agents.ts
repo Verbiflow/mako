@@ -42,7 +42,9 @@ import {
   afterStart,
   WAIT_LIMIT_MS,
   type AgentOperations,
+  type AgentsCrew,
   type AgentStrip,
+  type CrewMate,
   type AgentsLinkInput,
   type AgentsLinkResult,
   type AgentsListInput,
@@ -663,6 +665,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   async list(caller: AgentCaller, input: AgentsListInput): Promise<AgentsListResult> {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
+    if (input.scope === "crew") return this.crewOf(apex)
     const store = this.store()!
     const strips: AgentStrip[] = []
     const visit = (parent: string, under?: string) => {
@@ -1939,6 +1942,33 @@ export class Agents implements AgentOperations, ConversationChildren {
     return own.find((request) => request.status === "dispatching") ?? own.at(-1)
   }
 
+  /** A Fin's Apex as it stands, and the other open Fins it started, as its front-door note names them: no transcript is read. */
+  private crewOf(fin: Apex): AgentsCrew | AgentRefused {
+    const store = this.store()!
+    const edge = store.edges().of(fin.thread)
+    if (!edge) return { refused: "no-parent", why: `This Thread has no ${APEX_WORD}: scope crew is for a ${FIN_WORD}. Leave scope out for this Thread's own ${FIN_WORD}s.` }
+    this.sync()
+    const conversation = this.frontOf(edge.parent, edge.parentSession)
+    const session = conversation ? this.deps.live.session(conversation) : undefined
+    const ready = conversation ? this.ready(conversation) : "gone"
+    const working = ready === "steer" || ready === "queue"
+    const held = working && conversation ? this.deps.live.held(conversation) : undefined
+    const step = held && session ? lastStep(held.blocks.slice(-24), session.harness) : undefined
+    const title = session?.title ?? store.thread(ThreadIdSchema.parse(edge.parent))?.title
+    const above = store.edges().of(edge.parent)
+    return {
+      you: edge.name,
+      apex: {
+        ...(title && { title }),
+        ...(session && { harness: this.deps.harnessLabel(session.harness) }),
+        working,
+        ...(step && { step }),
+        ...(above && { asked: noteLine(above.asked.brief.objective, 160) }),
+      },
+      crew: store.edges().children(edge.parent).filter((other) => other.child !== edge.child && !other.closedAt).map((other) => crewMate(this.frontDoorChild(other))),
+    }
+  }
+
   /** A Fin as its Apex's front-door note names it: what it was asked, where it stands and what it said last. */
   private frontDoorChild(edge: ThreadParent): FrontDoorChild {
     const latest = this.latest.get(edge.child)
@@ -2118,6 +2148,11 @@ export function briefText(brief: Brief, name: string): string {
   if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
   lines.push("", BRIEF_CLOSE)
   return lines.join("\n")
+}
+
+/** A Fin as another Fin of its Apex reads it: the person's words to it directly stay its own. */
+function crewMate(fin: FrontDoorChild): CrewMate {
+  return { name: fin.name, harness: fin.harness, state: fin.state, topic: fin.topic, ...(fin.branch && { branch: fin.branch }), ...(fin.report && { report: fin.report }) }
 }
 
 /** Words on one line of a note: the first sentence, cut at `max` characters. */

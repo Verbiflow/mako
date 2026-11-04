@@ -57,6 +57,8 @@ jobs:
       # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
       - run: npm run test:device-join
       - run: npm run test:cloud-conversations
+      # A picture or page another host read (a cloud Thread's machine, another device, another host here) loads in this host's windows.
+      - run: npx tsx scripts/test-owned-files.ts
       - run: npx tsx scripts/test-cloud-returns.ts
 
   # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
@@ -82,6 +84,7 @@ jobs:
       - run: npm run test:transcript
       - run: npm run test:transcript-events
       - run: npm run test:stage
+      - run: npm run test:fin-words
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
@@ -125,6 +128,7 @@ jobs:
       - run: npm run test:thread-split
       - run: npm run test:agents-wake
       - run: npm run test:orch-answer
+      - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
       - run: npm run test:orch-deliver
       # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
@@ -158,6 +162,7 @@ jobs:
       # Native routing's policy, each harness's control and Diagnostics' reading of them; then every
       # eval:orch-tools case's first request for Claude and Codex, built and its grading checked, at $0.
       - run: npm run test:native-routing
+      - run: npm run test:native-calls
       - run: npm run eval:orch-tools -- --dry-run
       - run: npm run test:decoders
       - run: npm run test:usage

@@ -228,8 +228,8 @@ async function check() {
   assert.match(header.text, /^12 Fins/)
   assert.match(
     header.text,
-    /5 Fins working · 2 need you/,
-    "the rollup line, needs-you named"
+    /2 need you · 5 working · 2 queued · 1 idle · 2 done/,
+    "the rollup line, needs-you first, an idle Fin its own group"
   )
   assert.doesNotMatch(
     header.text,
@@ -243,7 +243,7 @@ async function check() {
   )
   assert.deepEqual(
     header.groups.toSorted(),
-    ["done", "needs", "queued", "working"],
+    ["done", "idle", "needs", "queued", "working"],
     "the bar is split by every group that's here"
   )
 
@@ -258,7 +258,7 @@ async function check() {
     12,
     "every Fin is reachable, not just the first screenful"
   )
-  const RANK = { needs: 0, working: 1, queued: 2, failed: 3, done: 4 }
+  const RANK = { needs: 0, working: 1, queued: 2, idle: 3, failed: 4, done: 5 }
   for (let i = 1; i < rows12.length; i++)
     assert.ok(
       RANK[rows12[i].group] >= RANK[rows12[i - 1].group],
@@ -360,8 +360,10 @@ async function check() {
   // card's own) drops a successfully-done Fin's reason outright — real data never gives the result line or the PR
   // glyph a successful Fin's line to read, so neither draws here; the case right below proves the glyph on a line
   // that does carry one (a failure's reason, which the contract keeps).
+  // An idle Fin is its own group now (open for a next message), so two of the three stand here.
+  assert.equal(rows12.filter((row) => row.group === "idle").length, 1, "the idle Fin stands under Idle, not Done")
   const done = rows12.filter((row) => row.group === "done")
-  assert.equal(done.length, 3, "swipe, deep-links and pull-refresh are done")
+  assert.equal(done.length, 2, "the two that ended are done")
   for (const row of done)
     assert.ok(
       !row.html.includes("lucide-git-pull-request"),
@@ -375,8 +377,9 @@ async function check() {
     window.apexScene.setChildren([...agents, failed])
     return true
   })()`)
+  // The card is virtualized: its failed group may sit below the rows it draws, so scroll it into reach.
   await until(
-    "Boolean(document.querySelector('[data-crew-row=\"00000000-0000-4000-8000-00000000fa17\"]'))",
+    "(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = el.scrollHeight; return Boolean(document.querySelector('[data-crew-row=\"00000000-0000-4000-8000-00000000fa17\"]')) })()",
     "the failed Fin's row"
   )
   const failedRow = await evaluate(
@@ -414,7 +417,7 @@ async function check() {
     "window.apexScene.children().find((agent) => agent.title === 'Sheet motion on iPad').child.thread"
   )
   const railBefore = await evaluate(
-    "document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('aria-label')"
+    "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
   )
   await click("[data-apex-count]")
   await until(
@@ -435,13 +438,13 @@ async function check() {
     "sheet-motion moving to working in the Agents panel"
   )
   const railAfter = await evaluate(
-    "document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('aria-label')"
+    "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
   )
   console.log("RAIL", railBefore, "->", railAfter)
   assert.match(
     railAfter,
     /1 needs? you/,
-    "the rail's badge counts one need now, not two"
+    "the rail's pips count one need now, not two"
   )
   assert.notEqual(railBefore, railAfter)
 
@@ -540,7 +543,7 @@ async function check() {
   await evaluate("window.__benchReset(); true")
   await evaluate(`(() => {
     const agents = window.apexScene.children()
-    const next = agents.map((agent) => agent.child?.thread === ${JSON.stringify(target)} ? { ...agent, child: { ...agent.child, state: { ...agent.child.state, step: agent.child.state.step + ' (still)' } } } : agent)
+    const next = agents.map((agent) => agent.child?.thread === ${JSON.stringify(target)} ? { ...agent, child: { ...agent.child, state: { ...agent.child.state, step: 'Read src/web-client/still-moving.tsx' } } } : agent)
     window.apexScene.setChildren(next)
     return true
   })()`)
@@ -551,8 +554,8 @@ async function check() {
   console.log("TARGET ROW AFTER", targetText)
   assert.match(
     targetText ?? "",
-    /\(still\)/,
-    "the mutated row's own text reflects its new step"
+    /Reading still-moving\.tsx/,
+    "the mutated row's own text reflects its new step, as a phrase"
   )
   const tally = await evaluate("window.__benchTally()")
   console.log("RENDER BENCH", JSON.stringify(tally))
@@ -571,7 +574,7 @@ async function check() {
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await until(
-    "Boolean(document.querySelector('[data-thread] [data-rollup]'))",
+    "Boolean(document.querySelector('[data-thread] [data-fin-pips]'))",
     "the Apex's row on the phone"
   )
   await click("[data-thread]")

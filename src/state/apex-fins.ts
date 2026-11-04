@@ -56,6 +56,23 @@ export function threadRollup(state: AcpState, thread: string | undefined): Rollu
   return children.length || !thread ? rollup(children) : (listedRollup(state, thread) ?? rollup(children))
 }
 
+const askingOf = new WeakMap<readonly NativeAgent[], readonly NativeAgent[]>()
+
+/**
+ * A Thread's Fins that wait on the person, in its roster's order, the same array while its roster is. Empty until this
+ * window holds the roster; the Inbox reads the roster of every Apex whose count says one waits (`useInboxRosters`).
+ */
+export function threadAsking(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
+  const children = threadChildren(state, thread)
+  let held = askingOf.get(children)
+  if (!held) {
+    const asking = children.filter((agent) => childGroup(childStateOf(agent)) === "needs")
+    held = asking.length ? asking : NO_CHILDREN
+    askingOf.set(children, held)
+  }
+  return held
+}
+
 export function useThreadRollup(thread: string | undefined): Rollup {
   return useAcp((state) => threadRollup(state, thread), sameRollup)
 }

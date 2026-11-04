@@ -11,6 +11,7 @@ import { grokChildSpend, grokModelWindow } from "./usage.js"
 import { GROK_FOLDER_TRUST_CAPABILITY } from "./folder-trust.js"
 import { grokFork, GrokTurnCounts } from "./fork.js"
 import { grokRequests } from "./plans.js"
+import { GROK_CALL_HOOKS } from "./call-hooks.js"
 import { GROK_TRANSCRIPTS, grokSessionSource, relocateGrokSession } from "./session-source.js"
 import { GROK_ACP_HOOKS, GrokSubagentFinished, GrokSubagentSpawned, grokSubagentTurn, GrokTaskSnapshot, grokTaskTurn } from "@mako/sessions/harnesses"
 import { resolveExecutable } from "../../base/executable.js"
@@ -240,6 +241,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
     mcpStartup: grokMcpStartup,
     ...GROK_ACP_HOOKS,
     requests: grokRequests,
+    callHooks: GROK_CALL_HOOKS,
     clientCapabilities: { _meta: GROK_FOLDER_TRUST_CAPABILITY },
     nativeRouting: { kind: "at-launch", via: "`GROK_SUBAGENTS=0` and `GROK_WORKFLOWS=0` in the agent's environment, which remove `spawn_subagent` and `workflow`. An Apex's `/goal` then runs on Grok's `update_goal` driver, whose `goal_updated` Mako reads as it reads the workflow driver's.", verified: { version: "1.0.70", how: "harness:native-tools records each mode as a lead without `spawn_subagent` or `workflow` (2026-11-02); test:native-routing-live: a lead offered neither, an ordinary Thread's child ran and was observed; test-grok-goal-live --apex: a goal set, completed and cleared on the update_goal driver" } },
     // Measured 2026-11-03 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model heard it

@@ -94,7 +94,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
         // launch runs is what Mako stamps the session's records with, which a restore weighs (`restoreGate`).
         versionArgs: ["--version"],
         configureEnvironment: configureDevinEnvironment,
-        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true),
+        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true, options.routesCalls === true),
         async prepareApprovals({ previous, publish }) {
           const { DevinApprovalObserver, readDevinApprovalDecisions } = await adapters.devinApprovals.load("devin approvals")
           if (options.nativePath && options.resume) {

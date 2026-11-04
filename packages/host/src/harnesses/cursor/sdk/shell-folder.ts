@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process"
+import { Writable } from "node:stream"
 import { createRequire, syncBuiltinESMExports } from "node:module"
 import { homedir } from "node:os"
 import { basename } from "node:path"
@@ -35,6 +36,51 @@ export function movedShellCommand(deleted: string, now: string): string {
   return `builtin printf '%s\\n' ${quote(notice)} >&2; false`
 }
 
+/** Said on stderr in place of a command routing denies, which fails; the agent reads it as the command's output. */
+export function deniedShellCommand(message: string): string {
+  return `builtin printf '%s\\n' ${quote(message)} >&2; false`
+}
+
+/** A command routing warns of: the note on stderr, then the command as it was. */
+export function warnedShellCommand(message: string, command: string): string {
+  return `builtin printf '%s\\n' ${quote(message)} >&2; ${command}`
+}
+
+/** A routed command as the shell runs it: a deny's notice in its place, or a warn's note before it. */
+function routedShellCommand(decision: { kind: "warn" | "deny"; message: string }, command: string): string {
+  return decision.kind === "deny" ? deniedShellCommand(decision.message) : warnedShellCommand(decision.message, command)
+}
+
+/**
+ * SDK 1.2.0's shell reads its command from file descriptor 5, up to a NUL,
+ * rather than from its arguments; the SDK writes it there in one `end` once
+ * the shell has started (`cr` in its bundle).
+ */
+const PIPED_COMMAND = "__cursor_command <&5"
+
+const Text = z.string()
+
+/** Routes the command a shell started in the piped shape reads from descriptor 5, as the SDK hands it over. */
+function routePipedCommand(child: ChildProcess, cwd: string, route: ShellRoute): void {
+  const pipe = child.stdio.at(5)
+  if (!(pipe instanceof Writable)) return
+  const end = pipe.end.bind(pipe)
+  const routed = (...parameters: Parameters<typeof end>) => {
+    const text = Text.safeParse(parameters[0]).data
+    if (text?.endsWith("\0")) {
+      const command = text.slice(0, -1)
+      const decision = route(command, cwd)
+      if (decision && decision.kind !== "allow") parameters[0] = `${routedShellCommand(decision, command)}\0`
+    }
+    return end(...parameters)
+  }
+  // SAFETY: `routed` takes every `end` overload's arguments and returns what `end` returns for them.
+  pipe.end = routed as typeof pipe.end
+}
+
+/** What a shell command's route says to do with it (`routeShellCall`). */
+export type ShellRoute = (command: string, cwd: string) => { kind: "allow" } | { kind: "warn" | "deny"; message: string } | undefined
+
 /** `spawn(command, args, options)` with a folder; other call shapes are not shells the SDK starts. */
 const ShellSpawnSchema = z.tuple([z.string(), z.array(z.string()), z.looseObject({ cwd: z.string() })]).rest(z.unknown())
 
@@ -51,7 +97,7 @@ type ForwardedSpawn = (...parameters: unknown[]) => ChildProcess
  * command runs in the workspace. Other processes are left to fail as they
  * would.
  */
-export function guardShellFolder(workspace: () => string | undefined, warn: (message: string) => void): void {
+export function guardShellFolder(workspace: () => string | undefined, warn: (message: string) => void, route?: ShellRoute): void {
   const require = createRequire(import.meta.url)
   const childProcess: typeof import("node:child_process") = require("node:child_process")
   // SAFETY: every `spawn` overload accepts the arguments its caller passed,
@@ -69,6 +115,20 @@ export function guardShellFolder(workspace: () => string | undefined, warn: (mes
         moved[index] = movedShellCommand(call[2].cwd, now)
         warn("a shell's folder was deleted; its command was not run and the shell moved to the workspace")
         parameters = [command, moved, Object.assign({}, parameters[2], { cwd: now }), ...parameters.slice(3)]
+      }
+    } else if (call && route) {
+      const [command, args, options] = call
+      const index = shellCommandIndex(command, args)
+      const decision = index === undefined ? undefined : route(args[index]!, options.cwd)
+      if (index !== undefined && decision && decision.kind !== "allow") {
+        const routed = [...args]
+        routed[index] = routedShellCommand(decision, args[index]!)
+        parameters = [command, routed, ...parameters.slice(2)]
+      }
+      if (index === undefined && SHELLS.has(basename(command)) && args.some((arg) => arg.includes(PIPED_COMMAND))) {
+        const child = spawn(...parameters)
+        routePipedCommand(child, options.cwd, route)
+        return child
       }
     }
     return spawn(...parameters)

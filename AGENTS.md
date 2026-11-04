@@ -308,6 +308,21 @@ journal. `npm run test:background-agents` covers the engine,
 `bench:orch-host` hold the follow, the wakes, a report's way to its Apex, a
 spawn's receipt and the host's loop to budgets.
 
+What an Apex and its Fins tell each other is kept short without dropping
+what the reader needs. Every `agents_*` answer is its JSON on one line
+(`agentToolText`), every field kept. A finished Fin's digest line
+(`finishedLine`) is its report's first paragraph past any heading, on one
+line, at most `FINISHED_CHARS`, with how many more characters the
+report holds (`agents_read` gives them), and every artifact by its ref with
+its label beside it.
+A Fin reads its Apex and the other open Fins it started with `agents_list`
+`scope: crew` (`AgentsCrew`): the Apex's title, harness, whether it works and
+its last step, what it was asked when it is a Fin too, and each other Fin as
+the front door's note names it (name, harness, state, what it was asked, its
+branch and last report). The person's direct words to a Fin stay out. It
+reads typed state, never a transcript, and its brief's first line says it's
+there. `npm run test:orch-comms` covers all three.
+
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where
 the last one went. To skip the Apex's turn, the person presses Reply on a
@@ -2109,6 +2124,19 @@ deliberate action and never rides along with a commit.
   (a diff's file headers, a table) and controls (an input's or a button's
   outline). Structural panes keep square edges; rounded `.card` surfaces are
   reserved for content within a pane.
+- **One count and one vocabulary for an Apex's Fins.** Every surface (the
+  composer's chip, the crew card, the rail's pips, the Agents panel, the stop
+  card, the phone's row) counts from the Thread's one roster
+  (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
+  `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
+  (`packages/host/src/contracts/children.ts`). They are Fins, never agents,
+  and they stand as needs you, working, queued, idle, failed or done; an idle
+  Fin is open for its next message, so it is neither working nor done and is
+  never background work. A Fin's step reads as a phrase (`readableStep`:
+  "Running gh pr checks 340", "Reading desk.tsx"), never the raw command or a
+  home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
+  without this; `npm run test:fin-counts-ui` draws every surface from one
+  roster and requires the same numbers, and `test:fin-words` holds the words.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, an agent's tile (its harness's
   glyph on the raised plane) on its reply's byline, and the sender's tile on

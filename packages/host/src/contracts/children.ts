@@ -46,7 +46,9 @@ const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(ag
 export function briefIntro(name: string): string {
   return `You're fin:${name}${INTRO_TAIL}`
 }
-const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
+const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope crew shows it and the other ${FIN_WORD}s it started.`
+/** The intro's tail before a Fin could read its crew. */
+const EARLIER_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
 export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells ${YOUR_APEX} how it ended.`
 /** A brief's lines as builds before the names wrote them, still left out of its card. */
 const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation." }
@@ -95,7 +97,7 @@ function spoken(from: string): string {
 }
 
 function briefIntroLine(line: string): boolean {
-  return (line.startsWith("You're fin:") && line.endsWith(INTRO_TAIL)) || (line.startsWith(LEGACY_INTRO.head) && line.endsWith(LEGACY_INTRO.tail))
+  return (line.startsWith("You're fin:") && (line.endsWith(INTRO_TAIL) || line.endsWith(EARLIER_INTRO_TAIL))) || (line.startsWith(LEGACY_INTRO.head) && line.endsWith(LEGACY_INTRO.tail))
 }
 
 /** A Fin's name as an agent may write it: `fin:<name>`, `child:<name>` as builds before the names taught it, or bare. */
@@ -152,10 +154,10 @@ const RoutedAnswerSchema = z.object({ child: z.string(), request: z.string(), de
 export type RoutedAnswer = z.infer<typeof RoutedAnswerSchema>
 
 /** What the person is shown a child as: the one reading `rollup`, the strip, the panel and the phone group it by. */
-export type ChildGroup = "needs" | "working" | "queued" | "failed" | "done"
+export type ChildGroup = "needs" | "working" | "queued" | "idle" | "failed" | "done"
 
 /** The order children are listed in, everywhere: what needs the person first, so it never falls behind "+N". */
-export const CHILD_GROUPS: readonly ChildGroup[] = ["needs", "working", "queued", "failed", "done"]
+export const CHILD_GROUPS: readonly ChildGroup[] = ["needs", "working", "queued", "idle", "failed", "done"]
 
 /**
  * A child entry's state: `childState`'s, as its entry carries it. An entry from
@@ -182,8 +184,9 @@ export function childStateOf(agent: NativeAgent): ChildState {
 
 /**
  * Where a Fin stands for the person. A question on its Apex is the Apex's
- * to answer, so that Fin is still at work as far as the person goes; an
- * idle one has nothing running and nothing asked.
+ * to answer, so that Fin is still at work as far as the person goes. An
+ * idle one has nothing running and nothing asked, and is open for a next
+ * message, so it is neither working nor done.
  */
 export function childGroup(state: ChildState): ChildGroup {
   switch (state.kind) {
@@ -195,7 +198,7 @@ export function childGroup(state: ChildState): ChildGroup {
     case "blocked":
       return state.on === "lead" ? "working" : "needs"
     case "idle":
-      return "done"
+      return "idle"
     case "ended":
       return state.outcome === "failed" ? "failed" : "done"
   }
@@ -226,11 +229,12 @@ export interface Rollup {
   needs: number
   working: number
   queued: number
+  idle: number
   failed: number
   done: number
 }
 
-const EMPTY_ROLLUP: Rollup = { total: 0, needs: 0, working: 0, queued: 0, failed: 0, done: 0 }
+const EMPTY_ROLLUP: Rollup = { total: 0, needs: 0, working: 0, queued: 0, idle: 0, failed: 0, done: 0 }
 const rollups = new WeakMap<readonly NativeAgent[], Rollup>()
 
 /** The one count of an Apex's Fins every surface shows: the same object while the Fins are. */
@@ -246,30 +250,90 @@ export function rollup(children: readonly NativeAgent[]): Rollup {
 
 export function sameRollup(left: Rollup, right: Rollup): boolean {
   return left.total === right.total && left.needs === right.needs && left.working === right.working &&
-    left.queued === right.queued && left.failed === right.failed && left.done === right.done
+    left.queued === right.queued && left.idle === right.idle && left.failed === right.failed && left.done === right.done
 }
 
-/** The badge's words, for screen readers and its tip: "12 Fins: 2 need you, 5 working, 2 queued, 3 done". */
-export function rollupLabel(counts: Rollup): string {
-  const parts = [
-    `${counts.needs} ${counts.needs === 1 ? "needs" : "need"} you`,
-    `${counts.working} working`,
-    `${counts.queued} queued`,
-    ...(counts.failed ? [`${counts.failed} failed`] : []),
-    `${counts.done} done`,
-  ]
-  return `${finsWord(counts.total)}: ${parts.join(", ")}`
+/** Each group's words after its count, in the one vocabulary every surface uses. */
+function groupWords(group: ChildGroup, count: number): string {
+  switch (group) {
+    case "needs":
+      return count === 1 ? "needs you" : "need you"
+    default:
+      return group
+  }
+}
+
+/** The groups that hold Fins, in `CHILD_GROUPS`' order: "2 need you · 5 working · 1 idle". */
+export function rollupLine(counts: Rollup): string {
+  return CHILD_GROUPS.filter((group) => counts[group] > 0).map((group) => `${counts[group]} ${groupWords(group, counts[group])}`).join(" · ")
 }
 
 /**
- * An Apex's line: what's at work and what waits on the person, "3 Fins working · 1 needs you"; with neither, what's
- * queued, failed or done. Queued and asking Fins are never "running". The first count names them.
+ * The short form, where a chip has the room for a few words: how many Fins, then what needs the person and what's
+ * working, or with neither the first group there is. "4 Fins · 3 working"; every number in it is one `rollupLine`
+ * says, so no two surfaces can disagree.
  */
-export function rollupLine(counts: Rollup): string {
-  const needs = (count: number) => (count === 1 ? "needs" : "need")
-  const now = [...(counts.working ? [[counts.working, "working"] as const] : []), ...(counts.needs ? [[counts.needs, `${needs(counts.needs)} you`] as const] : [])]
-  const rest = [...(counts.queued ? [[counts.queued, "queued"] as const] : []), ...(counts.failed ? [[counts.failed, "failed"] as const] : []), ...(counts.done ? [[counts.done, "done"] as const] : [])]
-  return (now.length ? now : rest).map(([count, words], index) => `${index === 0 ? finsWord(count) : count} ${words}`).join(" · ")
+export function rollupChip(counts: Rollup): string {
+  const live = (["needs", "working"] as const).filter((group) => counts[group] > 0)
+  const shown = live.length ? live : CHILD_GROUPS.filter((group) => counts[group] > 0).slice(0, 1)
+  return [finsWord(counts.total), ...shown.map((group) => `${counts[group]} ${groupWords(group, counts[group])}`)].join(" · ")
+}
+
+/** The badge's words, for screen readers and tips: "12 Fins: 2 need you · 5 working · 2 queued · 3 done". */
+export function rollupLabel(counts: Rollup): string {
+  return counts.total ? `${finsWord(counts.total)}: ${rollupLine(counts)}` : finsWord(0)
+}
+
+const STEP_CHARS = 60
+const HOME = /\/(?:Users|home)\/[^/\s]+/g
+/** A tool's label (`identifyTool`'s) and the verb its step reads with. */
+const VERB = new Map([
+  ["Shell", "Running"], ["Script", "Running"], ["Read", "Reading"], ["Lints", "Reading lints in"], ["Edit", "Editing"],
+  ["Write", "Writing"], ["Delete", "Deleting"], ["Move", "Moving"], ["List", "Listing"], ["Search", "Searching"], ["Find", "Finding"],
+])
+const WRAPPERS = new Set(["npx", "sudo", "time", "env", "nohup", "exec", "command"])
+
+/** A path as a person reads it in a line: its file or folder name. */
+function shortPath(path: string): string {
+  const trimmed = path.replace(/[/\\]+$/, "")
+  return trimmed.split(/[/\\]/).filter(Boolean).at(-1) ?? trimmed
+}
+
+/** What a command line does, in its first few words: "gh pr checks 340", "npm run typecheck"; "" when only setup. */
+function commandGist(command: string): string {
+  const quoted = /^(?:z|ba)?sh\s+-l?c\s+(['"])(.*)\1\s*$/.exec(command.trim())
+  if (quoted) return commandGist(quoted[2]!)
+  const segment = command.split(/\s*(?:&&|\|\||;|\|)\s*/).map((part) => part.trim())
+    .find((part) => part && !/^(?:cd|export|source|set|true|:|echo)\b/.test(part) && !/^\w+=\S*$/.test(part))
+  if (!segment) return ""
+  const tokens = segment.split(/\s+/)
+  while (tokens.length && (WRAPPERS.has(tokens[0]!) || /^\w+=/.test(tokens[0]!))) tokens.shift()
+  if (tokens[0] === "timeout") tokens.splice(0, 2)
+  const kept: string[] = []
+  for (const token of tokens) {
+    if (kept.length === 4 || /^-|[<>|$'"`(){}]|\d>&/.test(token)) break
+    kept.push(/[/\\]/.test(token) ? shortPath(token) : token)
+  }
+  return kept.join(" ")
+}
+
+/**
+ * A Fin's step as a phrase, not the raw tool call: "Running gh pr checks 340" for
+ * "Shell cd /Users/you/… && gh pr checks 340 -R … 2>&1 | awk …", "Editing dock.tsx" for an edit's full path. A step
+ * that names no tool keeps its words, with home folders shortened. Also reads steps hosts recorded before this.
+ */
+export function readableStep(step: string | undefined): string | undefined {
+  if (!step) return step
+  const label = [...VERB.keys()].find((verb) => step === verb || step.startsWith(`${verb} `))
+  const rest = label ? step.slice(label.length).trim().replace(/…$/, "") : ""
+  const phrase = !label
+    ? step.replace(HOME, "~")
+    : label === "Shell" || label === "Script"
+      ? (() => { const gist = commandGist(rest); return gist ? `Running ${gist}` : "Running a command" })()
+      : label === "Search" || label === "Find"
+        ? `${VERB.get(label)} ${rest.replace(HOME, "~")}`.trim()
+        : `${VERB.get(label)} ${shortPath(rest)}`.trim()
+  return phrase.length > STEP_CHARS ? `${phrase.slice(0, STEP_CHARS - 1).trimEnd()}…` : phrase
 }
 
 /** What a child's state says in a line: its question, its phase or step, why it waits, or how it ended. */
@@ -280,7 +344,7 @@ export function childLine(state: ChildState): string | undefined {
     case "starting":
       return "Starting"
     case "working":
-      return state.phase ?? state.step
+      return state.phase ?? readableStep(state.step)
     case "blocked":
       return state.question
     case "idle":
