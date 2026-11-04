@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
 import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import type { Report } from "@mako/host/contracts/agents"
 import { apexAsk } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -82,6 +83,10 @@ export const OrchCase = z.object({
     priorTurns: z.array(PriorTurn).optional(),
     /** Facts the shell's answers keep to. */
     world: z.record(z.string(), z.json()).optional(),
+    /** The person's rules for Fins, each "<their words> → <where it goes>", as the note ahead of their message lists them (`finPolicyNote`). */
+    rules: z.array(z.object({ when: z.string(), to: z.string() })).optional(),
+    /** Where work no rule fits goes, in the note's words. */
+    otherwise: z.string().optional(),
     /** Regexes on a shell command, answered with `output` instead of the default. */
     shellMocks: z.array(z.object({ match: z.string(), output: z.string() })).optional(),
     /** An Apex's Fins as they stand: the front-door note the host sends ahead of the person's message (`frontDoorNote`). */
@@ -158,7 +163,11 @@ function frontDoorChild(child: EvalChild): FrontDoorChild {
 
 /** What a case's agent reads ahead of the person's message: the note an Apex with these Fins hears, as the host writes it. */
 export function frontDoorText(orchCase: OrchCase): string | undefined {
-  return orchCase.setup.children?.length ? controlNote(frontDoorNote(orchCase.setup.children.map(frontDoorChild), NOW)) : undefined
+  const { rules, otherwise, children } = orchCase.setup
+  // The note's targets are words already, so each rule's `to` stands for its target.
+  const policy = rules?.length || otherwise ? finPolicyNote({ rules: (rules ?? []).map((rule, index) => ({ id: `r${index}`, when: rule.when, target: { harness: rule.to } })), ...(otherwise && { otherwise: { harness: otherwise } }) }, (target) => target.harness) : []
+  const lines = [...policy, ...(children?.length ? frontDoorNote(children.map(frontDoorChild), NOW) : [])]
+  return lines.length ? controlNote(lines) : undefined
 }
 
 function askReport(ask: EvalAsk, child: EvalChild): Report {

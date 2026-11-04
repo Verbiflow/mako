@@ -62,6 +62,8 @@ const fixtureReads = [
   "mako:terminal-list",
   "mako:utility-model-settings",
   "mako:harness-order-saved",
+  /** Read from the profile's own file. */
+  "mako:fin-defaults",
   /** Read from the profile's own file; a fixture desk signs in only to a cloud on loopback. */
   "mako:access-choices",
   "mako:default-commit-prompt",

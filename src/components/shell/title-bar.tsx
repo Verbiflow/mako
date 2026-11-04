@@ -58,6 +58,7 @@ export function TitleBar() {
   })
   const activeTab = useTabs((state) => state.activeId)
   const companionOpen = useStage((state) => Boolean(state.byTab[activeTab]?.companion))
+  const railOpen = usePrefs((prefs) => prefs.railOpen)
 
   return (
     <TitleStrip
@@ -66,13 +67,16 @@ export function TitleBar() {
       leading={
         <>
           <RailToggle />
-          <IconAction
-            label="New thread"
-            keys={formatChord("mod+n")}
-            onClick={() => void actions.newSession()}
-          >
-            <PlusIcon />
-          </IconAction>
+          {/* With the rail open, its New thread row is the doorway. */}
+          {railOpen ? null : (
+            <IconAction
+              label="New thread"
+              keys={formatChord("mod+n")}
+              onClick={() => void actions.newSession()}
+            >
+              <PlusIcon />
+            </IconAction>
+          )}
 
           <Slot name="titlebar.leading" />
         </>
