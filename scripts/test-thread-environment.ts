@@ -166,6 +166,7 @@ function processEnvironment(): void {
   assert.match(cloud, /^<mako-local-control>\nYou run in Mako's cloud, not on the person's computer/)
   assert.match(cloud, /keeps that computer's path for it, but nothing else of that computer is here/)
   assert.match(cloud, /Run `mako-access`/)
+  assert.match(cloud, /never set user\.name, user\.email, --author or GIT_AUTHOR_\*, and never copy an identity from another commit/, "agents are told who commits name, and not to guess")
   assert.match(cloud, /This machine is this Thread's alone/)
   assert.ok(!cloud.includes("Other Threads' agents share this machine"), "a machine isn't shared with other Threads")
   assert.equal(withoutMakoFraming(`${cloud}\n\nDeploy the worker`), "Deploy the worker", "history readers strip the cloud's note too")
