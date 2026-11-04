@@ -3,8 +3,9 @@ import { appendFile, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, wr
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
+import { z } from "zod"
 import {
-  DEGRADED_LAG_MS, DEGRADED_MEMORY_BYTES, LAG_BEATS, LAG_BEATS_NEEDED, MEMORY_READINGS_NEEDED, SAMPLE_EVERY_MS,
+  DEGRADED_LAG_MS, DEGRADED_MEMORY_BYTES, DEGRADED_SILENCE_MS, EPISODE_GAP_MS, LAG_BEATS, LAG_BEATS_NEEDED, MEMORY_READINGS_NEEDED, SAMPLE_EVERY_MS, SETTLE_MS, WORSE_BY,
   FileEventsSampleSchema, type FileEventsContext, type FileEventsMeasure, type FileEventsRestart, type FileEventsRestartStep, type FileEventsSample, type FileEventsService, type FileEventsState,
 } from "../contracts/file-events-service.js"
 import type { MethodTable } from "../base/methods.js"
@@ -18,6 +19,8 @@ const DAY_MS = 24 * 3_600_000
 const KEPT_MS = 7 * DAY_MS
 /** A pid looked up this recently answers `restartedSince` without asking `ps` again. */
 const PID_FRESH_MS = 1_000
+/** Beats a median is said from in Diagnostics and a restart's outcome; judging waits for `LAG_BEATS_NEEDED`. */
+const SHOWN_BEATS = 4
 /** How long a restarted fseventsd is waited for before Mako measures it. */
 const RESTARTED_WITHIN_MS = 15_000
 /** What the password dialog says, under macOS's own line. */
@@ -146,7 +149,31 @@ export interface FileEventsServiceDeps {
   uid: number
   /** `EVIDENCE_TEMPORARY` but in tests, where no root makes the folder. */
   evidenceTemporary?: string
+  /** Whether other work keeps this Mac busy now: a late canary then says nothing about fseventsd. */
+  machineBusy?(): Promise<boolean>
+  /** Where "Not now" and the episode it was pressed in are kept, so neither is said again after a restart of the host. */
+  noticeFile?: string
   now?(): number
+}
+
+/** What was degraded, and how badly, when the person said "Not now" or restarted it. */
+const BaselineSchema = z.object({ lag: z.boolean(), memory: z.boolean(), lagMs: z.number().optional(), residentBytes: z.number().optional() })
+type Baseline = z.infer<typeof BaselineSchema>
+
+/** A stretch of degraded readings, until `EPISODE_GAP_MS` healthy ends it; `acknowledged` once said and answered. */
+const EpisodeSchema = z.object({ since: z.number(), lastDegradedAt: z.number(), acknowledged: z.boolean(), baseline: BaselineSchema.optional() })
+
+const NoticeStateSchema = z.object({
+  episode: EpisodeSchema.optional(),
+  snooze: z.object({ until: z.number(), baseline: BaselineSchema }).optional(),
+})
+type NoticeState = z.infer<typeof NoticeStateSchema>
+
+/** Local midnight after `at`: "Not now" holds for the rest of the day. */
+function endOfDay(at: number): number {
+  const day = new Date(at)
+  day.setHours(24, 0, 0, 0)
+  return day.getTime()
 }
 
 /**
@@ -178,6 +205,11 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
   private lastRestart: FileEventsRestart | undefined
   private loaded: Promise<void> | undefined
   private looking: Promise<void> | undefined
+  private busy = false
+  private settlingUntil = -Infinity
+  private notices: NoticeState = {}
+  private restartSeen = false
+  private noticed = false
 
   constructor(deps: FileEventsServiceDeps) {
     this.deps = deps
@@ -205,6 +237,7 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
     if (!this.deps.mac) return
     await this.load()
     await this.look(true)
+    this.busy = await this.deps.machineBusy?.().catch(() => false) ?? false
     this.evaluate()
     if (this.now() - this.lastSampleAt >= SAMPLE_EVERY_MS) await this.sample()
     if (this.state === "degraded") this.publish()
@@ -229,8 +262,28 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
       ...(this.reading && { pid: this.reading.pid, residentBytes: this.reading.residentBytes, readAt: this.reading.at }),
       history: this.samples.filter((sample) => sample.at >= now - DAY_MS),
       ...(this.restarting && { restarting: this.restarting }),
-      ...(this.lastRestart && { restart: { ...this.lastRestart } }),
+      ...(this.lastRestart && { restart: { ...this.lastRestart, ...(this.restartSeen && { seen: true }) } }),
+      notice: this.noticeDue(),
+      ...(this.notices.snooze && this.notices.snooze.until > now && { snoozedUntil: this.notices.snooze.until }),
+      ...(this.settlingUntil > now && { settlingUntil: this.settlingUntil }),
+      ...(this.busy && { busy: true }),
     }
+  }
+
+  /**
+   * "Not now", or closing the restart's outcome: the notice isn't said again
+   * this episode, nor for the rest of the day, unless a reading gets
+   * `WORSE_BY` worse or degrades for another reason.
+   */
+  async dismiss(): Promise<FileEventsService> {
+    await this.load()
+    const baseline = this.baseline()
+    this.notices.snooze = { until: endOfDay(this.now()), baseline }
+    if (this.notices.episode) this.notices.episode = { ...this.notices.episode, acknowledged: true, baseline }
+    if (this.lastRestart) this.restartSeen = true
+    await this.saveNotices()
+    this.publish()
+    return this.snapshot()
   }
 
   /**
@@ -275,11 +328,18 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
     this.beats = []
     this.overMemory = 0
     this.silentSince = undefined
+    this.settlingUntil = now + SETTLE_MS
+    this.restartSeen = false
     this.deps.recover()
     this.step("measuring")
     const lags = await this.deps.probe().catch(() => [])
     for (const lag of lags) this.beat(lag)
-    const after = this.measure()
+    const after = { ...this.measure(), ...(lags.length && { lagMs: medianOf(lags) }) }
+    // The restart answered this episode: its outcome is said instead, and only worse than after brings the notice back.
+    if (this.notices.episode) {
+      this.notices.episode = { ...this.notices.episode, acknowledged: true, baseline: { lag: false, memory: false, ...after } }
+      await this.saveNotices()
+    }
     const historyKept = await kept?.(true)
     this.lastRestart = { at, outcome: "restarted", before, after, ...(evidence && { evidence }), ...(historyKept !== undefined && { historyKept }) }
     if (evidence) await writeFile(join(evidence, "summary.json"), JSON.stringify({ ...this.lastRestart, samples: this.samples.filter((sample) => sample.at >= at - DAY_MS) }, null, 2)).catch(() => {})
@@ -293,14 +353,44 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
   }
 
   private publish(): void {
-    this.deps.emit(this.snapshot())
+    const service = this.snapshot()
+    this.noticed = service.notice
+    this.deps.emit(service)
   }
 
-  private median(): number | undefined {
-    if (this.beats.length < LAG_BEATS_NEEDED) return undefined
-    const sorted = [...this.beats].sort((a, b) => a - b)
-    const middle = sorted.length / 2
-    return Math.round(sorted.length % 2 ? sorted[Math.floor(middle)]! : (sorted[middle - 1]! + sorted[middle]!) / 2)
+  /** What's degraded now and how badly, to hold "Not now" against. */
+  private baseline(): Baseline {
+    return { lag: this.degraded?.lag ?? false, memory: this.degraded?.memory ?? false, ...this.measure() }
+  }
+
+  /** Worse than `baseline`: degraded for a reason it wasn't, or `WORSE_BY` times the lag or memory it was. */
+  private worse(baseline: Baseline | undefined): boolean {
+    if (!baseline) return true
+    const now = this.baseline()
+    if ((now.lag && !baseline.lag) || (now.memory && !baseline.memory)) return true
+    const grew = (value: number | undefined, was: number | undefined) => value !== undefined && was !== undefined && was > 0 && value >= was * WORSE_BY
+    return (now.lag && grew(now.lagMs, baseline.lagMs)) || (now.memory && grew(now.residentBytes, baseline.residentBytes))
+  }
+
+  /** Whether the desk says it: degraded, once an episode, and not while "Not now" holds unless it got worse. */
+  private noticeDue(): boolean {
+    if (this.state !== "degraded" || this.restarting) return false
+    const { episode, snooze } = this.notices
+    if (episode?.acknowledged && !this.worse(episode.baseline)) return false
+    if (snooze && snooze.until > this.now() && !this.worse(snooze.baseline)) return false
+    return true
+  }
+
+  private async saveNotices(): Promise<void> {
+    const file = this.deps.noticeFile
+    if (!file) return
+    await mkdir(join(file, ".."), { recursive: true }).catch(() => {})
+    await writeFile(file, JSON.stringify(this.notices)).catch(() => {})
+  }
+
+  /** The median of the kept beats, said from `SHOWN_BEATS`, judged from `LAG_BEATS_NEEDED`. */
+  private median(needed = SHOWN_BEATS): number | undefined {
+    return this.beats.length < needed ? undefined : medianOf(this.beats)
   }
 
   private measure(): FileEventsMeasure {
@@ -308,15 +398,31 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
     return { ...(lagMs !== undefined && { lagMs }), ...(this.reading && { residentBytes: this.reading.residentBytes }) }
   }
 
+  /**
+   * Degraded is memory past `DEGRADED_MEMORY_BYTES`, or a canary late past
+   * `DEGRADED_LAG_MS` at the median of five minutes or unheard for three,
+   * on a Mac not busy with other work and not just after a restart, when
+   * only memory is judged.
+   */
   private evaluate(force = false): void {
     if (!this.deps.mac) return
-    const lagMs = this.median()
-    const lag = this.silentSince !== undefined || (lagMs !== undefined && lagMs > DEGRADED_LAG_MS)
+    const now = this.now()
+    const lagMs = this.median(LAG_BEATS_NEEDED)
+    const judged = now >= this.settlingUntil && !this.busy
+    const silent = this.silentSince !== undefined && now - this.silentSince >= DEGRADED_SILENCE_MS
+    const lag = judged && (silent || (lagMs !== undefined && lagMs > DEGRADED_LAG_MS))
     const memory = this.overMemory >= MEMORY_READINGS_NEEDED
     const state: FileEventsState = lag || memory ? "degraded" : lagMs !== undefined || this.reading ? "healthy" : "unknown"
     const changed = state !== this.state || (state === "degraded" && (this.degraded?.lag !== lag || this.degraded?.memory !== memory))
-    if (state === "degraded") this.degraded = { since: this.state === "degraded" ? this.degraded!.since : this.now(), lag, memory }
-    else this.degraded = undefined
+    if (state === "degraded") {
+      const episode = this.notices.episode
+      if (episode && now - episode.lastDegradedAt < EPISODE_GAP_MS) this.notices.episode = { ...episode, lastDegradedAt: now }
+      else {
+        this.notices.episode = { since: now, lastDegradedAt: now, acknowledged: false }
+        void this.saveNotices()
+      }
+      this.degraded = { since: this.notices.episode.since, lag, memory }
+    } else this.degraded = undefined
     if (state !== this.state) {
       this.deps.log(state === "degraded" ? "fseventsd is degraded" : state === "healthy" ? "fseventsd is healthy" : "fseventsd unread", {
         ...(lagMs !== undefined && { lagMs }), ...(this.reading && { residentBytes: this.reading.residentBytes, pid: this.reading.pid }), lag, memory,
@@ -324,7 +430,7 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
       this.state = state
       void this.sample("state")
     }
-    if (changed || force) this.publish()
+    if (changed || force || this.noticeDue() !== this.noticed) this.publish()
   }
 
   /**
@@ -348,6 +454,7 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
       this.restarts.push(at)
       this.beats = []
       this.overMemory = over && counted ? 1 : 0
+      this.settlingUntil = at + SETTLE_MS
       this.deps.log("fseventsd started over", { pid: reading.pid, was: known })
       this.deps.recover()
       await this.sample("restarted")
@@ -450,6 +557,18 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
   /** The samples an earlier host kept, and the restarts among them; a file past a week is written again without the older. */
   private load(): Promise<void> {
     this.loaded ??= (async () => {
+      if (this.deps.noticeFile) {
+        const text = await readFile(this.deps.noticeFile, "utf8").catch(() => "")
+        const notices = NoticeStateSchema.safeParse(jsonOrEmpty(text))
+        if (notices.success) {
+          // Beats heard before this read may have begun an episode: one the file holds within the gap is the same one.
+          const kept = notices.data
+          const live = this.notices.episode
+          if (live && kept.episode && live.since - kept.episode.lastDegradedAt < EPISODE_GAP_MS) kept.episode = { ...kept.episode, lastDegradedAt: live.lastDegradedAt }
+          else if (live) kept.episode = live
+          this.notices = { ...kept, ...(!kept.snooze && this.notices.snooze && { snooze: this.notices.snooze }) }
+        }
+      }
       const file = this.deps.historyFile
       if (!file) return
       const text = await readFile(file, "utf8").catch(() => "")
@@ -483,6 +602,22 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
 export function declareFileEventsMethods(methods: MethodTable, service: FileEventsServiceWatch): void {
   methods.handle("mako:file-events-service", () => service.snapshot())
   methods.handle("mako:file-events-restart", () => service.restart())
+  methods.handle("mako:file-events-dismiss", () => service.dismiss())
+}
+
+/** A file's JSON, or an empty object for one that's missing or cut short. */
+function jsonOrEmpty(text: string) {
+  try {
+    return text ? JSON.parse(text) : {}
+  } catch {
+    return {}
+  }
+}
+
+function medianOf(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = sorted.length / 2
+  return Math.round(sorted.length % 2 ? sorted[Math.floor(middle)]! : (sorted[middle - 1]! + sorted[middle]!) / 2)
 }
 
 function numbers(prefix: "before" | "after", measure: FileEventsMeasure) {
