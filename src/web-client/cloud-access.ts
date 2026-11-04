@@ -1,5 +1,6 @@
-import { CloudAccessGrantSchema, CloudAccessGrantsAnswerSchema, CloudAccessUsesAnswerSchema, type CloudAccessService } from "@mako/host/contracts/cloud-access"
+import { CloudAccessGrantSchema, CloudAccessGrantsAnswerSchema, CloudAccessRepositorySchema, CloudAccessUsesAnswerSchema, type CloudAccessService } from "@mako/host/contracts/cloud-access"
 import type { CloudAccessTransport } from "@/state/cloud-access"
+import type { WebProject } from "./account"
 import { accountListStore } from "./account-list"
 import type { Gateway } from "./gateway"
 
@@ -18,15 +19,18 @@ export function webCloudAccess(gateway: Pick<Gateway, "rest">, accountId: string
 }
 
 /**
- * The account's projects a cloud Thread can work in, from the list this browser follows: each Session's repository,
- * the one the person prompted in latest first.
+ * The account's projects a cloud Thread can work in, newest first, each once: the repositories it named for the cloud
+ * (`GET /v1/projects`, by when each was last used), and those of the Sessions this browser lists, by when the person
+ * last prompted there. A cloud machine's Sessions are listed without a repository, so an account whose projects are
+ * cloud-only has only the first.
  */
-export function listedRepositories(rows: ReadonlyArray<{ repository?: { url: string }; promptedAt?: string; createdAt?: string }>): string[] {
+export function listedRepositories(rows: ReadonlyArray<{ repository?: { url: string }; promptedAt?: string; createdAt?: string }>, projects: ReadonlyArray<Pick<WebProject, "url" | "usedAt">> = []): string[] {
   const latest = new Map<string, number>()
-  for (const row of rows) {
-    if (!row.repository) continue
-    const at = Date.parse(row.promptedAt ?? row.createdAt ?? "") || 0
-    latest.set(row.repository.url, Math.max(latest.get(row.repository.url) ?? 0, at))
+  const seen = (url: string, at: string | undefined) => {
+    if (!CloudAccessRepositorySchema.safeParse(url).success) return
+    latest.set(url, Math.max(latest.get(url) ?? 0, Date.parse(at ?? "") || 0))
   }
+  for (const project of projects) seen(project.url, project.usedAt)
+  for (const row of rows) if (row.repository) seen(row.repository.url, row.promptedAt ?? row.createdAt)
   return [...latest].sort((left, right) => right[1] - left[1]).map(([url]) => url)
 }

@@ -9,6 +9,7 @@ import { CLOUD_ACCESS_CATALOG, CLOUD_ACCESS_HINT, CLOUD_ACCESS_SERVICES, type Cl
 import { CloudAccess } from "@/components/settings/cloud-access"
 import { grantAccount, givenWords, useCloudAccess, usedByName, type CloudAccessBusy, type CloudAccessTransport, type CloudAccessUsesPhase } from "@/state/cloud-access"
 import { listedRepositories, webCloudAccess } from "./cloud-access"
+import { accountProjects, type WebProject } from "./account"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
@@ -218,13 +219,22 @@ export function TouchPullRequests({ tokens }: { tokens: GitHubTokens }) {
 /**
  * Each project's cloud access: the accounts its cloud Threads can use. In a laptop's browser it's the desktop's own
  * part (`CloudAccess`); on a phone or tablet, the same part in the touch layout here. The projects are the account's
- * repositories its listed Sessions work in, the one prompted in latest first. Neither keeps a token.
+ * cloud projects and its listed Sessions' repositories (`listedRepositories`). Neither keeps a token.
  */
 function CloudAccessSettings() {
   const client = useWebClient()
   const transport = useMemo(() => webCloudAccess(client.gateway, client.account.id), [client])
   const rows = useAccountList((state) => state.rows)
-  const repositories = useMemo(() => listedRepositories(rows), [rows])
+  const [projects, setProjects] = useState<WebProject[]>([])
+  useEffect(() => {
+    let live = true
+    // Without the account's projects, those of the listed Sessions still show.
+    void accountProjects(client.gateway).then((found) => live && setProjects(found), () => undefined)
+    return () => {
+      live = false
+    }
+  }, [client])
+  const repositories = useMemo(() => listedRepositories(rows, projects), [rows, projects])
   return <CloudAccessProjects transport={transport} repositories={repositories} touch={useForm() !== "desk"} />
 }
 

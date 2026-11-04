@@ -87,6 +87,33 @@ assert.deepEqual(
   ]),
   [REPOSITORY, "https://github.com/acme/docs"],
 )
+// An account whose projects are cloud-only: its cloud machines' Sessions are listed without a repository, so the
+// account's cloud projects are the list, newest first.
+const cloudOnly = [
+  { createdAt: "2026-11-03T00:00:00.000Z", promptedAt: "2026-11-03T01:00:00.000Z" },
+  { createdAt: "2026-11-02T00:00:00.000Z" },
+]
+assert.deepEqual(
+  listedRepositories(cloudOnly, [
+    { url: "https://github.com/acme/api", usedAt: "2026-11-03T02:00:00.000Z" },
+    { url: REPOSITORY, usedAt: "2026-11-01T00:00:00.000Z" },
+  ]),
+  ["https://github.com/acme/api", REPOSITORY],
+)
+assert.deepEqual(listedRepositories(cloudOnly), [])
+// Both together: each repository once, at the later of its project's use and its Sessions' prompts; anything that
+// isn't a GitHub repository's URL left out.
+assert.deepEqual(
+  listedRepositories(
+    [{ repository: { url: REPOSITORY }, createdAt: "2026-10-01T00:00:00.000Z", promptedAt: "2026-11-04T00:00:00.000Z" }],
+    [
+      { url: "https://github.com/acme/api", usedAt: "2026-11-03T02:00:00.000Z" },
+      { url: REPOSITORY, usedAt: "2026-11-01T00:00:00.000Z" },
+      { url: "https://gitlab.com/acme/other", usedAt: "2026-11-05T00:00:00.000Z" },
+    ],
+  ),
+  [REPOSITORY, "https://github.com/acme/api"],
+)
 
 // A connected row's words.
 assert.equal(grantAccount(grant), "acc-1")
@@ -94,4 +121,4 @@ assert.equal(grantAccount({ ...grant, account: { id: "acc-1", name: "Acme" } }),
 assert.equal(givenWords(grant, Date.parse("2026-11-03T10:00:00.000Z")), "Given to a cloud Thread 5 minutes ago")
 assert.equal(givenWords({ ...grant, lastGiven: null }), "Not given to a cloud Thread yet")
 
-console.log("Cloud access: the answers parsed and refused as the contract says, every service named, a browser's calls on the account's routes, its projects listed once each, and a connected row's words")
+console.log("Cloud access: the answers parsed and refused as the contract says, every service named, a browser's calls on the account's routes, its projects (cloud-only ones too) listed once each, and a connected row's words")
