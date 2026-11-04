@@ -2,7 +2,8 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { ChildStartSchema, type ChildStart } from "../contracts/agents.js"
 import type { LiveSnapshot, LiveStartOptions, LiveSummary } from "../contracts/live-conversations.js"
-import { SessionIdSchema, ThreadIdSchema, type Actor } from "../contracts/thread-identity.js"
+import { CLOUD_FOLDER_WHERE } from "../contracts/listed-conversations.js"
+import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { JournalFacts, SourceRef } from "../threads/index.js"
 import { threadIdentity } from "@mako/sessions"
@@ -152,6 +153,34 @@ export class LiveThreads {
       this.placementWarned = true
       return {}
     }
+  }
+
+  /**
+   * Where each of these conversations runs, for those whose Session the Thread store says a cloud Thread executes now:
+   * the one record a move or a return changes, and the one the account's list is held to (`#listable`), so every
+   * window reads the same place from it rather than from whichever summary of the conversation reached it last.
+   */
+  runningElsewhere(ids: readonly string[]): Map<string, string> {
+    const away = new Map<string, string>()
+    const threads = this.dependencies.threads
+    if (!threads || !ids.length) return away
+    try {
+      const sessions = new Map<string, SessionId>()
+      for (const id of ids) {
+        const placed = threads.journalPlacement(id)
+        const session = placed && SessionIdSchema.safeParse(placed.session)
+        if (session?.success) sessions.set(id, session.data)
+      }
+      const executions = threads.executionsOf(new Set(sessions.values()))
+      for (const [id, session] of sessions) {
+        const execution = executions.get(session)
+        if (execution?.state === "elsewhere" && execution.owner.kind === "cloud") away.set(id, CLOUD_FOLDER_WHERE)
+      }
+    } catch (error) {
+      if (!this.placementWarned) hostWarn("threads", "where conversations run could not be read; they are served as this computer's", { error: errorMessage({ error }) })
+      this.placementWarned = true
+    }
+    return away
   }
 
   /** Tell every window what a Thread's tabs are now, after a Session joined it. */
