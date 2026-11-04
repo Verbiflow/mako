@@ -170,7 +170,7 @@ try {
       await world.agents.stop(apex.caller, { child: "labels", reason: "first stop" })
       await until("the stop", () => world.live.session(fin)?.status !== "running")
       // A message an older build sent a stopped Fin as a turn of its own, as its Fins' digests went.
-      world.live.submit(fin, randomUUID(), `${FROM_AGENTS}\n1 finished`, [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse((apex.caller as Extract<AgentCaller, { kind: "agent" }>).session) })
+      world.live.submit(fin, randomUUID(), `${FROM_AGENTS}\n1 finished`, [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(world.store.journalPlacement(apex.conversation)?.session) })
       await until("that turn to run", () => world.live.session(fin)?.status === "running")
       assert.deepEqual(stateOf(world, apex.conversation, "labels"), { kind: "ended", outcome: "stopped", reason: "first stop" }, `${harness}: a stopped Fin doesn't read working`)
       const again = await world.agents.stop(apex.caller, { child: "labels", reason: "stop it all" })
