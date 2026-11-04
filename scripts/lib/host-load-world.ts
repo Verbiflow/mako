@@ -109,7 +109,7 @@ function pastSessions(home: string, project: string, count: number): void {
 /** A process group that lives until the world is released: `sh` holding `sleep`s, its command line as long as a dev server's. */
 function idleGroup(label: string, cwd: string, sleeps = 2) {
   const script = `${Array.from({ length: sleeps }, () => "sleep 86400 &").join(" ")} wait`
-  const child = spawn("/bin/sh", ["-c", script, label, "--port", "3000", "--watch", "--config", join(cwd, "vite.config.ts")], { cwd, detached: true, stdio: "ignore" })
+  const child = spawn("/bin/sh", ["-c", script, label, "--port", "3000", "--watch", "--config", "vite.config.ts"], { cwd, detached: true, stdio: "ignore" })
   child.unref()
   return { pid: child.pid!, stop: () => { try { process.kill(-child.pid!, "SIGKILL") } catch { /* gone */ } } }
 }
