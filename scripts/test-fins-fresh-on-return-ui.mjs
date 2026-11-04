@@ -81,20 +81,22 @@ async function check() {
     }
   }
   const capture = async (name) => writeFile(join(shots, `fins-fresh-${name}.png`), (await page.capturePage()).toPNG())
-  const open = (title) => evaluate(`[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes(${JSON.stringify(title)})).click(); true`)
+  /** The page's own: opens a Thread by its row's title. */
+  const OPEN = "window.__open = (title) => { [...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes(title)).click(); return true }; true"
 
   await window.loadURL(`${process.env.MAKO_FRESH_UI_URL}?mock&app=apex&apexes=1`)
   await until("[...document.querySelectorAll('[data-thread-row]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row")
-  await open("Mobile polish")
+  await evaluate(OPEN)
+  await evaluate("window.__open('Mobile polish')")
   await until("document.querySelectorAll('[data-fin-ask]').length > 0", "the Apex's Fins' asks")
-  const before = await evaluate(ASKS)
+  const before = await evaluate(`window.__before = ${ASKS}`)
   assert.ok(before.length > 1, `the Apex's Fins ask: ${JSON.stringify(before)}`)
   await capture("before")
 
   // Away, on another Apex's Thread, while this one's Fins move as its host's batches say: every ask is answered and
   // its Fin finishes, all but four go, and one of those four asks something new.
-  await open("Apex 1")
-  await until(`(() => { const asks = ${ASKS}; return !asks.some((ask) => ${JSON.stringify(before)}.includes(ask)) })()`, "the other Apex on screen")
+  await evaluate("window.__open('Apex 1')")
+  await until(`(() => { const asks = ${ASKS}; return !asks.some((ask) => window.__before.includes(ask)) })()`, "the other Apex on screen")
   await evaluate(`(() => {
     const fins = window.apexScene.children().filter((agent) => agent.child).slice(0, 4)
     window.apexScene.setChildren(fins.map((agent, index) => ({ ...agent, child: { ...agent.child, state: index === 0
@@ -105,7 +107,7 @@ async function check() {
 
   // Back: sampled every frame from the click.
   await evaluate(SAMPLER)
-  await open("Mobile polish")
+  await evaluate("window.__open('Mobile polish')")
   await until("window.__fresh.frames.some((asks) => asks.some((ask) => ask.includes('Ship the sheet now')))", "the new ask")
   await until("window.__fresh.frames.length > 30", "frames after coming back")
   const frames = await evaluate("(() => { cancelAnimationFrame(window.__fresh.raf); return window.__fresh.frames })()")
