@@ -87,7 +87,12 @@ const inputs = {
       ]),
       z.object({
         scope: z
-          .union([z.literal("children"), z.literal("tree"), z.literal("crew")])
+          .union([
+            z.literal("children"),
+            z.literal("tree"),
+            z.literal("crew"),
+            z.literal("apexes"),
+          ])
           .optional(),
       }),
     ]),

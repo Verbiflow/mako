@@ -6,7 +6,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
-import { caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
+import { apexesAnswer, caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
 import { bareName, isShell, makoTool, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
@@ -90,7 +90,7 @@ export async function liveSample(input: {
   const status = () => events.findLast((event) => event.type === "live-session")?.session.status
   try {
     const mode = ASKING_MODE.get(harness)
-    const grant = stub.grant(id)
+    const grant = stub.grant(id, apexesAnswer(orchCase))
     if (routing === "on") stub.routes(id, caseCallThread(orchCase, project))
     if (orchCase.setup.answers) stub.answers(id, orchCase.setup.answers)
     await driver.start(project, admitted(harness, {

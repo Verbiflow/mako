@@ -1,6 +1,6 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { reportPhase, type Report } from "../contracts/agents.js"
+import { APEX_WORD, reportPhase, type Report } from "../contracts/agents.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -29,6 +29,8 @@ export interface Notice {
   wake?: string
   /** The result of a `wait` start whose window ended first: it starts the Apex's next turn, in full, and is never steered into a running one. */
   settledOnly?: true
+  /** Another of the person's Apexes' reply to this one's message, in full: the turn the message started, as it ended. */
+  reply?: true
 }
 
 /** What an Apex's conversation can take now. */
@@ -257,13 +259,15 @@ function nextBatch(notices: readonly Notice[]): Notice[] {
 
 const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
 
-/** The digest in its fixed shape: the results waited for, in full; then decisions; then what finished; then how the rest stand. */
+/** The digest in its fixed shape: the results waited for, in full; other Apexes' replies, in full; then decisions; then what finished; then how the rest stand. */
 export function digest(notices: readonly Notice[], counts: string): string {
   const results = notices.filter((notice) => notice.settledOnly)
-  const asks = notices.filter((notice) => !notice.settledOnly && DECIDES.has(notice.report.status))
+  const replies = notices.filter((notice) => notice.reply)
+  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply)
+  const asks = fins.filter((notice) => DECIDES.has(notice.report.status))
   const decisions = asks.filter((notice) => notice.report.for !== "person")
   const persons = asks.filter((notice) => notice.report.for === "person")
-  const finished = notices.filter((notice) => !notice.settledOnly && (notice.report.status === "done" || notice.report.status === "failed"))
+  const finished = fins.filter((notice) => notice.report.status === "done" || notice.report.status === "failed")
   const lines = [FROM_AGENTS]
   if (results.length) {
     lines.push(results.length === 1 ? "The result you waited for:" : `The ${results.length} results you waited for:`)
@@ -273,6 +277,15 @@ export function digest(notices: readonly Notice[], counts: string): string {
       lines.push(`  • ${label} ${report.status}:`, ...text.split("\n").map((line) => `    ${line}`))
       for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
     }
+  }
+  if (replies.length) {
+    lines.push(replies.length === 1 ? `Another ${APEX_WORD}'s reply to your message:` : `${replies.length} other ${APEX_WORD}es' replies to your messages:`)
+    for (const { label, report } of replies) {
+      const said = report.summary.trim()
+      const text = said.length > RESULT_CHARS ? `${said.slice(0, RESULT_CHARS)}… (+${(said.length - RESULT_CHARS).toLocaleString("en-US")} chars)` : said
+      lines.push(`  • ${label} ${report.status === "done" ? "replied" : "failed"}:`, ...text.split("\n").map((line) => `    ${line}`))
+    }
+    lines.push("  Don't reply to a reply unless it asks you something.")
   }
   if (decisions.length) {
     lines.push(`${decisions.length} ${decisions.length === 1 ? "needs" : "need"} a decision:`)
@@ -295,7 +308,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
   }
   lines.push(counts)
-  lines.push(results.length && !decisions.length && !persons.length && !finished.length
+  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return lines.join("\n")
@@ -308,6 +321,12 @@ export function digest(notices: readonly Notice[], counts: string): string {
 export function finishedLine(report: Report): string {
   const summary = report.summary.trim()
   if (!summary) return report.status === "done" ? "it finished." : "it failed."
+  return firstParagraph(summary)
+}
+
+/** Words as a line of a digest carries them: the first paragraph past any heading, at most `FINISHED_CHARS`, and how much more there is. */
+export function firstParagraph(text: string): string {
+  const summary = text.trim()
   const paragraphs = summary.split(/\n\s*\n/).map((paragraph) => paragraph.split("\n").filter((line) => !/^\s*(#{1,6}\s|[-*_]{3,}\s*$)/.test(line)).join("\n").trim()).filter(Boolean)
   const first = (paragraphs[0] ?? summary).replace(/\s+/g, " ")
   if (paragraphs.length <= 1 && first.length <= FINISHED_CHARS) return first
