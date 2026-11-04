@@ -532,9 +532,10 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
  * What a script makes of `settled`: the lines to fail on. Under the local
  * updater, which names a verdict file (`PERFORMANCE_VERDICT_VARIABLE`), the
  * verdict goes there and an unsure row doesn't fail; anywhere else nobody is
- * there to choose, so it fails beside a slower one.
+ * there to choose, so it fails beside a slower one. `null` names no file even
+ * under the updater.
  */
-export async function concluded(script: string, settled: Settled, allowed: number, file = process.env[PERFORMANCE_VERDICT_VARIABLE]): Promise<string[]> {
+export async function concluded(script: string, settled: Settled, allowed: number, file: string | null = process.env[PERFORMANCE_VERDICT_VARIABLE] ?? null): Promise<string[]> {
   if (file) {
     const verdict: PerformanceVerdict = { script, allowed, rows: settled.rows, machine: settled.machine, busy: settled.busy }
     await appendFile(file, `${JSON.stringify(verdict)}\n`)
