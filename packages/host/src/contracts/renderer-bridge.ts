@@ -23,6 +23,7 @@ import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { AccessChoices } from "./access-choices.js"
+import type { FinChoicesReading, FinPolicy } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -222,6 +223,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseAccess: (harness: string, mode: string) => invokeTrustedHost<AccessChoices>("mako:access-choose", harness, mode),
     /** A window's own copy from before the host kept them, handed over once: taken only where no choice is made. */
     adoptAccessChoices: (modes: Record<string, string>) => invokeTrustedHost<AccessChoices>("mako:access-adopt", modes),
+    /** Settings › Fins by harness, and the model the person last used on each (`contracts/fin-tuning.ts`). */
+    finDefaults: () => invokeTrustedHost<FinChoicesReading>("mako:fin-defaults"),
+    /** Fins on `harness` run on `settings`, or with null, on what the person uses there. */
+    chooseFinDefault: (harness: string, settings: SessionSettings | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-default-choose", harness, settings),
+    /** The person's rules for which work goes to which harness and model, saved whole. */
+    saveFinPolicy: (policy: FinPolicy) => invokeTrustedHost<FinChoicesReading>("mako:fin-policy-save", policy),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>

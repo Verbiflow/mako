@@ -198,6 +198,8 @@ const inputs = {
         harness: z.string().optional(),
         model: z.string().optional(),
         reasoning: z.string().optional(),
+        fast: z.boolean().optional(),
+        rule: z.number().optional(),
         access: z
           .union([
             z.literal("ask"),
@@ -449,6 +451,55 @@ const inputs = {
   "mako:external-editors": () => z.tuple([]),
   "mako:file-events-restart": () => z.tuple([]),
   "mako:file-events-service": () => z.tuple([]),
+  "mako:fin-default-choose": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.null(),
+        z.object({
+          model: z.string().optional(),
+          options: z
+            .record(z.string(), z.union([z.boolean(), z.string()]))
+            .optional(),
+        }),
+      ]),
+    ]),
+  "mako:fin-defaults": () => z.tuple([]),
+  "mako:fin-policy-save": () =>
+    z.tuple([
+      z.object({
+        rules: z.array(
+          z.object({
+            id: z.string(),
+            when: z.string(),
+            target: z.object({
+              harness: z.string(),
+              settings: z
+                .object({
+                  model: z.string().optional(),
+                  options: z
+                    .record(z.string(), z.union([z.boolean(), z.string()]))
+                    .optional(),
+                })
+                .optional(),
+            }),
+          })
+        ),
+        otherwise: z
+          .object({
+            harness: z.string(),
+            settings: z
+              .object({
+                model: z.string().optional(),
+                options: z
+                  .record(z.string(), z.union([z.boolean(), z.string()]))
+                  .optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+      }),
+    ]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
@@ -972,6 +1023,8 @@ const inputs = {
               harness: z.string().optional(),
               model: z.string().optional(),
               reasoning: z.string().optional(),
+              fast: z.boolean().optional(),
+              rule: z.number().optional(),
               access: z
                 .union([
                   z.literal("ask"),
@@ -1019,6 +1072,30 @@ const inputs = {
               }),
             ]),
             op: z.string(),
+            tuned: z
+              .object({
+                source: z.union([
+                  z.literal("harness"),
+                  z.literal("rule"),
+                  z.literal("asked"),
+                  z.literal("mako"),
+                  z.literal("fins"),
+                  z.literal("apex"),
+                  z.literal("used"),
+                ]),
+                note: z.string().optional(),
+                rerouted: z
+                  .object({
+                    from: z.string(),
+                    until: z.number().optional(),
+                    instead: z.string().optional(),
+                  })
+                  .optional(),
+                rule: z
+                  .object({ when: z.string(), n: z.number().optional() })
+                  .optional(),
+              })
+              .optional(),
           })
           .optional(),
       }),
@@ -2456,6 +2533,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:external-editors", "workspaces"],
   ["mako:file-events-restart", "workspaces"],
   ["mako:file-events-service", "workspaces"],
+  ["mako:fin-default-choose", "harnesses"],
+  ["mako:fin-defaults", "harnesses"],
+  ["mako:fin-policy-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
   ["mako:git-changed-since", "git"],

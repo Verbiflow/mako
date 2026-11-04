@@ -9,7 +9,7 @@ import { AgentAnswerSchema, agentToolText, registerAgentTools, type AgentToolDoo
 import { z } from "zod"
 import { localHost, type HostTransport } from "./transport.js"
 
-export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--access <tier>]
+export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--fast|--standard] [--rule <n>] [--access <tier>]
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
                     [--wait [--timeout <ms>]] [--wake decisions|finish|never]
   mako agents list [--tree]
@@ -58,6 +58,9 @@ const OPTIONS = {
   "brief-file": { type: "string" },
   model: { type: "string" },
   reasoning: { type: "string" },
+  fast: { type: "boolean" },
+  standard: { type: "boolean" },
+  rule: { type: "string" },
   access: { type: "string" },
   worktree: { type: "boolean" },
   branch: { type: "string" },
@@ -86,6 +89,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       if ((values.branch || values.base) && !values.worktree) throw new Error("--branch and --base name its worktree: add --worktree")
       if (values.branch && values.base) throw new Error("--branch or --base, not both")
       if (values.timeout && !values.wait) throw new Error("--timeout is how long --wait holds: add --wait")
+      if (values.fast && values.standard) throw new Error("--fast or --standard, not both")
       return {
         tool: tool("start"),
         input: {
@@ -95,6 +99,8 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
           clientKey: values.key ?? randomUUID(),
           ...(values.model && { model: values.model }),
           ...(values.reasoning && { reasoning: values.reasoning }),
+          ...((values.fast || values.standard) && { fast: Boolean(values.fast) }),
+          ...(values.rule && { rule: Number(values.rule) }),
           ...(values.access && { access: values.access }),
           ...(values.worktree && { workspace: { ...(values.branch && { branch: values.branch }), ...(values.base && { base: values.base }) } }),
           ...(values.title && { title: values.title }),

@@ -71,7 +71,7 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <WebClientContext value={client}>
-      <PhoneApexScreen opened={search.get("open") ?? undefined} />
+      <PhoneApexScreen opened={search.get("open") ?? undefined} inbox={search.get("screen") === "inbox"} />
       <Toaster position="top-center" />
     </WebClientContext>
   </TooltipProvider>

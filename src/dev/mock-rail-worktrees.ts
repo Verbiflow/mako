@@ -60,7 +60,7 @@ export const RAIL_MARKS: AppMark[] = [
 const TITLES = ["Billing webhooks", "Set up api", "Payments queue", "Retry budget"]
 const MB = 1024 ** 2
 
-/** The Status view's Room for the same scene, with a spare checkout installing ahead and each project's fit. */
+/** The Inbox's Room for the same scene, with a spare checkout installing ahead and each project's fit. */
 export function railRoom(now: number): RoomView {
   const apps: RoomApp[] = MOVED.map((entry, index) => {
     const worktree = RAIL_WORKTREES[index]!

@@ -409,12 +409,12 @@ async function check() {
   assert.match(stopAllTitle ?? "", /Stop \d+ Fins under Mobile polish/)
 
   // Answering sheet-motion's approval moves it to working everywhere at once: the card, the Agents panel, the
-  // rail's badge — all through the one action (`answerFin`) the Agents panel and the dock share.
+  // rail's pips — all through the one action (`answerFin`) the Agents panel and the dock share.
   const sheetMotion = await evaluate(
     "window.apexScene.children().find((agent) => agent.title === 'Sheet motion on iPad').child.thread"
   )
   const railBefore = await evaluate(
-    "document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('aria-label')"
+    "document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]').getAttribute('aria-label')"
   )
   await click("[data-apex-count]")
   await until(
@@ -435,13 +435,13 @@ async function check() {
     "sheet-motion moving to working in the Agents panel"
   )
   const railAfter = await evaluate(
-    "document.querySelector('.thread-jump-scope [data-rollup]').getAttribute('aria-label')"
+    "document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]').getAttribute('aria-label')"
   )
   console.log("RAIL", railBefore, "->", railAfter)
   assert.match(
     railAfter,
     /1 needs? you/,
-    "the rail's badge counts one need now, not two"
+    "the rail's pips count one need now, not two"
   )
   assert.notEqual(railBefore, railAfter)
 
@@ -571,7 +571,7 @@ async function check() {
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await until(
-    "Boolean(document.querySelector('[data-thread] [data-rollup]'))",
+    "Boolean(document.querySelector('[data-thread] [data-fin-pips]'))",
     "the Apex's row on the phone"
   )
   await click("[data-thread]")

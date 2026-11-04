@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { RollupBadge } from "@/components/rail/rollup-badge"
-import { useThreadRollup } from "@/state/apex-fins"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { finsWord } from "@mako/host/contracts/agents"
+import { FinPips } from "@/components/rail/fin-pips"
+import { apexPips, pipsCounts } from "@/state/fin-pips"
+import { useAcp } from "@/state/acp"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
+import { childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
+import { ApexMark } from "@/components/ui/apex-mark"
+import { finMarkState } from "@/lib/live-mark-state"
 import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
@@ -34,27 +39,35 @@ import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { DiagnosisCard } from "./trouble"
+import { useWebFinAsks, waitingThreads, webInboxCount, type WebFinAsk } from "./inbox"
 import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
 
-/** The list's sections: what needs the person, what's at work, and the rest. */
-function sections(threads: readonly WebThread[]) {
-  const needs = threads.filter((thread) => thread.standing === "waiting" || thread.standing === "failed")
-  const working = threads.filter((thread) => thread.standing === "working" || thread.standing === "moving")
-  const rest = threads.filter((thread) => thread.standing === "idle")
+/**
+ * The list's sections, as the Inbox counts them: what waits on the person (Threads, and each Fin that asks as a row of
+ * its own), what's at work, and the rest, a failure among them wearing its mark. An Apex whose asks are its Fins'
+ * stands with the work, its Fins' rows saying what they ask.
+ */
+function sections(threads: readonly WebThread[], fins: readonly WebFinAsk[]) {
+  const needs = waitingThreads(threads, fins)
+  const waiting = new Set(needs.map((thread) => thread.id))
+  const working = threads.filter((thread) => !waiting.has(thread.id) && (thread.standing === "working" || thread.standing === "moving" || thread.standing === "waiting"))
+  const rest = threads.filter((thread) => thread.standing === "idle" || thread.standing === "failed")
   return [
-    { id: "needs", label: "Needs you", threads: needs },
-    { id: "working", label: "Working", threads: working },
-    { id: "recent", label: "Recent", threads: rest },
-  ].filter((section) => section.threads.length > 0)
+    { id: "needs", label: "Needs you", threads: needs, fins },
+    { id: "working", label: "Working", threads: working, fins: NO_FINS },
+    { id: "recent", label: "Recent", threads: rest, fins: NO_FINS },
+  ].filter((section) => section.threads.length > 0 || section.fins.length > 0)
 }
+
+const NO_FINS: readonly WebFinAsk[] = []
 
 /**
  * The account's Threads under a finger. On a phone, the first screen: its bar says where you are and holds your
- * account, rows run edge to edge, parted by hairlines, and New floats at the bottom right in thumb's reach, a small
+ * account, rows run edge to edge, and New floats at the bottom right in thumb's reach, a small
  * round button that steps aside while the list is scrolled down and comes back on the way up. On a tablet, the rail
  * beside what's open: rows inset and rounded, the one open lit, New at its head and your account at its foot.
  */
-export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting = false, settings = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; wide: boolean; starting?: boolean; settings?: boolean }) {
+export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide, starting = false, settings = false, inbox = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; onInbox?: () => void; wide: boolean; starting?: boolean; settings?: boolean; inbox?: boolean }) {
   const client = useWebClient()
   const list = useAccountList((state) => state)
   const folded = useMemo(() => foldThreads(list), [list])
@@ -62,6 +75,8 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
   const hidden = useArchiving((state) => state.hidden)
   const threads = useMemo(() => (hidden.size ? folded.threads.filter((thread) => !hidden.has(thread.id)) : folded.threads), [folded, hidden])
   const { archived } = folded
+  const fins = useWebFinAsks()
+  const byId = useMemo(() => new Map(threads.map((thread) => [thread.id, thread])), [threads])
   const read = useReadState((state) => state)
   // Threads listed here for the first time read as seen: only what happens from now on is news.
   useEffect(() => {
@@ -130,13 +145,14 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
+          {onInbox && (threads.length > 0 || archived.length > 0) ? <TopChips count={webInboxCount(threads, fins)} open={inbox} onInbox={onInbox} /> : null}
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : (
             <>
-              {sections(threads).map((section) => (
-                <section key={section.id} aria-labelledby={`section-${section.id}`} className="web-section">
-                  <h2 id={`section-${section.id}`} className="web-section-label">
+              {sections(threads, fins).map((section) => (
+                <section key={section.id} aria-labelledby={`section-${section.id}`} data-list-section={section.id} className="web-section">
+                  <h2 id={`section-${section.id}`} className={cn("web-section-label", section.id === "needs" && "text-caution")}>
                     {section.label}
                   </h2>
                   <ul role="list" className="web-rows">
@@ -145,6 +161,14 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
                         <ThreadRow {...rowProps(thread)} />
                       </li>
                     ))}
+                    {section.fins.map((fin) => {
+                      const apex = byId.get(fin.apex.thread)
+                      return (
+                        <li key={fin.key} data-flip-key={fin.key}>
+                          <FinAskRow fin={fin} onOpen={apex ? () => onOpen(apex) : onInbox} />
+                        </li>
+                      )
+                    })}
                   </ul>
                 </section>
               ))}
@@ -190,7 +214,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
         onArchive={(thread) => archiveWithUndo(client, thread)}
       />
       {wide ? (
-        <footer className="shrink-0 border-t border-hairline p-2">
+        <footer className="shrink-0 p-2">
           <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
             <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} />
             <span className="min-w-0 flex-1 truncate text-left">{client.account.name || client.account.email}</span>
@@ -376,9 +400,10 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
           <span className="flex min-w-0 items-baseline gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
             <span className="flex shrink-0 items-center gap-1.5 self-center">
-              <LeadOrTime thread={thread.id} activityAt={thread.activityAt} />
+              <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
             </span>
           </span>
+          <ApexLineOr thread={thread.id}>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
             {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
             {detail.tone === "working" ? (
@@ -400,9 +425,71 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
               </span>
             )}
           </span>
+          </ApexLineOr>
         </span>
       </button>
     </div>
+  )
+}
+
+/**
+ * What the desk's rail has at its top, as chips: the Inbox with how many wait on the person. Pull requests and
+ * automations live on a Mac, which this browser doesn't reach for them, so they have no chip here.
+ */
+function TopChips({ count, open, onInbox }: { count: number; open: boolean; onInbox: () => void }) {
+  return (
+    <nav aria-label="Go to" data-list-chips className="web-scroll flex gap-1.5 overflow-x-auto px-4 pt-2 pb-1">
+      <button
+        type="button"
+        data-list-chip="inbox"
+        aria-current={open ? "page" : undefined}
+        aria-label={count ? `Inbox, ${count} ${count === 1 ? "needs" : "need"} you` : "Inbox"}
+        onClick={onInbox}
+        className={cn("pressable flex h-9 shrink-0 items-center gap-2 rounded-full pr-2 pl-3 text-ui font-medium text-foreground", open ? "bg-fill-selected" : "bg-raised")}
+      >
+        <InboxIcon aria-hidden className="size-4 text-muted-foreground" />
+        Inbox
+        {count ? (
+          <span data-inbox-count={count} className="tabular flex h-5 min-w-5 items-center justify-center rounded-full bg-caution/15 px-1.5 text-label font-medium text-caution">
+            {count}
+          </span>
+        ) : (
+          <span className="pr-1" />
+        )}
+      </button>
+    </nav>
+  )
+}
+
+/** A Fin asking the person, a row of its own under Needs you: its mark and title, then "Mobile polish · its question". */
+export function FinAskRow({ fin, onOpen }: { fin: WebFinAsk; onOpen?: () => void }) {
+  const state = childStateOf(fin.agent)
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-fin-row={fin.ask.fin}
+      aria-label={`${fin.ask.title}, in ${fin.apex.title}. Needs you: ${fin.ask.question}`}
+      className="web-row group relative flex w-full items-center text-left"
+    >
+      <span className="web-row-mark">
+        <LiveMark state={finMarkState(state)} label={childWord(state)}>
+          <WebHarnessIcon harness={fin.ask.harness} />
+        </LiveMark>
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">{fin.ask.title}</span>
+          <span className="tabular shrink-0 self-center text-label text-faint">{formatRelative(fin.agent.observedAt)}</span>
+        </span>
+        <span className="flex min-w-0 items-center gap-1.5 text-label text-faint">
+          <ApexMark aria-hidden className="size-3 shrink-0" />
+          <span className="min-w-0 truncate">
+            <span data-fin-row-apex>{fin.apex.title}</span> · {fin.ask.question}
+          </span>
+        </span>
+      </span>
+    </button>
   )
 }
 
@@ -439,8 +526,18 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
   return away
 }
 
-/** An Apex's row wears its Fins' badge where the time stands, from the snapshot this page holds of it (`rollup`). */
-function LeadOrTime({ thread, activityAt }: { thread: string; activityAt: WebThread["activityAt"] }) {
-  const counts = useThreadRollup(thread)
-  return counts.total ? <RollupBadge counts={counts} size="phone" /> : <span className="tabular text-label text-faint">{formatRelative(activityAt)}</span>
+/**
+ * An Apex's second line: one pip per Fin and how many, where another row says what it's doing, from the snapshot this
+ * page holds of it. Its Fins that need the person are rows of their own under Needs you. Repaints when a pip changes.
+ */
+function ApexLineOr({ thread, children }: { thread: string; children: ReactNode }) {
+  const pips = useAcp((state) => apexPips(state, thread))
+  if (!pips) return children
+  const label = rollupLabel(pipsCounts(pips))
+  return (
+    <span role="img" aria-label={label} data-fin-pips={pips} className="flex h-4 min-w-0 items-center gap-2 text-label">
+      <FinPips pips={pips} />
+      <span className="tabular min-w-0 truncate text-faint">{finsWord(pips.length)}</span>
+    </span>
+  )
 }
