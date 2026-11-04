@@ -666,6 +666,7 @@ test("an Apex's row says its Fins; a change to them alone waits a quarter second
 })
 
 test("a row's Fins read on another device count, order and say each Fin as its owner's roster does, for any roster", () => {
+  // SAFETY: a blocked Fin's ask, filled only as far as `listedFinState` reads it (it drops the ask whole).
   const states: ChildState[] = [
     { kind: "queued", reason: "place-full", ahead: 3 }, { kind: "queued", reason: "tree-running", ahead: 0 }, { kind: "starting", step: "launching" },
     { kind: "working", step: `Running ${"x".repeat(400)}` }, { kind: "working", phase: "Reading the brief" }, { kind: "working" }, { kind: "idle" },

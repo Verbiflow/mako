@@ -132,7 +132,8 @@ try {
   const moved = rollup(threadChildren(windowOf(otherMac), placed.thread))
   assert.equal(account.report({ ...apexRow(1), fins: undefined }, MAC), false, "the old owner's late word, at its generation, is refused")
   assert.deepEqual(rollup(threadChildren(windowOf(otherMac), placed.thread)), moved, "and changes nothing")
-  assert.equal(windowOf(browser).conversations[apex.conversation]?.kind === "live" && (windowOf(browser).conversations[apex.conversation] as { fins?: unknown }).fins !== undefined, true)
+  const listed = windowOf(browser).conversations[apex.conversation]
+  assert.ok(listed?.kind === "live" && listed.fins !== undefined, "the browser holds the moved Apex's Fins")
   await w.agents.stop(apex.caller, { child: "all" })
   console.log("fin tree sync: an Apex's Fins, held starts included, read the same on its owner, another Mac and a browser; live, asleep with its age, and moved to the cloud under the one-owner rule")
 } finally {
