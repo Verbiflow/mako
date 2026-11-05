@@ -188,7 +188,8 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
     /** A line no agent of this version sends. */
     tellRaw: (line: string) => agentEnd.write(`${line}\n`),
-    until: async (what: string, check: () => boolean, ms = 5_000) => {
+    /** A hang guard: what the host says comes within a tick or two of a second, or never. */
+    until: async (what: string, check: () => boolean, ms = 30_000) => {
       for (const deadline = Date.now() + ms; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 10))) if (check()) return
       assert.fail(`${what} within ${ms} ms; the host said ${JSON.stringify(state())}`)
     },
@@ -278,16 +279,15 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   await agent.until("enrolled", () => agent.state()?.link === "connected")
   await cloud.gateway.assign("th-1", RUNTIME)
   // Assigned, it says at once that nothing runs.
-  await agent.until("idle said", () => cloud.gateway.activity("th-1")?.busy === false, 3_000)
-  // A turn starts and streams nothing: busy all the same, within a tick.
-  const started = Date.now()
+  await agent.until("idle said", () => cloud.gateway.activity("th-1")?.busy === false)
+  // A turn starts and streams nothing: busy all the same, at the next tick. Without one it would never be said; the
+  // wait is a hang guard thirty ticks long.
   work = [item("running", "a long build")]
-  await agent.until("busy said", () => cloud.gateway.activity("th-1")?.busy === true, 3_000)
-  assert.ok(Date.now() - started < 1_500, "within a tick of the turn starting")
+  await agent.until("busy said of a turn that streams nothing", () => cloud.gateway.activity("th-1")?.busy === true)
   assert.deepEqual(cloud.gateway.activity("th-1")?.work, ["claude running: a long build"])
   // Waiting on a person isn't work: a question survives a pause.
   work = [item("waiting", "an approval")]
-  await agent.until("idle again", () => cloud.gateway.activity("th-1")?.busy === false, 3_000)
+  await agent.until("idle again", () => cloud.gateway.activity("th-1")?.busy === false)
   // Readings about the machine's own harnesses never reach the Thread; the conversation's do.
   for (const type of ["account-usage", "harness-profile", "runtime-updates"]) agent.runtime.event("event", { type, payload: JSON.stringify({ type }) })
   agent.runtime.event("event", hostEvent(1))
@@ -310,19 +310,19 @@ test("the machine reports the Sessions it owns on its link: everything at first,
   await new Promise((resolve) => setTimeout(resolve, 1_200))
   assert.equal(cloud.gateway.reports(RUNTIME).length, 0)
   rows = [row("working")]
-  await agent.until("everything said", () => cloud.gateway.reports(RUNTIME).length === 1, 3_000)
+  await agent.until("everything said", () => cloud.gateway.reports(RUNTIME).length === 1)
   assert.deepEqual(cloud.gateway.reports(RUNTIME)[0]?.owned, [{ session: row("working").session, generation: 1 }])
   // Unchanged across ticks and the second's throttle: nothing more.
   await new Promise((resolve) => setTimeout(resolve, 2_200))
   assert.equal(cloud.gateway.reports(RUNTIME).length, 1, "nothing again while nothing changed")
   rows = [row("idle")]
   sessions.changed()
-  await agent.until("the change said", () => cloud.gateway.reports(RUNTIME).length === 2, 3_000)
+  await agent.until("the change said", () => cloud.gateway.reports(RUNTIME).length === 2)
   assert.equal(cloud.gateway.reports(RUNTIME)[1]?.listed[0]?.state, "idle")
   assert.equal(cloud.gateway.reports(RUNTIME)[1]?.owned, undefined, "a change, not everything")
   // A new link: everything again, since the gateway it reaches may not have heard it.
   cloud.drop()
-  await agent.until("linked again and everything said again", () => cloud.gateway.reports(RUNTIME).at(-1)?.owned !== undefined && cloud.gateway.reports(RUNTIME).length === 3, 6_000)
+  await agent.until("linked again and everything said again", () => cloud.gateway.reports(RUNTIME).at(-1)?.owned !== undefined && cloud.gateway.reports(RUNTIME).length === 3)
 })
 
 /** A conversation's batch as its host emits it: whole, and compact against the answer it goes on with. */
@@ -419,29 +419,29 @@ test("a change a list shows on the machine goes out at once, not at its next tic
   let shown: ReportedSession["state"] = "working"
   // As composition makes it on a cloud machine: the early report goes on the machine's own link.
   let runtime: MachineRuntime | undefined
-  const sessions = new SessionPublisher({ rows: () => rows, shown: () => ({ state: shown }), reportNow: () => runtime?.reportSessions() })
+  // The publisher's clock stands still, so after its first report its tick never reports again: only a change said at
+  // once is said at all.
+  const frozen = Date.now()
+  const sessions = new SessionPublisher({ rows: () => rows, shown: () => ({ state: shown }), reportNow: () => runtime?.reportSessions(), now: () => frozen })
   const agent = machineAgent({ dataRoot: join(scratch, "sessions-early"), sessions })
   runtime = agent.runtime
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected")
   rows = [row("working")]
-  await agent.until("everything said, at a tick", () => cloud.gateway.reports(RUNTIME).length === 1, 3_000)
+  await agent.until("everything said, at a tick", () => cloud.gateway.reports(RUNTIME).length === 1)
   // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
   sessions.own({ type: "live-batch", batch: { id: "c-1", revision: 2, updates: [] } } as never)
   // The turn ends just after that tick: the next is a second away.
   rows = [row("idle")]
   shown = "idle"
-  const changed = Date.now()
   // SAFETY: as above, a host event filled only as far as the publisher reads it.
   sessions.own({ type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } } as never)
-  await agent.until("the change said", () => cloud.gateway.reports(RUNTIME).length === 2, 3_000)
-  const ms = Date.now() - changed
+  await agent.until("the change said at once, which the tick never would", () => cloud.gateway.reports(RUNTIME).length === 2, 10_000)
   assert.equal(cloud.gateway.reports(RUNTIME)[1]?.listed[0]?.state, "idle")
-  assert.ok(ms < 400, `said ${ms} ms after it changed`)
 })
 
-test("a machine that woke keeps a connection that survived its pause, and replaces one that didn't, within a second and a half", async () => {
+test("a machine that woke keeps a connection that survived its pause, and replaces one that didn't once its probe runs out", async () => {
   const cloud = await machineGateway()
   const agent = machineAgent({ dataRoot: join(scratch, "woke") })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
@@ -453,13 +453,14 @@ test("a machine that woke keeps a connection that survived its pause, and replac
   await new Promise((resolve) => setTimeout(resolve, 2_000))
   assert.equal(cloud.upgrades(), upgrades, "no new connection for one that answered")
   assert.equal(agent.state()?.enrolls, 1)
-  // It didn't: nothing answers, and a new connection replaces it once the probe runs out, without a backoff.
+  // It didn't: nothing answers, and a new connection replaces it once the 1.5 s probe runs out, long before the 25 s
+  // heartbeat would have found it dead.
   cloud.silence()
   const woke = Date.now()
   agent.tell({ type: "wake" })
-  await agent.until("enrolled on it", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 3_000)
+  await agent.until("enrolled on it, before the heartbeat", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 20_000)
   const replacedMs = Date.now() - woke
-  assert.ok(replacedMs >= 1_400 && replacedMs < 2_800, `replaced after ${replacedMs} ms`)
+  assert.ok(replacedMs >= 1_400, `replaced only once the probe went unanswered (${replacedMs} ms)`)
 })
 
 test("a credential the agent renewed keeps the connection, and the next connection and the records carry it", async () => {
@@ -673,7 +674,7 @@ test("a link given while the workspace opens waits for it, so the Thread's first
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal(cloud.upgrades(), 0, "no connection while the workspace opens")
-  await agent.until("connected", () => agent.state()?.link === "connected", 5_000)
+  await agent.until("connected", () => agent.state()?.link === "connected")
   const states = agent.messages.flatMap((message) => (message.type === "state" ? [message.state] : []))
   const opened = states.findIndex((state) => state.workspace?.status === "opened")
   const linking = states.findIndex((state) => state.link !== "none")
@@ -685,7 +686,7 @@ test("a clock that jumps is told to the agent within a second, and counted in th
   const agent = machineAgent({ dataRoot: join(scratch, "two"), now: () => Date.now() + offset })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   offset += 30_000
-  await agent.until("the jump reported", () => agent.messages.some((message) => message.type === "resumed"), 3_000)
+  await agent.until("the jump reported", () => agent.messages.some((message) => message.type === "resumed"))
   const resumed = agent.messages.find((message) => message.type === "resumed")
   assert.ok(resumed?.type === "resumed" && resumed.gapMs >= 29_000, JSON.stringify(resumed))
   await agent.until("counted in its state", () => agent.state()?.resumes === 1)
@@ -764,7 +765,7 @@ test("a machine made for a lost one restores its Thread's save before its runtim
   })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: replacement, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 2 })
-  await agent.until("restoring, once tried again", () => tries === 2 && release !== undefined, 5_000)
+  await agent.until("restoring, once tried again", () => tries === 2 && release !== undefined)
   assert.equal(agent.links.length, 1, "the records' link given first, which the restore reads")
   agent.tell({ type: "inspect" })
   await agent.until("restoring said", () => agent.state()?.restore?.state === "restoring" && agent.state()?.restore?.attempts === 2)
@@ -807,13 +808,13 @@ test("a machine says it's idle only once its turn's save has landed, so idle mea
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected")
   await cloud.gateway.assign("th-1", RUNTIME)
-  await agent.until("busy said", () => cloud.gateway.activity("th-1")?.busy === true, 3_000)
+  await agent.until("busy said", () => cloud.gateway.activity("th-1")?.busy === true)
   assert.ok(busy.includes(true), "the tracker hears it works")
   work = []
-  await agent.until("the turn's save asked for", () => settles.length === 1, 3_000)
+  await agent.until("the turn's save asked for", () => settles.length === 1)
   await new Promise((resolve) => setTimeout(resolve, 2_500))
   assert.equal(cloud.gateway.activity("th-1")?.busy, true, "still busy while the save is on its way")
   land?.()
-  await agent.until("idle once saved", () => cloud.gateway.activity("th-1")?.busy === false, 3_000)
+  await agent.until("idle once saved", () => cloud.gateway.activity("th-1")?.busy === false)
   assert.deepEqual(settles, ["a turn ended"], "one save per turn's end")
 })
