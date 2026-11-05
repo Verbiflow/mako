@@ -10,6 +10,7 @@ import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
+import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LivePermissionRequest, LivePermissionResponse, LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
@@ -18,6 +19,7 @@ import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
+import { handOff } from "@mako/host/harnesses/prompt-dispatch"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 
@@ -97,6 +99,10 @@ export interface WorldOptions {
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
   /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
   apexAnswerMs?: number
+  /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
+  resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
+  /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
+  refusePrompt?: (conversation: string, harness: string) => string | undefined | Promise<string | undefined>
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -164,7 +170,7 @@ export class AgentsWorld {
       agents: () => this.agents,
       settled: (id) => this.agents?.moved(id),
       autoContinueDelayMs: this.options.autoContinueDelayMs ?? 10,
-      resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+      resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     this.live = live
     const deps: AgentsDeps = {
@@ -340,7 +346,12 @@ export class AgentsWorld {
         return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
       },
       prompt: async (id, text, _attachments, _settings, dispatch) => {
-        dispatch.report({ kind: "submitted", source: "transport-call" })
+        const refused = await this.options.refusePrompt?.(id, harness)
+        if (refused) {
+          dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
+          throw new Error(refused)
+        }
+        handOff(dispatch, { kind: "submitted", source: "transport-call" })
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
         const session = this.live.snapshot(id)?.session ?? state(id)
@@ -390,7 +401,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
     throw new Error("There's no conversation here")
   }
   return {
-    session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, holdQueued: () => 0, snapshot: () => null, editQueued: none, transfer: none, submit: none,
+    session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, snapshot: () => null, editQueued: none, transfer: none, submit: none,
     act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }

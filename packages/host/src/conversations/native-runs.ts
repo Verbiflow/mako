@@ -31,7 +31,7 @@ import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { type AccountLaunch, type AccountHold, type ProviderHost, dropUncarried, type NativeCommand, type NativeRunOptions, type NativeRunner } from "../harnesses/index.js"
 import { resumable, type ResumeVerdict } from "../contracts/conversation-control.js"
-import { reconnectRefusal } from "./live-transfers.js"
+import { reconnectError } from "./live-transfers.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { launchContext } from "../base/execution-context.js"
 import type { ExecutionContext } from "../contracts/execution-context.js"
@@ -311,7 +311,7 @@ export class NativeRuns {
       if (ref) {
         const verdict = await hooks.assessResume?.(ref)
         assertPreparation()
-        if (!verdict || !resumable(verdict)) throw new Error(reconnectRefusal(verdict))
+        if (!verdict || !resumable(verdict)) throw reconnectError(verdict)
         if (!hooks.claimSession) throw new Error("Native session ownership is unavailable. Retry after the host reconnects.")
         releaseSession = hooks.claimSession(ref)
         preparation.releaseSession = releaseSession

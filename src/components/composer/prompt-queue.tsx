@@ -1,4 +1,6 @@
 import { clockText } from "@/state/request-recovery"
+import { retryWords } from "@mako/host/contracts/delivery-retry"
+import { harnessLabel } from "@/lib/harness-label"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
 import { useThreads } from "@/state/threads"
@@ -49,6 +51,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           item.text === right[index]?.text &&
           item.status === right[index]?.status &&
           item.signIn === right[index]?.signIn &&
+          item.retry === right[index]?.retry &&
           item.waiting === right[index]?.waiting &&
           item.steering === right[index]?.steering &&
           item.attachments === right[index]?.attachments
@@ -132,6 +135,8 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
               ? "Sends after Resume"
               : delivery[0] && "wake" in delivery[0] && delivery[0].wake
                 ? `Sends at ${clockText(delivery[0].wake.at)}`
+              : delivery[0]?.status === "held" && "retry" in delivery[0] && delivery[0].retry
+                ? `Trying again at ${clockText(delivery[0].retry.at)}`
               : delivery[0]?.status === "held"
                 ? "Paused"
                 : delivery[0] && "waiting" in delivery[0] && delivery[0].waiting
@@ -261,6 +266,7 @@ function QueueRow({
   }, [editing])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  const harness = useAcp((state) => activeLiveAcp(state)?.harness)
   const canSteer = useAcp(
     (state) =>
       target.kind === "live" &&
@@ -411,8 +417,12 @@ function QueueRow({
         </div>
       )}
       {request.status === "held" && !editing && !request.signIn ? (
-        <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at}>
-          {request.wake ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets` : "Paused until you resume or edit this message"}
+        <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at ?? request.retry?.at} data-queue-retry={request.retry?.cause}>
+          {request.wake
+            ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
+            : request.retry
+              ? `Sends again by itself at ${clockText(request.retry.at)}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
+              : "Paused until you resume or edit this message"}
         </p>
       ) : null}
       {target.kind === "live" && !editable && !editing && !request.status ? (
