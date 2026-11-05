@@ -1,4 +1,5 @@
 import { availableParallelism, totalmem } from "node:os"
+import { onLinux } from "../base/platform.js"
 import type { FinCapacityReading } from "../contracts/fin-tuning.js"
 import { CapacityGovernor, deviceCapacity, reserveOf, type FinHardware, type PressureReading } from "./fin-capacity.js"
 import type { FinCostModel } from "./fin-cost.js"
@@ -92,5 +93,5 @@ export function pressureOf(reading: MacReading, working: number, hardware: FinHa
 
 /** A machine nobody sits at: Linux without a display. A Mac always has its person. */
 function headless(): boolean {
-  return process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY
+  return onLinux() && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY
 }
