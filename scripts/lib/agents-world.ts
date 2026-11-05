@@ -54,6 +54,8 @@ export interface WorldOptions {
   budget?: TreeBudget
   /** This Mac's load as a start reads it (`AgentsDeps.capacity`); a start says nothing of it without one. */
   capacity?: AgentsDeps["capacity"]
+  /** What this device's capacity hears from the engine's looks (`AgentsDeps.observeCapacity`). */
+  observeCapacity?: AgentsDeps["observeCapacity"]
   /** The person's limit of Fins at once (`AgentsDeps.finLimit`); `FIN_LIMIT` without it. */
   finLimit?: () => number
   /** Runs after a Fin's start has written its edge, before the start answers: a launch slow to reply. */
@@ -205,6 +207,7 @@ export class AgentsWorld {
       ...(this.options.movePending && { movePending: this.options.movePending }),
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.capacity && { capacity: this.options.capacity }),
+      ...(this.options.observeCapacity && { observeCapacity: this.options.observeCapacity }),
       ...(this.options.finLimit && { finLimit: this.options.finLimit }),
       ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
       ...(this.options.processes && { processes: this.options.processes }),
