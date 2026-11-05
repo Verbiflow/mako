@@ -7,7 +7,7 @@ import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
-import { nextRetry, retryCause } from "../contracts/delivery-retry.js"
+import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
@@ -406,7 +406,7 @@ export class LiveDispatch {
           return
         }
         // The harness refused it unsent for a cause that clears by itself: it waits and goes again, never a failure.
-        const cause = refused ? retryCause(classifyProviderFailure(errorMessage({ error })).kind, error instanceof SessionBusyError) : undefined
+        const cause = refused ? transientCause(errorMessage({ error }), classifyProviderFailure(errorMessage({ error })).kind, error instanceof SessionBusyError) : undefined
         const retry = cause && nextRetry(target.retry, cause, errorMessage({ error }), Date.now())
         if (retry) {
           resident.snapshot = {

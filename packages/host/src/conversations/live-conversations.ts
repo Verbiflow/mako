@@ -863,7 +863,9 @@ export class LiveConversations {
     const due = this.records.listing().filter((summary) => summary.wakeAt !== undefined && summary.wakeAt <= now).map((summary) => summary.session.id)
     for (const id of due) {
       const resident = this.records.load(id)
-      if (!resident || resident.closing || resident.snapshot.session.status === "closed") continue
+      // A session Mako's exit closed reopens for what was due, as for a new message (`release`); one the person closed
+      // holds nothing with a time (`close`).
+      if (!resident || resident.closing) continue
       // A retry goes again keeping its count, so a failure after it waits longer (`nextRetry`).
       const released = resident.snapshot.requests.filter((request) => {
         const at = request.status === "held" ? (request.wake ?? request.retry)?.at : undefined
@@ -879,8 +881,11 @@ export class LiveConversations {
       }
       this.flush(resident)
       hostLog("live", "a held message's time came", { conversation: id, requests: released.length })
-      if (!resident.driver && !resident.opening && this.hibernation.reopens(resident)) void this.hibernation.wake(resident)
-      else this.dispatch.drain(resident)
+      try {
+        this.release(resident)
+      } catch (error) {
+        hostWarn("live", "a held message's time came, and its session couldn't reopen", { conversation: id, error: errorMessage({ error }) })
+      }
     }
     return due
   }
@@ -1543,7 +1548,20 @@ export class LiveConversations {
     )
   }
 
+  /**
+   * The person closes a conversation: what waited to go again or at a time stops waiting and stays paused, with
+   * Resume, since closing it says they're done for now. Mako's own exit closes through `closeForExit`, which keeps
+   * those, so the next host sends them when their time comes.
+   */
   close(id: string): Promise<void> {
+    const resident = this.records.get(id)
+    if (resident?.snapshot.requests.some((request) => request.status === "held" && (request.retry || request.wake))) {
+      resident.snapshot = {
+        ...resident.snapshot,
+        requests: resident.snapshot.requests.map((request) => request.status === "held" && (request.retry || request.wake) ? { ...request, retry: undefined, wake: undefined } : request),
+      }
+      this.flush(resident)
+    }
     return this.closing.close(id)
   }
 

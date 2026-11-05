@@ -5,7 +5,7 @@ import { ExecutionAccountChanged, resumes } from "../harnesses/index.js"
 import type { AccountRemovalSession, AccountRemovalWait } from "../contracts/accounts.js"
 import type { AccountSwitchWait, LiveRequest, SignInHold, SignInReadiness, SignInResume } from "../contracts/live-conversations.js"
 import { isBusyProviderWork } from "../contracts/native-agents.js"
-import { holdForRetry, retryCause } from "../contracts/delivery-retry.js"
+import { holdForRetry, transientCause } from "../contracts/delivery-retry.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { SessionHeldError } from "../threads/index.js"
@@ -42,7 +42,7 @@ export class LiveAccounts {
     if (failure === "auth" && !(boundary.error instanceof ExecutionAccountChanged))
       return holdForSignIn(resident.snapshot.requests, this.signInHold(resident))
     const busy = boundary.error instanceof SessionBusyError || boundary.error instanceof SessionHeldError
-    const cause = resuming ? retryCause(failure, busy) : undefined
+    const cause = resuming ? transientCause(message, failure, busy) : undefined
     const retried = cause && holdForRetry(resident.snapshot.requests, cause, message, Date.now())
     if (retried) {
       hostLog("live", "a message waits to go again: its harness couldn't take it for now", { conversation: resident.snapshot.session.id, cause, error: message })

@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BUSY_GIVE_UP_MS, nextRetry, RETRY_STEPS_MS, type RetryCause } from "@mako/host/contracts/delivery-retry"
+import { GIVE_UP_MS, nextRetry, RETRY_STEPS_MS, transientCause, type RetryCause } from "@mako/host/contracts/delivery-retry"
+import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
@@ -55,11 +56,12 @@ interface Faults {
 
 /**
  * A Fin's brief holds its turn until `release`; a turn told to "Stall" fails partway with its harness at capacity, as
- * Cursor's does, its process kept; every other turn ends at once.
+ * Cursor's does, its process kept, and one told to "Stall later" does so once released; every other turn ends at once.
  */
-const script: Script = (turn) => {
+const script: Script = async (turn) => {
   if (turn.text.includes("fin:labels")) return turn.world.hold(turn.conversation).then(() => "Labels finished.")
-  if (!turn.text.includes("Stall.")) return "Done."
+  if (!turn.text.includes("Stall")) return "Done."
+  if (turn.text.includes("Stall later.")) await turn.world.hold(turn.conversation)
   const session = turn.world.live.snapshot(turn.conversation)!.session
   turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: "[resource_exhausted] Error" } })
   return new Promise<string>(() => {})
@@ -139,11 +141,20 @@ try {
     let retry = first
     for (let attempt = 2; attempt <= 40; attempt++) retry = nextRetry(retry, "rate-limited", "usage limit", now)!
     assert.equal(retry.at - now, 600_000, "the fortieth attempt waits ten minutes, as every one past the sixth")
-    const busy = nextRetry(undefined, "busy", "open elsewhere", now)!
-    assert.ok(nextRetry(busy, "busy", "open elsewhere", now + BUSY_GIVE_UP_MS - 1))
-    assert.equal(nextRetry(busy, "busy", "open elsewhere", now + BUSY_GIVE_UP_MS), undefined, "a session open elsewhere for half an hour is the person's")
+    // Every cause ends: past its bound the message fails with its card, so nothing waits unseen forever.
+    for (const cause of ["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"] as const) {
+      const begun = nextRetry(undefined, cause, "why", now)!
+      assert.ok(nextRetry(begun, cause, "why", now + GIVE_UP_MS[cause] - 1), cause)
+      assert.equal(nextRetry(begun, cause, "why", now + GIVE_UP_MS[cause]), undefined, `${cause} gives up after ${GIVE_UP_MS[cause] / 60_000} minutes`)
+    }
+    assert.ok(GIVE_UP_MS["rate-limited"] >= 5 * 60 * 60_000, "a usage limit's five-hour window is waited out")
+    // A cause the person must fix is never waited out, whatever transient words wrap it.
+    for (const words of ["API error: 400 Bad Request: unknown model permanently-retired-model", "503 Service Unavailable: invalid api key", "429 Too Many Requests: your plan does not include this model"])
+      assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), undefined, words)
+    for (const words of ["[unavailable] Server at capacity", "429 Too Many Requests", "fetch failed", "503 Service Unavailable"])
+      assert.ok(transientCause(words, classifyProviderFailure(words).kind, false), words)
   }
-  console.log("policy: waits grow to ten minutes and repeat; a session open elsewhere is waited for half an hour")
+  console.log("policy: waits grow to ten minutes and repeat; every cause ends in a failure past its bound; a permanent cause inside transient words is never retried")
 
   for (const harness of HARNESSES) {
     // A wake that fails for a cause that clears by itself waits, then sends the message once.
@@ -230,6 +241,56 @@ try {
       const failed = requestOf(world, conversation, "Stall.")!
       world.live.wakeDue(Date.now() + LATER)
       await until(`${harness} mid-turn alone: it to continue`, () => world.live.snapshot(conversation)!.requests.some((request) => request.continues?.requestId === failed.id && request.status === "completed"))
+      await world.close()
+    }
+
+    // A permanent cause wrapped in a service's words fails at once too.
+    {
+      const { world, faults } = worldOf(`${harness}-wrapped`)
+      const conversation = await asleep(world, harness)
+      faults.start.set(conversation, "API error: 400 Bad Request: unknown model permanently-retired-model")
+      world.say(conversation, "Second.")
+      await until(`${harness} wrapped: it to fail`, () => requestOf(world, conversation, "Second.")?.status === "failed")
+      assert.equal(requestOf(world, conversation, "Second.")?.retry, undefined)
+      await world.close()
+    }
+
+    // The person's order holds: A fails partway with B queued, then C supersedes A's continuation; B goes before C.
+    {
+      const { world } = worldOf(`${harness}-order`)
+      const { conversation } = await world.apex(harness, "full")
+      world.say(conversation, "Stall later.")
+      await until("A to run", () => world.live.session(conversation)?.status === "running")
+      world.say(conversation, "Then B.")
+      world.release(conversation)
+      await until(`${harness} order: A to fail`, () => requestOf(world, conversation, "Stall later.")?.status === "failed")
+      world.say(conversation, "Then C.")
+      await until(`${harness} order: C to go`, () => requestOf(world, conversation, "Then C.")?.status === "completed")
+      const order = world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => /Stall later\.|Then B\.|Then C\./.exec(prompt.text)?.[0])
+      assert.deepEqual(order, ["Stall later.", "Then B.", "Then C."], `${harness}: the person's messages go in the order they sent them`)
+      await world.close()
+    }
+
+    // A message refused unsent on a rate limit goes again after Mako's normal restart; once the person closes the session, nothing waits to go.
+    {
+      const { world, faults } = worldOf(`${harness}-restart`)
+      const { conversation } = await world.apex(harness, "full")
+      world.say(conversation, "First.")
+      await until("the first turn", () => requestOf(world, conversation, "First.")?.status === "completed")
+      faults.refuse.set(conversation, "429 Too Many Requests")
+      world.say(conversation, "Second.")
+      await until(`${harness} restart: it to wait`, () => requestOf(world, conversation, "Second.")?.status === "held")
+      await world.restart()
+      assert.equal(requestOf(world, conversation, "Second.")?.retry?.cause, "rate-limited", `${harness}: the next host keeps it waiting to go again`)
+      await goesOnce(world, conversation, "Second.", `${harness} restart`)
+      faults.refuse.set(conversation, "429 Too Many Requests")
+      world.say(conversation, "Third.")
+      await until(`${harness} close: it to wait`, () => requestOf(world, conversation, "Third.")?.status === "held")
+      await world.live.close(conversation)
+      assert.equal(requestOf(world, conversation, "Third.")?.retry, undefined, "the person's close stops it waiting to go")
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      assert.equal(sentTimes(world, conversation, "Third."), 0, "nothing sends it after the person closed the session")
       await world.close()
     }
 

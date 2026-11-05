@@ -1,5 +1,5 @@
 import type { LiveRequest } from "./live-conversations.js"
-import type { ProviderFailureKind } from "./provider-failure.js"
+import { permanentFailure, type ProviderFailureKind } from "./provider-failure.js"
 
 /**
  * Why a message that didn't reach its harness waits and goes again by itself
@@ -24,8 +24,18 @@ export interface RequestRetry {
 /** The waits between attempts, the last repeating: a usage limit that resets in hours is tried every ten minutes until it does. */
 export const RETRY_STEPS_MS = [10_000, 30_000, 60_000, 120_000, 300_000, 600_000] as const
 
-/** How long a session busy in another process is waited for before the person is asked: past that it's theirs, not a passing hold. */
-export const BUSY_GIVE_UP_MS = 30 * 60_000
+/**
+ * How long each cause is waited out before Mako stops and the message fails with its card. A usage limit resets
+ * within hours, so a rate limit is waited for six; a service, a network or a start that stays broken an hour is
+ * something the person should hear about; a session open elsewhere for half an hour is theirs, not a passing hold.
+ */
+export const GIVE_UP_MS = {
+  "rate-limited": 6 * 60 * 60_000,
+  "provider-unavailable": 60 * 60_000,
+  network: 60 * 60_000,
+  "launch-stalled": 60 * 60_000,
+  busy: 30 * 60_000,
+} as const satisfies Record<RetryCause, number>
 
 /** The cause a failure is waited out for, or undefined when it's one the person must act on. */
 export function retryCause(kind: ProviderFailureKind, busy: boolean): RetryCause | undefined {
@@ -41,10 +51,19 @@ export function retryCause(kind: ProviderFailureKind, busy: boolean): RetryCause
   }
 }
 
-/** The attempt after `previous` for `cause`, or undefined when Mako stops waiting and the message fails. */
+/**
+ * The cause a failure in `message` is waited out for: none when anything in it is a cause the person must fix,
+ * whatever transient words wrap it (`permanentFailure`: "API error: 400 … unknown model" is a setting, not an outage).
+ */
+export function transientCause(message: string, kind: ProviderFailureKind, busy: boolean): RetryCause | undefined {
+  if (busy) return "busy"
+  return permanentFailure(message) ? undefined : retryCause(kind, false)
+}
+
+/** The attempt after `previous` for `cause`, or undefined when Mako stops waiting (`GIVE_UP_MS`) and the message fails. */
 export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause, reason: string, now: number): RequestRetry | undefined {
   const since = previous?.since ?? now
-  if (cause === "busy" && now - since >= BUSY_GIVE_UP_MS) return undefined
+  if (now - since >= GIVE_UP_MS[cause]) return undefined
   const attempt = (previous?.attempt ?? 0) + 1
   const wait = RETRY_STEPS_MS[Math.min(attempt, RETRY_STEPS_MS.length) - 1]!
   return { at: now + wait, attempt, since, cause, reason: reason.slice(0, 2_000) }

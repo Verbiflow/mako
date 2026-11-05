@@ -139,6 +139,22 @@ const rules: Rule[] = [
   },
 ]
 
+/** The kinds a second attempt can't fix, whatever else the message says. */
+const PERMANENT = new Set<ProviderFailureKind>([
+  "transcript-rejected", "context-exhausted", "auth", "plan", "wrong-account", "rejected-input", "missing-folder", "transport-limit", "launch-failed",
+])
+
+/**
+ * Whether `message` names a fault only the person can fix anywhere in it, before the first rule decides its kind:
+ * a provider's "API error: 400 Bad Request: unknown model x" is a refused setting under a service's words. A client
+ * error code other than a timeout (408) or a rate limit (429) is one too.
+ */
+export function permanentFailure(message: string | undefined): boolean {
+  const text = message ?? ""
+  return rules.some((rule) => PERMANENT.has(rule.kind) && rule.match.test(text)) ||
+    /\b4\d\d (?:Bad Request|Unauthorized|Payment Required|Forbidden|Not Found|Method Not Allowed|Not Acceptable|Conflict|Gone|Unprocessable)/i.test(text)
+}
+
 export function classifyProviderFailure(
   message: string | undefined,
   providerLabel = "The provider"

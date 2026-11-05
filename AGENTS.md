@@ -4005,11 +4005,18 @@ continued as a dropped connection's is, by a continuation held first in line
 `retry`, so its row reads "Continues by itself at …" with nothing to press,
 and a new message supersedes the continuation. The held-wakes job sends each
 again when its time comes (`wakeDue`), across restarts, as it does a usage
-limit's timed resume; a Resume sends it now. The waits grow from ten seconds
-to ten minutes and repeat (`RETRY_STEPS_MS`), so a usage limit is waited out
-until it resets; a session open elsewhere is waited for half an hour
-(`BUSY_GIVE_UP_MS`) and then fails, since it's the person's. Signed out
-still pauses for Sign in, and anything else fails at once with its card.
+limit's timed resume; a Resume sends it now. A session Mako's exit closed
+reopens for it, while the person's own close stops it waiting. The waits grow
+from ten seconds to ten minutes and repeat (`RETRY_STEPS_MS`), and every
+cause ends (`GIVE_UP_MS`): a rate limit after six hours, so a usage limit's
+window is waited out, the service, the network or a stalled start after an
+hour, a session open elsewhere after half an hour, each then failing with its
+card. A cause the person must fix anywhere in the words is never waited out,
+whatever transient words wrap it (`permanentFailure`: "API error: 400 Bad
+Request: unknown model …"). A turn continued by itself leaves its session
+ready, so what the person queued behind it goes in the order they sent it.
+Signed out still pauses for Sign in, and anything else fails at once with its
+card.
 The queue row says when it goes and why (`retryWords`). This holds for the
 person's messages, an Apex's wakes and a Fin's messages alike, on every
 harness (`test:delivery-retry`).
