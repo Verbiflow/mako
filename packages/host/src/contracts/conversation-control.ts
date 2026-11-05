@@ -162,6 +162,7 @@ export const ContextTransferSchema = z.object({
     requestId: z.string(),
     ...StoredReason,
     auto: z.boolean(),
+    brief: z.string().optional(),
   }).transform(readStoredReason).optional(),
   createdAt: z.number(),
   state: TransferStateSchema,
