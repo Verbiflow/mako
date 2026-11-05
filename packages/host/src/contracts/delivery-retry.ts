@@ -69,16 +69,18 @@ export const RESET_MARGIN_MS = 30_000
 
 /**
  * The attempt after `previous` for `cause`, or undefined when Mako stops waiting (`GIVE_UP_MS`) and the message fails.
- * A limit whose words say when it resets (`limitReset`) goes once, then, rather than knocking until it does, and what's
- * waited out is counted from that reset: a limit three days off outlasts every bound and is no failure.
+ * A limit whose words say when it resets (`limitReset`) goes once, then, rather than knocking until it does. That reset
+ * is read once and stands for the whole wait: words such as "Try again in 3 hours" read later every time, so reading
+ * them again would renew it forever. The bound then counts from the reset, so one three days off is no failure, and
+ * one that never lifts ends.
  */
 export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause, reason: string, now: number): RequestRetry | undefined {
   const since = previous?.since ?? now
-  const reset = cause === "rate-limited" ? limitReset(reason, now) : undefined
-  if (reset === undefined && now - Math.max(since, previous?.until ?? 0) >= GIVE_UP_MS[cause]) return undefined
+  const reset = previous?.until ?? (cause === "rate-limited" ? limitReset(reason, now) : undefined)
+  if (now - (reset ?? since) >= GIVE_UP_MS[cause]) return undefined
   const attempt = (previous?.attempt ?? 0) + 1
   const wait = RETRY_STEPS_MS[Math.min(attempt, RETRY_STEPS_MS.length) - 1]!
-  return { at: reset !== undefined ? reset + RESET_MARGIN_MS : now + wait, attempt, since, cause, reason: reason.slice(0, 2_000), ...(reset !== undefined && { until: reset }) }
+  return { at: cause === "rate-limited" && reset !== undefined && reset > now ? reset + RESET_MARGIN_MS : now + wait, attempt, since, cause, reason: reason.slice(0, 2_000), ...(reset !== undefined && { until: reset }) }
 }
 
 /**

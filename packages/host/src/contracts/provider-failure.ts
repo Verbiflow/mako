@@ -65,10 +65,6 @@ interface Rule {
  */
 const USAGE_LIMIT = /\bhit your (?:[\w-]+ )?limit|\breached (?:your|its|the) (?:[\w-]+ )?(?:usage |rate )?limit|\busage limit\b|\b(?:session|weekly|daily|monthly|five-hour|5-hour) limit (?:reached|hit)|\bquota (?:exhausted|exceeded)\b|usage_limit_(?:reached|exceeded)/i
 
-/** Whether `message` says an account ran out, whatever a plan's words sit beside it. */
-export function usageLimitWords(message: string | undefined): boolean {
-  return USAGE_LIMIT.test(message ?? "")
-}
 
 /**
  * Order matters: the first rule that matches wins, and the specific faults
@@ -94,11 +90,6 @@ const rules: Rule[] = [
     kind: "context-exhausted",
     match:
       /context[_ ]?(?:window|length|limit)|prompt is too long|too many tokens|maximum (?:context|number of tokens)|exceeds? the (?:model|maximum|context)|input (?:length|is too long)|token limit|max_tokens.*exceed|request too large|content too large/i,
-  },
-  {
-    // A harness's own words that the account ran out, before a plan's or an account's words they often carry.
-    kind: "rate-limited",
-    match: USAGE_LIMIT,
   },
   {
     // ExecutionIdentityMismatch's own words, before "sign in again" reads as signed out.
@@ -161,14 +152,22 @@ const PERMANENT = new Set<ProviderFailureKind>([
 ])
 
 /**
+ * Whether `message` says an account ran out. A limit often suggests a bigger plan, and those words give way to it; any
+ * other fault only the person can fix stands, whichever is said first: an invalid key doesn't clear at a reset.
+ */
+export function usageLimitWords(message: string | undefined): boolean {
+  const text = message ?? ""
+  return USAGE_LIMIT.test(text) && !rules.some((rule) => PERMANENT.has(rule.kind) && rule.kind !== "plan" && rule.match.test(text))
+}
+
+/**
  * Whether `message` names a fault only the person can fix anywhere in it, before the first rule decides its kind:
  * a provider's "API error: 400 Bad Request: unknown model x" is a refused setting under a service's words. A client
  * error code other than a timeout (408) or a rate limit (429) is one too.
  */
 export function permanentFailure(message: string | undefined): boolean {
   const text = message ?? ""
-  // "You've hit your limit. Upgrade your plan to keep going" clears by itself at its reset.
-  if (USAGE_LIMIT.test(text)) return false
+  if (usageLimitWords(text)) return false
   return rules.some((rule) => PERMANENT.has(rule.kind) && rule.match.test(text)) ||
     /\b4\d\d (?:Bad Request|Unauthorized|Payment Required|Forbidden|Not Found|Method Not Allowed|Not Acceptable|Conflict|Gone|Unprocessable)/i.test(text)
 }
@@ -178,7 +177,7 @@ export function classifyProviderFailure(
   providerLabel = "The provider"
 ): ProviderFailure {
   const text = message ?? ""
-  const kind = rules.find((rule) => rule.match.test(text))?.kind ?? "unknown"
+  const kind = usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown"
   return describeProviderFailure(kind, providerLabel)
 }
 

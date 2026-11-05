@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { classifyProviderFailure, permanentFailure, usageLimitWords, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
 import { limitReset } from "@mako/host/contracts/limit-reset"
-import { GIVE_UP_MS, nextRetry, RESET_MARGIN_MS, retryWords, transientCause } from "@mako/host/contracts/delivery-retry"
+import { GIVE_UP_MS, nextRetry, RESET_MARGIN_MS, RETRY_STEPS_MS, retryWords, transientCause } from "@mako/host/contracts/delivery-retry"
+import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
 
 /**
  * A usage limit reads as one on every harness, with its reset when its words say it (`npm run test:delivery-retry`):
@@ -64,6 +66,18 @@ assert.equal(usageLimitWords("Server at capacity"), false)
 // A limit's plan words don't make it the person's to fix: it clears at its reset.
 assert.equal(permanentFailure("You've hit your limit. Upgrade your plan to keep going."), false)
 assert.equal(classifyProviderFailure("You've hit your limit. Upgrade your plan to keep going.").kind, "rate-limited")
+// Only a plan's words give way to a limit: another cause the person must fix stands, in whichever order they're said.
+for (const words of [
+  "You've hit your usage limit. 401 Unauthorized: invalid API key",
+  "401 Unauthorized: invalid API key. You've hit your usage limit.",
+  "You've hit your usage limit. API error: 400 Bad Request: unknown model retired-model",
+  "You've hit your usage limit, and kim@example.com is signed in as lee@example.com, not kim@example.com, the account this session started with",
+  "Failed to authenticate: OAuth session expired. Claude usage limit reached.",
+]) {
+  assert.equal(permanentFailure(words), true, words)
+  assert.equal(usageLimitWords(words), false, words)
+  assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), undefined, words)
+}
 // What it wasn't before: a plan that doesn't cover a model is still the person's, and a model's context is still that.
 assert.equal(classifyProviderFailure("Your plan does not include this model").kind, "plan")
 assert.equal(classifyProviderFailure("prompt is too long: 214031 tokens > 200000 maximum").kind, "context-exhausted")
@@ -76,12 +90,36 @@ console.log("limit words: Cursor's and Claude's exact lines and every harness's 
   assert.equal(retry.until, until)
   assert.equal(retry.at, until + RESET_MARGIN_MS, "it goes after the reset, not in ten seconds")
   assert.equal(nextRetry(retry, "rate-limited", CURSOR, NOW + 7 * HOUR)?.at, until + RESET_MARGIN_MS, "a wait past six hours is no failure while the reset is ahead")
-  // Refused again past its reset, the words name nothing still to come: the steps go on from the reset, and end.
+  // Refused past its reset, the wait keeps that reset: attempts go on the steps, counted from it, however many they are.
   const past = until + RESET_MARGIN_MS
-  const again = nextRetry(retry, "rate-limited", CURSOR, past)
-  assert.ok(again && again.at - past <= 30_000, "after its reset it tries on the steps")
-  assert.equal(nextRetry(again, "rate-limited", CURSOR, until + GIVE_UP_MS["rate-limited"]), undefined, "a limit that never lifted ends in a failure")
+  const again = nextRetry(retry, "rate-limited", CURSOR, past)!
+  assert.ok(again.at - past <= 30_000, "after its reset it tries on the steps")
+  assert.equal(again.until, until, "and remembers the reset")
+  const twice = nextRetry(again, "rate-limited", CURSOR, again.at)!
+  assert.equal(twice.until, until, "through every attempt after it")
+  assert.ok(nextRetry(twice, "rate-limited", CURSOR, until + GIVE_UP_MS["rate-limited"] - 1), "the bound is six hours past the reset, not past the first wait")
+  assert.equal(nextRetry(twice, "rate-limited", CURSOR, until + GIVE_UP_MS["rate-limited"]), undefined, "a limit that never lifted ends in a failure")
+  // It's kept with the row: a restart doesn't lose it.
+  assert.equal(LiveRequestSchema.parse({ id: randomUUID(), text: "x", attachments: [], status: "held", retry }).retry?.until, until, "the journal keeps it")
   assert.match(retryWords(retry, "Cursor", NOW), /^Cursor is at its usage limit until /)
   assert.equal(retryWords({ cause: "rate-limited" }, "Cursor", NOW), "Cursor is at capacity or its usage limit")
 }
-console.log("limit waits: a reset days off goes once at it, outlasts the bound, and ends if the limit never lifted")
+// Words that read later each time they're read don't renew the wait: going to each attempt as it comes, each form ends.
+for (const words of ["You've hit your usage limit. Try again in 3 hours.", CLAUDE, "You've hit your usage limit. Try again in 30s."]) {
+  let at = NOW
+  let retry = nextRetry(undefined, "rate-limited", words, at)!
+  const reset = retry.until!
+  assert.ok(reset > NOW, words)
+  let attempts = 1
+  while (attempts < 1_000) {
+    at = retry.at
+    const next = nextRetry(retry, "rate-limited", words, at)
+    if (!next) break
+    assert.equal(next.until, reset, `${words}: read once, it stands`)
+    retry = next
+    attempts += 1
+  }
+  assert.ok(attempts < 1_000, `${words}: it ends`)
+  assert.ok(at <= reset + GIVE_UP_MS["rate-limited"] + RETRY_STEPS_MS.at(-1)!, `${words}: within the bound past its reset`)
+}
+console.log("limit waits: a reset days off goes once at it, outlasts the bound, keeps its reset through every attempt and the journal, and always ends")
