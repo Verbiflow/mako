@@ -557,9 +557,13 @@ async function followedStopHoldsUntilExit(): Promise<void> {
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
  */
 async function afterOrder(): Promise<void> {
+  // Lint fails once what's to start after it has queued, so the order of the two is the test's, not the clock's.
+  let lintMay: () => void = () => {}
+  const lintGate = new Promise<void>((resolve) => (lintMay = resolve))
   const w = world("after", async (turn) => {
     if (!turn.text.includes("You're fin:")) return "ok"
     if (turn.text.includes("Lint it")) {
+      await lintGate
       await turn.world.agents.report(turn.caller, { status: "failed", summary: "Lint found 3 errors.", clientKey: "lint" })
       return "Lint failed."
     }
@@ -599,7 +603,8 @@ async function afterOrder(): Promise<void> {
     const lint = await w.agents.start(apex.caller, { brief: { objective: "Lint it" }, name: "lint", clientKey: "lint", cwd: w.root })
     assert.ok(!("refused" in lint))
     const ship = await w.agents.start(apex.caller, { brief: { objective: "Ship it" }, name: "ship", after: ["lint"], clientKey: "ship", cwd: w.root })
-    assert.ok(!("refused" in ship) && ship.state === "queued")
+    assert.ok(!("refused" in ship) && ship.state === "queued", JSON.stringify(ship))
+    lintMay()
     await w.settle()
     assert.equal(fin("ship"), undefined, "it never started")
     assert.equal(w.store.queuedSpawns().length, 0, "dropped once its Apex heard")
