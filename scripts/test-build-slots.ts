@@ -143,8 +143,8 @@ try {
   const one = apps[0]!
   const two = apps[1]!
   for (const app of apps) await quick.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === one ? heldUntil("go") : "echo two fine" } }), "A check")
-  const first = await quick.check(one.conversation, "quick")
-  assert.match(first, /still running/, first)
+  await quick.check(one.conversation, "quick")
+  await until(async () => (await processes.status(one.environment.app)).find((run) => run.name === "quick")?.state.kind === "running", "the first check to run")
   const waiting = await quick.check(two.conversation, "quick")
   assert.match(waiting, /^The quick check waits for a build slot: 1 of 1 in use \(the quick check of one\), and it's next\. It starts on its own the moment one frees/, waiting)
   const shown = await quick.status(two.conversation)
@@ -215,7 +215,8 @@ function bench(name: string, slotsOf: () => BuildSlots) {
   try {
     const tools = b.host()
     for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? heldUntil("go") : "echo ran >> count" } }), "A check")
-    assert.match(await tools.check(b.one.conversation, "quick"), /still running/)
+    await tools.check(b.one.conversation, "quick")
+    await until(async () => (await b.processes.status(b.one.environment.app)).find((run) => run.name === "quick")?.state.kind === "running", "the first check to run")
     const both = await Promise.all([tools.check(b.two.conversation, "quick"), tools.check(b.two.conversation, "quick")])
     assert.ok(both.every((reply) => /waits for a build slot/.test(reply)), JSON.stringify(both))
     b.wait.ms = 10_000
@@ -414,32 +415,34 @@ function heldReads(processes: ThreadProcesses) {
   }
 }
 
-// ── A survivor that ends as its caller's run starts: that run takes a slot of its own.
+// ── A survivor that ends as its caller's run starts: the slot goes on to that run, and is free when it ends.
 {
   // The first run waits for go, the one after it for again.
   const { b, processes, slots, check, done } = await survivor("survivor-ends", `if [ -e ran ]; then ${heldUntil("again")}; else touch ran; ${heldUntil("go")}; fi`)
   try {
     const open = heldReads(processes)
     const start = processes.start.bind(processes)
-    const key = `${b.one.environment.app}\0quick`
     processes.start = async (app, specs) => {
-      await until(() => !slots.has(key), "the survivor's end")
+      await until(async () => await check(b.one) !== "running", "the survivor's end")
+      await new Promise((resolve) => setTimeout(resolve, 600))
       return start(app, specs)
     }
     const next = b.hostOver(processes, slots)
     const asked = next.check(b.one.conversation, "quick")
-    await until(() => slots.has(key), "its place in line")
+    await until(() => slots.has(`${b.one.environment.app}\0quick`), "its place in line")
     open()
     await until(() => slots.reading().holders.length === 1, "the survivor to be counted")
     release(b.one.folder)
     await asked
-    await until(() => slots.reading().holders.length === 1, "the run after it to take its slot")
-    processes.start = start
     await until(async () => await check(b.one) === "running", "a run of its own")
+    processes.start = start
+    assert.equal(slots.reading().holders.length, 1, "the slot went on to it")
     assert.match(await next.check(b.two.conversation, "quick"), /waits for a build slot: 1 of 1 in use/)
+    assert.notEqual(await check(b.two), "running", "nothing starts beside it")
     b.wait.ms = 10_000
     release(b.one.folder, "again")
     assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+    await until(() => !slots.reading().holders.length && !slots.reading().waiting, "the slot to be free")
   } finally {
     await done()
   }

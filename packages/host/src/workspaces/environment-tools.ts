@@ -21,7 +21,7 @@ import { freeMemory, runKey, type AppOverview, type Leftover, type MemoryLook, t
 import { memoryPressure, type MemoryPressure } from "../base/machine-load.js"
 import type { FileHistory } from "./watch-backend.js"
 import type { HistoryMark } from "../contracts/watcher-child.js"
-import type { BuildSlots } from "./build-slots.js"
+import type { BuildSlots, BuildTicket } from "./build-slots.js"
 import { KeyedAdmission } from "../base/keyed-admission.js"
 import { hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
@@ -1016,8 +1016,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const slots = deps.buildSlots
     // A run already under way holds its own slot; one that didn't start holds none.
     const fresh = slots !== undefined && !slots.has(pending.slot)
-    const holder = { key: pending.slot, label: `the ${tier} check of ${(conversation && deps.conversation?.(conversation)?.title) || current.checkout}` }
-    const ticket = slots?.take(holder)
+    const ticket = slots?.take({ key: pending.slot, label: `the ${tier} check of ${(conversation && deps.conversation?.(conversation)?.title) || current.checkout}` })
     await ticket?.granted
     pending.grant()
     // Whether the ticket is this call's to give back: one recovery adopted while it waited is the surviving run's.
@@ -1030,8 +1029,6 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       throw error
     }
     if (own() && !started.includes(tier)) ticket?.release()
-    // The survivor it would have joined ended as it started, and took its slot along: this run needs one of its own.
-    if (started.includes(tier) && ticket && !ticket.held()) slots?.take(holder)
     const status = await checkRun(app, tier)
     if (status?.startedAt !== undefined) for (const caller of pending.callers) owed.set(caller, { startedAt: status.startedAt })
     return !started.includes(tier)
@@ -1058,7 +1055,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
             if (run.kind !== "check" || (run.name !== "quick" && run.name !== "full")) continue
             const tier: CheckTier = run.name
             const ticket = slots.recover({ key: slotKey(active.app, tier), label: `the ${tier} check of ${deps.processes.checkoutOf(active.app) ?? active.folder}` })
-            if (ticket) void untilExited(active.app, tier).then(() => ticket.release())
+            if (ticket) void holdThrough(active.app, tier, ticket)
           }
         uncounted = undefined
         return slots.recovered()
@@ -1068,6 +1065,15 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         uncounted = why
         await until(wait)
       }
+    }
+  }
+  /** Holds a survivor's slot until it exits, and through any run a caller was starting as it did: that run holds it on. */
+  const holdThrough = async (app: AppKey, tier: CheckTier, ticket: BuildTicket): Promise<void> => {
+    for (;;) {
+      await untilExited(app, tier)
+      const starting = pendingChecks.get(slotKey(app, tier))
+      if (!starting) return ticket.release()
+      await starting.started.catch(() => {})
     }
   }
   /** Until a check run this host didn't spawn has exited. A look that fails isn't an exit: its slot stays held. */
