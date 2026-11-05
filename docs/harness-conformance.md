@@ -47,7 +47,7 @@ No vendor leak turned up that a patch should paper over. Cursor's transcript gro
 
 Cursor transcripts are already published by rename, with the directory synced and a torn append cut back on the next open. Approval decisions are synced a line at a time, and their reader stops at the last newline.
 
-Whole-file writes go through `publishFile`: a temporary file in the same directory, synced, renamed over the destination, and the directory synced. A directory sync the platform refuses (`EINVAL`, `ENOTSUP`, `EOPNOTSUPP`, `EPERM`, `EISDIR`) is success. The folder lock is the same kernel lock as a Cursor transcript, `withFileLock` on `<folder>/.mako-lock`.
+Whole-file writes go through `publishFile`: a temporary file of its own beside the destination, synced, renamed over it, and the directory synced. A directory sync the platform refuses (`EINVAL`, `ENOTSUP`, `EOPNOTSUPP`, `EPERM`, `EISDIR`) is success. Nothing is locked while the bytes are staged. Only the rename takes the file's own kernel lock, the same lock as a Cursor transcript, on `<file>.mako-place-lock`, and it is never held across an await, so a synchronous save beside an asynchronous write waits for nothing. A staged file is deleted by a later writer only once its process is gone.
 
 Two writes stay on the final path, because a crash cannot tear them into a lie. The login-pending marker is created empty, and approval decisions are one synced line at a time; their reader stops at the last newline. The native stream every harness appends loses its last line on a crash. The reader rejects a range that is not whole lines, so a torn line cannot be decoded, and the line is still gone. The Cursor transcript lock stays as it is, because two processes share those files.
 
