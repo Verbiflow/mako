@@ -114,6 +114,12 @@ export interface WorldOptions {
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
   /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
   apexAnswerMs?: number
+  /** The engine's timers for those waits (`AgentsDeps.later`): a fake clock a test advances itself. */
+  later?: AgentsDeps["later"]
+  /** The pull requests the host last read for a worktree's branch (`AgentsDeps.heldPulls`). */
+  heldPulls?: AgentsDeps["heldPulls"]
+  /** The engine's clock (`AgentsDeps.now`), for a case that needs two moments to read the same. */
+  now?: () => number
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
@@ -238,6 +244,9 @@ export class AgentsWorld {
       ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
+      ...(this.options.later && { later: this.options.later }),
+      ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
+      ...(this.options.now && { now: this.options.now }),
       archived: (conversation) => this.archived.has(conversation),
     }
     const agents = new Agents(deps)
