@@ -73,6 +73,8 @@
     "decode:outputs": "tsx --tsconfig tsconfig.app.json scripts/decoder-outputs.ts",
     "perf:decoders": "tsx --tsconfig tsconfig.app.json scripts/perf-decoders.ts",
     "check:journal-merge": "tsx --tsconfig tsconfig.app.json scripts/merge-journals.ts",
+    "check:public-text": "node scripts/check-public-text.mjs origin/main HEAD",
+    "test:public-text": "node scripts/test-public-text.mjs",
     "usage": "tsx scripts/usage-ledger.ts",
     "audit:tools": "tsx scripts/audit-native-tools.ts",
     "attribution": "tsx scripts/attribution.ts",

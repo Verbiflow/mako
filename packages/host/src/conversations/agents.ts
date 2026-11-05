@@ -119,6 +119,8 @@ const LIMIT_READ_MS = 3_000
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
 /** How often what waits looks again, for a limit the person raised or a Fin that ended unseen. */
 const ROOM_EVERY_MS = 10_000
+/** The job that looks every `ROOM_EVERY_MS`. */
+export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
 export const APEX_ANSWER_MS = 60_000
 
@@ -476,7 +478,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: deps.now,
     })
     // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
-    this.stopRoomWatch = deps.jobs.every("read this device's capacity", ROOM_EVERY_MS, () => this.observe(true))
+    this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true))
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
