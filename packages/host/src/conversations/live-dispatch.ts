@@ -21,6 +21,10 @@ import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
 import { turnStart, usageMark } from "./live-settlement.js"
+import { captureNativeHistory, transcriptHolds } from "./native-history.js"
+import type { ConversationControl } from "../contracts/conversation-control.js"
+import { continueTurnPrompt } from "../contracts/turn-continuation.js"
+import type { ThreadPage } from "@mako/sessions"
 
 /** How often in a row a message the harness refused for a turn of its own is sent again at once (`turnInProgress`). */
 const TURN_IN_PROGRESS_RETRIES = 3
@@ -34,6 +38,24 @@ export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">)
   const waiting = snapshot.requests.filter((request) => request.status === "queued" || request.status === "held")
   const request = snapshot.session.status === "failed" ? waiting.at(-1) : waiting[0]
   return request?.status === "queued" ? request : undefined
+}
+
+/**
+ * Whether the harness's own transcript shows the Fin's brief `briefId` (`transcriptHolds`): under the message id it
+ * was sent with, where the harness keeps that, or by its "You're fin:" line, which the brief sent again carries too.
+ * False when its session has no transcript, or one Mako can't read.
+ */
+async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationControl, briefId: string, history: (path: string, before?: number) => Promise<ThreadPage | null>): Promise<boolean> {
+  const brief = snapshot.requests.find((request) => request.id === briefId)
+  const bindingId = brief?.nativeDelivery?.bindingId ?? control.activeBindingId
+  const path = control.bindings.find((binding) => binding.id === bindingId)?.path
+  if (!brief || !path) return false
+  const page = await captureNativeHistory(path, history).catch((error) => {
+    hostWarn("live", "a harness's transcript couldn't be read to see whether it had a Fin's brief", { conversation: snapshot.session.id, error: errorMessage({ error }) })
+    return null
+  })
+  const marker = brief.text.split("\n").find((line) => line.includes("You're fin:")) ?? ""
+  return page ? transcriptHolds(page.entries, { attemptId: brief.nativeDelivery?.attemptId, marker }) : false
 }
 
 type DispatchAccess = Pick<LiveAccess,
@@ -304,6 +326,11 @@ export class LiveDispatch {
       .prompt(resident, current, async () => {
         const active = this.access.control(resident).activeBindingId
         if (review) return review.run(active, review.target, request.tuning, dispatch)
+        // A Fin's brief carried again: a Continue goes in its place when the harness's own transcript shows the brief.
+        // Read now, in its place in the queue, and sent through the same handoff and Stop as any message.
+        const words = request.continues?.brief && await briefInTranscript(resident.snapshot, this.access.control(resident), request.continues.brief, dependencies.history)
+          ? continueTurnPrompt("host-crashed", "mako")
+          : request.text
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
         const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: dependencies.agents?.()?.isApex(resident.snapshot.session.id) ? "apex" : "thread" })
         const standing = instructions && standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, instructions.standing)
@@ -315,7 +342,7 @@ export class LiveDispatch {
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
             ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
           ]),
-          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), request.text),
+          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), words),
         ].filter(Boolean).join("\n\n")
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })
