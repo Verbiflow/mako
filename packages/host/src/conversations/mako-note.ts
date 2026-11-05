@@ -1,7 +1,7 @@
 import type { RoutedThread } from "../contracts/native-routing.js"
 import { primerBlocks } from "../contracts/primer.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
-import { CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions } from "../workspaces/thread-environment.js"
+import { CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions } from "../workspaces/index.js"
 import type { ControlInstructions } from "./control-cadence.js"
 
 /** Where Mako's note reads what it says for a conversation. */
