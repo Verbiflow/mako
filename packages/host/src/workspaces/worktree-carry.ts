@@ -381,10 +381,10 @@ async function carriedEntries(git: Git, repoRoot: string, entries: readonly Carr
  * The files the recipe's `carry` names, from the main checkout, before the
  * agent starts: copied, or linked to the main checkout's. Entries the
  * checkout already has are left alone, so a retry never overwrites what the
- * Thread's agent wrote. Returns how many came.
+ * Thread's agent wrote. Returns the entries it placed, each one it made itself.
  */
-export async function carryFiles(git: Git, repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<number> {
-  let copied = 0
+export async function carryFiles(git: Git, repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<string[]> {
+  const placed: string[] = []
   for (const [entry, link] of await carriedEntries(git, repoRoot, entries)) {
     const from = join(repoRoot, entry)
     const to = join(checkout, entry)
@@ -393,7 +393,7 @@ export async function carryFiles(git: Git, repoRoot: string, checkout: string, e
     if (!info || (info.isDirectory() && virtualEnvironment(from))) continue
     if (link) {
       await placeLink(repoRoot, checkout, entry)
-      copied += 1
+      placed.push(entry)
       continue
     }
     await mkdir(dirname(to), { recursive: true })
@@ -410,9 +410,9 @@ export async function carryFiles(git: Git, repoRoot: string, checkout: string, e
         await cp(from, to, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true })
       }
     } else continue
-    copied += 1
+    placed.push(entry)
   }
-  return copied
+  return placed
 }
 
 export interface BringEntry {

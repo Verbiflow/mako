@@ -2,10 +2,10 @@ import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CHECKOUT_GRANTS, CheckoutBorrowing, LOCAL_ACCOUNT, LOCAL_DEVICE, checkoutSource } from "@mako/host/workspaces/checkout-borrowing"
+import { CHECKOUT_GRANTS, CHECKOUT_SOURCES, CheckoutBorrowing, LOCAL_ACCOUNT, LOCAL_DEVICE } from "@mako/host/workspaces/checkout-borrowing"
 import { LocalBorrowing } from "@mako/host/base/local-borrowing"
 
 /**
@@ -101,7 +101,7 @@ assert.equal(lstatSync(join(main, ".env")).isFile(), true)
 // A lease that lapsed while the device was off is taken again at the next keep, not taken away.
 let now = Date.now()
 const clock = () => now
-const lapsing = new CheckoutBorrowing({ git, borrowing: new LocalBorrowing({ device: LOCAL_DEVICE, account: LOCAL_ACCOUNT, source: checkoutSource, now: clock }) })
+const lapsing = new CheckoutBorrowing({ git, borrowing: new LocalBorrowing({ device: LOCAL_DEVICE, account: LOCAL_ACCOUNT, sources: CHECKOUT_SOURCES, now: clock }) })
 const other = join(root, "worktrees", "shop-2")
 run(main, "worktree", "add", "-q", "-b", "mako/two", other)
 await lapsing.carry("thread-2", main, other, [{ path: ".env", link: false }])
@@ -116,4 +116,89 @@ assert.equal(readFileSync(join(other, ".env"), "utf8"), `API_KEY=${CANARY}\n`, "
 await lapsing.forget(other)
 assert.equal((await lapsing.borrowing.leases()).length, 0)
 
-console.log("checkout borrowing: carry and bring as leases, one lease per need, no value on disk, the device's grants keep to it, state kept across hosts, revocation removes links and copies but not the worktree's own files, refusals in words, revoked stays revoked, lapsed leases taken again, removal releases")
+
+// Mako removes only what it made. A file and a folder the worktree had before are left alone when the grant goes,
+// and so is a file put in place of Mako's copy since.
+{
+  const own = join(root, "worktrees", "shop-own")
+  run(main, "worktree", "add", "-q", "-b", "mako/own", own)
+  const ownFolder = join(root, "borrowing-own")
+  const keeper = CheckoutBorrowing.open(git, ownFolder)
+  writeFileSync(join(own, "local.json"), "the person's own\n")
+  mkdirSync(join(own, "models"))
+  writeFileSync(join(own, "models", "mine.bin"), "the person's own\n")
+  const before = await keeper.bring("thread-own", main, own, [{ path: "local.json" }, { path: "models" }, { path: ".env" }])
+  assert.deepEqual(before.existing.sort(), ["local.json", "models"])
+  assert.deepEqual(before.copied, [".env"])
+  // The agent replaces Mako's copy with a file of its own.
+  rmSync(join(own, ".env"))
+  writeFileSync(join(own, ".env"), "the agent's own\n")
+  await keeper.borrowing.revoke(CHECKOUT_GRANTS.copy, { kind: "person", account: LOCAL_ACCOUNT })
+  await keeper.keep()
+  assert.equal(readFileSync(join(own, "local.json"), "utf8"), "the person's own\n", "an existing file is never deleted")
+  assert.equal(readFileSync(join(own, "models", "mine.bin"), "utf8"), "the person's own\n", "nor an existing folder")
+  assert.equal(readFileSync(join(own, ".env"), "utf8"), "the agent's own\n", "nor a file put where Mako's copy was")
+}
+
+// A removal that fails, or that a crash cuts short, is written down and finished by the next keep.
+{
+  const flaky = join(root, "worktrees", "shop-flaky")
+  run(main, "worktree", "add", "-q", "-b", "mako/flaky", flaky)
+  const flakyFolder = join(root, "borrowing-flaky")
+  let failing = true
+  const remove = async (path: string, recursive: boolean) => {
+    if (failing) throw new Error("the disk said no")
+    rmSync(path, { recursive, force: true })
+  }
+  const first = CheckoutBorrowing.open(git, flakyFolder, {}, remove)
+  await first.bring("thread-flaky", main, flaky, [{ path: ".env" }])
+  await first.borrowing.revoke(CHECKOUT_GRANTS.copy, { kind: "person", account: LOCAL_ACCOUNT })
+  await first.keep()
+  assert.ok(existsSync(join(flaky, ".env")), "the delete failed")
+  // SAFETY: the index is the broker's own file, written whole by it.
+  const index = JSON.parse(readFileSync(join(flakyFolder, "placed.json"), "utf8")) as Array<{ entry: string; removing?: boolean }>
+  assert.deepEqual(index.map((item) => [item.entry, item.removing]), [[".env", true]], "and its removal is still written down")
+  failing = false
+  // A new host over the same folder, as after a crash, finishes it.
+  await CheckoutBorrowing.open(git, flakyFolder, {}, remove).keep()
+  assert.ok(!existsSync(join(flaky, ".env")), "the next keep finished the removal")
+  assert.deepEqual(JSON.parse(readFileSync(join(flakyFolder, "placed.json"), "utf8")), [])
+}
+
+// Two brokers over one folder are one broker: one opened before a revoke can't bring the grant back, in this
+// process or another, and two writing at once lose nothing.
+{
+  const sharedFolder = join(root, "borrowing-shared")
+  const shared = join(root, "worktrees", "shop-shared")
+  run(main, "worktree", "add", "-q", "-b", "mako/shared", shared)
+  const early = CheckoutBorrowing.open(git, sharedFolder)
+  const late = CheckoutBorrowing.open(git, sharedFolder)
+  await early.seed()
+  await late.seed()
+  const names = Array.from({ length: 12 }, (_, index) => `file-${index}.json`)
+  for (const name of names) writeFileSync(join(main, name), "{}\n")
+  writeFileSync(join(main, ".git", "info", "exclude"), "file-*.json\n")
+  await Promise.all(names.map((name, index) => (index % 2 ? early : late).bring("thread-shared", main, shared, [{ path: name }])))
+  assert.equal((await early.borrowing.leases({ borrower: { thread: "thread-shared" } })).length, names.length, "no lease lost between two writers")
+  await late.borrowing.revoke(CHECKOUT_GRANTS.copy, { kind: "person", account: LOCAL_ACCOUNT })
+  await early.borrowing.tick()
+  await early.seed()
+  assert.ok(!(await CheckoutBorrowing.open(git, sharedFolder).borrowing.grants()).some((grant) => grant.id === CHECKOUT_GRANTS.copy), "the revoke stands after the other broker writes")
+  const refused = await early.bring("thread-shared", main, shared, [{ path: ".env" }])
+  assert.deepEqual(refused.refused, [".env: the grant for it was revoked"])
+  await early.keep()
+  assert.ok(names.every((name) => !existsSync(join(shared, name))), "the other broker's keep removes what the revoke ended")
+
+  // Another process revokes the link grant while this one holds its broker open.
+  execFileSync(process.execPath, ["--import", "tsx", "-e", `
+    const { CheckoutBorrowing, CHECKOUT_GRANTS, LOCAL_ACCOUNT } = await import("@mako/host/workspaces/checkout-borrowing")
+    const { Git } = await import("@mako/git")
+    const other = CheckoutBorrowing.open(new Git(), ${JSON.stringify(sharedFolder)})
+    await other.borrowing.revoke(CHECKOUT_GRANTS.live, { kind: "person", account: LOCAL_ACCOUNT })
+  `], { cwd: process.cwd(), stdio: "inherit" })
+  await early.seed()
+  const linked = await early.bring("thread-shared", main, shared, [{ path: "models", link: true }])
+  assert.deepEqual(linked.refused, ["models: the grant for it was revoked"], "a revoke from another process stands")
+}
+
+console.log("checkout borrowing: carry and bring as leases, one lease per need, no value on disk, the device's grants keep to it, state kept across hosts, revocation removes links and copies but not the worktree's own files, refusals in words, revoked stays revoked, lapsed leases taken again, removal releases, nothing Mako didn't make is removed, a failed or interrupted removal is finished, two brokers and two processes over one folder are one broker")
