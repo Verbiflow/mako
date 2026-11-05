@@ -18,7 +18,7 @@ import { duplexPair } from "node:stream"
 import { after, test } from "node:test"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
-import { LIVE_FORM, PING, PONG, SUBPROTOCOL, WHOLE_LIVE_FORM, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, sessionStream, threadStream, type Actor, type LiveForm, type MediaHandler, type Subscription } from "@mako/protocol"
+import { LIVE_FORM, PING, PONG, SUBPROTOCOL, WHOLE_LIVE_FORM, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, sessionStream, threadStream, type Actor, type GatewayFrame, type LiveForm, type MediaHandler, type Subscription } from "@mako/protocol"
 import { createFakeGateway, type FakeGatewayOptions, type GatewayLogLine } from "@mako/protocol/fake-gateway"
 import { compactLiveBatch, type LiveBatch } from "@mako/host/contracts/live-conversations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -105,6 +105,10 @@ async function machineGateway(runtimeId = RUNTIME, options: FakeGatewayOptions =
     /** The connection drops as a network change would drop it, with no close frame. */
     drop: () => {
       for (const socket of sockets) socket.terminate()
+    },
+    /** A frame of the gateway's own on every connection open now, as the gateway's objects send theirs. */
+    send: (frame: GatewayFrame) => {
+      for (const socket of sockets) socket.send(encodeGatewayFrame(frame))
     },
   }
 }
@@ -481,6 +485,18 @@ test("a credential the agent renewed keeps the connection, and the next connecti
   cloud.accepted.delete(CREDENTIAL)
   cloud.drop()
   await agent.until("enrolled again on the renewed credential", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 15_000)
+})
+
+test("what the machine's Thread borrows reaches the agent as the gateway pushes it, unchanged", async () => {
+  const cloud = await machineGateway()
+  const agent = machineAgent({ dataRoot: join(scratch, "borrow") })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello" && message.protocol >= 10))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  const push = { push: "ended", lease: "l-1", why: "revoked" } as const
+  cloud.send({ type: "borrow", threadId: "th-1", seq: 4, push })
+  await agent.until("the push passed on", () => agent.messages.some((message) => message.type === "borrow"))
+  assert.deepEqual(agent.messages.find((message) => message.type === "borrow"), { type: "borrow", threadId: "th-1", seq: 4, push })
 })
 
 test("the sign-ins the agent gives are installed one set at a time, the newest last, and what became of each is in the runtime's state", async () => {
