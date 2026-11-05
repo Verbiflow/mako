@@ -1,6 +1,5 @@
-import { execFileSync } from "node:child_process"
-import { randomBytes } from "node:crypto"
-import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs"
+import { mkdirSync } from "node:fs"
+import { DatabaseSync } from "node:sqlite"
 import { dirname } from "node:path"
 
 /**
@@ -12,167 +11,55 @@ import { dirname } from "node:path"
  */
 export const CURSOR_TRANSCRIPT_LOCK = Symbol.for("mako:cursor-transcript-lock")
 
+/**
+ * A SQLite database beside the transcript, created empty, whose exclusive
+ * transaction is the lock. SQLite locks it with the operating system's file
+ * locks (`fcntl` here, `LockFileEx` on Windows), which the kernel drops the
+ * moment the holder exits, however it exits, and which also exclude a second
+ * connection in the same process. The file and the journal SQLite keeps
+ * beside it while the lock is held stay on disk: removing a lock file another
+ * process has open would let two processes each lock a file of their own.
+ */
 const LOCK_SUFFIX = ".mako-lock"
-const BREAK_SUFFIX = ".mako-lock-break"
 /** How long a write waits for another process's write to the same file. */
 const WAIT_MS = 30_000
-/** A lock or break file nobody finished writing is abandoned after this long. */
-const UNWRITTEN_MS = 5_000
-const LIVE_RECHECK_MS = 500
-
-interface Owner {
-  pid: number
-  /** `ps`'s start time for `pid`: a reused pid has another one. Empty where the platform has no `ps`. */
-  start: string
-  /** One acquisition of the lock, so a holder only ever removes its own file. */
-  token: string
-}
-
-/**
- * When a process started, as one string every process computes the same way, or
- * undefined when `pid` isn't running. Where `ps` is missing the pid alone
- * identifies a process.
- */
-export function processStart(pid: number): string | undefined {
-  try {
-    process.kill(pid, 0)
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== "EPERM") return undefined
-  }
-  if (process.platform === "win32") return ""
-  try {
-    const start = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim()
-    return start || undefined
-  } catch (cause) {
-    // `ps` ran and found no such process, or couldn't run at all.
-    return (cause as NodeJS.ErrnoException).code === "ENOENT" ? "" : undefined
-  }
-}
-
-let ownStart: string | undefined
-const ownOwner = (): Owner => {
-  ownStart ??= processStart(process.pid) ?? ""
-  return { pid: process.pid, start: ownStart, token: randomBytes(8).toString("hex") }
-}
+const SQLITE_BUSY = 5
 
 export interface LockOptions {
-  /** Where the process-identity lookup is replaced, by tests. */
-  start?: (pid: number) => string | undefined
   waitMs?: number
-}
-
-/** A lock file's owner, `null` for one that is empty or unreadable, `undefined` once it is gone. */
-function readOwner(path: string): Owner | null | undefined {
-  let text: string
-  try {
-    text = readFileSync(path, "utf8")
-  } catch (cause) {
-    return (cause as NodeJS.ErrnoException).code === "ENOENT" ? undefined : null
-  }
-  try {
-    const value = JSON.parse(text) as Partial<Owner>
-    return typeof value.pid === "number" && typeof value.start === "string" && typeof value.token === "string" ? (value as Owner) : null
-  } catch {
-    return null
-  }
-}
-
-function ageMs(path: string): number {
-  try {
-    return Date.now() - statSync(path).mtimeMs
-  } catch {
-    return 0
-  }
-}
-
-/** Creates `path` holding `text` only if nothing is there. */
-function createExclusive(path: string, text: string): boolean {
-  let fd: number
-  try {
-    fd = openSync(path, "wx")
-  } catch (cause) {
-    const code = (cause as NodeJS.ErrnoException).code
-    if (code === "EEXIST") return false
-    if (code !== "ENOENT") throw cause
-    mkdirSync(dirname(path), { recursive: true })
-    return createExclusive(path, text)
-  }
-  try {
-    writeSync(fd, text)
-  } finally {
-    closeSync(fd)
-  }
-  return true
-}
-
-const remove = (path: string) => {
-  try {
-    unlinkSync(path)
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause
-  }
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
+const busy = (cause: unknown) => (cause as { errcode?: number }).errcode === SQLITE_BUSY
+
 /**
- * Runs `work` holding the exclusive lock of the transcript at `file`: a lock
- * file beside it naming the process by pid and start time. It is held until
- * `work` ends, and stale only once that process is gone. A dead holder may
- * have died halfway through a write, so `recover` runs before its lock is
- * taken over, while no one else can take the lock.
+ * Runs `work` holding the exclusive lock of the transcript at `file`, until
+ * `work` ends. A holder that dies loses it at once, and leaves no mark that it
+ * held it, so whatever it left half written is for the next holder to find.
  */
-export async function withTranscriptLock<T>(file: string, work: () => Promise<T>, recover?: (file: string) => void, options: LockOptions = {}): Promise<T> {
-  const lock = `${file}${LOCK_SUFFIX}`
-  const breaker = `${file}${BREAK_SUFFIX}`
-  const startOf = options.start ?? processStart
-  const mine = ownOwner()
-  const text = JSON.stringify(mine)
-  const deadline = Date.now() + (options.waitMs ?? WAIT_MS)
-  // A holder seen alive isn't looked up again for a moment: the lookup runs `ps`.
-  let liveToken: string | undefined
-  let liveAt = 0
-  for (let delay = 5; !createExclusive(lock, text); delay = Math.min(delay * 2, 50)) {
-    const owner = readOwner(lock)
-    if (owner === undefined) continue
-    let dead: boolean
-    if (owner === null) dead = ageMs(lock) > UNWRITTEN_MS
-    else if (owner.token === liveToken && Date.now() - liveAt < LIVE_RECHECK_MS) dead = false
-    else {
-      const running = startOf(owner.pid)
-      dead = running === undefined || (owner.start !== "" && running !== owner.start)
-      if (!dead) {
-        liveToken = owner.token
-        liveAt = Date.now()
-      }
-    }
-    if (dead) {
-      // Only the holder of the break file takes a lock over, and only the one it saw, so a lock another
-      // process took in the meantime is left alone.
-      if (createExclusive(breaker, text)) {
-        try {
-          const now = readOwner(lock)
-          if (now !== undefined && JSON.stringify(now) === JSON.stringify(owner)) {
-            recover?.(file)
-            remove(lock)
-          }
-        } finally {
-          remove(breaker)
-        }
-        continue
-      }
-      if (ageMs(breaker) > UNWRITTEN_MS) remove(breaker)
-    }
-    if (Date.now() > deadline) throw new Error(`The transcript ${file} is being written by process ${owner?.pid ?? "unknown"}`)
-    await sleep(delay)
-  }
+export async function withTranscriptLock<T>(file: string, work: () => Promise<T>, options: LockOptions = {}): Promise<T> {
+  const path = `${file}${LOCK_SUFFIX}`
+  mkdirSync(dirname(path), { recursive: true })
+  const db = new DatabaseSync(path, { timeout: 0 })
   try {
-    return await work()
+    const deadline = Date.now() + (options.waitMs ?? WAIT_MS)
+    for (let delay = 5; ; delay = Math.min(delay * 2, 50)) {
+      try {
+        db.exec("BEGIN EXCLUSIVE")
+        break
+      } catch (cause) {
+        if (!busy(cause)) throw cause
+        if (Date.now() > deadline) throw new Error(`The transcript ${file} is being written by another process`)
+        await sleep(delay)
+      }
+    }
+    try {
+      return await work()
+    } finally {
+      db.exec("ROLLBACK")
+    }
   } finally {
-    if (readOwner(lock)?.token === mine.token) remove(lock)
+    db.close()
   }
 }

@@ -42,7 +42,8 @@ function extract(bundle: string, head: string): string {
   throw new Error(`${head} has no end`)
 }
 
-export function loadWriters(build: Build, fs: object): Writers {
+/** `platform` stands in for `process.platform`, which the folder sync reads. */
+export function loadWriters(build: Build, fs: object, platform: NodeJS.Platform = process.platform): Writers {
   const names = TRANSCRIPT_BUILDS[build]
   const bundle = readFileSync(path.join(sdk, build, "336.js"), "utf8")
   const write = extract(bundle, `async function ${names.write}(e,t){`)
@@ -56,7 +57,7 @@ export function loadWriters(build: Build, fs: object): Writers {
   const context: Record<string, unknown> = {
     [names.fs]: fs,
     s: path,
-    process,
+    process: platform === process.platform ? process : { pid: process.pid, platform },
     [names2.ctx]: { OA: (value: unknown) => value },
     [names2.archive]: async () => [],
     [names2.visit]: async (_ctx: unknown, _store: unknown, rows: Row[], _stats: unknown, visit: { visit(row: Row): Promise<void> }) => {

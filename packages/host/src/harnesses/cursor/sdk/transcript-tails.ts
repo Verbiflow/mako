@@ -23,11 +23,12 @@ export function cursorTranscriptFolder(cwd: string, agentId: string, env: NodeJS
 }
 
 /**
- * Makes one transcript whole after the process writing it died: deletes the
+ * Makes one transcript whole after a process writing it died: deletes the
  * full write it staged, and cuts a torn append back to its last complete line,
  * since the SDK ends every line it writes with a newline. Only for a caller
- * holding the transcript's lock (`withTranscriptLock`), which no live writer
- * does. Returns whether it cut the file.
+ * holding the transcript's lock (`withTranscriptLock`): every writer holds it
+ * while it writes, so what the holder finds unfinished, nobody is finishing.
+ * Returns whether it cut the file.
  */
 export function recoverTranscript(file: string): boolean {
   const prefix = `${basename(file)}.mako-`
@@ -43,10 +44,14 @@ export function recoverTranscript(file: string): boolean {
 
 /**
  * The function the patched SDK runs each transcript write inside: the file's
- * lock, taken over from a dead holder only after that holder's file is made
- * whole.
+ * lock, and the file made whole before the write, since a holder that died
+ * leaves no sign that it did.
  */
-export const transcriptLock = <T>(file: string, work: () => Promise<T>): Promise<T> => withTranscriptLock(file, work, recoverTranscript)
+export const transcriptLock = <T>(file: string, work: () => Promise<T>): Promise<T> =>
+  withTranscriptLock(file, async () => {
+    recoverTranscript(file)
+    return work()
+  })
 
 /**
  * Makes the transcripts of the agent a child is about to open whole again
@@ -73,12 +78,8 @@ export async function repairCursorTranscripts(folder: string, options: LockOptio
   const cut: string[] = []
   const left: string[] = []
   for (const file of files) {
-    // A lock taken over from a dead writer is recovered before it is taken, which may be the cut.
-    let cutOnTakeover = false
-    const recover = (target: string) => { cutOnTakeover = recoverTranscript(target) || cutOnTakeover }
     try {
-      const cutUnderLock = await withTranscriptLock(file, async () => recoverTranscript(file), recover, options)
-      if (cutUnderLock || cutOnTakeover) cut.push(file)
+      if (await withTranscriptLock(file, async () => recoverTranscript(file), options)) cut.push(file)
     } catch {
       left.push(file)
     }

@@ -27,11 +27,11 @@
 //    transcript, synced, renamed over it, and the folder synced, so a child
 //    killed mid-write leaves the transcript as it was and a crash of the
 //    machine doesn't lose the rename. Every write of a transcript, an append
-//    or a rewrite, runs inside the file's lock (`transcript-lock.ts`), so one
-//    child writes a file at a time. An append killed mid-write leaves a torn
-//    last line, which whoever next takes the lock from the dead writer, a
-//    writer or the Cursor child opening the agent, cuts off first
-//    (`transcript-tails.ts`).
+//    or a rewrite, runs inside the file's lock (`transcript-lock.ts`), a file
+//    lock the kernel drops when its holder dies, so one child writes a file at
+//    a time. An append killed mid-write leaves a torn last line, which
+//    whoever next takes the lock, a writer or the Cursor child opening the
+//    agent, cuts off first (`transcript-tails.ts`).
 // 3. Each bidi stream races every read, of what the backend sends and of what
 //    the client appends, against a promise pending for the stream's life, and
 //    each race leaves a reaction on that promise. Every message the stream
@@ -67,7 +67,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const VERSION = "1.2.0"
-const MARKER = "/*mako:patched:10*/"
+const MARKER = "/*mako:patched:11*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -162,8 +162,10 @@ function transcripts({ writer, store, write, fs, child, chunks }) {
       `async function ${write}(e,t){return ${lock}(e,(async()=>{const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0});const n=e${staged},o=await(0,${fs}.open)(n,"w");try{await o.writeFile(t,"utf-8"),await o.sync()}finally{await o.close()}await(0,${fs}.rename)(n,e),await makoSyncDir(e)}))}` +
         // Runs `work` inside the process's transcript lock (`transcript-lock.ts`); outside Mako's child there is none.
         `function ${lock}(p,w){const k=globalThis[Symbol.for("mako:cursor-transcript-lock")];return k?k(p,w):w()}` +
-        // A rename is durable once its folder is synced. A platform that can't open or sync a folder (Windows) has nothing to sync.
-        `async function makoSyncDir(p){const d=(0,s.dirname)(p),x=new Set(["EINVAL","ENOTSUP","EOPNOTSUPP","EPERM","EISDIR"]);let h;try{h=await(0,${fs}.open)(d,"r")}catch(e){if(x.has(e?.code))return;throw e}try{await h.sync()}catch(e){if(!x.has(e?.code))throw e}finally{await h.close()}}`,
+        // A rename is durable once its folder is synced. Windows can't open a folder as a file (EISDIR, or EPERM),
+        // and makes a rename durable without it; a file system that can't sync a folder says so (EINVAL, ENOTSUP,
+        // EOPNOTSUPP). Any other failure is a rename that may not last, so the write fails.
+        `async function makoSyncDir(p){const d=(0,s.dirname)(p);let h;try{h=await(0,${fs}.open)(d,"r")}catch(e){if("win32"===process.platform&&("EISDIR"===e?.code||"EPERM"===e?.code))return;throw e}try{await h.sync()}catch(e){if(!["EINVAL","ENOTSUP","EOPNOTSUPP"].includes(e?.code))throw e}finally{await h.close()}}`,
     ],
     [
       `async writeJsonlStreamed(e,t){const{filePath:r,appendFile:n}=t;let o=[],s=0,${chunks}=0,`,

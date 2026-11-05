@@ -2,15 +2,17 @@
 // writer on the real file system with the child's lock installed. Its write
 // puts half its bytes on disk and tells its parent, then either waits for
 // `go` on stdin to write the rest (a slow writer) or hangs for a SIGKILL.
+// `repair` is a child opening the agent instead: it repairs `file`'s folder
+// and prints what it cut, or what it left.
 import { closeSync, fsyncSync, openSync, writeSync } from "node:fs"
 import * as promises from "node:fs/promises"
-import { transcriptLock } from "@mako/host/harnesses/cursor/sdk/transcript-tails"
+import { repairCursorTranscripts, transcriptLock } from "@mako/host/harnesses/cursor/sdk/transcript-tails"
 import { CURSOR_TRANSCRIPT_LOCK } from "@mako/host/harnesses/cursor/sdk/transcript-lock"
 import { loadWriters, rowsOf, jsonl, type Build } from "./cursor-transcript-writers.js"
 
 interface Case {
   build: Build
-  mode: "append" | "rewrite"
+  mode: "append" | "rewrite" | "repair"
   file: string
   from: number
   count: number
@@ -20,9 +22,17 @@ interface Case {
   finish: boolean
   /** Without the child's lock, as the unpatched SDK writes. */
   unlocked?: boolean
+  /** For `repair`: how long it waits for a writer. */
+  waitMs?: number
 }
 const job = JSON.parse(process.env.CASE ?? "null") as Case
 if (!job.unlocked) Object.assign(globalThis, { [CURSOR_TRANSCRIPT_LOCK]: transcriptLock })
+
+if (job.mode === "repair") {
+  const outcome = await repairCursorTranscripts(job.file, { waitMs: job.waitMs ?? 10_000 }).then((cut) => ({ cut }), (error: Error) => ({ left: error.message }))
+  process.stdout.write(`${JSON.stringify(outcome)}\n`)
+  process.exit(0)
+}
 
 let writes = 0
 let go: () => void = () => undefined

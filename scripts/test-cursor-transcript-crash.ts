@@ -6,32 +6,34 @@
 // - a rewrite is published by rename and the folder is synced after it, in
 //   that order, and a folder that can't be synced fails the write unless the
 //   platform has no such thing;
-// - an append killed mid-line is cut back by whoever takes the lock from the
-//   dead writer, a writer or an opening child, with no model turn between;
+// - an append killed mid-line is cut back by whoever next takes the lock, a
+//   writer or an opening child, with no model turn between;
 // - a child opening an agent while another is mid-append waits for it and
 //   leaves its line whole; a writer that stays locked leaves the file alone;
-// - a lock is stale only when its owner's pid and start time name no live process.
+// - the lock is the kernel's: a SIGKILLed holder frees it at once, a
+//   SIGSTOPped one keeps it however long it is stopped, an opener with no
+//   `ps` still waits, and a lock file nobody holds is no lock at all.
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import * as promises from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path, { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { cursorTranscriptFolder, repairCursorTranscripts } from "@mako/host/harnesses/cursor/sdk/transcript-tails"
-import { processStart, withTranscriptLock } from "@mako/host/harnesses/cursor/sdk/transcript-lock"
+import { withTranscriptLock } from "@mako/host/harnesses/cursor/sdk/transcript-lock"
 import { BUILDS, jsonl, loadWriters, rowsOf, type Build } from "./lib/cursor-transcript-writers.js"
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 const worker = join(repo, "scripts/lib/cursor-transcript-worker.ts")
 
-interface Job { build: Build; mode: "append" | "rewrite"; file: string; from: number; count: number; tag: string; stall: number; finish?: boolean }
+interface Job { build: Build; mode: "append" | "rewrite" | "repair"; file: string; from: number; count: number; tag: string; stall: number; finish?: boolean; waitMs?: number }
 
 /** A child process writing, kept so a test can let it finish or kill it. */
-function start(job: Job) {
+function start(job: Job, env: NodeJS.ProcessEnv = {}) {
   const child = spawn(process.execPath, ["--import", "tsx", worker], {
     cwd: repo,
-    env: { ...process.env, NODE_OPTIONS: "", CASE: JSON.stringify({ finish: false, ...job }) },
+    env: { ...process.env, NODE_OPTIONS: "", ...env, CASE: JSON.stringify({ finish: false, ...job }) },
     stdio: ["pipe", "pipe", "inherit"],
   })
   let out = ""
@@ -78,7 +80,8 @@ try {
   const primary = join(folder, "agent-1.jsonl")
   const child = join(folder, "subagents", "child-1.jsonl")
   const before = jsonl(rowsOf(0, 20, "old"))
-  const leftovers = () => [...readdirSync(folder), ...readdirSync(join(folder, "subagents"))].filter((name) => name.includes(".mako-"))
+  // A transcript's lock file stays beside it for good; what a dead writer staged must not.
+  const leftovers = () => [...readdirSync(folder), ...readdirSync(join(folder, "subagents"))].filter((name) => /\.mako-\d+\.tmp$/.test(name))
   const valid = (file: string) => { for (const line of readFileSync(file, "utf8").trimEnd().split("\n")) JSON.parse(line) }
 
   for (const build of BUILDS) {
@@ -89,10 +92,10 @@ try {
       await writer.stalled()
       await writer.kill()
       assert.equal(readFileSync(primary, "utf8"), before, `${build}: a rewrite killed at chunk ${stall} leaves the published transcript whole`)
-      assert.ok(leftovers().some((name) => /\.mako-\d+\.tmp$/.test(name)), "the killed rewrite's staged file is left beside it")
-      assert.ok(leftovers().some((name) => name.endsWith(".mako-lock")), "and so is its lock")
-      assert.deepEqual(await repairCursorTranscripts(folder), [])
-      assert.deepEqual(leftovers(), [], `${build}: opening the agent removes a dead writer's staged file and lock`)
+      assert.equal(leftovers().length, 1, "the killed rewrite's staged file is left beside it")
+      // The killed holder's lock is gone with it: an opener that waits only a moment gets it.
+      assert.deepEqual(await repairCursorTranscripts(folder, { waitMs: 300 }), [])
+      assert.deepEqual(leftovers(), [], `${build}: opening the agent removes a dead writer's staged file`)
       assert.equal(readFileSync(primary, "utf8"), before)
     }
 
@@ -102,7 +105,7 @@ try {
     assert.equal(readFileSync(primary, "utf8"), jsonl(rowsOf(0, 20, "new")))
     assert.deepEqual(leftovers(), [])
 
-    // An append killed mid-line: the next writer, taking the lock from the dead one, cuts the torn line first.
+    // An append killed mid-line: the next writer to take the lock cuts the torn line first.
     writeFileSync(child, before)
     const killed = start({ build, mode: "append", file: child, from: 20, count: 1, tag: "old", stall: 0 })
     await killed.stalled()
@@ -119,7 +122,7 @@ try {
     const again = start({ build, mode: "append", file: child, from: 20, count: 1, tag: "old", stall: 0 })
     await again.stalled()
     await again.kill()
-    assert.deepEqual(await repairCursorTranscripts(folder), [child])
+    assert.deepEqual(await repairCursorTranscripts(folder, { waitMs: 300 }), [child])
     assert.equal(readFileSync(child, "utf8"), before, `${build}: opening the agent cuts the transcript back to its last whole line`)
     assert.deepEqual(await repairCursorTranscripts(folder), [], "a whole transcript is left alone")
     assert.deepEqual(leftovers(), [])
@@ -155,24 +158,41 @@ try {
     assert.deepEqual(leftovers(), [])
   }
 
-  // A lock is stale when its owner's pid and start time name no live process, and not otherwise.
+  // The lock belongs to the kernel, not to a file's contents, its age or a process lookup.
+  const repairIn = async (env: NodeJS.ProcessEnv, waitMs: number) => {
+    const opener = start({ build: "esm", mode: "repair", file: folder, from: 0, count: 0, tag: "", stall: -1, waitMs }, env)
+    assert.deepEqual(await opener.done(), { code: 0, signal: null })
+    return JSON.parse(opener.out()) as { cut?: string[]; left?: string }
+  }
+  // An opener with no `ps` to run waits for a live writer like any other.
   writeFileSync(child, before)
+  const live = start({ build: "esm", mode: "append", file: child, from: 20, count: 1, tag: "live", stall: 0, finish: true })
+  await live.stalled()
+  const midway = readFileSync(child, "utf8")
+  assert.match((await repairIn({ PATH: "" }, 500)).left ?? "", /child-1\.jsonl/, "an opener without ps leaves the file a live writer holds")
+  assert.equal(readFileSync(child, "utf8"), midway)
+  // A writer stopped mid-line, for longer than anything once counted as abandoned, keeps its lock.
+  live.child.kill("SIGSTOP")
+  const stoppedFor = Date.now()
+  await assert.rejects(withTranscriptLock(child, async () => undefined, { waitMs: 6_000 }), /being written by another process/)
+  assert.ok(Date.now() - stoppedFor >= 6_000)
+  assert.equal(readFileSync(child, "utf8"), midway, "a stopped writer's half line is not cut")
+  live.child.kill("SIGCONT")
+  live.go()
+  assert.deepEqual(await live.done(), { code: 0, signal: null })
+  assert.equal(readFileSync(child, "utf8"), before + jsonl(rowsOf(20, 1, "live")), "the writer finished its line once it ran again")
+  assert.deepEqual((await repairIn({ PATH: "" }, 500)).cut, [], "and an opener without ps then has the file")
+  // A lock file nobody holds, however old and whatever it holds, is no lock.
   const lockFile = `${child}.mako-lock`
-  const owner = (pid: number, start: string) => JSON.stringify({ pid, start, token: "other" })
-  writeFileSync(lockFile, owner(process.pid, "Thu Jan  1 00:00:00 1970"))
+  assert.ok(existsSync(lockFile), "a transcript's lock file stays beside it")
+  utimesSync(lockFile, new Date(0), new Date(0))
   writeFileSync(child, `${before}{"role":"us`)
-  assert.deepEqual(await repairCursorTranscripts(folder, { waitMs: 2000 }), [child], "a live pid with another start time is a reused pid: its lock is stale")
-  assert.equal(readFileSync(child, "utf8"), before)
-  const real = processStart(process.pid)
-  assert.ok(real, "the process has a start time")
-  writeFileSync(lockFile, owner(process.pid, real))
-  await assert.rejects(withTranscriptLock(child, async () => undefined, undefined, { waitMs: 300 }), /being written by process/)
-  assert.ok(existsSync(lockFile), "a lock whose owner's pid and start time are live is not taken")
+  assert.deepEqual(await repairCursorTranscripts(folder, { waitMs: 0 }), [child], "an old lock file nobody holds is taken at once")
   rmSync(lockFile)
   writeFileSync(lockFile, "")
-  assert.deepEqual(await repairCursorTranscripts(folder, { waitMs: 100 }).catch(() => "waited"), "waited", "a lock being written is not taken at once")
-  rmSync(lockFile)
-  assert.deepEqual(await repairCursorTranscripts(folder), [])
+  assert.deepEqual(await repairCursorTranscripts(folder, { waitMs: 0 }), [], "and so is an empty one")
+  rmSync(`${child}.mako-lock`)
+  rmSync(`${child}.mako-lock-journal`, { force: true })
 
   // A transcript holding no whole line is emptied; a missing folder is nothing to repair.
   writeFileSync(child, '{"role":"us')
@@ -208,11 +228,12 @@ try {
     mkdirSync(dir)
     const file = join(dir, "t.jsonl")
     const writers = loadWriters(build, recording(dir))
-    const cases: [string, () => Promise<void>][] = [
-      ["a single write", () => writers.writeFile(file, "a\n")],
-      ["a streamed rewrite", () => writers.rewrite(file, rowsOf(0, 3, "x"))],
+    const windows = loadWriters(build, recording(dir), "win32")
+    const cases: [string, () => Promise<void>, () => Promise<void>][] = [
+      ["a single write", () => writers.writeFile(file, "a\n"), () => windows.writeFile(file, "a\n")],
+      ["a streamed rewrite", () => writers.rewrite(file, rowsOf(0, 3, "x")), () => windows.rewrite(file, rowsOf(0, 3, "x"))],
     ]
-    for (const [name, publish] of cases) {
+    for (const [name, publish, publishOnWindows] of cases) {
       sequence.length = 0
       folderSync = folderOpen = undefined
       await publish()
@@ -221,11 +242,17 @@ try {
       assert.ok(at("rename") > at("sync file"), `${build}: ${name} renames after syncing the file`)
       assert.ok(at("sync folder") > at("rename"), `${build}: ${name} syncs the folder after the rename: ${sequence.join(", ")}`)
       assert.ok(at("close folder") > at("sync folder"), `${build}: ${name} closes the folder it synced`)
-      // A platform with no folder to open or sync (Windows, some filesystems) has nothing to sync.
-      for (const failure of ["EISDIR", "EPERM", "EINVAL", "ENOTSUP", "EOPNOTSUPP"]) {
-        folderOpen = failure === "EISDIR" || failure === "EPERM" ? code(failure) : undefined
-        folderSync = folderOpen ? undefined : code(failure)
+      // A file system that can't sync a folder says so, and the rename stands as it is.
+      for (const failure of ["EINVAL", "ENOTSUP", "EOPNOTSUPP"]) {
+        folderSync = code(failure)
         await publish()
+      }
+      folderSync = undefined
+      // Only Windows can't open a folder as a file; anywhere else that is a failure like any other.
+      for (const failure of ["EISDIR", "EPERM"]) {
+        folderOpen = code(failure)
+        await publishOnWindows()
+        await assert.rejects(publish(), new RegExp(failure), `${build}: ${name} fails when a folder can't be opened off Windows: ${failure}`)
       }
       // Anything else is a write that didn't happen: it rejects, with the folder still closed.
       for (const failure of ["EIO", "ENOSPC"]) {
@@ -241,7 +268,7 @@ try {
       folderOpen = undefined
     }
   }
-  console.log("Cursor transcripts (esm and cjs): a killed rewrite leaves the transcript whole, a rewrite syncs its folder after the rename, a killed append is cut back by the next writer or opener, a child mid-append is waited for, and a lock is stale only when its owner is gone")
+  console.log("Cursor transcripts (esm and cjs): a killed rewrite leaves the transcript whole, a rewrite syncs its folder after the rename, a killed append is cut back by the next writer or opener, a child mid-append is waited for, even stopped or by an opener without ps, and a killed holder's lock is free at once")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
