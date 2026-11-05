@@ -54,6 +54,9 @@ jobs:
       - run: npx tsx scripts/test-host-liveness.ts
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
+      # Every whole file a harness writes, through one publisher: a writer killed mid-write, writers in several
+      # processes, create-once, another program's folder, and the folder lock they share.
+      - run: npx tsx scripts/test-published-files.ts
       # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
       - run: npm run test:device-join
       - run: npm run test:cloud-conversations
