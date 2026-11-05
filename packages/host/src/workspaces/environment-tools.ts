@@ -83,6 +83,9 @@ const ROOM_MEMORY_MS = 15_000
 /** Under memory pressure, or for a start that won't fit in free memory, another Thread's app unused this long is stopped to make room. */
 const EVICT_QUIET_MS = 15 * 60 * 1000
 const PREPARE_KEY = runKey("prepare", "checkout")
+/** How soon the checks the last host left running are read again after a read fails, doubling to the most. */
+const COUNT_AGAIN_MS = 500
+const COUNT_AGAIN_MOST_MS = 30_000
 /** How often a start waiting in line looks at memory again. */
 const LINE_MS = 5_000
 const INSTALL_POLL_MS = 1_000
@@ -1013,17 +1016,22 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const slots = deps.buildSlots
     // A run already under way holds its own slot; one that didn't start holds none.
     const fresh = slots !== undefined && !slots.has(pending.slot)
-    const ticket = slots?.take({ key: pending.slot, label: `the ${tier} check of ${(conversation && deps.conversation?.(conversation)?.title) || current.checkout}` })
+    const holder = { key: pending.slot, label: `the ${tier} check of ${(conversation && deps.conversation?.(conversation)?.title) || current.checkout}` }
+    const ticket = slots?.take(holder)
     await ticket?.granted
     pending.grant()
+    // Whether the ticket is this call's to give back: one recovery adopted while it waited is the surviving run's.
+    const own = () => fresh && !ticket?.survivor()
     let started: string[]
     try {
       ({ started } = await deps.processes.start(app, [{ kind: "check", name: tier, command: plan.command, cwd: current.checkout, env: env(current, current.recipe) }]))
     } catch (error) {
-      if (fresh) ticket?.release()
+      if (own()) ticket?.release()
       throw error
     }
-    if (fresh && !started.includes(tier)) ticket?.release()
+    if (own() && !started.includes(tier)) ticket?.release()
+    // The survivor it would have joined ended as it started, and took its slot along: this run needs one of its own.
+    if (started.includes(tier) && ticket && !ticket.held()) slots?.take(holder)
     const status = await checkRun(app, tier)
     if (status?.startedAt !== undefined) for (const caller of pending.callers) owed.set(caller, { startedAt: status.startedAt })
     return !started.includes(tier)
@@ -1034,30 +1042,40 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   deps.processes.onExit((app, key) => {
     for (const tier of ["quick", "full"] as const) if (key === runKey("check", tier)) deps.buildSlots?.release(slotKey(app, tier))
   })
+  /** Why the checks the last host left running can't be counted yet: no slot goes out until they are. */
+  let uncounted: string | undefined
+  const until = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms).unref())
   /**
    * The checks the last host left running hold their slots before any is granted (`BuildSlots.recover`), each until
-   * its exit is seen: this host didn't spawn them, so it can't hear their exit and looks for it instead.
+   * its exit is seen: this host didn't spawn them, so it can't hear their exit and looks for it instead. A read that
+   * fails says nothing of what runs, so it's read again and no slot goes out meanwhile; a check that waits says why.
    */
   const recoverSlots = async (slots: BuildSlots): Promise<void> => {
-    try {
-      for (const active of await deps.processes.active())
-        for (const run of active.runs) {
-          if (run.kind !== "check" || (run.name !== "quick" && run.name !== "full")) continue
-          const tier: CheckTier = run.name
-          const ticket = slots.recover({ key: slotKey(active.app, tier), label: `the ${tier} check of ${deps.processes.checkoutOf(active.app) ?? active.folder}` })
-          if (ticket) void untilExited(active.app, tier).then(() => ticket.release())
-        }
-    } catch (error) {
-      hostWarn("environment", "the checks the last host left running couldn't be read; slots are granted without them", { error: errorMessage({ error }) })
-    } finally {
-      slots.recovered()
+    for (let wait = COUNT_AGAIN_MS; ; wait = Math.min(wait * 2, COUNT_AGAIN_MOST_MS)) {
+      try {
+        for (const active of await deps.processes.activeRead())
+          for (const run of active.runs) {
+            if (run.kind !== "check" || (run.name !== "quick" && run.name !== "full")) continue
+            const tier: CheckTier = run.name
+            const ticket = slots.recover({ key: slotKey(active.app, tier), label: `the ${tier} check of ${deps.processes.checkoutOf(active.app) ?? active.folder}` })
+            if (ticket) void untilExited(active.app, tier).then(() => ticket.release())
+          }
+        uncounted = undefined
+        return slots.recovered()
+      } catch (error) {
+        const why = errorMessage({ error })
+        if (why !== uncounted) hostWarn("environment", "the checks the last host left running couldn't be read; no build slot goes out until they can", { error: why })
+        uncounted = why
+        await until(wait)
+      }
     }
   }
-  /** Until a check run this host didn't spawn has exited. */
+  /** Until a check run this host didn't spawn has exited. A look that fails isn't an exit: its slot stays held. */
   const untilExited = async (app: AppKey, tier: CheckTier): Promise<void> => {
     for (;;) {
-      const [status] = await deps.processes.settle(app, [runKey("check", tier)], 60_000).catch(() => [])
-      if (status?.state.kind !== "running" && status?.state.kind !== "starting") return
+      const look = await deps.processes.settle(app, [runKey("check", tier)], 60_000).then(([status]) => ({ status }), () => undefined)
+      if (!look) await until(COUNT_AGAIN_MS)
+      else if (look.status?.state.kind !== "running" && look.status?.state.kind !== "starting") return
     }
   }
   if (deps.buildSlots) void recoverSlots(deps.buildSlots)
@@ -1072,6 +1090,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   /** Where a check waiting for a build slot stands: "waits for a build slot: 1 of 1 in use (…), and it's next". */
   const slotWait = (app: AppKey, tier: CheckTier): string => {
+    if (uncounted) return `waits for a build slot: none goes out until the checks the last host left running can be read (${uncounted}), and Mako keeps trying`
     const reading = deps.buildSlots!.reading()
     const ahead = deps.buildSlots!.ahead(slotKey(app, tier))
     return `waits for a build slot: ${reading.holders.length} of ${reading.slots} in use (${reading.holders.join("; ")})${ahead ? `, ${ahead} ahead of it` : ", and it's next"}`

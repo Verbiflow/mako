@@ -594,15 +594,27 @@ export class ThreadProcesses {
   }
 
   /** Every app on this Mac with a process running, with what it holds and when it was last used. */
-  async active(): Promise<ActiveApp[]> {
-    const folders = await readdir(this.dependencies.root).catch(() => [])
+  active(): Promise<ActiveApp[]> {
+    return this.appsRunning(() => readdir(this.dependencies.root).catch(() => []), (app) => this.runs(app).catch(() => ({})))
+  }
+
+  /**
+   * `active` for what mustn't take an error for nothing running: a records folder or a record that can't be read
+   * throws, so an empty answer means nothing runs.
+   */
+  activeRead(): Promise<ActiveApp[]> {
+    return this.appsRunning(() => readdir(this.dependencies.root).catch(ifMissing([])), (app) => this.runs(app))
+  }
+
+  private async appsRunning(listed: () => Promise<string[]>, runsOf: (app: AppKey) => Promise<Record<string, Run>>): Promise<ActiveApp[]> {
+    const folders = await listed()
     if (!folders.length) return []
     const rows = await this.sharedProcessTable()
     const found: ActiveApp[] = []
     for (const folder of folders) {
       const app = AppKeySchema.safeParse(folder)
       if (!app.success) continue
-      const runs = await this.runs(app.data).catch(() => ({}))
+      const runs = await runsOf(app.data)
       let memoryBytes = 0
       const alive: ActiveApp["runs"] = []
       const pids: number[] = []
@@ -1128,7 +1140,7 @@ export class ThreadProcesses {
   }
 
   private async runs(app: AppKey): Promise<Record<string, Run>> {
-    const text = await readFile(join(this.folder(app), "runs.json"), "utf8").catch(() => undefined)
+    const text = await readFile(join(this.folder(app), "runs.json"), "utf8").catch(ifMissing(undefined))
     return text === undefined ? {} : RunsSchema.parse(JSON.parse(text)).runs
   }
 
@@ -1234,6 +1246,12 @@ export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: num
 }
 
 /** Every process on the machine, with when it started; `ps` is on macOS and Linux alike. */
+/** For a read's `catch`: `value` when the file isn't there; any other failure stays one, since it says nothing of what's there. */
+const ifMissing = <T>(value: T) => (error: NodeJS.ErrnoException): T => {
+  if (error.code === "ENOENT") return value
+  throw error
+}
+
 async function processTable(): Promise<Row[]> {
   const { stdout } = await run("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,command="], {
     env: { ...process.env, LC_ALL: "C" },

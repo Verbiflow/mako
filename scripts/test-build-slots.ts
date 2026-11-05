@@ -1,7 +1,7 @@
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
@@ -34,10 +34,11 @@ const GB = 1024 ** 3
   const left = slots.recover({ key: "left", label: "the check the last host left" })!
   slots.recovered()
   assert.equal(a.held(), false, "a check the last host left running holds the only slot")
-  assert.equal(slots.recover({ key: "a", label: "a's check" }), undefined, "a key this host has is its own, not a survivor")
+  assert.equal(slots.recover({ key: "a", label: "a's check" }), undefined, "once they're counted, a key this host has is its own, not a survivor")
   left.release()
   assert.equal(a.held(), true, "its exit frees it for the next")
   assert.equal(slots.take({ key: "a", label: "a's check" }), a, "the same run asking again is the same ticket")
+  assert.equal(a.survivor(), false)
   const b = slots.take({ key: "b", label: "b's check" })
   const c = slots.take({ key: "c", label: "c's check" })
   const d = slots.take({ key: "d", label: "d's check" })
@@ -243,6 +244,170 @@ function bench(name: string, slotsOf: () => BuildSlots) {
   } finally {
     for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
     rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── A place in line for a run that turns out to have survived becomes that run's, and a second look counts it once.
+{
+  const slots = new BuildSlots(() => 1)
+  const waiting = slots.take({ key: "left", label: "a caller's check" })
+  const other = slots.take({ key: "other", label: "another check" })
+  const left = slots.recover({ key: "left", label: "the check the last host left" })
+  assert.equal(left, waiting, "the caller's place is the survivor's")
+  assert.deepEqual([waiting.held(), waiting.survivor()], [true, true])
+  assert.equal(slots.recover({ key: "left", label: "the check the last host left" }), undefined, "a second look counts it once")
+  slots.recovered()
+  assert.equal(other.held(), false, "it holds the only slot")
+  assert.deepEqual(slots.reading().waiting, 1, "and has left the line")
+  waiting.release()
+  assert.equal(other.held(), true)
+}
+
+async function until(check: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 8_000
+  while (!check()) {
+    assert.ok(Date.now() < deadline, `timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+/** A check of app one still running from a host that's gone, and a new host's processes over its records. */
+async function survivor(name: string, seconds: number) {
+  const b = bench(name, () => new BuildSlots(() => 1))
+  const first = b.host()
+  for (const app of [b.one, b.two]) await first.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? `sleep ${seconds}` : "echo second finished" } }), "A check")
+  assert.match(await first.check(b.one.conversation, "quick"), /still running/)
+  const processes = new ThreadProcesses({ root: b.records, listening: portListening })
+  const slots = new BuildSlots(() => 1)
+  const check = (app: { environment: ThreadEnvironment }) => processes.status(app.environment.app).then((runs) => runs.find((run) => run.name === "quick")?.state.kind)
+  const done = async () => {
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+  return { b, processes, slots, check, done }
+}
+
+// ── A read of what the last host left that fails says nothing of what runs: no slot goes out until one succeeds.
+{
+  const { b, processes, slots, check, done } = await survivor("failed-scan", 2)
+  try {
+    let fails = true
+    const reads = { active: processes.active.bind(processes), activeRead: processes.activeRead.bind(processes) }
+    processes.active = () => fails ? Promise.reject(new Error("the records can't be read")) : reads.active()
+    processes.activeRead = () => fails ? Promise.reject(new Error("the records can't be read")) : reads.activeRead()
+    const next = b.hostOver(processes, slots)
+    const waiting = await next.check(b.two.conversation, "quick")
+    assert.match(waiting, /waits for a build slot: none goes out until the checks the last host left running can be read \(the records can't be read\)/, waiting)
+    assert.notEqual(await check(b.two), "running", "nothing starts over a check it can't see")
+    fails = false
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/, "a read that works counts it, and the next goes once it exits")
+    assert.equal(await check(b.one), "exited", "and not before")
+  } finally {
+    await done()
+  }
+}
+
+// ── A record that can't be read isn't an empty one.
+{
+  const { b, processes, slots, check, done } = await survivor("unreadable-record", 2)
+  const record = join(b.records, b.one.environment.app, "runs.json")
+  try {
+    chmodSync(record, 0)
+    const next = b.hostOver(processes, slots)
+    const waiting = await next.check(b.two.conversation, "quick")
+    assert.match(waiting, /none goes out until the checks the last host left running can be read/, waiting)
+    assert.notEqual(await check(b.two), "running", "nothing starts over a check whose record can't be read")
+    await assert.rejects(processes.activeRead(), /EACCES/)
+    assert.deepEqual(await processes.active().then((apps) => apps.map(({ app }) => app)), [], "active reads on past it for what only reports")
+    chmodSync(record, 0o600)
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+    assert.equal(await check(b.one), "exited")
+  } finally {
+    chmodSync(record, 0o600)
+    await done()
+  }
+}
+
+// ── A look at a recovered run that fails isn't its exit: its slot stays held.
+{
+  const { b, processes, slots, check, done } = await survivor("failed-look", 2)
+  try {
+    let fails = true
+    const settle = processes.settle.bind(processes)
+    processes.settle = (app, keys, ...rest) => fails && app === b.one.environment.app ? Promise.reject(new Error("the table can't be read")) : settle(app, keys, ...rest)
+    const next = b.hostOver(processes, slots)
+    await until(() => slots.reading().holders.length === 1, "the survivor to be counted")
+    assert.match(await next.check(b.two.conversation, "quick"), /waits for a build slot: 1 of 1 in use/)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.notEqual(await check(b.two), "running", "a failed look frees nothing")
+    assert.equal(slots.reading().holders.length, 1)
+    fails = false
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+    assert.equal(await check(b.one), "exited")
+  } finally {
+    await done()
+  }
+}
+
+// ── The survivor's own caller, there while it's being counted: it joins the run, and the slot stays the run's.
+{
+  const { b, processes, slots, check, done } = await survivor("same-key-recovery", 2)
+  try {
+    let open!: () => void
+    const scan = new Promise<void>((resolve) => (open = resolve))
+    const reads = { active: processes.active.bind(processes), activeRead: processes.activeRead.bind(processes) }
+    processes.active = () => scan.then(() => reads.active())
+    processes.activeRead = () => scan.then(() => reads.activeRead())
+    const next = b.hostOver(processes, slots)
+    const asked = next.check(b.one.conversation, "quick")
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.ok(slots.has(`${b.one.environment.app}\0quick`), "it waits in line while the scan is held")
+    open()
+    await asked
+    await until(() => slots.reading().holders.length === 1, "the survivor to be counted")
+    assert.equal(await check(b.one), "running", "its run outlives the call")
+    assert.match(await next.check(b.two.conversation, "quick"), /waits for a build slot: 1 of 1 in use/, "the survivor keeps the slot")
+    assert.notEqual(await check(b.two), "running", "nothing starts beside it")
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+    assert.equal(await check(b.one), "exited")
+  } finally {
+    await done()
+  }
+}
+
+// ── A survivor that ends as its caller's run starts: that run takes a slot of its own.
+{
+  const { b, processes, slots, check, done } = await survivor("survivor-ends", 1)
+  try {
+    let open!: () => void
+    const scan = new Promise<void>((resolve) => (open = resolve))
+    const reads = { active: processes.active.bind(processes), activeRead: processes.activeRead.bind(processes) }
+    processes.active = () => scan.then(() => reads.active())
+    processes.activeRead = () => scan.then(() => reads.activeRead())
+    const start = processes.start.bind(processes)
+    processes.start = async (app, specs) => {
+      while (slots.has(`${app}\0quick`)) await new Promise((resolve) => setTimeout(resolve, 20))
+      return start(app, specs)
+    }
+    const next = b.hostOver(processes, slots)
+    const asked = next.check(b.one.conversation, "quick")
+    await until(() => slots.has(`${b.one.environment.app}\0quick`), "its place in line")
+    open()
+    await asked
+    await until(() => slots.reading().holders.length === 1, "the survivor to be counted")
+    await until(() => slots.reading().holders.length === 0, "the survivor's end")
+    await until(() => slots.reading().holders.length === 1, "the run after it to take its slot")
+    assert.equal(await check(b.one), "running", "a run of its own started")
+    processes.start = start
+    assert.match(await next.check(b.two.conversation, "quick"), /waits for a build slot: 1 of 1 in use/)
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+  } finally {
+    await done()
   }
 }
 

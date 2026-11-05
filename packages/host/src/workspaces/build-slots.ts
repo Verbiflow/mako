@@ -20,6 +20,8 @@ export interface BuildTicket {
   /** How many wait ahead of it now; 0 once it holds a slot. */
   ahead(): number
   held(): boolean
+  /** It holds for a run the last host left, whose exit releases it, whoever else asked for that run. */
+  survivor(): boolean
   release(): void
 }
 
@@ -51,12 +53,17 @@ export class BuildSlots {
 
   /**
    * A run the last host left that's still going: it holds a slot from now, whatever the number, until it's released.
-   * Undefined when `key` is this host's already, whose own run releases it.
+   * A caller that asked for that run while the last host's were being counted waits in line for it, so its place
+   * becomes the run's. Undefined when it's counted already, or once this host's own runs hold their keys.
    */
   recover(holder: BuildHolder): BuildTicket | undefined {
     const { record, joined } = this.#entries.open(holder.key, () => this.#entry(holder))
-    if (joined) return undefined
+    if (joined) {
+      if (this.#entries.isRecovered || this.#holding.has(record)) return undefined
+      this.#line.splice(this.#line.indexOf(record), 1)
+    }
     this.#holding.add(record)
+    record.survivor = true
     record.grant()
     return record.ticket
   }
@@ -99,10 +106,12 @@ export class BuildSlots {
     const entry: Entry = {
       holder,
       grant,
+      survivor: false,
       ticket: {
         granted,
         ahead: () => Math.max(0, this.#line.indexOf(entry)),
         held: () => this.#holding.has(entry),
+        survivor: () => entry.survivor,
         release: () => this.#release(entry),
       },
     }
@@ -132,5 +141,6 @@ export class BuildSlots {
 interface Entry {
   holder: BuildHolder
   grant: () => void
+  survivor: boolean
   ticket: BuildTicket
 }
