@@ -5,7 +5,7 @@ import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { finMovedText, finResumedText } from "../contracts/resume-account.js"
-import { movedLine, movedWords, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
+import { movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } from "../contracts/access.js"
@@ -151,7 +151,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "relaunch"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "moveWaiting"
 >
 
 export interface AgentsDeps {
@@ -400,6 +400,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly moves: FinMoves | undefined
   /** By Apex, the moves of its Fins its next digest says, once. */
   private readonly movedNotes = new Map<string, string[]>()
+  /** The waits for a limit a move of this host is taking now (`limitMove`). */
+  private readonly moving = new Set<string>()
 
   constructor(deps: AgentsDeps) {
     this.deps = deps
@@ -723,6 +725,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       return this.resumeFin(conversation, persons.id)
     }
     this.childMoved(edge, true)
+    // A message its harness refused at its limit waits to go again: a Fin moves on instead.
+    if (edge.closedAt === undefined) this.limitMove(edge, conversation)
   }
 
   // ── AgentOperations ──
@@ -1863,7 +1867,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A turn Mako's exit cut short continues on the next host (`LeftTurn.always`); it hasn't ended.
     if (ended.status === "interrupted" && ended.interruption?.reason !== "stopped") return
     if (this.limitMove(edge, conversation, ended, reply)) return
-    if (ended.status === "completed") this.moves?.settled(edge.child)
+    if (ended.status === "completed" && this.store()!.finTurn(edge.child)) this.store()!.clearFinTurn(edge.child)
     this.turnReported(edge, conversation, request, ended, reply)
   }
 
@@ -1892,93 +1896,104 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * A Fin's turn that its account's usage limit refused goes on at the next step of its order (`FinMoves`), once
-   * for that limit and never back to a place this turn ran on: true while that move is under way, after which the
-   * turn it goes on with is its report. The limit is the harness's own word for it (`TurnReply.limit`), else a
-   * failure its text calls a limit that the account's own reading confirms. Only a Fin Mako drives moves: a turn
-   * the person sent in its Thread, a run a process Mako didn't start drives, or the person's switch off keeps today's
-   * end. What waited behind the turn is held until the move is made, so none of it goes to the account that ran out.
+   * A Fin's request that waits out its account's usage limit (held with its `retry`: the continuation Mako made of a
+   * turn the limit cut, or a message its harness refused) goes on at the next step of its order instead (`FinMoves`).
+   * The limit is the harness's own word for it (`TurnReply.limit`), else the account's own reading. Once per wait,
+   * never back to a place its logical turn ran on, across a restart too (`FinTurn`, claimed by this host's
+   * generation). Only a Fin Mako drives moves, and never a turn the person sent in its Thread. True while a move for
+   * the turn `ended` is under way: its report is the turn the move goes on with.
    */
-  private limitMove(edge: ThreadParent, conversation: string, ended: LiveRequest, reply: TurnReply): boolean {
+  private limitMove(edge: ThreadParent, conversation: string, ended?: LiveRequest, reply?: TurnReply): boolean {
     const moves = this.moves
-    if (!moves?.on() || !edge.asked.access || ended.status === "interrupted" || edge.closedAt !== undefined || (edge.run && !edge.run.ended)) return false
-    if (ended.actor?.kind === "person" || moves.movedFor(edge.child, ended.id)) return false
-    if (!reply.limit && !(ended.status === "failed" && (ended.failure === "rate-limited" || ended.failure === "plan"))) return false
+    if (!moves?.on() || !edge.asked.access || edge.closedAt !== undefined || (edge.run && !edge.run.ended)) return false
+    const requests = this.deps.live.held(conversation)?.requests ?? []
+    const wait = requests.find((request) => request.status === "held" && request.retry?.cause === "rate-limited" && request.pause !== "stop" &&
+      (ended ? request.continues?.requestId === ended.id : request.continues === undefined))
+    if (!wait || this.moving.has(wait.id)) return false
+    const origin = wait.continues ? requests.find((request) => request.id === wait.continues!.requestId) : wait
+    if (!origin || origin.actor?.kind === "person") return false
     const harness = this.deps.live.session(conversation)?.harness
-    if (!harness) return false
-    const waiting = (this.deps.live.held(conversation)?.requests ?? []).filter((request) => request.status === "queued").map((request) => request.id)
-    try {
-      if (waiting.length) this.deps.live.holdQueued(conversation)
-    } catch (error) {
-      hostWarn("agents", "what waited behind a Fin's limit couldn't be held; its turn ends as it failed", { op: edge.op, error: errorMessage({ error }) })
-      return false
-    }
-    void this.moveOn(edge, conversation, ended, reply, harness, waiting)
+    const turn = harness && this.store()!.claimFinMove(edge.child, wait.id, this.generation, this.now())
+    if (!turn) return false
+    this.moving.add(wait.id)
+    const limit = reply?.limit ?? (wait.continues ? this.deps.live.turnReply(conversation, wait.continues.requestId)?.limit : undefined)
+    // A move that gives up leaves the turn's end as it was: its report, as `turnEnded` would have written it.
+    const report = ended && reply ? () => this.turnReported(edge, conversation, ended.id, ended, reply) : () => {}
+    void this.moveOn(edge, conversation, wait, origin, harness, turn.visited, limit, report).finally(() => this.moving.delete(wait.id))
     return true
   }
 
-  /** `limitMove`'s move: the step, the edge that says it, the continuation that carries the work there, and its words. */
-  private async moveOn(edge: ThreadParent, conversation: string, ended: LiveRequest, reply: TurnReply, harness: string, waiting: readonly string[]): Promise<void> {
+  /** `limitMove`'s move: the step, the edge that says it, and the waiting request taken over to carry the work there. */
+  private async moveOn(edge: ThreadParent, conversation: string, wait: LiveRequest, origin: LiveRequest, harness: string, visited: readonly string[], limit: TurnReply["limit"], report: () => void): Promise<void> {
     const moves = this.moves!
+    const store = this.store()!
     const tier = edge.asked.access!
-    const resume = (first?: string) => {
-      if (!waiting.length) return
-      try {
-        this.deps.live.resumeHeld(conversation, waiting, first)
-      } catch (error) {
-        hostWarn("agents", "what waited behind a Fin's limit stays paused", { op: edge.op, error: errorMessage({ error }) })
-      }
-    }
-    const end = () => {
-      resume()
-      this.turnReported(edge, conversation, ended.id, ended, reply)
-    }
+    let moved = false
+    let ended = false
     try {
       const pinned = this.pinnedAccount(conversation, harness)
       const accounts = await moves.accounts(harness, pinned, true)
       const from = accounts.find((account) => account.name === pinned) ?? accounts.find((account) => account.active)
       // Without the harness's own word for the limit, the account's reading has to say it ran out.
-      if (!reply.limit && !from?.spent) return end()
+      if (!limit && !from?.spent) return
       const session = this.deps.live.session(conversation)
       const model = this.settingsOf(conversation)?.model
       const place: FinPlace = { harness, ...(from && { account: from.name }), ...(model && { model }) }
-      const { steps } = await moves.order({ from: place, when: "mid-run", tier, ...(session?.cwd && { cwd: session.cwd }), child: edge.child, accounts })
-      const step = steps[0]
-      if (!step) {
-        hostLog("agents", "a Fin's account ran out mid-turn and nothing else has room; its turn ends as it failed", { op: edge.op, harness })
-        return end()
-      }
+      const order = await moves.order({ from: place, when: "mid-run", tier, ...(session?.cwd && { cwd: session.cwd }), visited, accounts })
       const now = this.now()
-      const until = reply.limit?.resetsAt ?? from?.spent?.until ?? undefined
+      const until = limit?.resetsAt ?? from?.spent?.until ?? undefined
       const label = (name: string) => this.deps.harnessLabel(name)
+      const step = order.steps[0]
+      if (!step) {
+        // Every step the person has is at its limit or was run on: the Fin stops saying so, rather than loop.
+        if (!order.spent.length && visited.length === 0) return
+        const line = outOfAccountsLine({ harness, ...(from && { account: from.label }) }, order.spent, label, until, now)
+        store.rerouteEdge(edge.child, { ...(store.edges().of(edge.child)?.tuned?.rerouted ?? { from: harness }), line })
+        moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place)] })
+        hostLog("agents", "a Fin's account ran out and every other is at its limit; it stops", { op: edge.op, harness })
+        ended = true
+        await this.end(store.edges().of(edge.child) ?? edge, line)
+        return
+      }
       const move: FinMove = { step, from: { harness, ...(from && { account: from.label }) }, ...(until !== undefined && { until }) }
       const words = movedWords(move, label, now)
       const line = `${words.to}: ${words.why}`
-      const moved = this.store()!.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge
-      moves.moved(edge.child, ended.id, place, step)
-      const checkout = session?.cwd ? await checkoutSince(session.cwd, ended.createdAt ?? now) : []
+      const checkout = session?.cwd ? await checkoutSince(session.cwd, origin.createdAt ?? now) : []
       const text = finMovedText({ from: from ? `${label(harness)} (${from.label})` : label(harness), to: words.to, why: words.why, session: step.why === "harness" ? "handed-over" : "same", checkout })
-      const id = namedUuid(`moved:${ended.id}`)
+      // A message the harness never took goes on with its own words beneath the move's.
+      const said = wait.continues ? text : `${text}\n\n${wait.text}`
       const actor: Actor = { kind: "service", name: "auto-continue" }
-      if (step.why === "harness") {
-        const apex: Apex = { session: edge.parentSession, thread: edge.parent, ...(this.conversationOf(edge.parent) && { conversation: this.conversationOf(edge.parent)! }) }
-        const tuned = await this.tuningOf(apex, step.harness, { brief: edge.asked.brief, clientKey: edge.op, ...(session?.cwd && { cwd: session.cwd }) })
-        const mode = childMode(this.deps.modes(step.harness), tier)
-        this.deps.live.transfer(conversation, { id, provider: step.harness, text, attachments: [], ...(!("refused" in tuned) && tuned.settings && { tuning: tuned.settings }), ...(mode && { modeId: mode.id }) }, actor)
-      } else {
-        // The process still holds the account that ran out: the next launch, on the pin, resumes the same session.
-        if (step.why === "account") await this.deps.live.relaunch(conversation)
-        this.deps.live.submit(conversation, id, text, [], step.why === "connection" ? { model: step.model } : undefined, undefined, undefined, actor)
+      // The launch reads its account from the edge, so the pin is there before the request may go.
+      const previous = store.edges().of(edge.child)?.tuned?.rerouted
+      const rerouted = store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge
+      let taken = false
+      if (store.finTurn(edge.child)?.moving?.owner === this.generation) {
+        if (step.why === "harness") {
+          const apex: Apex = { session: edge.parentSession, thread: edge.parent, ...(this.conversationOf(edge.parent) && { conversation: this.conversationOf(edge.parent)! }) }
+          const tuned = await this.tuningOf(apex, step.harness, { brief: edge.asked.brief, clientKey: edge.op, ...(session?.cwd && { cwd: session.cwd }) })
+          const mode = childMode(this.deps.modes(step.harness), tier)
+          taken = this.deps.live.moveWaiting(conversation, wait.id, { kind: "hand-off", id: namedUuid(`moved:${wait.id}`), provider: step.harness, text: said, ...(!("refused" in tuned) && tuned.settings && { tuning: tuned.settings }), ...(mode && { modeId: mode.id }) }, actor)
+        } else {
+          taken = this.deps.live.moveWaiting(conversation, wait.id, { kind: "send", text: said, ...(step.why === "connection" && { tuning: { model: step.model } }) }, actor)
+        }
       }
-      resume(id)
+      if (!taken) {
+        // A Stop latched the wait, or another host has it: the move gives up, and the Fin stays where it was.
+        store.rerouteEdge(edge.child, previous)
+        hostLog("agents", "a Fin's move gave up: its wait was stopped or taken", { op: edge.op, harness })
+        return
+      }
+      moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place), stepKey(step)] })
       this.deps.live.recordNote(conversation, words.to, words.why)
       this.movedNotes.set(edge.parent, [...(this.movedNotes.get(edge.parent) ?? []), `"${edge.name}" ${line.charAt(0).toLowerCase()}${line.slice(1)}.`])
-      hostLog("agents", "a Fin's account ran out mid-turn; it goes on at the next step", { op: edge.op, from: harness, why: step.why, to: step.harness })
+      hostLog("agents", "a Fin's account ran out; it goes on at the next step", { op: edge.op, from: harness, why: step.why, to: step.harness })
       this.forget(edge.parent)
-      this.childMoved(moved, false)
+      this.childMoved(rerouted, false)
     } catch (error) {
-      hostWarn("agents", "a Fin couldn't go on after its account ran out; its turn ends as it failed", { op: edge.op, error: errorMessage({ error }) })
-      end()
+      hostWarn("agents", "a Fin couldn't go on after its account ran out; it waits as before", { op: edge.op, error: errorMessage({ error }) })
+    } finally {
+      if (!moved) store.finishFinMove(edge.child, this.generation)
+      if (!moved && !ended) report()
     }
   }
 

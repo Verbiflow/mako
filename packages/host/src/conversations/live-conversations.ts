@@ -67,7 +67,7 @@ import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
 import { LiveSideQuestions } from "./live-side-questions.js"
-import { FIN_MOVED, LiveHibernation } from "./live-hibernation.js"
+import { LiveHibernation } from "./live-hibernation.js"
 import { JournalWriteError, LiveRequestSchema } from "./live-journal.js"
 import { JournalReclaims } from "./journal-reclaim.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
@@ -1466,16 +1466,44 @@ export class LiveConversations {
   }
 
   /**
-   * Closes the conversation's process so its next message launches it again on the account it runs on now
-   * (`ProviderStartOptions.pinnedAccount`), resuming its native session, as a change of account does. False when
-   * work still holds the process; the message then waits for it as any account change's does.
+   * A request waiting out a usage limit (held with its `retry`: a turn's continuation Mako made, or a message its
+   * harness refused) goes on now where the limit doesn't hold: `send` sends it as `text` on this conversation's
+   * harness (a Fin pinned to another account, or on a connection's model), `hand-off` withdraws it and starts the
+   * conversation on `provider` with `text`, what waited behind it following there. All in one step, and only while it
+   * still waits for its time on this host: a Stop's latch (`pause`), a send, a removal or another owner having it
+   * leaves it as it is, and the answer is false. What goes is then the handoff's to guard, as every send is.
    */
-  async relaunch(id: string): Promise<boolean> {
+  moveWaiting(id: string, requestId: string, to: { kind: "send"; text: string; tuning?: SessionSettings } | { kind: "hand-off"; id: string; provider: string; text: string; tuning?: SessionSettings; modeId?: string }, actor?: Actor): boolean {
     const resident = this.records.get(id)
-    // A turn that failed leaves its process connected and idle: that's the one this closes.
-    if (!resident?.driver || !this.hibernation.canHibernate(resident, false, true, true)) return false
-    await this.hibernation.hibernate(resident, FIN_MOVED)
-    return resident.snapshot.session.connection === "hibernated"
+    const waiting = resident?.snapshot.requests.find((request) => request.id === requestId)
+    if (!resident || !waiting || waiting.status !== "held" || !waiting.retry || waiting.pause === "stop" || !this.moves.executes(resident)) return false
+    const previous = resident.snapshot
+    if (to.kind === "send") {
+      const tuning = to.tuning ?? waiting.tuning
+      const sent: LiveRequest = { ...waiting, text: to.text, displayText: undefined, ...(tuning && { tuning }), status: "queued", retry: undefined, inputDigest: promptFingerprint(to.text, waiting.attachments, tuning) }
+      resident.snapshot = { ...previous, requests: previous.requests.map((request) => (request === waiting ? sent : request)) }
+      try {
+        this.flush(resident)
+      } catch (error) {
+        resident.snapshot = previous
+        throw error
+      }
+      this.release(resident)
+      return true
+    }
+    // A switch takes nothing queued with it; what waited behind is held for the step that starts it, then waits there.
+    const behind = new Set(previous.requests.filter((request) => request.status === "queued").map((request) => request.id))
+    resident.snapshot = { ...previous, requests: previous.requests.map((request) => request === waiting ? { ...request, status: "canceled" as const, retry: undefined } : behind.has(request.id) ? { ...request, status: "held" as const } : request) }
+    try {
+      this.transfer(id, { id: to.id, provider: to.provider, text: to.text, attachments: waiting.attachments, ...(to.tuning && { tuning: to.tuning }), ...(to.modeId && { modeId: to.modeId }) }, actor)
+    } catch (error) {
+      resident.snapshot = previous
+      this.flush(resident)
+      throw error
+    }
+    resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (behind.has(request.id) && request.status === "held" ? { ...request, status: "queued" as const } : request)) }
+    this.flush(resident)
+    return true
   }
 
   /**

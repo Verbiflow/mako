@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { ReportSchema, ThreadParentSchema, type FinRerouted, type FollowedRun, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -583,6 +583,7 @@ CREATE TABLE IF NOT EXISTS thread_reports (
 CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, at);
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
 `
 const RecordRowSchema = z.object({ record: z.string() })
 const ReportRowSchema = z.object({ record: z.string(), wake_request: z.string().nullable() })
@@ -945,16 +946,62 @@ export class ThreadStore {
     })
   }
 
+  /** A Fin's logical turn as its fallback left it (`FinTurn`); undefined between turns, or for one this build can't read. */
+  finTurn(child: string): FinTurn | undefined {
+    const kept = this.sql("SELECT record FROM fin_moves WHERE child_thread = ?").get(child)
+    if (!kept) return undefined
+    const parsed = FinTurnSchema.safeParse(JSON.parse(RecordRowSchema.parse(kept).record))
+    return parsed.success ? parsed.data : undefined
+  }
+
+  /**
+   * Claims the move for `wait` for host generation `owner`: refused (undefined) when the turn moved for it already or
+   * a newer host holds a move; an older host's claim, left by an exit, gives way. The turn as claimed.
+   */
+  claimFinMove(child: string, wait: string, owner: number, at: number): FinTurn | undefined {
+    return this.write(() => {
+      const turn = this.finTurn(child) ?? { visited: [], handled: [] }
+      if (turn.handled.includes(wait) || (turn.moving && turn.moving.owner > owner)) return undefined
+      const next: FinTurn = { ...turn, moving: { owner, wait, at } }
+      this.sql("INSERT INTO fin_moves (child_thread, record) VALUES (?, ?) ON CONFLICT (child_thread) DO UPDATE SET record = excluded.record").run(child, JSON.stringify(next))
+      return next
+    })
+  }
+
+  /**
+   * Ends `owner`'s move for its wait: with `visited` added and the wait handled when it moved, or released when it
+   * gave up. False when another host's claim took it meanwhile, which then has the move.
+   */
+  finishFinMove(child: string, owner: number, moved?: { visited: readonly string[] }): boolean {
+    return this.write(() => {
+      const turn = this.finTurn(child)
+      if (!turn?.moving || turn.moving.owner !== owner) return false
+      const { moving, ...rest } = turn
+      const next: FinTurn = moved
+        ? { visited: [...new Set([...rest.visited, ...moved.visited])].slice(-64), handled: [...rest.handled, moving.wait].slice(-64) }
+        : rest
+      this.sql("UPDATE fin_moves SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return true
+    })
+  }
+
+  /** The Fin's turn ended without a limit: its next one goes from the person's first choice again. */
+  clearFinTurn(child: string): void {
+    this.write(() => this.sql("DELETE FROM fin_moves WHERE child_thread = ?").run(child))
+  }
+
   /**
    * Where a child went on when its harness's account ran out (`FinRerouted`): the move replaces the last one, its
    * model's source kept. The edge as it stands after, undefined when there's none.
    */
-  rerouteEdge(child: string, rerouted: FinRerouted): ThreadParent | undefined {
+  rerouteEdge(child: string, rerouted: FinRerouted | undefined): ThreadParent | undefined {
     return this.write(() => {
       const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
       if (!kept) return undefined
       const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
-      const next: ThreadParent = { ...previous, tuned: { ...(previous.tuned ?? { source: "harness" }), rerouted } }
+      const tuned: NonNullable<ThreadParent["tuned"]> = { ...(previous.tuned ?? { source: "harness" }) }
+      delete tuned.rerouted
+      const next: ThreadParent = { ...previous, tuned: { ...tuned, ...(rerouted && { rerouted }) } }
       this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
       return next
     })

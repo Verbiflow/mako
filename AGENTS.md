@@ -356,16 +356,24 @@ applies whether or not the harness was named, and a named model keeps the
 refusal. Another account runs only that Fin's launches
 (`ProviderStartOptions.pinnedAccount`, from its edge's `tuned.rerouted.to`),
 never the person's selection, and admission checks the pin before each input
-as it checks a selection. Mid-run, a Fin's turn its account's limit refused
-(the harness's own marker, `TurnReply.limit`, else a limit failure the
-account's reading confirms) moves once: what waited behind it is held, and it
-goes on in the same session on another account where its driver declares
+as it checks a selection. Mid-run, what waits out the limit (#391's held
+request with its `retry`: the continuation of a turn the limit cut, or a
+message the harness refused) moves instead, when the harness's own marker
+(`TurnReply.limit`) or the account's reading says it's a limit: the move takes
+that very request over (`LiveConversations.moveWaiting`), only while it still
+waits for its time on this host, so a Stop's latch (`pause`) or another owner
+makes the move give up, and handOff guards its send as every send's. It goes
+on in the same session on another account where its driver declares
 `accountContinuation` `resumes` (Claude; `test-harness-definitions.ts`
 requires every harness to declare it), on a connection's model, or by a
-hand-off to the next harness (`transfer`), each told where it stopped and
-what moved in its checkout since (`finMovedText`). A turn never moves back to
-a place it ran on, and one that ends without a limit clears that. A turn the
-person sent in the Fin's Thread, or a run Mako doesn't drive, never moves.
+hand-off to the next harness, each told where it stopped and what moved in
+its checkout since (`finMovedText`). The logical turn's places, the waits it
+moved for and the host generation taking a move are the store's (`fin_moves`,
+`FinTurn`, cleared when a turn ends without a limit), so a restart never sends
+it back to a place it ran on; with every step at its limit or run on, the Fin
+stops, its row saying "Out of accounts: personal and work are at their limits
+until …" (`outOfAccountsLine`). A turn the person sent in the Fin's Thread, or
+a run Mako doesn't drive, never moves.
 Its row and strip say "Moved to Claude (work): personal is at its limit until
 …" (`child.moved`, `movedLine`), its transcript has the line, and its Apex's
 next digest says it once without being woken for it (`test:fin-fallback`). The person's rules for Fins (`FinPolicy`,

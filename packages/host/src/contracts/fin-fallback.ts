@@ -123,6 +123,21 @@ export function fallbackOrder(input: FallbackInput): FallbackStep[] {
   return steps.filter((step) => !visited.has(stepKey(step)))
 }
 
+/**
+ * The steps the person's setup has that are closed now only because each is at its limit or this turn ran on it
+ * already: what "out of accounts" names. Empty when the setup has nowhere else at all, which is no reason to stop.
+ */
+export function fallbackSpent(input: FallbackInput): FallbackStep[] {
+  const open: FallbackInput = {
+    ...input,
+    accounts: input.accounts.map(({ name, label, active, unread, unusable }) => ({ name, label, active, ...(unread && { unread }), ...(unusable && { unusable }) })),
+    harnesses: input.harnesses.map((harness) => ({ ...harness, spent: false })),
+    visited: [],
+  }
+  const taken = new Set(fallbackOrder(input).map(stepKey))
+  return fallbackOrder(open).filter((step) => !taken.has(stepKey(step)))
+}
+
 /** The words a model's id names its family by, most specific first. */
 const FAMILIES: readonly [RegExp, string][] = [
   [/claude|opus|sonnet|haiku/, "claude"],
@@ -169,4 +184,13 @@ export function movedWords(move: FinMove, label: (harness: string) => string, no
 export function movedLine(move: FinMove, label: (harness: string) => string, now: number): string {
   const words = movedWords(move, label, now)
   return `${words.to}: ${words.why}`
+}
+
+/** "Out of accounts: personal and work are at their limits until 3:10 PM PST": a Fin with no step left, stopped. */
+export function outOfAccountsLine(from: { harness: string; account?: string }, spent: readonly FallbackStep[], label: (harness: string) => string, until: number | undefined, now: number): string {
+  const names = [from.account ?? label(from.harness), ...spent.map((step) => step.why === "account" ? (step.harness === from.harness ? step.label : `${label(step.harness)} (${step.label})`) : step.why === "connection" ? step.connectionName : label(step.harness))]
+  const unique = [...new Set(names)]
+  const listed = unique.length > 1 ? `${unique.slice(0, -1).join(", ")} and ${unique.at(-1)}` : unique[0]!
+  const reset = until === undefined ? "" : ` until ${resetWords(until, now)}`
+  return `Out of accounts: ${listed} ${unique.length > 1 ? "are at their limits" : "is at its limit"}${reset}`
 }

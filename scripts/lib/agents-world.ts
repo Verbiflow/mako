@@ -144,6 +144,8 @@ export interface WorldOptions {
   connections?: Partial<Record<string, FallbackConnection[]>>
   /** Settings › Fins' switch, as it stands when read; absent, on. */
   moveOnLimit?: () => boolean
+  /** Runs as a harness's accounts are read, before they answer: `all` is a move's read of every one. */
+  readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
   /** The engine's clock (`AgentsDeps.now`). */
   now?: () => number
 }
@@ -248,12 +250,15 @@ export class AgentsWorld {
       catalogOf: (harness) => this.options.catalogs?.[harness],
       ...((this.options.limits || this.options.accounts) && { limited: async (harness: string) => this.options.limits?.[harness] ?? this.selectedLimit(harness) }),
       ...(this.options.accounts && {
-        accounts: async (harness: string) => (this.options.accounts?.[harness] ?? []).map((account) => ({
+        accounts: async (harness: string, _on?: string, all = false) => {
+          await this.options.readingAccounts?.(harness, all)
+          return (this.options.accounts?.[harness] ?? []).map((account) => ({
           name: account.name,
           label: account.name,
           active: account.name === (this.options.selected?.[harness] ?? "default"),
           ...(account.spentUntil !== undefined && { spent: { until: account.spentUntil } }),
-        })),
+          }))
+        },
         connections: async (harness: string) => this.options.connections?.[harness] ?? [],
         accountContinuation: (harness: string) => this.options.continuation?.[harness] ?? { kind: "resumes" as const, via: "Scripted model" },
         ...(this.options.moveOnLimit && { moveOnLimit: this.options.moveOnLimit }),
@@ -503,7 +508,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, snapshot: () => null, editQueued: none, transfer: none, submit: none,
     act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false, recordNote: () => false, relaunch: async () => false,
+    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false, recordNote: () => false, moveWaiting: () => false,
   }
 }
 

@@ -112,7 +112,7 @@ interface Run {
 
 /** An Apex on Claude with one Fin, "labels"; `fin` scripts the Fin's turns by their number. */
 /** A Fin's scripted turn: its reply, after `end` says how a limit refused it, if one did. */
-type FinScript = (turn: number, end: (how: ScriptedEnd) => void) => string
+type FinScript = (turn: number, end: (how: ScriptedEnd) => void) => string | Promise<string>
 
 async function run(name: string, options: Partial<WorldOptions> & { fin: FinScript; start?: { harness?: string; model?: string } }): Promise<Run | { refused: string }> {
   const wakes: string[] = []
@@ -288,6 +288,83 @@ try {
     await r.world.close()
   }
   console.log("a turn the person sent in the Fin's Thread: no move")
+
+  // A Stop while the move reads the accounts: the waiting continuation is the Stop's, so nothing moves or goes.
+  {
+    let release!: () => void
+    let reading = false
+    const read = new Promise<void>((resolve) => (release = resolve))
+    const held = accounts()
+    const r = await run("stop-during-read", {
+      accounts: held,
+      selected: { claude: "personal" },
+      readingAccounts: async (_harness, all) => {
+        if (!all) return
+        reading = true
+        await read
+      },
+      fin: (turn, end) => {
+        if (turn === 1) {
+          held.claude[0]!.spentUntil = RESET
+          end({ limit: { resetsAt: RESET }, fail: LIMIT })
+        }
+        return "partial"
+      },
+    })
+    assert.ok(!("refused" in r))
+    await until("the move to read the accounts", () => reading)
+    const stopped = await r.world.agents.stop(r.world.caller(r.apex.conversation), { child: "labels" })
+    assert.ok("stopped" in stopped && stopped.stopped.includes("labels"), JSON.stringify(stopped))
+    release()
+    await r.world.settle(400, 20_000, "ignore")
+    assert.equal(r.finTurns().length, 1, "the stopped Fin got no continuation")
+    assert.deepEqual(r.world.launches.filter((launch) => launch.conversation === r.fin()).map((launch) => launch.account), ["personal"], "nor a launch on the next account")
+    assert.equal(edgeOf(r).tuned?.rerouted, undefined, "and its edge names no move")
+    assert.equal(r.world.store.finTurn(edgeOf(r).child)?.moving, undefined, "the move let go of its claim")
+    await r.world.close()
+  }
+  console.log("a Stop while the move reads the accounts: no move, no continuation, no launch")
+
+  // A restart in the middle of a logical turn: the places it ran on are the store's, so it never goes back to one, and
+  // with every step at its limit or run on it stops out of accounts rather than loop.
+  {
+    const held = accounts()
+    let finConversation = ""
+    const r = await run("restart", {
+      accounts: held,
+      selected: { claude: "personal" },
+      catalogs: { claude: CATALOGS.claude! },
+      fin: (turn, end) => {
+        if (turn === 1) {
+          held.claude[0]!.spentUntil = RESET
+          end({ limit: { resetsAt: RESET }, fail: LIMIT })
+          return "partial"
+        }
+        // The restart cuts this one: its script never answers.
+        if (turn === 2) return new Promise<string>(() => {})
+        if (turn === 3) {
+          delete held.claude[0]!.spentUntil
+          held.claude[1]!.spentUntil = RESET
+          end({ limit: { resetsAt: RESET }, fail: LIMIT })
+          return "partial"
+        }
+        return "done"
+      },
+    })
+    assert.ok(!("refused" in r))
+    finConversation = r.fin()
+    await until("the move to work", () => r.world.launches.some((launch) => launch.conversation === finConversation && launch.account === "work"))
+    await until("its turn on work", () => r.finTurns().length === 2)
+    await r.world.restart()
+    await until("it to stop out of accounts", () => { const state = r.world.agents.roster(r.apex.conversation)[0]?.child?.state; return state?.kind === "ended" && state.outcome === "stopped" }, 30_000)
+    const accountsRun = r.world.launches.filter((launch) => launch.conversation === finConversation).map((launch) => launch.account)
+    assert.equal(accountsRun.lastIndexOf("personal"), 0, `never back to personal: ${accountsRun.join(", ")}`)
+    const line = r.world.agents.roster(r.apex.conversation)[0]!.child!.moved!
+    assert.match(line, /^Out of accounts: work and personal are at their limits until /, line)
+    assert.equal(edgeOf(r).closedReason, line, "its stop says why in the same words")
+    await r.world.close()
+  }
+  console.log("a restart mid-turn: never back to an account the turn ran on, and out of accounts it stops saying so")
 
   // Switch off: today's behaviour exactly. At a start the next harness for a Fin that named none, a refusal for one that
   // named it; mid-run the turn fails and reports so.

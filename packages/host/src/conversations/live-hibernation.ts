@@ -17,8 +17,6 @@ import { reconnectError } from "./live-transfers.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
-/** Why a Fin's process closes when its account ran out mid-turn: its next launch runs on the account it moved to. */
-export const FIN_MOVED = "fin-moved"
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
@@ -157,7 +155,7 @@ export class LiveHibernation {
     if (clearSince) resident.idleSince = undefined
   }
 
-  canHibernate(resident: Resident, preparing = false, recoverAccount = false, afterFailure = false): boolean {
+  canHibernate(resident: Resident, preparing = false, recoverAccount = false): boolean {
     const native = resident.snapshot.nativeAgents?.agents ?? []
     const binding = activeBinding(resident)
     const driver = this.access.dependencies.driver(binding?.provider ?? "")
@@ -165,7 +163,7 @@ export class LiveHibernation {
       resident.driver &&
         resumes(driver) &&
         resident.snapshot.session.connection === "connected" &&
-        (resident.snapshot.session.status === "ready" || (afterFailure && resident.snapshot.session.status === "failed")) &&
+        resident.snapshot.session.status === "ready" &&
         !resident.snapshot.session.backgroundTasks &&
         binding?.nativeId &&
         binding.path &&
@@ -306,10 +304,8 @@ export class LiveHibernation {
     reason: string
   ): Promise<void> {
     // Input that never reached the provider waits through these, for the provider that starts next.
-    const recoverAccount = reason === "account-change" || reason === "folder-removed" || reason === FIN_MOVED
-    // A Fin moved off an account that ran out closes the process its failed turn left idle.
-    const afterFailure = reason === FIN_MOVED
-    if (!this.canHibernate(resident, false, recoverAccount, afterFailure)) return
+    const recoverAccount = reason === "account-change" || reason === "folder-removed"
+    if (!this.canHibernate(resident, false, recoverAccount)) return
     const binding = activeBinding(resident)
     if (!binding?.nativeId || !binding.path) return
     const generation = resident.generation
@@ -322,7 +318,7 @@ export class LiveHibernation {
     if (
       !checkpointReady ||
       resident.generation !== generation ||
-      !this.canHibernate(resident, true, recoverAccount, afterFailure)
+      !this.canHibernate(resident, true, recoverAccount)
     )
       return
     const retiringGeneration = ++resident.generation

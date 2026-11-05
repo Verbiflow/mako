@@ -1,7 +1,7 @@
 import { hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
 import type { AccessTier } from "../contracts/access.js"
-import { fallbackOrder, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep } from "../contracts/fin-fallback.js"
+import { fallbackOrder, fallbackSpent, placeKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackInput, type FallbackStep } from "../contracts/fin-fallback.js"
 
 /** What a Fin's fallback order reads of the host (`contracts/fin-fallback.ts`), each through its existing store. */
 export interface FinMovesDeps {
@@ -29,25 +29,21 @@ export interface FinPlace {
   model?: string
 }
 
-/** The order from a place, and the account there as it stands. */
+/** The order from a place, the account there as it stands, and the steps closed only by limits and this turn's visits. */
 export interface FinOrder {
   steps: FallbackStep[]
+  spent: FallbackStep[]
   accounts: readonly FallbackAccount[]
   /** The account the Fin runs on, when the harness lists one. */
   from?: FallbackAccount
 }
 
 /**
- * A Fin's moves when its harness's account runs out: the order built from the
- * person's setup, and what each Fin's turn already moved through, so it moves
- * at most once for a limit and never back to a place this turn ran on. A turn
- * that ends without a limit clears it (`settled`), and the Fin's next start
- * goes from the person's first choice again.
+ * A Fin's fallback order, built from the person's setup as the host reads it now. What its logical turn already ran
+ * on is the store's (`FinTurn`), so a restart never sends it back; this only reads.
  */
 export class FinMoves {
   private readonly deps: FinMovesDeps
-  /** By Fin: the places its turn ran on (`placeKey`), and the failed requests it already moved for. */
-  private readonly turns = new Map<string, { visited: Set<string>; moved: Set<string> }>()
 
   constructor(deps: FinMovesDeps) {
     this.deps = deps
@@ -69,8 +65,8 @@ export class FinMoves {
     })
   }
 
-  /** The steps from `from`, at a Fin's start or mid-run, for a Fin at `tier` in `cwd`, past the places its turn ran on. */
-  async order(input: { from: FinPlace; when: "start" | "mid-run"; tier: AccessTier; cwd?: string; child?: string; accounts?: readonly FallbackAccount[] }): Promise<FinOrder> {
+  /** The steps from `from`, at a Fin's start or mid-run, for a Fin at `tier` in `cwd`, past `visited` (`placeKey`). */
+  async order(input: { from: FinPlace; when: "start" | "mid-run"; tier: AccessTier; cwd?: string; visited?: readonly string[]; accounts?: readonly FallbackAccount[] }): Promise<FinOrder> {
     const { from, when, tier, cwd } = input
     const live = this.deps.harnesses()
     const ordered = [...new Set([...((await this.deps.harnessOrder().catch(() => undefined)) ?? []), ...live])].filter((harness) => live.includes(harness))
@@ -84,37 +80,18 @@ export class FinMoves {
       })),
     ])
     const account = from.account ?? accounts.find((each) => each.active)?.name
-    const turn = input.child ? this.turns.get(input.child) : undefined
-    const steps = fallbackOrder({
+    const continuation = this.deps.continuation(from.harness)
+    const ordering: FallbackInput = {
       from: { ...from, ...(account !== undefined && { account }) },
       when,
       on: this.on(),
       accounts,
-      ...(this.deps.continuation(from.harness) && { continuation: this.deps.continuation(from.harness)! }),
+      ...(continuation && { continuation }),
       connections,
       harnesses,
-      visited: [placeKey({ harness: from.harness, ...(account !== undefined && { account }) }), ...(turn?.visited ?? [])],
-    })
+      visited: [placeKey({ harness: from.harness, ...(account !== undefined && { account }) }), ...(input.visited ?? [])],
+    }
     const standing = accounts.find((each) => each.name === account)
-    return { steps, accounts, ...(standing && { from: standing }) }
-  }
-
-  /** Whether the Fin's turn already moved for this failed request: one limit, one move. */
-  movedFor(child: string, request: string): boolean {
-    return this.turns.get(child)?.moved.has(request) ?? false
-  }
-
-  /** The Fin moved from `from` to `step` for `request`: neither is a place its turn goes back to. */
-  moved(child: string, request: string, from: FinPlace, step: FallbackStep): void {
-    const turn = this.turns.get(child) ?? { visited: new Set<string>(), moved: new Set<string>() }
-    turn.visited.add(placeKey(from))
-    turn.visited.add(stepKey(step))
-    turn.moved.add(request)
-    this.turns.set(child, turn)
-  }
-
-  /** The Fin's turn ended without a limit: its next one starts from the person's first choice. */
-  settled(child: string): void {
-    this.turns.delete(child)
+    return { steps: fallbackOrder(ordering), spent: fallbackSpent(ordering), accounts, ...(standing && { from: standing }) }
   }
 }

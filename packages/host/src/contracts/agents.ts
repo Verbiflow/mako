@@ -160,6 +160,18 @@ export const FinReroutedSchema = z.object({
 export type FinRerouted = z.infer<typeof FinReroutedSchema>
 
 /**
+ * A Fin's logical turn as its fallback reads it (`fin_moves`, beside its edge), so it never loops across a restart:
+ * the places it ran on (`placeKey`), the waits for a limit it already moved for, and the host generation taking a
+ * move now and for which wait. It's cleared once a turn of the Fin ends without a limit.
+ */
+export const FinTurnSchema = z.object({
+  visited: z.array(z.string().min(1).max(400)).max(64),
+  handled: z.array(z.string().min(1).max(600)).max(64),
+  moving: z.object({ owner: z.number(), wait: z.string().min(1).max(600), at: z.number() }).optional(),
+})
+export type FinTurn = z.infer<typeof FinTurnSchema>
+
+/**
  * The edge: one row of `thread_parents`, keyed by the child Thread, written
  * by the child's owner. It holds only what nothing else does; the child's
  * state is computed (`childState`), never stored beside it.
