@@ -37,7 +37,7 @@ if (process.argv[2] === "host") {
   const root = process.argv[3]!
   const fake = fakeCatalog()
   const w = new AgentsWorld({ root, catalog: fake.catalog, finLimit: () => 1, script: script(root) })
-  const shell = spawn(process.execPath, ["-e", "const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+  const shell = spawn(process.execPath, ["-e", "const fs=require('node:fs');process.on('SIGTERM',()=>{});const put=()=>{fs.writeFileSync('shared.tmp','linked');fs.renameSync('shared.tmp','shared.txt')};put();console.log('ready');setInterval(put,10)"], { cwd: root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
   await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
   const identity = await w.agents.runs.processOf(shell.pid!)
   assert.ok(identity)
