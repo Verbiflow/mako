@@ -263,7 +263,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const pushed = (await mine.pushes()).pushes.find((entry) => entry.push.push === "decided" && entry.push.correlationId === "c-1")
     assert.ok(pushed && pushed.push.push === "decided")
     assert.deepEqual(pushed.push.answer, { refusal: { refused: "unavailable", reason: "unreadable" } })
-    assert.deepEqual(await mine.borrow(need("c-1", { ref: "~/notes/a.md" })), { refusal: { refused: "unavailable", reason: "unreadable" } })
+    assert.ok("pending" in (await mine.borrow(need("c-1", { ref: "~/notes/a.md" }))), "only a lease and a person's no answer a need for good: asked again, the source is asked again")
     assert.ok((await person.events()).some((event) => event.event === "refused" && event.refused === "unavailable"))
   })
 
