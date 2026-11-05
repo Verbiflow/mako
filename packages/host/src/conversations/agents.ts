@@ -79,6 +79,7 @@ import {
   frontDoorNote,
 } from "../contracts/agent-tools.js"
 import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
+import { KeyedAdmission } from "../base/keyed-admission.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
@@ -374,7 +375,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * settles: a call with the same key joins it. The record alone holds its name, its place while it launches and its
    * stop, and only its own settle gives them back (`StartRecord`).
    */
-  private readonly starts = new Map<string, StartRecord>()
+  private readonly starts = new KeyedAdmission<StartRecord>((record) => record.op)
   /** What each Apex's conversations last heard of its waiting Fins (`queueRefresh`), by its Thread. */
   private readonly queueHeard = new Map<string, string>()
   /** Fins holding a place now (`occupies`): one that lets go frees it for what waits, at once. */
@@ -462,6 +463,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     // The places Fins hold as this host takes over, the turns the last one cut short going on among them: each that lets
     // go of one later wakes what waits (`childMoved`).
     for (const edge of edges.all) if (this.occupies(edge)) this.occupying.add(edge.child)
+    // Counted: from here a start may take a place (`KeyedAdmission.recovered`).
+    this.starts.recovered()
     void this.drain()
   }
 
@@ -710,18 +713,15 @@ export class Agents implements AgentOperations, ConversationChildren {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return Promise.resolve(apex)
     const op = `start:${apex.session}:${input.clientKey}`
-    const held = this.starts.get(op)
-    if (held) return held.answer.then((answer) => ("refused" in answer ? answer : { ...answer, deduped: true as const }))
-    const record = this.record(op, apex.thread, input.name ?? input.title)
+    const { record, joined } = this.starts.open(op, () => startRecord(op, apex.thread, input.name ?? input.title))
+    if (joined) return record.answer.then((answer) => ("refused" in answer ? answer : { ...answer, deduped: true as const }))
     record.answer = this.admit(apex, input, record).finally(() => this.retire(record))
     return record.answer
   }
 
   /** A start's record, in place before its first await (`starts`). */
   private record(op: string, thread: string, name?: string): StartRecord {
-    const record: StartRecord = { op, thread, ...(name && { asked: name }), cancelled: false, answer: Promise.resolve({ refused: "unavailable", why: "" }) }
-    this.starts.set(op, record)
-    return record
+    return this.starts.open(op, () => startRecord(op, thread, name)).record
   }
 
   /**
@@ -729,8 +729,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * the same tick, whichever way the start ended; a record its replacement already took over gives back nothing.
    */
   private retire(record: StartRecord): void {
-    if (this.starts.get(record.op) !== record) return
-    this.starts.delete(record.op)
+    if (!this.starts.retire(record)) return
     if (record.launching) void this.drain()
   }
 
@@ -823,7 +822,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // What it starts after is read as the call made it; one of those that ends meanwhile is the queue's to tell (`tellHeld`).
     const after = this.afterOf(apex, input.after ?? [])
     if ("refused" in after) return this.refuse(op, after.refused, after.why)
-    await Promise.all([this.readMac(), this.observe()])
+    await Promise.all([this.readMac(), this.observe(), this.starts.recovery])
     // From here to its place or its queue row nothing is awaited: every budget is checked and taken in one step, so two
     // starts deciding together never both take the last of one.
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
@@ -1595,7 +1594,8 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private async drain(): Promise<void> {
     const store = this.store()
-    if (!store || this.stopped) return
+    // Nothing waiting goes until the places the last host left are counted (`resume`).
+    if (!store || this.stopped || !this.starts.isRecovered) return
     // An end during a drain is looked at by another, after it: a Fin that was to start after it doesn't wait for the watch.
     if (this.draining) return void (this.drainAgain = true)
     this.draining = true
@@ -2987,6 +2987,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private now(): number {
     return this.deps.now?.() ?? Date.now()
   }
+}
+
+function startRecord(op: string, thread: string, name?: string): StartRecord {
+  return { op, thread, ...(name && { asked: name }), cancelled: false, answer: Promise.resolve({ refused: "unavailable", why: "" }) }
 }
 
 function parseQueued(record: string): QueuedStart | undefined {

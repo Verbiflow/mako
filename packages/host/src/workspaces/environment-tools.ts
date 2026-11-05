@@ -22,6 +22,9 @@ import { memoryPressure, type MemoryPressure } from "../base/machine-load.js"
 import type { FileHistory } from "./watch-backend.js"
 import type { HistoryMark } from "../contracts/watcher-child.js"
 import type { BuildSlots } from "./build-slots.js"
+import { KeyedAdmission } from "../base/keyed-admission.js"
+import { hostWarn } from "../base/host-log.js"
+import { errorMessage } from "../base/error-message.js"
 import { installCommand, installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
 import { installStatus, settleHanded } from "./spare-install.js"
 import {
@@ -946,8 +949,13 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (conversation !== undefined) owed.delete(owedKey(app, tier, conversation))
     return (await checkReport(app, tier, status, plan)) + (joinedNote ? `\n${joinedNote.trim()}` : "")
   }
+  /** A check run from its first call until it has started (`pendingChecks`): who's owed its result, and its start. */
   interface PendingCheck {
+    slot: string
     callers: Set<string>
+    /** Its slot is its own: what a call waits for within its window, the run's start after it. */
+    granted: Promise<void>
+    grant(): void
     started: Promise<boolean>
   }
   const checkIn = async (current: Ready, tier: CheckTier, again: () => Promise<StartOutcome>, conversation?: string, target?: string, only?: string[]): Promise<string> => {
@@ -986,59 +994,80 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (preparing) return preparing.message
     }
     const slot = slotKey(app, tier)
-    const waited = pendingChecks.get(slot)
-    if (waited) {
-      if (mine !== undefined) waited.callers.add(mine)
-      return waitForSlot(app, tier, plan, conversation, waited)
-    }
+    // One run per app and tier from here until it has started, in place before anything is awaited: a repeat joins it.
+    const { record: pending, joined } = pendingChecks.open(slot, () => pendingCheck(slot))
+    if (mine !== undefined) pending.callers.add(mine)
+    if (!joined) pending.started = startCheck(current, tier, plan, conversation, pending).finally(() => pendingChecks.retire(pending))
+    return waitForSlot(app, tier, plan, conversation, pending, joined)
+  }
+  const pendingCheck = (slot: string): PendingCheck => {
+    let grant!: () => void
+    const granted = new Promise<void>((resolve) => (grant = resolve))
+    return { slot, callers: new Set<string>(), granted, grant, started: Promise.resolve(false) }
+  }
+  /** A check's run: its slot taken, then started once it's granted, each caller owed its result. True when it joined a run under way. */
+  const startCheck = async (current: Ready, tier: CheckTier, plan: CheckPlan, conversation: string | undefined, pending: PendingCheck): Promise<boolean> => {
+    const { app } = current.environment
     // Before it joins the line: its slot, once it comes, goes straight to starting the run.
     await keepOwedResults(app, tier, plan)
     const slots = deps.buildSlots
-    const fresh = slots !== undefined && !slots.has(slot)
-    const ticket = slots?.take({ key: slot, label: `the ${tier} check of ${(conversation && deps.conversation?.(conversation)?.title) || current.checkout}` })
-    const run = async (): Promise<boolean> => {
-      let started: string[]
-      try {
-        ({ started } = await deps.processes.start(app, [{ kind: "check", name: tier, command: plan.command, cwd: current.checkout, env: env(current, current.recipe) }]))
-      } catch (error) {
-        if (fresh) slots!.release(slot)
-        throw error
-      }
-      // A run already under way holds its own slot; one that didn't start holds none.
-      if (fresh && !started.includes(tier)) slots!.release(slot)
-      return !started.includes(tier)
+    // A run already under way holds its own slot; one that didn't start holds none.
+    const fresh = slots !== undefined && !slots.has(pending.slot)
+    const ticket = slots?.take({ key: pending.slot, label: `the ${tier} check of ${(conversation && deps.conversation?.(conversation)?.title) || current.checkout}` })
+    await ticket?.granted
+    pending.grant()
+    let started: string[]
+    try {
+      ({ started } = await deps.processes.start(app, [{ kind: "check", name: tier, command: plan.command, cwd: current.checkout, env: env(current, current.recipe) }]))
+    } catch (error) {
+      if (fresh) ticket?.release()
+      throw error
     }
-    if (ticket && !ticket.held()) {
-      const pending: PendingCheck = { callers: new Set(mine === undefined ? [] : [mine]), started: ticket.granted.then(async () => {
-        try {
-          const joined = await run()
-          const status = await checkRun(app, tier)
-          for (const caller of pending.callers) if (status?.startedAt !== undefined) owed.set(caller, { startedAt: status.startedAt })
-          return joined
-        } finally {
-          pendingChecks.delete(slot)
-        }
-      }) }
-      pendingChecks.set(slot, pending)
-      return waitForSlot(app, tier, plan, conversation, pending)
-    }
-    const joined = await run()
+    if (fresh && !started.includes(tier)) ticket?.release()
     const status = await checkRun(app, tier)
-    if (mine !== undefined && status?.startedAt !== undefined) owed.set(mine, { startedAt: status.startedAt })
-    return awaitCheck(app, tier, plan, conversation, joined)
+    if (status?.startedAt !== undefined) for (const caller of pending.callers) owed.set(caller, { startedAt: status.startedAt })
+    return !started.includes(tier)
   }
-  /** Checks that wait for a build slot, by app and tier: each starts on its own the moment one frees, and a repeat call joins it. */
-  const pendingChecks = new Map<string, PendingCheck>()
+  /** Checks that wait for a build slot or are starting, by app and tier: each starts on its own the moment one frees, and a repeat call joins it. */
+  const pendingChecks = new KeyedAdmission<PendingCheck>((pending) => pending.slot)
   const slotKey = (app: AppKey, tier: CheckTier) => `${app}\0${tier}`
   deps.processes.onExit((app, key) => {
     for (const tier of ["quick", "full"] as const) if (key === runKey("check", tier)) deps.buildSlots?.release(slotKey(app, tier))
   })
+  /**
+   * The checks the last host left running hold their slots before any is granted (`BuildSlots.recover`), each until
+   * its exit is seen: this host didn't spawn them, so it can't hear their exit and looks for it instead.
+   */
+  const recoverSlots = async (slots: BuildSlots): Promise<void> => {
+    try {
+      for (const active of await deps.processes.active())
+        for (const run of active.runs) {
+          if (run.kind !== "check" || (run.name !== "quick" && run.name !== "full")) continue
+          const tier: CheckTier = run.name
+          const ticket = slots.recover({ key: slotKey(active.app, tier), label: `the ${tier} check of ${deps.processes.checkoutOf(active.app) ?? active.folder}` })
+          if (ticket) void untilExited(active.app, tier).then(() => ticket.release())
+        }
+    } catch (error) {
+      hostWarn("environment", "the checks the last host left running couldn't be read; slots are granted without them", { error: errorMessage({ error }) })
+    } finally {
+      slots.recovered()
+    }
+  }
+  /** Until a check run this host didn't spawn has exited. */
+  const untilExited = async (app: AppKey, tier: CheckTier): Promise<void> => {
+    for (;;) {
+      const [status] = await deps.processes.settle(app, [runKey("check", tier)], 60_000).catch(() => [])
+      if (status?.state.kind !== "running" && status?.state.kind !== "starting") return
+    }
+  }
+  if (deps.buildSlots) void recoverSlots(deps.buildSlots)
   /** Waits for a check's build slot within the call's window: its result once it ran, else where it stands in line. */
-  const waitForSlot = async (app: AppKey, tier: CheckTier, plan: CheckPlan, conversation: string | undefined, pending: PendingCheck): Promise<string> => {
+  const waitForSlot = async (app: AppKey, tier: CheckTier, plan: CheckPlan, conversation: string | undefined, pending: PendingCheck, joined: boolean): Promise<string> => {
+    if (!deps.buildSlots) return awaitCheck(app, tier, plan, conversation, (await pending.started) && !joined)
     const window = checkWait(conversation)
     let timer: ReturnType<typeof setTimeout> | undefined
-    const came = await Promise.race([pending.started.then(() => true), new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), window) })]).finally(() => clearTimeout(timer))
-    if (came) return awaitCheck(app, tier, plan, conversation, false)
+    const came = await Promise.race([Promise.race([pending.granted, pending.started]).then(() => true), new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), window) })]).finally(() => clearTimeout(timer))
+    if (came) return awaitCheck(app, tier, plan, conversation, (await pending.started) && !joined)
     return `The ${tier} check ${slotWait(app, tier)}. It starts on its own the moment one frees; your next app_check with tier "${tier}" waits for this same run and returns its result.`
   }
   /** Where a check waiting for a build slot stands: "waits for a build slot: 1 of 1 in use (…), and it's next". */

@@ -1,7 +1,7 @@
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
@@ -30,7 +30,13 @@ const GB = 1024 ** 3
   let size = 1
   const slots = new BuildSlots(() => size)
   const a = slots.take({ key: "a", label: "a's check" })
-  assert.equal(a.held(), true, "a free slot is taken at once")
+  assert.equal(a.held(), false, "nothing is granted before what the last host left is counted")
+  const left = slots.recover({ key: "left", label: "the check the last host left" })!
+  slots.recovered()
+  assert.equal(a.held(), false, "a check the last host left running holds the only slot")
+  assert.equal(slots.recover({ key: "a", label: "a's check" }), undefined, "a key this host has is its own, not a survivor")
+  left.release()
+  assert.equal(a.held(), true, "its exit frees it for the next")
   assert.equal(slots.take({ key: "a", label: "a's check" }), a, "the same run asking again is the same ticket")
   const b = slots.take({ key: "b", label: "b's check" })
   const c = slots.take({ key: "c", label: "c's check" })
@@ -154,6 +160,90 @@ try {
   assert.deepEqual(slots.reading(), { slots: 1, holders: [], waiting: 0 }, "a run that never started holds no slot")
 } finally {
   rmSync(root, { recursive: true, force: true })
+}
+
+/** Two apps' checks under one slot, in a fresh records folder: `host()` is a new host's tools over the same records and slots. */
+function bench(name: string, slotsOf: () => BuildSlots) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `mako-build-slots-${name}-`)))
+  const records = join(root, "records")
+  const apps = ["one", "two"].map((app, at) => {
+    const folder = join(root, app)
+    const dataDir = join(root, `${app}-data`)
+    mkdirSync(folder)
+    mkdirSync(dataDir)
+    const id = ThreadIdSchema.parse(randomUUID())
+    const environment: ThreadEnvironment = { thread: id, app: AppKeySchema.parse(id), host: `${app}.thread.localhost`, port: 20050 + at, ports: 1, dataDir }
+    return { name: app, folder, environment, conversation: `conversation-${app}` }
+  })
+  const of = (conversation: string) => apps.find((app) => app.conversation === conversation)!
+  /** How long a call waits for its check; a test makes it longer to wait for a result. */
+  const wait = { ms: 100 }
+  const host = (processes: ThreadProcesses, slots: BuildSlots) => environmentTools({
+    git: new Git(),
+    cwd: (conversation) => of(conversation).folder,
+    environment: async (conversation) => of(conversation).environment,
+    launchedWith: () => undefined,
+    conversation: (conversation) => ({ title: of(conversation).name, harness: "claude", working: true }),
+    processes,
+    buildSlots: slots,
+    traces: new TraceRefresh(),
+    recipesRoot: join(root, "recipes"),
+    get settleMs() {
+      return wait.ms
+    },
+  })
+  const processes = new ThreadProcesses({ root: records, listening: portListening })
+  return { root, records, wait, one: apps[0]!, two: apps[1]!, processes, host: () => host(processes, slotsOf()), hostOver: host }
+}
+
+// ── Two calls for one app's check at once, while another holds the slot: one run, started once, its result for both.
+{
+  const slots = new BuildSlots(() => 1)
+  const b = bench("same-key", () => slots)
+  const starts = new Map<string, number>()
+  const start = b.processes.start.bind(b.processes)
+  b.processes.start = (app, specs) => {
+    if (specs.some((spec) => spec.kind === "check")) starts.set(app, (starts.get(app) ?? 0) + 1)
+    return start(app, specs)
+  }
+  try {
+    const tools = b.host()
+    for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? "sleep 1" : "echo ran >> count" } }), "A check")
+    assert.match(await tools.check(b.one.conversation, "quick"), /still running/)
+    const both = await Promise.all([tools.check(b.two.conversation, "quick"), tools.check(b.two.conversation, "quick")])
+    assert.ok(both.every((reply) => /waits for a build slot/.test(reply)), JSON.stringify(both))
+    b.wait.ms = 10_000
+    assert.match(await tools.check(b.two.conversation, "quick"), /passed/)
+    await b.processes.settle(b.two.environment.app, [runKey("check", "quick")], 5_000)
+    assert.equal(starts.get(b.two.environment.app), 1, "the run both asked for started once")
+    assert.equal(readFileSync(join(b.two.folder, "count"), "utf8").trim().split("\n").length, 1, "and ran once")
+  } finally {
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── A new host over the same records: a check the last one left running holds the only slot until it exits.
+{
+  const b = bench("recovery", () => new BuildSlots(() => 1))
+  try {
+    const first = b.host()
+    for (const app of [b.one, b.two]) await first.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? "sleep 1.5" : "echo second finished" } }), "A check")
+    assert.match(await first.check(b.one.conversation, "quick"), /still running/)
+    const processes = new ThreadProcesses({ root: b.records, listening: portListening })
+    const slots = new BuildSlots(() => 1)
+    const next = b.hostOver(processes, slots)
+    assert.equal((await processes.status(b.one.environment.app)).find((run) => run.name === "quick")?.state.kind, "running", "the first check outlived its host")
+    const waiting = await next.check(b.two.conversation, "quick")
+    assert.match(waiting, /waits for a build slot: 1 of 1 in use \(the quick check of /, waiting)
+    assert.notEqual((await processes.status(b.two.environment.app)).find((run) => run.name === "quick")?.state.kind, "running", "nothing starts beside it")
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/, "once it exits, the next goes")
+    assert.deepEqual(slots.reading(), { slots: 1, holders: [], waiting: 0 }, "and both slots are given back")
+  } finally {
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
 }
 
 console.log("build slots: one per check run, first come first served, handed on the moment one frees")
