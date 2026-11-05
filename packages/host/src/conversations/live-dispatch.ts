@@ -169,7 +169,7 @@ export class LiveDispatch {
     if (resident.transferring) return
     // A switch waits for what was queued before it, as a switch asked for behind another waits for that one's message.
     const transfer = transfers.pending(resident)
-    if (transfer && !(transfer.state.kind === "queued" && resident.snapshot.requests.some((request) => request.status === "queued" && (request.createdAt ?? 0) <= transfer.createdAt))) {
+    if (transfer && !(transfer.state.kind === "queued" && resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== transfer.input.id && (request.createdAt ?? 0) <= transfer.createdAt))) {
       transfers.start(resident)
       return
     }
@@ -185,6 +185,8 @@ export class LiveDispatch {
       return
     const request = nextQueued(resident.snapshot)
     if (!request) return
+    // A switch's own message goes on its destination, once the switch has committed.
+    if (request.id === transfer?.input.id) return
     if (request.digest && this.overBudget(resident, request)) return
     if (this.leaveRemovedFolder(resident)) return
     if (request.accountSwitch) {

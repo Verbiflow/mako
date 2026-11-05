@@ -83,7 +83,7 @@ import { ContextBundles } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
-import { LiveTransfers } from "./live-transfers.js"
+import { holdSwitches, LiveTransfers } from "./live-transfers.js"
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
@@ -501,32 +501,26 @@ export class LiveConversations {
   /**
    * A Stop of `id`, the person's or an Apex's of its Fin: every message waiting there pauses, and one that was to go by
    * itself (again, or at a time) stops being so, so nothing sends until a deliberate resume (`resumeHeld`, Resume),
-   * across a restart too. A message being edited or waiting for a sign-in keeps its own hold. Read in if it isn't
-   * loaded. How many it paused.
+   * across a restart too. A message waiting for a sign-in keeps its own hold. Read in if it isn't loaded. How many it
+   * paused (`docs/delivery-queue.md`).
    */
   stopHolds(id: string): number {
     const resident = this.records.load(id)
     // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
+    // One being edited takes the mark under its edit, so saving the edit doesn't send it.
     const stops = (request: LiveRequest) => request.pause !== "stop" &&
-      (request.status === "queued" || request.status === "dispatching" || (request.status === "held" && !request.editing && !request.signIn))
-    // A switch or reconnect not yet made, waiting or under way, is retired: an attempt under way sees its transfer no
-    // longer waiting and drops whatever it comes back with, a session or a failure to wait out alike
-    // (`LiveTransfers.perform`). The resident's generation stays, so the source binding's events still count. One
-    // whose destination is committed is no longer waiting: it completes, and its message, in the queue now, is
-    // paused with the rest; the Stop is noted, should the switch go back before its commit (`Resident.transferPhase`).
-    const transfer = resident && this.transfers.pending(resident)
-    const phase = resident?.transferPhase
-    const committed = phase !== undefined && (phase.phase === "committed" || phase.phase === "closing")
-    const count = (resident?.snapshot.requests.filter(stops).length ?? 0) + (transfer || committed ? 1 : 0)
-    if (!resident || !count) return 0
+      (request.status === "queued" || request.status === "dispatching" || (request.status === "held" && !request.signIn))
+    if (!resident) return 0
+    // A switch not yet committed is queued work, held like any message; a committed one's message is in the queue
+    // already. Holding moves no generation, so the source binding's events still count (`holdSwitches`).
+    const { snapshot, held } = holdSwitches(resident.snapshot)
+    const count = resident.snapshot.requests.filter(stops).length + held
+    if (!count) return 0
     const previous = resident.snapshot
-    resident.snapshot = { ...previous, requests: previous.requests.map((request) => stops(request)
+    resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => stops(request)
       ? { ...request, pause: "stop" as const, ...request.status !== "dispatching" && { status: "held" as const, retry: undefined, wake: undefined } }
       : request) }
     try {
-      if (committed) phase.stopped = true
-      else if (transfer)
-        this.transfers.save(resident, { ...transfer, retry: undefined, state: { kind: "failed", error: "Stopped before it was sent", stopped: true } })
       this.flush(resident)
     } catch (error) {
       resident.snapshot = previous
@@ -1197,14 +1191,14 @@ export class LiveConversations {
       case "resume":
         next = { ...released(request), retry: undefined }
         break
+      // The person's words stand, and a Stop's hold with them: saving an edit isn't a resume.
       case "edit":
         next = {
           ...request,
-          status: request.signIn ? "held" : "queued",
+          status: request.signIn || request.pause === "stop" ? "held" : "queued",
           wake: undefined,
           retry: undefined,
           editing: undefined,
-          pause: undefined,
           text: command.change.text,
           displayText: undefined,
           nativeDelivery: undefined,
@@ -1213,12 +1207,13 @@ export class LiveConversations {
         break
     }
     const previous = resident.snapshot
-    resident.snapshot = {
+    const edited = {
       ...previous,
       requests: previous.requests.map((item) =>
         item.id === request.id ? next : item
       ),
     }
+    resident.snapshot = command.change.kind === "remove" ? this.transfers.withdraw(edited, request.id) : edited
     try {
       this.flush(resident)
     } catch (error) {
@@ -1472,15 +1467,15 @@ export class LiveConversations {
       await this.cancelDriver(resident, why)
       return
     }
-    const pending = this.transfers.pending(resident)
-    if (pending?.input.id === requestId) {
+    const pending = this.transfers.unsettled(resident, requestId)
+    if (pending) {
       if (pending.state.kind === "preparing") resident.generation += 1
       this.transfers.save(resident, {
         ...pending,
         state: { kind: "failed", error: "The remote request was canceled" },
       })
     }
-    if (request?.status === "queued") {
+    if (request?.status === "queued" || (pending && request?.status === "held")) {
       resident.snapshot = {
         ...resident.snapshot,
         requests: resident.snapshot.requests.map((candidate) =>

@@ -4056,7 +4056,9 @@ SDK `result`) settle, so a retry never triggers a continuation.
 
 One delivery queue. Every message into a conversation is an entry in its
 journal's request queue (`LiveRequest`), sent by `LiveDispatch` alone; the
-design and its steps are in the orchestration notes (`delivery-queue.md`).
+rules every change to it keeps, a provider switch's included, are in
+`docs/delivery-queue.md`, and `test:switch-interleavings` holds generated
+schedules of switches, Stops, edits and crashes to them after every step.
 Step one: why a held message waits has one reading (`holdOf`, in
 `contracts/request-hold.ts`): `edit` (the person paused it to edit it),
 `sign-in`, `retry`, `until` (a usage limit's timed resume) or `paused`, by

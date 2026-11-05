@@ -759,8 +759,9 @@ async function queueProjection(): Promise<void> {
     limit = 2
     w.agents.capacityChanged()
     limit = 1
-    await waitFor(() => w.store.queuedSpawns().some((row) => row.record.includes("refused")), "doomed to be refused and kept for its Apex")
+    // Its row goes as the digest enters its Apex's queue, which can come before the row is read: the Apex's word is the proof.
     await waitFor(() => w.store.queuedSpawns().length === 1, "doomed to go once its Apex heard", 15_000)
+    await waitFor(() => w.prompts.some((prompt) => prompt.conversation === a.conversation && /"doomed" \(\w+\) failed: It didn't start/.test(prompt.text)), "A to hear why doomed didn't start")
     await waitFor(() => JSON.stringify(reason()) === JSON.stringify({ kind: "waiting", reason: "Queued: 0 ahead, your limit of Fins at once is in use" }), `the other Apex's line to move up with it: ${JSON.stringify(reason())}`, 3_000)
     await w.agents.stop(a.caller, { child: "all" })
     await w.agents.stop(b.caller, { child: "all" })

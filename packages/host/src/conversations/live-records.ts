@@ -2,6 +2,7 @@ import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { carryingWords } from "../contracts/conversation-control.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
@@ -655,19 +656,25 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
           ),
           // One under way has an unknown outcome and fails. One that waited behind another switch, or for its time,
           // never started: it goes once its conversation is read in (`LiveConversations` `loaded`), or at its time.
-          transfers: previous.control.transfers.map((transfer) =>
-            transfer.state.kind === "preparing" ||
-            (transfer.state.kind === "queued" && !transfer.behind && !transfer.retry) ||
-            strandedTransfers.has(transfer.input.id)
+          // One whose message waits in the queue (a Stop held it, or a failed close took it back) waits with that
+          // message; a stranded one's retry carries the words its message has now.
+          transfers: previous.control.transfers.map((transfer) => {
+            const own = previous.requests.find((request) => request.id === transfer.input.id && (request.status === "queued" || request.status === "held"))
+            if (own && (transfer.state.kind === "queued" || transfer.state.kind === "preparing"))
+              return { ...transfer, state: { kind: "queued" as const } }
+            return transfer.state.kind === "preparing" ||
+              (transfer.state.kind === "queued" && !transfer.behind && !transfer.retry) ||
+              strandedTransfers.has(transfer.input.id)
               ? {
                   ...transfer,
+                  ...(own && { input: carryingWords(transfer.input, own) }),
                   state: {
                     kind: "failed" as const,
                     error: restartError,
                   },
                 }
               : transfer
-          ),
+          }),
         }
       : undefined,
     session: {

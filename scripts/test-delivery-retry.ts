@@ -258,7 +258,7 @@ try {
       await world.close()
     }
 
-    // A Stop during a switch to another harness retires the switch alone: the source session stays the conversation's,
+    // A Stop during a switch to another harness holds the switch alone: the source session stays the conversation's,
     // and a fresh message on it goes and its reply and end are heard, through its driver's own callback.
     {
       const to = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
@@ -275,7 +275,8 @@ try {
       await world.live.cancel(conversation)
       opened!()
       await pause(200)
-      assert.equal(world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind, "failed", label)
+      assert.equal(world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind, "queued", label)
+      assert.equal(requestOf(world, conversation, "Switch.")?.status, "held", `${label}: its message waits, held`)
       world.say(conversation, "Fresh message.")
       await until(`${label}: the fresh message to complete on the source`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
       assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), harness, `${label}: it went on the source, once`)
@@ -320,7 +321,10 @@ try {
       if (during === "stop" || during === "control") assert.equal(waiting()?.status, "held", `${label}: what waited still waits`)
       if (during === "stop") assert.equal(waiting()?.pause, "stop", `${label}: paused by the Stop`)
       if (during === "stop, edit") {
-        await until(`${label}: the edit to go`, () => requestOf(world, conversation, "Edited.")?.status === "completed")
+        // Saving an edit isn't a resume: the person's words stand, under the Stop's hold, until Resume sends them.
+        assert.deepEqual([requestOf(world, conversation, "Edited.")?.status, requestOf(world, conversation, "Edited.")?.pause, sentTimes(world, conversation, "Edited.")], ["held", "stop", 0], `${label}: the edit stands, held`)
+        world.live.editQueued(conversation, { requestId: later, expectedText: "Edited.", change: { kind: "resume" } })
+        await until(`${label}: Resume to send the edit`, () => requestOf(world, conversation, "Edited.")?.status === "completed")
         assert.deepEqual([sentTimes(world, conversation, "Edited."), sentTimes(world, conversation, "Later.")], [1, 0], `${label}: the person's words went, once, and the old ones never`)
       }
       if (during === "stop, resume") await until(`${label}: the resumed message to go`, () => waiting()?.status === "completed")
@@ -383,7 +387,9 @@ try {
         assert.equal(transfers().find((transfer) => transfer.input.id === secondId)?.state.kind, "queued", `${label}: the second waits for the first's message`)
         await world.restart()
       }
-      await until(`${label}: it to settle on ${ends}`, () => world.live.snapshot(conversation)?.session.harness === ends && !transfers().some((transfer) => transfer.state.kind === "queued" || transfer.state.kind === "preparing"), 15_000)
+      // A switch a Stop reached waits with its message, held, for its Resume; the rest settle.
+      const stopped = first === "stopped, fails" ? firstId : undefined
+      await until(`${label}: it to settle on ${ends}`, () => world.live.snapshot(conversation)?.session.harness === ends && !transfers().some((transfer) => transfer.input.id !== stopped && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")), 15_000)
       if (when !== "opening") {
         await until(`${label}: the second's message to go`, () => requestOf(world, conversation, "Second switch.")?.status === "completed")
         assert.equal(sentTimes(world, conversation, "Second switch."), 1, `${label}: the second went once`)
@@ -393,6 +399,12 @@ try {
       world.say(conversation, "Fresh message.")
       await until(`${label}: the next message to complete`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
       assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), ends, `${label}: on ${ends}, once`)
+      if (stopped) {
+        assert.deepEqual([requestOf(world, conversation, "First switch.")?.status, requestOf(world, conversation, "First switch.")?.pause, sentTimes(world, conversation, "First switch.")], ["held", "stop", 0], `${label}: the first waits for its Resume, unsent`)
+        world.live.editQueued(conversation, { requestId: stopped, expectedText: "First switch.", change: { kind: "resume" } })
+        await until(`${label}: Resume to send it on its destination`, () => requestOf(world, conversation, "First switch.")?.status === "completed" && world.live.snapshot(conversation)?.session.harness === one, 15_000)
+        assert.equal(sentTimes(world, conversation, "First switch."), 1, `${label}: once`)
+      }
       await world.close()
     }
 
@@ -456,8 +468,8 @@ try {
       await world.close()
     }
 
-    // The person's Stop retires a transfer waiting to go again, or one under way whatever its open comes back with: it
-    // never goes by itself, nor after a restart, and reads as stopped, not failed. Send again sends it once.
+    // The person's Stop holds a transfer waiting to go again, or one under way whatever its open comes back with: it
+    // never goes by itself, nor after a restart, and reads as paused, not failed. Resume sends it once.
     for (const under of ["waiting", "late capacity", "late open"] as const) {
       let opens = 0
       let open: ((fails: boolean) => void) | undefined
@@ -482,9 +494,11 @@ try {
       await world.live.cancel(conversation)
       open?.(under === "late capacity")
       await pause(200)
+      // Held like any message: its words wait in the queue under the Stop, and the switch waits with them.
       const stopped = transfer()
-      assert.deepEqual([stopped?.state.kind, stopped?.state.kind === "failed" && stopped.state.stopped, stopped?.retry], ["failed", true, undefined], `${label}: retired as stopped`)
-      assert.equal(describeTransferRecovery(stopped!, harness).retryLabel, "Send again", label)
+      assert.deepEqual([stopped?.state.kind, stopped?.retry], ["queued", undefined], `${label}: held, not going again by itself`)
+      assert.deepEqual([requestOf(world, conversation, "Hello.")?.status, requestOf(world, conversation, "Hello.")?.pause], ["held", "stop"], `${label}: its message is the Stop's`)
+      assert.match(describeTransferRecovery(stopped!, harness, requestOf(world, conversation, "Hello.")).title, /is paused$/, label)
       world.live.wakeDue(Date.now() + LATER)
       await pause(300)
       assert.equal(sentTimes(world, conversation, "Hello."), 0, `${label}: nothing sends after the Stop`)
@@ -492,9 +506,10 @@ try {
       world.live.wakeDue(Date.now() + LATER)
       await pause(500)
       assert.equal(sentTimes(world, conversation, "Hello."), 0, `${label}: nor after a restart`)
-      // Send again, as its notice does (`retryTransfer`): a new transfer of the same words.
-      world.live.transfer(conversation, { ...stopped!.input, id: randomUUID() })
-      await until(`${label}: Send again to go`, () => sentTimes(world, conversation, "Hello.") === 1)
+      const held = requestOf(world, conversation, "Hello.")
+      assert.equal(held?.status, "held", `${label}: still held`)
+      world.live.editQueued(conversation, { requestId: held!.id, expectedText: held!.text, change: { kind: "resume" } })
+      await until(`${label}: Resume to send it`, () => sentTimes(world, conversation, "Hello.") === 1)
       await world.close()
     }
 

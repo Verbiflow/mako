@@ -10,14 +10,14 @@ export function useTransferNotice(): ComposerNotice | null {
   const id = useAcp((state) => state.activeKey)
   const transfer = useAcp((state) => activeLiveAcp(state)?.control?.transfers.at(-1))
   const request = useAcp((state) => activeLiveAcp(state)?.requests?.find((item) => item.id === transfer?.input.id))
-  if (!transfer || transfer.state.kind === "accepted") return null
+  if (!transfer || transfer.state.kind === "accepted" || (transfer.state.kind === "failed" && transfer.state.removed)) return null
   const provider = labels[transfer.input.provider] ?? transfer.input.provider
   const state = transfer.state
   const recovery = describeTransferRecovery(transfer, provider, request)
   const troubled = state.kind === "failed" || state.kind === "uncertain"
   return {
     id: `transfer:${transfer.input.id}`,
-    tone: state.kind === "failed" ? (state.stopped ? "info" : "danger") : state.kind === "uncertain" ? "caution" : "progress",
+    tone: state.kind === "failed" ? "danger" : state.kind === "uncertain" ? "caution" : "progress",
     title: recovery.title,
     description: recovery.guidance,
     detail: troubled ? (

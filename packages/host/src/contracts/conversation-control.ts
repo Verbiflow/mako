@@ -139,8 +139,8 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     error: z.string(),
     /** What `error` means; see `provider-failure.ts`. */
     failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
-    /** A Stop retired it before it went (`LiveConversations.stopHolds`): nothing went wrong, and it waits to be sent again. */
-    stopped: z.literal(true).optional(),
+    /** The person removed its message from the queue before it went (`LiveTransfers.withdraw`): nothing went wrong, and nothing is left to retry. */
+    removed: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
 ])
@@ -185,6 +185,10 @@ export const ContextTransferSchema = z.object({
   behind: z.string().optional(),
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
+/** A switch's input saying what its message in the queue says now. */
+export function carryingWords(input: TransferInput, message: Pick<TransferInput, "text" | "displayText" | "attachments">): TransferInput {
+  return { ...input, text: message.text, displayText: message.displayText, attachments: message.attachments }
+}
 export const ConversationControlSchema = z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),

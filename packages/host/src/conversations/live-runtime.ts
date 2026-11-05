@@ -91,13 +91,12 @@ export interface Resident {
   bindingGenerations: Map<string, number>
   transferring: boolean
   /**
-   * Where the transfer under way stands, by its id. A Stop retires it only while it's `preparing` or `opening`;
+   * Where the transfer under way stands, by its id. A Stop holds it back only while it's `preparing` or `opening`;
    * once its destination is `committed` (the conversation's state, written, names it the binding), it completes
-   * through `closing` the source to `done`, and a Stop pauses its message with the rest of the queue (`stopped`
-   * says so, should a failed close take the switch back before its commit), so the conversation always has a
-   * binding it can use.
+   * through `closing` the source to `done`, and a Stop pauses its message with the rest of the queue, so the
+   * conversation always has a binding it can use (`docs/delivery-queue.md`).
    */
-  transferPhase?: { id: string; phase: "preparing" | "opening" | "committed" | "closing" | "done"; stopped?: true }
+  transferPhase?: { id: string; phase: "preparing" | "opening" | "committed" | "closing" | "done" }
   transferOperation?: Promise<void>
   /**
    * The binding a transfer is opening, which the conversation doesn't listen
