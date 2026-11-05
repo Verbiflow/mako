@@ -358,7 +358,11 @@ export interface LiveRequest {
    */
   retry?: RequestRetry
   /** A digest of an Apex's Fins' news (`AgentWakes`): the notices it carries, which a notice arriving before it's sent joins. */
-  digest?: { notices: Notice[] }
+  digest?: {
+    notices: Notice[]
+    /** When it went to the harness, for the minute's budget (`WAKES_PER_MINUTE`), which counts what was sent. */
+    sentAt?: number
+  }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**

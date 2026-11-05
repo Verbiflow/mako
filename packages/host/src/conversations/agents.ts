@@ -405,24 +405,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
-      open: (conversation) => {
-        // The newest unsent: a full digest (`FIN_REPORTS_MAX`) leaves the next to start one of its own.
-        const open = [...deps.live.held(conversation)?.requests ?? []].reverse().find((request) => request.digest && (request.status === "queued" || request.status === "held"))
-        return open?.digest && { id: open.id, notices: open.digest.notices }
-      },
+      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
+      unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
+        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, notices: request.digest.notices }] : []),
+      carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
+        request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
-        if (deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) return
+        if (deps.live.snapshot(conversation)?.requests.some((asked) => asked.id === request)) return
         deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor, {
           digest: { notices: [...notices] },
           ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS } },
         })
       },
       rewrite: (conversation, request, text, notices) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices] }),
-      sent: (conversation, since) => (deps.live.held(conversation)?.requests ?? [])
-        .filter((request) => request.digest && request.status !== "queued" && request.status !== "held" && request.status !== "canceled" && (request.createdAt ?? 0) >= since)
-        .map((request) => request.createdAt ?? 0)
-        .sort((left, right) => left - right),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
       assign: (reports, request) => this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request),
       delivered: (reports, at) => {

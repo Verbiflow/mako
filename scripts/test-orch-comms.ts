@@ -298,10 +298,10 @@ async function manyReports(): Promise<void> {
 
   // The Apex's queue, as the producer sees it: each digest an entry, the newest unsent one open to join.
   const entries: { id: string; text: string; notices: Notice[]; sent?: true }[] = []
-  const unsent = () => [...entries].reverse().find((entry) => !entry.sent)
   const wakesOf = new AgentWakes({
     ready: () => "idle",
-    open: () => { const entry = unsent(); return entry && { id: entry.id, notices: entry.notices } },
+    unsent: () => entries.flatMap((entry) => (entry.sent ? [] : [{ id: entry.id, notices: entry.notices }])),
+    carried: (_conversation, notice) => entries.some((entry) => entry.notices.some((each) => each.id === notice)),
     admit: (_conversation, id, text, notices) => void entries.push({ id, text, notices: [...notices] }),
     rewrite: (_conversation, id, text, notices) => {
       const entry = entries.find((candidate) => candidate.id === id && !candidate.sent)
@@ -310,7 +310,6 @@ async function manyReports(): Promise<void> {
       entry.notices = [...notices]
       return true
     },
-    sent: () => [],
     steer: () => false,
     assign: () => {},
     delivered: () => {},
@@ -321,7 +320,7 @@ async function manyReports(): Promise<void> {
     assert.equal(entries.length, 2, "a burst of more than a digest holds is two digests in the Apex's queue")
     assert.equal(readFinReports(entries[0]!.text).reports.length, FIN_REPORTS_MAX, "the first of as many as it holds")
     assert.equal(readFinReports(entries[1]!.text).reports.length, many.length - FIN_REPORTS_MAX, "the rest in the next, which goes after it")
-    assert.equal(wakesOf.pending(), 1, "the one unsent digest is what waits, in the queue")
+    assert.equal(wakesOf.pending(), 2, "the two unsent digests are what waits, in the queue")
   } finally {
     wakesOf.dispose()
   }

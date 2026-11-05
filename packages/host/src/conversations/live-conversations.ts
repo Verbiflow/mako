@@ -915,7 +915,12 @@ export class LiveConversations {
     if (this.wakeTimer) clearTimeout(this.wakeTimer.timer)
     const timer = setTimeout(() => {
       this.wakeTimer = undefined
-      this.wakeDue()
+      try {
+        this.wakeDue()
+      } catch (error) {
+        hostWarn("live", "held messages' times couldn't be read; tried again", { error: errorMessage({ error }) })
+        this.armWakes(Date.now() + (this.dependencies.saveAgainMs ?? SAVE_AGAIN_MS))
+      }
     }, Math.min(Math.max(0, at - Date.now()), MAX_TIMER_MS))
     timer.unref?.()
     this.wakeTimer = { at, timer }
@@ -931,23 +936,45 @@ export class LiveConversations {
 
   wakeDue(now = Date.now()): string[] {
     const due = this.records.listing().filter((summary) => summary.wakeAt !== undefined && summary.wakeAt <= now).map((summary) => summary.session.id)
-    for (const id of due) {
-      const resident = this.records.load(id)
-      // A session Mako's exit closed reopens for what was due, as for a new message (`release`); one the person closed
-      // holds nothing with a time (`close`).
-      if (!resident || resident.closing) continue
-      // A retry goes again keeping its count, so a failure after it waits longer (`nextRetry`).
-      const ready = resident.snapshot.requests.filter((request) => {
-        const hold = holdOf(request)
-        const at = hold && holdDue(hold)
-        return at !== undefined && at <= now
-      })
+    let failed = false
+    try {
+      // One conversation's failure (its journal unwritable) is its own: the rest go, and it's tried again.
+      for (const id of due) if (!this.wakeOne(id, now)) failed = true
+    } finally {
+      const next = this.soonestWake(now)
+      const again = failed ? Date.now() + (this.dependencies.saveAgainMs ?? SAVE_AGAIN_MS) : undefined
+      this.armWakes(next === undefined ? again : again === undefined ? next : Math.min(next, again))
+    }
+    return due
+  }
+
+  /** Sends what of `id` was due at `now`; false when its journal couldn't take the release, which then waits to be tried again. */
+  private wakeOne(id: string, now: number): boolean {
+    let resident: Resident | undefined
+    try {
+      resident = this.records.load(id)
+    } catch (error) {
+      hostWarn("live", "a held message's time came, and its conversation couldn't be read", { conversation: id, error: errorMessage({ error }) })
+      return false
+    }
+    // A session Mako's exit closed reopens for what was due, as for a new message (`release`); one the person closed
+    // holds nothing with a time (`close`).
+    if (!resident || resident.closing) return true
+    // A retry goes again keeping its count, so a failure after it waits longer (`nextRetry`).
+    const ready = resident.snapshot.requests.filter((request) => {
+      const hold = holdOf(request)
+      const at = hold && holdDue(hold)
+      return at !== undefined && at <= now
+    })
+    const previous = resident.snapshot
+    try {
       // A reconnect waiting to go again goes at its time too: its gate opens now (`LiveTransfers.start`).
       const transfer = this.transfers.pending(resident)
-      if (transfer?.retry && transfer.retry.at <= now) this.transfers.save(resident, { ...transfer, retry: { ...transfer.retry, at: Math.min(transfer.retry.at, Date.now()) } })
+      const transferDue = Boolean(transfer?.retry && transfer.retry.at <= now)
+      if (transfer?.retry && transferDue) this.transfers.save(resident, { ...transfer, retry: { ...transfer.retry, at: Math.min(transfer.retry.at, Date.now()) } })
       if (!ready.length) {
-        if (transfer?.retry && transfer.retry.at <= now) this.release(resident)
-        continue
+        if (transferDue) this.release(resident)
+        return true
       }
       const ids = new Set(ready.map((request) => request.id))
       const session = resident.snapshot.session
@@ -957,15 +984,19 @@ export class LiveConversations {
         requests: resident.snapshot.requests.map((request) => ids.has(request.id) ? released(request) : request),
       }
       this.flush(resident)
-      hostLog("live", "a held message's time came", { conversation: id, requests: ready.length })
-      try {
-        this.release(resident)
-      } catch (error) {
-        hostWarn("live", "a held message's time came, and its session couldn't reopen", { conversation: id, error: errorMessage({ error }) })
-      }
+    } catch (error) {
+      // Nothing goes that isn't written: the release is undone, storage recovery runs, and the timer tries it again.
+      resident.snapshot = previous
+      this.storageFailed(resident, { error })
+      return false
     }
-    this.armWakes(this.soonestWake(now))
-    return due
+    hostLog("live", "a held message's time came", { conversation: id, requests: ready.length })
+    try {
+      this.release(resident)
+    } catch (error) {
+      hostWarn("live", "a held message's time came, and its session couldn't reopen", { conversation: id, error: errorMessage({ error }) })
+    }
+    return true
   }
 
   /** Record a new request in the journal and start it when the session is free. */

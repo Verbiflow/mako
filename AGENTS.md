@@ -362,11 +362,17 @@ never dropped. The digest is an entry in the Apex's own queue
 (`LiveRequest.digest`), its reports heard once it's there, so the queue
 keeps it through a crash, sends it once and retries it as any message: a
 burst's window is a hold until its time (`RequestWake.after` is
-`DIGEST_WAITS`), a notice joins the digest still unsent
-(`LiveConversations.rewriteWaiting`), the minute's budget is read from the
-digests the queue sent, a stopped Fin's digest is paused for its resume, and
-one no longer current leaves it when the Apex's turn ends or a Fin's state
-moves (`AgentWakes.refresh`). Nothing of it lives only in memory but a steer
+`DIGEST_WAITS`), a notice joins the newest digest still unsent
+(`LiveConversations.rewriteWaiting`), a stopped Fin's digest is paused for
+its resume, and a withdrawn notice or one no longer current leaves whichever
+unsent digest has it (`AgentWakes.withdraw`, `refresh`). A digest in the
+queue is its notices' receipt (`carried`): a host killed between the
+digest, its claim in the store and the store's receipt re-notices the
+report on its start and finds it carried, so it's sent once. The minute's
+budget is the queue's, kept as it sends (`LiveDispatch.overBudget`, from
+`LiveRequest.digest.sentAt`). A journal the timer can't write fails its own
+conversation alone, runs storage recovery, and is tried again; the timer
+always arms for what's next. Nothing of it lives only in memory but a steer
 unanswered (`test:wake-queue`). Each start sets its `mode` and `wake` (on the edge's
 `asked`), and `reportRoute` is where its reports go: `background` returns at
 once, `wait` holds the call at most `WAIT_LIMIT_MS` (half the 60 s Cursor's

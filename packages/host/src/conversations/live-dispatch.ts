@@ -9,6 +9,7 @@ import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { nextInLine } from "../contracts/request-hold.js"
+import { DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
@@ -22,6 +23,8 @@ import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
 import { turnStart, usageMark } from "./live-settlement.js"
+
+const MINUTE_MS = 60_000
 
 /** How often in a row a message the harness refused for a turn of its own is sent again at once (`turnInProgress`). */
 const TURN_IN_PROGRESS_RETRIES = 3
@@ -107,6 +110,31 @@ export class LiveDispatch {
     hostLog("live", "a message waits for this Mac to hear its account before it runs here", { conversation: resident.snapshot.session.id, requests: [...ids].join(",") })
   }
 
+  /**
+   * The minute's budget for an Apex's digests (`WAKES_PER_MINUTE`), counted from when each was sent: one past it is held
+   * until the oldest of the minute is a minute old, and the one timer sends it then. True when it was held.
+   */
+  private overBudget(resident: Resident, request: LiveRequest): boolean {
+    const now = Date.now()
+    const sent = resident.snapshot.requests.flatMap((candidate) => {
+      const at = candidate.digest?.sentAt
+      return at !== undefined && at > now - MINUTE_MS ? [at] : []
+    }).sort((left, right) => left - right)
+    if (sent.length < WAKES_PER_MINUTE) return false
+    const at = sent[sent.length - WAKES_PER_MINUTE]! + MINUTE_MS
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => candidate === request ? { ...candidate, status: "held" as const, wake: { at, after: DIGEST_WAITS } } : candidate) }
+    try {
+      this.access.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      this.access.storageFailed(resident, { error })
+      return true
+    }
+    hostLog("agents", "a digest waits for the minute's budget", { conversation: resident.snapshot.session.id, request: request.id, at: new Date(at).toISOString() })
+    return true
+  }
+
   drain(resident: Resident): void {
     const { dependencies } = this.access
     const { actions, checkpoints, transfers } = this.parts
@@ -153,6 +181,7 @@ export class LiveDispatch {
       return
     const request = nextQueued(resident.snapshot)
     if (!request) return
+    if (request.digest && this.overBudget(resident, request)) return
     if (this.leaveRemovedFolder(resident)) return
     if (request.accountSwitch) {
       void this.access.switchAccount(resident, request).catch((error) => {
@@ -190,6 +219,7 @@ export class LiveDispatch {
       nativeDelivery,
       usageFrom: usageFrom && (usageFrom.tokens || usageFrom.cost || usageFrom.unrecorded) ? usageFrom : undefined,
       status: "dispatching" as const,
+      ...request.digest && { digest: { ...request.digest, sentAt: Date.now() } },
       mode: resident.snapshot.session.currentMode ?? undefined,
       context: [
         ...(request.context ?? []),
