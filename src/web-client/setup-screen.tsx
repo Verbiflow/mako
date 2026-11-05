@@ -4,15 +4,23 @@ import { PhoneSetup } from "@/components/setup/setup-page"
 import { setSetupSource } from "@/state/setup"
 import { accountListStore } from "./account-list"
 import { useWebClient } from "./client"
-import { webSetup } from "./setup-source"
+import { webSetup, type BorrowGateway } from "./setup-source"
 
 /** The phone's Setup screen under a project: Back to where it was opened from. */
 export function SetupScreen({ project, onBack }: { project: string; onBack: () => void }) {
   const client = useWebClient()
+  return <SetupScreenOn project={project} onBack={onBack} gateway={client.gateway} account={client.account.id} />
+}
+
+/**
+ * The screen on a gateway: it installs the account broker's source as it mounts. Its page's first read can come before
+ * that (a child's effect runs first); the read waits for the source and is made as it arrives (`setSetupSource`).
+ */
+export function SetupScreenOn({ project, onBack, gateway, account }: { project: string; onBack: () => void; gateway: BorrowGateway; account: string }) {
   useEffect(() => {
-    setSetupSource(webSetup(client.gateway, client.account.id, () => [...accountListStore.get().devices.values()]))
+    setSetupSource(webSetup(gateway, account, () => [...accountListStore.get().devices.values()]))
     return () => setSetupSource(undefined)
-  }, [client])
+  }, [gateway, account])
   return <SetupScreenView project={project} onBack={onBack} />
 }
 
