@@ -393,6 +393,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       conversationOwns: (ref, marker) => this.conversationOwns(ref, marker),
       changed: (edge, progressOnly) => this.childMoved(edge, progressOnly),
       ended: (edge, ended) => this.runEnded(edge, ended),
+      stuck: (edge) => this.runStuck(edge),
       ...(deps.processes && { processes: deps.processes }),
       now: deps.now,
     })
@@ -1827,6 +1828,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.ready(held.conversation) !== "idle" || this.wakes.waits(held.conversation) || this.waitsOn(edge, held.conversation)) return
     this.awaiting.delete(edge.child)
     this.turnEnded(edge, held.conversation, held.request)
+  }
+
+  /** A run Mako stopped outlived its kill: its Fin's row says so (`stuckWords`), and it keeps its place. */
+  private runStuck(edge: ThreadParent): void {
+    this.childMoved(this.store()?.edges().of(edge.child) ?? edge, false)
   }
 
   /** A followed run ended: its end is its last report, unless it reported while it ran; held notices go to its next turn. */

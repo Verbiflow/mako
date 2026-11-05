@@ -552,6 +552,90 @@ async function followedStopHoldsUntilExit(): Promise<void> {
   }
 }
 
+/** A world with one place, a run its Apex's shell started linked into it (deaf to SIGTERM, writing shared.txt every 10 ms) and a Fin queued behind it. */
+async function linkedWriter(name: string, detached: boolean) {
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, name),
+    finLimit: () => 1,
+    catalog: fake.catalog,
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) {
+        writeFileSync(join(turn.world.root, "shared.txt"), "next")
+        await turn.world.hold(turn.conversation)
+      }
+      return "ok"
+    },
+  })
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached, stdio: ["ignore", "pipe", "ignore"] })
+  await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
+  const apex = await w.apex("claude", "full")
+  const nativeId = randomUUID()
+  fake.write({ harness: "claude", nativeId, path: join(w.root, "linked.jsonl"), cwd: w.root, startedAt: new Date().toISOString() }, [{ type: "tool", id: "one", name: "Bash", input: "{}", status: "completed" }])
+  const linked = await w.agents.link(apex.caller, { harness: "claude", session: nativeId, pid: shell.pid!, name: "linked" })
+  assert.ok(!("refused" in linked), JSON.stringify(linked))
+  await waitFor(() => w.agents.diagnostics().running === 1, "the linked run counted")
+  const queued = await w.agents.start(apex.caller, { name: "next", clientKey: "next", cwd: w.root, queue: true, brief: { objective: "Edit the shared file" } })
+  assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+  const started = () => w.prompts.some((prompt) => prompt.text.includes("You're fin:next,"))
+  return { w, shell, apex, linked, started }
+}
+
+/** A stopped run whose process can't be told apart, its identity unreadable (no `ps`), is taken as still running and keeps its place. */
+async function followedStopUnknownIdentity(): Promise<void> {
+  const { w, shell, apex, started } = await linkedWriter("followed-unknown", false)
+  const path = process.env.PATH
+  try {
+    process.env.PATH = "/mako-test-no-ps"
+    await w.agents.stop(apex.caller, { child: "linked" })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(started(), false, "unknown identity is not gone: the next Fin waits")
+    assert.equal(readFileSync(join(w.root, "shared.txt"), "utf8"), "linked")
+  } finally {
+    process.env.PATH = path
+  }
+  try {
+    await waitFor(started, "next to start once the run was killed and seen gone", 12_000)
+    assert.ok(shell.exitCode !== null || shell.signalCode !== null, "after the linked run exited")
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    shell.kill("SIGKILL")
+    await w.close()
+  }
+}
+
+/**
+ * A stopped run that outlives its kill (its signals refused) is never taken as gone: past its grace it keeps its place
+ * and its Fin says Mako couldn't stop it, and the place goes only once it has actually exited.
+ */
+async function followedStopStuck(): Promise<void> {
+  const { w, shell, apex, linked, started } = await linkedWriter("followed-stuck", true)
+  const kill = process.kill
+  try {
+    // Mako's TERM and KILL are refused, as for a process it may not signal; its liveness checks still read it.
+    // SAFETY: the stand-in takes process.kill's arguments and returns what it returns for every call it passes on.
+    process.kill = ((pid: number, signal?: string | number) => {
+      if ((pid === shell.pid || pid === -shell.pid!) && (signal === "SIGTERM" || signal === "SIGKILL")) throw Object.assign(new Error("permission denied"), { code: "EPERM" })
+      return kill(pid, signal)
+    }) as typeof process.kill
+    await w.agents.stop(apex.caller, { child: "linked" })
+    await new Promise((resolve) => setTimeout(resolve, 7_500))
+    assert.equal(started(), false, "past its grace it still keeps its place")
+    const row = w.agents.roster(apex.conversation).find((entry) => entry.child?.thread === linked.child)
+    assert.match(JSON.stringify(row?.child?.state), /couldn't stop it: its process \(\d+\) is still running/, `its Fin says Mako couldn't stop it: ${JSON.stringify(row?.child?.state)}`)
+  } finally {
+    process.kill = kill
+  }
+  try {
+    shell.kill("SIGKILL")
+    await waitFor(started, "next to start once it actually exited", 5_000)
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    shell.kill("SIGKILL")
+    await w.close()
+  }
+}
+
 /**
  * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
@@ -1316,6 +1400,8 @@ try {
   await launchesBeforeTheirEdge()
   await stopHoldsUntilCancelled()
   await followedStopHoldsUntilExit()
+  await followedStopUnknownIdentity()
+  await followedStopStuck()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()
