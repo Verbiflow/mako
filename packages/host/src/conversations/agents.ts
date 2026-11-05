@@ -89,6 +89,7 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../c
 import { crashedChildTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
+import { holdOf } from "../contracts/request-hold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
@@ -138,6 +139,12 @@ interface ApexAsk {
   label: string
   /** The Apex as the sender's card of its reply names it. */
   fin: { name: string; harness?: string }
+}
+
+/** A message Mako's exit or a crash paused, which the next host resumes for a Fin: never a Stop's, which waits for a deliberate resume. */
+function madePaused(request: LiveRequest): boolean {
+  const hold = holdOf(request)
+  return hold?.kind === "paused" && hold.by === "mako"
 }
 
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
@@ -496,7 +503,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || request.actor?.kind !== "agent") continue
+      if (!madePaused(request) || request.actor?.kind !== "agent") continue
       const relaunched = !launched
       try {
         if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
@@ -516,7 +523,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** An exit or a crash pauses the digests waiting for an Apex with the person's messages; they're Mako's, so they go on. */
   private resumeWakes(conversation: string): void {
     for (const request of this.deps.live.snapshot(conversation)?.requests ?? []) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
+      if (!madePaused(request) || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
       try {
         this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         hostLog("agents", "resumed", { conversation, request: request.id, wake: true })
@@ -2580,7 +2587,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private resumeFin(conversation: string, first: string): void {
     const paused = (this.deps.live.held(conversation)?.requests ?? []).filter((request) =>
-      request.status === "held" && !request.signIn && !request.wake && !request.retry && !request.editing && request.actor?.kind === "agent")
+      holdOf(request)?.kind === "paused" && request.actor?.kind === "agent")
     if (paused.length) {
       try {
         this.deps.live.resumeHeld(conversation, paused.map((request) => request.id), first)

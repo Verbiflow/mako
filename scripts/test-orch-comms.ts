@@ -321,7 +321,7 @@ async function manyReports(): Promise<void> {
     assert.equal(entries.length, 2, "a burst of more than a digest holds is two digests in the Apex's queue")
     assert.equal(readFinReports(entries[0]!.text).reports.length, FIN_REPORTS_MAX, "the first of as many as it holds")
     assert.equal(readFinReports(entries[1]!.text).reports.length, many.length - FIN_REPORTS_MAX, "the rest in the next, which goes after it")
-    assert.equal(wakesOf.pending(), 0, "nothing waits outside the queue")
+    assert.equal(wakesOf.pending(), 1, "the one unsent digest is what waits, in the queue")
   } finally {
     wakesOf.dispose()
   }

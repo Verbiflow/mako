@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { ReportSchema, type Notice } from "@mako/host/contracts/agents"
 import { AgentWakes, FROM_AGENTS, RESULT_COALESCE_MS, WAKE_COALESCE_MS, WAKES_PER_MINUTE, type AgentWakesDeps, type ParentReady } from "@mako/host/conversations/agent-wakes"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -178,7 +179,8 @@ try {
     await world.settle(600, 20_000, "ignore")
     const sent = world.prompts.filter((prompt) => prompt.conversation === apex && prompt.text.startsWith(FROM_AGENTS))
     assert.equal(sent.length, 1, `${harness}: once`)
-    assert.equal(sent[0]!.text.split('"labels"').length - 1, 1, `${harness}: its report once`)
+    // The digest's words, before the person's cards of the same reports (`appendFinReports`).
+    assert.equal(readFinReports(sent[0]!.text).text.split('"labels"').length - 1, 1, `${harness}: its report once`)
     assert.equal(world.store.undeliveredReports().length, 0)
     await world.close()
     console.log(`${harness}: a digest gathering its burst survived SIGKILL and went once`)
