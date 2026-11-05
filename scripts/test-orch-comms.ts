@@ -7,7 +7,7 @@ import type { AgentCaller, Report } from "@mako/host/contracts/agents"
 import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema, agentToolText } from "@mako/host/conversations/agent-tools"
-import { AgentWakes, digest, finishedLine, WAKE_COALESCE_MS, type Notice } from "@mako/host/conversations/agent-wakes"
+import { AgentWakes, digest, finishedLine, type Notice } from "@mako/host/conversations/agent-wakes"
 import { FIN_REPORTS_MAX, readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
@@ -296,29 +296,32 @@ async function manyReports(): Promise<void> {
   const kept = readFinReports(digest([long, many[1]!], "2 ended."))
   assert.deepEqual(kept.reports.map((card) => card.name), ["fin-1"], "a card its schema refuses is left to the words, the rest kept")
 
-  const wakes: string[] = []
+  // The Apex's queue, as the producer sees it: each digest an entry, the newest unsent one open to join.
+  const entries: { id: string; text: string; notices: Notice[]; sent?: true }[] = []
+  const unsent = () => [...entries].reverse().find((entry) => !entry.sent)
   const wakesOf = new AgentWakes({
     ready: () => "idle",
-    wake: (_conversation, _request, text) => void wakes.push(text),
+    open: () => { const entry = unsent(); return entry && { id: entry.id, notices: entry.notices } },
+    admit: (_conversation, id, text, notices) => void entries.push({ id, text, notices: [...notices] }),
+    rewrite: (_conversation, id, text, notices) => {
+      const entry = entries.find((candidate) => candidate.id === id && !candidate.sent)
+      if (!entry) return false
+      entry.text = text
+      entry.notices = [...notices]
+      return true
+    },
+    sent: () => [],
     steer: () => false,
     assign: () => {},
     delivered: () => {},
     counts: () => "70 ended.",
   })
   try {
-    const wakesBy = async (count: number) => {
-      const deadline = Date.now() + WAKE_COALESCE_MS + 3_000
-      while (wakes.length < count && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
-    }
     for (const each of many) wakesOf.notice("apex", "apex", each)
-    await wakesBy(1)
-    assert.equal(wakes.length, 1, "a burst of more than a wake holds starts one wake")
-    assert.equal(readFinReports(wakes[0]!).reports.length, FIN_REPORTS_MAX, "of as many as it holds")
-    wakesOf.settled("apex")
-    await wakesBy(2)
-    assert.equal(wakes.length, 2, "the rest go once its turn ends")
-    assert.equal(readFinReports(wakes[1]!).reports.length, many.length - FIN_REPORTS_MAX)
-    assert.equal(wakesOf.pending(), 0, "and none waits")
+    assert.equal(entries.length, 2, "a burst of more than a digest holds is two digests in the Apex's queue")
+    assert.equal(readFinReports(entries[0]!.text).reports.length, FIN_REPORTS_MAX, "the first of as many as it holds")
+    assert.equal(readFinReports(entries[1]!.text).reports.length, many.length - FIN_REPORTS_MAX, "the rest in the next, which goes after it")
+    assert.equal(wakesOf.pending(), 0, "nothing waits outside the queue")
   } finally {
     wakesOf.dispose()
   }

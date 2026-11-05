@@ -474,6 +474,28 @@ export class LiveConversations {
   }
 
   /**
+   * An unsent message of `id` says `text` now, carrying `digest`, its place and its hold kept: an Apex's digest a
+   * notice joined before it went (`AgentWakes`). With no notices left it's taken back. False when it went meanwhile.
+   */
+  rewriteWaiting(id: string, requestId: string, text: string, digest: NonNullable<LiveRequest["digest"]>): boolean {
+    const resident = this.records.get(id)
+    const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
+    if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
+    const next: LiveRequest = digest.notices.length
+      ? { ...request, text, digest, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
+      : { ...request, status: "canceled" }
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => (candidate === request ? next : candidate)) }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+    return true
+  }
+
+  /**
    * A Stop of `id`, the person's or an Apex's of its Fin: every message waiting there pauses, and one that was to go by
    * itself (again, or at a time) stops being so, so nothing sends until a deliberate resume (`resumeHeld`, Resume),
    * across a restart too. A message being edited or waiting for a sign-in keeps its own hold. Read in if it isn't
@@ -741,7 +763,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -815,7 +837,9 @@ export class LiveConversations {
       return this.admit(resident, { ...request, status: "held", signIn: pause.hold })
     }
     // A message for later waits here, held, whatever the process is doing; `wakeDue` releases it.
-    if (request.wake) {
+    // A message for later, or one its sender's stop paused (a stopped Fin's news), waits here, held, whatever the
+    // process is doing; `wakeDue` releases the one, the Fin's resume the other.
+    if (request.wake || request.pause) {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held" })
     }

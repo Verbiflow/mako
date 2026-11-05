@@ -11,6 +11,9 @@ export const YOUR_FINS = `your ${FIN_WORD}s`
 const LEGACY_FROM: ReadonlyMap<string, string> = new Map([[`your ${LEGACY_APEX_WORD}`, YOUR_APEX], ["your agents", YOUR_FINS]])
 
 /** The header every delivery an agent wrote starts with: the model reads it as an agent's words, never the person's. */
+/** What a digest's hold for its burst's window names as the message it follows (`RequestWake.after`): none, it's Mako's. */
+export const DIGEST_WAITS = "digest"
+
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`

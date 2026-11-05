@@ -177,6 +177,8 @@ jobs:
       # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
       # queue's order kept in the journal; a waiting message surviving SIGKILL (`test:request-holds`).
       - run: npm run test:request-holds
+      # An Apex's Fins' news as entries in its own queue: coalesced, budgeted, paused and kept through SIGKILL.
+      - run: npm run test:wake-queue
       - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
       - run: npm run test:orch-deliver

@@ -89,7 +89,7 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../c
 import { crashedChildTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
-import { AgentWakes, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
+import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
@@ -146,7 +146,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -398,11 +398,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
-      wake: (conversation, request, text, actor) => {
+      open: (conversation) => {
+        // The newest unsent: a full digest (`FIN_REPORTS_MAX`) leaves the next to start one of its own.
+        const open = [...deps.live.held(conversation)?.requests ?? []].reverse().find((request) => request.digest && (request.status === "queued" || request.status === "held"))
+        return open?.digest && { id: open.id, notices: open.digest.notices }
+      },
+      admit: (conversation, request, text, notices, actor, hold) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
         if (deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) return
-        deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor)
+        deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor, {
+          digest: { notices: [...notices] },
+          ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS } },
+        })
       },
+      rewrite: (conversation, request, text, notices) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices] }),
+      sent: (conversation, since) => (deps.live.held(conversation)?.requests ?? [])
+        .filter((request) => request.digest && request.status !== "queued" && request.status !== "held" && request.status !== "canceled" && (request.createdAt ?? 0) >= since)
+        .map((request) => request.createdAt ?? 0)
+        .sort((left, right) => left - right),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
       assign: (reports, request) => this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request),
       delivered: (reports, at) => {
@@ -2096,7 +2109,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     this.rosters.delete(edge.parent)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
-    for (const conversation of this.conversationsOfThread(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
+    for (const conversation of this.conversationsOfThread(edge.parent)) {
+      this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
+      if (kindChanged) this.wakes.refresh(conversation)
+    }
     this.askApex(edge)
     if (kindChanged) {
       this.checkHolds(edge.child)
@@ -2450,7 +2466,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!session) return "gone"
     // A stopped Fin hears its own Fins' news once it's resumed (`reopen`), not as turns of a Fin its Apex paused.
     const child = this.childOfConversation(conversation)
-    if (child && this.store()?.edges().of(child)?.closedAt !== undefined) return "queue"
+    if (child && this.store()?.edges().of(child)?.closedAt !== undefined) return "paused"
     if (!this.deps.live.atWork(conversation)) return "idle"
     return this.deps.live.steersAtStep(conversation) ? "steer" : "queue"
   }

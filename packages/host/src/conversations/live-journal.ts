@@ -3,6 +3,7 @@ import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
 import { NativePromptReferenceSchema } from "../contracts/native-prompt-identity.js"
 import { NativeAgentRosterSchema, providerRoster, sameProviderWork } from "../contracts/native-agents.js"
+import { NoticeSchema } from "../contracts/agents.js"
 import { ConversationGoalSchema } from "../contracts/live-goals.js"
 import { ReviewTargetSchema } from "../contracts/live-reviews.js"
 import {
@@ -158,6 +159,7 @@ export const LiveRequestSchema = z.object({
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   retry: RequestRetrySchema.optional(),
+  digest: z.object({ notices: z.array(NoticeSchema) }).optional(),
   interruption: z
     .object({
       ...StoredReason,

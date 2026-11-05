@@ -358,7 +358,16 @@ implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
 its next step where its harness steers there and at its turn's end where it
 doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex
 never polls. A steer the harness doesn't take goes as the Apex's next turn,
-never dropped. Each start sets its `mode` and `wake` (on the edge's
+never dropped. The digest is an entry in the Apex's own queue
+(`LiveRequest.digest`), its reports heard once it's there, so the queue
+keeps it through a crash, sends it once and retries it as any message: a
+burst's window is a hold until its time (`RequestWake.after` is
+`DIGEST_WAITS`), a notice joins the digest still unsent
+(`LiveConversations.rewriteWaiting`), the minute's budget is read from the
+digests the queue sent, a stopped Fin's digest is paused for its resume, and
+one no longer current leaves it when the Apex's turn ends or a Fin's state
+moves (`AgentWakes.refresh`). Nothing of it lives only in memory but a steer
+unanswered (`test:wake-queue`). Each start sets its `mode` and `wake` (on the edge's
 `asked`), and `reportRoute` is where its reports go: `background` returns at
 once, `wait` holds the call at most `WAIT_LIMIT_MS` (half the 60 s Cursor's
 MCP client and the MCP default give a tool call) for the result or a

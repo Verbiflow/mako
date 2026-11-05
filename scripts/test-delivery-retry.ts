@@ -197,7 +197,7 @@ try {
       await until("the Apex to sleep", () => world.live.session(apex.conversation)?.connection === "hibernated")
       faults.start.set(apex.conversation, "[unavailable] Server at capacity")
       world.release(fin)
-      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.status === "held", 10_000)
+      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.retry?.cause === "rate-limited", 10_000)
       waits(world, apex.conversation, FROM_AGENTS, "rate-limited", `${harness} apex`)
       await goesOnce(world, apex.conversation, FROM_AGENTS, `${harness} apex`)
       await world.close()

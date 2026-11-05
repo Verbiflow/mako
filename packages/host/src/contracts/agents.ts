@@ -216,6 +216,25 @@ export const ReportSchema = z.object({
 })
 export type Report = z.infer<typeof ReportSchema>
 
+/** `notice:{child}:{reportId}`: a report its Apex's owner hears, under an ID a resend repeats; a digest in the Apex's queue carries its notices (`LiveRequest.digest`). */
+export const NoticeSchema = z.object({
+  id: z.string(),
+  report: ReportSchema,
+  /** The Fin as the digest names it: `"name" (Harness)`. */
+  label: z.string(),
+  /** Who wrote it as the person's card of it names them (`FinReportCard`): its name and its harness's ID, when known. */
+  fin: z.object({ name: z.string(), harness: z.string().optional() }),
+  /** The Fin's own Session, which the wake's request names as its actor: an agent's words, never the person's. */
+  from: z.string(),
+  /** The request already named to carry it, by a host that stopped before it was sent (`ThreadStore.assignWake`). */
+  wake: z.string().optional(),
+  /** The result of a `wait` start whose window ended first: it starts the Apex's next turn, in full, and is never steered into a running one. */
+  settledOnly: z.literal(true).optional(),
+  /** Another of the person's Apexes' reply to this one's message, in full: the turn the message started, as it ended. */
+  reply: z.literal(true).optional(),
+})
+export type Notice = z.infer<typeof NoticeSchema>
+
 /** Why a spawn waits: the tree's running budget, the person's limit of Fins at once (`place-full`), or (from 8.4) another place. */
 export type QueueReason = "tree-running" | "place-full" | "device-offline"
 

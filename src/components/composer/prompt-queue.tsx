@@ -1,5 +1,6 @@
 import { clockText } from "@/state/request-recovery"
 import { retryWords } from "@mako/host/contracts/delivery-retry"
+import { DIGEST_WAITS } from "@mako/host/contracts/children"
 import { harnessLabel } from "@/lib/harness-label"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
@@ -418,7 +419,9 @@ function QueueRow({
       )}
       {request.status === "held" && !editing && !request.signIn ? (
         <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at ?? request.retry?.at} data-queue-retry={request.retry?.cause}>
-          {request.wake
+          {request.wake?.after === DIGEST_WAITS
+            ? "Your Fins' news, going in a moment with whatever else they say."
+            : request.wake
             ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
             : request.retry
               ? `Sends again by itself at ${clockText(request.retry.at)}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`

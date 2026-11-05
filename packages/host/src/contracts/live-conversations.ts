@@ -1,5 +1,6 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
 import type { RequestRetry } from "./delivery-retry.js"
+import type { Notice } from "./agents.js"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
@@ -356,12 +357,8 @@ export interface LiveRequest {
    * second failure counts on from this one; gone once it's sent.
    */
   retry?: RequestRetry
-  /**
-   * A Stop's latch on a request it found waiting or being sent: the person's Stop, or an Apex's of its Fin. Whatever
-   * comes back for it later (a refusal, a retry, a time), it's held as the Stop's pause and goes by itself never,
-   * across a restart too, until a deliberate resume clears the mark: Resume, or for a Fin its next message.
-   */
-  pause?: "stop"
+  /** A digest of an Apex's Fins' news (`AgentWakes`): the notices it carries, which a notice arriving before it's sent joins. */
+  digest?: { notices: Notice[] }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**
