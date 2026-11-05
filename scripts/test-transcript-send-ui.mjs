@@ -6,10 +6,12 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 /**
- * Sending a message at the end of a long Apex Thread (`?mock&app=apex&turns=260`, windowed rows, the crew card and
- * the Fins' reports below them) on the desk, the web app and the phone, with the Apex between turns (`idle=1`: the
- * message starts one) and in one (it steers or waits): from the keypress until the answer has landed, no two rows of the transcript overlap in any frame, nor the last row and what follows it. Each frame reads
- * every painted turn's box; a failure names the frame, the two rows and by how much, and leaves a screenshot.
+ * A long Apex Thread (`?mock&app=apex&turns=260`, windowed rows, the crew card and the Fins' reports below them) on
+ * the desk, the web app and the phone, with the Apex between turns (`idle=1`: a message starts one) and in one (it
+ * steers or waits). It opens at its end with no blank room below its last line. Then a message is sent: from the
+ * keypress until the answer has landed, no two rows of the transcript overlap in any frame, nor the last row and what
+ * follows it. Each frame reads every painted turn's box; a failure names the frame, the two rows and by how much, and
+ * leaves a screenshot.
  *
  * Pass a dev server's URL to use it; with none it serves its own. Screenshots go to the printed directory, or to
  * `MAKO_SEND_SHOTS`.
@@ -106,6 +108,7 @@ async function check() {
       results.push(await sendOn(BrowserWindow, base, shots, { ...surface, path: `${surface.path}${idle ? "&idle=1" : ""}`, surface: `${surface.surface}${idle ? "" : " mid-turn"}` }))
   console.log(`SEND ${JSON.stringify(results)}`)
   const failed = results.filter((result) => result.overlaps.length)
+  assert.deepEqual(results.filter((result) => result.room > 1).map((result) => ({ surface: result.surface, room: result.room })), [], "a long Thread opens at its end with no blank room below its last line")
   assert.deepEqual(failed.map((result) => ({ surface: result.surface, first: result.overlaps.slice(0, 3) })), [], "no two rows of the transcript overlap in any frame of a send")
   app.exit(0)
 }
@@ -156,6 +159,23 @@ async function sendOn(BrowserWindow, base, shots, { surface, path, width, height
   await until("Boolean(document.querySelector('[data-transcript-viewport][data-virtualized] [data-exchange]'))", "the long Apex's windowed transcript")
   await evaluate("document.fonts.ready.then(() => true)")
   await until(`Boolean(${composer})`, "the composer")
+  // Opened at its end, once the scroller has held still for 10 frames: the column's last line meets the scroller's
+  // content edge, with no room left below it (the phone's steady end keeps room only for a column that got shorter).
+  const room = await evaluate(`new Promise((done) => {
+    const node = document.querySelector('[data-transcript-viewport]')
+    let last = -1, still = 0
+    const look = () => {
+      const at = node.scrollTop + node.scrollHeight
+      still = Math.abs(at - last) < 0.5 ? still + 1 : 0
+      last = at
+      if (still < 10) return requestAnimationFrame(look)
+      node.scrollTop = node.scrollHeight
+      // From the scroller's content edge: the phone's padding below it is room the capsule keeps.
+      requestAnimationFrame(() => done(Math.round(node.getBoundingClientRect().bottom - parseFloat(getComputedStyle(node).paddingBottom) - node.firstElementChild.getBoundingClientRect().bottom)))
+    }
+    requestAnimationFrame(look)
+  })`)
+  await writeFile(join(shots, `${surface}-opened.png`), (await page.capturePage()).toPNG())
   await wait(600)
   await evaluate(WATCH)
   await wait(300)
@@ -173,5 +193,5 @@ async function sendOn(BrowserWindow, base, shots, { surface, path, width, height
   const overlaps = (await evaluate("window.__overlaps")).slice(before)
   const frames = await evaluate("window.__frames")
   window.destroy()
-  return { surface, turns, frames, overlaps }
+  return { surface, turns, frames, room, overlaps }
 }

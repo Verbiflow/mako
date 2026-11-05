@@ -622,6 +622,17 @@ export function ConversationTimeline({
       : "start"
   const rowKey = (index: number) => keys.get(exchanges[index]!.id) ?? exchanges[index]!.id
   const placedTotal = useRef(0)
+  /** How much of a windowed column is rows' estimates (`estimateSize`), not yet their measured sizes. */
+  const estimated = useRef<() => number>(() => 0)
+  estimated.current = () => {
+    if (!windowed) return 0
+    let height = 0
+    for (let index = 0; index < exchanges.length; index += 1) {
+      const key = rowKey(index)
+      if (!rows.itemSizeCache.has(key)) height += measuredSize(readingSource, key)
+    }
+    return height
+  }
   /*
    * A row's new size is placed in the frame it is laid out, never the next: the resize observer's sizes apply in its
    * own callback, the virtualizer writes every row's offset and the column's height there itself, and the end is
@@ -1110,14 +1121,16 @@ export function ConversationTimeline({
           // row giving way to its turn's own) keeps its height as room at the end, which what it writes next fills.
           // At another width every line has flowed again (a phone turned sideways, a pane resized), and a height from
           // before says nothing of what's under the reader: kept, it would leave the end blank.
+          // Rows still at their estimate aren't height the column had: one measured below it is no shrink.
           const natural = column.offsetHeight
+          const measured = natural - estimated.current()
           const width = column.offsetWidth
-          highWater.current = width === highWaterWidth.current ? Math.max(highWater.current, natural) : natural
+          highWater.current = width === highWaterWidth.current ? Math.max(highWater.current, measured) : measured
           highWaterWidth.current = width
-          spacer.style.height = `${highWater.current - natural}px`
+          spacer.style.height = `${highWater.current - measured}px`
         } else {
           // Away from the end, the room kept there goes: nothing the reader sees moves.
-          highWater.current = column.offsetHeight
+          highWater.current = column.offsetHeight - estimated.current()
           highWaterWidth.current = column.offsetWidth
           spacer.style.height = "0px"
         }
