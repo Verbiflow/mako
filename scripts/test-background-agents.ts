@@ -523,8 +523,9 @@ async function followedStopHoldsUntilExit(): Promise<void> {
       return "ok"
     },
   })
-  // A run its Apex's shell started, deaf to SIGTERM, writing the shared file every 10 ms until it's killed.
-  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+  // A run its Apex's shell started, deaf to SIGTERM, writing the shared file every 10 ms until it's killed. Each write
+  // replaces the file whole: one that truncated it first was read empty between the two, 170 reads in 20,000.
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');const put=()=>{fs.writeFileSync('shared.tmp','linked');fs.renameSync('shared.tmp','shared.txt')};put();console.log('ready');setInterval(put,10)"], { cwd: w.root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
   await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
   let exited = 0
   shell.once("exit", () => (exited = performance.now()))
@@ -577,7 +578,7 @@ async function linkedWriter(name: string, detached: boolean) {
       return "ok"
     },
   })
-  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached, stdio: ["ignore", "pipe", "ignore"] })
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');const put=()=>{fs.writeFileSync('shared.tmp','linked');fs.renameSync('shared.tmp','shared.txt')};put();console.log('ready');setInterval(put,10)"], { cwd: w.root, detached, stdio: ["ignore", "pipe", "ignore"] })
   await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
   const apex = await w.apex("claude", "full")
   const nativeId = randomUUID()
