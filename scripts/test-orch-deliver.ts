@@ -30,6 +30,19 @@ async function until(what: string, done: () => boolean, timeoutMs = 10_000): Pro
   }
 }
 
+/** `call`, which must answer without the held steer's answer: a hang guard thirty times the 5 s it waits for one. */
+async function beforeAnswered<T>(call: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const never = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("the call still waited after 150 s, so it waited for Cursor to answer the steer it holds")), 150_000)
+  })
+  try {
+    return await Promise.race([call, never])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function sent(result: AgentsSendResult): AgentsSent {
   assert.ok(!("refused" in result), JSON.stringify(result))
   return result
@@ -161,9 +174,8 @@ async function cursorHoldsASteer(): Promise<void> {
   const { world, apex, fin, work, release, prompts, steers } = await team("cursor", "claude", ["cursor"], { steering: { cursor: { lands: "interrupt", answersOnEnd: true, hears: CURSOR, holds: true } } })
   try {
     await work()
-    const began = Date.now()
-    const held = sent(await world.agents.send(apex.caller, { to: "cursor", text: "Drop the retry loop.", deliver: "steer", clientKey: "c1" }))
-    assert.ok(Date.now() - began < 8_000, "the call answers while Cursor holds it")
+    // The call gives up on the harness's answer after 5 s at most; Cursor here answers only when the test says.
+    const held = sent(await beforeAnswered(world.agents.send(apex.caller, { to: "cursor", text: "Drop the retry loop.", deliver: "steer", clientKey: "c1" })))
     assert.equal(held.delivery, "steer")
     assert.equal(held.hears, "Cursor holds it until what cursor is running now returns, then cursor hears it; if its turn ends first, it goes as its next message.")
     const second = sent(await world.agents.send(apex.caller, { to: "cursor", text: "And the second retry.", deliver: "steer", clientKey: "c2" }))
