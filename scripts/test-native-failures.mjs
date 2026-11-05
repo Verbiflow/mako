@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { ChildProcess, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { appendFileSync } from "node:fs"
@@ -21,7 +21,10 @@ const nativeStores = new NativeStores(false)
 //   a child it started still holds its pipes: the driver reports the exit
 //   promptly as one failed-and-disconnected update, and never claims delivery;
 // - the runtime version the process reports is recorded, so a wake under a
-//   different version is assessed rather than trusted.
+//   different version is assessed rather than trusted;
+// - a close that can't end the process rejects and keeps the session, so its
+//   binding's place isn't released while it can still write, and the next
+//   close ends it.
 // A harness registered without a stand-in here fails this test.
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-native-failures-"))
@@ -225,7 +228,7 @@ async function main() {
     const started = settled(standIn.start(settings.dir, admitted(provider, { conversationId: id, emit, mcpSnapshot })))
     const pids = await until(`${provider} stand-in launched`, () => readFile(settings.pids, "utf8").then(JSON.parse, () => undefined))
     const sessions = () => events.filter(({ event }) => event.type === "live-session" && event.session.id === id)
-    return { id, standIn, events, started, pids, sessions, session: () => sessions().at(-1)?.event.session }
+    return { provider, id, standIn, events, started, pids, sessions, session: () => sessions().at(-1)?.event.session }
   }
 
   const missing = []
@@ -284,8 +287,31 @@ async function main() {
       for (const pid of leftovers) if (pid && alive(pid)) process.kill(pid, "SIGKILL")
     }
   }
+  // A process its signals can't reach: every close waits out its graces, so they run side by side.
+  const outliving = await Promise.all(providerHost.liveDrivers.list().map(({ provider }) => open(provider, "stay")))
+  const signal = ChildProcess.prototype.kill
+  ChildProcess.prototype.kill = () => false
+  try {
+    await Promise.all(outliving.map(async (run) => {
+      const { provider } = run
+      // OpenCode's stand-in never gets past starting: Close cancels the start, whose server then holds the binding.
+      if (run.standIn.unproven) await run.standIn.close(run.id)
+      const start = await run.started
+      assert.equal(start.ok, !run.standIn.unproven, `${provider}: the stand-in starts or is cancelled: ${start.error?.message}`)
+      const closed = await settled(run.standIn.close(run.id))
+      assert.equal(closed.error?.name, "ProviderProcessOutlivedError", `${provider}: a close that couldn't end the process says so`)
+      assert.ok(alive(run.pids.pid), `${provider}: the process is really still there`)
+    }))
+  } finally {
+    ChildProcess.prototype.kill = signal
+  }
+  await Promise.all(outliving.map(async (run) => {
+    await run.standIn.close(run.id)
+    await until("the next close ends what outlived the last", () => !alive(run.pids.pid))
+  }))
+  trace("outliving closes passed")
   for (const result of results) console.log(JSON.stringify(result))
   assert.deepEqual(missing, [], `Every registered harness needs a failure stand-in in ${fileURLToPath(import.meta.url)}`)
   const proven = results.filter((result) => result.exitAfterHandoff !== "unproven").map((result) => result.provider)
-  console.log(`Native failures: ${results.map((result) => result.provider).join(", ")} cancel during setup; ${proven.join(", ")} report a death after hand-off while a child holds the pipes, end what it left in its group, and record the runtime version`)
+  console.log(`Native failures: ${results.map((result) => result.provider).join(", ")} cancel during setup; ${proven.join(", ")} report a death after hand-off while a child holds the pipes; a close that can't end a process rejects and the next one ends it, end what it left in its group, and record the runtime version`)
 }

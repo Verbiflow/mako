@@ -129,7 +129,7 @@ async function summarize(results: CaseResult[]) {
     const name = `${result.harness} · ${result.model} · routing ${result.routing} · primer ${result.primer ?? "on"}${result.mako === "http" ? " · mako http" : ""}`
     groups.set(name, [...groups.get(name) ?? [], result])
   }
-  const lines = ["| run | route | front door | don't spawn | no polling | stay native | mako tools | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+  const lines = ["| run | route | front door | don't spawn | no polling | stay native | mako tools | reports | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
   for (const [name, group] of groups) {
     const rates = budget(group)
     const cell = (line: string) => {
@@ -137,7 +137,7 @@ async function summarize(results: CaseResult[]) {
       return entry.rate === undefined ? "–" : `${Math.round(entry.rate * 100)}% (${entry.passed}/${entry.of})${entry.met ? "" : " ✗"}`
     }
     const usd = group.reduce((sum, result) => sum + (result.usd ?? 0), 0)
-    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${cell("mako tools")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
+    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${cell("mako tools")} | ${cell("reports")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
   }
   const failing = results.filter((result) => !result.error && result.passes.filter(Boolean).length * 2 <= result.passes.length)
   const errors = results.filter((result) => result.error)
@@ -220,6 +220,9 @@ try {
       ["fd-finished-wake-carries-refs", { ...sample([[{ tool: "agents_read", args: { child: "alarm-fix" } }]]), text: "It landed: https://git.example.com/acme/app/pull/292, and the report is reports/alarm-loop.md." }, false],
       ["fin-reads-crew-before-shared-files", sample([[{ tool: "agents_list", args: { scope: "crew" } }], [{ tool: "edit", args: {} }]]), true],
       ["fin-reads-crew-before-shared-files", sample([[{ tool: "edit", args: {} }]]), false],
+      ["done-asks-merge", sample([[{ tool: "pull_request_status", args: {} }], [{ tool: "agents_report", args: { status: "done", summary: "PR #371 is green.", question: "Merge #371?", options: [{ label: "Merge" }, { label: "Leave open" }], decides: "person", clientKey: "k" } }]]), true],
+      ["done-asks-merge", sample([[{ tool: "pull_request_status", args: {} }], [{ tool: "agents_report", args: { status: "needs-input", summary: "PR #371 is green.", question: "Merge #371?", clientKey: "k" } }]]), false],
+      ["done-asks-merge", sample([[{ tool: "agents_report", args: { status: "done", summary: "PR #371 is green; merge it when you like.", clientKey: "k" } }]]), false],
       ["fin-solo-no-crew", sample([[{ tool: "edit", args: {} }]]), true],
       ["fin-solo-no-crew", sample([[{ tool: "agents_list", args: { scope: "crew" } }]]), false],
       ["apex-reads-digest-not-message", { ...sample([[{ tool: "agents_list", args: { scope: "apexes" } }]]), text: "Not quite: the migration is in PR #12, waiting on review." }, true],
