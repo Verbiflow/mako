@@ -18,8 +18,10 @@ const StoredSchema = z.object({
     .default({ rules: [] }),
   limit: FinLimitSchema.optional().catch(undefined),
   ceiling: FinCeilingSchema.optional().catch(undefined),
+  /** Kept only once the person turned "When an account runs out, continue on the next one" off. */
+  moveOnLimit: z.literal(false).optional().catch(undefined),
 })
-type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number; ceiling?: number }
+type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number; ceiling?: number; moveOnLimit?: false }
 
 function kept(entries: Readonly<Record<string, SessionSettings | undefined>>): Record<string, SessionSettings> {
   return Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, SessionSettings] => entry[1] !== undefined))
@@ -44,8 +46,8 @@ export class FinDefaultsStore {
   }
 
   reading(): FinChoicesReading {
-    const { chosen, used, policy, limit, ceiling } = this.#read()
-    return { chosen: { ...chosen }, used: { ...used }, policy, ...(limit !== undefined && { limit }), ceiling: ceiling ?? FIN_CEILING }
+    const { chosen, used, policy, limit, ceiling, moveOnLimit } = this.#read()
+    return { chosen: { ...chosen }, used: { ...used }, policy, ...(limit !== undefined && { limit }), ceiling: ceiling ?? FIN_CEILING, moveOnLimit: moveOnLimit ?? true }
   }
 
   /** The person's own number of Fins at once on this device, or with null, its capacity (Auto). */
@@ -53,6 +55,14 @@ export class FinDefaultsStore {
     const next = limit === null ? undefined : FinLimitSchema.parse(limit)
     const stored = this.#read()
     if (stored.limit !== next) this.#write(withOwn(stored, "limit", next))
+    return this.reading()
+  }
+
+  /** Whether a Fin whose account runs out goes on to the next step of its order (`contracts/fin-fallback.ts`). */
+  chooseMoveOnLimit(on: boolean): FinChoicesReading {
+    z.boolean().parse(on)
+    const { moveOnLimit, ...stored } = this.#read()
+    if ((moveOnLimit ?? true) !== on) this.#write(on ? stored : { ...stored, moveOnLimit: false })
     return this.reading()
   }
 
@@ -113,7 +123,7 @@ export class FinDefaultsStore {
     try {
       const parsed = StoredSchema.parse(JSON.parse(readFileSync(this.#file, "utf8")))
       const rules = parsed.policy.rules.filter((rule) => rule !== undefined)
-      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used), policy: { rules, ...(parsed.policy.otherwise && { otherwise: parsed.policy.otherwise }) }, ...(parsed.limit !== undefined && { limit: parsed.limit }), ...(parsed.ceiling !== undefined && { ceiling: parsed.ceiling }) }
+      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used), policy: { rules, ...(parsed.policy.otherwise && { otherwise: parsed.policy.otherwise }) }, ...(parsed.limit !== undefined && { limit: parsed.limit }), ...(parsed.ceiling !== undefined && { ceiling: parsed.ceiling }), ...(parsed.moveOnLimit === false && { moveOnLimit: false as const }) }
     } catch {
       // A file this build can't read is replaced at the next choice; until then Fins run on what the person uses.
     }
@@ -159,4 +169,5 @@ export function declareFinDefaultMethods(methods: MethodTable, store: FinDefault
     changed?.()
     return reading
   })
+  methods.handle("mako:fin-move-on-limit", (on: boolean) => read(store.chooseMoveOnLimit(on)))
 }

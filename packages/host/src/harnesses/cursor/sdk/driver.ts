@@ -585,6 +585,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     nativeRouting: { kind: "at-launch", via: "`disallowedTools: [\"task\"]` on the SDK's `Agent.create` and every `Agent.resume`, which removes the task tool.", verified: { version: "1.2.0", how: "test:native-routing-cursor (2026-11-01), real turns asking for a subagent: a lead called no task tool and said it had none, as did that lead resumed; an ordinary Thread's task ran and its subagent was observed" } },
     layer: cursorLayer.capabilities,
     modelRoutes: { kind: "absent", reason: "Cursor's SDK runs its models through Cursor's own service and takes no endpoint of the person's." },
+    accountContinuation: { kind: "new-session", reason: "An agent's conversation is kept by Cursor's service under the account whose key started it; another account's key starts an agent of its own." },
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
     contextBreakdown: {
       kind: "itemized",

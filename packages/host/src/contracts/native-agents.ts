@@ -124,6 +124,8 @@ export const NativeAgentObservationSchema = z.object({
       path: z.string().min(1).max(4096).optional(),
       conversation: z.string().min(1).max(512).optional(),
       state: ChildStateSchema.optional(),
+      /** Where it went on when its harness's account ran out, and why: "Moved to Claude (work): personal is at its limit until 3:10 PM PST". */
+      moved: z.string().max(512).optional(),
     })
     .optional(),
   state: NativeAgentStateSchema,

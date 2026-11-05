@@ -36,6 +36,18 @@ export async function chooseFinDefault(harness: string, settings: SessionSetting
   }
 }
 
+/** Whether a Fin whose account runs out goes on to the next one: shown at once, put back if the host refuses. */
+export async function chooseMoveOnLimit(on: boolean): Promise<void> {
+  const before = store.get().reading
+  if (before) store.set({ reading: { ...before, moveOnLimit: on } })
+  try {
+    store.set({ reading: await getMako().chooseFinMoveOnLimit(on) })
+  } catch (error) {
+    store.set({ reading: before })
+    throw error
+  }
+}
+
 /** The person's rules, saved whole: shown at once, put back if the host refuses them. */
 export async function saveFinPolicy(policy: FinPolicy): Promise<void> {
   const before = store.get().reading

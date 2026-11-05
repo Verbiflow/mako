@@ -168,6 +168,7 @@ jobs:
       - run: npm run test:agents-wake
       - run: npm run test:orch-answer
       - run: npm run test:fin-resume
+      - run: npm run test:fin-fallback
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
       # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still

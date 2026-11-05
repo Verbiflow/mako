@@ -342,7 +342,33 @@ them through the Mac, and a Fin's row says its model, reasoning and fast lane
 one whose Apex named no harness or model starts on the person's next harness
 with room (`harnessOrder`), its answer's `limited` and its row's note saying
 until when and which other account of that harness has room; a named one,
-or one with nowhere to go, is refused (`limited`) with the same. The person's rules for Fins (`FinPolicy`,
+or one with nowhere to go, is refused (`limited`) with the same. That is the
+rule with Settings › Fins' one switch, "When an account runs out, continue on
+the next one" (`FinChoicesReading.moveOnLimit`), off. On, the default, a Fin
+goes on at the first step of one harness-blind order with room
+(`fallbackOrder`, `contracts/fin-fallback.ts`, read by `FinMoves`): the
+person's other accounts of its harness in their order
+(`HarnessAccounts.standing`; an unread one is never taken), keeping harness
+and model; their model connections its harness's routes take for its model's
+family (`ModelRouteAdapter.model` names the model as the harness lists it);
+then their next harness that fits its access and has room. At a start it
+applies whether or not the harness was named, and a named model keeps the
+refusal. Another account runs only that Fin's launches
+(`ProviderStartOptions.pinnedAccount`, from its edge's `tuned.rerouted.to`),
+never the person's selection, and admission checks the pin before each input
+as it checks a selection. Mid-run, a Fin's turn its account's limit refused
+(the harness's own marker, `TurnReply.limit`, else a limit failure the
+account's reading confirms) moves once: what waited behind it is held, and it
+goes on in the same session on another account where its driver declares
+`accountContinuation` `resumes` (Claude; `test-harness-definitions.ts`
+requires every harness to declare it), on a connection's model, or by a
+hand-off to the next harness (`transfer`), each told where it stopped and
+what moved in its checkout since (`finMovedText`). A turn never moves back to
+a place it ran on, and one that ends without a limit clears that. A turn the
+person sent in the Fin's Thread, or a run Mako doesn't drive, never moves.
+Its row and strip say "Moved to Claude (work): personal is at its limit until
+…" (`child.moved`, `movedLine`), its transcript has the line, and its Apex's
+next digest says it once without being woken for it (`test:fin-fallback`). The person's rules for Fins (`FinPolicy`,
 Settings › Fins: their own words, each to a harness and maybe a model, first
 fit wins, and where the rest go) reach every Thread's agent ahead of the
 person's next message once they change (`finPolicyNote`, `rulesNote`), and

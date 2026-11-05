@@ -217,6 +217,13 @@ export interface ConversationChildren {
   isApex(conversation: string): boolean
   /** What an Apex hears before a message the person sends it: its Fins as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
+  /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
+  pinnedAccount?(conversation: string, harness: string): string | undefined
+}
+
+/** What a launch of `conversation` on `harness` reads its account from: the Fin's pin, else the selected account. */
+export function launchAccount(dependencies: Pick<Dependencies, "agents">, conversation: string, harness: string): () => string | undefined {
+  return () => dependencies.agents?.()?.pinnedAccount?.(conversation, harness)
 }
 export interface Dependencies {
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

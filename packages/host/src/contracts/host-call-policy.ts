@@ -344,6 +344,8 @@ const replays = [
   "mako:fin-limit-set",
   /** `FinDefaultsStore.setCeiling`: the same number saved twice is one choice. */
   "mako:fin-ceiling-set",
+  /** `FinDefaultsStore.chooseMoveOnLimit`: the same switch set twice is set once. */
+  "mako:fin-move-on-limit",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */

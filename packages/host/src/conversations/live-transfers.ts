@@ -17,7 +17,7 @@ import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
@@ -366,6 +366,7 @@ export class LiveTransfers {
           threadEnvironment,
           nativeRouting: launchRouting(this.host.dependencies, source.session.id, conversationTools),
           nativeCalls: launchCalls(this.host.dependencies, source.session.id, source.session.cwd, conversationTools, threadEnvironment),
+          pinnedAccount: launchAccount(this.host.dependencies, source.session.id, transfer.input.provider),
           title: source.session.title,
           tuning,
           modeId,

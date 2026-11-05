@@ -44,7 +44,7 @@ import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
-import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate } from "@mako/sessions/live-content"
+import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { DirectRoute } from "@mako/sessions/events"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
@@ -67,7 +67,7 @@ import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
 import { LiveSideQuestions } from "./live-side-questions.js"
-import { LiveHibernation } from "./live-hibernation.js"
+import { FIN_MOVED, LiveHibernation } from "./live-hibernation.js"
 import { JournalWriteError, LiveRequestSchema } from "./live-journal.js"
 import { JournalReclaims } from "./journal-reclaim.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
@@ -511,6 +511,11 @@ export class LiveConversations {
     const resident = this.records.get(id)
     if (!resident) return undefined
     return { ...turnReply(resident, requestId), request: resident.snapshot.requests.find((request) => request.id === requestId) }
+  }
+
+  /** The conversation a driver's binding speaks for: a hand-off's new session is another binding of the same one. */
+  ownerOf(bindingId: string): string {
+    return this.records.owners.get(bindingId) ?? bindingId
   }
 
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
@@ -1456,6 +1461,33 @@ export class LiveConversations {
     this.keep(resident)
     if (resident.snapshot.blocks.some((block) => block.type === "event" && block.direct?.request === direct.request)) return true
     queueLiveUpdate(resident, { kind: "event", label: `You wrote to ${direct.to} directly`, body: text, direct })
+    this.keep(resident)
+    return true
+  }
+
+  /**
+   * Closes the conversation's process so its next message launches it again on the account it runs on now
+   * (`ProviderStartOptions.pinnedAccount`), resuming its native session, as a change of account does. False when
+   * work still holds the process; the message then waits for it as any account change's does.
+   */
+  async relaunch(id: string): Promise<boolean> {
+    const resident = this.records.get(id)
+    // A turn that failed leaves its process connected and idle: that's the one this closes.
+    if (!resident?.driver || !this.hibernation.canHibernate(resident, false, true, true)) return false
+    await this.hibernation.hibernate(resident, FIN_MOVED)
+    return resident.snapshot.session.connection === "hibernated"
+  }
+
+  /**
+   * A line Mako writes into a conversation that no harness's record holds, as `recordDirect` does: a Fin's move to
+   * another account or harness when its own ran out. Said once: the same words again change nothing.
+   */
+  recordNote(id: string, label: string, detail: string): boolean {
+    const resident = this.records.load(id)
+    if (!resident) return false
+    this.keep(resident)
+    if (reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
+    queueLiveUpdate(resident, { kind: "event", label, detail })
     this.keep(resident)
     return true
   }

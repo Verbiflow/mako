@@ -11,12 +11,14 @@ import { resumes, restorableTotals, verifyRecoveredSession } from "../harnesses/
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { nativeStart } from "./live-launches.js"
 import { releaseHold } from "./live-ledger.js"
-import { activeBinding, conversationControl, launchCalls, launchRouting, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launchAccount, launchCalls, launchRouting, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { updateBinding } from "./live-sources.js"
 import { reconnectError } from "./live-transfers.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
+/** Why a Fin's process closes when its account ran out mid-turn: its next launch runs on the account it moved to. */
+export const FIN_MOVED = "fin-moved"
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
@@ -155,7 +157,7 @@ export class LiveHibernation {
     if (clearSince) resident.idleSince = undefined
   }
 
-  canHibernate(resident: Resident, preparing = false, recoverAccount = false): boolean {
+  canHibernate(resident: Resident, preparing = false, recoverAccount = false, afterFailure = false): boolean {
     const native = resident.snapshot.nativeAgents?.agents ?? []
     const binding = activeBinding(resident)
     const driver = this.access.dependencies.driver(binding?.provider ?? "")
@@ -163,7 +165,7 @@ export class LiveHibernation {
       resident.driver &&
         resumes(driver) &&
         resident.snapshot.session.connection === "connected" &&
-        resident.snapshot.session.status === "ready" &&
+        (resident.snapshot.session.status === "ready" || (afterFailure && resident.snapshot.session.status === "failed")) &&
         !resident.snapshot.session.backgroundTasks &&
         binding?.nativeId &&
         binding.path &&
@@ -304,8 +306,10 @@ export class LiveHibernation {
     reason: string
   ): Promise<void> {
     // Input that never reached the provider waits through these, for the provider that starts next.
-    const recoverAccount = reason === "account-change" || reason === "folder-removed"
-    if (!this.canHibernate(resident, false, recoverAccount)) return
+    const recoverAccount = reason === "account-change" || reason === "folder-removed" || reason === FIN_MOVED
+    // A Fin moved off an account that ran out closes the process its failed turn left idle.
+    const afterFailure = reason === FIN_MOVED
+    if (!this.canHibernate(resident, false, recoverAccount, afterFailure)) return
     const binding = activeBinding(resident)
     if (!binding?.nativeId || !binding.path) return
     const generation = resident.generation
@@ -318,7 +322,7 @@ export class LiveHibernation {
     if (
       !checkpointReady ||
       resident.generation !== generation ||
-      !this.canHibernate(resident, true, recoverAccount)
+      !this.canHibernate(resident, true, recoverAccount, afterFailure)
     )
       return
     const retiringGeneration = ++resident.generation
@@ -500,6 +504,7 @@ export class LiveHibernation {
         threadEnvironment,
         nativeRouting: launchRouting(dependencies, resident.snapshot.session.id, conversationTools),
         nativeCalls: launchCalls(dependencies, resident.snapshot.session.id, resident.snapshot.session.cwd, conversationTools, threadEnvironment),
+        pinnedAccount: launchAccount(dependencies, resident.snapshot.session.id, binding.provider),
       }))
       startedSession = session
       if (resident.generation !== generation) {

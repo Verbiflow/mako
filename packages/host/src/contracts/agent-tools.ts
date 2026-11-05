@@ -97,6 +97,8 @@ export interface AgentsStarted {
   note?: string
   /** Its Apex's harness was at its limit (until `until`), so it started on the person's next harness; `instead` is another account of that harness with room. */
   limited?: { harness: string; until?: number; instead?: string }
+  /** Where it went instead, and why, as its row says it (`movedLine`). */
+  moved?: string
   /** The person's rule it follows, as its row says it. */
   rule?: string
   next: string
@@ -132,6 +134,8 @@ export interface AgentStrip {
   runsOn?: string
   /** The person's rule it was started by: "Rule 2 · Anything that isn't frontend". */
   rule?: string
+  /** Where it went on when its harness's account ran out, and why (`movedLine`). */
+  moved?: string
   origin: ChildOrigin
   state: ChildState
   title?: string

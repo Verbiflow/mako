@@ -504,6 +504,7 @@ const inputs = {
     ]),
   "mako:fin-defaults": () => z.tuple([]),
   "mako:fin-limit-set": () => z.tuple([z.union([z.null(), z.number()])]),
+  "mako:fin-move-on-limit": () => z.tuple([z.boolean()]),
   "mako:fin-policy-save": () =>
     z.tuple([
       z.object({
@@ -1148,6 +1149,7 @@ const inputs = {
                   z.literal("fins"),
                   z.literal("apex"),
                   z.literal("used"),
+                  z.literal("connection"),
                 ]),
                 note: z.string().optional(),
                 rerouted: z
@@ -1155,6 +1157,27 @@ const inputs = {
                     from: z.string(),
                     until: z.number().optional(),
                     instead: z.string().optional(),
+                    account: z.string().optional(),
+                    to: z
+                      .union([
+                        z.object({
+                          why: z.literal("account"),
+                          harness: z.string(),
+                          account: z.string(),
+                          label: z.string(),
+                        }),
+                        z.object({
+                          why: z.literal("connection"),
+                          harness: z.string(),
+                          connection: z.string(),
+                          connectionName: z.string(),
+                          model: z.string(),
+                        }),
+                        z.object({ why: z.literal("harness"), harness: z.string() }),
+                      ])
+                      .optional(),
+                    at: z.number().optional(),
+                    line: z.string().optional(),
                   })
                   .optional(),
                 rule: z
@@ -2661,6 +2684,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-limit-set", "harnesses"],
+  ["mako:fin-move-on-limit", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],

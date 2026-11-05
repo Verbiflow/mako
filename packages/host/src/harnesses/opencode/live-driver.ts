@@ -749,6 +749,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     nativeRouting: { kind: "at-launch", via: "A deny on the `subagent` permission, last in the Build and Plan agents' rules in `OPENCODE_CONFIG_CONTENT`, which removes the tool.", verified: { version: "2.2.3", how: "harness:native-tools records Build and Plan as a lead without `subagent`, where a deny on `task` left it (2026-11-01); test:native-routing-live: a lead offered none, an ordinary Thread's child ran and was observed" } },
     layer: opencodeLayer.capabilities,
     modelRoutes: openCodeModelRoutes,
+    accountContinuation: { kind: "new-session", reason: "Mako reads OpenCode's logins and never chooses one (its accounts are observed), so there is no other account of it to go on under." },
     questions: { kind: "request", via: "The `question` tool's form, answered with `form.reply`." },
     contextBreakdown: { kind: "unavailable", reason: "OpenCode reports token totals per message, not what fills the context." },
     modeSwitching: { kind: "native", via: "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`." },

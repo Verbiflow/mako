@@ -57,12 +57,14 @@ import { AccountHolds, type AccountHold, type AccountHolder } from "./account-ho
 import { AccountUsageReadings } from "./account-usage-readings.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, spentUntil, windowsAt, type AccountLimitOffer, type HarnessLimit } from "../contracts/account-usage.js"
+import type { FallbackAccount } from "../contracts/fin-fallback.js"
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
 export interface AccountLaunch {
   env: NodeJS.ProcessEnv
   account: SelectedAccount
-  selection: { kind: "selectable"; name: string | null } | { kind: "observed" } | { kind: "unavailable" }
+  /** `pinned`: the account one conversation runs on instead of the one selected (`launch`'s `account`). */
+  selection: { kind: "selectable"; name: string | null; pinned?: true } | { kind: "observed" } | { kind: "unavailable" }
   /** Opaque configured-source equality. Host-only, never a native principal. */
   credential?: { name: string; revision: string }
   /** Keeps a Mako-kept account's credentials until the launched work ends. */
@@ -107,6 +109,11 @@ async function removingNames(root: AccountRoot, provider: string): Promise<Reado
 
 function capabilitySelection(root: AccountRoot, capability: ProviderAccountCapability): Promise<string | null> {
   return capability.mode === "selectable" ? root.readSelection(capability.provider) : Promise.resolve(null)
+}
+
+/** An account's name as a selection holds it: the CLI's own login is no selection. */
+function selectionOf(account: string): string | null {
+  return account === "default" ? null : account
 }
 
 function spentPercent(usage: AccountUsage): number | null {
@@ -417,24 +424,30 @@ export class HarnessAccounts {
     this.route = route
   }
 
+  /**
+   * `account` runs this launch on one of the harness's accounts instead of the one selected: a Fin moved off an
+   * account at its limit (`contracts/fin-fallback.ts`). Only a selectable harness takes it.
+   */
   async launch(
     provider: string,
     base: NodeJS.ProcessEnv,
-    options: { trackCredential?: boolean; holder?: AccountHolder } = {}
+    options: { trackCredential?: boolean; holder?: AccountHolder; account?: string } = {}
   ): Promise<AccountLaunch> {
     if (options.trackCredential !== false) await this.gate?.(provider)
     const env = childProcessEnv(base)
     const capability = this.capabilities.get(provider)
     if (!capability) return { env: await this.routed(provider, env), account: { name: "default" }, selection: { kind: "unavailable" } }
+    const pinned = capability.mode === "selectable" && options.account !== undefined ? selectionOf(options.account) : undefined
     const resolve = async () => {
-      const selection = await capabilitySelection(this.root, capability)
+      if (pinned) this.refuseRemoving(provider, pinned)
+      const selection = pinned !== undefined ? pinned : await capabilitySelection(this.root, capability)
       const name = selection ?? "default"
       const before = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
       const resolved = await this.routed(provider, await capability.accountEnv(selection, env))
       const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
       if (before !== revision) throw new ExecutionAccountChanged("credentials")
       const launch: AccountLaunch = { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"
-        ? { kind: "selectable" as const, name: selection }
+        ? { kind: "selectable" as const, name: selection, ...(pinned !== undefined && { pinned: true as const }) }
         : { kind: "observed" as const }, credential: revision === undefined ? undefined : { name, revision } }
       // The CLI's own login is never Mako's to remove; only kept accounts are held.
       if (options.holder && capability.mode === "selectable" && selection !== null)
@@ -457,9 +470,12 @@ export class HarnessAccounts {
 
   /** Linearizes new input against configured selection and credential revision.
    * Running work keeps its launch identity. Equality of the configured source
-   * does not prove the principal reported by native code or OAuth refresh health. */
-  async assertLaunch(provider: string, launch: AccountLaunch): Promise<void> {
-    if (launch.selection.kind === "selectable" && await this.root.readSelection(provider) !== launch.selection.name)
+   * does not prove the principal reported by native code or OAuth refresh health.
+   * `pinned` is the account the conversation runs on now instead of the selected one; a pin set or cleared since
+   * the launch changes it as a selection would. */
+  async assertLaunch(provider: string, launch: AccountLaunch, pinned?: string): Promise<void> {
+    const wanted = pinned !== undefined && this.capabilities.get(provider)?.mode === "selectable" ? selectionOf(pinned) : undefined
+    if (launch.selection.kind === "selectable" && (wanted !== undefined ? wanted : await this.root.readSelection(provider)) !== launch.selection.name)
       throw new ExecutionAccountChanged("selection")
     if (launch.credential) {
       const capability = this.capabilities.get(provider)
@@ -485,8 +501,10 @@ export class HarnessAccounts {
   /**
    * Another account to switch to, when the one in use is near its plan
    * limit or the harness just refused a turn on it, and another of the
-   * harness's accounts has room (`limitOffer`). Never switches by itself:
-   * an account is money, and money moves are the user's to make. A harness
+   * harness's accounts has room (`limitOffer`). Never switches the selection
+   * by itself: an account is money, and money moves are the user's to make.
+   * A Fin goes on under another account only by their switch in Settings ›
+   * Fins, and only that Fin's launches (`launch`'s `account`). A harness
    * with one account is never read for this. Offers near a limit come at
    * most once an hour per harness, since a nag repeated is a nag ignored; a
    * refused turn always asks.
@@ -526,6 +544,37 @@ export class HarnessAccounts {
       readings.push({ ...account, active: account === active, usage: account === active ? usage : await this.usage.read(harness, account.name) })
     const offer = accounts.length > 1 ? limitOffer(harness, readings, now, true) : null
     return { account: active.email ?? active.name, until: spent.until, ...(offer && { instead: offer.to.email ?? offer.to.name }) }
+  }
+
+  /**
+   * Each of the harness's accounts as a Fin's fallback order reads them (`fallbackOrder`), in the order Settings ›
+   * Agents lists them: which is in use, which is at its limit and until when, and which can't be read or started on.
+   * The account in use (or `on`) is read first and the others only when it is at its limit or `all` asks, so a start
+   * with room reads one account. An account whose reading failed is unread, never taken as having room.
+   */
+  async standing(harness: string, on?: string, all = false): Promise<FallbackAccount[]> {
+    const capability = this.capabilities.get(harness)
+    if (!capability) return []
+    const accounts = (await this.harnessAccounts(harness)).filter((account) => !account.missing)
+    const active = accounts.find((account) => account.active) ?? (accounts.length === 1 ? accounts[0] : undefined)
+    const from = accounts.find((account) => account.name === on) ?? active
+    const now = Date.now()
+    const first = from ? await this.usage.read(harness, from.name) : undefined
+    const spent = from && spentUntil(first, now)
+    const standing: FallbackAccount[] = []
+    for (const account of accounts) {
+      const usage = account === from ? first : spent || all ? await this.usage.read(harness, account.name) : undefined
+      const limit = usage ? spentUntil(usage, now) : undefined
+      standing.push({
+        name: account.name,
+        label: account.name === "default" ? account.email ?? account.name : account.name,
+        active: account === active,
+        ...(limit && { spent: limit }),
+        ...(usage && usage.status !== "ok" && { unread: true as const }),
+        ...((account.removing || account.signedOut || (capability.mode !== "selectable" && account !== active)) && { unusable: true as const }),
+      })
+    }
+    return standing
   }
 
   /**

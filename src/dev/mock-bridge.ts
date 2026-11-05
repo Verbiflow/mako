@@ -867,6 +867,7 @@ export function installMockBridge() {
     },
     capacity: { atOnce: 17, auto: 17, why: "14 cores, 36 GB · a Fin ≈ 0.35 core, 0.8 GB · room for 1 build", measured: false },
     ceiling: 64,
+    moveOnLimit: true,
   }
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
@@ -1066,6 +1067,10 @@ export function installMockBridge() {
     },
     setFinCeiling: async (ceiling) => {
       finChoices = { ...finChoices, ceiling }
+      return finChoices
+    },
+    chooseFinMoveOnLimit: async (on) => {
+      finChoices = { ...finChoices, moveOnLimit: on }
       return finChoices
     },
     planBuilds: async () => planBuilds,
