@@ -5,10 +5,10 @@
 //    on the first checkpoint save, and when reading the conversation. A 2.4 GB
 //    conversation needs 3.2 GB of base64 and exhausts the child's V8 heap; smaller
 //    ones keep the whole store resident until the child exits. The patched store
-//    reads through to SQLite one blob at a time, and tells the process how many
-//    bytes each read took (`mako:cursor-sdk-read`): the backend reads the whole
-//    conversation back every turn, and the Cursor child collects that garbage
-//    (`turn-garbage.ts`).
+//    reads through to SQLite one blob at a time. `checkpoints.get` already hands
+//    back a copy of its own, so a read is not copied again: a turn on a 146-turn
+//    conversation rewrites its transcript from every blob, and the extra copy
+//    added 60 MB to that turn's peak (2026-11-04).
 // 2. The transcript writer rewrites the full JSONL transcript, hydrating every
 //    message blob, at each checkpoint, and again for every subagent the
 //    conversation ever spawned. The patched writer uses the SDK's own incremental
@@ -23,6 +23,11 @@
 //    bundle already calls), so the option was `undefined` and every rewrite
 //    hydrated every summary archive at once: one turn on an 80-turn conversation
 //    peaked at 2.1 GB (2026-11-04). The patch appends with `writeFile`.
+//    A full write, streamed or not, goes to a file of its own beside the
+//    transcript, synced and then renamed over it, so a child killed mid-write
+//    leaves the transcript as it was. An append killed mid-write leaves a torn
+//    last line, which the Cursor child cuts off when it next opens the agent
+//    (`transcript-tails.ts`).
 // 3. Each bidi stream races every read, of what the backend sends and of what
 //    the client appends, against a promise pending for the stream's life, and
 //    each race leaves a reaction on that promise. Every message the stream
@@ -58,7 +63,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const VERSION = "1.2.0"
-const MARKER = "/*mako:patched:8*/"
+const MARKER = "/*mako:patched:9*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -98,7 +103,7 @@ const BLOB_STORE = [
   ],
   [
     "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
-    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return null==e?void 0:(globalThis[Symbol.for(\"mako:cursor-sdk-read\")]?.(e.length),T(e))}}",
+    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return e??void 0}}",
   ],
   [
     "const e=await f(this.localStore,t,r.latestCheckpoint),n=this.setBlobStore(t,e),o=await n.getBlob((0,s.q6)(),k(e.rootBlobId));",
@@ -137,14 +142,28 @@ export const BIDI_READS = [
 
 /**
  * `writer` is the transcript writer's class, `store` the transcript store's, `write` its file writer, `fs`
- * node:fs/promises, `child` the variable holding each subagent's state where the writer writes their transcripts.
+ * node:fs/promises, `child` the variable holding each subagent's state where the writer writes their transcripts,
+ * `chunks` the streamed writer's count of chunks written.
  * The bundle's `fs` only carries the functions it already calls, so `appendFile` is not among them: passing
  * `fs.appendFile` stores `undefined`, and every transcript write then hydrates the whole conversation at once.
  * `writeFile` with flag `a` is the same call.
  */
-function transcripts({ writer, store, write, fs, child }) {
+function transcripts({ writer, store, write, fs, child, chunks }) {
   const options = `writeText:!1,writeJsonl:!0,appendFile:(p,d)=>${fs}.writeFile(p,d,{flag:"a"}),streamFullJsonlWrites:!0,`
+  const staged = `+".mako-"+process.pid+".tmp"`
   return [
+    [
+      `async function ${write}(e,t){const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0}),await(0,${fs}.writeFile)(e,t,"utf-8")}`,
+      `async function ${write}(e,t){const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0});const n=e${staged},o=await(0,${fs}.open)(n,"w");try{await o.writeFile(t,"utf-8"),await o.sync()}finally{await o.close()}await(0,${fs}.rename)(n,e)}`,
+    ],
+    [
+      `async writeJsonlStreamed(e,t){const{filePath:r,appendFile:n}=t;let o=[],s=0,${chunks}=0,`,
+      `async writeJsonlStreamed(e,t){const{filePath:f,appendFile:n}=t,r=f${staged};let o=[],s=0,${chunks}=0,`,
+    ],
+    [
+      `await l(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
+      `await l(),${chunks}>0&&await(async()=>{const t=await(0,${fs}.open)(r,"r+");try{await t.sync()}finally{await t.close()}await(0,${fs}.rename)(r,f)})(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
+    ],
     [
       `class ${writer}{constructor(e){this.writeChain=Promise.resolve(),`,
       `${MARKER}class ${writer}{static transcripts=new Map;constructor(e){this.writeChain=Promise.resolve(),`,
@@ -198,8 +217,8 @@ const resumeAccount = proto => [
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
   { target: "dist/cjs/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
-  { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), runLog("BF"), resumeAccount("jr")], change: "incremental transcripts, the run log and the resume account" },
-  { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), runLog("qF"), resumeAccount("Ur")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n", chunks: "a" }), runLog("BF"), resumeAccount("jr")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n", chunks: "i" }), runLog("qF"), resumeAccount("Ur")], change: "incremental transcripts, the run log and the resume account" },
   { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
   { target: "dist/cjs/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
 ]
