@@ -209,6 +209,21 @@ export async function openCodeSessionMessages(list: MessagePage, sessionID: stri
   }
 }
 
+/**
+ * The pages and the fork are separate startup steps. The page read used to
+ * finish before its step began, so a silence there had no watch and no name:
+ * one fork of a long session sat in that gap (2026-11-04).
+ */
+export async function openCodeForkUnderWatch<Session>(
+  step: <Value>(name: string, work: Promise<Value>) => Promise<Value>,
+  list: MessagePage,
+  fork: (before: string | undefined) => Promise<Session>,
+  source: { nativeId: string; runId: string; steers?: number },
+): Promise<Session> {
+  const messages = await step("fork history", openCodeSessionMessages(list, source.nativeId))
+  return step("session", fork(openCodeForkBoundary(messages, source.runId, source.steers ?? 0)))
+}
+
 /** OpenCode's ascending identifiers: a 48-bit time and counter, then 14 random base62 characters. */
 export class OpenCodeMessageIds {
   private time = 0
@@ -888,10 +903,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const fork = options.fork
         if (options.resume || fork) {
           session = fork
-            ? await trace.step("session-open", async () => api.watch.step("session", api.client.session.fork({
-                sessionID: fork.nativeId,
-                before: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId, fork.steers),
-              })))
+            ? await trace.step("session-fork", () => openCodeForkUnderWatch(
+                (name, work) => api.watch.step(name, work),
+                (input) => api.client.message.list(input),
+                (before) => api.client.session.fork({ sessionID: fork.nativeId, before }),
+                fork,
+              ))
             : await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
           // A session resumed in another folder, as a Thread's move into its worktree does, goes on there: OpenCode keeps its folder on the session.
           if (!fork && !sameFolder(session.location.directory, cwd)) {
