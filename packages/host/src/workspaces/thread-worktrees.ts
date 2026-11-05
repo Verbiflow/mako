@@ -272,6 +272,8 @@ export class ThreadWorktreeService {
   private readonly starts: WorktreeStarts
   private readonly skips = new Map<string, () => void>()
   private readonly branchPulls = new Map<string, { at: number; pulls: Promise<WorktreeBranchPull[] | null> }>()
+  /** Each repository's pull requests as last read, kept past `forgetPulls`, for what a Fin's strip says (`heldPulls`). */
+  private readonly pullsRead = new Map<string, WorktreeBranchPull[]>()
   /** Each receipt's `untold`, read without waiting, as a turn is sent. */
   private readonly untold = new Map<string, string[]>()
   /** The summaries pass under way, and the one queued behind it for whoever asked meanwhile (`summaries`). */
@@ -766,12 +768,20 @@ export class ThreadWorktreeService {
     this.branchPulls.clear()
   }
 
+  /** The pull requests whose head is `branch`, as the summaries last read `repoRoot`'s: no read of GitHub, none before the first. */
+  heldPulls(repoRoot: string, branch: string): WorktreeBranchPull[] {
+    return (this.pullsRead.get(repoRoot) ?? []).filter((pull) => pull.branch === branch)
+  }
+
   private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined) {
     const now = Date.now()
     const cached = this.branchPulls.get(repoRoot)
     if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
     const pulls = (pullsOf?.(repoRoot) ?? Promise.resolve(null)).catch(() => null)
     this.branchPulls.set(repoRoot, { at: now, pulls })
+    void pulls.then((read) => {
+      if (read) this.pullsRead.set(repoRoot, read)
+    })
     return pulls
   }
 

@@ -344,6 +344,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       }),
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
+      heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     agents.resume()

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
-import { DatabaseSync, type StatementSync } from "node:sqlite"
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
 import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
@@ -584,9 +584,37 @@ CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, 
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_answers (
+  ask TEXT PRIMARY KEY, child_thread TEXT NOT NULL, op TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
+CREATE INDEX IF NOT EXISTS agent_answers_child ON agent_answers(child_thread, at);
+CREATE INDEX IF NOT EXISTS agent_answers_op ON agent_answers(op);
 `
 const RecordRowSchema = z.object({ record: z.string() })
 const ReportRowSchema = z.object({ record: z.string(), wake_request: z.string().nullable() })
+
+/**
+ * The answer that took a question in a Fin's report, kept as it's claimed and before it's delivered: the ask it
+ * answers, the operation whose repeat it is, who gave it and its words, and the message that carries it to the Fin
+ * under the request it's sent as, so a host that stopped before it was delivered sends that same request once.
+ */
+export const KeptAnswerSchema = z.object({
+  ask: z.string().min(1).max(600),
+  child: ThreadIdSchema,
+  op: z.string().min(1).max(600),
+  by: z.enum(["lead", "person"]),
+  answer: z.string().max(400),
+  request: z.string().min(1).max(200),
+  text: z.string().max(20_000),
+  actor: z.object({ kind: z.literal("agent"), session: SessionIdSchema }).optional(),
+  at: z.number(),
+  /** When it reached the Fin's conversation, and how. */
+  delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
+})
+export type KeptAnswer = z.infer<typeof KeptAnswerSchema>
+const AnswerRowSchema = z.object({ record: z.string(), delivered_at: z.number().nullable() })
+function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
+  return KeptAnswerSchema.parse(JSON.parse(AnswerRowSchema.parse(row).record))
+}
 
 /** A report its parent hasn't heard yet, and the request already named to carry it, if one was. */
 export interface WaitingReport {
@@ -1120,6 +1148,67 @@ export class ThreadStore {
       const mark = this.sql("UPDATE thread_reports SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL")
       for (const id of ids) mark.run(at, id)
     })
+  }
+
+  /**
+   * Claims a question in a Fin's report for one answer, in one write: the answer kept, or the one that claimed it
+   * first (`claimed: false`), whoever's it was. A repeat of the same operation is that first answer.
+   */
+  claimAnswer(input: KeptAnswer): { answer: KeptAnswer; claimed: boolean } {
+    const answer = KeptAnswerSchema.parse(input)
+    return this.write(() => {
+      const held = this.sql("SELECT record, delivered_at FROM agent_answers WHERE ask = ?").get(answer.ask)
+      if (held) return { answer: keptAnswer(held), claimed: false }
+      this.sql("INSERT INTO agent_answers (ask, child_thread, op, record, at, delivered_at) VALUES (?, ?, ?, ?, ?, NULL)")
+        .run(answer.ask, answer.child, answer.op, JSON.stringify(answer), answer.at)
+      return { answer, claimed: true }
+    })
+  }
+
+  /** The answer an operation claimed with, delivered or not. */
+  answerByOp(op: string): KeptAnswer | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record, delivered_at FROM agent_answers WHERE op = ?").get(op)
+    return row ? keptAnswer(row) : undefined
+  }
+
+  /** The answer that took an ask, if one did. */
+  answerOf(ask: string): KeptAnswer | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record, delivered_at FROM agent_answers WHERE ask = ?").get(ask)
+    return row ? keptAnswer(row) : undefined
+  }
+
+  /** Each Fin's newest answer, by its Thread: the last one kept, whatever the clocks said. */
+  latestAnswers(): Map<string, KeptAnswer> {
+    this.syncVersion()
+    const latest = new Map<string, KeptAnswer>()
+    for (const row of this.sql("SELECT record, delivered_at FROM agent_answers a WHERE rowid = (SELECT max(rowid) FROM agent_answers WHERE child_thread = a.child_thread) ORDER BY at, ask").all()) {
+      const answer = keptAnswer(row)
+      latest.set(answer.child, answer)
+    }
+    return latest
+  }
+
+  /** Answers claimed and not yet delivered to their Fin, oldest first: what a starting host sends once. */
+  undeliveredAnswers(): KeptAnswer[] {
+    this.syncVersion()
+    return this.sql("SELECT record, delivered_at FROM agent_answers WHERE delivered_at IS NULL ORDER BY at, ask").all().map(keptAnswer)
+  }
+
+  /** The answer reached its Fin's conversation. */
+  markAnswerDelivered(ask: string, delivered: NonNullable<KeptAnswer["delivered"]>): void {
+    this.write(() => {
+      const held = this.sql("SELECT record, delivered_at FROM agent_answers WHERE ask = ? AND delivered_at IS NULL").get(ask)
+      if (!held) return
+      const answer = { ...keptAnswer(held), delivered }
+      this.sql("UPDATE agent_answers SET record = ?, delivered_at = ? WHERE ask = ?").run(JSON.stringify(answer), delivered.at, ask)
+    })
+  }
+
+  /** Lets go of a claim whose delivery failed, so another answer can take the ask; one delivered stays. */
+  releaseAnswer(ask: string, op: string): void {
+    this.write(() => this.sql("DELETE FROM agent_answers WHERE ask = ? AND op = ? AND delivered_at IS NULL").run(ask, op))
   }
 
   /** Spawns waiting on a tree's running budget, oldest first. */
