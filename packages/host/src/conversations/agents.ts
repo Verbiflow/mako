@@ -77,7 +77,7 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, apexNote, BRIEF_AGAIN, BRIEF_CLOSE, briefIntro, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
@@ -146,7 +146,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "promptInTranscript" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -472,14 +472,33 @@ export class Agents implements AgentOperations, ConversationChildren {
     const snapshot = conversation && this.deps.live.snapshot(conversation)
     if (!snapshot) return
     const crashed = crashedChildTurn(snapshot.requests, this.now())
-    if (crashed) {
+    if (!crashed) return this.resumeMade(edge, conversation)
+    // A Fin's brief cut short: unless its harness says it had it, the brief itself goes again, framed so a Fin that
+    // did get it carries on; a bare Continue would leave one that never had it with nothing to do.
+    const brief = crashed.id === namedUuid(`${edge.op}\nbrief`)
+    const marker = crashed.text.split("\n").find((line) => line.includes("You're fin:")) ?? ""
+    const shown = !brief || crashed.nativeDelivery?.evidence.kind === "accepted"
+      ? Promise.resolve(true)
+      : this.deps.live.promptInTranscript(conversation, crashed.id, marker)
+    void shown.then((had) => {
       try {
-        this.deps.live.continueTurn(conversation, { requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, actor: { kind: "service", name: "auto-continue" } })
-        hostLog("agents", "resumed", { op: edge.op, request: crashed.id, crashed: true })
+        this.deps.live.continueTurn(conversation, {
+          requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, actor: { kind: "service", name: "auto-continue" },
+          ...!had && { text: `${BRIEF_AGAIN}\n\n${crashed.text}` },
+        })
+        hostLog("agents", "resumed", { op: edge.op, request: crashed.id, crashed: true, ...brief && { brief: had ? "continued" : "sent again" } })
       } catch (error) {
         hostWarn("agents", "a Fin's turn a crash cut short waits for Continue turn", { op: edge.op, request: crashed.id, error: errorMessage({ error }) })
       }
-    }
+      // What waited behind it goes after it.
+      this.resumeMade(edge, conversation)
+    })
+  }
+
+  /** A Fin's messages an exit or a crash paused go on: they're its Apex's. */
+  private resumeMade(edge: ThreadParent, conversation: string): void {
+    const snapshot = this.deps.live.snapshot(conversation)
+    if (!snapshot) return
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync } from "node:fs"
-import { join } from "node:path"
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
-import type { Entry } from "@mako/sessions/entries"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { HarnessLimit } from "@mako/host/contracts/account-usage"
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
@@ -64,6 +64,8 @@ export interface WorldOptions {
   finCeiling?: () => number
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
+  /** Each scripted harness keeps its own transcript on disk, a user entry for each prompt it takes, which `history` reads. */
+  transcripts?: true
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
   launching?: (conversation: string) => Promise<void> | void
   /** Every steer is refused, as a harness whose turn moved on refuses one. */
@@ -160,7 +162,10 @@ export class AgentsWorld {
       driver: (provider) => drivers.get(provider),
       history: async (path) => {
         const ref = this.options.catalog?.ref(path)
-        return ref ? this.options.catalog!.page(path) : null
+        if (ref) return this.options.catalog!.page(path)
+        if (!this.options.transcripts || !existsSync(path)) return null
+        const entries = readFileSync(path, "utf8").split("\n").filter(Boolean).map((line): Entry => EntrySchema.parse(JSON.parse(line)))
+        return { ref: { harness: "claude", nativeId: path, path }, entries, start: 0, total: entries.length, hasEarlier: false }
       },
       emit: (event) => {
         this.events.push(event)
@@ -352,6 +357,12 @@ export class AgentsWorld {
           throw new Error(refused)
         }
         handOff(dispatch, { kind: "submitted", source: "transport-call" })
+        const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath!
+        // A session another program runs (a linked CLI's) keeps its own transcript, which the catalog reads.
+        if (this.options.transcripts && path.startsWith(this.root)) {
+          mkdirSync(dirname(path), { recursive: true })
+          appendFileSync(path, `${JSON.stringify({ type: "user", text, messageId: dispatch.attemptId } satisfies Entry)}\n`)
+        }
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
         const session = this.live.snapshot(id)?.session ?? state(id)
@@ -402,7 +413,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, snapshot: () => null, editQueued: none, transfer: none, submit: none,
-    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
+    act: async () => none(), cancel: async () => {}, continueTurn: none, promptInTranscript: async () => false, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
 }

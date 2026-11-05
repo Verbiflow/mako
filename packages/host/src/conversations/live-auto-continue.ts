@@ -129,7 +129,7 @@ export class LiveAutoContinue {
    * of it (`Interruption.stopped`). `stayed`: the move didn't happen and the turn goes on where it was, which its words
    * say (`continueTurnPrompt`). Asked again under the same `requestId`, it changes nothing.
    */
-  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor }): void {
+  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; text?: string }): void {
     const resident = this.access.resident(id)
     if (!resident) throw new Error("This conversation is no longer available")
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
@@ -140,7 +140,7 @@ export class LiveAutoContinue {
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
-      text: continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
+      text: input.text ?? continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
       attachments: [],
       tuning,
       status: "queued",
