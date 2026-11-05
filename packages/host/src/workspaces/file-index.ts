@@ -1,5 +1,6 @@
 import { grepMatches, listFileStates, type Git, type GrepMatch } from "@mako/git"
-import { lstat, readdir, readFile } from "node:fs/promises"
+import { constants } from "node:fs"
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { FileIndexCore, type FileFindResults, type FileFolders, type FileFoldersOptions, type FileGrepOptions, type FileGrepResults } from "../contracts/file-index.js"
 import type { FileMatches, GitStatus, WorkspaceFile } from "../contracts/git-workspace-search.js"
@@ -40,6 +41,10 @@ const CHANGED_EVERY_MS = 1_500
 const GREP_PER_FILE = 20
 /** Files outside any repository read at most by a text search in a folder that isn't one. */
 const GREP_LOOSE_FILES = 5_000
+/** An untracked file a text search reads is at most this large; larger ones are skipped, never read. */
+const GREP_LOOSE_FILE_BYTES = 1024 * 1024
+/** Bytes of untracked files one text search reads at most, together. */
+const GREP_LOOSE_BYTES = 64 * 1024 * 1024
 /** Bytes of Git's output a matching line takes, for its byte limit. */
 const GREP_LINE_BYTES = 240
 
@@ -310,7 +315,8 @@ export class FolderIndex {
       this.#nested = nested
     }
     this.#untracked = untracked
-    const core = new FileIndexCore(paths)
+    // Versions climb across rebuilds: a window holding the last index's version is never told it's current.
+    const core = new FileIndexCore(paths, this.#core?.version ?? 0)
     this.#core = core
     this.#builtAt = startedAt
     this.#changedAt = 0
@@ -401,20 +407,60 @@ export class FolderIndex {
     if (!core) return { matches: [], more: false }
     const test = matcher(term, options)
     const loose = [...this.#untracked].filter((path) => core.has(path)).sort().slice(0, GREP_LOOSE_FILES)
+    const root = await realpath(this.#root).catch(() => this.#root)
     const matches: GrepMatch[] = []
+    let budget = GREP_LOOSE_BYTES
     for (const path of loose) {
       if (signal.aborted || matches.length >= limit) return { matches, more: matches.length >= limit }
-      const bytes = await readFile(join(this.#root, path)).catch(() => null)
-      if (!bytes || bytes.subarray(0, 8000).includes(0)) continue
-      const lines = bytes.toString("utf8").split("\n")
+      if (budget <= 0) return { matches, more: true }
+      const text = await looseText(root, path, Math.min(GREP_LOOSE_FILE_BYTES, budget))
+      if (text === undefined) continue
+      budget -= text.length
       let inFile = 0
-      for (let index = 0; index < lines.length && inFile < GREP_PER_FILE; index += 1) {
-        if (!test(lines[index]!)) continue
-        matches.push({ path, line: index + 1, text: lines[index]! })
-        inFile += 1
+      let from = 0
+      for (let line = 1; from <= text.length && inFile < GREP_PER_FILE; line += 1) {
+        const end = text.indexOf("\n", from)
+        const content = text.slice(from, end < 0 ? text.length : end)
+        if (test(content)) {
+          matches.push({ path, line, text: content })
+          inFile += 1
+        }
+        if (end < 0) break
+        from = end + 1
       }
     }
     return { matches, more: false }
+  }
+}
+
+/**
+ * An untracked file's text for a search, or undefined to skip it: only a regular file inside `root`, never through a
+ * symlink (its last part is opened with `O_NOFOLLOW`, and what was opened must be the file its real path names, so a
+ * folder swapped for a link mid-read is refused), never past `max` bytes (its size is read before anything is), and
+ * never one whose first 8 KB hold a NUL, as Git tells binary from text.
+ */
+async function looseText(root: string, path: string, max: number): Promise<string | undefined> {
+  const absolute = join(root, path)
+  let handle
+  try {
+    handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch {
+    return undefined
+  }
+  try {
+    const info = await handle.stat()
+    if (!info.isFile() || info.size > max) return undefined
+    const real = await realpath(absolute).catch(() => undefined)
+    if (!real || !real.startsWith(`${root}${sep}`)) return undefined
+    const named = await stat(real).catch(() => undefined)
+    if (!named || named.ino !== info.ino || named.dev !== info.dev) return undefined
+    const bytes = Buffer.alloc(info.size)
+    const { bytesRead } = await handle.read(bytes, 0, info.size, 0)
+    const read = bytes.subarray(0, bytesRead)
+    if (read.subarray(0, 8000).includes(0)) return undefined
+    return read.toString("utf8")
+  } finally {
+    await handle.close()
   }
 }
 

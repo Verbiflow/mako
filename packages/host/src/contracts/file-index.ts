@@ -330,9 +330,10 @@ export class FileIndexCore {
   /** The last query's matches, which the next query that only extends it searches instead of everything. */
   #narrowed: { query: string; version: number; ids: Int32Array } | undefined
 
-  constructor(paths: Iterable<string> = []) {
+  /** `after`: the version of the index this one replaces, so a window holding that one never reads as current. */
+  constructor(paths: Iterable<string> = [], after = 0) {
     for (const path of paths) this.#insert(path)
-    this.#version = 1
+    this.#version = after + 1
   }
 
   get version(): number {

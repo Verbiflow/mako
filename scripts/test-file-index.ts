@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
@@ -118,6 +118,40 @@ try {
   assert.equal(untracked.files.some((file) => file.path === "fresh/needle.ts"), true, "an untracked file's lines are found, read from the index's own list")
   assert.equal(untracked.total, 102)
   assert.equal((await index.grep("[ab", { regex: true })).error !== undefined, true, "a pattern that doesn't parse is the query's problem")
+
+  // A rebuild (a lost event) must not answer a window holding an older version with `unchanged`.
+  const held = await index.folders([""])
+  rmSync(join(scratch, "src", "gamma.ts"))
+  writeFileSync(join(scratch, "rebuilt.ts"), "rebuilt\n")
+  index.noteChanges(undefined)
+  // The untracked files join a rebuilt index after the tracked ones; the `@` list waits for them.
+  await index.list()
+  const rebuilt = await index.folders([""], { since: held.version })
+  assert.notEqual(rebuilt.unchanged, true, "a rebuilt index never says a window's older version is current")
+  assert.ok(rebuilt.version > held.version, "the version keeps climbing across a rebuild")
+  assert.equal(rebuilt.folders[0]?.files.some((file) => file.name === "rebuilt.ts"), true, "and the rebuilt listing comes back")
+
+  // An untracked symlink to a file outside the folder is never read by a text search, nor one to a folder.
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), "mako-file-index-outside-")))
+  try {
+    writeFileSync(join(outside, "canary.txt"), "outsidecanary\n")
+    symlinkSync(join(outside, "canary.txt"), join(scratch, "linked.txt"))
+    symlinkSync(outside, join(scratch, "linked-folder"))
+    index.noteChanges(["linked.txt", "linked-folder"])
+    const escaped = await index.grep("outsidecanary", { limit: 100 })
+    assert.equal(escaped.total, 0, `a symlink out of the folder is never followed (${escaped.files.map((file) => file.path).join(", ")})`)
+  } finally {
+    rmSync(outside, { recursive: true, force: true })
+  }
+
+  // A huge untracked file is skipped by its size, never read whole into memory.
+  writeFileSync(join(scratch, "huge.txt"), `hugeneedle\n${"x".repeat(1023)}\n`.repeat(12 * 1024))
+  index.noteChanges(["huge.txt"])
+  const huge = await index.grep("hugeneedle", { limit: 100 })
+  assert.equal(huge.files.some((file) => file.path === "huge.txt"), false, "a file past the text search's byte bound isn't read")
+  writeFileSync(join(scratch, "small.txt"), "hugeneedle\n")
+  index.noteChanges(["small.txt"])
+  assert.equal((await index.grep("hugeneedle", { limit: 100 })).files.some((file) => file.path === "small.txt"), true, "while a small untracked file still is")
   index.close()
 } finally {
   git.close()
