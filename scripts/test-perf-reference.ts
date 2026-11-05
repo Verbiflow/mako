@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { MachineReading } from "@mako/host/base/machine-load"
 import { parseVerdicts, PERFORMANCE_VERDICT_VARIABLE } from "@mako/host/contracts/performance-verdict"
-import { buildRepository, concluded, CONFIRM_ROUNDS, judge, MAX_ROUNDS, medianInterval, ROUNDS, settle, type Machine, type Paired, type Settling } from "./perf-reference"
+import { buildRepository, concluded, CONFIRM_ROUNDS, judge, MAX_ROUNDS, medianInterval, ROUNDS, settle, UNSURE_REPORTED_VARIABLE, type Machine, type Paired, type Settling } from "./perf-reference"
 
 /**
  * Where a performance reference's history is read. A checkout reads its own;
@@ -41,10 +41,10 @@ try {
 /*
  * A row is judged on its rounds' head over reference: wholly over the
  * allowance at 95% is slower and wholly under it within, busy or not; a quiet
- * machine's median decides the rest, and a busy machine's rows get more
- * rounds and then are unsure. The busy machine here is simulated: readings
- * that say other work holds most cores, and runs that land on a slower core
- * at random, as macOS places a whole process under load.
+ * machine's median under the allowance is within, and a row over it at the
+ * median alone gets more rounds and then is unsure. The busy machine here is
+ * simulated: readings that say other work holds most cores, and runs that
+ * land on a slower core at random, as macOS places a whole process under load.
  */
 const ALLOWED = 1.25
 const row = (ratios: number[], busy: boolean): Paired => ({ key: "row", reference: ratios.map(() => 1), head: ratios, busy: ratios.map(() => busy) })
@@ -59,6 +59,11 @@ assert.equal(judge(row([1.4, 1.35, 1.38, 1.42, 1.3, 1.36, 1.39], false), ALLOWED
 assert.equal(judge(row([1.05, 0.98, 1.1], true), ALLOWED).outcome, undefined, "a busy machine's median alone settles nothing")
 assert.equal(judge(row([2.1, 1.9, 2.3, 2, 1.8], true), ALLOWED).outcome, "slower", "a real regression blocks however busy the machine")
 assert.equal(judge(row(Array.from({ length: 15 }, (_, index) => [0.7, 1, 1.4][index % 3]!), true), ALLOWED).outcome, "unsure", "noise as wide as the allowance, on a busy machine, is unsure")
+// Unchanged code, as a quiet CI runner read it on 2026-11-05: over at the median, between -8% and +44%.
+const ciNoise = [1.4, 1.36, 1.04, 1.385, 1, 0.92, 1.44]
+assert.equal(judge(row(ciNoise, false), ALLOWED).outcome, undefined, "a quiet machine's median over the allowance alone isn't slower: it's measured again")
+assert.equal(judge(row([...ciNoise, ...ciNoise, ciNoise[0]!], false), ALLOWED).outcome, "unsure", "and is unsure when fifteen rounds can't settle it")
+assert.equal(judge(row(ciNoise.map((ratio) => ratio * 2), false), ALLOWED).outcome, "slower", "twice as slow through that noise is slower")
 console.log("PASS: a row is within, slower, measured again, or unsure, by its rounds and the machine")
 
 /** The same pseudo-random draws every run, so the test reads the same wherever it runs. */
@@ -129,6 +134,21 @@ assert.match(hurried.said, /Measured for the 0 s a busy machine gets; rows it ha
 assert.equal((await settled(2, Infinity, 0, 0)).rows[0]!.outcome, "slower", "a real regression is caught in those seven")
 console.log("PASS: a busy machine is waited out, measured in more rounds for as long as it gets, and never fails unchanged code")
 
+// A quiet machine as noisy as CI's runner, each run up to 30% either way: unchanged code is never slower, twice as slow always is.
+const quietly = (slower: number, seed: number) => {
+  const random = draws(seed)
+  return settle(suspect, {
+    allowed: ALLOWED, rounds: ROUNDS, say: () => {}, quietWaitMs: 0, machine: machine(0), reference: async () => "/reference",
+    measurer: async () => async (tree) => ({ [KEY]: (tree === here ? slower : 1) * (1 + 0.3 * (random() * 2 - 1)) }),
+  })
+}
+const seeds = Array.from({ length: 200 }, (_, index) => index + 1)
+const unchanged = await Promise.all(seeds.map((seed) => quietly(1, seed)))
+assert.deepEqual(unchanged.flatMap((result) => result.failed), [], "unchanged code on a noisy quiet machine is never slower")
+const doubled = await Promise.all(seeds.map((seed) => quietly(2, seed)))
+assert.deepEqual(doubled.map((result) => result.rows[0]!.outcome).filter((outcome) => outcome !== "slower"), [], "twice as slow through the same noise always is")
+console.log("PASS: on a quiet machine as noisy as CI's, unchanged code is never slower and a regression of twice always is")
+
 const folder = mkdtempSync(join(tmpdir(), "mako-perf-verdict-"))
 try {
   const file = join(folder, "verdict.jsonl")
@@ -141,7 +161,9 @@ try {
   const underUpdater = process.env[PERFORMANCE_VERDICT_VARIABLE]
   process.env[PERFORMANCE_VERDICT_VARIABLE] = file
   try {
-    assert.match((await concluded("perf:decoders", busy, ALLOWED, null))[0]!, /unsure; measure it again on a quieter machine$/, "with nobody to choose, unsure fails, even under the updater")
+    assert.match((await concluded("perf:decoders", busy, ALLOWED, null, {}))[0]!, /unsure; measure it again on a quieter machine$/, "with nobody to choose, unsure fails, even under the updater")
+    assert.deepEqual(await concluded("perf:decoders", busy, ALLOWED, null, { [UNSURE_REPORTED_VARIABLE]: "1" }), [], "in CI an unsure row is reported, not failed")
+    assert.deepEqual(await concluded("perf:decoders", regression, ALLOWED, null, { [UNSURE_REPORTED_VARIABLE]: "1" }), regression.failed, "and a slower one fails there")
   } finally {
     if (underUpdater === undefined) delete process.env[PERFORMANCE_VERDICT_VARIABLE]
     else process.env[PERFORMANCE_VERDICT_VARIABLE] = underUpdater

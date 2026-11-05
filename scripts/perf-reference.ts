@@ -36,7 +36,10 @@ export const ROUNDS = 3
  * processes can all draw the slower cores: unchanged code read 30% apart that way.
  */
 export const CONFIRM_ROUNDS = 4
-/** The rounds a row measured on a busy machine gets at most before it's called unsure; a quiet one is decided after `ROUNDS + CONFIRM_ROUNDS`. */
+/**
+ * The rounds a row gets at most before it's called unsure. A quiet CI runner's median alone read unchanged code 29%
+ * to 36% slower (between -29% and +52% at 95%), so no machine's median decides a row over its allowance.
+ */
 export const MAX_ROUNDS = 15
 /** A row with at least this share of its runs measured busy is read as a busy machine's. */
 export const BUSY_RUNS = 0.25
@@ -342,10 +345,11 @@ export interface Judged {
  * Whether a row is within `allowed` of its reference, slower, or can't be
  * told apart from the machine's noise. An interval wholly over the allowance
  * is slower and one wholly under it within, busy or not; past that a quiet
- * machine's median decides, after `ROUNDS + CONFIRM_ROUNDS` for a row over,
- * and a busy machine's rows get up to `MAX_ROUNDS`, or past
- * `ROUNDS + CONFIRM_ROUNDS` until the time a busy machine gets is spent
- * (`outOfTime`), before they're unsure.
+ * machine's median under the allowance is within. A row over it at the
+ * median alone gets up to `MAX_ROUNDS`, or past `ROUNDS + CONFIRM_ROUNDS`
+ * until the time a busy machine gets is spent (`outOfTime`), before it's
+ * unsure: slower is every round of seven over it, nine of eleven or twelve
+ * of fifteen.
  */
 export function judge({ reference, head, busy }: Paired, allowed: number, outOfTime = false): Judged {
   const rounds = Math.min(reference.length, head.length)
@@ -358,7 +362,6 @@ export function judge({ reference, head, busy }: Paired, allowed: number, outOfT
   if (interval && interval[0] > allowed) return judged("slower")
   if (interval && interval[1] <= allowed) return judged("within")
   if (quiet && change <= allowed) return judged("within")
-  if (quiet) return judged(rounds >= ROUNDS + CONFIRM_ROUNDS ? "slower" : undefined)
   // Seven rounds bound the median, so a regression that holds through the noise is caught before time runs out.
   return judged(rounds >= MAX_ROUNDS || (outOfTime && rounds >= ROUNDS + CONFIRM_ROUNDS) ? "unsure" : undefined)
 }
@@ -540,18 +543,24 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
 /**
  * What a script makes of `settled`: the lines to fail on. Under the local
  * updater, which names a verdict file (`PERFORMANCE_VERDICT_VARIABLE`), the
- * verdict goes there and an unsure row doesn't fail; anywhere else nobody is
- * there to choose, so it fails beside a slower one. `null` names no file even
- * under the updater.
+ * verdict goes there and an unsure row doesn't fail. In CI
+ * (`UNSURE_REPORTED_VARIABLE`) an unsure row is printed and passes: CI fails
+ * only a row its rounds show slower at 95%, not one a runner's noise moved. Anywhere
+ * else a person runs it, so an unsure row fails beside a slower one, to be
+ * measured again. `null` names no file even under the updater.
  */
-export async function concluded(script: string, settled: Settled, allowed: number, file: string | null = process.env[PERFORMANCE_VERDICT_VARIABLE] ?? null): Promise<string[]> {
+export async function concluded(script: string, settled: Settled, allowed: number, file: string | null = process.env[PERFORMANCE_VERDICT_VARIABLE] ?? null, env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   if (file) {
     const verdict: PerformanceVerdict = { script, allowed, rows: settled.rows, machine: settled.machine, busy: settled.busy }
     await appendFile(file, `${JSON.stringify(verdict)}\n`)
     return settled.failed
   }
+  if (env[UNSURE_REPORTED_VARIABLE] === "1") return settled.failed
   return [...settled.failed, ...settled.unsure.map((line) => `${line}; measure it again on a quieter machine`)]
 }
+
+/** Set to `1` where a row the rounds can't settle is reported rather than failed: CI's `performance` job. */
+export const UNSURE_REPORTED_VARIABLE = "MAKO_PERFORMANCE_UNSURE_REPORTED"
 
 /** HEAD, if the tree holds nothing uncommitted but `baseline` itself: the code a baseline recorded now measured. */
 export async function committed(baseline: string): Promise<string | undefined> {
