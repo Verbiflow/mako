@@ -65,9 +65,17 @@ export interface ProcessReads {
   holding(file: string, pids: readonly number[], signal: AbortSignal): Promise<Set<number>>
   folders(pids: readonly number[], signal: AbortSignal): Promise<Map<number, string>>
   startedAt(pid: number, signal: AbortSignal): Promise<number>
+  /** Whether `pid` is still the process that started at `startedAt`; it throws when that can't be read. */
+  matches?(pid: number, startedAt: number, signal: AbortSignal): Promise<boolean>
 }
 
-const PROCESS_READS: ProcessReads = { marked: markedProcesses, holding: processesHolding, folders: processFolders, startedAt: processStartedAt }
+export const PROCESS_READS: ProcessReads = {
+  marked: markedProcesses,
+  holding: processesHolding,
+  folders: processFolders,
+  startedAt: processStartedAt,
+  matches: (pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, exact: true, signal }),
+}
 
 export interface AgentRunsDeps {
   store(): ThreadStore | undefined
@@ -380,7 +388,8 @@ export class AgentRuns {
    */
   private async identity(process: NonNullable<FollowedRun["process"]>): Promise<"same" | "other" | "unknown"> {
     if (process.startedAt === undefined) return signalable(process.pid) ? "unknown" : "other"
-    return processIdentityMatches({ pid: process.pid, startedAt: process.startedAt, exact: true, signal: this.abort.signal }).then(
+    const matches = this.deps.processes?.matches ?? PROCESS_READS.matches!
+    return matches(process.pid, process.startedAt, this.abort.signal).then(
       (same) => (same ? "same" : "other"),
       () => "unknown",
     )

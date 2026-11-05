@@ -17,7 +17,7 @@ import { AFTER_LIMIT, CHILDREN_BINDING, withChildren } from "@mako/host/contract
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
-import { END_CONFIRM_MS, lastStep } from "@mako/host/conversations/agent-runs"
+import { END_CONFIRM_MS, lastStep, PROCESS_READS, type ProcessReads } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { namedUuid } from "@mako/host/conversations/cloud-moves"
 import { Agents } from "@mako/host/conversations/agents"
@@ -552,6 +552,13 @@ async function followedStopHoldsUntilExit(): Promise<void> {
   }
 }
 
+/** Identity reads as the host's own, except that while `on` a process's start can't be read, on any platform. */
+const unreadable = { on: false }
+const identityReads: ProcessReads = {
+  ...PROCESS_READS,
+  matches: (pid, startedAt, signal) => (unreadable.on ? Promise.reject(new Error("its start time can't be read")) : PROCESS_READS.matches!(pid, startedAt, signal)),
+}
+
 /** A world with one place, a run its Apex's shell started linked into it (deaf to SIGTERM, writing shared.txt every 10 ms) and a Fin queued behind it. */
 async function linkedWriter(name: string, detached: boolean) {
   const fake = fakeCatalog()
@@ -559,6 +566,7 @@ async function linkedWriter(name: string, detached: boolean) {
     root: join(root, name),
     finLimit: () => 1,
     catalog: fake.catalog,
+    processes: identityReads,
     script: async (turn) => {
       if (turn.text.includes("You're fin:")) {
         writeFileSync(join(turn.world.root, "shared.txt"), "next")
@@ -594,15 +602,14 @@ function signalsTo(pid: number) {
 }
 
 /**
- * A stopped run whose identity can't be read (no `ps`) is neither gone nor proven its own: it keeps its place, Mako
+ * A stopped run whose identity can't be read is neither gone nor proven its own: it keeps its place, Mako
  * sends it nothing and says it couldn't confirm it stopped, and once its identity reads again the stop goes on.
  */
 async function followedStopUnknownIdentity(): Promise<void> {
   const { w, shell, apex, linked, started } = await linkedWriter("followed-unknown", false)
-  const path = process.env.PATH
   const signals = signalsTo(shell.pid!)
   try {
-    process.env.PATH = "/mako-test-no-ps"
+    unreadable.on = true
     await w.agents.stop(apex.caller, { child: "linked" })
     await new Promise((resolve) => setTimeout(resolve, 300))
     assert.equal(started(), false, "unknown identity is not gone: the next Fin waits")
@@ -611,7 +618,7 @@ async function followedStopUnknownIdentity(): Promise<void> {
     const row = w.agents.roster(apex.conversation).find((entry) => entry.child?.thread === linked.child)
     assert.match(JSON.stringify(row?.child?.state), /couldn't confirm linked stopped; it may still be running/, JSON.stringify(row?.child?.state))
   } finally {
-    process.env.PATH = path
+    unreadable.on = false
   }
   try {
     await waitFor(started, "next to start once the run was proven, killed and seen gone", 12_000)
@@ -636,21 +643,20 @@ async function followedStopStaleIdentity(): Promise<void> {
   const process0 = edge.run!.process!
   w.store.keepEdge({ ...edge, closedAt: at, run: { ...edge.run!, process: { ...process0, startedAt: process0.startedAt! - 60_000 }, stopping: { at }, ended: { at, kind: "stopped" } } })
   await w.close()
-  const path = process.env.PATH
   const signals = signalsTo(shell.pid!)
   let next: AgentsWorld | undefined
   try {
-    process.env.PATH = "/mako-test-no-ps"
-    next = new AgentsWorld({ root: w.root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: () => "ok" })
+    unreadable.on = true
+    next = new AgentsWorld({ root: w.root, catalog: fakeCatalog().catalog, processes: identityReads, finLimit: () => 1, script: () => "ok" })
     await new Promise((resolve) => setTimeout(resolve, 500))
     assert.equal(signals.sent.length, 0, `a recovered stop whose identity can't be read signals nothing: ${signals.sent.join(", ")}`)
     assert.equal(next.agents.runs.isTerminating(linked.child!), true, "and keeps its place")
-    process.env.PATH = path
+    unreadable.on = false
     await waitFor(() => !next!.agents.runs.isTerminating(linked.child!), "the place to go once the pid reads as another process's", 5_000)
     assert.equal(signals.sent.length, 0, `the process now under that pid is never signalled: ${signals.sent.join(", ")}`)
     assert.equal(shell.exitCode, null, "and it still runs")
   } finally {
-    process.env.PATH = path
+    unreadable.on = false
     signals.restore()
     shell.kill("SIGKILL")
     await next?.close()
