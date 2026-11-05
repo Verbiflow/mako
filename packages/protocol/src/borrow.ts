@@ -247,6 +247,13 @@ export const AskOfferSchema = z
   .strict()
 export type AskOffer = z.infer<typeof AskOfferSchema>
 
+/**
+ * Why a source or the vault couldn't give what a grant allows, as a fixed reason, never the source's own words: a
+ * source's error text can hold anything, a value included, and a refusal is pushed, logged and shown.
+ */
+export const UNAVAILABLE_REASONS = ["not-found", "outside", "unreadable", "changed", "no-value", "error"] as const
+export type UnavailableReason = (typeof UNAVAILABLE_REASONS)[number]
+
 export const RefusalSchema = z.discriminatedUnion("refused", [
   z.object({ refused: z.literal("no-grant"), ask: AskOfferSchema }).strict(),
   z.object({ refused: z.literal("out-of-scope") }).strict(),
@@ -262,7 +269,9 @@ export const RefusalSchema = z.discriminatedUnion("refused", [
     .strict(),
   z.object({ refused: z.literal("declined"), by: ActorSchema }).strict(),
   z.object({ refused: z.literal("too-large"), limit: z.number().int().positive() }).strict(),
-  z.object({ refused: z.literal("unavailable"), detail: z.string().max(500) }).strict(),
+  z.object({ refused: z.literal("unavailable"), reason: z.enum(UNAVAILABLE_REASONS) }).strict(),
+  /** The borrower's Thread has ended: nothing more is lent to it. */
+  z.object({ refused: z.literal("thread-ended") }).strict(),
 ])
 export type Refusal = z.infer<typeof RefusalSchema>
 
@@ -330,7 +339,7 @@ export type SourceAsk = z.infer<typeof SourceAskSchema>
 export const SourceAnswerSchema = z.discriminatedUnion("answer", [
   z.object({ answer: z.literal("yes"), version: z.string().min(1).max(80), size: z.number().int().nonnegative().optional() }).strict(),
   z.object({ answer: z.literal("no"), by: ActorSchema }).strict(),
-  z.object({ answer: z.literal("unavailable"), detail: z.string().max(500) }).strict(),
+  z.object({ answer: z.literal("unavailable"), reason: z.enum(UNAVAILABLE_REASONS) }).strict(),
 ])
 export type SourceAnswer = z.infer<typeof SourceAnswerSchema>
 
@@ -450,10 +459,12 @@ export type BrokerState = {
   answers: Record<string, BorrowAnswer>
   asks: Record<string, AskState>
   devices: Record<string, DeviceState>
+  /** The Threads that have ended, by account and Thread, with when: nothing is lent to them after. */
+  endedThreads: Record<string, number>
 }
 
 export function emptyBroker(account: string): BrokerState {
-  return { account, grants: {}, leases: {}, answers: {}, asks: {}, devices: {} }
+  return { account, grants: {}, leases: {}, answers: {}, asks: {}, devices: {}, endedThreads: {} }
 }
 
 /**
@@ -504,7 +515,26 @@ function clone(state: BrokerState): BrokerState {
     answers: { ...state.answers },
     asks: { ...state.asks },
     devices: { ...state.devices },
+    endedThreads: { ...(state.endedThreads ?? {}) },
   }
+}
+
+function threadKey(account: string, thread: string): string {
+  return `${account}\0${thread}`
+}
+
+/**
+ * How long an ended lease, the answers naming it and an ended Thread are kept before they're let go, so a broker's
+ * state stays the size of what's live: a replayed need older than this is decided afresh. The log keeps the history.
+ */
+export const RETIRE_MS = 7 * 24 * 60 * 60_000
+/** An ended Thread is remembered far longer, since a need it sent late must still find it ended. */
+export const RETIRE_THREAD_MS = 90 * 24 * 60 * 60_000
+
+function retire(state: BrokerState, at: number): void {
+  for (const [id, held] of Object.entries(state.leases)) if (held.ended && at - held.ended.at >= RETIRE_MS) delete state.leases[id]
+  for (const [key, answer] of Object.entries(state.answers)) if ("lease" in answer && !state.leases[answer.lease.id]) delete state.answers[key]
+  for (const [key, endedAt] of Object.entries(state.endedThreads)) if (at - endedAt >= RETIRE_THREAD_MS) delete state.endedThreads[key]
 }
 
 /** The grant that decides a need, by the narrowest scope and then the newest; or why none does. */
@@ -641,6 +671,7 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
   const effects: BrokerEffect[] = []
   const done = (extra: Omit<BrokerResult, "state" | "effects"> = {}): BrokerResult => ({ state, effects, ...extra })
   expire(state, effects, input.at)
+  retire(state, input.at)
   switch (input.type) {
     case "grant": {
       const parsed = GrantSchema.safeParse(input.grant)
@@ -683,6 +714,7 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
       if (!parsed.success) return done({ rejected: parsed.error.issues[0]?.message ?? "Not a need" })
       const need = parsed.data
       if (need.for.account !== state.account) return done({ rejected: "A need of another account" })
+      if (state.endedThreads[threadKey(need.for.account, need.for.thread)] !== undefined) return done({ answer: decide(state, effects, need, { refusal: { refused: "thread-ended" } }, input.at, false) })
       const answered = state.answers[needKey(need.for, need.correlationId)]
       if (answered && "lease" in answered) {
         const ended = state.leases[answered.lease.id]?.ended
@@ -711,7 +743,7 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
         effects.push({ effect: "ask", device: grant.source.device, ask })
         return done({ answer: pending })
       }
-      if (grant.mode === "copy" && !input.content) return done({ answer: decide(state, effects, need, { refusal: { refused: "unavailable", detail: "The vault holds no value for it" } }, input.at, false) })
+      if (grant.mode === "copy" && !input.content) return done({ answer: decide(state, effects, need, { refusal: { refused: "unavailable", reason: "no-value" } }, input.at, false) })
       if (input.content && input.content.size > BORROW_COPY_MAX_BYTES)
         return done({ answer: decide(state, effects, need, { refusal: { refused: "too-large", limit: BORROW_COPY_MAX_BYTES } }, input.at, false) })
       const version = grant.mode === "copy" ? input.content!.version : `g${grant.version}`
@@ -723,13 +755,14 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
       delete state.asks[input.ask]
       const held = state.grants[asked.grant]
       const need = asked.need
+      if (state.endedThreads[threadKey(need.for.account, need.for.thread)] !== undefined) return done({ answer: decide(state, effects, need, { refusal: { refused: "thread-ended" } }, input.at) })
       if (!held || held.ended || lapsed(held.grant, input.at)) {
         if (held && !held.ended) endGrant(state, effects, held.grant.id, { at: input.at, why: "expired", by: { kind: "mako" } })
         return done({ answer: decide(state, effects, need, { refusal: { refused: held?.ended?.why === "expired" || !held?.ended ? "expired" : "revoked" } }, input.at) })
       }
       const { answer } = input
       if (answer.answer === "no") return done({ answer: decide(state, effects, need, { refusal: { refused: "declined", by: answer.by } }, input.at) })
-      if (answer.answer === "unavailable") return done({ answer: decide(state, effects, need, { refusal: { refused: "unavailable", detail: answer.detail } }, input.at) })
+      if (answer.answer === "unavailable") return done({ answer: decide(state, effects, need, { refusal: { refused: "unavailable", reason: answer.reason } }, input.at) })
       if (answer.size !== undefined && answer.size > BORROW_COPY_MAX_BYTES)
         return done({ answer: decide(state, effects, need, { refusal: { refused: "too-large", limit: BORROW_COPY_MAX_BYTES } }, input.at) })
       const key = borrowerKey(need.for)
@@ -756,6 +789,12 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
       return done()
     }
     case "thread-ended": {
+      state.endedThreads[threadKey(input.account, input.thread)] = input.at
+      for (const ask of Object.values(state.asks))
+        if (ask.need.for.account === input.account && ask.need.for.thread === input.thread) {
+          delete state.asks[ask.ask]
+          decide(state, effects, ask.need, { refusal: { refused: "thread-ended" } }, input.at)
+        }
       for (const held of Object.values(state.leases))
         if (held.lease.borrower.account === input.account && held.lease.borrower.thread === input.thread) endLease(state, effects, held.lease.id, "released", input.at)
       for (const held of Object.values(state.grants))

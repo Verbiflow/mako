@@ -30,12 +30,7 @@ function lcg(seed) {
   return { next, int: (n) => Math.floor(next() * n), pick: (list) => list[Math.floor(next() * list.length)] }
 }
 
-const THREADS = [
-  { thread: "t1", repository: "acme/web" },
-  { thread: "t2", repository: "acme/web" },
-  { thread: "t3", repository: "acme/api" },
-  { thread: "t4", repository: "acme/api" },
-]
+const THREADS = Array.from({ length: 40 }, (_, index) => ({ thread: `t${index + 1}`, repository: index % 2 ? "acme/api" : "acme/web" }))
 const PLACES = [{ kind: "device", device: "mac" }, { kind: "machine", machine: "m1" }, { kind: "device", device: "studio" }]
 const REFS = {
   file: [".env", "config/dev.json", "~/flage/README.md", "../outside"],
@@ -113,6 +108,7 @@ function walk(seed, steps, tally) {
   let correlations = 0
   const values = []
   const revokedGrants = new Set()
+  const endedThreads = new Set()
   const leaseByNeed = new Map()
   const grantedPerNeed = new Map()
   const consentedLeases = new Set()
@@ -148,7 +144,7 @@ function walk(seed, steps, tally) {
         { answer: "yes", version: sha(value), size: random.int(100_000) },
         { answer: "yes", version: sha(value) },
         { answer: "no", by: { kind: "person", account: ACCOUNT, device: "mac" } },
-        { answer: "unavailable", detail: `cat: ${value}: No such file` },
+        { answer: "unavailable", reason: random.pick(["not-found", "outside", "unreadable", "changed", "error"]) },
       ])
       input = { type: "source-answer", ask, answer, at }
     } else if (roll < 0.76 && Object.keys(before.leases).length) input = { type: random.next() < 0.6 ? "renew" : "release", lease: random.pick(Object.keys(before.leases)), at }
@@ -201,6 +197,12 @@ function walk(seed, steps, tally) {
     if (input.type === "grant" && revokedGrants.has(input.grant.id)) assert.ok(result.rejected, `${where}: a revoked grant came back`)
     for (const id of revokedGrants) assert.equal(liveLeases(state, { grant: id }).length, 0, `${where}: a live lease under revoked ${id}`)
 
+    // A Thread that ended is lent nothing more, whatever answers or grants come after.
+    if (input.type === "thread-ended") endedThreads.add(`${input.account}\0${input.thread}`)
+    for (const event of events.filter((line) => line.event === "granted"))
+      assert.ok(!endedThreads.has(`${event.borrower.account}\0${event.borrower.thread}`), `${where}: a lease to a Thread that ended`)
+    for (const lease of liveLeases(state)) assert.ok(!endedThreads.has(`${lease.borrower.account}\0${lease.borrower.thread}`) || lease.issuedAt < 0, `${where}: a live lease of an ended Thread`)
+
     // 3. Expiry: no lease outlives its grant, and none lives past its own end.
     for (const lease of liveLeases(state)) {
       const expiry = grantExpiry(state.grants[lease.grant].grant)
@@ -209,7 +211,7 @@ function walk(seed, steps, tally) {
     }
 
     // 4. No value in the log, a push, an ask or a listing.
-    const said = JSON.stringify([events, result.effects.filter((effect) => effect.effect !== "push" || effect.push.push !== "decided"), liveLeases(state), standingGrants(state, at)])
+    const said = JSON.stringify([events, result.effects, result.answer ?? null, liveLeases(state), standingGrants(state, at)])
     for (const value of values) assert.ok(!said.includes(value), `${where}: a value in what the broker says`)
 
     // 5. Source consent.
@@ -231,15 +233,17 @@ function walk(seed, steps, tally) {
     if (input.type === "borrow" && !result.rejected) {
       const key = `${input.need.for.account}\0${input.need.for.thread}\0${input.need.correlationId}`
       const first = leaseByNeed.get(key)
-      const firstLive = first && !state.leases[first.lease.id].ended
+      const firstHeld = first && state.leases[first.lease.id]
+      const firstLive = firstHeld && !firstHeld.ended
       if (firstLive) assert.deepEqual(result.answer, first, `${where}: the same need answered twice differently`)
-      else if (first) assert.ok(["expired", "revoked"].includes(result.answer.refusal?.refused), `${where}: an ended lease answered again`)
+      else if (firstHeld) assert.ok(["expired", "revoked", "thread-ended"].includes(result.answer.refusal?.refused), `${where}: an ended lease answered again`)
       else if (result.answer && "lease" in result.answer) leaseByNeed.set(key, result.answer)
     }
     for (const event of events.filter((line) => line.event === "granted")) {
       const key = `${event.borrower.account}\0${event.borrower.thread}\0${event.correlationId}`
-      grantedPerNeed.set(key, (grantedPerNeed.get(key) ?? 0) + 1)
-      assert.equal(grantedPerNeed.get(key), 1, `${where}: one need given two leases`)
+      const earlier = grantedPerNeed.get(key)
+      assert.ok(earlier === undefined || !before.leases[earlier], `${where}: one need given two leases`)
+      grantedPerNeed.set(key, event.lease)
     }
     if (input.type === "source-answer" && result.answer && "lease" in result.answer) {
       const asked = before.asks[input.ask].need
@@ -251,7 +255,7 @@ function walk(seed, steps, tally) {
       const chosen = chooseGrant(before, input.need, at)
       if ("grant" in chosen && chosen.grant.grant.source.kind === "device" && !before.devices[chosen.grant.grant.source.device]?.online) {
         const answer = result.answer
-        assert.ok(("lease" in answer && answer.lease.stale) || answer.refusal?.refused === "source-offline" || answer.refusal?.refused === "expired", `${where}: an offline source answered ${JSON.stringify(answer)}`)
+        assert.ok(("lease" in answer && answer.lease.stale) || ["source-offline", "expired", "thread-ended"].includes(answer.refusal?.refused), `${where}: an offline source answered ${JSON.stringify(answer)}`)
         tally.offline = (tally.offline ?? 0) + 1
       }
     }
@@ -400,6 +404,43 @@ describe("borrowing: exact cases", () => {
     const copy = step(state, { type: "borrow", need: need({ kind: "tree", ref: "node_modules", for: here, mode: "copy" }), at: 2, lease: "l3", ask: "a3" })
     assert.equal(copy.effects.find((effect) => effect.effect === "ask").ask.grant, "local-copy")
     assert.throws(() => base({ within: "source-device" }), "only a device's grant keeps to it")
+  })
+
+  test("a Thread that ends while a device decides gets nothing from the device's late yes", () => {
+    const device = base({ id: "mac-src", source: { kind: "device", device: "mac" }, scope: { level: "account", account: ACCOUNT }, ask: "first-use", resource: { kind: "tree", ref: "~/flage/src" }, secret: false })
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: device, at: 1 }).state
+    state = step(state, { type: "device", device: "mac", online: true, at: 1 }).state
+    const need = { kind: "tree", ref: "~/flage/src", for: mac, why: "read it", correlationId: "c1" }
+    state = step(state, { type: "borrow", need, at: 2, lease: "l1", ask: "a1" }).state
+    const ended = step(state, { type: "thread-ended", account: ACCOUNT, thread: mac.thread, at: 3 })
+    assert.ok(ended.effects.some((effect) => effect.effect === "push" && effect.push.push === "decided" && effect.push.answer.refusal?.refused === "thread-ended"), "the waiting need ends with its Thread")
+    const late = step(ended.state, { type: "source-answer", ask: "a1", answer: { answer: "yes", version: sha("tree") }, at: 4 })
+    assert.ok(late.rejected, "the ask is gone")
+    assert.equal(liveLeases(late.state).length, 0)
+    const again = step(late.state, { type: "borrow", need: { ...need, correlationId: "c2" }, at: 5, lease: "l2", ask: "a2" })
+    assert.equal(again.answer.refusal.refused, "thread-ended", "and a need it sends after is refused")
+  })
+
+  test("a source's failure reaches the borrower as a fixed reason, never the source's words", () => {
+    const device = base({ id: "mac-src", source: { kind: "device", device: "mac" }, ask: "never", resource: { kind: "file", ref: ".env" } })
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: device, at: 1 }).state
+    state = step(state, { type: "device", device: "mac", online: true, at: 1 }).state
+    state = step(state, { type: "borrow", need: need(), at: 2, lease: "l1", ask: "a1" }).state
+    const failed = step(state, { type: "source-answer", ask: "a1", answer: { answer: "unavailable", reason: "unreadable" }, at: 3 })
+    assert.deepEqual(failed.answer, { refusal: { refused: "unavailable", reason: "unreadable" } })
+    assert.throws(() => step(state, { type: "source-answer", ask: "a1", answer: { answer: "unavailable", detail: "API_KEY=sk-live" }, at: 3 }).answer.refusal.reason.length)
+  })
+
+  test("a long-lived broker keeps only what's live: ended leases and their answers retire", () => {
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: base(), at: 1 }).state
+    let at = 10
+    for (let index = 0; index < 5000; index++) {
+      at += 60 * 60_000
+      const taken = step(state, { type: "borrow", need: need({ correlationId: `c${index}` }), at, lease: `l${index}`, ask: `a${index}`, content: { version: sha("x"), size: 1 } })
+      state = step(taken.state, { type: "release", lease: `l${index}`, at }).state
+    }
+    assert.ok(Object.keys(state.leases).length <= 24 * 7 + 1, `${Object.keys(state.leases).length} leases kept`)
+    assert.ok(Object.keys(state.answers).length <= 24 * 7 + 1, `${Object.keys(state.answers).length} answers kept`)
   })
 
   test("one seal context for every borrowed value", () => {
