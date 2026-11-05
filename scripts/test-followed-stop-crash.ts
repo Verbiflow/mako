@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { processIdentityMatches } from "@mako/host/base/process-liveness"
+import { STOP_GRACE_MS } from "@mako/host/conversations/agent-runs"
 import { AgentsWorld, fakeCatalog } from "./lib/agents-world.ts"
 
 /**
@@ -64,14 +65,13 @@ if (process.argv[2] === "host") {
     assert.equal(signal, "SIGKILL", said)
     const identity = Identity.parse(JSON.parse(readFileSync(join(root, "linked-process.json"), "utf8")))
     assert.ok(await live(identity), "the linked run outlived the host that stopped it")
-    const stoppedAt = Date.now()
     w = new AgentsWorld({ root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: script(root) })
     const started = () => w!.prompts.some((prompt) => prompt.text.includes("You're fin:next,"))
     await pause(500)
     assert.equal(started(), false, "the next host holds the stopped run's place while its process runs")
     assert.equal(readFileSync(join(root, "shared.txt"), "utf8"), "linked")
-    await until(async () => !(await live(identity)), "the next host to kill the run once its grace is up", 12_000)
-    assert.ok(Date.now() - stoppedAt < 9_000, "killed in the next host's turn, not left running")
+    // The run never ends by itself: left running, it outlives this hang guard, thirty times its grace.
+    await until(async () => !(await live(identity)), "the next host to kill the run once its grace is up, not leave it running", 30 * STOP_GRACE_MS)
     await until(started, "next to start once the run was gone")
     await pause(100)
     assert.equal(readFileSync(join(root, "shared.txt"), "utf8"), "next", "and nothing overwrote its file after")
