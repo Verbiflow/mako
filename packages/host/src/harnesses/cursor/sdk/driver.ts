@@ -5,7 +5,7 @@ import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime
 import { NO_NATIVE_EXCLUSION } from "../../../contracts/execution-context.js"
 import { untilStopped } from "../../../contracts/live-side-questions.js"
 import { applyThreadEnvironment } from "../../../workspaces/index.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError } from "../../prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { cursorLegacyIdentity, cursorSdkReportedSettings, cursorSdkSelection, cursorSdkStorePath, cursorStoreOrigin, normalizeCursorSdkModels, CURSOR_PLAN_OPTION } from "@mako/sessions"
@@ -913,6 +913,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return { live, selection, plan: merged.options?.plan === true }
       })
       const turn = dispatch.attemptId
+      const { images, words } = preparePrompt(dispatch, () => ({ images: promptImages(attachments), words: promptText(text, attachments) }))
+      handOff(dispatch, { kind: "submitted", source: "transport-call", correlationId: turn })
       live.turn = turn
       live.decoder.startTurn(turn)
       engine.patch(live, {
@@ -926,11 +928,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       engine.emitUpdate(live, { kind: "user", text })
       live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
       try {
-        const images = promptImages(attachments)
-        dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn })
         const sent = await live.client.request("send", {
           turn,
-          text: promptText(text, attachments),
+          text: words,
           images: images.length > 0 ? images : undefined,
           model: selection,
           plan,

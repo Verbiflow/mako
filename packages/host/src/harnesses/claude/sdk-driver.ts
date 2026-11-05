@@ -1,5 +1,5 @@
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
@@ -879,6 +879,8 @@ export function createClaudeSdkDriver(
         if (current.state.status === "running") throw new TurnInProgressError("Claude")
       })
       const uuid = dispatch.attemptId
+      // Before the input queue holds it: its consumer takes what it holds even if the prompt then fails.
+      handOff(dispatch, { kind: "submitted", source: "sdk-input", correlationId: uuid })
       live.promptReceipt = { id: uuid, dispatch }
       live.awaitingTurn = uuid
       // The input queue refuses before holding the message, so a refusal
@@ -915,7 +917,6 @@ export function createClaudeSdkDriver(
         error: undefined,
       })
       engine.emitUpdate(live, { kind: "user", text })
-      dispatch.report({ kind: "submitted", source: "sdk-input", correlationId: uuid })
     },
     // Seen with the Agent SDK 0.3.314 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model
     // heard it in the request after the command returned, and a Stop ended the turn in 0.2 s. Measured again

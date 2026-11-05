@@ -84,6 +84,8 @@ type Key = RowSizes extends Map<infer Key, number> ? Key : never
 const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
 const MEASURED_KEPT = 8
 const ESTIMATED_ROW = 360
+/** The column's `gap-7` between turns, kept by the virtualizer between windowed rows. */
+const ROW_GAP = 28
 
 function keepMeasured(source: string, sizes: RowSizes): void {
   if (!sizes.size) return
@@ -619,6 +621,25 @@ export function ConversationTimeline({
       ? "more"
       : "start"
   const rowKey = (index: number) => keys.get(exchanges[index]!.id) ?? exchanges[index]!.id
+  const placedTotal = useRef(0)
+  /** How much of a windowed column is rows' estimates (`estimateSize`), not yet their measured sizes. */
+  const estimated = useRef<() => number>(() => 0)
+  estimated.current = () => {
+    if (!windowed) return 0
+    let height = 0
+    for (let index = 0; index < exchanges.length; index += 1) {
+      const key = rowKey(index)
+      if (!rows.itemSizeCache.has(key)) height += measuredSize(readingSource, key)
+    }
+    return height
+  }
+  /*
+   * A row's new size is placed in the frame it is laid out, never the next: the resize observer's sizes apply in its
+   * own callback, the virtualizer writes every row's offset and the column's height there itself, and the end is
+   * followed in the same pass. Placed a frame later, a row that just grew (a sent message, a report, an answer) is
+   * painted over what follows it. The space between rows is the virtualizer's gap, so a row arriving below another
+   * doesn't change that one's size.
+   */
   const rows = useVirtualizer({
     count: exchanges.length,
     enabled: windowed,
@@ -626,8 +647,15 @@ export function ConversationTimeline({
     estimateSize: (index) => measuredSize(readingSource, rowKey(index)),
     getItemKey: (index) => rowKey(index),
     overscan: 6,
+    gap: ROW_GAP,
     scrollMargin: edge ? 80 : 24,
-    useAnimationFrameWithResizeObserver: true,
+    directDomUpdates: true,
+    onChange: (instance) => {
+      const total = instance.getTotalSize()
+      if (total === placedTotal.current) return
+      placedTotal.current = total
+      followEnd.current()
+    },
     scrollToFn: (offset, options, instance) => {
       elementScroll(offset, options, instance)
       if (viewport.current) owned(viewport.current)
@@ -1093,14 +1121,16 @@ export function ConversationTimeline({
           // row giving way to its turn's own) keeps its height as room at the end, which what it writes next fills.
           // At another width every line has flowed again (a phone turned sideways, a pane resized), and a height from
           // before says nothing of what's under the reader: kept, it would leave the end blank.
+          // Rows still at their estimate aren't height the column had: one measured below it is no shrink.
           const natural = column.offsetHeight
+          const measured = natural - estimated.current()
           const width = column.offsetWidth
-          highWater.current = width === highWaterWidth.current ? Math.max(highWater.current, natural) : natural
+          highWater.current = width === highWaterWidth.current ? Math.max(highWater.current, measured) : measured
           highWaterWidth.current = width
-          spacer.style.height = `${highWater.current - natural}px`
+          spacer.style.height = `${highWater.current - measured}px`
         } else {
           // Away from the end, the room kept there goes: nothing the reader sees moves.
-          highWater.current = column.offsetHeight
+          highWater.current = column.offsetHeight - estimated.current()
           highWaterWidth.current = column.offsetWidth
           spacer.style.height = "0px"
         }
@@ -1449,8 +1479,13 @@ export function ConversationTimeline({
     requestAnimationFrame(settle)
   }, [exchanges, hidden, mountedKeys, endSeek, owned, holdReader])
 
+  // Registered once: a stream renders the transcript every batch, and registering again each time sets every
+  // command's reader (the palette) to work through the whole list.
+  const moving = useRef({ activeTurn, exchanges, jump })
+  moving.current = { activeTurn, exchanges, jump }
   useEffect(() => {
     const move = (offset: number) => {
+      const { activeTurn, exchanges, jump } = moving.current
       if (!exchanges.length) return
       const at = exchanges.findIndex((exchange) => exchange.id === activeTurn)
       const from = at < 0 ? exchanges.length - 1 : at
@@ -1473,7 +1508,7 @@ export function ConversationTimeline({
         run: () => move(1),
       },
     ])
-  }, [activeTurn, exchanges, jump])
+  }, [])
 
   const showNavigator = navigates && !isEmpty && exchanges.length >= 3
   const woke = useMemo(() => wokeAfterRest(exchanges, askedAt), [exchanges, askedAt])
@@ -1593,23 +1628,16 @@ export function ConversationTimeline({
               ) : null}
               {windowed ? (
                 <div
+                  ref={rows.containerRef}
                   data-virtual-transcript
-                  style={{ height: rows.getTotalSize(), position: "relative" }}
+                  style={{ position: "relative" }}
                 >
                   {virtualRows.map((row) => (
                     <div
                       key={row.key}
                       data-index={row.index}
                       ref={rows.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        transform: `translateY(${row.start - rows.options.scrollMargin}px)`,
-                        paddingBottom:
-                          row.index < exchanges.length - 1 ? 28 : 0,
-                      }}
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%" }}
                     >
                       {renderExchange(exchanges[row.index]!)}
                     </div>

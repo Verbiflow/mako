@@ -1,4 +1,5 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
+import type { RequestRetry } from "./delivery-retry.js"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
@@ -343,6 +344,19 @@ export interface LiveRequest {
    * releases it when the time comes, across restarts, since the journal keeps it.
    */
   wake?: RequestWake
+  /**
+   * A message that didn't reach its harness for a cause that clears by itself (`RetryCause`): `held` until `at`,
+   * when the held-wakes job sends it again, as often as it takes (`nextRetry`). It isn't a failure: the queue says
+   * why it waits and when it goes, a Resume sends it now, and removing it cancels it. Kept once it goes, so a
+   * second failure counts on from this one; gone once it's sent.
+   */
+  retry?: RequestRetry
+  /**
+   * A Stop's latch on a request it found waiting or being sent: the person's Stop, or an Apex's of its Fin. Whatever
+   * comes back for it later (a refusal, a retry, a time), it's held as the Stop's pause and goes by itself never,
+   * across a restart too, until a deliberate resume clears the mark: Resume, or for a Fin its next message.
+   */
+  pause?: "stop"
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**

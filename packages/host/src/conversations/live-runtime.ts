@@ -207,6 +207,8 @@ export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "work
 
 /** What a conversation's Fins are to its turns and its roster (`Agents`). */
 export interface ConversationChildren {
+  /** A Fin's edge was just written, under the op its start named: it leaves the line of those waiting (`queueRefresh`). */
+  edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
@@ -464,6 +466,7 @@ export interface LiveAccess {
   retireFromAccount(resident: Resident): Promise<void>
   switchAccount(resident: Resident, request: LiveRequest): Promise<void>
   accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
+  /** A turn ended: Mako continues it after a dropped connection, or when its next attempt is due after a failure that clears by itself. */
   scheduleAutoContinue(resident: Resident, settled: string): void
   declineAutoContinue(resident: Resident): void
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */

@@ -2,7 +2,7 @@ import type { AccessTier } from "./access.js"
 import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
-import type { AskOption, FinAsk } from "./native-agents.js"
+import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
 
 /**
  * The orchestration operations, each defined once: a host call
@@ -45,6 +45,10 @@ export interface AgentsStartInput extends DoorFilled {
   wake?: WakeOn
   /** A `wait`'s window, at most `WAIT_LIMIT_MS`. */
   timeoutMs?: number
+  /** The caller's own Fins, by name or Thread, queued ones too, that it starts after: once each has finished. */
+  after?: string[]
+  /** True: past the person's limit or the tree's running budget it waits for one to end instead of being refused. */
+  queue?: boolean
   /** The caller's own key for this spawn: a repeat with the same key answers the same Fin. */
   clientKey: string
 }
@@ -77,9 +81,13 @@ export interface AgentsStarted {
   state: ChildState["kind"]
   /** What it waits for, when queued. */
   why?: string
+  /** The Fins it starts after (`after`) that haven't finished yet, by name. */
+  after?: string[]
   tree: { running: number; started: number; of: { running: number; started: number } }
-  /** This Mac's room: Fins at work on it, every tree's, and how many it runs at once now, measured (`macSlots`). */
-  mac?: { working: number; slots: number; why: string }
+  /** The person's Fins at work on this device, every tree's, and how many run on it at once: its capacity, or their own number. */
+  atOnce?: { working: number; of: number }
+  /** Set while this Mac is busy (`macLoad`): it starts anyway, and says so, so heavy work goes one at a time. */
+  mac?: string
   /** A repeat of an earlier spawn: this is that spawn's Fin. */
   deduped?: true
   /** A `wait` start's outcome; a repeat of one answers its result again. */
@@ -358,6 +366,8 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
   `Pass \`model\`, \`reasoning\` or \`fast\` only as the person said them ("Codex on high", "the fast one"); left out, a ${FIN_WORD} runs on what the person uses.`,
   `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report or ask, and a message to it has to stop its run.`,
+  `Each device runs as many ${FIN_WORD}s at once as its capacity, from its hardware and what a ${FIN_WORD} costs there, or the person's own number; past it a start is refused unless you pass \`queue: true\`, which starts it when one ends.`,
+  `To run work in order, pass \`after: [<${FIN_WORD} names>]\`: it starts once those finish, and if one fails or is stopped you're woken to decide instead.`,
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
   `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
@@ -418,7 +428,7 @@ function stateWords(state: ChildState, report: FrontDoorChild["report"], now: nu
     case "starting":
       return "starting"
     case "queued":
-      return `queued, ${state.ahead} ahead`
+      return state.refused ? `not started: ${state.refused.replace(/^It didn't start: /, "")}` : state.held ? `not started: ${state.held} didn't finish` : state.after?.length ? `starts after ${state.after.join(", ")}` : `queued, ${state.ahead} ahead`
     case "idle":
       return "idle"
     case "blocked":
@@ -476,6 +486,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         mode: "background (default): returns at once; work on or end your turn. wait: only when your next step needs its result; you get it here if it's quick, else your turn ends and the result starts your next turn. Never wait on work that can run while you do other things.",
         wake: "What wakes you: decisions (default: it finished, failed, is blocked or asks), finish (only its result; its questions go to the person), or never (nothing; read it with agents_read; its questions go to the person).",
         timeoutMs: `For wait: how long to hold for its result here, at most ${WAIT_LIMIT_MS} (the default).`,
+        after: `Only to order work: your ${FIN_WORD}s, by name or Thread (queued ones too), at most ${AFTER_LIMIT}, that must finish first. It waits until each has; if one fails or is stopped it doesn't start, and you're woken to decide.`,
+        queue: `true: if its place is full (a device's capacity, the cloud's plan, or the person's ceiling across places) or this tree's running budget is, it waits for one to end. Absent: a full place refuses the start, saying where else it could run.`,
         clientKey: `Your own key for this spawn: a repeat with it answers the same ${FIN_WORD}.`,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },

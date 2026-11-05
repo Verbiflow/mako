@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
-import { CheckIcon, ChevronRightIcon, PlusIcon } from "lucide-react"
+import { CheckIcon, ChevronRightIcon, MinusIcon, PlusIcon } from "lucide-react"
 import { errorMessage } from "@mako/host/contracts/error-message"
-import { FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
+import { cloudWords, FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT_MAX, FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { modelByIdentity, optionDefault, settingsWithVariant, type ModelOption, type SessionSettings, type SettingValue } from "@mako/sessions/settings"
 import { cn } from "@/lib/utils"
@@ -90,9 +90,44 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
     })
   }
 
+  const save = (channel: string, value: number | null, next: FinChoicesReading) => {
+    const before = reading
+    setReading(next)
+    call<FinChoicesReading>(channel, [value]).then(setReading, (error) => {
+      setReading(before)
+      toast.error(errorMessage({ error }))
+    })
+  }
+  const setLimit = (limit: number | null) => {
+    if (!reading) return
+    const next = { ...reading }
+    if (limit === null) delete next.limit
+    else next.limit = limit
+    save("mako:fin-limit-set", limit, next)
+  }
+  const setCeiling = (ceiling: number) => reading && save("mako:fin-ceiling-set", ceiling, { ...reading, ceiling })
+
   const signedIn = WEB_HARNESSES.filter((harness) => profiles[harness]?.available)
+  const capacity = reading?.capacity
+  const own = reading?.limit
   return (
     <>
+      {reading && capacity ? (
+        <Group title="Fins at once" footer="How many of your Fins run at the same time in each place, across every Apex. Past it, an Apex waits for one to end only when it asks to.">
+          <Row
+            label={mac}
+            detail={own !== undefined ? `Your number · Auto would be ${capacity.auto}` : [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["defaults so far"]].join(" · ")}
+            end={
+              <span className="flex shrink-0 items-center gap-2">
+                <Switch label="Auto" on={own === undefined} onChange={(auto) => setLimit(auto ? null : capacity.atOnce)} />
+                {own === undefined ? <span className="tabular w-7 text-center text-ui font-medium">{capacity.atOnce}</span> : <WebStepper label={`${mac}'s Fins at once`} value={own} most={FIN_LIMIT_MAX} onChange={setLimit} />}
+              </span>
+            }
+          />
+          {reading.cloud ? <Row label="Cloud" detail="A machine per Fin, so your plan sets it" end={<span className="shrink-0 text-ui text-faint">{cloudWords(reading.cloud)}</span>} /> : null}
+          <Row label="Across every place" detail="A safety net over each place's own" end={<WebStepper label="Fins at once across every place" value={reading.ceiling ?? FIN_CEILING} most={FIN_CEILING_MAX} onChange={setCeiling} />} />
+        </Group>
+      ) : null}
       {reading ? <RulesGroup policy={reading.policy} profiles={profiles} signedIn={signedIn} onSave={savePolicy} {...(opened?.startsWith("rule:") && { opened: opened.slice(5) })} /> : null}
       <Group
       title="Fins, per harness"
@@ -436,5 +471,19 @@ function RuleSheet({ title, when: start, done = "Done", target: initial, apexOwn
         ) : null}
       </SheetScroll>
     </Sheet>
+  )
+}
+
+function WebStepper({ label, value, most, onChange }: { label: string; value: number; most: number; onChange: (next: number) => void }) {
+  return (
+    <span role="group" aria-label={label} className="flex shrink-0 items-center gap-1">
+      <button type="button" aria-label="One fewer" disabled={value <= 1} onClick={() => onChange(value - 1)} className="pressable flex size-9 items-center justify-center rounded-full text-muted-foreground disabled:opacity-40">
+        <MinusIcon className="size-4" />
+      </button>
+      <output aria-live="polite" className="tabular w-7 text-center text-ui font-medium">{value}</output>
+      <button type="button" aria-label="One more" disabled={value >= most} onClick={() => onChange(value + 1)} className="pressable flex size-9 items-center justify-center rounded-full text-muted-foreground disabled:opacity-40">
+        <PlusIcon className="size-4" />
+      </button>
+    </span>
   )
 }

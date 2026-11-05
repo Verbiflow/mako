@@ -1,4 +1,5 @@
-import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
+import type { LiveRequest, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
+import type { Entry } from "@mako/sessions/entries"
 import { childEntry, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
 import type { FinTuningWords } from "@mako/host/contracts/fin-tuning"
 import { BRIEF_CLOSE, briefIntro, fromAgent, FROM_AGENTS, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
@@ -260,15 +261,74 @@ const WAKE_TEXT = appendFinReports(
   ]
 )
 
+/** What stands in the Apex's conversation ahead of its own turns: the requests and the blocks that drew them. */
+interface EarlierTurns {
+  requests: LiveRequest[]
+  blocks: Entry[]
+}
+
+const EARLIER_WORDS = [
+  "The sheet measures its container once the keyboard's inset settles, so split view no longer starts it off screen.",
+  "Each Fin's report lands as its own message under the wake, with its options live while the ask is yours.",
+  "The crew card keeps the Fins on screen through every transition; only the background line waits for the turn's end.",
+  "Rows the transcript has not laid out stand at the size they last measured, or an estimate until they mount.",
+]
+
+/**
+ * `turns` earlier exchanges ahead of the Apex's own, for a long Thread (`?mock&app=apex&turns=260`): each a prompt,
+ * a few tool calls, and an answer of prose, a list and code of varying length, so the transcript windows its rows.
+ */
+function earlierTurns(turns: number): EarlierTurns {
+  const requests: LiveRequest[] = []
+  const blocks: Entry[] = []
+  for (let turn = 0; turn < turns; turn += 1) {
+    const id = `1ead1ead-6000-4000-8000-${String(turn + 1).padStart(12, "0")}`
+    const createdAt = STARTED - (turns - turn) * 120_000
+    const text = `Turn ${turn + 1}: ${EARLIER_WORDS[turn % EARLIER_WORDS.length]}`
+    requests.push({ id, createdAt, text, attachments: [], status: "completed" })
+    blocks.push({ type: "user", text, requestId: id, at: createdAt })
+    for (let tool = 0; tool < turn % 4; tool += 1)
+      blocks.push({ type: "tool", id: `apex-earlier-${turn}-${tool}`, toolKind: "read", title: `Read src/web-client/part-${tool}.tsx`, input: `{"path":"src/web-client/part-${tool}.tsx"}`, output: "export function Part() {}", status: "completed" })
+    const lines = 2 + ((turn * 7) % 18)
+    blocks.push({ type: "text", text: [
+      EARLIER_WORDS[(turn + 1) % EARLIER_WORDS.length]!.repeat(1 + (turn % 3)),
+      ...EARLIER_WORDS.slice(0, 1 + (turn % 4)).map((words) => `- ${words}`),
+      "```ts",
+      ...Array.from({ length: lines }, (_, line) => `const step${line} = measure(${turn}, ${line})`),
+      "```",
+    ].join("\n\n") })
+  }
+  return { requests, blocks }
+}
+
+/**
+ * A real conversation's blocks and requests ahead of the Apex's own (`?mock&app=apex&journal=/path.json`), for
+ * measuring the transcript on one: `{ blocks, requests }` as a journal holds them, served by the dev server. Read
+ * synchronously, as the mock bridge builds its scene before the window draws.
+ */
+function journalTurns(url: string): EarlierTurns {
+  const request = new XMLHttpRequest()
+  request.open("GET", url, false)
+  request.send()
+  // SAFETY: a file a bench wrote from a journal's `blocks` and `requests` rows, each row's value as written.
+  return JSON.parse(request.responseText) as EarlierTurns
+}
+
 /**
  * The Apex's own conversation: the person's first ask, a message it passed on to Sheet motion, one the person wrote
  * straight to Dictation, its turn running, its roster the twelve.
  */
 export function apexSnapshot(): LiveSnapshot {
+  const search = new URLSearchParams(globalThis.location?.search)
+  const earlier = search.has("journal") ? journalTurns(search.get("journal")!) : earlierTurns(Number(search.get("turns") ?? 0))
+  // Where a bench's cold open starts: the scene is built, the window not yet drawn.
+  performance.mark("mock-apex-scene")
+  // `idle=1`: its turn over, as between the person's messages.
+  const idle = search.get("idle") === "1"
   const first = { id: "1ead1ead-7000-4000-8000-000000000001", createdAt: STARTED, text: "Split the phone polish list into Threads and see them through. Ask me only for what you can't decide.", attachments: [], status: "completed" as const }
   const routed = { id: "1ead1ead-7000-4000-8000-000000000002", createdAt: ROUTED_AT, text: ROUTED_WORDS, attachments: [], status: "completed" as const }
   const wake = { id: "1ead1ead-7000-4000-8000-000000000004", createdAt: WAKE_AT, text: WAKE_TEXT, attachments: [], status: "completed" as const }
-  const request = { id: "1ead1ead-7000-4000-8000-000000000003", createdAt: Date.now() - 60_000, text: "How are the queued ones doing?", attachments: [], status: "dispatching" as const }
+  const request = { id: "1ead1ead-7000-4000-8000-000000000003", createdAt: Date.now() - 60_000, text: "How are the queued ones doing?", attachments: [], status: idle ? ("completed" as const) : ("dispatching" as const) }
   const sent = { to: "sheet-motion", forward: true, clientKey: "sheet-keyboard" }
   const landed = { child: childThread(SHEET_MOTION), name: "sheet-motion", request: ROUTED_REQUEST, delivery: "steer" }
   return {
@@ -279,7 +339,7 @@ export function apexSnapshot(): LiveSnapshot {
       cwd: APEX_CWD,
       title: APEX_TITLE,
       connection: "connected",
-      status: "running",
+      status: idle ? "ready" : "running",
       modes: [
         { id: "acceptEdits", name: "Accept edits", access: "ask" },
         { id: "bypassPermissions", name: "Full access", access: "full" },
@@ -294,8 +354,9 @@ export function apexSnapshot(): LiveSnapshot {
     sessionId: APEX_SESSION,
     base: null,
     permissions: [],
-    requests: [first, routed, wake, request],
+    requests: [...earlier.requests, first, routed, wake, request],
     blocks: [
+      ...earlier.blocks,
       { type: "user", text: first.text, requestId: first.id },
       { type: "text", text: "Twelve pieces, each its own Thread. I'll start them as the tree allows and read their reports as they come." },
       { type: "tool", id: "apex-start", toolKind: "other", title: "agents_start ×12", input: "{}", output: "started 10, queued 2", status: "completed" },

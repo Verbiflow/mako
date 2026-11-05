@@ -10,7 +10,7 @@ import type {
   ContextTransfer,
   ResumeVerdict,
 } from "../contracts/conversation-control.js"
-import { heldReason } from "../contracts/session-hold.js"
+import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
@@ -26,6 +26,11 @@ import type {
 } from "./live-runtime.js"
 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
+/** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
+export function reconnectError(verdict: ResumeVerdict | undefined): Error {
+  return verdict?.kind === "held" ? new SessionBusyError(verdict.by) : new Error(reconnectRefusal(verdict))
+}
+
 export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {
   if (verdict?.kind === "held") return heldReason(verdict.by)
   if (verdict?.kind === "closed") return `${verdict.reason} Send the message again to continue.`
@@ -249,7 +254,7 @@ export class LiveTransfers {
       // A record its harness keeps closed goes on in a new session with the
       // whole conversation; any other record that won't reopen refuses.
       if (verdict?.kind === "closed") reconnect = false
-      else if ((reconnect || target) && !prior) throw new Error(reconnectRefusal(verdict))
+      else if ((reconnect || target) && !prior) throw reconnectError(verdict)
       const tuning =
         transfer.input.tuning ??
         prior?.tuning ??

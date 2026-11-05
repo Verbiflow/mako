@@ -222,7 +222,7 @@ try {
       await world.close()
     }
 
-    // A turn the harness failed (a stall that cut it) leaves no message stuck behind it.
+    // A turn the harness failed for good leaves no message stuck behind it.
     {
       let fin = ""
       let turns = 0
@@ -232,7 +232,7 @@ try {
         if (turns > 1) return "Labels finished."
         await turn.world.hold(turn.conversation)
         const session = turn.world.live.snapshot(turn.conversation)!.session
-        turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: "Agent turn stopped after repeated resume attempts made no progress" } })
+        turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: "The model API refused the request: encrypted_content could not be verified" } })
         return new Promise<string>(() => {})
       })
       const apex = await world.apex("cursor", "full")
@@ -243,7 +243,7 @@ try {
       // Failure sends nothing queued by itself: what waits behind it is no work, and the Fin reads failed.
       await until(`${harness}: the failed Fin to read failed`, () => stateOf(world, apex.conversation, "labels")?.kind === "ended")
       await pause(300)
-      assert.deepEqual(stateOf(world, apex.conversation, "labels"), { kind: "ended", outcome: "failed", reason: "Agent turn stopped after repeated resume attempts made no progress" })
+      assert.deepEqual(stateOf(world, apex.conversation, "labels"), { kind: "ended", outcome: "failed", reason: "The model API refused the request: encrypted_content could not be verified" })
       assert.equal(requestOf(world, fin, "Also do the README.")?.status, "queued")
       // A new message goes, and what waited behind the failure follows it.
       assert.equal(sent(await world.agents.send(apex.caller, { to: "labels", text: "Retry the labels.", clientKey: "retry" })).delivery, "turn")

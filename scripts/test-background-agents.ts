@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { ThreadPage, ThreadRef } from "@mako/sessions"
+import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { HostJobs } from "@mako/host/base/host-jobs"
@@ -13,22 +13,22 @@ import { accessModeId } from "@mako/host/contracts/access"
 import { childEntry, childMode, childState, modeWithin, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
+import { AFTER_LIMIT, CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
-import { END_CONFIRM_MS, lastStep } from "@mako/host/conversations/agent-runs"
+import { END_CONFIRM_MS, lastStep, PROCESS_READS, type ProcessReads } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
-import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
-import { FIN_LOAD, macSlots } from "@mako/host/conversations/mac-capacity"
+import { namedUuid } from "@mako/host/conversations/cloud-moves"
+import { Agents } from "@mako/host/conversations/agents"
+import { macLoad } from "@mako/host/conversations/mac-capacity"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
 import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
 import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
 import { openCodeModes } from "@mako/host/harnesses/opencode/access"
 import { ThreadStore } from "@mako/host/threads/store"
-import { AgentsWorld, noConversations, type Heard, type Script } from "./lib/agents-world.ts"
-import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
+import { AgentsWorld, fakeCatalog, noConversations, type Heard, type Script } from "./lib/agents-world.ts"
+import { cloudWords, placeFull, type FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
@@ -218,54 +218,672 @@ async function explicitReports(): Promise<void> {
   }
 }
 
-async function macRoom(): Promise<void> {
+async function finLimit(): Promise<void> {
   const GB = 1024 ** 3
   // The person's Mac as it stood when Fins took it over: 14 cores, 36 GB, 13 Fins at work and the load at 26.8.
-  assert.deepEqual(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 26.8 }, 13).slots, 5, "13 Fins at once is more than this Mac runs")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0 }, 0).slots, 6, "an idle 14-core Mac runs six")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).slots, 2, "the person's own work takes its cores first")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 8 * GB, load: 0 }, 0).slots, 4, "memory bounds it too")
-  assert.equal(macSlots({ cores: 4, memoryBytes: 16 * GB, load: 6 }, 0).slots, 1, "a small, busy Mac still runs one at a time")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).slots, 0, "a Mac out of swap takes none")
-  assert.equal(macSlots({ cores: 14, memoryBytes: 36 * GB, load: 8 }, 0).why, "14 cores, 36 GB, 8 cores of other work")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 26.8 }, 13), { why: "14 cores, 36 GB", busy: true }, "13 Fins at once is more than this Mac takes easily")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 0 }, 0), { why: "14 cores, 36 GB" }, "an idle Mac isn't busy")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 12 }, 2), { why: "14 cores, 36 GB, 8 cores of other work", busy: true }, "the person's own work counts first")
+  assert.equal(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).busy, true, "a Mac out of swap is busy")
 
-  // A 6-core Mac: room for two Fins with nothing else at work. Each working Fin's load is FIN_LOAD.
-  let others = 0
+  // Each place has its own bound: a device its count, the cloud the person's plan and spend, never a device's count.
+  assert.equal(placeFull({ place: "device", atOnce: 16 }, 15), undefined)
+  assert.equal(placeFull({ place: "device", atOnce: 16 }, 16), "16 of the 16 Fins this device runs at once are at work")
+  assert.equal(placeFull({ place: "cloud" }, 500), undefined, "a cloud with no plan bound holds nothing: each Fin has a machine of its own")
+  assert.equal(placeFull({ place: "cloud", atOnce: 40 }, 40), "40 of the 40 cloud Fins the person's plan runs at once are at work")
+  assert.equal(placeFull({ place: "cloud", atOnce: 40, dailySpendCents: 2_000, spentTodayCents: 2_000 }, 3), "today's cloud spend reached the person's ceiling of $20.00")
+  assert.equal(cloudWords({}), "By your plan")
+  assert.equal(cloudWords({ atOnce: 8, dailySpendCents: 2_000 }), "8 at once · $20.00 a day")
+
+  // A busy Mac and a limit of two: the Mac only warns, and the limit refuses unless the Apex asks to wait.
   let working = 0
   const w = new AgentsWorld({
-    root: join(root, "mac-room"),
+    root: join(root, "fin-limit"),
     script: (turn) => turn.text.includes("You're fin:") ? (working++, turn.world.hold(turn.conversation).then(() => (working--, "stopped"))) : "ok",
-    capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, load: working * FIN_LOAD + others }) },
+    capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, load: 20 }) },
+    finLimit: () => 2,
   })
   try {
     const apex = await w.apex("opencode")
     const other = await w.apex("claude")
     const brief = { objective: "Hold" }
     const one = await w.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
+    assert.ok(!("refused" in one) && one.state !== "queued", JSON.stringify(one))
+    assert.match(one.mac ?? "", /^This Mac is busy \(6 cores, 16 GB, 20 cores of other work\): it starts anyway/, "a busy Mac is said, and it starts")
     const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
-    assert.ok(!("refused" in one) && !("refused" in two) && one.mac?.slots === 2, JSON.stringify(one))
+    assert.ok(!("refused" in two) && two.state !== "queued", JSON.stringify(two))
     await waitFor(() => working === 2, "both Fins at work")
-    const three = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3", cwd: w.root })
-    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past this Mac's room a spawn queues, whatever the tree's budget")
-    assert.equal(three.why, "This Mac is busy: it runs 2 Fins at once now (6 cores, 16 GB) and 2 are at work; it starts when one ends or the Mac frees up (0 ahead).")
-    assert.deepEqual(three.mac, { working: 2, slots: 2, why: "6 cores, 16 GB" }, "the Apex sees the Mac's room in the answer")
-    const four = await w.agents.start(other.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
-    assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), `another tree's spawn waits behind it: the Mac's room is first come, first started: ${JSON.stringify(four)}`)
+    const refused = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3-refused", cwd: w.root })
+    assert.ok("refused" in refused && refused.refused === "budget", "past the limit a start is refused, never queued unasked")
+    assert.equal(refused.why, "2 of the 2 Fins this device runs at once are at work. Pass queue: true to start it when one ends, or after: to start it after one of yours.")
+    const heard = w.events.length
+    const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
+    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "with queue it waits")
+    // The sidebar, pips and crew card read the Apex's conversation: it hears a spawn held as it hears a Fin start.
+    await waitFor(() => w.events.slice(heard).some((event) => JSON.stringify(event).includes("Queued: 0 ahead, your limit of Fins at once is in use")), "the Apex's conversation to hear the spawn queued")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children.map((strip) => [strip.name, strip.state.kind]), [["one", "working"], ["two", "working"], ["three", "queued"]], "agents_list shows a queued Fin")
+    const read = await w.agents.read(apex.caller, { child: "fin:three" })
+    assert.ok(!("refused" in read) && read.state.kind === "queued" && /your limit of Fins at once is in use/.test(read.text), `agents_read reads a queued Fin: ${JSON.stringify(read)}`)
+    assert.equal(three.why, "2 of the 2 Fins this device runs at once are at work; it starts when one ends (0 ahead).")
+    assert.deepEqual(three.atOnce, { working: 2, of: 2 }, "the answer carries the limit")
+    const four = await w.agents.start(other.caller, { brief, name: "four", queue: true, clientKey: "4", cwd: w.root })
+    assert.ok(!("refused" in four) && four.state === "queued" && /\(1 ahead\)/.test(four.why ?? ""), `another tree's spawn waits behind it: first come, first started: ${JSON.stringify(four)}`)
     const waiting = (apexConversation: string) => w.agents.roster(apexConversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
-    assert.deepEqual(waiting(apex.conversation), ["Queued: this Mac is busy, 0 ahead"])
-    assert.deepEqual(waiting(other.conversation), ["Queued: this Mac is busy, 1 ahead"])
-    // The person starts a build of their own: it takes the cores a Fin that ends would have freed.
-    others = 2
+    assert.deepEqual(waiting(apex.conversation), ["Queued: 0 ahead, your limit of Fins at once is in use"])
+    assert.deepEqual(waiting(other.conversation), ["Queued: 1 ahead, your limit of Fins at once is in use"])
     await w.agents.stop(apex.caller, { child: "one" })
-    await waitFor(() => working === 1, "one ended")
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    assert.equal(w.store.queuedSpawns().length, 2, "a Mac busy with the person's own work starts nothing more")
-    others = 0
+    await waitFor(() => w.store.queuedSpawns().length === 1 && working === 2, "the first waiting spawn to start once one ended")
+    assert.ok(w.store.edges().byOp(`start:${w.store.journalPlacement(apex.conversation)!.session}:3`), "first come, first started")
     await w.agents.stop(apex.caller, { child: "two" })
-    await waitFor(() => w.store.queuedSpawns().length === 0 && working === 2, "both waiting spawns to start once the build ended and a Fin did")
-    assert.deepEqual(w.store.edges().all.map((edge) => edge.name).sort(), ["four", "one", "three", "two"], "first come, first started")
+    await waitFor(() => w.store.queuedSpawns().length === 0 && working === 2, "the second once another ended")
+    assert.deepEqual(w.store.edges().all.map((edge) => edge.name).sort(), ["four", "one", "three", "two"])
     await w.agents.stop(apex.caller, { child: "all" })
     await w.agents.stop(other.caller, { child: "all" })
+  } finally {
+    await w.close()
+  }
+
+  // The person's ceiling across every place holds over a place with room.
+  let held = 0
+  const capped = new AgentsWorld({
+    root: join(root, "fin-ceiling"),
+    script: (turn) => turn.text.includes("You're fin:") ? (held++, turn.world.hold(turn.conversation).then(() => (held--, "stopped"))) : "ok",
+    finLimit: () => 10,
+    finCeiling: () => 1,
+  })
+  try {
+    const apex = await capped.apex("claude")
+    const first = await capped.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "first", clientKey: "1", cwd: capped.root })
+    assert.ok(!("refused" in first) && first.state !== "queued")
+    await waitFor(() => held === 1, "the first Fin at work")
+    const second = await capped.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "second", clientKey: "2", cwd: capped.root })
+    assert.ok("refused" in second && second.why.startsWith("1 of the person's 1 Fins at once across every place are at work."), JSON.stringify(second))
+    await capped.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    await capped.close()
+  }
+}
+
+/**
+ * A freed place goes to the next waiting Fin at once, event-driven: a stop, a turn's end, or a raised number starts
+ * the first waiter that fits within milliseconds, first come first started across Apexes. One whose `after` isn't
+ * finished is passed over, and one whose harness hangs as it starts holds its place without holding up the rest.
+ */
+async function slotsGoAtOnce(): Promise<void> {
+  const launched = new Map<string, number>()
+  const done = new Map<string, number>()
+  let release: (() => void) | undefined
+  let limit = 2
+  let w!: AgentsWorld
+  w = new AgentsWorld({
+    root: join(root, "slots"),
+    finLimit: () => limit,
+    starting: async (conversation) => {
+      launched.set(conversation, performance.now())
+      if (conversation === stuck) await new Promise<void>((resolve) => (release = resolve))
+    },
+    script: async (turn) => {
+      if (!turn.text.includes("You're fin:")) return "ok"
+      if (turn.text.includes("Quick")) {
+        done.set(turn.conversation, performance.now())
+        return "Done."
+      }
+      await turn.world.hold(turn.conversation)
+      return "stopped"
+    },
+  })
+  let stuck = ""
+  try {
+    const one = await w.apex("claude")
+    const two = await w.apex("codex")
+    const key = (apex: { conversation: string }, clientKey: string) => namedUuid(`start:${w.store.journalPlacement(apex.conversation)!.session}:${clientKey}`)
+    const hold = { objective: "Hold" }
+    for (const name of ["a", "b"]) assert.ok(!("refused" in await w.agents.start(one.caller, { brief: hold, name, clientKey: name, cwd: w.root })))
+    await waitFor(() => launched.has(key(one, "a")) && launched.has(key(one, "b")), "two Fins at work")
+    stuck = key(two, "s")
+    // In line: g waits for b too; s's harness hangs as it starts; then c, which finishes at once, and d.
+    const queued = [
+      await w.agents.start(one.caller, { brief: hold, name: "g", after: ["b"], queue: true, clientKey: "g", cwd: w.root }),
+      await w.agents.start(two.caller, { brief: hold, name: "s", queue: true, clientKey: "s", cwd: w.root }),
+      await w.agents.start(one.caller, { brief: { objective: "Quick" }, name: "c", queue: true, clientKey: "c", cwd: w.root }),
+      await w.agents.start(two.caller, { brief: hold, name: "d", queue: true, clientKey: "d", cwd: w.root }),
+    ]
+    assert.ok(queued.every((answer) => !("refused" in answer) && answer.state === "queued"), JSON.stringify(queued))
+    const latency: number[] = []
+    // A stop frees a place: s goes, past g, whose b still works.
+    let freed = performance.now()
+    await w.agents.stop(one.caller, { child: "a" })
+    await waitFor(() => launched.has(stuck), "s to start once a stopped")
+    latency.push(launched.get(stuck)! - freed)
+    assert.equal(launched.has(key(one, "g")), false, "g waits for b, without holding up s")
+    // Another: b's stop holds g, and c goes though s is still coming up.
+    freed = performance.now()
+    await w.agents.stop(one.caller, { child: "b" })
+    await waitFor(() => launched.has(key(one, "c")), "c to start though s hangs")
+    latency.push(launched.get(key(one, "c"))! - freed)
+    // c's turn ends: d, another Apex's, takes its place.
+    await waitFor(() => launched.has(key(two, "d")), "d to start once c finished")
+    latency.push(launched.get(key(two, "d"))! - done.get(key(one, "c"))!)
+    assert.equal(launched.has(key(one, "g")), false, "g, whose b was stopped, never starts")
+    // A raised number takes what waits at once, with no Fin ending.
+    await w.agents.start(two.caller, { brief: hold, name: "e", queue: true, clientKey: "e", cwd: w.root })
+    limit = 3
+    freed = performance.now()
+    w.agents.capacityChanged()
+    await waitFor(() => launched.has(key(two, "e")), "e to start once the number rose")
+    latency.push(launched.get(key(two, "e"))! - freed)
+    console.log(`slot to launch: ${latency.map((ms) => `${ms.toFixed(1)} ms`).join(", ")}`)
+    for (const ms of latency) assert.ok(ms < 100, `a freed place goes within 100 ms: ${latency.map((each) => each.toFixed(1)).join(", ")} ms`)
+    release?.()
+    await w.agents.stop(one.caller, { child: "all" })
+    await w.agents.stop(two.caller, { child: "all" })
+  } finally {
+    release?.()
+    await w.close()
+  }
+}
+
+/**
+ * Queued starts launching side by side, before their edges are written: two of one name under one Apex take two
+ * names, a stop during a start's preparation cancels it, and one that can't start stays, saying why, until its Apex
+ * has heard, never dropped unseen.
+ */
+async function launchesBeforeTheirEdge(): Promise<void> {
+  const gates = new Map<string, () => void>()
+  const preparing: string[] = []
+  let limit = 0
+  const w = new AgentsWorld({
+    root: join(root, "pre-edge"),
+    finLimit: () => limit,
+    preparing: async (options) => {
+      const name = options.parent!.name
+      preparing.push(name)
+      if (name === "bad") throw new Error("its worktree couldn't be made")
+      await new Promise<void>((resolve) => gates.set(name, resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  const open = () => {
+    for (const [name, gate] of gates) {
+      gates.delete(name)
+      gate()
+    }
+  }
+  try {
+    const apex = await w.apex("claude")
+    const thread = () => w.store.journalPlacement(apex.conversation)!.thread
+    const briefs = (name: string) => w.prompts.filter((prompt) => prompt.text.includes(`You're fin:${name},`)).length
+    for (const clientKey of ["first", "second"]) {
+      const queued = await w.agents.start(apex.caller, { brief: { objective: "Check" }, name: "check", queue: true, clientKey, cwd: w.root })
+      assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    }
+    limit = 2
+    w.agents.capacityChanged()
+    await waitFor(() => preparing.length === 2, "both starts preparing at once")
+    assert.deepEqual(preparing, ["check", "check-2"], "two of one name, launching side by side, take two names")
+    open()
+    await waitFor(() => w.store.queuedSpawns().length === 0 && w.store.edges().children(thread()).length === 2, "both to start")
+    assert.deepEqual(w.store.edges().children(thread()).map((edge) => edge.name).sort(), ["check", "check-2"])
+    await waitFor(() => briefs("check") + briefs("check-2") === 2, "a brief each")
+
+    // A stop while it prepares: it never starts, whatever its preparation does after.
+    limit = 3
+    preparing.length = 0
+    const late = w.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "late", queue: true, clientKey: "late", cwd: w.root })
+    await waitFor(() => preparing.includes("late"), "late preparing")
+    const stopped = await w.agents.stop(apex.caller, { child: "late" })
+    assert.deepEqual("stopped" in stopped && stopped.stopped, ["late"])
+    open()
+    const answer = await late
+    assert.ok("refused" in answer && /stopped it before it started/.test(answer.why), `its start says it was stopped: ${JSON.stringify(answer)}`)
+    assert.equal(w.store.edges().children(thread()).some((edge) => edge.name === "late" && !edge.closedAt), false, "a Fin stopped as it prepared has no open Thread")
+    assert.equal(briefs("late"), 0, "and was never sent its brief")
+    assert.equal(w.store.queuedSpawns().length, 0)
+
+    // One that can't start: it stays in line saying why, wakes its Apex, and goes once its Apex has heard.
+    limit = 2
+    const bad = await w.agents.start(apex.caller, { brief: { objective: "Bad" }, name: "bad", queue: true, clientKey: "bad", cwd: w.root })
+    assert.ok(!("refused" in bad) && bad.state === "queued", JSON.stringify(bad))
+    limit = 3
+    w.agents.capacityChanged()
+    await waitFor(() => w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && /^Not started: its worktree couldn't be made/.test(entry.state.reason ?? "")), "the refusal to show on its row")
+    await waitFor(() => w.store.queuedSpawns().length === 0, "it to go once its Apex heard", 15_000)
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.match(wake, /"bad" \(Claude\) failed: It didn't start: its worktree couldn't be made/, "its Apex hears why it didn't start")
+    assert.equal(w.store.queuedSpawns().length, 0, "and it goes once its Apex heard")
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    open()
+    await w.close()
+  }
+}
+
+/**
+ * A Fin shown stopped holds its place until its harness has stopped: with one place, a Fin waiting behind one whose
+ * cancel is slow never starts while that turn still runs, so two turns never write in one worktree at once, and it
+ * starts the moment the cancel finishes.
+ */
+async function stopHoldsUntilCancelled(): Promise<void> {
+  let release: () => void = () => {}
+  const active = new Set<string>()
+  let overlapped = false
+  let cancelled = 0
+  const w = new AgentsWorld({
+    root: join(root, "slow-cancel"),
+    finLimit: () => 1,
+    // Only the first stop is slow; the ones after go at once.
+    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = performance.now(); resolve() }))),
+    script: async (turn) => {
+      if (!turn.text.includes("You're fin:")) return "ok"
+      if (active.size) overlapped = true
+      active.add(turn.conversation)
+      await turn.world.hold(turn.conversation)
+      active.delete(turn.conversation)
+      return "stopped"
+    },
+  })
+  try {
+    const apex = await w.apex("claude")
+    const brief = { objective: "Edit the shared file" }
+    await w.agents.start(apex.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => active.size === 1, "the first at work")
+    const second = await w.agents.start(apex.caller, { brief, name: "second", queue: true, clientKey: "second", cwd: w.root })
+    assert.ok(!("refused" in second) && second.state === "queued")
+    const stopping = w.agents.stop(apex.caller, { child: "first" })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(w.store.queuedSpawns().length, 1, "the second waits while the first's harness is still stopping")
+    assert.equal(overlapped, false, "no two turns in one worktree at once")
+    release()
+    await stopping
+    await waitFor(() => active.size === 1 && w.store.queuedSpawns().length === 0, "the second to start once the first stopped")
+    assert.equal(overlapped, false, "the second started only after the first's turn ended")
+    const started = w.prompts.find((prompt) => prompt.text.includes("You're fin:second,"))!.at
+    assert.ok(started - (Date.now() - (performance.now() - cancelled)) < 100, "and at once once it did")
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    release()
+    await w.close()
+  }
+}
+
+/**
+ * A shell-linked run Mako stops holds its place until its process has exited, its kill's grace included: one that
+ * ignores SIGTERM keeps writing for five seconds, and the Fin waiting for its place starts only once it's gone.
+ */
+async function followedStopHoldsUntilExit(): Promise<void> {
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, "followed-stop"),
+    finLimit: () => 1,
+    catalog: fake.catalog,
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) {
+        writeFileSync(join(turn.world.root, "shared.txt"), "next")
+        await turn.world.hold(turn.conversation)
+      }
+      return "ok"
+    },
+  })
+  // A run its Apex's shell started, deaf to SIGTERM, writing the shared file every 10 ms until it's killed.
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+  await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
+  let exited = 0
+  shell.once("exit", () => (exited = performance.now()))
+  try {
+    const apex = await w.apex("claude", "full")
+    const nativeId = randomUUID()
+    fake.write({ harness: "claude", nativeId, path: join(w.root, "linked.jsonl"), cwd: w.root, startedAt: new Date().toISOString() }, [{ type: "tool", id: "one", name: "Bash", input: "{}", status: "completed" }])
+    const linked = await w.agents.link(apex.caller, { harness: "claude", session: nativeId, pid: shell.pid!, name: "linked" })
+    assert.ok(!("refused" in linked), JSON.stringify(linked))
+    await waitFor(() => w.agents.diagnostics().running === 1, "the linked run counted")
+    const queued = await w.agents.start(apex.caller, { name: "next", clientKey: "next", cwd: w.root, queue: true, brief: { objective: "Edit the shared file" } })
+    assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    await w.agents.stop(apex.caller, { child: "linked" })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(w.prompts.length, 0, "a stopped run still exiting keeps its place")
+    assert.equal(readFileSync(join(w.root, "shared.txt"), "utf8"), "linked")
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:next,")), "next to start once the linked run is gone", 12_000)
+    const started = w.prompts.find((prompt) => prompt.text.includes("You're fin:next,"))!.at
+    assert.ok(exited > 0, "the linked run had exited before next started")
+    assert.ok(started - (Date.now() - (performance.now() - exited)) >= 0, "next started after the linked run's exit")
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(readFileSync(join(w.root, "shared.txt"), "utf8"), "next", "and nothing overwrote its file after")
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    shell.kill("SIGKILL")
+    await w.close()
+  }
+}
+
+/** Identity reads as the host's own, except that while `on` a process's start can't be read, on any platform. */
+const unreadable = { on: false }
+const identityReads: ProcessReads = {
+  ...PROCESS_READS,
+  matches: (pid, startedAt, signal) => (unreadable.on ? Promise.reject(new Error("its start time can't be read")) : PROCESS_READS.matches!(pid, startedAt, signal)),
+}
+
+/** A world with one place, a run its Apex's shell started linked into it (deaf to SIGTERM, writing shared.txt every 10 ms) and a Fin queued behind it. */
+async function linkedWriter(name: string, detached: boolean) {
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, name),
+    finLimit: () => 1,
+    catalog: fake.catalog,
+    processes: identityReads,
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) {
+        writeFileSync(join(turn.world.root, "shared.txt"), "next")
+        await turn.world.hold(turn.conversation)
+      }
+      return "ok"
+    },
+  })
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached, stdio: ["ignore", "pipe", "ignore"] })
+  await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
+  const apex = await w.apex("claude", "full")
+  const nativeId = randomUUID()
+  fake.write({ harness: "claude", nativeId, path: join(w.root, "linked.jsonl"), cwd: w.root, startedAt: new Date().toISOString() }, [{ type: "tool", id: "one", name: "Bash", input: "{}", status: "completed" }])
+  const linked = await w.agents.link(apex.caller, { harness: "claude", session: nativeId, pid: shell.pid!, name: "linked" })
+  assert.ok(!("refused" in linked), JSON.stringify(linked))
+  await waitFor(() => w.agents.diagnostics().running === 1, "the linked run counted")
+  const queued = await w.agents.start(apex.caller, { name: "next", clientKey: "next", cwd: w.root, queue: true, brief: { objective: "Edit the shared file" } })
+  assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+  const started = () => w.prompts.some((prompt) => prompt.text.includes("You're fin:next,"))
+  return { w, shell, apex, linked, started }
+}
+
+/** Counts Mako's TERM and KILL to `pid` or its group, passing every call on. */
+function signalsTo(pid: number) {
+  const kill = process.kill
+  const sent: string[] = []
+  // SAFETY: the stand-in takes process.kill's arguments and returns what it returns for every call.
+  process.kill = ((target: number, signal?: string | number) => {
+    if (Math.abs(target) === pid && (signal === "SIGTERM" || signal === "SIGKILL")) sent.push(`${target} ${signal}`)
+    return kill(target, signal)
+  }) as typeof process.kill
+  return { sent, restore: () => (process.kill = kill) }
+}
+
+/**
+ * A stopped run whose identity can't be read is neither gone nor proven its own: it keeps its place, Mako
+ * sends it nothing and says it couldn't confirm it stopped, and once its identity reads again the stop goes on.
+ */
+async function followedStopUnknownIdentity(): Promise<void> {
+  const { w, shell, apex, linked, started } = await linkedWriter("followed-unknown", false)
+  const signals = signalsTo(shell.pid!)
+  try {
+    unreadable.on = true
+    await w.agents.stop(apex.caller, { child: "linked" })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(started(), false, "unknown identity is not gone: the next Fin waits")
+    assert.equal(readFileSync(join(w.root, "shared.txt"), "utf8"), "linked")
+    assert.equal(signals.sent.length, 0, `a process not proven its own is sent nothing: ${signals.sent.join(", ")}`)
+    const row = w.agents.roster(apex.conversation).find((entry) => entry.child?.thread === linked.child)
+    assert.match(JSON.stringify(row?.child?.state), /couldn't confirm linked stopped; it may still be running/, JSON.stringify(row?.child?.state))
+  } finally {
+    unreadable.on = false
+  }
+  try {
+    await waitFor(started, "next to start once the run was proven, killed and seen gone", 12_000)
+    assert.ok(shell.exitCode !== null || shell.signalCode !== null, "after the linked run exited")
+    assert.ok(signals.sent.some((sent) => sent.endsWith("SIGKILL")), `once its identity read, the stop went on: ${signals.sent.join(", ")}`)
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    signals.restore()
+    shell.kill("SIGKILL")
+    await w.close()
+  }
+}
+
+/**
+ * A stop the next host recovers whose pid is another process now (its start time differs): while that can't be read
+ * it keeps the place and signals nothing; once it reads, the place goes, and the other process is never signalled.
+ */
+async function followedStopStaleIdentity(): Promise<void> {
+  const { w, shell, linked } = await linkedWriter("followed-stale", true)
+  const edge = w.store.edges().of(linked.child!)!
+  const at = Date.now() - 6_000
+  const process0 = edge.run!.process!
+  w.store.keepEdge({ ...edge, closedAt: at, run: { ...edge.run!, process: { ...process0, startedAt: process0.startedAt! - 60_000 }, stopping: { at }, ended: { at, kind: "stopped" } } })
+  await w.close()
+  const signals = signalsTo(shell.pid!)
+  let next: AgentsWorld | undefined
+  try {
+    unreadable.on = true
+    next = new AgentsWorld({ root: w.root, catalog: fakeCatalog().catalog, processes: identityReads, finLimit: () => 1, script: () => "ok" })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    assert.equal(signals.sent.length, 0, `a recovered stop whose identity can't be read signals nothing: ${signals.sent.join(", ")}`)
+    assert.equal(next.agents.runs.isTerminating(linked.child!), true, "and keeps its place")
+    unreadable.on = false
+    await waitFor(() => !next!.agents.runs.isTerminating(linked.child!), "the place to go once the pid reads as another process's", 5_000)
+    assert.equal(signals.sent.length, 0, `the process now under that pid is never signalled: ${signals.sent.join(", ")}`)
+    assert.equal(shell.exitCode, null, "and it still runs")
+  } finally {
+    unreadable.on = false
+    signals.restore()
+    shell.kill("SIGKILL")
+    await next?.close()
+  }
+}
+
+/**
+ * A stopped run that outlives its kill (its signals refused) is never taken as gone: past its grace it keeps its place
+ * and its Fin says Mako couldn't stop it, and the place goes only once it has actually exited.
+ */
+async function followedStopStuck(): Promise<void> {
+  const { w, shell, apex, linked, started } = await linkedWriter("followed-stuck", true)
+  const kill = process.kill
+  try {
+    // Mako's TERM and KILL are refused, as for a process it may not signal; its liveness checks still read it.
+    // SAFETY: the stand-in takes process.kill's arguments and returns what it returns for every call it passes on.
+    process.kill = ((pid: number, signal?: string | number) => {
+      if ((pid === shell.pid || pid === -shell.pid!) && (signal === "SIGTERM" || signal === "SIGKILL")) throw Object.assign(new Error("permission denied"), { code: "EPERM" })
+      return kill(pid, signal)
+    }) as typeof process.kill
+    await w.agents.stop(apex.caller, { child: "linked" })
+    await new Promise((resolve) => setTimeout(resolve, 7_500))
+    assert.equal(started(), false, "past its grace it still keeps its place")
+    const row = w.agents.roster(apex.conversation).find((entry) => entry.child?.thread === linked.child)
+    assert.match(JSON.stringify(row?.child?.state), /couldn't stop it: its process \(\d+\) is still running/, `its Fin says Mako couldn't stop it: ${JSON.stringify(row?.child?.state)}`)
+  } finally {
+    process.kill = kill
+  }
+  try {
+    shell.kill("SIGKILL")
+    await waitFor(started, "next to start once it actually exited", 5_000)
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    shell.kill("SIGKILL")
+    await w.close()
+  }
+}
+
+/**
+ * One entry per Fin, by its op, and every Apex hears its line move: a queued Fin whose edge is written while its
+ * launch is still coming up shows once, as its edge; and when one Apex's refused start leaves the line, another
+ * Apex's waiting Fin hears its place move up without doing anything.
+ */
+async function queueProjection(): Promise<void> {
+  let limit = 1
+  let hold: (() => void) | undefined
+  let failing = ""
+  const w = new AgentsWorld({
+    root: join(root, "projection"),
+    finLimit: () => limit,
+    preparing: (options) => {
+      if (options.parent?.name === failing) throw new Error("its worktree couldn't be made")
+    },
+    replying: async (options) => {
+      if (options.conversationId === holdFor) await new Promise<void>((resolve) => (hold = resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  let holdFor = ""
+  try {
+    const a = await w.apex("claude")
+    const b = await w.apex("codex")
+    const brief = { objective: "Hold" }
+    const key = (apex: { conversation: string }, clientKey: string) => namedUuid(`start:${w.store.journalPlacement(apex.conversation)!.session}:${clientKey}`)
+    await w.agents.start(a.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:first,")), "the first at work")
+    // A queued Fin launching: its edge is written, its start not yet answered.
+    holdFor = key(a, "next")
+    const queued = await w.agents.start(a.caller, { brief, name: "next", queue: true, clientKey: "next", cwd: w.root })
+    assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    await w.agents.stop(a.caller, { child: "first" })
+    await waitFor(() => hold !== undefined && w.store.edges().all.some((edge) => edge.name === "next"), "next's edge written while its start answers")
+    const listed = await w.agents.list(a.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children.filter((strip) => strip.name === "next").length, 1, `one entry for a Fin whose launch is still answering: ${JSON.stringify(listed.children.map((strip) => [strip.name, strip.state.kind]))}`)
+    assert.equal(w.agents.roster(a.conversation).filter((entry) => entry.child?.name === "next").length, 1, "and one on its Apex's roster")
+    hold!()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "next to settle")
+
+    // A's queued start fails to prepare while the device stays full; B's Fin waits behind it, then moves up once A heard.
+    failing = "doomed"
+    await w.agents.start(a.caller, { brief, name: "doomed", queue: true, clientKey: "doomed", cwd: w.root })
+    await w.agents.start(b.caller, { brief, name: "behind", queue: true, clientKey: "behind", cwd: w.root })
+    // What B's conversation shows, as its windows read it: only what it was told.
+    const reason = () => w.live.snapshot(b.conversation)?.nativeAgents?.agents.find((entry) => entry.child?.name === "behind")?.state
+    await waitFor(() => reason()?.kind === "waiting", "B's conversation to show its waiting Fin")
+    assert.deepEqual(reason(), { kind: "waiting", reason: "Queued: 1 ahead, your limit of Fins at once is in use" })
+    limit = 2
+    w.agents.capacityChanged()
+    limit = 1
+    await waitFor(() => w.store.queuedSpawns().some((row) => row.record.includes("refused")), "doomed to be refused and kept for its Apex")
+    await waitFor(() => w.store.queuedSpawns().length === 1, "doomed to go once its Apex heard", 15_000)
+    await waitFor(() => JSON.stringify(reason()) === JSON.stringify({ kind: "waiting", reason: "Queued: 0 ahead, your limit of Fins at once is in use" }), `the other Apex's line to move up with it: ${JSON.stringify(reason())}`, 3_000)
+    await w.agents.stop(a.caller, { child: "all" })
+    await w.agents.stop(b.caller, { child: "all" })
+  } finally {
+    hold?.()
+    await w.close()
+  }
+}
+
+/**
+ * An Apex behind a launch hears its place move the moment that launch's edge is written, not when the launch answers:
+ * A's next takes a place with its reply held, and B's waiting Fin, which was behind it, reads 0 ahead at once.
+ */
+async function edgeWriteMovesTheLine(): Promise<void> {
+  let limit = 1
+  let hold: (() => void) | undefined
+  let holdFor = ""
+  const w = new AgentsWorld({
+    root: join(root, "edge-moves-line"),
+    finLimit: () => limit,
+    replying: async (options) => {
+      if (options.conversationId === holdFor) await new Promise<void>((resolve) => (hold = resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  try {
+    const a = await w.apex("claude")
+    const b = await w.apex("codex")
+    const brief = { objective: "Hold" }
+    await w.agents.start(a.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:first,")), "the first at work")
+    holdFor = namedUuid(`start:${w.store.journalPlacement(a.conversation)!.session}:next`)
+    await w.agents.start(a.caller, { brief, name: "next", queue: true, clientKey: "next", cwd: w.root })
+    await w.agents.start(b.caller, { brief, name: "behind", queue: true, clientKey: "behind", cwd: w.root })
+    const shown = () => w.live.snapshot(b.conversation)?.nativeAgents?.agents.find((entry) => entry.child?.name === "behind")?.state
+    await waitFor(() => JSON.stringify(shown()) === JSON.stringify({ kind: "waiting", reason: "Queued: 1 ahead, your limit of Fins at once is in use" }), "B to show its Fin behind A's")
+    limit = 2
+    w.agents.capacityChanged()
+    await waitFor(() => hold !== undefined && w.store.edges().all.some((edge) => edge.name === "next"), "next's edge written, its start not answered")
+    await waitFor(() => JSON.stringify(shown()) === JSON.stringify({ kind: "waiting", reason: "Queued: 0 ahead, your limit of Fins at once is in use" }), `B to hear its place move while next's start still answers: ${JSON.stringify(shown())}`, 2_000)
+    assert.ok(hold !== undefined, "next's reply was still held")
+    hold!()
+    await w.agents.stop(a.caller, { child: "all" })
+    await w.agents.stop(b.caller, { child: "all" })
+  } finally {
+    hold?.()
+    await w.close()
+  }
+}
+
+/**
+ * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
+ * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
+ */
+async function afterOrder(): Promise<void> {
+  // Lint fails once what's to start after it has queued, so the order of the two is the test's, not the clock's.
+  let lintMay: () => void = () => {}
+  const lintGate = new Promise<void>((resolve) => (lintMay = resolve))
+  const w = world("after", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    if (turn.text.includes("Lint it")) {
+      await lintGate
+      await turn.world.agents.report(turn.caller, { status: "failed", summary: "Lint found 3 errors.", clientKey: "lint" })
+      return "Lint failed."
+    }
+    if (turn.text.includes("Hold")) await turn.world.hold(turn.conversation)
+    return "Done."
+  })
+  try {
+    const apex = await w.apex("claude")
+    const fin = (name: string) => w.store.edges().children(w.store.journalPlacement(apex.conversation)!.thread).find((edge) => edge.name === name)
+    const build = await w.agents.start(apex.caller, { brief: { objective: "Hold the build" }, name: "build", clientKey: "build", cwd: w.root })
+    assert.ok(!("refused" in build), JSON.stringify(build))
+    const deploy = await w.agents.start(apex.caller, { brief: { objective: "Deploy it" }, name: "deploy", after: ["build"], clientKey: "deploy", cwd: w.root })
+    assert.ok(!("refused" in deploy) && deploy.state === "queued" && !deploy.child, JSON.stringify(deploy))
+    assert.deepEqual(deploy.after, ["build"])
+    assert.equal(deploy.why, "It starts once build finishes; if one fails or is stopped it doesn't start, and you're woken to decide.")
+    const announce = await w.agents.start(apex.caller, { brief: { objective: "Announce it" }, name: "announce", after: ["fin:deploy"], clientKey: "announce", cwd: w.root })
+    assert.ok(!("refused" in announce) && announce.state === "queued" && announce.after?.[0] === "deploy", "a queued spawn can be waited on too")
+    const waiting = () => w.agents.roster(apex.conversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
+    assert.deepEqual(waiting(), ["Starts after build finishes", "Starts after deploy finishes"], "the crew card says what each waits on")
+    const many = await w.agents.start(apex.caller, { brief: { objective: "x" }, after: Array.from({ length: AFTER_LIMIT + 1 }, (_, at) => `fin-${at}`), clientKey: "many", cwd: w.root })
+    assert.ok("refused" in many && many.refused === "conflict" && w.store.queuedSpawns().length === 2, "more than a queued state carries is refused before anything is kept")
+    const unknown = await w.agents.start(apex.caller, { brief: { objective: "x" }, after: ["nobody"], clientKey: "x", cwd: w.root })
+    assert.ok("refused" in unknown && unknown.refused === "unknown-child")
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(fin("deploy"), undefined, "nothing starts before what it's after finished")
+    w.release(build.conversation!)
+    await waitFor(() => fin("announce") !== undefined, "deploy, then announce, to start in order")
+    await w.settle()
+    for (const name of ["build", "deploy", "announce"]) {
+      const read = await w.agents.read(apex.caller, { child: name })
+      assert.ok("state" in read && read.state.kind === "ended" && read.state.outcome === "done", `${name} finished: ${JSON.stringify(read)}`)
+    }
+    const at = (name: string) => fin(name)!.createdAt ?? 0
+    assert.ok(at("build") <= at("deploy") && at("deploy") <= at("announce"), "each started after the one before it")
+
+    // A Fin that fails holds what was to start after it: the Apex is woken to decide, and the spawn is dropped.
+    const lint = await w.agents.start(apex.caller, { brief: { objective: "Lint it" }, name: "lint", clientKey: "lint", cwd: w.root })
+    assert.ok(!("refused" in lint))
+    const ship = await w.agents.start(apex.caller, { brief: { objective: "Ship it" }, name: "ship", after: ["lint"], clientKey: "ship", cwd: w.root })
+    assert.ok(!("refused" in ship) && ship.state === "queued", JSON.stringify(ship))
+    lintMay()
+    await w.settle()
+    assert.equal(fin("ship"), undefined, "it never started")
+    assert.equal(w.store.queuedSpawns().length, 0, "dropped once its Apex heard")
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.match(wake, /"ship" \(Claude\) failed: It didn't start: it was to start after lint, which failed/, "its Apex is told why, to decide")
+    const late = await w.agents.start(apex.caller, { brief: { objective: "Ship it" }, name: "ship", after: ["lint"], clientKey: "ship-2", cwd: w.root })
+    assert.ok("refused" in late && late.refused === "conflict" && /lint failed/.test(late.why), "after a Fin that already failed is refused at once")
+
+    // Stopping a queued spawn by name drops it, and what waited on it is held the same way.
+    const hold = await w.agents.start(apex.caller, { brief: { objective: "Hold again" }, name: "hold", clientKey: "hold", cwd: w.root })
+    assert.ok(!("refused" in hold))
+    await w.agents.start(apex.caller, { brief: { objective: "Second" }, name: "second", after: ["hold"], clientKey: "second", cwd: w.root })
+    await w.agents.start(apex.caller, { brief: { objective: "Third" }, name: "third", after: ["second"], clientKey: "third", cwd: w.root })
+    const stopped = await w.agents.stop(apex.caller, { child: "second" })
+    assert.deepEqual("stopped" in stopped && stopped.stopped, ["second"])
+    await waitFor(() => w.store.queuedSpawns().length === 0, "third to be dropped once its Apex heard second was stopped")
+    assert.match(w.prompts.filter((prompt) => prompt.conversation === apex.conversation).at(-1)?.text ?? "", /"third" \(Claude\) failed: It didn't start: it was to start after second, which was stopped \(it never started\)/)
+    await w.agents.stop(apex.caller, { child: "all" })
   } finally {
     await w.close()
   }
@@ -287,8 +905,10 @@ async function refusals(): Promise<void> {
     const one = await w.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
     const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in one) && !("refused" in two))
-    const three = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3", cwd: w.root })
-    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past the running budget a spawn queues")
+    const unasked = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3-unasked", cwd: w.root })
+    assert.ok("refused" in unasked && unasked.refused === "budget" && /runs 2 of its 2 Threads at once\. Pass queue: true/.test(unasked.why), "past the running budget a spawn is refused unless it asks to wait")
+    const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
+    assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past the running budget a spawn that asks to wait queues")
     assert.match(three.why ?? "", /runs 2 of its 2 at once/)
     assert.equal(w.agents.roster(apex.conversation).length, 3, "a queued spawn shows, saying why")
     const four = await w.agents.start(apex.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
@@ -393,10 +1013,14 @@ async function stopAllUnqueues(): Promise<void> {
     const apex = await w.apex("grok")
     const brief = { objective: "Hold" }
     await w.agents.start(apex.caller, { brief, name: "runs", clientKey: "1", cwd: w.root })
-    const waits = await w.agents.start(apex.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
+    const waits = await w.agents.start(apex.caller, { brief, name: "waits", queue: true, clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in waits) && waits.state === "queued")
-    const again = await w.agents.start(apex.caller, { brief, name: "waits", clientKey: "2", cwd: w.root })
+    const again = await w.agents.start(apex.caller, { brief, name: "waits", queue: true, clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in again) && again.deduped && again.state === "queued", "a repeated queued spawn is the same spawn")
+    await w.agents.start(apex.caller, { brief, name: "later", queue: true, clientKey: "3", cwd: w.root })
+    const one = await w.agents.stop(apex.caller, { child: "fin:later" })
+    assert.deepEqual("stopped" in one && one.stopped, ["later"], "a queued Fin stops by its name, before it starts")
+    assert.deepEqual(w.agents.roster(apex.conversation).map((entry) => entry.child?.name).sort(), ["runs", "waits"], "and its Apex's roster drops it")
     const all = await w.agents.stop(apex.caller, { child: "all" })
     assert.deepEqual("stopped" in all && [...all.stopped].sort(), ["runs", "waits"], "stopping all also drops what's queued")
     assert.equal(w.store.queuedSpawns().length, 0)
@@ -413,34 +1037,6 @@ async function waitFor(check: () => boolean, what: string, ms = 8_000): Promise<
   }
 }
 
-function fakeCatalog() {
-  const sessions = new Map<string, { ref: ThreadRef; entries: Entry[] }>()
-  const subscribers = new Set<(event: HostEvent) => void>()
-  const catalog: AgentsDeps["catalog"] = {
-    nativePath: (identity) => [...sessions.values()].find((session) => session.ref.harness === identity.harness && session.ref.nativeId === identity.nativeId)?.ref.path,
-    ref: (path) => sessions.get(path)?.ref,
-    async page(path, before, limit = 50) {
-      const session = sessions.get(path)
-      if (!session) return null
-      const end = before ?? session.entries.length
-      const start = Math.max(0, end - limit)
-      return { ref: session.ref, entries: session.entries.slice(start, end), start, total: session.entries.length, hasEarlier: start > 0 } satisfies ThreadPage
-    },
-    activity: () => ({}),
-    subscribe(subscriber) {
-      subscribers.add(subscriber)
-      return () => subscribers.delete(subscriber)
-    },
-    announce: () => {},
-  }
-  return {
-    catalog,
-    write(ref: ThreadRef, entries: Entry[]) {
-      sessions.set(ref.path, { ref, entries })
-      for (const subscriber of subscribers) subscriber({ type: "thread-ref", ref })
-    },
-  }
-}
 
 /** A harness CLI a Thread's shell started: found by `MAKO_SESSION_ID`, followed by its Session and process, ended once with its last reply as its report. */
 async function followsShellRuns(): Promise<void> {
@@ -979,7 +1575,17 @@ try {
   await startsAndWakes()
   await explicitReports()
   await refusals()
-  await macRoom()
+  await finLimit()
+  await afterOrder()
+  await slotsGoAtOnce()
+  await launchesBeforeTheirEdge()
+  await stopHoldsUntilCancelled()
+  await followedStopHoldsUntilExit()
+  await followedStopUnknownIdentity()
+  await followedStopStaleIdentity()
+  await followedStopStuck()
+  await queueProjection()
+  await edgeWriteMovesTheLine()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()

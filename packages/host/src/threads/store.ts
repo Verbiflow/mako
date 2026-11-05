@@ -1069,6 +1069,11 @@ export class ThreadStore {
     this.write(() => this.sql("INSERT OR IGNORE INTO agent_spawns (op, tree, record, at) VALUES (?, ?, ?, ?)").run(spawn.op, spawn.tree, spawn.record, spawn.at))
   }
 
+  /** Rewrites a held spawn's record in its place in line: one that couldn't start, kept until its Apex has heard why. */
+  keepQueuedSpawn(op: string, record: string): void {
+    this.write(() => this.sql("UPDATE agent_spawns SET record = ? WHERE op = ?").run(record, op))
+  }
+
   unqueueSpawn(op: string): void {
     this.write(() => this.sql("DELETE FROM agent_spawns WHERE op = ?").run(op))
   }
