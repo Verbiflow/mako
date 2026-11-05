@@ -4,7 +4,7 @@ import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
-import { TransferInputSchema, resumable } from "../contracts/conversation-control.js"
+import { TransferInputSchema, resumable, type ConversationControl } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
   ContextTransfer,
@@ -85,8 +85,11 @@ export class LiveTransfers {
       throw new Error("A transfer needs a request or an attachment")
     if (this.pending(resident))
       throw new Error("A provider switch is already pending")
+    // One switch at a time: asked for while another is committed and closing its source, it waits behind that one,
+    // and so does that one's own message, which goes first.
+    const inFlight = resident.transferPhase && (resident.transferPhase.phase === "committed" || resident.transferPhase.phase === "closing") ? resident.transferPhase.id : undefined
     if (
-      resident.snapshot.requests.some((request) => request.status === "queued")
+      resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== inFlight)
     )
       throw new Error(
         "Send or remove queued messages before switching providers"
@@ -113,6 +116,7 @@ export class LiveTransfers {
             inputDigest,
             createdAt: Date.now(),
             state: { kind: "queued" },
+            ...inFlight && { behind: inFlight },
           },
         ],
       },
@@ -203,7 +207,7 @@ export class LiveTransfers {
     let reconnect = false
     let activated = false
     try {
-      this.save(resident, { ...transfer, state: { kind: "preparing" } })
+      this.save(resident, { ...transfer, behind: undefined, state: { kind: "preparing" } })
       await this.host.locateNativePath(resident)
       this.host.returnFromRemovedWorktree(resident)
       const source = resident.snapshot
@@ -486,6 +490,7 @@ export class LiveTransfers {
         },
       }
       const previous = resident.snapshot
+      const previousControl = this.host.control(resident)
       const nextSnapshot: LiveSnapshot = {
         ...previous,
         nativeAgents: disconnectNativeAgents(previous.nativeAgents),
@@ -575,9 +580,10 @@ export class LiveTransfers {
           )
         )
       } catch (error) {
-        // Back before its commit, keeping what the queue became meanwhile but the switch's own message; a Stop that
-        // came meanwhile retires it (below).
-        resident.snapshot = { ...previous, requests: resident.snapshot.requests.filter((request) => request.id !== transfer.input.id) }
+        // Back before its commit: only what this switch did is undone, on the state as it is now, so whatever else was
+        // accepted meanwhile (a Stop, an edit, another switch waiting behind it) stands. A Stop that came meanwhile
+        // retires it (below).
+        resident.snapshot = undoSwitch(resident.snapshot, this.host.control(resident), previous, previousControl, transfer.input.id)
         phase.phase = "opening"
         try {
           this.host.flush(resident)
@@ -696,5 +702,28 @@ export class LiveTransfers {
       resident.transferring = false
       resident.transferOpening = undefined
     }
+  }
+}
+
+/**
+ * A committed switch taken back (its source wouldn't close), as an operation on the conversation as it is now: the
+ * session, binding and history it made the conversation's go back to `before`'s, its own message leaves the queue and
+ * its transfer reads as it did, and everything else stands.
+ */
+function undoSwitch(current: LiveSnapshot, control: ConversationControl, before: LiveSnapshot, beforeControl: ConversationControl, id: string): LiveSnapshot {
+  const was = beforeControl.transfers.find((transfer) => transfer.input.id === id)
+  return {
+    ...current,
+    nativeAgents: before.nativeAgents,
+    session: before.session,
+    threadPath: before.threadPath,
+    permissions: before.permissions,
+    requests: current.requests.filter((request) => request.id !== id),
+    control: {
+      ...control,
+      activeBindingId: beforeControl.activeBindingId,
+      bindings: beforeControl.bindings,
+      transfers: control.transfers.map((transfer) => (transfer.input.id === id && was ? was : transfer)),
+    },
   }
 }

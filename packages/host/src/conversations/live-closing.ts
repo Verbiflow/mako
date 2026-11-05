@@ -36,10 +36,10 @@ export class LiveClosing {
     this.parts = parts
   }
 
-  close(id: string): Promise<void> {
+  close(id: string, forExit = false): Promise<void> {
     const resident = this.access.require(id)
     if (resident.closeOperation) return resident.closeOperation
-    const operation = this.closeResident(resident, id)
+    const operation = this.closeResident(resident, id, forExit)
     resident.closeOperation = operation
     void operation.catch(() => {
       if (resident.closeOperation === operation)
@@ -70,7 +70,7 @@ export class LiveClosing {
       this.access.flush(resident)
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        await Promise.race([this.close(id), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("A provider did not finish closing. Mako stayed open; wait for it to settle before trying again.")), 30_000) })])
+        await Promise.race([this.close(id, true), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("A provider did not finish closing. Mako stayed open; wait for it to settle before trying again.")), 30_000) })])
       } finally { clearTimeout(timer) }
     }))
     this.parts.restarts.leave(left)
@@ -113,14 +113,17 @@ export class LiveClosing {
 
   private async closeResident(
     resident: Resident,
-    id: string
+    id: string,
+    forExit: boolean
   ): Promise<void> {
     const { dependencies } = this.access
     const { transfers } = this.parts
     this.access.clearHibernationTimer(resident)
     resident.generation += 1
     const pending = transfers.pending(resident)
-    if (pending)
+    // A switch that only waits (behind another, or for its time) did nothing yet: Mako's exit leaves it for the next
+    // host, as it leaves queued messages; one under way, or any the person's close finds, fails.
+    if (pending && !(forExit && pending.state.kind === "queued"))
       transfers.save(resident, {
         ...pending,
         state: {
@@ -292,7 +295,8 @@ export class LiveClosing {
       }
     } finally {
       resident.closing = false
-      this.access.drain(resident)
+      // Mako's exit starts nothing: what still waits is the next host's.
+      if (!forExit) this.access.drain(resident)
       this.parts.records.scheduleSweep()
     }
   }

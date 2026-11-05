@@ -338,6 +338,64 @@ try {
       await world.close()
     }
 
+    // One switch at a time: a second asked for while the first opens is refused; one asked for while the first is
+    // committed and closing its source waits behind it, durable and saying so, and runs after it and its message,
+    // whether the first completes or its close fails and takes it back, a Stop first or not, and across a restart.
+    for (const [when, first] of [["opening", "succeeds"], ["opening", "fails"], ["closing", "succeeds"], ["closing", "fails"], ["closing", "stopped, fails"], ["closing", "restart"]] as const) {
+      const one = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      const two = HARNESSES[(HARNESSES.indexOf(harness) + 2) % HARNESSES.length]!
+      let gate: (() => void) | undefined
+      let gating = false
+      const fails = first === "fails" || first === "stopped, fails"
+      const held = (reason: string) => new Promise<void>((resolve, reject) => { gate = () => (fails ? reject(new Error(reason)) : resolve()) })
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-second-switch-${when}-${first.replaceAll(", ", "-")}`),
+        script: (turn) => (first === "restart" && turn.text.includes("First switch.") ? turn.world.hold(turn.conversation).then(() => "Done.") : script(turn)),
+        starting: (_conversation, starting) => (gating && when === "opening" && starting === one ? held("The model API refused the request: encrypted_content could not be verified") : undefined),
+        closing: (_binding, closing) => (gating && when === "closing" && closing === harness ? held("The source session did not close") : undefined),
+      })
+      const label = `${harness} a second switch while the first is ${when} (${first})`
+      const { conversation } = await world.apex(harness, "full")
+      const transfers = () => world.live.snapshot(conversation)?.control?.transfers ?? []
+      const firstId = randomUUID()
+      const secondId = randomUUID()
+      gating = true
+      world.live.transfer(conversation, { id: firstId, provider: one, text: "First switch.", attachments: [] })
+      await until(`${label}: the first ${when}`, () => gate !== undefined)
+      if (first === "stopped, fails") await world.live.cancel(conversation)
+      let refused = ""
+      try {
+        world.live.transfer(conversation, { id: secondId, provider: two, text: "Second switch.", attachments: [] })
+      } catch (error) {
+        refused = error instanceof Error ? error.message : String(error)
+      }
+      const waiting = transfers().find((transfer) => transfer.input.id === secondId)
+      if (when === "opening") assert.match(refused, /already pending/, `${label}: refused while the first opens`)
+      else {
+        assert.deepEqual([refused, waiting?.state.kind, waiting?.behind], ["", "queued", firstId], `${label}: it waits behind the first`)
+        assert.equal(describeTransferRecovery(waiting!, two).title, "Waiting for the current switch to finish", label)
+      }
+      gating = false
+      gate!()
+      const ends = when === "opening" ? (fails ? harness : one) : two
+      if (first === "restart") {
+        await until(`${label}: the first's message to run`, () => requestOf(world, conversation, "First switch.")?.status === "dispatching")
+        assert.equal(transfers().find((transfer) => transfer.input.id === secondId)?.state.kind, "queued", `${label}: the second waits for the first's message`)
+        await world.restart()
+      }
+      await until(`${label}: it to settle on ${ends}`, () => world.live.snapshot(conversation)?.session.harness === ends && !transfers().some((transfer) => transfer.state.kind === "queued" || transfer.state.kind === "preparing"), 15_000)
+      if (when !== "opening") {
+        await until(`${label}: the second's message to go`, () => requestOf(world, conversation, "Second switch.")?.status === "completed")
+        assert.equal(sentTimes(world, conversation, "Second switch."), 1, `${label}: the second went once`)
+        const order = world.prompts.filter((prompt) => prompt.conversation === conversation && /First switch\.|Second switch\./.test(prompt.text)).map((prompt) => `${/First/.test(prompt.text) ? "first" : "second"}@${prompt.harness}`)
+        assert.deepEqual(order, fails ? [`second@${two}`] : [`first@${one}`, `second@${two}`], `${label}: in order, each on its own harness`)
+      }
+      world.say(conversation, "Fresh message.")
+      await until(`${label}: the next message to complete`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), ends, `${label}: on ${ends}, once`)
+      await world.close()
+    }
+
     // The person's Stop ends a turn that fails partway on capacity as it lands, and a first start waiting to go again or
     // under way that comes back at capacity: nothing continues, starts or sends after it, nor after a restart.
     for (const under of ["mid-turn", "first start waiting", "first start late"] as const) {

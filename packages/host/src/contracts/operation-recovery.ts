@@ -64,6 +64,7 @@ export function describeTransferRecovery(
   const request = candidate?.id === transfer.input.id ? candidate : undefined
   switch (state.kind) {
     case "queued":
+      if (transfer.behind) return { title: "Waiting for the current switch to finish", guidance: `Your request and attachments are saved. The switch to ${provider} goes once the one before it is done.` }
       return { title: `Switch to ${provider} after this turn`, guidance: "Your request and attachments are saved. The destination has not been prepared yet." }
     case "preparing":
       return { title: `Preparing ${provider}`, guidance: "Mako is preparing the destination. This does not confirm message delivery." }

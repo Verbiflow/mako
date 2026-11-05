@@ -178,6 +178,11 @@ export const ContextTransferSchema = z.object({
   state: TransferStateSchema,
   /** A reconnect that failed for a cause that clears by itself: it stays queued and goes again at `at` (`nextRetry`). */
   retry: RequestRetrySchema.optional(),
+  /**
+   * Asked for while the switch `behind` was committing: it waits for that one to finish and for that one's message
+   * (`LiveDispatch.drain`), across a restart too, and reads so until it starts.
+   */
+  behind: z.string().optional(),
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
 export const ConversationControlSchema = z.object({

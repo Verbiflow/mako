@@ -175,6 +175,8 @@ export class LiveConversations {
         this.counts.loaded(resident)
         // A journal keeps no children: their engine says how they are now.
         this.takeChildren(resident)
+        // A switch that waited behind another when the last host ended goes on, as it was asked to.
+        if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
       paged: (id) => this.dependencies.historyPaged?.(id),

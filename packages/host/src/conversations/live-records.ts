@@ -668,9 +668,11 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
                 }
               : action
           ),
+          // One under way has an unknown outcome and fails. One that waited behind another switch, or for its time,
+          // never started: it goes once its conversation is read in (`LiveConversations` `loaded`), or at its time.
           transfers: previous.control.transfers.map((transfer) =>
             transfer.state.kind === "preparing" ||
-            transfer.state.kind === "queued" ||
+            (transfer.state.kind === "queued" && !transfer.behind && !transfer.retry) ||
             strandedTransfers.has(transfer.input.id)
               ? {
                   ...transfer,

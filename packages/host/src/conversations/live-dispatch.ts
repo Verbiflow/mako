@@ -167,7 +167,9 @@ export class LiveDispatch {
       return
     // Nor while a transfer is under way: once committed, its source may still be closing, and nothing goes on it.
     if (resident.transferring) return
-    if (transfers.pending(resident)) {
+    // A switch waits for what was queued before it, as a switch asked for behind another waits for that one's message.
+    const transfer = transfers.pending(resident)
+    if (transfer && !(transfer.state.kind === "queued" && resident.snapshot.requests.some((request) => request.status === "queued" && (request.createdAt ?? 0) <= transfer.createdAt))) {
       transfers.start(resident)
       return
     }
