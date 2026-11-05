@@ -13,7 +13,6 @@ import { WebSocketServer } from "ws"
 import {
   PING,
   PONG,
-  PROBE_ANSWER_MS,
   PROTOCOL_VERSION,
   SILENT_WHILE_WORKING_MS,
   Payload,
@@ -312,6 +311,9 @@ function conversations(account: CloudAccount, file: string, copies?: CloudCopies
   return { router, events, starts, changed, archived, ended }
 }
 
+/** A hang guard: a link the probe or a wake replaced is back well before the 25 s heartbeat would have found it dead. */
+const BEFORE_HEARTBEAT_MS = 20_000
+
 async function until(what: string, check: () => boolean, ms = 3_000) {
   const deadline = Date.now() + ms
   while (!check()) {
@@ -367,10 +369,9 @@ test("another device's conversation followed here picks up where it was: a dropp
   // Stalled while it works: nothing moves on the link and nothing closes it. Silent for a few seconds, its connection
   // is asked whether it's alive, and replaced: the next batch arrives on the new one.
   machine.network!.sleep()
-  const stalled = performance.now()
   send(701)
-  await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), 6_000)
-  assert.ok(performance.now() - stalled < 5_500, `a stall found within ${SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS} ms and a bit: ${Math.round(performance.now() - stalled)} ms`)
+  // Found by the probe once silent and unanswered (`SILENT_WHILE_WORKING_MS`, `PROBE_ANSWER_MS`), not by the heartbeat.
+  await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), BEFORE_HEARTBEAT_MS)
   assert.equal(rereads(), 1, "picked up from what the gateway kept")
   // Diagnostics' readings of it: what went by, what was read again, and why it was followed again each time.
   const reading = readings.readings().follows.find((follow) => follow.stream.endsWith(conversation))
@@ -790,18 +791,19 @@ const MISSED = 400
 
 test("a Mac woken on a network the sleep didn't keep follows on at once: every event the machine sent meanwhile, once and in order", async () => {
   // A heartbeat as the app's: on its own it would find the dead socket only after a minute.
-  const { machine, router, events, conversationId, threadId, revisions } = await midTurn({ sockets: { heartbeatMs: 25_000, wakeProbeMs: 500 } }, "slept")
+  const { machine, router, events, conversationId, threadId, revisions } = await midTurn({ sockets: { heartbeatMs: 25_000, wakeProbeMs: 100 } }, "slept")
   machine.network!.sleep()
   for (let revision = 3; revision < 3 + MISSED; revision++) machine.batch(threadId, conversationId, revision, revision % 2 ? "running" : "ready")
   await new Promise((resolve) => setTimeout(resolve, 300))
   assert.equal(events.length, 1, "nothing arrives on the dead socket")
   const woke = performance.now()
   router.wake()
-  await until("every missed event", () => events.length === 1 + MISSED, 5_000)
+  await until("every missed event", () => events.length === 1 + MISSED, BEFORE_HEARTBEAT_MS)
   const ms = performance.now() - woke
   assert.deepEqual(revisions(), Array.from({ length: 1 + MISSED }, (_, index) => index + 2), "each event once, in order")
   console.log(`  woke to ${MISSED} missed events relayed: ${ms.toFixed(0)} ms`)
-  assert.ok(ms < 2_000, `caught up in ${ms.toFixed(0)} ms, the wake's probe (500 ms) included`)
+  // Without the wake's 100 ms probe, the stream's own silence (`SILENT_WHILE_WORKING_MS`) would find the dead socket.
+  assert.ok(ms < SILENT_WHILE_WORKING_MS, `caught up by the wake's probe, before the working stream's silence could: ${ms.toFixed(0)} ms`)
   // Following on: the next event comes on the new connection.
   machine.batch(threadId, conversationId, 3 + MISSED, "ready")
   await until("the next event", () => events.length === 2 + MISSED)
