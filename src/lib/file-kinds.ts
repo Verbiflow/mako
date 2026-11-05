@@ -1,3 +1,5 @@
+import { diagnosticFormat, filePreviewFormat, type FilePreviewFormat } from "@mako/host/contracts/file-preview"
+
 /**
  * What a file is, from its name: the glyph it wears in every list and the language its source is highlighted as.
  *
@@ -326,4 +328,35 @@ export function fileKind(path: string): FileKind {
 /** The renderer's language for a file whose own guess this table overrides, or undefined to let it guess. */
 export function fileLanguage(path: string): string | undefined {
   return fileKind(path).language
+}
+
+/** What a preview format looks like, for a file its name doesn't place (an attachment named by its type alone). */
+const BY_FORMAT = {
+  image: "image",
+  video: "video",
+  audio: "audio",
+  pdf: "document",
+  word: "document",
+  workbook: "table",
+  presentation: "document",
+  markdown: "markdown",
+  html: "markup",
+  table: "table",
+  text: "text",
+  har: "profile",
+  "cpu-profile": "profile",
+  "heap-profile": "profile",
+  "heap-snapshot": "profile",
+  trace: "profile",
+} satisfies Record<FilePreviewFormat, GlyphName>
+
+/** A file's mark, as `FileIcon` draws it: a diagnostic recording's by its format, else its kind's, else what its type says it holds. */
+export function fileGlyph(path: string, mimeType?: string): FileGlyph {
+  const diagnostic = diagnosticFormat(path)
+  if (diagnostic) return { kind: "glyph", name: BY_FORMAT[diagnostic] }
+  const kind = fileKind(path)
+  if (kind.glyph.kind === "letters" || kind.glyph.name !== "file") return kind.glyph
+  // A type that says nothing (application/octet-stream) leaves the name to say it, as `filePreviewFormat` alone would.
+  const format = filePreviewFormat(path, mimeType) ?? filePreviewFormat(path)
+  return format ? { kind: "glyph", name: BY_FORMAT[format] } : kind.glyph
 }

@@ -1,6 +1,5 @@
 import { memo, type ReactNode } from "react"
-import { diagnosticFormat, filePreviewFormat, type FilePreviewFormat } from "@mako/host/contracts/file-preview"
-import { fileKind, type FileGlyph, type GlyphName } from "@/lib/file-kinds"
+import { fileGlyph, type GlyphName } from "@/lib/file-kinds"
 import { cn } from "@/lib/utils"
 
 /**
@@ -13,40 +12,10 @@ import { cn } from "@/lib/utils"
  */
 export const FileIcon = memo(function FileIcon({ path, mimeType, folder, open, className }: { path: string; mimeType?: string; folder?: boolean; open?: boolean; className?: string }) {
   if (folder) return <Svg className={className}>{open ? FOLDER_OPEN : FOLDER}</Svg>
-  const glyph = glyphOf(path, mimeType)
+  const glyph = fileGlyph(path, mimeType)
   if (glyph.kind === "letters") return <Svg className={className}>{lettered(glyph.text)}</Svg>
   return <Svg className={className}>{GLYPHS[glyph.name]}</Svg>
 })
-
-/** What a preview format looks like, for a file its name doesn't place (an attachment named by its type alone). */
-const BY_FORMAT = {
-  image: "image",
-  video: "video",
-  audio: "audio",
-  pdf: "document",
-  word: "document",
-  workbook: "table",
-  presentation: "document",
-  markdown: "markdown",
-  html: "markup",
-  table: "table",
-  text: "text",
-  har: "profile",
-  "cpu-profile": "profile",
-  "heap-profile": "profile",
-  "heap-snapshot": "profile",
-  trace: "profile",
-} satisfies Record<FilePreviewFormat, GlyphName>
-
-/** The file's mark: a diagnostic recording's by its format, else its kind's, else what its type says it holds. */
-function glyphOf(path: string, mimeType: string | undefined): FileGlyph {
-  const diagnostic = diagnosticFormat(path)
-  if (diagnostic) return { kind: "glyph", name: BY_FORMAT[diagnostic] }
-  const kind = fileKind(path)
-  if (kind.glyph.kind === "letters" || kind.glyph.name !== "file") return kind.glyph
-  const format = filePreviewFormat(path, mimeType)
-  return format ? { kind: "glyph", name: BY_FORMAT[format] } : kind.glyph
-}
 
 function Svg({ className, children }: { className?: string; children: ReactNode }) {
   return (

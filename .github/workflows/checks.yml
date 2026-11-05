@@ -132,6 +132,7 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-index.ts
+      - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-kinds.ts
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/bench-file-search.ts --files 100000
 
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
