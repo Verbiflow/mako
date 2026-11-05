@@ -1378,37 +1378,52 @@ async function closeDuringStartup() {
 /**
  * A host that dies while a message is still being prepared never handed it to its harness: the next host has it wait
  * again, as the messages behind it do, not stand for a cut turn that "Continue" would pick up (`test:orch-crash` sends
- * a Fin's whole).
+ * a Fin's whole). A journal an older build wrote, whose drivers could send before `submitted` was written, keeps the
+ * cautious reading: its turn may have run.
  */
 async function unhandedMessageWaitsAfterCrash() {
-  const f = fixture()
-  try {
-    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
-    f.started.resolve(f.state)
-    await tick()
-    f.preparing.on = true
-    const brief = randomUUID()
-    f.owner.submit(f.id, brief, "the brief")
-    await tick()
-    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.nativeDelivery?.evidence.kind, "prepared")
-    const afterCrash = new LiveConversations(f.dependencies)
+  for (const written of ["gated", "older"] as const) {
+    const f = fixture()
+    // A journal an older build wrote, before a driver sent only once `submitted` held: no `gated` on its attempts.
+    const commit = LiveJournal.prototype.commit
+    const older = written === "older" ? mock.method(LiveJournal.prototype, "commit", function (this: LiveJournal, ...[snapshot, ...rest]: Parameters<LiveJournal["commit"]>) {
+      const stripped = { ...snapshot, requests: snapshot.requests.map(({ nativeDelivery, ...request }) => (nativeDelivery ? { ...request, nativeDelivery: { ...nativeDelivery, gated: undefined } } : request)) }
+      return commit.call(this, stripped, ...rest)
+    }) : undefined
     try {
-      const found = afterCrash.snapshot(f.id)!.requests[0]!
-      assert.equal(found.status, "held", "it waits again")
-      assert.equal(found.interruption, undefined, "no turn was cut")
-      assert.deepEqual([found.pause, found.retry, found.wake], [undefined, undefined, undefined], "paused as Mako's exit pauses what waits")
-      assert.equal(crashedChildTurn([found]), undefined, "a Fin's is no turn to continue")
-      // Drawn already, and a send reads a refused attempt's message as drawn, so it isn't drawn twice.
-      assert.equal(found.nativeDelivery?.evidence.kind, "not-accepted")
-      const drawn = afterCrash.snapshot(f.id)!.blocks.filter((block) => block.type === "user" && block.requestId === brief)
-      assert.equal(drawn.length, 1, "its message is drawn once")
-      assert.deepEqual(f.sent, [], "nothing reached the harness")
+      await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+      f.started.resolve(f.state)
+      await tick()
+      f.preparing.on = true
+      const brief = randomUUID()
+      f.owner.submit(f.id, brief, "the brief")
+      await tick()
+      assert.equal(f.owner.snapshot(f.id)?.requests[0]?.nativeDelivery?.evidence.kind, "prepared")
+      older?.mock.restore()
+      const afterCrash = new LiveConversations(f.dependencies)
+      try {
+        const found = afterCrash.snapshot(f.id)!.requests[0]!
+        if (written === "older") {
+          assert.deepEqual([found.status, found.interruption?.reason], ["uncertain", "host-crashed"], "an older journal's prepared attempt may have run: it's read as cautiously as before")
+          continue
+        }
+        assert.equal(found.status, "held", "it waits again")
+        assert.equal(found.interruption, undefined, "no turn was cut")
+        assert.deepEqual([found.pause, found.retry, found.wake], [undefined, undefined, undefined], "paused as Mako's exit pauses what waits")
+        assert.equal(crashedChildTurn([found]), undefined, "a Fin's is no turn to continue")
+        // Drawn already, and a send reads a refused attempt's message as drawn, so it isn't drawn twice.
+        assert.equal(found.nativeDelivery?.evidence.kind, "not-accepted")
+        const drawn = afterCrash.snapshot(f.id)!.blocks.filter((block) => block.type === "user" && block.requestId === brief)
+        assert.equal(drawn.length, 1, "its message is drawn once")
+        assert.deepEqual(f.sent, [], "nothing reached the harness")
+      } finally {
+        afterCrash.stop()
+      }
     } finally {
-      afterCrash.stop()
+      older?.mock.restore()
+      f.owner.stop()
+      rmSync(f.root, { recursive: true, force: true })
     }
-  } finally {
-    f.owner.stop()
-    rmSync(f.root, { recursive: true, force: true })
   }
 }
 

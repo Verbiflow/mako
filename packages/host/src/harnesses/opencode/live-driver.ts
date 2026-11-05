@@ -27,7 +27,7 @@ import { createLiveEngine, type LiveEngineApi } from "../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { configureOpenCodePrimer } from "./primer-file.js"
@@ -967,7 +967,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return live
       })
       if (text.trim() === "/compact" && attachments.length === 0) {
-        dispatch.report({ kind: "submitted", source: "transport-call" })
+        handOff(dispatch, { kind: "submitted", source: "transport-call" })
         await startCompaction(live, randomUUID(), dispatch)
         return
       }
@@ -984,9 +984,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.closed || live.turn) throw new Error("The session changed while preparing the prompt")
         return slashInvocation(text, live.catalog)
       })
-      const files = promptFiles(attachments)
+      const files = preparePrompt(dispatch, () => promptFiles(attachments))
       const inboxId = slash?.kind === "command" ? undefined : messageIds.next()
       const turn: Turn = { kind: slash?.kind === "command" ? "command" : "prompt", inboxId, enqueued: false, delivered: false, dispatch }
+      handOff(dispatch, { kind: "submitted", source: "transport-call", correlationId: inboxId })
       live.turn = turn
       live.providerTurnCause = undefined
       live.stopped.clear()
@@ -994,7 +995,6 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
       live.nativeStream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, run: inboxId, attachments })
-      dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
       try {
         if (slash?.kind === "command") {
           await live.api.client.session.command({ sessionID: live.root, name: slash.name, text: slash.rest, files })

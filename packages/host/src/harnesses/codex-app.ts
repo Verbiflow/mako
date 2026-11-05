@@ -6,7 +6,7 @@ import { applyThreadEnvironment } from "../workspaces/index.js"
 import { join } from "node:path"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./codex/permission-observer.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
-import { preparePrompt, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
+import { handOff, preparePrompt, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./codex/agents.js"
@@ -443,6 +443,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       turn.check()
       return { live, threadId: live.threadId, joining }
     })
+    handOff(dispatch, { kind: "submitted", source: "transport-call" })
     const sequence = ++live.promptSequence
     let resolveStarted = () => {}
     const startingTurn = new Promise<void>(resolve => { resolveStarted = resolve })
@@ -460,7 +461,6 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     live.stream?.prompted({ text: turn.text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments: turn.attachments })
     live.decoder.expectTurn()
     try {
-      dispatch.report({ kind: "submitted", source: "transport-call" })
       const result = await turn.start(live, threadId)
       dispatch.report({ kind: "accepted", source: "native-response", referenceId: result.turn.id })
       // Steered into the goal's turn, the message starts none of its own.

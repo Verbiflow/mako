@@ -276,6 +276,7 @@
     "test:fin-resume": "tsx scripts/test-fin-resume.ts",
     "test:fin-states": "tsx scripts/test-fin-states.ts",
     "test:delivery-retry": "tsx scripts/test-delivery-retry.ts",
+    "test:handoff": "tsx scripts/test-handoff.ts",
     "test:orch-comms": "tsx scripts/test-orch-comms.ts",
     "test:orch-deliver": "tsx scripts/test-orch-deliver.ts",
     "test:steer-landing": "tsx --tsconfig tsconfig.app.json scripts/test-steer-landing.ts",

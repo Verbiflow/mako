@@ -1,7 +1,7 @@
 import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
@@ -941,7 +941,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     })
     const compact = source.compaction
     if (compact?.kind === "supported" && text.trim() === compact.command && attachments.length === 0) {
-      dispatch.report({ kind: "submitted", source: "transport-call" })
+      handOff(dispatch, { kind: "submitted", source: "transport-call" })
       await liveCompact(id, randomUUID())
       return
     }
@@ -979,6 +979,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         })
       update(live, { ...verdict, nativePath: live.locateNativePath(), nativeForkId: verdict.status === "ready" ? live.checkpoint?.() : undefined })
     })
+    const prompt = preparePrompt(dispatch, () => acpPromptBlocks(text, attachments, live.promptCapabilities))
+    handOff(dispatch, { kind: "submitted", source: "transport-call", correlationId: turn.id })
     live.turn = turn
     live.turnReceipt = () => {
       if (live.turn !== turn) return
@@ -992,8 +994,6 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     engine.emitUpdate(live, { kind: "user", text })
     live.sent?.(text, attachments.length)
     live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
-    const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
-    dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
     void turn.send(() => connection.prompt({ sessionId, prompt })).then(
       () => dispatch.report({ kind: "accepted", source: "native-response" }),
       (error: Error) => dispatch.report({ kind: "uncertain", reason: error.message })

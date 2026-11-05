@@ -314,14 +314,15 @@ try {
     }
 
     // A Stop, the Apex's, the person's from the Apex's Fins or the person's own, ends a message's wait to go again: nothing sends after it, nor after a restart.
-    // A Stop while a message is still being sent latches it: its 429, coming back after the Stop, holds it as the Stop's pause, never to go by itself.
-    for (const stop of ["apex", "person-fin", "person"] as const) {
-      let answer: ((words: string) => void) | undefined
+    // A Stop while a message is still being prepared latches it: its 429, coming back after the Stop, holds it as the
+    // Stop's pause, never to go by itself; and a preparation that succeeds after the Stop sends nothing (`handOff`).
+    for (const [stop, outcome] of (["apex", "person-fin", "person"] as const).flatMap((stop) => (["429", "prepared"] as const).map((outcome) => [stop, outcome] as const))) {
+      let answer: ((words: string | undefined) => void) | undefined
       let late = false
       const world = new AgentsWorld({
-        root: join(root, `${harness}-late-${stop}`),
+        root: join(root, `${harness}-late-${stop}-${outcome}`),
         script,
-        refusePrompt: () => (late ? new Promise<string>((resolve) => { answer = resolve }) : undefined),
+        refusePrompt: () => (late ? new Promise<string | undefined>((resolve) => { answer = resolve }) : undefined),
       })
       const apex = await world.apex("cursor", "full")
       const started = await world.agents.start(apex.caller, { brief: { objective: "Label" }, harness, name: "labels", clientKey: "labels", cwd: world.root })
@@ -337,17 +338,17 @@ try {
       if (stop === "apex") await world.agents.stop(apex.caller, { child: "labels", reason: "enough" })
       else if (stop === "person-fin") assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
       else await world.live.cancel(fin)
-      answer!("429 Too Many Requests")
-      await until(`${harness} late ${stop}: the late refusal`, () => requestOf(world, fin, "Carry on.")?.status === "held")
-      assert.equal(requestOf(world, fin, "Carry on.")?.retry, undefined, `${harness} late ${stop}: a refusal after the Stop is no retry`)
+      answer!(outcome === "429" ? "429 Too Many Requests" : undefined)
+      await until(`${harness} late ${stop} ${outcome}: its outcome`, () => requestOf(world, fin, "Carry on.")?.status === "held")
+      assert.equal(requestOf(world, fin, "Carry on.")?.retry, undefined, `${harness} late ${stop} ${outcome}: an outcome after the Stop is no retry`)
       assert.equal(requestOf(world, fin, "Carry on.")?.pause, "stop")
       world.live.wakeDue(Date.now() + LATER)
       await pause(300)
-      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} late ${stop}: nothing sends after the Stop`)
+      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} late ${stop} ${outcome}: nothing sends after the Stop`)
       await world.restart()
       world.live.wakeDue(Date.now() + LATER)
       await pause(500)
-      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} late ${stop}: nor after a restart`)
+      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} late ${stop} ${outcome}: nor after a restart`)
       assert.equal(requestOf(world, fin, "Carry on.")?.pause, "stop")
       await world.close()
     }

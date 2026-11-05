@@ -17,6 +17,7 @@ import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
+import { handOff } from "@mako/host/harnesses/prompt-dispatch"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 
@@ -331,7 +332,7 @@ export class AgentsWorld {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
           throw new Error(refused)
         }
-        dispatch.report({ kind: "submitted", source: "transport-call" })
+        handOff(dispatch, { kind: "submitted", source: "transport-call" })
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
         const session = this.live.snapshot(id)?.session ?? state(id)
