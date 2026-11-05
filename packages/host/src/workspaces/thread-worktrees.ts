@@ -200,10 +200,15 @@ async function worktreeGitDir(path: string): Promise<string | undefined> {
 }
 
 /**
- * How long a worktree's `status` answers for the summaries after it: windows ask every half minute anyway, and a
- * commit, staging, checkout or merge rewrites the index, which asks again at once.
+ * How long a worktree's `status` answers for the summaries after it. It starts at `STATUS_FRESH_MS`, and each read that
+ * finds nothing changed doubles it, to `STATUS_QUIET_MS`: a Mac keeps a hundred or more worktrees and few are at work,
+ * and reading them all every half minute took 5 cores on 2026-11-05. A commit, staging, checkout or merge rewrites the
+ * index, which asks again at once, and a conversation at work in the worktree, whose edits the index can't show, keeps
+ * it at `STATUS_FRESH_MS`. The wait is spread by `STATUS_SPREAD`, so worktrees that went quiet together don't come due together.
  */
 const STATUS_FRESH_MS = 15_000
+const STATUS_QUIET_MS = 5 * 60_000
+const STATUS_SPREAD = 0.25
 
 /** `map` with at most `limit` running at once, results in order. */
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
@@ -265,6 +270,7 @@ export class ThreadWorktreeService {
   private readonly setup: CheckoutSetup | undefined
   private readonly conversations: CheckoutConversations | undefined
   private readonly ledger: () => MoveLedger | undefined
+  private readonly workingFolders: () => Promise<string[]>
   private readonly pending = new Map<string, Promise<Receipt>>()
   private readonly carrying = new Map<string, Promise<OutputsCarry>>()
   private readonly wanting = new Set<Promise<void>>()
@@ -277,8 +283,8 @@ export class ThreadWorktreeService {
   /** The summaries pass under way, and the one queued behind it for whoever asked meanwhile (`summaries`). */
   private summariesRunning: Promise<WorktreeSummary[]> | undefined
   private summariesNext: Promise<WorktreeSummary[]> | undefined
-  /** Each worktree's `status` as a summary last read it, with when and its index's modification time then (`statusOf`). */
-  private readonly statuses = new Map<string, { at: number; index: number; status: Promise<string> }>()
+  /** Each worktree's `status` as a summary last read it, with when, its index's modification time then, and how long it answers (`statusOf`). */
+  private readonly statuses = new Map<string, { at: number; index: number; status: Promise<string>; freshMs: number }>()
   /** Each receipt as last parsed, by the file's modification time and size then (`receipt`). */
   private readonly receiptsRead = new Map<string, { stamp: string; receipt: Receipt }>()
   /** Answers fixed by the commits they were read at, least recently asked first (`byCommits`): landings, and counts of commits. */
@@ -298,6 +304,9 @@ export class ThreadWorktreeService {
    * `ledger`, who changed what, once the journal is open: a move takes only
    * the Thread's own changes. Without it nothing is attributed, so nothing
    * moves unless the person brings it.
+   * `workingFolders`, every folder a conversation is mid-turn in, read once a
+   * summaries pass: `working` for each of a hundred worktrees would read every
+   * conversation a hundred times.
    */
   constructor(
     git: Git,
@@ -309,6 +318,7 @@ export class ThreadWorktreeService {
     setup?: CheckoutSetup,
     conversations?: CheckoutConversations,
     ledger: () => MoveLedger | undefined = () => undefined,
+    workingFolders: () => Promise<string[]> = async () => [],
   ) {
     this.git = git
     this.root = root
@@ -319,6 +329,7 @@ export class ThreadWorktreeService {
     this.setup = setup
     this.conversations = conversations
     this.ledger = ledger
+    this.workingFolders = workingFolders
     this.starts = new WorktreeStarts(git)
     this.spares = new WorktreeSpares(git, root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
@@ -717,7 +728,9 @@ export class ThreadWorktreeService {
       if (!known) facts.set(repoRoot, known = this.repositoryFacts(repoRoot))
       return known
     }
-    return mapLimited(worktrees, 6, async (worktree) => this.summarize(worktree, pullsOf, await factsOf(worktree.repoRoot)))
+    const working = await this.workingFolders().catch(() => [])
+    const atWork = ({ path }: ThreadWorktree) => working.some((folder) => folder === path || folder === dirname(path) || folder.startsWith(`${path}/`))
+    return mapLimited(worktrees, 6, async (worktree) => this.summarize(worktree, pullsOf, await factsOf(worktree.repoRoot), atWork(worktree)))
   }
 
   /** What every worktree of a repository shares: the branch its main checkout has out, every branch's commit, where new Threads start. */
@@ -736,24 +749,30 @@ export class ThreadWorktreeService {
   }
 
   /**
-   * A worktree's `git status` for its summary, read again once `STATUS_FRESH_MS` passed or its index changed. Each
-   * read is a spawn, which holds the host's thread (hundreds of milliseconds each on a loaded Linux machine), and a
-   * hundred worktrees were read on every pass.
+   * A worktree's `git status` for its summary, read again once its answer has aged out (`STATUS_QUIET_MS`) or its
+   * index changed, and past `STATUS_FRESH_MS` while `busy`. Each read is a spawn, which holds the host's thread
+   * (hundreds of milliseconds each on a loaded Linux machine), and walks the worktree in the kernel, and a hundred
+   * worktrees were read on every pass.
    */
-  private async statusOf(path: string): Promise<string> {
+  private async statusOf(path: string, busy: boolean): Promise<string> {
     const gitDir = await worktreeGitDir(path)
     const index = gitDir ? await stat(join(gitDir, "index")).then(({ mtimeMs }) => mtimeMs, () => 0) : 0
     const known = this.statuses.get(path)
-    if (known && gitDir && known.index === index && Date.now() - known.at < STATUS_FRESH_MS) return known.status
+    const unchanged = known !== undefined && gitDir !== undefined && known.index === index
+    if (unchanged && Date.now() - known.at < (busy ? STATUS_FRESH_MS : known.freshMs)) return known.status
     const status = this.git.readOutput(path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => "")
-    this.statuses.set(path, { at: Date.now(), index, status })
+    const read = { at: Date.now(), index, status, freshMs: STATUS_FRESH_MS }
+    this.statuses.set(path, read)
+    if (unchanged) void Promise.all([known.status, status]).then(([before, now]) => {
+      if (before === now) read.freshMs = Math.min(STATUS_QUIET_MS, known.freshMs * 2) * (1 - STATUS_SPREAD * Math.random())
+    })
     return status
   }
 
   /** One worktree's summary, with where its branch started; undefined for a folder that isn't one of Mako's worktrees. */
   async summary(path: string, pullsOf?: PullsOf): Promise<(WorktreeSummary & { startedFrom: string | null }) | undefined> {
     const worktree = (await this.list()).worktrees.find((entry) => entry.path === path)
-    return worktree && { ...await this.summarize(worktree, pullsOf, await this.repositoryFacts(worktree.repoRoot)), startedFrom: worktree.start?.from ?? null }
+    return worktree && { ...await this.summarize(worktree, pullsOf, await this.repositoryFacts(worktree.repoRoot), true), startedFrom: worktree.start?.from ?? null }
   }
 
   /** Where a worktree's new branch started (`origin/main`); null on a branch that existed already, or a folder that isn't one of Mako's worktrees. */
@@ -775,12 +794,12 @@ export class ThreadWorktreeService {
     return pulls
   }
 
-  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined, facts: RepositoryFacts): Promise<WorktreeSummary> {
+  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined, facts: RepositoryFacts, busy: boolean): Promise<WorktreeSummary> {
     const { into, point } = facts
     const tip = facts.tips.get(worktree.branch) ?? ""
     const from = into ? facts.tips.get(into) : worktree.base
     const [status, landing, pulls, head] = await Promise.all([
-      this.statusOf(worktree.path),
+      this.statusOf(worktree.path, busy),
       this.landing(worktree, facts),
       this.pullsIn(worktree.repoRoot, pullsOf),
       worktreeHead(worktree.path, facts.tips),

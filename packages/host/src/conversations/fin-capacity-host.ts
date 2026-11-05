@@ -4,7 +4,7 @@ import type { FinCapacityReading } from "../contracts/fin-tuning.js"
 import { CapacityGovernor, deviceCapacity, reserveOf, type FinHardware, type PressureReading } from "./fin-capacity.js"
 import type { FinCostModel } from "./fin-cost.js"
 import type { FinAtWork, FinCostReading } from "./fin-cost-sampler.js"
-import { DISK_FREE_LEAST, FIN_LOAD, SWAP_FREE_LEAST, type MacReading } from "./mac-capacity.js"
+import { DISK_FREE_LEAST, FIN_LOAD, idleCores, SWAP_FREE_LEAST, type MacReading } from "./mac-capacity.js"
 
 export interface FinCapacityDeps {
   /** This machine's load and pressure (`MacCapacity`). */
@@ -99,13 +99,18 @@ export class FinCapacity {
   }
 }
 
-/** What presses on the machine now, from one reading: the person's own work is the load working Fins don't account for. */
+/**
+ * What presses on the machine now, from one reading. The person's own work is the busy cores working Fins don't account
+ * for, and it presses only while it leaves them fewer idle cores than their reserve: idle cores are room, whoever
+ * keeps the rest busy.
+ */
 export function pressureOf(reading: MacReading, working: number, hardware: FinHardware): PressureReading {
-  const others = Math.max(0, reading.load - working * FIN_LOAD)
+  const others = Math.max(0, reading.busyCores - working * FIN_LOAD)
+  const reserve = reserveOf(hardware).cores
   return {
     memory: reading.memoryPressure === true || (reading.swapFreeBytes !== undefined && reading.swapFreeBytes < SWAP_FREE_LEAST),
     thermal: reading.hot === true,
-    person: others > reserveOf(hardware).cores,
+    person: others > reserve && idleCores(reading) < reserve,
     disk: reading.diskFreeBytes !== undefined && reading.diskFreeBytes < DISK_FREE_LEAST,
   }
 }

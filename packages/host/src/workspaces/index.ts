@@ -118,6 +118,8 @@ export interface WorkspacesDeps {
   inUse(path: string): Promise<string[]>
   /** Conversations mid-turn in a worktree. */
   working(path: string): Promise<string[]>
+  /** Every folder a conversation is mid-turn in. */
+  workingFolders(): Promise<string[]>
   /** What holds a removed worktree, and its conversations going on in the main checkout. */
   conversations: CheckoutConversations
   /** The recipe's cleanup for a worktree about to be removed, once the app tools exist. */

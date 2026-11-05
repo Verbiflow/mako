@@ -1,15 +1,16 @@
 import { execFile } from "node:child_process"
 import { statfs } from "node:fs/promises"
-import { availableParallelism, homedir, loadavg, totalmem } from "node:os"
+import { availableParallelism, homedir, totalmem } from "node:os"
 import { promisify } from "node:util"
+import { coresBusy, cpuTicks, type CpuTicks } from "../base/machine-load.js"
 import { onMac } from "../base/platform.js"
 
 /** What this Mac has and what's at work on it, as a Fin's start reads it (`macLoad`). */
 export interface MacReading {
   cores: number
   memoryBytes: number
-  /** The 1-minute load average: runnable threads, the person's own work and every Fin's alike. */
-  load: number
+  /** Cores busy on average since the last reading, the person's own work and every Fin's alike; the rest are idle (`coresBusy`). */
+  busyCores: number
   /** Swap still free; undefined where it can't be read. */
   swapFreeBytes?: number
   /** Free space where worktrees are made; undefined where it can't be read. */
@@ -32,9 +33,9 @@ export interface MacLoad {
 }
 
 /**
- * A working Fin's share of the Mac, in cores of load. Measured 2026-11-03 on a 14-core Mac: 13 Fins at work, with
- * the builds and tests they ran, held the 1-minute load at 26.8, and one Fin building took 6 cores at its peak while
- * idle ones took none.
+ * A working Fin's share of the Mac, in cores. Measured 2026-11-03 on a 14-core Mac: 13 Fins at work, with the builds
+ * and tests they ran, held the 1-minute load at 26.8, and one Fin building took 6 cores at its peak while idle ones
+ * took none.
  */
 export const FIN_LOAD = 2
 /** A working Fin's memory: the largest Fin's processes held 1.8 GB that day and the average 0.35 GB. */
@@ -49,21 +50,26 @@ export const DISK_FREE_LEAST = 10 * 1024 ** 3
 const GB = (bytes: number) => Math.round(bytes / 1024 ** 3)
 
 /**
- * Whether this Mac is busy: the Fins at work take the cores the person's own work leaves, a Fin's `FIN_LOAD` each, or
- * its memory, a Fin's `FIN_MEMORY` each, or it's swapping or short of disk. The person's own work is the load the
- * working Fins don't account for.
+ * Whether this Mac is busy: its idle cores, past the person's, have no room for another Fin at `FIN_LOAD`, or the Fins
+ * at work take its memory, a Fin's `FIN_MEMORY` each, or it's swapping or short of disk. An idle core is room whatever
+ * keeps the others busy. Other work is the busy cores the working Fins don't account for.
  */
 export function macLoad(reading: MacReading, working: number): MacLoad {
-  const others = Math.max(0, reading.load - working * FIN_LOAD)
-  const cpu = Math.floor((reading.cores - PERSON_CORES(reading.cores) - others) / FIN_LOAD)
+  const others = Math.max(0, reading.busyCores - working * FIN_LOAD)
+  const cpu = Math.floor((idleCores(reading) - PERSON_CORES(reading.cores)) / FIN_LOAD)
   const memory = Math.floor((reading.memoryBytes - PERSON_MEMORY) / FIN_MEMORY)
   const short = reading.swapFreeBytes !== undefined && reading.swapFreeBytes < SWAP_FREE_LEAST ? "it's out of swap"
     : reading.diskFreeBytes !== undefined && reading.diskFreeBytes < DISK_FREE_LEAST ? `it has ${GB(reading.diskFreeBytes)} GB of disk free`
     : undefined
   const parts = [`${reading.cores} cores`, `${GB(reading.memoryBytes)} GB`, ...others >= 1 ? [`${Math.round(others)} cores of other work`] : [], ...short ? [short] : []]
   const load: MacLoad = { why: parts.join(", ") }
-  if (short || working >= Math.min(cpu, memory)) load.busy = true
+  if (short || cpu < 1 || working >= memory) load.busy = true
   return load
+}
+
+/** The cores nothing is using. */
+export function idleCores(reading: MacReading): number {
+  return Math.max(0, reading.cores - reading.busyCores)
 }
 
 /** Reads this Mac for `macLoad`, at most every `READ_EVERY_MS`: a burst of starts reads it once. */
@@ -71,25 +77,32 @@ export class MacCapacity {
   #last: { at: number; reading: MacReading } | undefined
   readonly #folder: string
   readonly #now: () => number
+  readonly #ticks: () => CpuTicks
+  #ticksThen: CpuTicks
 
-  constructor(options: { folder?: string; now?: () => number } = {}) {
+  constructor(options: { folder?: string; now?: () => number; ticks?: () => CpuTicks } = {}) {
     this.#folder = options.folder ?? homedir()
     this.#now = options.now ?? Date.now
+    this.#ticks = options.ticks ?? cpuTicks
+    this.#ticksThen = this.#ticks()
   }
 
   async read(): Promise<MacReading> {
     const now = this.#now()
     if (this.#last && now - this.#last.at < READ_EVERY_MS) return this.#last.reading
     const [swapFreeBytes, diskFreeBytes, memoryPressure, hot] = await Promise.all([swapFree(), statfs(this.#folder).then((stats) => stats.bavail * stats.bsize, () => undefined), pressured(), throttled()])
+    const ticks = this.#ticks()
+    const cores = availableParallelism()
     const reading: MacReading = {
-      cores: availableParallelism(),
+      cores,
       memoryBytes: totalmem(),
-      load: loadavg()[0] ?? 0,
+      busyCores: coresBusy(this.#ticksThen, ticks, cores),
       ...swapFreeBytes !== undefined && { swapFreeBytes },
       ...diskFreeBytes !== undefined && { diskFreeBytes },
       ...memoryPressure !== undefined && { memoryPressure },
       ...hot !== undefined && { hot },
     }
+    this.#ticksThen = ticks
     this.#last = { at: now, reading }
     return reading
   }
