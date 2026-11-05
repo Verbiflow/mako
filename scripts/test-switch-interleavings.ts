@@ -108,6 +108,12 @@ interface Gate {
   reject(error: Error): void
 }
 
+/** A switch's destination opening and its source closing, each until a step lets it. */
+interface Gates {
+  open: Gate[]
+  close: Gate[]
+}
+
 /** What this schedule accepted: a piece of work the person gave Mako, under the words it now has. */
 interface Work {
   id: string
@@ -125,7 +131,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const sentWords = (text: string, words: string) => text.includes(words)
 
 class Schedule {
-  private readonly gates = { open: [] as Gate[], close: [] as Gate[] }
+  private readonly gates: Gates = { open: [], close: [] }
   private world: AgentsWorld
   private readonly work: Work[] = []
   private conversation = ""

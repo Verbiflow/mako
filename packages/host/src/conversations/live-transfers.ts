@@ -757,7 +757,7 @@ function messageOf(transfer: ContextTransfer, createdAt: number, fields: Pick<Li
  * the queue, held by the Stop, and from here on is edited, removed and resumed as any message is. An attempt under way
  * sees its transfer no longer next and drops what it comes back with (`LiveTransfers.perform`).
  */
-export function holdSwitches(snapshot: LiveSnapshot): { snapshot: LiveSnapshot; held: number } {
+export function holdSwitches(snapshot: LiveSnapshot) {
   const control = snapshot.control
   const waiting = control?.transfers.filter(unsettled) ?? []
   if (!control || !waiting.length) return { snapshot, held: 0 }
