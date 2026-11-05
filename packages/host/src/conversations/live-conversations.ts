@@ -447,7 +447,8 @@ export class LiveConversations {
     const own = first === undefined ? undefined : requests.find((request) => request.id === first && request.status === "queued")
     const rest = own ? requests.filter((request) => request !== own) : requests
     // Nothing goes ahead of a message the person is editing: `first` goes ahead of what waits after the last of those.
-    const barrier = rest.findLastIndex((request) => request.status === "held" && request.editing)
+    let barrier = -1
+    rest.forEach((request, index) => { if (request.status === "held" && request.editing) barrier = index })
     const ahead = rest.findIndex((request, index) => index > barrier && (request.status === "queued" || request.status === "held"))
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: own && ahead !== -1 ? [...rest.slice(0, ahead), own, ...rest.slice(ahead)] : requests }
