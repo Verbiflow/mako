@@ -291,6 +291,7 @@
     "test:packaged-animations": "node scripts/test-packaged-animations.mjs",
     "test:native-routing": "tsx scripts/test-native-routing.ts && tsx scripts/test-mako-layer.ts",
     "test:native-calls": "tsx scripts/test-native-calls.ts && tsx scripts/test-cursor-shell-folder.ts",
+    "test:primer": "tsx scripts/test-primer.ts && tsx --tsconfig tsconfig.app.json scripts/test-primer-delivery.ts",
     "test:native-routing-live": "tsx scripts/test-native-routing-live.ts",
     "test:native-routing-cursor": "tsx --tsconfig tsconfig.app.json scripts/test-native-routing-cursor.ts",
     "eval:orch-tools": "tsx scripts/eval-orch-tools/run.ts",

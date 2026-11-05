@@ -1463,19 +1463,22 @@ page reports (`PAGE_FIT_SCRIPT` in `contracts/page-frame.ts`), between
 big to be fitted, it holds 16:10 of the column. A page that loaded and
 drew nothing shows a quiet empty state at the minimum height, never a
 sliver. Every harness is told
-one line (`SHOW_MEDIA_LINE`): Claude in its appended system prompt, Codex
-as turn context, the others in Mako's note before the prompt
+Mako's primer (`contracts/primer.ts`, whose `routes` block carries
+`SHOW_MEDIA_LINE`): Claude in its appended system prompt, Codex
+as turn context, OpenCode in an instructions file, the others in Mako's note before the prompt
 (`makoInstructions` on the live driver says which). That note
-(`controlInstructions`, `conversations/control-cadence.ts`) has standing
+(`makoNote`, `conversations/control-cadence.ts`) has standing
 lines, each under a name (the cloud machine, Local Control, the Thread's
-environment, the media line), and notices (a worktree move, a cloud
+environment, and on a harness without a slot the primer's `routes` and
+`policy`), and notices (a worktree move, a cloud
 return), each said once when it happens. A binding's process hears the
 standing lines whole on its first prompt, then only those that changed
 (`CHANGED_LINE`), nothing when none did, and the whole note again
 (`REPLACED_LINE`) when one stops applying. `Resident.controlSaid` records
 what it heard under the binding's start (`bindingGenerations`), so a
 relaunch or resume hears it whole; a compaction, a rewound history or a
-failed send forgets it. `scripts/test-control-cadence.ts` covers it. The decode pairs draw
+failed send forgets it. `scripts/test-control-cadence.ts` covers it, and
+`scripts/test-primer-delivery.ts` the primer on it. The decode pairs draw
 each turn's media, so live and saved must find the same files;
 `scripts/test-turn-media.ts` covers each source and the host.
 

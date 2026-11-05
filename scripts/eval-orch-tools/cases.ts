@@ -157,8 +157,10 @@ export const CASES_FILE = join(import.meta.dirname, "cases.ndjson")
 export const DELIVER_CASES_FILE = join(import.meta.dirname, "cases-deliver.ndjson")
 /** Moving the Thread itself between this Mac and the cloud (`thread_move`): its own file, read last. */
 export const MOVE_CASES_FILE = join(import.meta.dirname, "cases-move.ndjson")
+/** Native-route habits, graded with the primer off and on. */
+export const PRIMER_CASES_FILE = join(import.meta.dirname, "cases-primer.ndjson")
 
-export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE, MOVE_CASES_FILE]): OrchCase[] {
+export function loadCases(files = [CASES_FILE, DELIVER_CASES_FILE, MOVE_CASES_FILE, PRIMER_CASES_FILE]): OrchCase[] {
   const cases = files.flatMap((file) => readFileSync(file, "utf8").split("\n").filter((line) => line.trim()).map((line, index) => {
     const parsed = OrchCase.safeParse(JSON.parse(line))
     if (!parsed.success) throw new Error(`${file}:${index + 1}: ${parsed.error.message}`)
@@ -378,6 +380,12 @@ export interface CaseResult {
   harness: string
   model: string
   routing: "on" | "off"
+  /** Whether the primer was in the launch. Absent on a result from before the switch: read as on. */
+  primer?: "on" | "off"
+  /** Claude serving `mako` over HTTP. Absent means the in-process server. */
+  mako?: "http"
+  /** Samples that didn't settle, left out of `passes`. */
+  errored?: string[]
   passes: boolean[]
   failures: string[][]
   seconds: number
@@ -399,11 +407,14 @@ export function budget(results: readonly CaseResult[]) {
 }
 
 /** What a baseline's `results.jsonl` line says of a case: enough to tell which passed every sample. */
-export const BaselineResult = z.object({ id: z.string(), harness: z.string(), model: z.string(), routing: z.enum(["on", "off"]), passes: z.array(z.boolean()), error: z.string().optional() })
+export const BaselineResult = z.object({ id: z.string(), harness: z.string(), model: z.string(), routing: z.enum(["on", "off"]), primer: z.enum(["on", "off"]).optional(), mako: z.literal("http").optional(), passes: z.array(z.boolean()), error: z.string().optional() })
 export type BaselineResult = z.infer<typeof BaselineResult>
+
+const armKey = (result: { harness: string; model: string; routing: string; id: string; primer?: string; mako?: string }) =>
+  `${result.harness}:${result.model}:${result.routing}:${result.id}${result.primer === "off" ? ":primer-off" : ""}${result.mako === "http" ? ":mako-http" : ""}`
 
 /** Cases that passed every baseline sample and fail now (T3's rule: none allowed). */
 export function regressions(baseline: readonly BaselineResult[], results: readonly CaseResult[]): string[] {
-  const perfect = new Set(baseline.filter((result) => !result.error && result.passes.length && result.passes.every(Boolean)).map((result) => `${result.harness}:${result.model}:${result.routing}:${result.id}`))
-  return results.filter((result) => perfect.has(`${result.harness}:${result.model}:${result.routing}:${result.id}`) && !result.passes.every(Boolean)).map((result) => `${result.harness} ${result.model} routing ${result.routing}: ${result.id}`)
+  const perfect = new Set(baseline.filter((result) => !result.error && result.passes.length && result.passes.every(Boolean)).map(armKey))
+  return results.filter((result) => perfect.has(armKey(result)) && !result.passes.every(Boolean)).map((result) => `${result.harness} ${result.model} routing ${result.routing}${result.primer === "off" ? " primer off" : ""}${result.mako === "http" ? " mako http" : ""}: ${result.id}`)
 }

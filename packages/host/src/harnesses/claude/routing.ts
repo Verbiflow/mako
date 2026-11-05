@@ -1,5 +1,6 @@
 import { z } from "zod"
-import type { HookCallback, PreToolUseHookInput, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk"
+import type { AgentDefinition, HookCallback, PreToolUseHookInput, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk"
+import { FIN_SUBAGENT } from "../../contracts/primer.js"
 import { hostLog } from "../../base/host-log.js"
 import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
 import { NATIVE_CHILD_INSTRUCTIONS, routeNativeSpawn, type NativeSpawn, type RoutedThread } from "../../contracts/native-routing.js"
@@ -20,6 +21,17 @@ export type ClaudeAgentInput = z.infer<typeof ClaudeAgentInput>
 /** Mako's `agents_start` as Claude names an MCP server's tool. */
 export const CLAUDE_START_TOOL = `mcp__${MAKO_THREAD_SERVER}__agents_start`
 
+/** Mako's own subagent type on Claude (`FIN_SUBAGENT`). Its one tool is `agents_start`, so spawning it starts a Fin. */
+export const CLAUDE_FIN_AGENT = FIN_SUBAGENT.name
+
+/** The `fin` agent Mako declares beside the person's own agents, which still load from their settings. */
+export const CLAUDE_FIN_DEFINITION = {
+  description: FIN_SUBAGENT.description,
+  prompt: FIN_SUBAGENT.prompt,
+  tools: [CLAUDE_START_TOOL],
+  omitClaudeMd: true,
+} satisfies AgentDefinition
+
 /**
  * A Claude tool call as a native spawn, or undefined for any other tool. An
  * `Explore` agent the turn waits for (`run_in_background: false`; Claude runs
@@ -29,6 +41,7 @@ export const CLAUDE_START_TOOL = `mcp__${MAKO_THREAD_SERVER}__agents_start`
 export function claudeSpawn(tool: string, input: ClaudeAgentInput, teams: boolean): NativeSpawn | undefined {
   if (!SPAWN_TOOLS.has(tool)) return undefined
   const agent = tool === "Workflow" ? {} : input
+  if (agent.subagent_type === CLAUDE_FIN_AGENT) return undefined
   return {
     tool,
     start: CLAUDE_START_TOOL,
@@ -86,6 +99,6 @@ export function claudeRoutedCall(routing: ClaudeRouting, input: PreToolUseHookIn
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: route.message } }
 }
 
-/** SubagentStart: every native subagent starts with Mako's paragraph for native children. */
+/** SubagentStart: every native subagent starts with Mako's paragraph for native children, but Mako's `fin`, whose work is starting one. */
 export const claudeSubagentStart: HookCallback = async (input) =>
-  input.hook_event_name === "SubagentStart" ? { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: NATIVE_CHILD_INSTRUCTIONS } } : {}
+  input.hook_event_name === "SubagentStart" && input.agent_type !== CLAUDE_FIN_AGENT ? { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: NATIVE_CHILD_INSTRUCTIONS } } : {}

@@ -30,7 +30,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, CLOUD_MACHINE_INSTRUCTIONS, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -57,7 +57,7 @@ import { openConversations, openMachineTracker, type MachineTracker, type MoveAr
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
-import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
+import { makoNote } from "./conversations/mako-note.js"
 import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
@@ -850,24 +850,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     jobs: shell.jobs,
     mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
     tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
-    controlInstructions: (bindingId, conversationId) => {
-      const launched = workspaces.environments?.launchedWith(conversationId)
-      if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
-      const session = control.sessions.get(bindingId)
-      // A harness without instructions of its own hears how media reaches the person here (`makoInstructions`).
-      const harness = late.conversations?.live.session(conversationId)?.harness
-      const media = harness && !harnesses.host.liveDrivers.get(harness)?.makoInstructions ? SHOW_MEDIA_LINE : undefined
-      const cloudMachine = config.machineAgentFd !== undefined
-      return {
-        standing: {
-          machine: cloudMachine ? CLOUD_MACHINE_INSTRUCTIONS : undefined,
-          control: session && controlLine(session),
-          environment: launched && threadEnvironmentInstructions(launched, cloudMachine ? "cloud" : "local"),
-          media,
-        },
-        notices: [...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])],
-      }
-    },
+    controlInstructions: makoNote({
+      cloudMachine: config.machineAgentFd !== undefined,
+      launchedWith: (conversationId) => {
+        const launched = workspaces.environments?.launchedWith(conversationId)
+        if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
+        return launched
+      },
+      controlLine: (bindingId) => {
+        const session = control.sessions.get(bindingId)
+        return session && controlLine(session)
+      },
+      ownSlot: (conversationId) => {
+        const harness = late.conversations?.live.session(conversationId)?.harness
+        return harness === undefined ? undefined : harnesses.host.liveDrivers.get(harness)?.makoInstructions !== undefined
+      },
+      notices: (conversationId) => [...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])],
+    }),
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),

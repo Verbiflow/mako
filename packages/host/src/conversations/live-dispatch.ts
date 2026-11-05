@@ -279,7 +279,7 @@ export class LiveDispatch {
         const active = this.access.control(resident).activeBindingId
         if (review) return review.run(active, review.target, request.tuning, dispatch)
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
-        const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id)
+        const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: dependencies.agents?.()?.isApex(resident.snapshot.session.id) ? "apex" : "thread" })
         const standing = instructions && standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, instructions.standing)
         if (standing) resident.controlSaid = standing.said
         const text = asWritten ? request.text : [

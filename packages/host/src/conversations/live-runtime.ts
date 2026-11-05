@@ -244,7 +244,7 @@ export interface Dependencies {
    * and then as they change (`standingLines`), and notices, each said once.
    * The note wraps them with anything Mako has to tell about the conversation itself.
    */
-  controlInstructions?(bindingId: string, conversationId: string): ControlInstructions
+  controlInstructions?(bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): ControlInstructions
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
   suspendTools?(bindingId: string, conversationId: string): void | Promise<void>

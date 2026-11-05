@@ -175,6 +175,8 @@ jobs:
       # eval:orch-tools case's first request for Claude and Codex, built and its grading checked, at $0.
       - run: npm run test:native-routing
       - run: npm run test:native-calls
+      # Mako's primer: its blocks, and that a note harness hears them again after anything that may have lost them.
+      - run: npm run test:primer
       - run: npm run eval:orch-tools -- --dry-run
       - run: npm run test:decoders
       - run: npm run test:usage

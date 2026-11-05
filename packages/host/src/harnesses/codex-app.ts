@@ -109,7 +109,7 @@ type Live = {
   tuning?: Tuning
   /** Mako's own servers, opened with the token in `MAKO_CONVERSATIONS_TOKEN`. */
   makoServers: Array<{ name: string; url: string }>
-  /** Mako's instructions for the model (`conversationInstructions`), handed to every turn as Codex's application context. */
+  /** Mako's instructions for the model, from the layer, handed to every turn as Codex's application context. */
   instructions?: string
   mcpSnapshot: McpRegistrySnapshot
   /** The Thread as native routing reads it (`ProviderStartOptions.nativeRouting`), read when the thread opens. */
@@ -216,7 +216,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         return
       }
     }
-    const started = codexLayer.apply(layerOf({ conversationTools: options.conversationTools }), id)
+    const started = codexLayer.apply(layerOf(options), id)
     const live: Live = {
       id,
       cwd: workingDir,

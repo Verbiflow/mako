@@ -9,6 +9,7 @@ import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
+import { primerBlocks } from "../contracts/primer.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "./native-continuation.js"
 import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSessionMode, LiveSteering } from "../contracts/providers-acp.js"
@@ -21,7 +22,7 @@ import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { AccountLaunch } from "./accounts.js"
 import type { UsageAmendment } from "./account-usage-readings.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
-import type { LayerCapabilities } from "../contracts/mako-layer.js"
+import type { InstructionBlock, LayerCapabilities } from "../contracts/mako-layer.js"
 import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
 import type { ModelRouteAdapter } from "./model-routes.js"
@@ -318,10 +319,8 @@ export function conversationServers(tools: ConversationTools): Array<{ name: str
 }
 
 /**
- * What Mako tells the agent itself, beside the instructions of its servers:
- * how media reaches the person (`SHOW_MEDIA_LINE`). An adapter whose
- * harness takes instructions of its own hands it them there and declares
- * `makoInstructions`; elsewhere Mako's note before each prompt carries it.
+ * How media reaches the person, on its own. A launch's words are
+ * `launchBlocks`: the primer when it's on, and this line when it's off.
  */
 export function conversationInstructions(tools: ConversationTools | undefined): string | undefined {
   return tools?.makoUrl ? SHOW_MEDIA_LINE : undefined
@@ -365,6 +364,37 @@ export interface ProviderStartOptions extends LiveStartOptions {
    * would ask a person to sign in fails at once, saying the harness isn't signed in, instead of waiting for an answer.
    */
   unattended?: boolean
+  /**
+   * Whether this launch carries Mako's instruction blocks (`primerText`),
+   * and on Claude the `fin` subagent and the in-process `mako` server.
+   * Absent means yes. The eval's off arm passes false: only how media is
+   * shown, over HTTP.
+   */
+  primer?: boolean
+  /** Claude: `false` serves `mako` over HTTP rather than in-process (`ToolGrant.makoServer`). The eval's arm for that comparison. */
+  inProcessMako?: boolean
+}
+
+type LaunchWording = Pick<ProviderStartOptions, "conversationTools" | "primer" | "nativeRouting" | "nativeCalls" | "threadEnvironment">
+
+/**
+ * The layer's instruction blocks for one launch. The `routes` and `policy`
+ * blocks when the primer is on. Only how media is shown when it's off.
+ */
+export function launchBlocks(options: LaunchWording): InstructionBlock[] {
+  if (!options.conversationTools?.makoUrl) return []
+  if (options.primer === false) return [{ id: "show-media", text: SHOW_MEDIA_LINE }]
+  return primerBlocks({
+    role: options.nativeRouting?.().role ?? "thread",
+    noRecipe: (options.threadEnvironment?.recipe ?? options.nativeCalls?.().recipe)?.kind === "none",
+    computer: true,
+  })
+}
+
+/** The blocks as one text, for a harness that takes them in one append slot. */
+export function launchInstructions(options: LaunchWording): string | undefined {
+  const blocks = launchBlocks(options)
+  return blocks.length ? blocks.map((block) => block.text).join("\n\n") : undefined
 }
 
 /** What a driver's own start receives: the owner's options and the account admission launched it on. */
@@ -400,10 +430,11 @@ export type PlanFeedback =
 export interface ProviderLiveDriver extends ProviderCapability {
   launchEnvironment: LaunchEnvironmentCapability
   /**
-   * Where the harness takes Mako's own instructions (`conversationInstructions`)
-   * as its own, never as the person's words: Claude's appended system
-   * prompt, Codex's turn context. Absent, Mako's note before each prompt
-   * (`controlNote`) carries them, which every reader of history strips.
+   * Where the harness takes Mako's instruction blocks as its own, never as
+   * the person's words: Claude's appended system prompt, Codex's turn
+   * context, OpenCode's instructions file. Absent, Mako's note before a
+   * prompt carries them once, and again when they change, and every reader
+   * of history strips that note.
    */
   makoInstructions?: { via: string }
   /** Native principal evidence, separately from configured account selection. */
