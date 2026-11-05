@@ -24,7 +24,7 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { projectLive } from "../src/state/live-projection.js"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
-import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
+import { continueTurnPrompt, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { namedWork } from "@mako/host/base/event-loop"
 import { BULK_LOADS } from "@mako/host/conversations/live-records"
@@ -88,6 +88,8 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   const events: HostEvent[] = []
   let closed = 0
   let cancels = 0
+  /** While set, a prompt is still being prepared, never handed over: the driver hasn't reported it submitted. */
+  const preparing = { on: false }
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
     resume: fixtureResume(),
@@ -95,6 +97,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     available: () => true,
     start: () => started.promise,
     prompt: async (_id, text, _attachments, tuning, dispatch) => {
+      if (preparing.on) await new Promise(() => {})
       // Sent, as every driver reports it: a turn that ends from here on is this message's.
       dispatch.report({ kind: "submitted", source: "transport-call" })
       sent.push(text)
@@ -133,6 +136,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     events,
     owner,
     dependencies,
+    preparing,
     closed: () => closed,
     cancels: () => cancels,
     cleanup: () => {
@@ -1368,6 +1372,43 @@ async function closeDuringStartup() {
     assert.ok(f.closed() >= 1)
   } finally {
     f.cleanup()
+  }
+}
+
+/**
+ * A host that dies while a message is still being prepared never handed it to its harness: the next host has it wait
+ * again, as the messages behind it do, not stand for a cut turn that "Continue" would pick up (`test:orch-crash` sends
+ * a Fin's whole).
+ */
+async function unhandedMessageWaitsAfterCrash() {
+  const f = fixture()
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.preparing.on = true
+    const brief = randomUUID()
+    f.owner.submit(f.id, brief, "the brief")
+    await tick()
+    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.nativeDelivery?.evidence.kind, "prepared")
+    const afterCrash = new LiveConversations(f.dependencies)
+    try {
+      const found = afterCrash.snapshot(f.id)!.requests[0]!
+      assert.equal(found.status, "held", "it waits again")
+      assert.equal(found.interruption, undefined, "no turn was cut")
+      assert.deepEqual([found.pause, found.retry, found.wake], [undefined, undefined, undefined], "paused as Mako's exit pauses what waits")
+      assert.equal(crashedChildTurn([found]), undefined, "a Fin's is no turn to continue")
+      // Drawn already, and a send reads a refused attempt's message as drawn, so it isn't drawn twice.
+      assert.equal(found.nativeDelivery?.evidence.kind, "not-accepted")
+      const drawn = afterCrash.snapshot(f.id)!.blocks.filter((block) => block.type === "user" && block.requestId === brief)
+      assert.equal(drawn.length, 1, "its message is drawn once")
+      assert.deepEqual(f.sent, [], "nothing reached the harness")
+    } finally {
+      afterCrash.stop()
+    }
+  } finally {
+    f.owner.stop()
+    rmSync(f.root, { recursive: true, force: true })
   }
 }
 
@@ -2787,6 +2828,7 @@ await startedAheadTakesFirstMessage()
 await closeDuringStartup()
 await closeBeforeNativeSpawn()
 await durabilityAndBatching()
+await unhandedMessageWaitsAfterCrash()
 await resumedHibernatesBeforeATurn()
 await hibernatesAndWakesExactlyOnce()
 await hibernatesAndWakesExactlyOnce(true)

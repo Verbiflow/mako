@@ -598,6 +598,20 @@ export function endedTurnsOnRead(previous: Pick<LiveSnapshot, "session" | "reque
 }
 
 /**
+ * A message the dead host began sending but never handed its harness: every driver reports it submitted, and that
+ * report is written, before its first transport call or input push. It waits again, paused as the others waiting
+ * are, rather than standing for a turn the harness never ran; its message is drawn already.
+ */
+function unhanded(request: LiveRequest): LiveRequest {
+  if (request.status !== "dispatching" || request.nativeDelivery?.evidence.kind !== "prepared") return request
+  return {
+    ...request,
+    status: "held",
+    nativeDelivery: { ...request.nativeDelivery, evidence: { kind: "not-accepted", source: "preflight", reason: "Mako closed before handing it to its harness" } },
+  }
+}
+
+/**
  * A journal no host is writing, as this host takes it on: whatever was in
  * flight when the last one ended is settled, and nothing it was doing goes
  * on by itself.
@@ -688,7 +702,7 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
     // A continuation that host had scheduled died with it.
     requests: clearAutoContinue(
       interruptRequests(
-        previous.requests,
+        previous.requests.map(unhanded),
         "host-crashed",
         "Mako closed unexpectedly while this turn was running; whether the provider finished it is unknown"
       ).map((request) =>
