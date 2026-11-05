@@ -20,6 +20,7 @@ import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { handOff } from "@mako/host/harnesses/prompt-dispatch"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 
@@ -141,6 +142,8 @@ export class AgentsWorld {
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
   private heldSteers = new Map<string, (answer: ProviderSteerResult) => void>()
+  /** Each conversation's driver callback, from its latest start. */
+  private emits = new Map<string, (event: LiveDriverEvent) => void>()
 
   constructor(options: WorldOptions) {
     this.root = options.root
@@ -345,6 +348,8 @@ export class AgentsWorld {
       available: () => true,
       start: async (_cwd, options) => {
         await this.options.starting?.(options.conversationId, harness)
+        // What the harness says goes through the callback its start was given, fenced as a real driver's is (`driverEvents`).
+        this.emits.set(options.conversationId, options.emit)
         return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
       },
       prompt: async (id, text, _attachments, _settings, dispatch) => {
@@ -357,11 +362,12 @@ export class AgentsWorld {
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
         const session = this.live.snapshot(id)?.session ?? state(id)
-        this.live.observe({ type: "live-session", session: { ...session, status: "running", nativeRunId: `run-${this.prompts.length}` } })
+        const emit = this.emits.get(id) ?? ((event: LiveDriverEvent) => this.live.observe(event))
+        emit({ type: "live-session", session: { ...session, status: "running", nativeRunId: `run-${this.prompts.length}` } })
         const turn = (async () => {
           const reply = await this.options.script({ world: this, conversation: id, harness, text, caller: this.caller(id) })
-          this.live.observe({ type: "live-update", id, update: { kind: "text", text: reply } })
-          this.live.observe({ type: "live-session", session: { ...(this.live.snapshot(id)?.session ?? session), status: "ready" } })
+          emit({ type: "live-update", id, update: { kind: "text", text: reply } })
+          emit({ type: "live-session", session: { ...(this.live.snapshot(id)?.session ?? session), status: "ready" } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))

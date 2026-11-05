@@ -191,6 +191,9 @@ export class LiveTransfers {
   ): Promise<void> {
     resident.transferring = true
     const generation = resident.generation
+    // This attempt goes on only while its own transfer is still the one waiting: a Stop retires it (`stopHolds`)
+    // without moving the resident's generation, so the source binding and its events stay live.
+    const owned = () => resident.generation === generation && this.pending(resident)?.input.id === transfer.input.id
     let prepared: ProviderConnection | null = null
     let preparedId: string | null = null
     let held: string | null = null
@@ -282,7 +285,7 @@ export class LiveTransfers {
       const nativeForkDeclined = forkSource && forksNatively?.kind === "native"
         ? await forksNatively.declines?.(forkSource)
         : undefined
-      if (resident.generation !== generation) return
+      if (!owned()) return
       if (nativeForkDeclined) hostLog("transfer", "native fork declined", { conversation: source.session.id, provider: transfer.input.provider, reason: nativeForkDeclined })
       const nativeFork = nativeForkDeclined ? undefined : forkSource
       const manifest = await prepareLiveContext({
@@ -294,7 +297,7 @@ export class LiveTransfers {
       })
       // Records the harness here is too old to restore go as the transcript, and the line above the reply says why.
       if (verdict?.kind === "closed" && verdict.outdated) manifest.outdated = verdict.outdated
-      if (resident.generation !== generation) return
+      if (!owned()) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
       if (!driver) throw new Error("The destination provider was removed")
       // A fork the harness doesn't make itself goes on from the transcript of its history, as a switch to another harness does.
@@ -401,7 +404,7 @@ export class LiveTransfers {
           prepared.session = { ...session, currentMode: mode }
         }
       }
-      if (resident.generation !== generation) {
+      if (!owned()) {
         if (preparedId) {
           await prepared.driver.close(preparedId)
           void this.revokeTools(preparedId, source.session.id)
@@ -575,7 +578,7 @@ export class LiveTransfers {
             source.session.id
           )
       }
-      if (resident.generation !== generation) {
+      if (!owned()) {
         await abandonPrepared()
         return
       }
@@ -650,7 +653,7 @@ export class LiveTransfers {
           held,
           resident.snapshot.session.id
         )
-      if (resident.generation === generation) {
+      if (owned()) {
         hostWarn("transfer", reconnect ? "reconnect failed" : "switch failed", {
           conversation: resident.snapshot.session.id,
           harness: transfer.input.provider,

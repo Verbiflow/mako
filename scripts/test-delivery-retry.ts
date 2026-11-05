@@ -258,6 +258,31 @@ try {
       await world.close()
     }
 
+    // A Stop during a switch to another harness retires the switch alone: the source session stays the conversation's,
+    // and a fresh message on it goes and its reply and end are heard, through its driver's own callback.
+    {
+      const to = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      let opened: (() => void) | undefined
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-switch-stop`),
+        script,
+        starting: (_conversation, starting) => (starting === to ? new Promise<void>((resolve) => { opened = resolve }) : undefined),
+      })
+      const label = `${harness} switch Stop`
+      const { conversation } = await world.apex(harness, "full")
+      world.live.transfer(conversation, { id: randomUUID(), provider: to, text: "Switch.", attachments: [] })
+      await until(`${label}: the switch under way`, () => opened !== undefined)
+      await world.live.cancel(conversation)
+      opened!()
+      await pause(200)
+      assert.equal(world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind, "failed", label)
+      world.say(conversation, "Fresh message.")
+      await until(`${label}: the fresh message to complete on the source`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), harness, `${label}: it went on the source, once`)
+      assert.equal(sentTimes(world, conversation, "Switch."), 0, `${label}: the switch's message never went`)
+      await world.close()
+    }
+
     // The person's Stop ends a turn that fails partway on capacity as it lands, and a first start waiting to go again or
     // under way that comes back at capacity: nothing continues, starts or sends after it, nor after a restart.
     for (const under of ["mid-turn", "first start waiting", "first start late"] as const) {

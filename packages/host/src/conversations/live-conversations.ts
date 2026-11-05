@@ -506,25 +506,22 @@ export class LiveConversations {
     // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
     const stops = (request: LiveRequest) => request.pause !== "stop" &&
       (request.status === "queued" || request.status === "dispatching" || (request.status === "held" && !request.editing && !request.signIn))
-    // A switch or reconnect not yet made, waiting or under way, is retired as a cancel retires it (`cancelRequest`): a
-    // newer generation drops whatever its attempt comes back with, a session or a failure to wait out alike.
+    // A switch or reconnect not yet made, waiting or under way, is retired: an attempt under way sees its transfer no
+    // longer waiting and drops whatever it comes back with, a session or a failure to wait out alike
+    // (`LiveTransfers.perform`). The resident's generation stays, so the source binding's events still count.
     const transfer = resident && this.transfers.pending(resident)
     const count = (resident?.snapshot.requests.filter(stops).length ?? 0) + (transfer ? 1 : 0)
     if (!resident || !count) return 0
     const previous = resident.snapshot
-    const generation = resident.generation
     resident.snapshot = { ...previous, requests: previous.requests.map((request) => stops(request)
       ? { ...request, pause: "stop" as const, ...request.status !== "dispatching" && { status: "held" as const, retry: undefined, wake: undefined } }
       : request) }
     try {
-      if (transfer) {
-        if (transfer.state.kind === "preparing") resident.generation += 1
+      if (transfer)
         this.transfers.save(resident, { ...transfer, retry: undefined, state: { kind: "failed", error: "Stopped before it was sent", stopped: true } })
-      }
       this.flush(resident)
     } catch (error) {
       resident.snapshot = previous
-      resident.generation = generation
       throw error
     }
     return count
