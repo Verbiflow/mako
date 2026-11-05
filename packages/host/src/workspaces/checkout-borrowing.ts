@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto"
-import { lstat, readFile, readlink, readdir, realpath, rename, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises"
 import { isAbsolute, join, relative } from "node:path"
 import type { Git } from "@mako/git"
 import type { BorrowAnswer, BorrowPush, Borrower, Grant, Kind, Mode, Need, Refusal, SourceAnswer, SourceAsk } from "@mako/protocol/borrow"
 import { LocalBorrowing, type LocalBorrowingOptions, type SourceFn } from "../base/local-borrowing.js"
-import { LINKED_MARK, bringFiles, carryFiles, matchedEntries, type BringEntry, type BringReport } from "./worktree-carry.js"
+import { bringFiles, carryFiles, matchedEntries, type BringEntry, type BringReport } from "./worktree-carry.js"
 import type { CarryEntry } from "./thread-recipe.js"
 
 /**
@@ -50,11 +50,14 @@ export function checkoutGrants(device: string, account: string, at: number): Gra
   ]
 }
 
-/** What Mako made at a path: a copy (its file, by device and inode), or a link (a symlink to the source, or a folder of links marked as Mako's). */
-type Made = { kind: "copy"; dev: number; ino: number } | { kind: "link" } | { kind: "linked-folder" }
+/**
+ * One thing Mako made at a placement, by its path inside the entry ("" for the entry itself), its device and inode,
+ * and whether it's a folder. A placement's whole list is its manifest: what a removal may take, and nothing else.
+ */
+type Owned = { path: string; dev: number; ino: number; folder: boolean }
 
 /** A placement: the lease, where it landed and what Mako made there; `removing` once its removal has begun. */
-type Placed = { lease: string; checkout: string; root: string; entry: string; link: boolean; thread: string; generation: number; made: Made; removing?: true }
+type Placed = { lease: string; checkout: string; root: string; entry: string; link: boolean; thread: string; generation: number; removing?: true }
 
 /** What the source says of an entry of a main checkout: a version from what it is now, never what it holds. */
 export async function checkoutSource(ask: SourceAsk): Promise<SourceAnswer> {
@@ -92,6 +95,33 @@ export function refusalText(entry: string, refusal: Refusal): string {
   }
 }
 
+/** Everything at `path` as Mako just made it, without following links: the entry itself first. */
+async function survey(path: string): Promise<Owned[]> {
+  const top = await lstat(path).catch(() => undefined)
+  if (!top) return []
+  const owned: Owned[] = [{ path: "", dev: top.dev, ino: top.ino, folder: top.isDirectory() }]
+  const walk = async (inner: string): Promise<void> => {
+    for (const entry of await readdir(join(path, inner), { withFileTypes: true })) {
+      const relative = inner ? `${inner}/${entry.name}` : entry.name
+      const info = await lstat(join(path, relative))
+      owned.push({ path: relative, dev: info.dev, ino: info.ino, folder: info.isDirectory() })
+      if (info.isDirectory()) await walk(relative)
+    }
+  }
+  if (top.isDirectory()) await walk("")
+  return owned
+}
+
+/** What each granted entry's path held before a placement, by device and inode: never Mako's to remove. */
+async function existing(granted: ReadonlyArray<{ checkout: string; entry: string }>): Promise<Map<string, Set<string>>> {
+  const held = new Map<string, Set<string>>()
+  for (const { checkout, entry } of granted) {
+    const path = join(checkout, entry)
+    held.set(path, new Set((await survey(path)).map((owned) => `${owned.dev}:${owned.ino}`)))
+  }
+  return held
+}
+
 export interface CheckoutBorrowingOptions {
   borrowing: LocalBorrowing
   git: Git
@@ -107,6 +137,7 @@ export class CheckoutBorrowing {
   readonly #git: Git
   readonly #remove: (path: string, recursive: boolean) => Promise<void>
   #memory: Placed[] = []
+  readonly #manifests = new Map<string, Owned[]>()
   #seeded: Promise<void> | undefined
   #queue: Promise<unknown> = Promise.resolve()
 
@@ -142,8 +173,9 @@ export class CheckoutBorrowing {
   /** The recipe's carry into a new worktree: each entry the grants allow and the worktree doesn't have, copied or linked. */
   async carry(thread: string, repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<{ copied: number; refused: string[] }> {
     const { granted, refused } = await this.#decide(thread, repoRoot, checkout, entries.map((entry) => ({ path: entry.path, link: Boolean(entry.link) })), "the recipe's carry")
+    const before = await existing(granted)
     const placed = granted.length ? await carryFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link }))) : []
-    await this.#settle(granted, placed)
+    await this.#settle(granted, placed, before)
     return { copied: placed.length, refused }
   }
 
@@ -151,9 +183,10 @@ export class CheckoutBorrowing {
   async bring(thread: string, repoRoot: string, checkout: string, entries: readonly BringEntry[]): Promise<BringReport & { refused: string[] }> {
     const asked = entries.map((entry) => ({ path: entry.path, link: Boolean(entry.link) }))
     const { granted, refused, missing } = await this.#decide(thread, repoRoot, checkout, asked, "worktree_bring")
+    const before = await existing(granted)
     const report = granted.length ? await bringFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link }))) : { copied: [], linked: [], owned: [], existing: [], missing: [] }
     // A linked entry made the worktree's own is Mako's copy now, in place of Mako's link.
-    await this.#settle(granted, [...report.copied, ...report.linked, ...report.owned])
+    await this.#settle(granted, [...report.copied, ...report.linked, ...report.owned], before)
     report.missing.push(...missing)
     return { ...report, refused }
   }
@@ -208,25 +241,45 @@ export class CheckoutBorrowing {
   }
 
   /** Each granted entry that landed is recorded with what Mako made; one that didn't (the worktree had it) is released. */
-  async #settle(granted: ReadonlyArray<{ entry: string; link: boolean; lease: string; thread: string; root: string; checkout: string; generation: number }>, placedEntries: readonly string[]): Promise<void> {
+  async #settle(granted: ReadonlyArray<{ entry: string; link: boolean; lease: string; thread: string; root: string; checkout: string; generation: number }>, placedEntries: readonly string[], before: ReadonlyMap<string, ReadonlySet<string>>): Promise<void> {
     const landed: Placed[] = []
     for (const item of granted) {
       if (!placedEntries.includes(item.entry)) {
         if (!(await this.#placed()).some((held) => held.lease === item.lease)) await this.borrowing.release(item.lease)
         continue
       }
-      const made = await this.#made(join(item.checkout, item.entry), item.link)
-      if (made) landed.push({ lease: item.lease, checkout: item.checkout, root: item.root, entry: item.entry, link: item.link, thread: item.thread, generation: item.generation, made })
+      const had = before.get(join(item.checkout, item.entry))
+      const manifest = (await survey(join(item.checkout, item.entry))).filter((owned) => !had?.has(`${owned.dev}:${owned.ino}`))
+      if (!manifest.length) continue
+      await this.#writeManifest(item.lease, manifest)
+      landed.push({ lease: item.lease, checkout: item.checkout, root: item.root, entry: item.entry, link: item.link, thread: item.thread, generation: item.generation })
     }
     if (landed.length) await this.#edit((placed) => ({ keep: [...placed.filter((held) => !landed.some((item) => item.lease === held.lease || (item.checkout === held.checkout && item.entry === held.entry))), ...landed], value: undefined }))
   }
 
-  async #made(path: string, link: boolean): Promise<Made | undefined> {
-    const info = await lstat(path).catch(() => undefined)
-    if (!info) return undefined
-    if (link && info.isSymbolicLink()) return { kind: "link" }
-    if (link && info.isDirectory()) return { kind: "linked-folder" }
-    return { kind: "copy", dev: info.dev, ino: info.ino }
+  async #writeManifest(lease: string, manifest: Owned[]): Promise<void> {
+    const folder = this.borrowing.folder
+    if (!folder) {
+      this.#manifests.set(lease, manifest)
+      return
+    }
+    await mkdir(join(folder, "placed"), { recursive: true, mode: 0o700 })
+    const temporary = join(folder, "placed", `.${lease}.${randomUUID()}.tmp`)
+    await writeFile(temporary, JSON.stringify(manifest), { mode: 0o600 })
+    await rename(temporary, join(folder, "placed", `${lease}.json`))
+  }
+
+  async #readManifest(lease: string): Promise<Owned[]> {
+    const folder = this.borrowing.folder
+    if (!folder) return this.#manifests.get(lease) ?? []
+    // SAFETY: only #writeManifest writes it, whole and by rename, from survey().
+    return JSON.parse((await readFile(join(folder, "placed", `${lease}.json`), "utf8").catch(() => "")) || "[]") as Owned[]
+  }
+
+  async #dropManifest(lease: string): Promise<void> {
+    this.#manifests.delete(lease)
+    const folder = this.borrowing.folder
+    if (folder) await rm(join(folder, "placed", `${lease}.json`), { force: true })
   }
 
   async #borrow(thread: string, root: string, checkout: string, entry: string, kind: Kind, link: boolean, why: string, generation: number): Promise<BorrowAnswer> {
@@ -258,24 +311,23 @@ export class CheckoutBorrowing {
   }
 
   /**
-   * What a lease placed, taken away only while it's still what Mako made: a copy is the same file, a link still
-   * leads into the main checkout's entry, a linked folder still has Mako's mark (and only its links go). The removal
-   * is written down first and crossed off after, so a delete that fails or is cut short is done by the next `keep`.
+   * What a lease placed, taken away entry by entry from its manifest: each file and link only while it's still the
+   * one Mako made (same device and inode), and each folder only once it's empty, so anything the person or an agent
+   * added inside stays, with the folders holding it. The removal is written down first and crossed off after, so a
+   * delete that fails or is cut short is done by the next `keep`.
    */
   async #unplace(item: Placed): Promise<void> {
     await this.#edit((placed) => ({ keep: placed.map((held) => (held.lease === item.lease ? { ...held, removing: true as const } : held)), value: undefined }))
-    const path = join(item.checkout, item.entry)
-    const source = join(item.root, item.entry)
-    const info = await lstat(path).catch(() => undefined)
-    if (info && item.made.kind === "copy" && info.dev === item.made.dev && info.ino === item.made.ino) await this.#remove(path, info.isDirectory())
-    else if (info?.isSymbolicLink() && item.made.kind === "link" && (await readlink(path).catch(() => "")) === source) await this.#remove(path, false)
-    else if (info?.isDirectory() && item.made.kind === "linked-folder" && (await readFile(join(path, LINKED_MARK), "utf8").catch(() => "")).trim()) {
-      for (const name of await readdir(path)) {
-        const inner = join(path, name)
-        if (name !== LINKED_MARK && (await readlink(inner).catch(() => "")).startsWith(source)) await this.#remove(inner, false)
-      }
-      await this.#remove(join(path, LINKED_MARK), false)
+    const base = join(item.checkout, item.entry)
+    const manifest = [...(await this.#readManifest(item.lease))].sort((left, right) => right.path.split("/").length - left.path.split("/").length || right.path.length - left.path.length)
+    for (const owned of manifest) {
+      const path = owned.path ? join(base, owned.path) : base
+      const info = await lstat(path).catch(() => undefined)
+      if (!info || info.dev !== owned.dev || info.ino !== owned.ino) continue
+      if (owned.folder) await rmdir(path).catch(() => undefined)
+      else await this.#remove(path, false)
     }
+    await this.#dropManifest(item.lease)
     await this.#edit((placed) => ({ keep: placed.filter((held) => held.lease !== item.lease), value: undefined }))
   }
 
