@@ -274,6 +274,7 @@
     "test:orch-front-door": "tsx scripts/test-orch-front-door.ts && tsx --tsconfig tsconfig.app.json scripts/test-routed-transcript.ts",
     "test:orch-answer": "tsx scripts/test-orch-answer.ts",
     "test:fin-resume": "tsx scripts/test-fin-resume.ts",
+    "test:fin-states": "tsx scripts/test-fin-states.ts",
     "test:orch-comms": "tsx scripts/test-orch-comms.ts",
     "test:orch-deliver": "tsx scripts/test-orch-deliver.ts",
     "test:steer-landing": "tsx --tsconfig tsconfig.app.json scripts/test-steer-landing.ts",

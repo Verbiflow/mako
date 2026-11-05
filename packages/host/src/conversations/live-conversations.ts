@@ -61,7 +61,7 @@ import { LiveTurnChanges } from "./live-turn-changes.js"
 import { LiveTurnReview } from "./live-turn-review.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
-import { LiveDispatch } from "./live-dispatch.js"
+import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -416,6 +416,65 @@ export class LiveConversations {
   /** What memory holds of the conversation now; `undefined` for one only on disk, which this never reads in. */
   held(id: string): LiveSnapshot | undefined {
     return this.records.get(id)?.snapshot
+  }
+
+  /**
+   * Whether this host runs a turn of `id` or is sending it one: its harness runs a turn, a message is being sent, the
+   * message next in line goes once its harness is up (`nextQueued`), or Mako continues a turn cut short. A message
+   * nothing here will send (behind a paused one, behind a failed turn, waiting for this Mac's account, or with no
+   * harness and none opening) is not work, however long it waits.
+   */
+  atWork(id: string): boolean {
+    const resident = this.records.get(id)
+    if (!resident) return false
+    const { session, requests } = resident.snapshot
+    if (session.status === "running" || session.status === "starting" || requests.some((request) => request.status === "dispatching") || resident.autoContinue) return true
+    const next = session.status === "failed" ? undefined : nextQueued(resident.snapshot)
+    if (!next || next.ownerCheck) return false
+    return Boolean(resident.driver || resident.starting || resident.opening || resident.waking || resident.hibernating || resident.transferring)
+  }
+
+  /**
+   * Sends on the messages `ids` that a stop or an exit paused, `first` ahead of them when it waits too: a Fin's
+   * Apex resuming it, which nobody would press Resume for. A message waiting on a sign-in or a usage limit stays, and
+   * so does one the person paused to edit (`editing`).
+   */
+  resumeHeld(id: string, ids: readonly string[], first?: string): void {
+    const resident = this.records.require(id)
+    const resuming = new Set(ids)
+    const requests = resident.snapshot.requests.map((request) =>
+      resuming.has(request.id) && request.status === "held" && !request.signIn && !request.wake && !request.editing ? { ...request, status: "queued" as const } : request)
+    const own = first === undefined ? undefined : requests.find((request) => request.id === first && request.status === "queued")
+    const rest = own ? requests.filter((request) => request !== own) : requests
+    // Nothing goes ahead of a message the person is editing: `first` goes ahead of what waits after the last of those.
+    let barrier = -1
+    rest.forEach((request, index) => { if (request.status === "held" && request.editing) barrier = index })
+    const ahead = rest.findIndex((request, index) => index > barrier && (request.status === "queued" || request.status === "held"))
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, requests: own && ahead !== -1 ? [...rest.slice(0, ahead), own, ...rest.slice(ahead)] : requests }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+    this.release(resident)
+  }
+
+  /** Pauses every message queued for `id`, as a stop pauses them (`resumeHeld` sends them on); how many it paused. */
+  holdQueued(id: string): number {
+    const resident = this.records.get(id)
+    const queued = resident?.snapshot.requests.filter((request) => request.status === "queued").length ?? 0
+    if (!resident || !queued) return 0
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, requests: previous.requests.map((request) => request.status === "queued" ? { ...request, status: "held" as const } : request) }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+    return queued
   }
 
   /** Whether a message to its running turn lands at the agent's next step (`steer` with `step`), not at the turn's end. */
@@ -994,20 +1053,21 @@ export class LiveConversations {
     let next: LiveRequest
     switch (command.change.kind) {
       case "remove":
-        next = { ...request, status: "canceled", signIn: undefined }
+        next = { ...request, status: "canceled", signIn: undefined, editing: undefined }
         break
       case "pause":
-        next = { ...request, status: "held", wake: undefined }
+        next = { ...request, status: "held", wake: undefined, editing: true }
         break
       // A message waiting on a sign-out keeps waiting; only the session's Resume releases it.
       case "resume":
-        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined }
+        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined, editing: undefined }
         break
       case "edit":
         next = {
           ...request,
           status: request.signIn ? "held" : "queued",
           wake: undefined,
+          editing: undefined,
           text: command.change.text,
           displayText: undefined,
           nativeDelivery: undefined,
