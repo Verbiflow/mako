@@ -153,6 +153,28 @@ const inputs = {
           .optional(),
         recommended: z.number().optional(),
         action: z.string().optional(),
+        decides: z.union([z.literal("person"), z.literal("apex")]).optional(),
+        waitingOn: z
+          .array(
+            z.union([
+              z.object({
+                kind: z.literal("pull-request"),
+                ref: z.string(),
+                repository: z.string().optional(),
+                number: z.number().optional(),
+                until: z
+                  .union([
+                    z.literal("checks"),
+                    z.literal("merge"),
+                    z.literal("review"),
+                  ])
+                  .optional(),
+              }),
+              z.object({ kind: z.literal("person"), what: z.string() }),
+              z.object({ kind: z.literal("other"), text: z.string() }),
+            ])
+          )
+          .optional(),
         clientKey: z.string(),
       }),
     ]),
