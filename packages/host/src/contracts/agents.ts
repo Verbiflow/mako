@@ -130,7 +130,7 @@ export const FollowedRunSchema = z.object({
    * Mako stopped it at `at` and its process hasn't been seen to exit: it holds its place until it has, on this host or
    * the next (`AgentRuns.untilGone`). `stuck` once it outlived its kill: the person is told Mako couldn't stop it.
    */
-  stopping: z.object({ at: z.number(), stuck: z.literal(true).optional() }).optional(),
+  stopping: z.object({ at: z.number(), stuck: z.literal(true).optional(), unconfirmed: z.literal(true).optional() }).optional(),
 })
 export type FollowedRun = z.infer<typeof FollowedRunSchema>
 
@@ -293,7 +293,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   const latest = journal.latest
   // A stop after its last report is how it ended, in the words of whoever stopped it, whatever its harness still winds down.
   if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
-    const reason = stuckWords(edge.run) ?? edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
+    const reason = stuckWords(edge.run, edge.name) ?? edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
     return { kind: "ended", outcome: "stopped", ...(reason && { reason }) }
   }
   if (thread.starting) return { kind: "starting", step: thread.starting }
@@ -319,8 +319,10 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
 }
 
 /** What a Fin whose stop outlived its kill says, in place of its stop's reason, while its process still runs (`FollowedRun.stopping`). */
-export function stuckWords(run: FollowedRun | undefined): string | undefined {
-  return run?.stopping?.stuck && run.process ? `Mako couldn't stop it: its process (${run.process.pid}) is still running, so it keeps its place until it exits.` : undefined
+export function stuckWords(run: FollowedRun | undefined, name: string): string | undefined {
+  if (!run?.process) return undefined
+  if (run.stopping?.unconfirmed) return `Mako couldn't confirm ${name} stopped; it may still be running (process ${run.process.pid}), so it keeps its place until Mako can tell.`
+  return run.stopping?.stuck ? `Mako couldn't stop it: its process (${run.process.pid}) is still running, so it keeps its place until it exits.` : undefined
 }
 
 /** A report's question as an ask: what it offers, keyed by the report. */

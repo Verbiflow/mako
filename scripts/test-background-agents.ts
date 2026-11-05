@@ -581,26 +581,79 @@ async function linkedWriter(name: string, detached: boolean) {
   return { w, shell, apex, linked, started }
 }
 
-/** A stopped run whose process can't be told apart, its identity unreadable (no `ps`), is taken as still running and keeps its place. */
+/** Counts Mako's TERM and KILL to `pid` or its group, passing every call on. */
+function signalsTo(pid: number) {
+  const kill = process.kill
+  const sent: string[] = []
+  // SAFETY: the stand-in takes process.kill's arguments and returns what it returns for every call.
+  process.kill = ((target: number, signal?: string | number) => {
+    if (Math.abs(target) === pid && (signal === "SIGTERM" || signal === "SIGKILL")) sent.push(`${target} ${signal}`)
+    return kill(target, signal)
+  }) as typeof process.kill
+  return { sent, restore: () => (process.kill = kill) }
+}
+
+/**
+ * A stopped run whose identity can't be read (no `ps`) is neither gone nor proven its own: it keeps its place, Mako
+ * sends it nothing and says it couldn't confirm it stopped, and once its identity reads again the stop goes on.
+ */
 async function followedStopUnknownIdentity(): Promise<void> {
-  const { w, shell, apex, started } = await linkedWriter("followed-unknown", false)
+  const { w, shell, apex, linked, started } = await linkedWriter("followed-unknown", false)
   const path = process.env.PATH
+  const signals = signalsTo(shell.pid!)
   try {
     process.env.PATH = "/mako-test-no-ps"
     await w.agents.stop(apex.caller, { child: "linked" })
     await new Promise((resolve) => setTimeout(resolve, 300))
     assert.equal(started(), false, "unknown identity is not gone: the next Fin waits")
     assert.equal(readFileSync(join(w.root, "shared.txt"), "utf8"), "linked")
+    assert.equal(signals.sent.length, 0, `a process not proven its own is sent nothing: ${signals.sent.join(", ")}`)
+    const row = w.agents.roster(apex.conversation).find((entry) => entry.child?.thread === linked.child)
+    assert.match(JSON.stringify(row?.child?.state), /couldn't confirm linked stopped; it may still be running/, JSON.stringify(row?.child?.state))
   } finally {
     process.env.PATH = path
   }
   try {
-    await waitFor(started, "next to start once the run was killed and seen gone", 12_000)
+    await waitFor(started, "next to start once the run was proven, killed and seen gone", 12_000)
     assert.ok(shell.exitCode !== null || shell.signalCode !== null, "after the linked run exited")
+    assert.ok(signals.sent.some((sent) => sent.endsWith("SIGKILL")), `once its identity read, the stop went on: ${signals.sent.join(", ")}`)
     await w.agents.stop(apex.caller, { child: "all" })
   } finally {
+    signals.restore()
     shell.kill("SIGKILL")
     await w.close()
+  }
+}
+
+/**
+ * A stop the next host recovers whose pid is another process now (its start time differs): while that can't be read
+ * it keeps the place and signals nothing; once it reads, the place goes, and the other process is never signalled.
+ */
+async function followedStopStaleIdentity(): Promise<void> {
+  const { w, shell, linked } = await linkedWriter("followed-stale", true)
+  const edge = w.store.edges().of(linked.child!)!
+  const at = Date.now() - 6_000
+  const process0 = edge.run!.process!
+  w.store.keepEdge({ ...edge, closedAt: at, run: { ...edge.run!, process: { ...process0, startedAt: process0.startedAt! - 60_000 }, stopping: { at }, ended: { at, kind: "stopped" } } })
+  await w.close()
+  const path = process.env.PATH
+  const signals = signalsTo(shell.pid!)
+  let next: AgentsWorld | undefined
+  try {
+    process.env.PATH = "/mako-test-no-ps"
+    next = new AgentsWorld({ root: w.root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: () => "ok" })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    assert.equal(signals.sent.length, 0, `a recovered stop whose identity can't be read signals nothing: ${signals.sent.join(", ")}`)
+    assert.equal(next.agents.runs.isTerminating(linked.child!), true, "and keeps its place")
+    process.env.PATH = path
+    await waitFor(() => !next!.agents.runs.isTerminating(linked.child!), "the place to go once the pid reads as another process's", 5_000)
+    assert.equal(signals.sent.length, 0, `the process now under that pid is never signalled: ${signals.sent.join(", ")}`)
+    assert.equal(shell.exitCode, null, "and it still runs")
+  } finally {
+    process.env.PATH = path
+    signals.restore()
+    shell.kill("SIGKILL")
+    await next?.close()
   }
 }
 
@@ -1401,6 +1454,7 @@ try {
   await stopHoldsUntilCancelled()
   await followedStopHoldsUntilExit()
   await followedStopUnknownIdentity()
+  await followedStopStaleIdentity()
   await followedStopStuck()
   await harnessLadders()
   await accessFits()
