@@ -464,6 +464,7 @@ export interface LiveAccess {
   retireFromAccount(resident: Resident): Promise<void>
   switchAccount(resident: Resident, request: LiveRequest): Promise<void>
   accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
+  /** A turn ended: Mako continues it after a dropped connection, or when its next attempt is due after a failure that clears by itself. */
   scheduleAutoContinue(resident: Resident, settled: string): void
   declineAutoContinue(resident: Resident): void
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */

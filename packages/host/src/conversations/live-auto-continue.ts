@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
+import { nextRetry, retryCause } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -154,8 +155,61 @@ export class LiveAutoContinue {
     hostLog("live", "continued a turn cut short", { conversation: id, harness: resident.snapshot.session.harness, request: request.id, continues: input.continues, reason: input.reason, reconnect: Boolean(reconnect) })
   }
 
+  /**
+   * A turn its harness failed partway for a cause that clears by itself (its
+   * service at capacity or rate-limited, failing on its side, a dropped or
+   * stalled connection): what it did stands in its session, so Mako continues
+   * it when its next attempt is due (`nextRetry`), held first in line so what
+   * was queued after it follows. The failed turn carries that time, which its
+   * row says instead of a failure. A continuation that fails the same way
+   * waits longer.
+   */
+  continueFailed(resident: Resident, settled: string): void {
+    const failed = resident.snapshot.requests.find((request) => request.id === settled)
+    if (failed?.status !== "failed" || this.access.admission.closed) return
+    const cause = retryCause(failed.failure ?? "unknown", false)
+    // Only a turn its harness ran is continued: one it never took has nothing to pick up.
+    const ran = failed.nativeRun !== undefined || failed.nativeDelivery?.evidence.kind === "accepted"
+    if (!cause || !ran) return
+    if (resident.snapshot.requests.some((request) => request.continues?.requestId === failed.id)) return
+    const now = Date.now()
+    const retry = nextRetry(failed.retry, cause, failed.error ?? "", now)
+    if (!retry) return
+    const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
+    const request = LiveRequestSchema.parse({
+      actor: { kind: "service", name: "auto-continue" },
+      id: randomUUID(),
+      createdAt: now,
+      text: continueTurnPrompt("connection-lost", "mako"),
+      attachments: [],
+      tuning: failed.tuning,
+      status: "held",
+      continues,
+      retry,
+    })
+    request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
+    const requests = resident.snapshot.requests.map((candidate) => (candidate === failed ? { ...candidate, retry } : candidate))
+    const at = requests.findIndex((candidate) => candidate.id === failed.id) + 1
+    resident.snapshot = { ...resident.snapshot, requests: [...requests.slice(0, at), request, ...requests.slice(at)] }
+    this.access.flush(resident)
+    hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+  }
+
   /** Drop a pending continuation and its stamp; a later prompt, close or host exit made it moot. */
   decline(resident: Resident): void {
+    // A failed turn's continuation that waits for its time gives way the same way.
+    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry)
+    if (waiting.length) {
+      const failed = new Set(waiting.map((request) => request.continues!.requestId))
+      const ids = new Set(waiting.map((request) => request.id))
+      resident.snapshot = {
+        ...resident.snapshot,
+        requests: resident.snapshot.requests.map((request) =>
+          ids.has(request.id) ? { ...request, status: "canceled" as const }
+            : failed.has(request.id) && request.status === "failed" ? { ...request, retry: undefined }
+              : request),
+      }
+    }
     const pending = resident.autoContinue
     if (!pending) return
     clearTimeout(pending.timer)

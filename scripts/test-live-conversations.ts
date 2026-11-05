@@ -603,18 +603,25 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
     observer.hold("test-provider", "native-hibernate", "other-conversation")
     const refused = randomUUID()
     owner.submit(id, refused, "must not double-open")
+    // Another host's hold lets go by itself: the message waits to go again, the session asleep, rather than failing.
     await waitFor(
       () =>
         owner.snapshot(id)?.requests.find((request) => request.id === refused)
-          ?.status === "failed",
+          ?.retry?.cause === "busy",
       "a competing host hold did not refuse the wake"
     )
+    assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === refused)?.status, "held")
     assert.equal(starts, 2, "ownership refusal happens before provider spawn")
-    assert.equal(owner.snapshot(id)?.session.connection, "disconnected")
+    assert.equal(owner.snapshot(id)?.session.connection, "hibernated")
     observer.release(
       "test-provider",
       "native-hibernate",
       "other-conversation"
+    )
+    owner.wakeDue(Date.now() + 11 * 60_000)
+    await waitFor(
+      () => starts === 3,
+      "the wake was not tried again once the other host let go"
     )
   } finally {
     owner.stop()

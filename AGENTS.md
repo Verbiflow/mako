@@ -3987,6 +3987,33 @@ turn or compaction ending. Codex and Claude retry dropped streams inside a
 turn without ending it; only their turn-end signals (`turn/completed`, the
 SDK `result`) settle, so a retry never triggers a continuation.
 
+A message its harness can't take for now waits and goes again by itself,
+never as a failure (`packages/host/src/contracts/delivery-retry.ts`). On
+2026-11-04 an Apex woken for its Fin's report showed "Could not reopen this
+session" twice: once on Cursor's "Server at capacity", once because the
+session was still open in the process Mako had just put to sleep. Neither
+needed the person. A start or a wake that fails for a cause that clears by
+itself (`retryCause`: the harness at capacity or rate-limited, its service
+failing, the network, a stalled start, or the session open in another
+process, `SessionBusyError` or another host's `SessionHeldError`) holds
+each queued message with `LiveRequest.retry` instead of failing it, and
+leaves the session asleep rather than failed (`LiveAccounts.failedStart`,
+`retriesBegun`). A prompt the harness refuses unsent for such a cause does
+the same (`LiveDispatch`). A turn it fails partway for one, having run it, is
+continued as a dropped connection's is, by a continuation held first in line
+(`LiveAutoContinue.continueFailed`); the failed turn carries the same
+`retry`, so its row reads "Continues by itself at …" with nothing to press,
+and a new message supersedes the continuation. The held-wakes job sends each
+again when its time comes (`wakeDue`), across restarts, as it does a usage
+limit's timed resume; a Resume sends it now. The waits grow from ten seconds
+to ten minutes and repeat (`RETRY_STEPS_MS`), so a usage limit is waited out
+until it resets; a session open elsewhere is waited for half an hour
+(`BUSY_GIVE_UP_MS`) and then fails, since it's the person's. Signed out
+still pauses for Sign in, and anything else fails at once with its card.
+The queue row says when it goes and why (`retryWords`). This holds for the
+person's messages, an Apex's wakes and a Fin's messages alike, on every
+harness (`test:delivery-retry`).
+
 Drivers owe the receipt early, the death in one update, and the native
 path a new session resumes from. Each declares that in `turnRecovery`
 (`ProviderLiveDriver`), with the tests that kill its process mid-turn;

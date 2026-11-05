@@ -258,7 +258,10 @@ export class LiveConversations {
       retireFromAccount: (resident) => this.accounts.retireFromAccount(resident),
       switchAccount: (resident, request) => this.accounts.switchAccount(resident, request),
       accountSwitchWait: (resident) => this.accounts.accountSwitchWait(resident),
-      scheduleAutoContinue: (resident, settled) => this.autoContinue.schedule(resident, settled),
+      scheduleAutoContinue: (resident, settled) => {
+        this.autoContinue.schedule(resident, settled)
+        this.autoContinue.continueFailed(resident, settled)
+      },
       declineAutoContinue: (resident) => this.autoContinue.decline(resident),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
       turnSettled: (resident, settled) => this.dependencies.agents?.()?.settled(resident.snapshot.session.id, settled),
@@ -861,7 +864,11 @@ export class LiveConversations {
     for (const id of due) {
       const resident = this.records.load(id)
       if (!resident || resident.closing || resident.snapshot.session.status === "closed") continue
-      const released = resident.snapshot.requests.filter((request) => request.status === "held" && request.wake && request.wake.at <= now)
+      // A retry goes again keeping its count, so a failure after it waits longer (`nextRetry`).
+      const released = resident.snapshot.requests.filter((request) => {
+        const at = request.status === "held" ? (request.wake ?? request.retry)?.at : undefined
+        return at !== undefined && at <= now
+      })
       if (!released.length) continue
       const ids = new Set(released.map((request) => request.id))
       const session = resident.snapshot.session
@@ -1056,17 +1063,18 @@ export class LiveConversations {
         next = { ...request, status: "canceled", signIn: undefined, editing: undefined }
         break
       case "pause":
-        next = { ...request, status: "held", wake: undefined, editing: true }
+        next = { ...request, status: "held", wake: undefined, retry: undefined, editing: true }
         break
       // A message waiting on a sign-out keeps waiting; only the session's Resume releases it.
       case "resume":
-        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined, editing: undefined }
+        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined, retry: undefined, editing: undefined }
         break
       case "edit":
         next = {
           ...request,
           status: request.signIn ? "held" : "queued",
           wake: undefined,
+          retry: undefined,
           editing: undefined,
           text: command.change.text,
           displayText: undefined,

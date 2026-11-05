@@ -8,6 +8,7 @@ import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
+import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LivePermissionRequest, LivePermissionResponse, LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
@@ -87,6 +88,10 @@ export interface WorldOptions {
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
   /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
   apexAnswerMs?: number
+  /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
+  resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
+  /** A harness refusing a prompt before taking it, with its words: nothing was sent. */
+  refusePrompt?: (conversation: string, harness: string) => string | undefined
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -154,7 +159,7 @@ export class AgentsWorld {
       agents: () => this.agents,
       settled: (id) => this.agents?.moved(id),
       autoContinueDelayMs: this.options.autoContinueDelayMs ?? 10,
-      resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+      resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     const deps: AgentsDeps = {
       store: () => this.store,
@@ -321,6 +326,11 @@ export class AgentsWorld {
         return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
       },
       prompt: async (id, text, _attachments, _settings, dispatch) => {
+        const refused = this.options.refusePrompt?.(id, harness)
+        if (refused) {
+          dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
+          throw new Error(refused)
+        }
         dispatch.report({ kind: "submitted", source: "transport-call" })
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })

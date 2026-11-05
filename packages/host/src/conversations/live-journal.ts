@@ -154,6 +154,13 @@ export const LiveRequestSchema = z.object({
   editing: z.literal(true).optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
+  retry: z.object({
+    at: z.number(),
+    attempt: z.number().int().positive(),
+    since: z.number(),
+    cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
+    reason: z.string(),
+  }).optional(),
   interruption: z
     .object({
       ...StoredReason,
@@ -680,12 +687,13 @@ export class LiveJournal {
       })
   }
 
-  /** The soonest a held request here sends itself (`LiveRequest.wake`); only rows that name a wake are parsed. */
+  /** The soonest a held request here sends itself (`LiveRequest.wake`, `LiveRequest.retry`); only rows that name one are parsed. */
   private wakeAt(): number | undefined {
     let soonest: number | undefined
-    for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%'").all()) {
+    for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%' OR value LIKE '%\"retry\"%'").all()) {
       const request = LiveRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data
-      if (request?.status === "held" && request.wake && (soonest === undefined || request.wake.at < soonest)) soonest = request.wake.at
+      const at = request?.status === "held" ? request.wake?.at ?? request.retry?.at : undefined
+      if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
     }
     return soonest
   }

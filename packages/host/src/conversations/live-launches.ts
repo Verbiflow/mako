@@ -2,6 +2,7 @@ import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AdmittedLiveDriver } from "../harnesses/index.js"
+import { retriesBegun } from "../contracts/delivery-retry.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -304,16 +305,19 @@ export class LiveLaunches {
         resident.opening = !closed
         resident.driver = closed ? null : driver
         if (closed) resident.connections.clear()
+        const requests = this.access.failedStart(resident, { error }, options.resume !== undefined)
+        // A message that goes again by itself leaves the session to reopen then, not failed.
+        const waits = retriesBegun(resident.snapshot.requests, requests)
         resident.snapshot = {
           ...resident.snapshot,
           permissions: [],
           session: {
             ...resident.snapshot.session,
-            status: "failed",
+            status: waits ? "ready" : "failed",
             connection: closed ? "disconnected" : "connected",
-            error: errorMessage({ error }),
+            error: waits ? undefined : errorMessage({ error }),
           },
-          requests: this.access.failedStart(resident, { error }, options.resume !== undefined),
+          requests,
         }
         this.access.flush(resident)
         if (closed && options.resume)

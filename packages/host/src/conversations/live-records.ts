@@ -782,7 +782,9 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
 /** The soonest a held request sends itself, if one waits for a time. */
 export function wakeAt(requests: readonly LiveRequest[]): number | undefined {
   let soonest: number | undefined
-  for (const request of requests)
-    if (request.status === "held" && request.wake && (soonest === undefined || request.wake.at < soonest)) soonest = request.wake.at
+  for (const request of requests) {
+    const at = request.status === "held" ? request.wake?.at ?? request.retry?.at : undefined
+    if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
+  }
   return soonest
 }

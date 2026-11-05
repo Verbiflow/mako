@@ -227,6 +227,8 @@ export interface PendingPrompt {
   signIn?: LiveRequest["signIn"]
   /** Set on a held message that sends itself at a time: a usage limit's reset. */
   wake?: LiveRequest["wake"]
+  /** Set on a held message that goes again by itself: its harness couldn't take it for now. */
+  retry?: LiveRequest["retry"]
   /** Set on a queued message waiting for this Mac to hear its account after it was away. */
   ownerCheck?: LiveRequest["ownerCheck"]
   displayText?: string
