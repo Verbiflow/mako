@@ -36,6 +36,8 @@ import {
   type ViewerPane,
 } from "@/state/viewer"
 import { cn } from "@/lib/utils"
+import { fileKind } from "@/lib/file-kinds"
+import { FileIcon } from "@/components/ui/file-icon"
 import {
   AtSignIcon,
   BookOpenIcon,
@@ -306,7 +308,7 @@ function PaneDropOverlay({ paneId }: { paneId: string }) {
   )
 }
 
-function DocumentView({ document }: { document: ViewerDocument }) {
+export function DocumentView({ document }: { document: ViewerDocument }) {
   if (document.kind === "plan" && document.plan) return <PlanDocumentView document={document} of={document.plan} />
   const previewable =
     document.kind === "transcript" ||
@@ -318,12 +320,7 @@ function DocumentView({ document }: { document: ViewerDocument }) {
         {document.kind === "transcript" ? (
           <TranscriptControls document={document} />
         ) : (
-          <span
-            className="min-w-0 flex-1 truncate px-1 font-mono text-label text-faint"
-            title={document.path}
-          >
-            {document.path}
-          </span>
+          <DocumentTitle path={document.path} file={document.kind === "file" ? document.file : undefined} />
         )}
         {document.file?.truncated ? (
           <span className="shrink-0 bg-raised px-1.5 py-px text-label text-caution">
@@ -518,6 +515,34 @@ function CenterDiff({ diff }: { diff: ViewerDiff }) {
       <LazyDiff diff={diff} />
     </Suspense>
   )
+}
+
+/** A file's name with its icon, its folder after it, and what it is: `TypeScript · 412 lines`. */
+function DocumentTitle({ path, file }: { path: string; file?: ViewerDocument["file"] }) {
+  const slash = path.lastIndexOf("/")
+  const kind = fileKind(path)
+  const lines = file && !file.binary && file.contents ? lineCount(file.contents) : undefined
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 px-1" title={path}>
+      <FileIcon path={path} className="size-3.5 text-faint" />
+      <span className="shrink-0 truncate text-label font-medium text-foreground">{path.slice(slash + 1)}</span>
+      {slash > 0 ? (
+        <span className="min-w-0 truncate text-label text-faint" dir="rtl">
+          <bdi>{path.slice(0, slash)}</bdi>
+        </span>
+      ) : null}
+      <span className="ml-auto shrink-0 pl-2 text-label text-faint">
+        {kind.label}
+        {lines !== undefined ? ` · ${lines.toLocaleString()} ${lines === 1 ? "line" : "lines"}` : ""}
+      </span>
+    </span>
+  )
+}
+
+function lineCount(text: string): number {
+  let lines = 1
+  for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lines += 1
+  return text.endsWith("\n") ? lines - 1 : lines
 }
 
 function hasRichPreview(path: string) {

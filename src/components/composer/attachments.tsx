@@ -8,7 +8,7 @@ import {
 } from "@mako/host/contracts/file-preview"
 import { InlineFilePreview } from "@/components/transcript/file-preview"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { resolveMarkdownMedia } from "@/lib/markdown-media"
 import { Prose } from "@/components/transcript/markdown"
 import { ArtifactPreview } from "@/components/viewer/artifact-preview"
@@ -189,7 +189,7 @@ function Face({ item, text }: { item: Attachment; text: Glance | undefined }) {
     >
       {text === undefined && item.origin !== "terminal" ? (
         <span className="absolute inset-0 flex items-center justify-center text-label font-medium text-faint">
-          <FileTypeIcon path={item.name} mimeType={item.mimeType} className="size-6" />
+          <FileIcon path={item.name} mimeType={item.mimeType} className="size-6" />
         </span>
       ) : (
         <span className="absolute top-0 left-0 flex h-[200%] w-[200%] origin-top-left scale-50 flex-col p-3 font-mono text-label leading-[17px]">
@@ -505,7 +505,7 @@ const Thumbnail = memo(function Thumbnail({
           >
             {unavailable ? (
               <>
-                <FileTypeIcon path={item.name} mimeType={item.mimeType} className="size-5 shrink-0 text-muted-foreground" />
+                <FileIcon path={item.name} mimeType={item.mimeType} className="size-5 shrink-0 text-muted-foreground" />
                 <span className="min-w-0">
                   <span className="block truncate text-label text-foreground">{item.name}</span>
                   <span className="block text-label text-faint">{formatBytes(item.size) || "File"}</span>
@@ -524,7 +524,7 @@ const Thumbnail = memo(function Thumbnail({
               />
             ) : (
               <>
-                <FileTypeIcon path={item.name} mimeType={item.mimeType} className="size-4 text-muted-foreground" />
+                <FileIcon path={item.name} mimeType={item.mimeType} className="size-4 text-muted-foreground" />
                 <span className="max-w-full truncate px-2 text-label text-muted-foreground">
                   {item.name}
                 </span>
