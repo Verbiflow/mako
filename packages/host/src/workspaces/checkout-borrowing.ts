@@ -4,7 +4,7 @@ import { isAbsolute, join, relative } from "node:path"
 import type { Git } from "@mako/git"
 import type { BorrowAnswer, BorrowPush, Borrower, Grant, Kind, Mode, Need, Refusal, SourceAnswer, SourceAsk } from "@mako/protocol/borrow"
 import { LocalBorrowing, type LocalBorrowingOptions, type SourceFn } from "../base/local-borrowing.js"
-import { bringFiles, carryFiles, matchedEntries, type BringEntry, type BringReport } from "./worktree-carry.js"
+import { bringFiles, carryFiles, matchedEntries, type BringEntry, type BringReport, type Staged } from "./worktree-carry.js"
 import type { CarryEntry } from "./thread-recipe.js"
 
 /**
@@ -57,7 +57,7 @@ export function checkoutGrants(device: string, account: string, at: number): Gra
 type Owned = { path: string; dev: number; ino: number; folder: boolean }
 
 /** A placement: the lease, where it landed and what Mako made there; `removing` once its removal has begun. */
-type Placed = { lease: string; checkout: string; root: string; entry: string; link: boolean; thread: string; generation: number; removing?: true }
+type Placed = { lease: string; checkout: string; root: string; entry: string; link: boolean; thread: string; generation: number; removing?: true; placing?: true }
 
 /** What the source says of an entry of a main checkout: a version from what it is now, never what it holds. */
 export async function checkoutSource(ask: SourceAsk): Promise<SourceAnswer> {
@@ -112,14 +112,11 @@ async function survey(path: string): Promise<Owned[]> {
   return owned
 }
 
-/** What each granted entry's path held before a placement, by device and inode: never Mako's to remove. */
-async function existing(granted: ReadonlyArray<{ checkout: string; entry: string }>): Promise<Map<string, Set<string>>> {
-  const held = new Map<string, Set<string>>()
-  for (const { checkout, entry } of granted) {
-    const path = join(checkout, entry)
-    held.set(path, new Set((await survey(path)).map((owned) => `${owned.dev}:${owned.ino}`)))
-  }
-  return held
+type Granted = { entry: string; link: boolean; lease: string; thread: string; root: string; checkout: string; generation: number }
+
+function withoutPlacing(entry: Placed): Placed {
+  const { placing: _placing, ...rest } = entry
+  return rest
 }
 
 export interface CheckoutBorrowingOptions {
@@ -127,6 +124,8 @@ export interface CheckoutBorrowingOptions {
   git: Git
   /** How a placement is deleted; a test fails it on purpose. */
   remove?: (path: string, recursive: boolean) => Promise<void>
+  /** Runs after a carry or bring has placed its entries and before Mako finishes recording them; a test writes there as a person would. */
+  afterPlacing?: (checkout: string) => Promise<void>
 }
 
 /** The sources a checkout broker answers for, to give any other broker over the same folder. */
@@ -136,6 +135,7 @@ export class CheckoutBorrowing {
   readonly borrowing: LocalBorrowing
   readonly #git: Git
   readonly #remove: (path: string, recursive: boolean) => Promise<void>
+  readonly #afterPlacing: ((checkout: string) => Promise<void>) | undefined
   #memory: Placed[] = []
   readonly #manifests = new Map<string, Owned[]>()
   #seeded: Promise<void> | undefined
@@ -145,6 +145,7 @@ export class CheckoutBorrowing {
     this.borrowing = options.borrowing
     this.#git = options.git
     this.#remove = options.remove ?? ((path, recursive) => rm(path, { recursive, force: true }))
+    this.#afterPlacing = options.afterPlacing
     this.borrowing.onPush((borrower, push) => void this.#heard(borrower, push))
   }
 
@@ -154,11 +155,12 @@ export class CheckoutBorrowing {
   }
 
   /** This device's, keeping its grants, its log and what it placed in `folder`, with any other sources that folder's brokers serve. */
-  static open(git: Git, folder?: string, more: Partial<Record<Kind, SourceFn>> = {}, remove?: CheckoutBorrowingOptions["remove"]): CheckoutBorrowing {
+  static open(git: Git, folder?: string, more: Partial<Record<Kind, SourceFn>> = {}, remove?: CheckoutBorrowingOptions["remove"], afterPlacing?: CheckoutBorrowingOptions["afterPlacing"]): CheckoutBorrowing {
     const options: LocalBorrowingOptions = { device: LOCAL_DEVICE, account: LOCAL_ACCOUNT, sources: { ...more, ...CHECKOUT_SOURCES } }
     if (folder) options.folder = folder
     const made: CheckoutBorrowingOptions = { git, borrowing: new LocalBorrowing(options) }
     if (remove) made.remove = remove
+    if (afterPlacing) made.afterPlacing = afterPlacing
     return new CheckoutBorrowing(made)
   }
 
@@ -173,9 +175,9 @@ export class CheckoutBorrowing {
   /** The recipe's carry into a new worktree: each entry the grants allow and the worktree doesn't have, copied or linked. */
   async carry(thread: string, repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<{ copied: number; refused: string[] }> {
     const { granted, refused } = await this.#decide(thread, repoRoot, checkout, entries.map((entry) => ({ path: entry.path, link: Boolean(entry.link) })), "the recipe's carry")
-    const before = await existing(granted)
-    const placed = granted.length ? await carryFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link }))) : []
-    await this.#settle(granted, placed, before)
+    const placed = granted.length ? await carryFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link })), this.#told(granted)) : []
+    await this.#afterPlacing?.(checkout)
+    await this.#settle(granted, placed)
     return { copied: placed.length, refused }
   }
 
@@ -183,10 +185,10 @@ export class CheckoutBorrowing {
   async bring(thread: string, repoRoot: string, checkout: string, entries: readonly BringEntry[]): Promise<BringReport & { refused: string[] }> {
     const asked = entries.map((entry) => ({ path: entry.path, link: Boolean(entry.link) }))
     const { granted, refused, missing } = await this.#decide(thread, repoRoot, checkout, asked, "worktree_bring")
-    const before = await existing(granted)
-    const report = granted.length ? await bringFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link }))) : { copied: [], linked: [], owned: [], existing: [], missing: [] }
+    const report = granted.length ? await bringFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link })), this.#told(granted)) : { copied: [], linked: [], owned: [], existing: [], missing: [] }
     // A linked entry made the worktree's own is Mako's copy now, in place of Mako's link.
-    await this.#settle(granted, [...report.copied, ...report.linked, ...report.owned], before)
+    await this.#afterPlacing?.(checkout)
+    await this.#settle(granted, [...report.copied, ...report.linked, ...report.owned])
     report.missing.push(...missing)
     return { ...report, refused }
   }
@@ -223,7 +225,7 @@ export class CheckoutBorrowing {
   async #decide(thread: string, repoRoot: string, checkout: string, asked: ReadonlyArray<{ path: string; link: boolean }>, why: string) {
     await this.seed()
     const root = await realpath(repoRoot).catch(() => repoRoot)
-    const granted: Array<{ entry: string; link: boolean; lease: string; thread: string; root: string; checkout: string; generation: number }> = []
+    const granted: Granted[] = []
     const refused: string[] = []
     const missing: string[] = []
     for (const request of asked) {
@@ -240,21 +242,52 @@ export class CheckoutBorrowing {
     return { granted, refused, missing }
   }
 
-  /** Each granted entry that landed is recorded with what Mako made; one that didn't (the worktree had it) is released. */
-  async #settle(granted: ReadonlyArray<{ entry: string; link: boolean; lease: string; thread: string; root: string; checkout: string; generation: number }>, placedEntries: readonly string[], before: ReadonlyMap<string, ReadonlySet<string>>): Promise<void> {
-    const landed: Placed[] = []
+  /**
+   * What Mako is about to place for a granted entry, recorded as it sits in the staging folder, where nothing but
+   * Mako writes: its placement is written down (as placing) and each thing in it added to the lease's manifest, all
+   * under the broker's lock, before it lands. A file the person makes anywhere, at any moment, is never in it.
+   */
+  #told(granted: ReadonlyArray<Granted>): Staged {
+    return async (relative, staged) => {
+      const item = granted.find((entry) => relative === entry.entry || relative.startsWith(`${entry.entry}/`))
+      if (!item) return
+      const inner = relative === item.entry ? "" : relative.slice(item.entry.length + 1)
+      const owned = (await survey(staged)).map((entry) => ({ ...entry, path: entry.path ? (inner ? `${inner}/${entry.path}` : entry.path) : inner }))
+      await this.#edit(async (placed) => {
+        await this.#writeManifest(item.lease, [...(await this.#readManifest(item.lease)), ...owned])
+        const known = placed.some((held) => held.lease === item.lease)
+        const entry: Placed = { lease: item.lease, checkout: item.checkout, root: item.root, entry: item.entry, link: item.link, thread: item.thread, generation: item.generation, placing: true }
+        return { keep: known ? placed : [...placed, entry], value: undefined }
+      })
+    }
+  }
+
+  /**
+   * After a placement: each entry that landed stops being `placing`, taking over what an earlier lease placed at the
+   * same path (its manifest joins this one's); each that didn't land is let go, its record and lease with it.
+   */
+  async #settle(granted: ReadonlyArray<Granted>, placedEntries: readonly string[]): Promise<void> {
     for (const item of granted) {
       if (!placedEntries.includes(item.entry)) {
-        if (!(await this.#placed()).some((held) => held.lease === item.lease)) await this.borrowing.release(item.lease)
+        const held = (await this.#placed()).find((entry) => entry.lease === item.lease)
+        if (held?.placing) {
+          await this.#dropManifest(item.lease)
+          await this.#edit(async (placed) => ({ keep: placed.filter((entry) => entry.lease !== item.lease), value: undefined }))
+        }
+        if (!held || held.placing) await this.borrowing.release(item.lease)
         continue
       }
-      const had = before.get(join(item.checkout, item.entry))
-      const manifest = (await survey(join(item.checkout, item.entry))).filter((owned) => !had?.has(`${owned.dev}:${owned.ino}`))
-      if (!manifest.length) continue
-      await this.#writeManifest(item.lease, manifest)
-      landed.push({ lease: item.lease, checkout: item.checkout, root: item.root, entry: item.entry, link: item.link, thread: item.thread, generation: item.generation })
+      const earlier = (await this.#placed()).filter((entry) => entry.lease !== item.lease && entry.checkout === item.checkout && entry.entry === item.entry)
+      for (const old of earlier) {
+        await this.#writeManifest(item.lease, [...(await this.#readManifest(old.lease)), ...(await this.#readManifest(item.lease))])
+        await this.#dropManifest(old.lease)
+        await this.borrowing.release(old.lease)
+      }
+      await this.#edit(async (placed) => ({
+        keep: placed.filter((entry) => !earlier.some((old) => old.lease === entry.lease)).map((entry) => (entry.lease === item.lease ? withoutPlacing(entry) : entry)),
+        value: undefined,
+      }))
     }
-    if (landed.length) await this.#edit((placed) => ({ keep: [...placed.filter((held) => !landed.some((item) => item.lease === held.lease || (item.checkout === held.checkout && item.entry === held.entry))), ...landed], value: undefined }))
   }
 
   async #writeManifest(lease: string, manifest: Owned[]): Promise<void> {
@@ -320,13 +353,22 @@ export class CheckoutBorrowing {
     await this.#edit((placed) => ({ keep: placed.map((held) => (held.lease === item.lease ? { ...held, removing: true as const } : held)), value: undefined }))
     const base = join(item.checkout, item.entry)
     const manifest = [...(await this.#readManifest(item.lease))].sort((left, right) => right.path.split("/").length - left.path.split("/").length || right.path.length - left.path.length)
+    let failed: unknown
     for (const owned of manifest) {
       const path = owned.path ? join(base, owned.path) : base
-      const info = await lstat(path).catch(() => undefined)
-      if (!info || info.dev !== owned.dev || info.ino !== owned.ino) continue
-      if (owned.folder) await rmdir(path).catch(() => undefined)
-      else await this.#remove(path, false)
+      try {
+        const info = await lstat(path)
+        if (info.dev !== owned.dev || info.ino !== owned.ino) continue
+        if (owned.folder) await rmdir(path)
+        else await this.#remove(path, false)
+      } catch (error) {
+        // Gone already, or a folder that holds what the person added: done. Anything else, the removal stays written down.
+        const why = error instanceof Error && "code" in error ? error.code : undefined
+        if (why === "ENOENT" || (owned.folder && (why === "ENOTEMPTY" || why === "EEXIST"))) continue
+        failed ??= error
+      }
     }
+    if (failed) throw failed
     await this.#dropManifest(item.lease)
     await this.#edit((placed) => ({ keep: placed.filter((held) => held.lease !== item.lease), value: undefined }))
   }
@@ -336,12 +378,12 @@ export class CheckoutBorrowing {
   }
 
   /** The index of placements, read, changed and written back under the broker's lock. */
-  #edit<T>(change: (placed: Placed[]) => { keep: Placed[]; value: T }): Promise<T> {
+  #edit<T>(change: (placed: Placed[]) => { keep: Placed[]; value: T } | Promise<{ keep: Placed[]; value: T }>): Promise<T> {
     const folder = this.borrowing.folder
     return this.borrowing.locked(async () => {
       // SAFETY: only this method writes the file, whole and by rename, under the folder's lock.
       const placed = folder ? (JSON.parse((await readFile(join(folder, "placed.json"), "utf8").catch(() => "")) || "[]") as Placed[]) : this.#memory
-      const { keep, value } = change(placed)
+      const { keep, value } = await change(placed)
       if (!folder) this.#memory = keep
       else {
         const temporary = join(folder, `.placed.${process.pid}.${randomUUID()}.tmp`)

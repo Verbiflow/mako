@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CHECKOUT_GRANTS, CHECKOUT_SOURCES, CheckoutBorrowing, LOCAL_ACCOUNT, LOCAL_DEVICE } from "@mako/host/workspaces/checkout-borrowing"
@@ -159,6 +159,46 @@ assert.equal((await lapsing.borrowing.leases()).length, 0)
   assert.equal(readFileSync(join(inside, "models", "runs", "one.json"), "utf8"), "the person's own\n", "and one in a folder they made there")
 }
 
+// A file the person makes inside a folder the moment Mako's copy lands is theirs, never claimed as Mako's: a revoke,
+// and a restart after it, leave it.
+{
+  const racing = join(root, "worktrees", "shop-racing")
+  run(main, "worktree", "add", "-q", "-b", "mako/racing", racing)
+  const folder = join(root, "borrowing-racing")
+  const keeper = CheckoutBorrowing.open(git, folder, {}, undefined, async (checkout) => {
+    if (existsSync(join(checkout, "models"))) writeFileSync(join(checkout, "models", "raced.md"), "the person's own\n")
+  })
+  await keeper.bring("thread-racing", main, racing, [{ path: "models" }])
+  await keeper.borrowing.revoke(CHECKOUT_GRANTS.copy, { kind: "person", account: LOCAL_ACCOUNT })
+  await CheckoutBorrowing.open(git, folder).keep()
+  assert.ok(!existsSync(join(racing, "models", "weights.bin")), "Mako's copy goes")
+  assert.equal(readFileSync(join(racing, "models", "raced.md"), "utf8"), "the person's own\n", "a file made as it landed stays")
+}
+
+// A removal the file system refuses (a folder made unreadable) stays written down, and finishes once it can,
+// in a host opened after.
+{
+  const locked = join(root, "worktrees", "shop-locked")
+  run(main, "worktree", "add", "-q", "-b", "mako/locked", locked)
+  const folder = join(root, "borrowing-locked")
+  const keeper = CheckoutBorrowing.open(git, folder)
+  await keeper.bring("thread-locked", main, locked, [{ path: "models" }])
+  await keeper.borrowing.revoke(CHECKOUT_GRANTS.copy, { kind: "person", account: LOCAL_ACCOUNT })
+  chmodSync(join(locked, "models"), 0o000)
+  try {
+    await keeper.keep()
+  } finally {
+    chmodSync(join(locked, "models"), 0o700)
+  }
+  assert.ok(existsSync(join(locked, "models", "weights.bin")), "the refused removal left the copy")
+  // SAFETY: the index is the broker's own file, written whole by it.
+  const index = JSON.parse(readFileSync(join(folder, "placed.json"), "utf8")) as Array<{ entry: string; removing?: boolean }>
+  assert.deepEqual(index.map((item) => [item.entry, item.removing]), [["models", true]], "and its removal is still written down")
+  await CheckoutBorrowing.open(git, folder).keep()
+  assert.ok(!existsSync(join(locked, "models", "weights.bin")), "a host opened after finishes it")
+  assert.deepEqual(JSON.parse(readFileSync(join(folder, "placed.json"), "utf8")), [])
+}
+
 // A removal that fails, or that a crash cuts short, is written down and finished by the next keep.
 {
   const flaky = join(root, "worktrees", "shop-flaky")
@@ -220,4 +260,4 @@ assert.equal((await lapsing.borrowing.leases()).length, 0)
   assert.deepEqual(linked.refused, ["models: the grant for it was revoked"], "a revoke from another process stands")
 }
 
-console.log("checkout borrowing: carry and bring as leases, one lease per need, no value on disk, the device's grants keep to it, state kept across hosts, revocation removes links and copies but not the worktree's own files, refusals in words, revoked stays revoked, lapsed leases taken again, removal releases, nothing Mako didn't make is removed, not even inside a folder it copied, a failed or interrupted removal is finished, two brokers and two processes over one folder are one broker")
+console.log("checkout borrowing: carry and bring as leases, one lease per need, no value on disk, the device's grants keep to it, state kept across hosts, revocation removes links and copies but not the worktree's own files, refusals in words, revoked stays revoked, lapsed leases taken again, removal releases, nothing Mako didn't make is removed, not even inside a folder it copied, nor one made as the copy landed, a refused removal stays written down until it's done, a failed or interrupted removal is finished, two brokers and two processes over one folder are one broker")
