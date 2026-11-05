@@ -300,18 +300,54 @@ export function answeredWords(answered: FinAnswered): string {
 const FIN_NOTE = 200
 const finNote = (text: string) => (text.length > FIN_NOTE ? `${text.slice(0, FIN_NOTE - 1)}…` : text)
 
-/** A Fin's state as its Apex's row says it: `ChildState` without a blocked one's ask, which the row's `asking` says. */
+/**
+ * What a roster's states say that a row carries, read whether or not this build's `ChildState` has them yet: a queued
+ * Fin's `after` and `held`, and a done one's `decision`.
+ */
+type Carried = { after?: readonly string[]; held?: string; decision?: { question: string; on: "lead" | "person" } }
+
+/**
+ * A Fin's state as its Apex's row says it: `ChildState` without a blocked Fin's ask or a done one's, which the row's
+ * `asking` says, its words cut to a row's length.
+ */
 function listedFinState(state: ChildState): ListedFinState {
+  // SAFETY: `Carried` names only optional fields, each read and checked below before it's carried.
+  const carried = state as ChildState & Carried
   switch (state.kind) {
+    case "queued":
+      return {
+        kind: "queued",
+        reason: state.reason,
+        ahead: state.ahead,
+        ...(carried.after?.length && { after: carried.after.slice(0, 20).map(finNote) }),
+        ...(carried.held && { held: finNote(carried.held) }),
+      }
     case "working":
       return { kind: "working", ...(state.step && { step: finNote(state.step) }), ...(state.phase && { phase: finNote(state.phase) }) }
     case "blocked":
       return { kind: "blocked", question: finNote(state.question), on: state.on }
     case "ended":
-      return { kind: "ended", outcome: state.outcome, ...(state.reason && { reason: finNote(state.reason) }) }
-    default:
-      return state
+      return {
+        kind: "ended",
+        outcome: state.outcome,
+        ...(state.reason && { reason: finNote(state.reason) }),
+        ...(carried.decision && { decision: { question: finNote(carried.decision.question), on: carried.decision.on } }),
+      }
+    case "starting":
+      return { kind: "starting", step: state.step }
+    case "idle":
+      return { kind: "idle" }
   }
+}
+
+/**
+ * The state a row's Fin stands for on a device that isn't its owner. A decision comes without its ask, which the
+ * row's `asking` carries; every selector reads only its question and whose it is.
+ */
+function childStateOfListed(state: ListedFinState): ChildState {
+  // SAFETY: a `ListedFinState` is a `ChildState` but for the ask a blocked Fin or a decision carries, which no
+  // selector of a row's Fins reads (`childGroup`, `childWord`, `childLine` read the question and whose it is).
+  return state as ChildState
 }
 
 /**
@@ -348,12 +384,12 @@ export function finsAsChildren(fins: readonly ListedFin[] | undefined): readonly
       title: fin.title ?? fin.name,
       work: "agent",
       background: true,
-      state: entryState(fin.state),
+      state: entryState(childStateOfListed(fin.state)),
       bindingId: CHILDREN_BINDING,
       provider: fin.harness,
       observedAt: at,
       startedAt: at,
-      child: { thread: fin.thread, name: fin.name, origin: "started", state: fin.state },
+      child: { thread: fin.thread, name: fin.name, origin: "started", state: childStateOfListed(fin.state) },
     }
   }))
   childrenOfFins.set(fins, children)

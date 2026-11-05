@@ -672,6 +672,9 @@ test("a row's Fins read on another device count, order and say each Fin as its o
     { kind: "working", step: `Running ${"x".repeat(400)}` }, { kind: "working", phase: "Reading the brief" }, { kind: "working" }, { kind: "idle" },
     { kind: "blocked", question: "Which branch?", on: "person", ask: { id: "a-1", kind: "question" } as never }, { kind: "blocked", question: "Plain or friendly?", on: "lead" },
     { kind: "blocked", question: "Approve: npm ci", on: "approval" }, { kind: "ended", outcome: "done" }, { kind: "ended", outcome: "failed", reason: "exit 1" }, { kind: "ended", outcome: "stopped" },
+    // What later builds' rosters say: a queued Fin's order and what held it, a done one's decision with its ask.
+    { kind: "queued", reason: "tree-running", ahead: 0, after: ["li-protocol", "x".repeat(300)] } as ChildState, { kind: "queued", reason: "tree-running", ahead: 1, after: ["li-flage"], held: "li-flage" } as ChildState,
+    { kind: "ended", outcome: "done", decision: { question: "Merge #371?", on: "person", ask: { id: "d-1", kind: "question" } } } as ChildState, { kind: "ended", outcome: "done", decision: { question: "Pick one", on: "lead", ask: { id: "d-2", kind: "question" } } } as ChildState,
   ]
   let seed = 7
   const next = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31), seed % n)

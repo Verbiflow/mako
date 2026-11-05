@@ -101,15 +101,33 @@ const finNote = z.string().max(200)
 
 /**
  * Where one of a Session's Fins stands, as its owner's roster says it (`ChildState` in the host's contracts), without
- * the ask a blocked one carries: the row's `asking` says that.
+ * the ask a blocked one or a done one's decision carries: the row's `asking` says that.
  */
 export const ListedFinStateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("queued"), reason: z.enum(["tree-running", "place-full", "device-offline"]), ahead: z.number().int().nonnegative() }).strict(),
+  z
+    .object({
+      kind: z.literal("queued"),
+      reason: z.enum(["tree-running", "place-full", "device-offline"]),
+      ahead: z.number().int().nonnegative(),
+      /** The Fins it starts after that haven't finished, by name. */
+      after: z.array(finNote).min(1).max(20).optional(),
+      /** The one of them that failed or was stopped: it won't start, and its Apex decides. */
+      held: finNote.optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }).strict(),
   z.object({ kind: z.literal("working"), step: finNote.optional(), phase: finNote.optional() }).strict(),
   z.object({ kind: z.literal("idle") }).strict(),
   z.object({ kind: z.literal("blocked"), question: finNote, on: z.enum(["lead", "person", "approval"]) }).strict(),
-  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: finNote.optional() }).strict(),
+  z
+    .object({
+      kind: z.literal("ended"),
+      outcome: z.enum(["done", "failed", "stopped"]),
+      reason: finNote.optional(),
+      /** What its finished work leaves to decide, and whose it is: the person's counts it as needing them. */
+      decision: z.object({ question: finNote, on: z.enum(["lead", "person"]) }).strict().optional(),
+    })
+    .strict(),
 ])
 export type ListedFinState = z.infer<typeof ListedFinStateSchema>
 
