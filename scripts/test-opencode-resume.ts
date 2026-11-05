@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { openCodeHistorySealed, readOpenCodeResumeRecord } from "@mako/host/harnesses/opencode/resume-store"
+import { openCodeHistorySealed, openCodeSessionOpens, readOpenCodeResumeRecord } from "@mako/host/harnesses/opencode/resume-store"
 import { resumeVerdict, type NativeResumeReader } from "@mako/host/harnesses/native-continuation"
 import { resumable, type ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
@@ -13,7 +13,7 @@ import { createOpenCodeDriver, openCodeForkBoundary, openCodeForkUnderWatch, ope
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { errorMessage } from "@mako/host/base/error-message"
 import { locateOpenCodeSession, verifyOpenCodeSession } from "@mako/host/harnesses/opencode/installation"
-import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { NativeStores, type ReadOnlyOpenOptions } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
@@ -88,6 +88,24 @@ try {
         await assert.rejects(verifyOpenCodeSession(nativeStores, "ses_one", undefined, { OPENCODE_DB: path }), /inputs awaiting execution/, "but is not loaded over that input")
         db.exec("DELETE FROM session_inbox")
         assert.equal(await verifyOpenCodeSession(nativeStores, "ses_one", undefined, { OPENCODE_DB: path }), binding.path)
+        // Opening reads whether the session loads, never its history: only a checkpoint hashes that.
+        const statements: string[] = []
+        class Recording extends NativeStores {
+          override open(database: string, options?: ReadOnlyOpenOptions) {
+            const opened = super.open(database, options)
+            const prepare = opened.prepare.bind(opened)
+            opened.prepare = (sql: string) => { statements.push(sql); return prepare(sql) }
+            return opened
+          }
+        }
+        assert.deepEqual(openCodeSessionOpens(new Recording(false), binding.path!, "ses_one"), { kind: "opens" })
+        assert.ok(statements.length > 0 && statements.every(sql => !sql.includes("session_message")), "opening never reads the session's messages")
+        statements.length = 0
+        assert.equal(readOpenCodeResumeRecord(new Recording(false), binding.path!, "ses_one").kind, "available")
+        assert.ok(statements.some(sql => sql.includes("session_message")), "a checkpoint still reads them")
+        db.prepare("INSERT INTO session_pending VALUES (?, ?)").run("waiting", "ses_one")
+        assert.equal(openCodeSessionOpens(nativeStores, binding.path!, "ses_one").kind, "unavailable", "and opening still refuses a session with an input waiting")
+        db.exec("DELETE FROM session_pending")
       }
     } finally { db.close() }
   }
