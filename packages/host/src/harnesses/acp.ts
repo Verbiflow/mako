@@ -38,7 +38,7 @@ import { adapters } from "./heavy.js"
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { endProviderProcess, spawnProviderProcess } from "./provider-process.js"
+import { closeProviderProcess, endProviderProcess, providerProcessGone, spawnProviderProcess } from "./provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { acpPromptBlocks } from "./acp-prompt.js"
@@ -877,7 +877,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         signal: child.signalCode,
         stderr: stderr.slice(-600),
       })
-      await liveClose(id)
+      // One that outlives this stays in `sessions` for the next close; what the start reports is why it failed.
+      await liveClose(id).catch(() => undefined)
       throw new Error(surfaced, { cause: error })
     }
   }
@@ -1216,17 +1217,21 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
    */
   async function endAgent(live: Live): Promise<void> {
     const { child } = live
-    if (child.exitCode !== null || child.signalCode !== null) return
+    if (providerProcessGone(child)) return
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()))
-    const deadline = setTimeout(() => void endProviderProcess(child), SHUTDOWN_GRACE_MS)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // An agent that never answers `session/close` is ended by this, and past it there is nothing left to wait for.
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => { void endProviderProcess(child); resolve() }, SHUTDOWN_GRACE_MS)
+    })
     if (live.closesSession && live.connection && live.sessionId)
-      await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited])
-    clearTimeout(deadline)
-    await endProviderProcess(child, "input", SHUTDOWN_GRACE_MS)
+      await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited, deadline])
+    clearTimeout(timer)
+    await closeProviderProcess(child, "input", SHUTDOWN_GRACE_MS)
   }
 
   function stop(): void {
-    for (const id of sessions.keys()) void liveClose(id)
+    for (const id of sessions.keys()) void liveClose(id).catch(() => undefined)
   }
 
   function update(live: Live, patch: Partial<LiveSessionState>): void {

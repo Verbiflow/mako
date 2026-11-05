@@ -6,7 +6,7 @@ import { z } from "zod"
 import { acpReadable, acpWritable } from "../acp-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import type { AcpForkInput } from "../acp-source.js"
-import { endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
+import { closeProviderProcess, endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
 import { ProviderStartupWatch } from "../provider-startup.js"
 import { grokSessionSource } from "./session-source.js"
 import { heavy } from "../../base/heavy-packages.js"
@@ -193,8 +193,9 @@ export async function grokFork(input: AcpForkInput): Promise<string> {
     clearTimeout(deadline)
     input.signal.removeEventListener("abort", kill)
     // The copy is whole when Grok answers, and Grok takes about two seconds to exit once its input closes. A failure
-    // reaches the caller without waiting for the process: it is still ended, SIGKILL if it must be.
-    const ended = endProviderProcess(child)
-    if (!failed) await ended
+    // reaches the caller without waiting for the process: it is still ended, SIGKILL if it must be. A fork whose
+    // process outlives that hasn't worked: the copy is still held.
+    if (failed) void endProviderProcess(child)
+    else await closeProviderProcess(child)
   }
 }

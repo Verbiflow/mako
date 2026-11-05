@@ -40,7 +40,7 @@ import { deliverDecoded, type DecodedSink } from "../../contracts/native-decodin
 import type { SelectedAccount } from "../../contracts/accounts.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
-import { endProviderProcess } from "../provider-process.js"
+import { closeProviderProcess } from "../provider-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
@@ -152,7 +152,7 @@ interface Live {
   /** The running goal's condition, as Mako set it or last read it; its Stop hook's feedback names it. */
   goalCondition?: string
   exited(): Promise<void>
-  /** Ends its process, SIGKILL if it must, and resolves once it's gone (`endProviderProcess`). */
+  /** Ends its process, SIGKILL if it must: resolves once it's gone, rejects if it outlives that (`closeProviderProcess`). */
   end(): Promise<void>
 }
 export interface ClaudeSdkConfiguration {
@@ -775,7 +775,7 @@ export function createClaudeSdkDriver(
         observeUsage: options.observeUsage,
         query,
         exited: () => exited,
-        end: () => (claudeChild ? endProviderProcess(claudeChild) : exited),
+        end: () => (claudeChild ? closeProviderProcess(claudeChild) : exited),
         input,
         permissions,
         approvals,
@@ -1062,8 +1062,9 @@ export function createClaudeSdkDriver(
       const live = sessions.get(id)
       if (!live) return
       stop(live)
-      sessions.delete(id)
+      // Kept until its process is gone: a close that can't say so rejects, and the next one tries again.
       await live.end()
+      if (sessions.get(id) === live) sessions.delete(id)
       await live.disposeApprovals()
     },
   }

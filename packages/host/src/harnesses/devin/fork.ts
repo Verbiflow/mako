@@ -6,7 +6,7 @@ import { z } from "zod"
 import { acpReadable, acpWritable } from "../acp-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import type { AcpForkInput } from "../acp-source.js"
-import { endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
+import { closeProviderProcess, endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
 import { ProviderStartupWatch } from "../provider-startup.js"
 import { devinCliDirectory } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
@@ -83,8 +83,9 @@ export async function devinFork(input: AcpForkInput): Promise<string> {
     clearTimeout(deadline)
     input.signal.removeEventListener("abort", kill)
     // Its input closed, Devin stops its shells and exits. A fork that worked waits for that, so the copy is unlocked;
-    // a failure reaches the caller without waiting: the process is still ended, SIGKILL if it must be.
-    const ended = endProviderProcess(child, "input")
-    if (!failed) await ended
+    // a failure reaches the caller without waiting: the process is still ended, SIGKILL if it must be. A fork whose
+    // process outlives that hasn't worked: the copy is still held.
+    if (failed) void endProviderProcess(child, "input")
+    else await closeProviderProcess(child, "input")
   }
 }

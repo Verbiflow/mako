@@ -3,14 +3,22 @@
 // A stand-in agent answers `initialize` (or doesn't) and dies at a chosen
 // request; no timer decides anything.
 import assert from "node:assert/strict"
+import { ChildProcess } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { devinFork } from "@mako/host/harnesses/devin/fork"
 import { grokFork } from "@mako/host/harnesses/grok/fork"
+import { ProviderProcessOutlivedError } from "@mako/host/harnesses/provider-process"
 
 const AGENT = String.raw`
 const dieAt = process.env.DIE_AT
+if (dieAt === "stay") {
+  // Forks, then ignores its input closing; only a signal ends it.
+  setInterval(() => {}, 1000)
+  process.stdin.on("end", () => {})
+  require("node:fs").writeFileSync(process.env.PID_FILE, String(process.pid))
+}
 if (dieAt === "refuse") {
   // Refuses the handshake, then ignores its input closing and SIGTERM: only SIGKILL ends it.
   process.on("SIGTERM", () => {})
@@ -23,6 +31,10 @@ process.stdin.on("data", (chunk) => {
   for (let at; (at = buffer.indexOf("\n")) >= 0;) {
     const message = JSON.parse(buffer.slice(0, at))
     buffer = buffer.slice(at + 1)
+    if (dieAt === "stay" && message.method !== "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { newSessionId: "copy", forkedSessionId: "copy" } }) + "\n")
+      continue
+    }
     if (message.method === dieAt || (dieAt === "fork" && message.method !== "initialize")) {
       process.stderr.write("the store is locked\n")
       process.exit(3)
@@ -88,8 +100,18 @@ try {
     }), new RegExp(`^Error: ${name} could not fork the session during initialize: refused`), `${name}: a refusal from an agent that won't exit still rejects`)
     assert.ok(aliveAtRejection, `${name}: the rejection reached the caller before the agent's exit`)
     await gone(Number(readFileSync(pidFile, "utf8")))
+    // A fork that worked waits for its process, which holds the copy until it's gone: one no signal reaches is a
+    // failed fork, not a copy to go on with.
+    const signal = ChildProcess.prototype.kill
+    ChildProcess.prototype.kill = () => false
+    try {
+      await assert.rejects(fork(input("stay", checkpoint)), ProviderProcessOutlivedError, `${name}: a fork whose process outlives being ended doesn't succeed`)
+    } finally {
+      ChildProcess.prototype.kill = signal
+    }
+    process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL")
   }
-  console.log("fork watches: Grok's and Devin's forks name the request their process died in, a closed conversation says so, and a failure never waits on an agent that won't exit, which is still killed")
+  console.log("fork watches: Grok's and Devin's forks name the request their process died in, a closed conversation says so, a failure never waits on an agent that won't exit, which is still killed, and a fork whose process outlives that fails")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

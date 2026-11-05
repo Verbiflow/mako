@@ -875,8 +875,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return live.state
       } catch (error) {
         stop(engine, live)
-        sessions.delete(live.state.id)
-        await live.client.close(2_000).catch(() => live.client.kill())
+        // One that outlives this stays for the next close; what the start reports is why it failed.
+        await live.client.close(2_000).then(() => sessions.delete(live.state.id), () => undefined)
         if (error instanceof CursorSdkError) {
           if (error.kind === "authentication") rejected(error.message)
           throw new Error(error.message, { cause: error })
@@ -993,8 +993,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         // A missing cancellation acknowledgement is not a stopped run. End
         // this provider process and let its exit mark the session disconnected
         // before another continuation can acquire the native session.
-        await live.client.close(5_000).catch(() => live.client.kill())
-        await live.client.exited
+        await live.client.close(5_000)
         throw error
       }
       // A successful cancellation acknowledgement may arrive before the
@@ -1007,10 +1006,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     async close(id) {
       const live = sessions.get(id)
       if (!live) return
-      sessions.delete(id)
-      if (live.closed) return
-      stop(engine, live)
-      await live.client.close(5_000).catch(() => live.client.kill())
+      if (!live.closed) stop(engine, live)
+      // Kept until its process is gone: a close that can't say so rejects, and the next one tries again.
+      await live.client.close(5_000)
+      if (sessions.get(id) === live) sessions.delete(id)
     },
   }
 }

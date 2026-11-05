@@ -1,5 +1,5 @@
 import type { PrefetchLaunch } from "../start-prefetch.js"
-import { endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
+import { closeProviderProcess, spawnProviderProcess } from "../provider-process.js"
 import { execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { promisify } from "node:util"
@@ -82,6 +82,8 @@ export async function startOpenCodeApi(input: {
   signal?: AbortSignal
   /** Transport fault injection uses the same SDK boundary as normal requests. */
   fetch?: typeof globalThis.fetch
+  /** A start that failed and couldn't end its server hands over the close to try again. */
+  unclosed?: (close: () => Promise<void>) => void
 }): Promise<OpenCodeApi> {
   input.signal?.throwIfAborted()
   const serve = openCodeServe(input.command, input.env)
@@ -140,15 +142,15 @@ export async function startOpenCodeApi(input: {
     input.signal?.removeEventListener("abort", abort)
     watch.dispose()
     lifetime.abort(new Error("OpenCode native API connection closed"))
-    await endProviderProcess(child, now ? "SIGTERM" : "input", 3000)
-    // Its pipes close once it exits (`spawnProviderProcess`); one that outlived SIGKILL is no longer waited for.
-    if (providerProcessGone(child)) await closed
+    // Its pipes close once it exits (`spawnProviderProcess`). One that outlives this rejects, and the next close tries again.
+    await closeProviderProcess(child, now ? "SIGTERM" : "input", 3000).catch((error: unknown) => { closing = undefined; throw error })
+    await closed
   })()
-  const abort = () => { void close(true) }
+  const abort = () => { void close(true).catch(() => {}) }
   input.signal?.addEventListener("abort", abort, { once: true })
   if (input.signal?.aborted) abort()
   // A failed spawn can close stdin before the normal lease shutdown.
-  child.stdin.on("error", () => { void close() })
+  child.stdin.on("error", () => { void close().catch(() => {}) })
   try {
     const baseUrl = await input.trace.step("handshake", () => watch.step("native API readiness", ready))
     const transport: typeof fetch = (url, options) => (input.fetch ?? fetch)(url, {
@@ -171,7 +173,8 @@ export async function startOpenCodeApi(input: {
     server?.answers(client)
     return { client, watch, info, signal: lifetime.signal, exited, stderr: () => stderr, close }
   } catch (error) {
-    await close()
+    // Nothing else can reach a server this start couldn't end; what the start reports is why it failed.
+    await close().catch(() => input.unclosed?.(close))
     throw error
   }
 }
