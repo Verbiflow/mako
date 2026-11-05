@@ -237,20 +237,43 @@ full) sends a Fin that named no harness, model or rule to the person's next
 harness that offers it, and otherwise runs it on the harness's nearest mode
 within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
 which; only a mode wider than the Apex's is refused. It starts
-here only (`place` other than `here` is refused); past a tree's running
-budget it queues with why, past its started budget it is refused with the
-count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
-this Mac's room it queues too, behind every Fin of any tree that waits for
-room ("Queued: this Mac is busy, 3 ahead"): `macSlots` gives the person a
-seventh of the cores and 4 GB, and each working Fin `FIN_LOAD` (2) cores of
-load and `FIN_MEMORY`, measured 2026-11-03 when 13 Fins at once held a 14-core
-Mac's load at 26.8 and its host and sync daemon timed out the person's
-requests; load the working Fins don't account for is the person's own work,
-a Mac always runs one, and one out of swap or short of disk runs none.
-`MAKO_FIN_SLOTS` sets the count instead, as a test's host does whatever
-machine runs it. The start's answer carries
-the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
-Mac frees up (`test:background-agents`). One a
+here only (`place` other than `here` is refused). It never waits unasked:
+past its place's bound or a tree's running budget, a start is refused with
+the count unless it passes `queue: true`, when it waits behind every spawn
+that waits for that place ("Queued: 3 ahead, your limit of Fins at once is
+in use"). Each place has its own bound (`placeFull`). A device runs its
+capacity (`fin-capacity.ts`): its cores and memory, less a reserve for the
+person (a seventh of the cores and a fifth of memory where they work at it,
+less on a headless box), less room for a few builds, divided by what a Fin
+costs there, its light cores and memory outside builds, learned per harness
+on that machine (`FinCostModel`, 75th percentiles moving over days, priors
+from 2026-11-03: 0.35 core, 0.8 GB, builds 6 cores and 3 GB). That is 17 on
+a 14-core, 36 GB Mac, 2 on a 2 vCPU 8 GB box, and at most `DEVICE_CEILING`
+(64). `CapacityGovernor` lowers it only under pressure that holds (memory
+pressure or swap, heat, the person's own load, disk; a 5-minute average,
+held 3 minutes, then a Fin a minute, never below half) and brings it back
+after relief holds 5 minutes; running Fins are never touched. The person
+can fix a number per device instead of Auto (Settings › Fins), and
+`FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
+machine per Fin, is bounded by the plan and the daily spend ceiling only
+(`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
+every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
+tree's running budget (32) caps one Apex's fan-out. A refused start names
+the places a start may name that have room. This Mac's load also shows in
+the start's answer when it's busy (`macLoad`, `mac`) beside the device's
+number (`atOnce`). `MAKO_FIN_SLOTS` fixes the number, as a test's host does.
+What waits goes the moment a place frees, by event, never a timer: a Fin
+that stops holding one (its turn ended, it stopped, failed, was archived or
+waits on its own Fins) or a place whose number rose (`capacityChanged`)
+starts the first waiter that fits, first come first started, one whose
+`after` isn't done passed over. Every start is one record per Apex and
+client key (`StartRecord`), made before its call awaits anything: the same
+key again joins it, and the record alone holds its name, its place and its
+stop until it settles; a stop marks it, and `mako:live-start` writes no
+edge for a stopped one (`test:start-interleavings` generates schedules of
+starts, stops, preparations and crashes against it). Each queued start launches on its own, so
+a harness slow to come up holds its place, never the queue; a freed place
+is taken within a few milliseconds (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
 across the host), its end written once. Linking it again with another pid
@@ -4015,6 +4038,40 @@ continuation the user declined is not revived by a later provider-started
 turn or compaction ending. Codex and Claude retry dropped streams inside a
 turn without ending it; only their turn-end signals (`turn/completed`, the
 SDK `result`) settle, so a retry never triggers a continuation.
+
+A message its harness can't take for now waits and goes again by itself,
+never as a failure (`packages/host/src/contracts/delivery-retry.ts`). On
+2026-11-04 an Apex woken for its Fin's report showed "Could not reopen this
+session" twice: once on Cursor's "Server at capacity", once because the
+session was still open in the process Mako had just put to sleep. Neither
+needed the person. A start or a wake that fails for a cause that clears by
+itself (`retryCause`: the harness at capacity or rate-limited, its service
+failing, the network, a stalled start, or the session open in another
+process, `SessionBusyError` or another host's `SessionHeldError`) holds
+each queued message with `LiveRequest.retry` instead of failing it, and
+leaves the session asleep rather than failed (`LiveAccounts.failedStart`,
+`retriesBegun`). A prompt the harness refuses unsent for such a cause does
+the same (`LiveDispatch`). A turn it fails partway for one, having run it, is
+continued as a dropped connection's is, by a continuation held first in line
+(`LiveAutoContinue.continueFailed`); the failed turn carries the same
+`retry`, so its row reads "Continues by itself at …" with nothing to press,
+and a new message supersedes the continuation. The held-wakes job sends each
+again when its time comes (`wakeDue`), across restarts, as it does a usage
+limit's timed resume; a Resume sends it now. A session Mako's exit closed
+reopens for it, while the person's own close stops it waiting. The waits grow
+from ten seconds to ten minutes and repeat (`RETRY_STEPS_MS`), and every
+cause ends (`GIVE_UP_MS`): a rate limit after six hours, so a usage limit's
+window is waited out, the service, the network or a stalled start after an
+hour, a session open elsewhere after half an hour, each then failing with its
+card. A cause the person must fix anywhere in the words is never waited out,
+whatever transient words wrap it (`permanentFailure`: "API error: 400 Bad
+Request: unknown model …"). A turn continued by itself leaves its session
+ready, so what the person queued behind it goes in the order they sent it.
+Signed out still pauses for Sign in, and anything else fails at once with its
+card.
+The queue row says when it goes and why (`retryWords`). This holds for the
+person's messages, an Apex's wakes and a Fin's messages alike, on every
+harness (`test:delivery-retry`).
 
 Drivers owe the receipt early, the death in one update, and the native
 path a new session resumes from. Each declares that in `turnRecovery`

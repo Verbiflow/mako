@@ -5,7 +5,10 @@ import { ExecutionAccountChanged, resumes } from "../harnesses/index.js"
 import type { AccountRemovalSession, AccountRemovalWait } from "../contracts/accounts.js"
 import type { AccountSwitchWait, LiveRequest, SignInHold, SignInReadiness, SignInResume } from "../contracts/live-conversations.js"
 import { isBusyProviderWork } from "../contracts/native-agents.js"
+import { holdForRetry, transientCause } from "../contracts/delivery-retry.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
+import { SessionBusyError } from "../contracts/session-hold.js"
+import { SessionHeldError } from "../threads/index.js"
 import { holdForSignIn, releaseSignIn, signInPause } from "../contracts/sign-in-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -29,12 +32,22 @@ export class LiveAccounts {
     this.access = access
   }
 
-  /** Queued work once a launch failed: it waits for the user when the account signed out, and fails otherwise. */
+  /**
+   * Queued work once a launch failed: it waits for the user when the account signed out, waits and goes again by
+   * itself when the cause clears by itself and the session can reopen (`retryCause`), and fails otherwise.
+   */
   failedStart(resident: Resident, boundary: FailureBoundary, resuming: boolean): LiveRequest[] {
     const message = errorMessage(boundary)
     const failure = classifyStartFailure(message, resuming)
     if (failure === "auth" && !(boundary.error instanceof ExecutionAccountChanged))
       return holdForSignIn(resident.snapshot.requests, this.signInHold(resident))
+    const busy = boundary.error instanceof SessionBusyError || boundary.error instanceof SessionHeldError
+    const cause = resuming ? transientCause(message, failure, busy) : undefined
+    const retried = cause && holdForRetry(resident.snapshot.requests, cause, message, Date.now())
+    if (retried) {
+      hostLog("live", "a message waits to go again: its harness couldn't take it for now", { conversation: resident.snapshot.session.id, cause, error: message })
+      return retried
+    }
     return resident.snapshot.requests.map((request) =>
       request.status === "queued"
         ? { ...request, status: "failed", error: message, failure, nativeDelivery: this.unsentStartupDelivery(resident, request, message) }

@@ -34,9 +34,10 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { SimulatorSetupFollower } from "./simulators/setup.js"
 import { Simulators } from "./simulators/simulators.js"
-import { LocalSimulatorHost } from "./simulators/local-host.js"
+import { LocalSimulatorHost, localDriving } from "./simulators/local-host.js"
 import { declareSimulatorMethods } from "./simulators/methods.js"
 import type { SimulatorAgent } from "../contracts/simulators.js"
+import { SimulatorTools } from "./simulators/mcp.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
@@ -63,6 +64,8 @@ export interface Control {
   simulatorSetup: SimulatorSetupFollower
   /** The simulators every host here runs, and the one Thread that drives each. */
   simulators: Simulators
+  /** The simulator tools on each Thread's `mako` server, offered as the setup line allows. */
+  simulatorTools: SimulatorTools
   /** The renderer a development host's windows load now; another checkout's dev server can register while it runs. */
   devServerUrl(): string | null
   /** Mako's own computer-use driver, started once and shared. */
@@ -259,10 +262,25 @@ export function openControl(
     (bindingId) => driver.revoke(`agent ${bindingId}`)
   )
   const unsubscribe = browser.subscribe((browsers) => emit({ type: "browser-control", browsers }))
-  const simulatorSetup = new SimulatorSetupFollower({ dataRoot: environment.dataRoot, jobs, emit: (setup) => emit({ type: "simulator-setup", setup }) })
+  const localSimulators: LocalSimulatorHost = new LocalSimulatorHost({
+    setup: (refresh) => simulatorSetup.read(refresh),
+    folder: join(environment.dataRoot, "simulators"),
+    driving: localDriving({ dataRoot: environment.dataRoot, hub: { entry: join(environment.appRoot, "dist-electron", "simulator-hub-entry.js") } }),
+  })
+  const simulatorTools = new SimulatorTools(simulatorAgent)
+  const simulatorSetup = new SimulatorSetupFollower({
+    dataRoot: environment.dataRoot,
+    jobs,
+    emit: (setup) => {
+      simulatorTools.heard(setup)
+      emit({ type: "simulator-setup", setup })
+    },
+    tryIt: () => localSimulators.tryIt(),
+  })
+  void simulatorSetup.read().catch(() => undefined)
   const simulatorHeld = jobs.demand("A simulator is held")
   const simulators = new Simulators({
-    hosts: [new LocalSimulatorHost(() => simulatorSetup.read())],
+    hosts: [localSimulators],
     consent: () => simulatorSetup.consent(),
     agent: simulatorAgent,
     holding: (on) => simulatorHeld.set(on),
@@ -279,6 +297,7 @@ export function openControl(
     sessions,
     simulatorSetup,
     simulators,
+    simulatorTools,
     devServerUrl: () => activeDevServerUrl,
     ensureLocalControl,
     driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),

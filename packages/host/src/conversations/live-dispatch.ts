@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
+import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
+import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
 import { checkoutSince } from "../base/checkout-since.js"
@@ -175,7 +177,7 @@ export class LiveDispatch {
     )
     const attemptId = randomUUID()
     const bindingId = control.activeBindingId
-    const nativeDelivery: PromptDelivery = { attemptId, bindingId, ownerEpoch: this.access.epoch, evidence: { kind: "prepared" } }
+    const nativeDelivery: PromptDelivery = { attemptId, bindingId, ownerEpoch: this.access.epoch, gated: true, evidence: { kind: "prepared" } }
     const ownerGeneration = this.access.moves.generation(resident)
     if (ownerGeneration !== undefined) nativeDelivery.ownerGeneration = ownerGeneration
     // Its spend counts from the last turn's end in this process: what was spent since, by work between turns, is this turn's.
@@ -254,9 +256,15 @@ export class LiveDispatch {
     }
     const generation = resident.generation
     const report = (evidence: PromptDeliveryEvidence): void => {
-      if (resident.generation !== generation || this.access.control(resident).activeBindingId !== bindingId) return
+      const handoff = evidence.kind === "submitted"
       const target = resident.snapshot.requests.find((item) => item.id === request.id)
-      if (!target?.nativeDelivery || target.nativeDelivery.attemptId !== attemptId) return
+      const own = resident.generation === generation && this.access.control(resident).activeBindingId === bindingId &&
+        target?.nativeDelivery?.attemptId === attemptId
+      // The handoff (`handOff`): the driver sends only if this returns, so a send this attempt no longer owns, one a
+      // Stop reached while it was prepared, and one the journal can't record as sent all go no further.
+      if (handoff && (!own || target?.status !== "dispatching" || target.nativeDelivery?.evidence.kind !== "prepared")) throw new HandoffRefused("superseded")
+      if (handoff && target?.pause === "stop") throw new HandoffRefused("stopped")
+      if (!own || !target?.nativeDelivery) return
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
       if (next === delivery.evidence) return
@@ -272,10 +280,21 @@ export class LiveDispatch {
           item === target ? { ...item, nativePrompt: prompt, nativeDelivery: { ...delivery, evidence: next } } : item
         ),
       }
+      // Unwritten, the handoff didn't happen: the request reads as it did, prepared, so no later write says it was sent.
+      const unsent = () => {
+        resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((item) => (item.id === request.id ? target : item)) }
+      }
       try {
         this.access.flush(resident)
       } catch (error) {
+        if (handoff) unsent()
         this.access.storageFailed(resident, { error })
+        if (handoff) throw new HandoffRefused("unsaved", { cause: error })
+      }
+      // A write the store dropped (a conversation already let go) holds nothing either.
+      if (handoff && resident.journalSnapshot?.requests.find((item) => item.id === request.id)?.nativeDelivery?.evidence.kind !== "submitted") {
+        unsent()
+        throw new HandoffRefused("unsaved")
       }
     }
     const drewIt = !shown && Boolean(text || request.attachments.length)
@@ -309,6 +328,19 @@ export class LiveDispatch {
             candidate.id === request.id && candidate.status === "dispatching"
         )
         if (generation !== resident.generation || !target) return
+        // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's.
+        if (error instanceof HandoffRefused) {
+          resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((candidate) =>
+            candidate === target ? { ...candidate, status: "held", error: undefined, snapshots: undefined } : candidate) }
+          dependencies.workspaceSnapshots?.abandonRun(request.id)
+          hostWarn("live", "a message went no further than its handoff", { conversation: resident.snapshot.session.id, request: request.id, why: error.why })
+          try {
+            this.access.flush(resident)
+          } catch (failure) {
+            this.access.storageFailed(resident, { error: failure })
+          }
+          return
+        }
         const session = resident.snapshot.session
         const refused = target.nativeDelivery?.attemptId === attemptId && target.nativeDelivery.evidence.kind === "not-accepted"
         if (refused && error instanceof ExecutionAccountChanged && resident.accountRefreshRequest !== request.id &&
@@ -401,6 +433,20 @@ export class LiveDispatch {
             request: request.id,
             error: errorMessage({ error }),
           })
+          return
+        }
+        // The harness refused it unsent for a cause that clears by itself: it waits and goes again, never a failure.
+        const cause = refused ? transientCause(errorMessage({ error }), classifyProviderFailure(errorMessage({ error })).kind, error instanceof SessionBusyError) : undefined
+        const retry = cause && nextRetry(target.retry, cause, errorMessage({ error }), Date.now())
+        if (retry) {
+          resident.snapshot = {
+            ...resident.snapshot,
+            requests: resident.snapshot.requests.map((candidate) =>
+              candidate === target ? { ...candidate, status: "held", retry, error: undefined, snapshots: undefined } : candidate),
+          }
+          dependencies.workspaceSnapshots?.abandonRun(request.id)
+          this.access.flush(resident)
+          hostWarn("live", "a message its harness refused for now goes again by itself", { conversation: session.id, request: request.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
           return
         }
         resident.snapshot = {

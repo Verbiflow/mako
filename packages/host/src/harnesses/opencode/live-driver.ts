@@ -27,7 +27,7 @@ import { createLiveEngine, type LiveEngineApi } from "../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { configureOpenCodePrimer } from "./primer-file.js"
@@ -207,6 +207,21 @@ export async function openCodeSessionMessages(list: MessagePage, sessionID: stri
     if (page.data.length < limit || !cursor) return messages
     page = await list({ sessionID, limit, cursor })
   }
+}
+
+/**
+ * The pages and the fork are separate startup steps. The page read used to
+ * finish before its step began, so a silence there had no watch and no name:
+ * one fork of a long session sat in that gap (2026-11-04).
+ */
+export async function openCodeForkUnderWatch<Session>(
+  step: <Value>(name: string, work: Promise<Value>) => Promise<Value>,
+  list: MessagePage,
+  fork: (before: string | undefined) => Promise<Session>,
+  source: { nativeId: string; runId: string; steers?: number },
+): Promise<Session> {
+  const messages = await step("fork history", openCodeSessionMessages(list, source.nativeId))
+  return step("session", fork(openCodeForkBoundary(messages, source.runId, source.steers ?? 0)))
 }
 
 /** OpenCode's ascending identifiers: a 48-bit time and counter, then 14 random base62 characters. */
@@ -888,10 +903,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const fork = options.fork
         if (options.resume || fork) {
           session = fork
-            ? await trace.step("session-open", async () => api.watch.step("session", api.client.session.fork({
-                sessionID: fork.nativeId,
-                before: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId, fork.steers),
-              })))
+            ? await trace.step("session-fork", () => openCodeForkUnderWatch(
+                (name, work) => api.watch.step(name, work),
+                (input) => api.client.message.list(input),
+                (before) => api.client.session.fork({ sessionID: fork.nativeId, before }),
+                fork,
+              ))
             : await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
           // A session resumed in another folder, as a Thread's move into its worktree does, goes on there: OpenCode keeps its folder on the session.
           if (!fork && !sameFolder(session.location.directory, cwd)) {
@@ -967,7 +984,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return live
       })
       if (text.trim() === "/compact" && attachments.length === 0) {
-        dispatch.report({ kind: "submitted", source: "transport-call" })
+        handOff(dispatch, { kind: "submitted", source: "transport-call" })
         await startCompaction(live, randomUUID(), dispatch)
         return
       }
@@ -984,9 +1001,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.closed || live.turn) throw new Error("The session changed while preparing the prompt")
         return slashInvocation(text, live.catalog)
       })
-      const files = promptFiles(attachments)
+      const files = preparePrompt(dispatch, () => promptFiles(attachments))
       const inboxId = slash?.kind === "command" ? undefined : messageIds.next()
       const turn: Turn = { kind: slash?.kind === "command" ? "command" : "prompt", inboxId, enqueued: false, delivered: false, dispatch }
+      handOff(dispatch, { kind: "submitted", source: "transport-call", correlationId: inboxId })
       live.turn = turn
       live.providerTurnCause = undefined
       live.stopped.clear()
@@ -994,7 +1012,6 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
       live.nativeStream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, run: inboxId, attachments })
-      dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
       try {
         if (slash?.kind === "command") {
           await live.api.client.session.command({ sessionID: live.root, name: slash.name, text: slash.rest, files })

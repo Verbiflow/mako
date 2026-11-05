@@ -67,4 +67,8 @@ for (const agent of crew.slice(0, 3)) {
   assert.doesNotMatch(line, /\/Users\/|2>&1|&&/, `a Fin's line is a phrase: ${line}`)
 }
 
+assert.equal(childLine({ kind: "queued", reason: "place-full", ahead: 2 }), "Queued: 2 ahead")
+assert.equal(childLine({ kind: "queued", reason: "tree-running", ahead: 0, after: ["build", "lint"] }), "Starts after build, lint", "a Fin started after others says which")
+assert.equal(childLine({ kind: "queued", reason: "tree-running", ahead: 0, after: ["build"], held: "lint" }), "Not started: lint didn't finish")
+
 console.log("Fin words: one count and one vocabulary for every surface, an idle Fin never counted as work, steps as phrases")

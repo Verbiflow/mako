@@ -216,7 +216,7 @@ export const ReportSchema = z.object({
 })
 export type Report = z.infer<typeof ReportSchema>
 
-/** Why a spawn waits: the tree's running budget, this Mac's room (`macSlots`), or (from 8.4) another place. */
+/** Why a spawn waits: the tree's running budget, the person's limit of Fins at once (`place-full`), or (from 8.4) another place. */
 export type QueueReason = "tree-running" | "place-full" | "device-offline"
 
 /**
@@ -244,8 +244,8 @@ export interface ChildThread {
   model?: string
   /** Its model, reasoning and fast lane in words, from its harness's catalog. */
   runsOn?: FinTuningWords
-  /** The admission queue holds it. */
-  queued?: { reason: QueueReason; ahead: number }
+  /** The admission queue holds it: for a place, and for the Fins it starts after (`after`, `held`). */
+  queued?: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string }
   starting?: "placing" | "preparing" | "booting" | "launching"
   /** A turn or its process is at work. */
   working?: boolean
@@ -281,7 +281,10 @@ export function reportPhase(report: Report | undefined): string | undefined {
  * whose last word is a question reads as blocked on it.
  */
 export function childState(edge: ThreadParent, thread: ChildThread, journal: ChildJournal): ChildState {
-  if (thread.queued) return { kind: "queued", reason: thread.queued.reason, ahead: thread.queued.ahead }
+  if (thread.queued) {
+    const { reason, ahead, after, held, refused } = thread.queued
+    return { kind: "queued", reason, ahead, ...(after?.length && { after }), ...(held && { held }), ...(refused && { refused }) }
+  }
   const latest = journal.latest
   // A stop after its last report is how it ended, in the words of whoever stopped it, whatever its harness still winds down.
   if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
@@ -380,10 +383,20 @@ function carried(state: ChildState): ChildState {
 }
 const NOTE_LIMIT = 8192
 
+/** A queued Fin's row: what it starts after, else the place it waits for. */
+export function queuedWords(state: Extract<ChildState, { kind: "queued" }>): string {
+  if (state.refused) return `Not started: ${state.refused.replace(/^It didn't start: /, "")}`
+  if (state.held) return `Not started: ${state.held} didn't finish, so its ${APEX_WORD} decides`
+  if (state.after?.length) return `Starts after ${state.after.join(", ")} ${state.after.length === 1 ? "finishes" : "finish"}`
+  if (state.reason === "tree-running") return `Queued: ${state.ahead} ahead, the tree's running budget is in use`
+  if (state.reason === "place-full") return `Queued: ${state.ahead} ahead, your limit of Fins at once is in use`
+  return `Queued: ${state.ahead} ahead`
+}
+
 function entryState(state: ChildState): NativeAgent["state"] {
   switch (state.kind) {
     case "queued":
-      return { kind: "waiting", reason: state.reason === "tree-running" ? `Queued: ${state.ahead} ahead, the tree's running budget is in use` : state.reason === "place-full" ? `Queued: this Mac is busy, ${state.ahead} ahead` : `Queued: ${state.ahead} ahead` }
+      return { kind: "waiting", reason: queuedWords(state) }
     case "starting":
       return { kind: "working", activity: "Starting" }
     case "working":
@@ -457,7 +470,7 @@ export interface TreeBudget {
   /** Threads started in total. */
   started: number
 }
-export const TREE_BUDGET: TreeBudget = { running: 20, started: 100 }
+export const TREE_BUDGET: TreeBudget = { running: 32, started: 100 }
 
 /** The host's Fins for Diagnostics: how many, how many run (and of those, how many a process Mako didn't start runs), and each tree against its budgets. */
 export interface AgentsDiagnostics {

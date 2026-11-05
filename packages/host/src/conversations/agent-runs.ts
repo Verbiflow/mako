@@ -37,6 +37,9 @@ const DISCOVER_MS = 10 * 60_000
 const DISCOVER_START_MS = 60_000
 /** A stopped run gets this long before its process group is killed. */
 export const STOP_GRACE_MS = 5_000
+/** How often a stopped run's exit is looked for, and how long past its kill before Mako takes it as gone. */
+const GONE_EVERY_MS = 50
+const GONE_AFTER_KILL_MS = 2_000
 /**
  * How long a run's Session stays quiet after its process went before the run
  * is declared ended: a chat resumed in a new process (to hand it a message)
@@ -125,6 +128,11 @@ export interface RunAdoption {
 export class AgentRuns {
   private readonly deps: AgentRunsDeps
   private readonly followed = new Map<string, Followed>()
+  /**
+   * Runs Mako stopped whose processes haven't exited yet, by child: shown stopped, their end written, but still at
+   * work on the machine, so each holds its place until its process group, the same process by pid and start, is gone.
+   */
+  private readonly terminating = new Map<string, NonNullable<FollowedRun["process"]>>()
   private readonly byNative = new Map<string, string>()
   private readonly byPath = new Map<string, string>()
   private readonly demand: JobDemand
@@ -168,6 +176,8 @@ export class AgentRuns {
       ...(title && { title }),
       harness: run.harness,
       ...(!ended && { working: revived || reading.alive !== false || reading.activity === "active" }),
+      // Stopped and shown so, but its process still exits: it's at work on the machine until it has.
+      ...(this.terminating.has(child) && { working: true }),
       ...(!ended && reading.step && { step: reading.step }),
       ...(!ended && reading.activity === "needs-input" && { waiting: { question: "It waits for an answer in its own terminal.", on: "person" as const } }),
       ...(ended && { ended: { outcome: ended.kind === "unknown" ? "unknown" : ended.kind, ...(ended.detail && { reason: ended.detail }), at: ended.at } }),
@@ -286,11 +296,36 @@ export class AgentRuns {
     const run = followed?.edge.run
     const store = this.deps.store()
     if (!followed || !run || !store || run.ended || !run.process || run.device !== store.deviceId) return false
-    const { pid } = run.process
+    const process = run.process
+    const { pid } = process
+    this.terminating.set(child, process)
     this.end(followed, { at: this.now(), kind: "stopped", ...(detail && { detail }), ...(followed.reading.toolUses && { toolUses: followed.reading.toolUses }) })
     signalGroup(pid, "SIGTERM")
     setTimeout(() => signalGroup(pid, "SIGKILL"), STOP_GRACE_MS).unref()
+    void this.untilGone(child, process)
     return true
+  }
+
+  /** Whether a run Mako stopped is still exiting: it reads as at work, and holds its place, until it has. */
+  isTerminating(child: string): boolean {
+    return this.terminating.has(child)
+  }
+
+  /**
+   * Waits for a stopped run's process group to exit, its kill's grace included, then lets its place go: its Fin's
+   * entry moves, and what waits for the place hears it then. A host can't wait on a process it didn't spawn, so it
+   * looks every `GONE_EVERY_MS`, as long as the kill can take.
+   */
+  private async untilGone(child: string, process: NonNullable<FollowedRun["process"]>): Promise<void> {
+    const deadline = this.now() + STOP_GRACE_MS + GONE_AFTER_KILL_MS
+    try {
+      while (!this.stopped && this.now() < deadline && (groupRuns(process.pid) || await processIdentityMatches({ pid: process.pid, startedAt: process.startedAt, exact: process.startedAt !== undefined, signal: this.abort.signal }).catch(() => false)))
+        await new Promise((resolve) => setTimeout(resolve, GONE_EVERY_MS))
+    } finally {
+      if (this.terminating.get(child) === process) this.terminating.delete(child)
+      const followed = this.followed.get(child)
+      if (followed && !this.stopped) this.deps.changed(followed.edge, false)
+    }
   }
 
   /**
@@ -709,6 +744,16 @@ async function lastLine(file: string): Promise<string | undefined> {
 function signalable(pid: number): boolean {
   try {
     process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
+
+/** Whether any process of the group `pid` leads still runs; false for one that leads none. */
+function groupRuns(pid: number): boolean {
+  try {
+    process.kill(-pid, 0)
     return true
   } catch (error) {
     return error instanceof Error && "code" in error && error.code === "EPERM"
