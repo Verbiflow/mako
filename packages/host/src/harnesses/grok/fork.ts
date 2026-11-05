@@ -7,6 +7,7 @@ import { acpReadable, acpWritable } from "../acp-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import type { AcpForkInput } from "../acp-source.js"
 import { spawnProviderProcess } from "../provider-process.js"
+import { ProviderStartupWatch } from "../provider-startup.js"
 import { grokSessionSource } from "./session-source.js"
 import { heavy } from "../../base/heavy-packages.js"
 
@@ -171,23 +172,26 @@ export async function grokFork(input: AcpForkInput): Promise<string> {
   const deadline = setTimeout(kill, FORK_MS)
   input.signal.addEventListener("abort", kill, { once: true })
   if (input.signal.aborted) kill()
+  const watch = new ProviderStartupWatch(child, { harness: "Grok fork", stderr: () => stderr })
   const connection = new ClientSideConnection(() => client, ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)))
   try {
-    await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: input.clientCapabilities })
-    const reply = await connection.extMethod("_x.ai/session/fork", {
+    await watch.step("initialize", connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: input.clientCapabilities }))
+    const reply = await watch.step("session fork", connection.extMethod("_x.ai/session/fork", {
       sourceSessionId: input.nativeId,
       sourceCwd,
       newCwd: input.cwd,
       targetPromptIndex: Number(input.checkpoint),
       sessionKind: "fork",
-    })
+    }))
     return Forked.parse(reply).newSessionId
   } catch (error) {
     const reason = input.signal.aborted ? "the conversation closed" : child.exitCode !== null || child.signalCode !== null
       ? `its process exited${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)}` : ""}`
       : errorMessage({ error })
-    throw new Error(`Grok could not fork the session: ${reason}`, { cause: error })
+    const during = input.signal.aborted ? "" : ` during ${watch.steps.at(-1)?.name ?? "startup"}`
+    throw new Error(`Grok could not fork the session${during}: ${reason}`, { cause: error })
   } finally {
+    watch.dispose()
     // The copy is whole when Grok answers, and Grok takes about two seconds to exit once its input closes.
     child.kill()
     await exited

@@ -7,6 +7,7 @@ import { acpReadable, acpWritable } from "../acp-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import type { AcpForkInput } from "../acp-source.js"
 import { spawnProviderProcess } from "../provider-process.js"
+import { ProviderStartupWatch } from "../provider-startup.js"
 import { devinCliDirectory } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
 
@@ -66,18 +67,21 @@ export async function devinFork(input: AcpForkInput): Promise<string> {
   const deadline = setTimeout(kill, FORK_MS)
   input.signal.addEventListener("abort", kill, { once: true })
   if (input.signal.aborted) kill()
+  const watch = new ProviderStartupWatch(child, { harness: "Devin fork", stderr: () => stderr })
   const connection = new ClientSideConnection(() => client, ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)))
   try {
     const capabilities = input.clientCapabilities
-    await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: { ...capabilities, _meta: { ...capabilities._meta, "cognition.ai/revert": true } } })
-    const reply = await connection.extMethod("_cognition.ai/revert/forkFromStep", { sessionId: input.nativeId, targetNodeId: Number(input.checkpoint) })
+    await watch.step("initialize", connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: { ...capabilities, _meta: { ...capabilities._meta, "cognition.ai/revert": true } } }))
+    const reply = await watch.step("session fork", connection.extMethod("_cognition.ai/revert/forkFromStep", { sessionId: input.nativeId, targetNodeId: Number(input.checkpoint) }))
     return Forked.parse(reply).forkedSessionId
   } catch (error) {
     const reason = input.signal.aborted ? "the conversation closed" : child.exitCode !== null || child.signalCode !== null
       ? `its process exited${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)}` : ""}`
       : errorMessage({ error })
-    throw new Error(`Devin could not fork the session: ${reason}`, { cause: error })
+    const during = input.signal.aborted ? "" : ` during ${watch.steps.at(-1)?.name ?? "startup"}`
+    throw new Error(`Devin could not fork the session${during}: ${reason}`, { cause: error })
   } finally {
+    watch.dispose()
     child.stdin.end()
     await exited
     clearTimeout(deadline)

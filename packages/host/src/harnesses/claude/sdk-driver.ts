@@ -826,7 +826,7 @@ export function createClaudeSdkDriver(
           throw new Error("Claude disconnected during initialization")
         // A resumed session's hooks have not reported its transcript yet, and
         // recovery refuses a reopened session that names no source.
-        if (options.resume) await transcript.locate(live.state.nativeId)
+        if (options.resume) await trace.step("session-resume", () => transcript.locate(live.state.nativeId))
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
         transcriptTail(live)
