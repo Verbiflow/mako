@@ -2,6 +2,7 @@ import { z } from "zod"
 import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { isProviderWork, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
+import { readFinReports, type FinReportCard } from "./fin-reports.js"
 
 /** Who an agent's words in a Thread are from, as their header names them: a Fin's Apex, or an Apex's Fins (a digest of their reports). */
 export const YOUR_APEX = `your ${APEX_WORD}`
@@ -94,6 +95,8 @@ export interface AgentWords {
   from: string
   body: string
   passedOn?: { added?: string }
+  /** A wake's reports as data (`readFinReports`), each drawn as a message from its Fin; the body is then the Apex's alone. */
+  reports?: FinReportCard[]
 }
 
 export function agentWords(text: string): AgentWords | undefined {
@@ -106,13 +109,14 @@ export function agentWords(text: string): AgentWords | undefined {
   }
   const header = AGENT_HEADER.exec(text)
   if (!header) return undefined
-  const body = text
+  const { text: words, reports } = readFinReports(text)
+  const body = words
     .slice(header[0].length)
     .split("\n")
     .filter((line) => line !== BRIEF_CLOSE && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
     .join("\n")
     .trim()
-  return { from: spoken(header[1]!), body }
+  return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }
 }
 
 function spoken(from: string): string {

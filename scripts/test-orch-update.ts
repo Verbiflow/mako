@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -84,7 +85,12 @@ async function reportsUnheard(): Promise<void> {
     await world.settle()
     const woken = digests(world, apex.conversation)
     assert.equal(woken.length, 1, "one wake, from the new host")
-    for (const harness of CHILDREN) assert.equal(woken[0]!.text.split(`"review-${harness}"`).length - 1, 1, `${harness}'s report once`)
+    // The words name each report once; the same report rides after them as data, for the person's card of it.
+    const { text: words, reports } = readFinReports(woken[0]!.text)
+    for (const harness of CHILDREN) {
+      assert.equal(words.split(`"review-${harness}"`).length - 1, 1, `${harness}'s report once`)
+      assert.equal(reports.filter((card) => card.name === `review-${harness}`).length, 1, `${harness}'s report once as data`)
+    }
     assert.equal(world.store.undeliveredReports().length, 0)
   } finally {
     await world.close()

@@ -202,10 +202,12 @@ export function frontDoorText(orchCase: OrchCase): string | undefined {
   return lines.length ? controlNote(lines) : undefined
 }
 
+/** A report's IDs, the same each time a case is read, so the wake the harness got and the one it's checked against are one text. */
+const reportIds = (name: string) => ({ id: namedUuid(`eval:report:${name}`), child: ThreadIdSchema.parse(namedUuid(`eval:child:${name}`)) })
+
 function askReport(ask: EvalAsk, child: EvalChild): Report {
   return {
-    id: randomUUID(),
-    child: ThreadIdSchema.parse(randomUUID()),
+    ...reportIds(child.name),
     status: ask.kind === "report" ? "needs-input" : "blocked",
     summary: ask.kind === "report" ? child.topic : `It waits: ${ask.line}`,
     question: ask.kind === "report" ? ask.line : apexAsk(ask.line, ask.kind === "approval"),
@@ -228,13 +230,13 @@ export function wakeText(orchCase: OrchCase): string | undefined {
   const notices = [
     ...asks.map((ask) => ({ child: childOf(ask.name), report: askReport(ask, childOf(ask.name)) })),
     ...finished.map((done) => ({ child: childOf(done.name), report: finishedReport(done) })),
-  ].map(({ child, report }) => ({ id: randomUUID(), report, label: `"${child.name}" (${child.harness})`, from: randomUUID() }))
+  ].map(({ child, report }) => ({ id: randomUUID(), report, label: `"${child.name}" (${child.harness})`, fin: { name: child.name, harness: child.harness }, from: randomUUID() }))
   const tally = (states: readonly EvalChild["state"][]) => children.filter((child) => states.includes(child.state)).length
   return digest(notices, `${tally(["working"])} working, ${tally(["blocked"])} blocked, ${tally(["done", "failed", "stopped"])} ended.`)
 }
 
 function finishedReport(done: z.infer<typeof EvalFinished>): Report {
-  return { id: randomUUID(), child: ThreadIdSchema.parse(randomUUID()), status: done.status, summary: done.summary, ...(done.artifacts && { artifacts: done.artifacts }), ownerGeneration: 1, at: NOW }
+  return { ...reportIds(done.name), status: done.status, summary: done.summary, ...(done.artifacts && { artifacts: done.artifacts }), ownerGeneration: 1, at: NOW }
 }
 
 /** The case's Thread before the turn it grades: its earlier turns, and the person's message when its Fins' wake is the turn. */
