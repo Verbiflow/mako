@@ -3,8 +3,11 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { ProviderChildren } from "@mako/host/base/provider-children"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { spawn } from "node:child_process"
 import {
+  endProviderProcess,
   MissingWorkingDirectoryError,
+  providerProcessGone,
   spawnProviderProcess,
 } from "@mako/host/harnesses/provider-process"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
@@ -49,6 +52,23 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
 
+  // Ending a provider: one that leaves when its input closes is only asked; one that ignores its input and SIGTERM
+  // is killed, so whoever ends it never waits on it forever. The grace is the escalation's, not a deadline.
+  const willing = spawnProviderProcess(process.execPath, ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0))"], { cwd: root })
+  await endProviderProcess(willing, "input", 60_000)
+  assert.deepEqual([willing.exitCode, willing.signalCode], [0, null], "a provider that leaves when its input closes is never signalled")
+  const stubborn = spawnProviderProcess(process.execPath, ["-e", "process.on('SIGTERM', () => {}); process.stdin.resume(); setInterval(() => {}, 1000); process.stdout.write('ready')"], { cwd: root })
+  await new Promise((resolve) => stubborn.stdout.once("data", resolve))
+  const ending = endProviderProcess(stubborn, "input", 200)
+  assert.equal(endProviderProcess(stubborn), ending, "a second end joins the first")
+  await ending
+  assert.equal(stubborn.signalCode, "SIGKILL", "a provider that ignores its input and SIGTERM is killed")
+  assert.ok(providerProcessGone(stubborn))
+  const never = spawn(join(root, "no-such-executable"), [])
+  never.once("error", () => {})
+  await endProviderProcess(never)
+  assert.ok(providerProcessGone(never), "a process that never started counts as gone, and ending it settles")
+
   await assert.rejects(
     new DiscoveryProcesses().run({ command: process.execPath, args: ["-e", ""], env: process.env, cwd: gone }, async () => "ran"),
     /no longer exists/,
@@ -62,4 +82,4 @@ try {
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
-console.log("Provider process: a missing folder is named for spawned harnesses, discovery and the Cursor child; an existing one starts")
+console.log("Provider process: a missing folder is named for spawned harnesses, discovery and the Cursor child; an existing one starts; ending one asks, then escalates to SIGKILL")

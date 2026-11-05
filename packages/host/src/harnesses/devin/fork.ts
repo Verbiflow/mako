@@ -6,7 +6,7 @@ import { z } from "zod"
 import { acpReadable, acpWritable } from "../acp-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import type { AcpForkInput } from "../acp-source.js"
-import { spawnProviderProcess } from "../provider-process.js"
+import { endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
 import { ProviderStartupWatch } from "../provider-startup.js"
 import { devinCliDirectory } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
@@ -55,36 +55,36 @@ export async function devinFork(input: AcpForkInput): Promise<string> {
   if (!NODE.test(input.checkpoint)) throw new Error(`Devin could not fork the session: ${JSON.stringify(input.checkpoint)} is not one of its nodes`)
   const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("devin fork")
   const child = spawnProviderProcess(input.executable, input.args, { cwd: input.cwd, env: input.env }, { kind: "acp:devin-fork", owner: input.owner })
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve())
-    child.once("error", () => resolve())
-  })
   let stderr = ""
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-2000)
   })
-  const kill = () => child.kill()
+  const kill = () => void endProviderProcess(child)
   const deadline = setTimeout(kill, FORK_MS)
   input.signal.addEventListener("abort", kill, { once: true })
   if (input.signal.aborted) kill()
   const watch = new ProviderStartupWatch(child, { harness: "Devin fork", stderr: () => stderr })
   const connection = new ClientSideConnection(() => client, ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)))
+  let failed = false
   try {
     const capabilities = input.clientCapabilities
     await watch.step("initialize", connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: { ...capabilities, _meta: { ...capabilities._meta, "cognition.ai/revert": true } } }))
     const reply = await watch.step("session fork", connection.extMethod("_cognition.ai/revert/forkFromStep", { sessionId: input.nativeId, targetNodeId: Number(input.checkpoint) }))
     return Forked.parse(reply).forkedSessionId
   } catch (error) {
-    const reason = input.signal.aborted ? "the conversation closed" : child.exitCode !== null || child.signalCode !== null
+    failed = true
+    const reason = input.signal.aborted ? "the conversation closed" : providerProcessGone(child)
       ? `its process exited${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)}` : ""}`
       : errorMessage({ error })
     const during = input.signal.aborted ? "" : ` during ${watch.steps.at(-1)?.name ?? "startup"}`
     throw new Error(`Devin could not fork the session${during}: ${reason}`, { cause: error })
   } finally {
     watch.dispose()
-    child.stdin.end()
-    await exited
     clearTimeout(deadline)
     input.signal.removeEventListener("abort", kill)
+    // Its input closed, Devin stops its shells and exits. A fork that worked waits for that, so the copy is unlocked;
+    // a failure reaches the caller without waiting: the process is still ended, SIGKILL if it must be.
+    const ended = endProviderProcess(child, "input")
+    if (!failed) await ended
   }
 }

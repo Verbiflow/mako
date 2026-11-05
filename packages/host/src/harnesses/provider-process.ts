@@ -59,6 +59,48 @@ export function spawnProviderProcess(
   return child
 }
 
+/** Whether the process has exited as far as Node has seen, or never started; until then it is this one's unreaped child. */
+export function providerProcessGone(child: ChildProcess): boolean {
+  return child.pid === undefined || child.exitCode !== null || child.signalCode !== null
+}
+
+const ending = new WeakMap<ChildProcess, Promise<void>>()
+
+/**
+ * Ends a provider process this host spawned, and resolves once it's gone or once waiting is pointless: `first` asks
+ * it to go (its input closed, or SIGTERM), then SIGTERM if it hasn't, then SIGKILL, a grace apart; a process still
+ * there a grace after SIGKILL is warned of and no longer waited for. Every signal goes through the process's own
+ * handle and only before Node has seen it exit, while it is this process's unreaped child and its pid can't be
+ * another's. A second call joins the first.
+ */
+export function endProviderProcess(child: ChildProcess, first: "input" | "SIGTERM" = "SIGTERM", graceMs = END_GRACE_MS): Promise<void> {
+  const already = ending.get(child)
+  if (already) return already
+  const ended = new Promise<void>((resolve) => {
+    if (providerProcessGone(child)) return resolve()
+    const timers: ReturnType<typeof setTimeout>[] = []
+    const done = () => {
+      for (const timer of timers) clearTimeout(timer)
+      resolve()
+    }
+    child.once("exit", done)
+    child.once("error", () => { if (providerProcessGone(child)) done() })
+    const signal = (name: NodeJS.Signals) => {
+      if (!providerProcessGone(child)) child.kill(name)
+    }
+    if (first === "input") child.stdin?.end()
+    else signal("SIGTERM")
+    const harder: NodeJS.Signals[] = first === "input" ? ["SIGTERM", "SIGKILL"] : ["SIGKILL"]
+    harder.forEach((name, step) => timers.push(setTimeout(() => signal(name), graceMs * (step + 1))))
+    timers.push(setTimeout(() => {
+      hostWarn("provider", "a provider process outlived SIGKILL; no longer waiting for it", { pid: child.pid ?? "" })
+      done()
+    }, graceMs * (harder.length + 1)))
+  })
+  ending.set(child, ended)
+  return ended
+}
+
 /**
  * A provider's own children outlive it when it dies: the native binary under
  * an npm wrapper, a tool's shell, an MCP server. Nothing reads them any more,
@@ -100,3 +142,5 @@ function pipeRelease(child: ChildProcess, label: string): () => void {
 
 const PIPE_DRAIN_GRACE_MS = 1_000
 const GROUP_END_GRACE_MS = 2_000
+/** How long a provider gets to end at each request before the next, harder one. */
+const END_GRACE_MS = 2_000

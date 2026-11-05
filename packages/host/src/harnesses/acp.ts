@@ -38,7 +38,7 @@ import { adapters } from "./heavy.js"
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { spawnProviderProcess } from "./provider-process.js"
+import { endProviderProcess, spawnProviderProcess } from "./provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { acpPromptBlocks } from "./acp-prompt.js"
@@ -967,7 +967,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       // update. A process that closed its pipes without exiting is ended so
       // that exit comes.
       if (verdict.status === "failed" && connection.signal.aborted) {
-        if (live.child.exitCode === null && live.child.signalCode === null) live.child.kill()
+        void endProviderProcess(live.child)
         return
       }
       if (verdict.status === "failed")
@@ -1218,12 +1218,11 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const { child } = live
     if (child.exitCode !== null || child.signalCode !== null) return
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()))
-    const deadline = setTimeout(() => child.kill(), SHUTDOWN_GRACE_MS)
+    const deadline = setTimeout(() => void endProviderProcess(child), SHUTDOWN_GRACE_MS)
     if (live.closesSession && live.connection && live.sessionId)
       await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited])
-    child.stdin.end()
-    await exited
     clearTimeout(deadline)
+    await endProviderProcess(child, "input", SHUTDOWN_GRACE_MS)
   }
 
   function stop(): void {

@@ -1,5 +1,5 @@
 import type { PrefetchLaunch } from "../start-prefetch.js"
-import { spawnProviderProcess } from "../provider-process.js"
+import { endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
 import { execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { promisify } from "node:util"
@@ -140,10 +140,9 @@ export async function startOpenCodeApi(input: {
     input.signal?.removeEventListener("abort", abort)
     watch.dispose()
     lifetime.abort(new Error("OpenCode native API connection closed"))
-    child.stdin.end()
-    const terminate = setTimeout(() => { child.kill("SIGTERM") }, now ? 0 : 3000)
-    const kill = setTimeout(() => { child.kill("SIGKILL") }, 6000)
-    try { await closed } finally { clearTimeout(terminate); clearTimeout(kill) }
+    await endProviderProcess(child, now ? "SIGTERM" : "input", 3000)
+    // Its pipes close once it exits (`spawnProviderProcess`); one that outlived SIGKILL is no longer waited for.
+    if (providerProcessGone(child)) await closed
   })()
   const abort = () => { void close(true) }
   input.signal?.addEventListener("abort", abort, { once: true })

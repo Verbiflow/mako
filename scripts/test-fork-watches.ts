@@ -3,7 +3,7 @@
 // A stand-in agent answers `initialize` (or doesn't) and dies at a chosen
 // request; no timer decides anything.
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { devinFork } from "@mako/host/harnesses/devin/fork"
@@ -11,6 +11,12 @@ import { grokFork } from "@mako/host/harnesses/grok/fork"
 
 const AGENT = String.raw`
 const dieAt = process.env.DIE_AT
+if (dieAt === "refuse") {
+  // Refuses the handshake, then ignores its input closing and SIGTERM: only SIGKILL ends it.
+  process.on("SIGTERM", () => {})
+  setInterval(() => {}, 1000)
+  require("node:fs").writeFileSync(process.env.PID_FILE, String(process.pid))
+}
 let buffer = ""
 process.stdin.on("data", (chunk) => {
   buffer += chunk
@@ -21,11 +27,28 @@ process.stdin.on("data", (chunk) => {
       process.stderr.write("the store is locked\n")
       process.exit(3)
     }
-    if (message.method === "initialize")
+    if (message.method === "initialize" && dieAt === "refuse")
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "refused" } }) + "\n")
+    else if (message.method === "initialize")
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, agentCapabilities: {}, authMethods: [] } }) + "\n")
   }
 })
 `
+
+/** Whether the process is there; only probes it. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Resolves once the process is gone, checking again until it is. */
+async function gone(pid: number): Promise<void> {
+  while (alive(pid)) await new Promise((resolve) => setTimeout(resolve, 50))
+}
 
 const root = mkdtempSync(join(tmpdir(), "mako-fork-watches-"))
 try {
@@ -38,12 +61,13 @@ try {
   mkdirSync(join(grokHome, "sessions", encodeURIComponent(cwd), nativeId), { recursive: true })
   writeFileSync(join(grokHome, "sessions", encodeURIComponent(cwd), nativeId, "updates.jsonl"), "")
 
+  const pidFile = join(root, "agent.pid")
   const input = (dieAt: string, checkpoint: string) => ({
     nativeId,
     checkpoint,
     executable: process.execPath,
     args: [agent],
-    env: { ...process.env, NODE_OPTIONS: "", DIE_AT: dieAt, GROK_HOME: grokHome },
+    env: { ...process.env, NODE_OPTIONS: "", DIE_AT: dieAt, GROK_HOME: grokHome, PID_FILE: pidFile },
     cwd,
     clientCapabilities: {},
     owner: "test-fork-watches",
@@ -56,8 +80,16 @@ try {
     const closed = new AbortController()
     closed.abort()
     await assert.rejects(fork({ ...input("fork", checkpoint), signal: closed.signal }), new RegExp(`^Error: ${name} could not fork the session: the conversation closed$`))
+    // A failed fork reaches its caller without waiting for an agent that won't leave, and that agent is still ended.
+    // Its escalation runs on timers, which can't fire before the rejection's continuation: the agent is still there.
+    let aliveAtRejection = false
+    await assert.rejects(fork(input("refuse", checkpoint)).finally(() => {
+      aliveAtRejection = alive(Number(readFileSync(pidFile, "utf8")))
+    }), new RegExp(`^Error: ${name} could not fork the session during initialize: refused`), `${name}: a refusal from an agent that won't exit still rejects`)
+    assert.ok(aliveAtRejection, `${name}: the rejection reached the caller before the agent's exit`)
+    await gone(Number(readFileSync(pidFile, "utf8")))
   }
-  console.log("fork watches: Grok's and Devin's forks name the request their process died in, and a closed conversation says so")
+  console.log("fork watches: Grok's and Devin's forks name the request their process died in, a closed conversation says so, and a failure never waits on an agent that won't exit, which is still killed")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

@@ -28,7 +28,7 @@ import type { ReviewTarget as CodexReviewTarget } from "./codex/generated/v2/Rev
 import { CodexSideQuestions } from "./codex/side-questions.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { spawnProviderProcess } from "./provider-process.js"
+import { endProviderProcess, providerProcessGone, spawnProviderProcess } from "./provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { mergeWindows } from "../contracts/account-usage.js"
@@ -678,8 +678,9 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         updateState(live, { status: "closed" })
         live.stream?.closed()
         disposeLive(live, new Error("Codex session closed"))
-        if (!live.child.killed) live.child.kill()
-        await live.processClosed
+        await endProviderProcess(live.child)
+        // Its pipes close once it exits (`spawnProviderProcess`); one that outlived SIGKILL is no longer waited for.
+        if (providerProcessGone(live.child)) await live.processClosed
         await live.approvals.close()
         if (sessions.get(id) === live) sessions.delete(id)
       }
@@ -782,7 +783,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
 
   function protocolFatal(live: Live, message: string): void {
     handleProcessEnd(live, message)
-    if (!live.child.killed) live.child.kill()
+    void endProviderProcess(live.child)
   }
 
   function handleProcessEnd(live: Live, message: string): void {

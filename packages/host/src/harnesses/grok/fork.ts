@@ -6,7 +6,7 @@ import { z } from "zod"
 import { acpReadable, acpWritable } from "../acp-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import type { AcpForkInput } from "../acp-source.js"
-import { spawnProviderProcess } from "../provider-process.js"
+import { endProviderProcess, providerProcessGone, spawnProviderProcess } from "../provider-process.js"
 import { ProviderStartupWatch } from "../provider-startup.js"
 import { grokSessionSource } from "./session-source.js"
 import { heavy } from "../../base/heavy-packages.js"
@@ -160,20 +160,17 @@ export async function grokFork(input: AcpForkInput): Promise<string> {
   if (!sourceCwd) throw new Error("Grok could not fork the session: its saved copy isn't in Grok's sessions folder")
   const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("grok fork")
   const child = spawnProviderProcess(input.executable, input.args, { cwd: input.cwd, env: input.env }, { kind: "acp:grok-fork", owner: input.owner, session: null })
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve())
-    child.once("error", () => resolve())
-  })
   let stderr = ""
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-2000)
   })
-  const kill = () => child.kill()
+  const kill = () => void endProviderProcess(child)
   const deadline = setTimeout(kill, FORK_MS)
   input.signal.addEventListener("abort", kill, { once: true })
   if (input.signal.aborted) kill()
   const watch = new ProviderStartupWatch(child, { harness: "Grok fork", stderr: () => stderr })
   const connection = new ClientSideConnection(() => client, ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)))
+  let failed = false
   try {
     await watch.step("initialize", connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: input.clientCapabilities }))
     const reply = await watch.step("session fork", connection.extMethod("_x.ai/session/fork", {
@@ -185,17 +182,19 @@ export async function grokFork(input: AcpForkInput): Promise<string> {
     }))
     return Forked.parse(reply).newSessionId
   } catch (error) {
-    const reason = input.signal.aborted ? "the conversation closed" : child.exitCode !== null || child.signalCode !== null
+    failed = true
+    const reason = input.signal.aborted ? "the conversation closed" : providerProcessGone(child)
       ? `its process exited${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)}` : ""}`
       : errorMessage({ error })
     const during = input.signal.aborted ? "" : ` during ${watch.steps.at(-1)?.name ?? "startup"}`
     throw new Error(`Grok could not fork the session${during}: ${reason}`, { cause: error })
   } finally {
     watch.dispose()
-    // The copy is whole when Grok answers, and Grok takes about two seconds to exit once its input closes.
-    child.kill()
-    await exited
     clearTimeout(deadline)
     input.signal.removeEventListener("abort", kill)
+    // The copy is whole when Grok answers, and Grok takes about two seconds to exit once its input closes. A failure
+    // reaches the caller without waiting for the process: it is still ended, SIGKILL if it must be.
+    const ended = endProviderProcess(child)
+    if (!failed) await ended
   }
 }
