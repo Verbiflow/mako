@@ -249,11 +249,13 @@ export class AgentWakes {
     const request = held?.request ?? fresh[0]!.wake ?? namedUuid(`wake:${conversation}:${ids.join("\n")}`)
     try {
       const text = digest([...(held?.notices ?? []), ...fresh], this.deps.counts(conversation))
-      this.deps.assign(ids, held?.wake ?? request)
+      // The digest is written first: what it carries is what the journal holds, never what was only meant for it, so a
+      // host that dies between the two tells a report again rather than reading it heard.
       if (!this.deps.holdWake(conversation, request, text, { kind: "agent", session: SessionIdSchema.parse(fresh[0]!.from) })) {
         waiting.forTurnEnd = undefined
         return this.after(conversation, waiting, WAKE_COALESCE_MS)
       }
+      this.deps.assign(ids, held?.wake ?? request)
     } catch (error) {
       hostWarn("agents", "a digest could not be held; its notices wait for the next", { conversation, error: errorMessage({ error }) })
       return

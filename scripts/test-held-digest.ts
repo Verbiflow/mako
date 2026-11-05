@@ -11,8 +11,8 @@ import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
  * Reports that arrive while an Apex can't run wait as one digest and go once, in the first turn after it can
  * (`npm run test:held-digest`), on each of the six harnesses. The case of 2026-11-05: an Apex's plan ran out, its Fin
  * posted 25 reports, each woke the Apex and every turn failed the same way. Covered: a wake refused unsent, a wake its
- * harness accepted and failed with nothing done, a restart in the wait, a Stop in the wait and a message of the
- * person's in the wait.
+ * harness accepted and failed with nothing done, a restart in the wait, a crash as the digest is written, a Stop in
+ * the wait and a message of the person's in the wait.
  */
 
 const root = mkdtempSync(join(tmpdir(), "mako-held-digest-"))
@@ -152,6 +152,28 @@ try {
       await world.close()
     }
 
+    // A crash as the digest is written, with a report on its way into it: that report is never read as heard unsent.
+    {
+      const { world, limits } = worldOf(`${harness}-crash`)
+      const { conversation, fins } = await apexWithFins(world, harness, names.slice(0, 2))
+      limits.refused.add(conversation)
+      await report(world, conversation, fins.slice(0, 1), names)
+      let cut = false
+      world.live.holdWake = () => {
+        cut = true
+        throw new Error("the host died here")
+      }
+      world.release(fins[1]!)
+      await until(`${harness} crash: the write to be cut`, () => cut)
+      await world.restart()
+      limits.refused.clear()
+      world.live.wakeDue(Date.now() + LATER)
+      await until(`${harness} crash: fin-a heard`, () => digests(world, conversation).some((prompt) => prompt.text.includes(`"fin-a"`)))
+      await until(`${harness} crash: fin-b heard too`, () => digests(world, conversation).some((prompt) => prompt.text.includes(`"fin-b"`)), 5_000)
+      assert.equal(world.store.undeliveredReports().filter(({ report: kept }) => kept.status !== "progress").length, 0, `${harness} crash: nothing left unheard`)
+      await world.close()
+    }
+
     // A Stop in the wait: the digest stays, Stop's, and goes on a Resume alone.
     {
       const { world, limits } = worldOf(`${harness}-stop`)
@@ -187,7 +209,7 @@ try {
       assert.ok(order.indexOf(went[0]!.text) < order.findIndex((text) => text.includes("Then this.")), `${harness} person: the digest went first`)
       await world.close()
     }
-    console.log(`${harness}: a wake refused or failed at a limit knocked once for three reports, which waited as one digest and went once, across a restart, a Stop and the person's own message`)
+    console.log(`${harness}: a wake refused or failed at a limit knocked once for three reports, which waited as one digest and went once, across a restart, a crash mid-write, a Stop and the person's own message`)
   }
   console.log("held digest: ok")
 } finally {
