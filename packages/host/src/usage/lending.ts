@@ -23,6 +23,8 @@ export interface LendingDeps {
   lent: LentHere
   /** A served lease in Settings' words: what it is, and for whom. */
   words(lease: Lease): { what: string; for: string }
+  /** A file a served session made, given to its lease on the account's routes: sealed there, listed by name and hash. */
+  upload?(lease: string, file: string, name: string): Promise<{ name: string; hash: string; size: number }>
   /** A served lease ended: whatever it holds here lets go (a simulator's claim). */
   ended?(lease: Lease, why: LeaseEnd): void
   now?(): number
@@ -107,6 +109,14 @@ export class Lending {
     if (!this.#served.has(lease)) return
     this.#progress.set(lease, progress)
     if (this.#deps.beat(lease, progress)) this.#progress.delete(lease)
+  }
+
+  /** A file a served session made, for its borrower: only under a lease this device serves now. */
+  async artifact(lease: string, file: string, name: string): Promise<{ name: string; hash: string; size: number }> {
+    if (!this.#served.has(lease) || !this.#deps.upload) throw new Error("No lease this Mac serves takes that file")
+    const made = await this.#deps.upload(lease, file, name)
+    this.#deps.log?.("gave a lease a file", { lease, size: made.size })
+    return made
   }
 
   /** A verb ran under a served lease: opening reads as booting, anything after as running, said when it changes. */

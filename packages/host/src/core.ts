@@ -5,7 +5,7 @@ import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-valu
 import { sessionAccessTier } from "./contracts/access.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { stat, writeFile } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
 import { controlArtifactsRoot, controlRecordingsRoot } from "@mako/control/program"
 import { homedir } from "node:os"
@@ -43,6 +43,8 @@ import { Advertiser, ADVERTISE_EVERY_MS } from "./base/advertiser.js"
 import { deviceProbe, probeCapabilities, type SimulatorFacts } from "./base/capabilities.js"
 import { LentHere } from "./base/lent.js"
 import { operationWords } from "@mako/protocol/borrow-words"
+import { BorrowAnswerSchema } from "@mako/protocol/borrow"
+import { z } from "zod"
 import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice, Lending, LEND_BEAT_MS } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
@@ -54,7 +56,7 @@ import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
-import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
+import { BorrowedSimulators, ControlResidency, LeaseEnded, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService, type SimulatorBorrowing } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
@@ -360,6 +362,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
   })
   const { catalog, store } = threads
+  // On a cloud Thread's machine its simulators are a Mac of the person's, borrowed under a session lease through the
+  // machine's own routes to the account's broker.
+  const borrowedSimulators = config.machineAgentFd === undefined
+    ? undefined
+    : new BorrowedSimulators({ port: machineBorrowing(() => machineLink), shots: join(environment.dataRoot, "simulators", "borrowed") })
   const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), (session) => {
     const parsed = SessionIdSchema.safeParse(session)
     const placed = parsed.success && store ? store.sessionPlacement(parsed.data) : undefined
@@ -373,7 +380,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }, {
     leaseOf: (via, thread) => late.lending?.leaseOf(via, thread, "ios-simulator")?.id,
     used: (lease, verb) => late.lending?.used(lease, verb),
-  })
+    artifact: async (lease, file, name) => {
+      if (!late.lending) throw new Error("This Mac lends nothing")
+      return late.lending.artifact(lease, file, name)
+    },
+  }, borrowedSimulators)
   const appUpdates = new Updates({
     environment,
     git,
@@ -705,6 +716,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         beat: (lease, progress, streams) => late.cloud?.beat?.(lease, progress, streams) ?? false,
         streams: (lease) => (lease.resource.ref === "ios-simulator" ? [{ name: "screen", kind: "video" }] : []),
         lent,
+        upload: async (lease, file, name) => {
+          if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+          return late.cloud.borrow.artifact(lease, name, file, (await stat(file)).size)
+        },
         words: (lease) => ({ what: operationWords(lease.resource.ref), for: lease.borrower.place.kind === "machine" ? "a cloud Thread" : "a Thread on another device" }),
         ended: (lease) => control.simulators.releaseThread({ thread: lease.borrower.thread }),
         log: (message, fields) => hostLog("borrowing", message, fields),
@@ -1789,3 +1804,28 @@ function watchOwnBuild(directories: readonly string[], emit: (event: HostEvent) 
     }
   })
 }
+
+/** A cloud Thread's machine's routes to the account's broker, as its credential names it, for borrowing a simulator. */
+function machineBorrowing(link: () => MachineGatewayLink | null): SimulatorBorrowing {
+  const call = async (method: string, path: string, body?: string): Promise<Response> => {
+    const linked = link()
+    if (!linked) throw new Error("This machine isn't linked to Mako's cloud yet.")
+    const url = new URL(`/v1/machines/${encodeURIComponent(linked.machine)}/borrow${path}`, linked.gatewayUrl)
+    return fetch(url, { method, headers: { authorization: `Bearer ${linked.credential}`, ...(body !== undefined && { "content-type": "application/json" }) }, ...(body !== undefined && { body }), signal: AbortSignal.timeout(75_000) })
+  }
+  const ok = async (response: Response): Promise<Response> => {
+    if (response.status === 410) throw new LeaseEnded(await response.text())
+    if (!response.ok) throw new Error(`Mako's cloud answered ${response.status}`)
+    return response
+  }
+  return {
+    need: async (need) => BorrowAnswerSchema.parse(await (await ok(await call("POST", "/needs", JSON.stringify(need)))).json()),
+    release: async (lease) => void (await call("DELETE", `/leases/${encodeURIComponent(lease)}`)),
+    renew: async (lease) => BorrowAnswerSchema.parse(await (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/renew`))).json()),
+    call: async (lease, operation) => (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/call`, operation))).text(),
+    artifact: async (lease, hash) => new Uint8Array(await (await ok(await call("GET", `/leases/${encodeURIComponent(lease)}/artifacts/${encodeURIComponent(hash)}`))).arrayBuffer()),
+    devices: async (ref) => WordedDevicesSchema.parse(await (await ok(await call("GET", `/devices?ref=${encodeURIComponent(ref)}`))).json()).devices,
+  }
+}
+
+const WordedDevicesSchema = z.object({ devices: z.array(z.object({ id: z.string(), name: z.string(), online: z.boolean(), lastSeen: z.number().nullable() }).strip()) })
