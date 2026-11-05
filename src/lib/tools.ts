@@ -373,12 +373,22 @@ function ordered(value: ToolContent | undefined): ToolContent | undefined {
  */
 function callKey(call: ToolCall, harness: string | undefined): string {
   const { kind, server, tool, command } = call.tool
-  if (kind === "shell" && command) {
-    const folder = call.cwd ?? commandFolder(harness, tool ?? call.name, toolArguments(toolInputText(call.arguments)))
-    return `${kind}\0\0${command.trim()}\0${folder ?? ""}`
-  }
-  const args = JSON.stringify(ordered(parseToolArguments(call.arguments)) ?? toolInputText(call.arguments) ?? "")
-  return `${kind}\0${server ? `${server}:${tool ?? ""}` : ""}\0${args}`
+  if (kind === "shell" && command) return `${kind}\0\0${command.trim()}\0${call.cwd ?? argumentKey(call, harness)}`
+  return `${kind}\0${server ? `${server}:${tool ?? ""}` : ""}\0${argumentKey(call, harness)}`
+}
+
+const argumentKeys = new WeakMap<ToolIdentity, string>()
+
+/** What a call's arguments add to its identity, read once per identity: a command's folder, any other call's arguments whole. */
+function argumentKey(call: ToolCall, harness: string | undefined): string {
+  const known = argumentKeys.get(call.tool)
+  if (known !== undefined) return known
+  const input = toolInputText(call.arguments)
+  const key = call.tool.kind === "shell" && call.tool.command
+    ? commandFolder(harness, call.tool.tool ?? call.name, toolArguments(input)) ?? ""
+    : JSON.stringify(ordered(parseToolArguments(call.arguments)) ?? input ?? "")
+  argumentKeys.set(call.tool, key)
+  return key
 }
 
 /** A call that went through: it returned, not failed, and exited 0 by the exit facts its row shows (`failedExitCode`). */
@@ -393,6 +403,7 @@ function succeeded(call: ToolCall, harness: string | undefined): boolean {
  * asks only what came after it.
  */
 export function unfixedFailures(calls: readonly ToolCall[], harness?: string): number {
+  if (!calls.some((call) => call.isError)) return 0
   const fixed = new Set<string>()
   let failed = 0
   for (let index = calls.length - 1; index >= 0; index -= 1) {
