@@ -2,10 +2,12 @@ import { applyControlEnvironment } from "../../control/index.js"
 import { applyThreadEnvironment } from "../../workspaces/index.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { ClaudeSdkConfiguration } from "./sdk-driver.js"
-import { acpMcpServers } from "../../tools/index.js"
+import { acpMcpServers, MAKO_TOOL_TIMEOUT_MS } from "../../tools/index.js"
+import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
 import type { AdmittedStartOptions } from "../live-driver.js"
 import { layerOf } from "../mako-layer.js"
 import { claudeLayer } from "./layer.js"
+import { CLAUDE_FIN_AGENT, CLAUDE_FIN_DEFINITION } from "./routing.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
 import { claudeRuntime } from "./runtime.js"
 import type { ProviderLaunchTrace } from "../provider-launch.js"
@@ -58,6 +60,11 @@ export async function claudeSdkOptions(
     }
   }
   Object.assign(mcpServers, layer.servers)
+  const tools = input.conversationTools
+  const primer = input.primer !== false
+  const inProcess = primer && input.inProcessMako !== false ? tools?.makoServer : undefined
+  if (inProcess && tools?.makoUrl)
+    mcpServers[MAKO_THREAD_SERVER] = { type: "sdk", name: MAKO_THREAD_SERVER, instance: await inProcess(), timeout: MAKO_TOOL_TIMEOUT_MS }
   const appended = layer.append
   return { account, options: {
     cwd,
@@ -79,6 +86,7 @@ export async function claudeSdkOptions(
     settings: tuning.fast === undefined ? undefined : { fastMode: tuning.fast },
     settingSources: ["user", "project", "local"],
     systemPrompt: { type: "preset", preset: "claude_code", ...appended && { append: appended } },
+    ...primer && tools?.makoUrl && { agents: { [CLAUDE_FIN_AGENT]: CLAUDE_FIN_DEFINITION } },
     mcpServers,
     includePartialMessages: true,
     title: input.title,

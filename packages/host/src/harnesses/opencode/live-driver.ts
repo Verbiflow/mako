@@ -28,7 +28,10 @@ import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
+import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
+import { configureOpenCodePrimer } from "./primer-file.js"
+import { instructionText } from "../../contracts/mako-layer.js"
 import { startOpenCodeApi } from "./native-api.js"
 import { discoverOpenCodeCatalog } from "./profile.js"
 import { openCodeBinaryTarget } from "./updates.js"
@@ -714,6 +717,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   return {
     provider: "opencode",
     launchEnvironment: { kind: "prepared", via: "Native API launch consumes AdmittedStartOptions.accountLaunch." },
+    makoInstructions: { via: "An instructions file named in `OPENCODE_CONFIG_CONTENT`, which OpenCode appends. Never an agent's `prompt`, which replaces the provider's own." },
     nativeIdentity: OPENCODE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "accepted-message-id", evidence: "OpenCode v2 session.prompt returns the accepted inbox ID; the native user message stores that same ID. Commands without that receipt remain uncorrelated." },
@@ -816,6 +820,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const launchAccess = openCodeLaunchAccess(options.modeId, options.launchModeId)
       configureOpenCodePermissions(env, launchAccess)
       configureOpenCodeRouting(env, options.conversationId, options.nativeRouting)
+      await configureOpenCodePrimer(env, instructionText(layerOf(options)) ?? SHOW_MEDIA_LINE)
       const tools = options.conversationTools
       await configureOpenCodeCalls(env, options.conversationId, options.nativeCalls && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
       applyControlEnvironment(env, options.conversationTools?.control)
