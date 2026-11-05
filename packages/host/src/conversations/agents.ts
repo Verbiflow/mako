@@ -481,24 +481,41 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!snapshot) return
     const crashed = crashedChildTurn(snapshot.requests, this.now())
     if (crashed) {
+      // A Fin's brief cut short, or the brief sent again and cut short too: unless its harness said it had it, it
+      // goes again, in the brief's own place ahead of what waits; whether as itself or as a Continue is decided as it's
+      // sent, by the harness's transcript (`LiveDispatch`). A bare Continue would leave a Fin that never had it with
+      // nothing to do.
+      const root = crashed.continues?.brief ?? (crashed.id === namedUuid(`${edge.op}\nbrief`) ? crashed.id : undefined)
+      const brief = root && crashed.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
       try {
-        this.deps.live.continueTurn(conversation, { requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, actor: { kind: "service", name: "auto-continue" } })
-        hostLog("agents", "resumed", { op: edge.op, request: crashed.id, crashed: true })
+        this.deps.live.continueTurn(conversation, {
+          requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, actor: { kind: "service", name: "auto-continue" },
+          ...brief && { brief },
+        })
+        hostLog("agents", "resumed", { op: edge.op, request: crashed.id, crashed: true, ...brief && { brief: "sent again" } })
       } catch (error) {
         hostWarn("agents", "a Fin's turn a crash cut short waits for Continue turn", { op: edge.op, request: crashed.id, error: errorMessage({ error }) })
       }
     }
+    this.resumeMade(edge, conversation)
+  }
+
+  /** A Fin's messages an exit or a crash paused go on: they're its Apex's. */
+  private resumeMade(edge: ThreadParent, conversation: string): void {
+    const snapshot = this.deps.live.snapshot(conversation)
+    if (!snapshot) return
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || request.actor?.kind !== "agent") continue
+      // A brief's recovery a crash stopped short of its handoff is Mako's, not the person's: it goes on as the brief would, in its place.
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || (request.actor?.kind !== "agent" && !request.continues?.brief)) continue
       const relaunched = !launched
       try {
         if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         else {
           // Its harness never started: the exit cut its launch. It starts now, the brief its first message, and the rest wait behind it.
           this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "remove" } })
-          this.deps.live.transfer(conversation, { id: namedUuid(`relaunch:${request.id}`), provider: snapshot.session.harness, text: request.text, attachments: request.attachments, ...(request.tuning && { tuning: request.tuning }), ...(binding?.modeId && { modeId: binding.modeId }) }, request.actor)
+          this.deps.live.transfer(conversation, { id: namedUuid(`relaunch:${request.id}`), provider: snapshot.session.harness, text: request.text, attachments: request.attachments, ...(request.tuning && { tuning: request.tuning }), ...(binding?.modeId && { modeId: binding.modeId }) }, request.actor, request.continues)
           launched = true
         }
         hostLog("agents", "resumed", { op: edge.op, request: request.id, relaunched })
