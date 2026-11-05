@@ -4,6 +4,7 @@ import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
+import { admittedInPlace } from "../contracts/turn-continuation.js"
 import { TransferInputSchema, carryingWords, resumable, type ConversationControl } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
@@ -536,7 +537,7 @@ export class LiveTransfers {
         permissions: [],
         requests: own
           ? previous.requests.map((request) => (request === own ? { ...own, ...carries } : request))
-          : [...previous.requests, messageOf(transfer, Date.now(), { ...carries, status: "queued" })],
+          : admittedInPlace(previous.requests, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
         control: {
           ...this.host.control(resident),
           activeBindingId: bindingId,
@@ -766,7 +767,7 @@ export function holdSwitches(snapshot: LiveSnapshot) {
     held: waiting.length,
     snapshot: {
       ...snapshot,
-      requests: [...snapshot.requests, ...fresh.map((transfer) => messageOf(transfer, transfer.createdAt, { status: "held", pause: "stop" }))],
+      requests: fresh.reduce((requests, transfer) => admittedInPlace(requests, messageOf(transfer, transfer.createdAt, { status: "held", pause: "stop" })), snapshot.requests),
       control: { ...control, transfers: control.transfers.map((transfer) => (unsettled(transfer) ? { ...transfer, retry: undefined, state: { kind: "queued" as const } } : transfer)) },
     },
   }

@@ -231,6 +231,12 @@ export interface TurnContinuation {
   requestId: string
   reason: InterruptionReason
   auto: boolean
+  /**
+   * The Fin's brief this continuation carries again, by its request's id: a crash cut it with nothing to say its
+   * harness had it. Kept through every continuation of it, so a crash of the brief sent again sends it again too;
+   * whether its words or a Continue go is decided as it's sent (`LiveDispatch`).
+   */
+  brief?: string
 }
 
 /**

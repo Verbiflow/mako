@@ -227,3 +227,12 @@ function chainedContinuations(requests: readonly LiveRequest[], last: LiveReques
   }
   return count
 }
+
+/**
+ * `requests` with `request` taken in: a Fin's brief carried again (`TurnContinuation.brief`) in the brief's own place,
+ * ahead of every message waiting, as what came after the brief waits for it; anything else after them all.
+ */
+export function admittedInPlace<T extends Pick<LiveRequest, "status" | "continues">>(requests: readonly T[], request: T): T[] {
+  const ahead = request.continues?.brief ? requests.findIndex((candidate) => candidate.status === "queued" || candidate.status === "held") : -1
+  return ahead === -1 ? [...requests, request] : [...requests.slice(0, ahead), request, ...requests.slice(ahead)]
+}
