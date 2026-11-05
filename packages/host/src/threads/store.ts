@@ -588,6 +588,9 @@ CREATE TABLE IF NOT EXISTS agent_answers (
   ask TEXT PRIMARY KEY, child_thread TEXT NOT NULL, op TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
 CREATE INDEX IF NOT EXISTS agent_answers_child ON agent_answers(child_thread, at);
 CREATE INDEX IF NOT EXISTS agent_answers_op ON agent_answers(op);
+CREATE TABLE IF NOT EXISTS agent_pull_wakes (
+  wait TEXT PRIMARY KEY, child_thread TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
+CREATE INDEX IF NOT EXISTS agent_pull_wakes_waiting ON agent_pull_wakes(at) WHERE delivered_at IS NULL;
 `
 const RecordRowSchema = z.object({ record: z.string() })
 const ReportRowSchema = z.object({ record: z.string(), wake_request: z.string().nullable() })
@@ -614,6 +617,31 @@ export type KeptAnswer = z.infer<typeof KeptAnswerSchema>
 const AnswerRowSchema = z.object({ record: z.string(), delivered_at: z.number().nullable() })
 function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
   return KeptAnswerSchema.parse(JSON.parse(AnswerRowSchema.parse(row).record))
+}
+
+/**
+ * The outcome of a pull request that woke a Fin waiting on it, claimed before it's delivered: the wait (its Fin, the
+ * report that named the pull request, and the pull request), the outcome, and the note that carries it under the
+ * request it's sent as, so a host that stopped before it was delivered sends that same request once, and none sends
+ * a wait's outcome twice.
+ */
+export const KeptPullWakeSchema = z.object({
+  wait: z.string().min(1).max(1200),
+  child: ThreadIdSchema,
+  /** The report that named the pull request, and the pull request by `pullKey`: what must still stand for it to go. */
+  report: z.string().min(1).max(600),
+  pull: z.string().min(1).max(300),
+  outcome: z.enum(["settled", "failed", "review", "merged", "closed"]),
+  request: z.string().min(1).max(200),
+  text: z.string().max(2_000),
+  at: z.number(),
+  delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
+  /** When its wait stopped holding before its note was sent (a newer report, a stop): retired, never sent. */
+  obsolete: z.number().optional(),
+})
+export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
+function keptPullWake(row: Record<string, SQLOutputValue>): KeptPullWake {
+  return KeptPullWakeSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
 }
 
 /** A report its parent hasn't heard yet, and the request already named to carry it, if one was. */
@@ -1209,6 +1237,58 @@ export class ThreadStore {
   /** Lets go of a claim whose delivery failed, so another answer can take the ask; one delivered stays. */
   releaseAnswer(ask: string, op: string): void {
     this.write(() => this.sql("DELETE FROM agent_answers WHERE ask = ? AND op = ? AND delivered_at IS NULL").run(ask, op))
+  }
+
+  /** Claims a wait's one wake, in one write: the wake kept, or the one that claimed it first (`claimed: false`). */
+  claimPullWake(input: KeptPullWake): { wake: KeptPullWake; claimed: boolean } {
+    const wake = KeptPullWakeSchema.parse(input)
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM agent_pull_wakes WHERE wait = ?").get(wake.wait)
+      if (held) return { wake: keptPullWake(held), claimed: false }
+      this.sql("INSERT INTO agent_pull_wakes (wait, child_thread, record, at, delivered_at) VALUES (?, ?, ?, ?, NULL)")
+        .run(wake.wait, wake.child, JSON.stringify(wake), wake.at)
+      return { wake, claimed: true }
+    })
+  }
+
+  /** The waits of these Fins that woke them already. */
+  pullWakesOf(children: readonly string[]): Set<string> {
+    this.syncVersion()
+    if (!children.length) return new Set()
+    const rows = this.sql(`SELECT wait FROM agent_pull_wakes WHERE child_thread IN (${children.map(() => "?").join(", ")})`).all(...children)
+    return new Set(rows.map((row) => z.object({ wait: z.string() }).parse(row).wait))
+  }
+
+  /** Wakes claimed and not yet delivered to their Fin, oldest first: what a starting host sends once. */
+  undeliveredPullWakes(): KeptPullWake[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM agent_pull_wakes WHERE delivered_at IS NULL ORDER BY at, wait").all().map(keptPullWake)
+  }
+
+  /** The wake reached its Fin's conversation. */
+  markPullWakeDelivered(wait: string, delivered: NonNullable<KeptPullWake["delivered"]>): void {
+    this.write(() => {
+      const held = this.sql("SELECT record FROM agent_pull_wakes WHERE wait = ? AND delivered_at IS NULL").get(wait)
+      if (!held || keptPullWake(held).obsolete !== undefined) return
+      this.sql("UPDATE agent_pull_wakes SET record = ?, delivered_at = ? WHERE wait = ?").run(JSON.stringify({ ...keptPullWake(held), delivered }), delivered.at, wait)
+    })
+  }
+
+  /** A Fin's wake that its note goes as `request`. */
+  pullWakeOfRequest(child: string, request: string): KeptPullWake | undefined {
+    this.syncVersion()
+    return this.sql("SELECT record FROM agent_pull_wakes WHERE child_thread = ?").all(child).map(keptPullWake).find((wake) => wake.request === request)
+  }
+
+  /** Retires a wake whose wait no longer holds: marked obsolete and as settled, so no start sends it again. */
+  retirePullWake(wait: string, at: number): void {
+    this.write(() => {
+      const held = this.sql("SELECT record FROM agent_pull_wakes WHERE wait = ?").get(wait)
+      if (!held) return
+      const wake = keptPullWake(held)
+      if (wake.obsolete !== undefined) return
+      this.sql("UPDATE agent_pull_wakes SET record = ?, delivered_at = coalesce(delivered_at, ?) WHERE wait = ?").run(JSON.stringify({ ...wake, obsolete: at }), at, wait)
+    })
   }
 
   /** Spawns waiting on a tree's running budget, oldest first. */

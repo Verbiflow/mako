@@ -178,6 +178,8 @@ export interface WorldOptions {
   readingChoices?: (harness: string) => Promise<void> | void
   /** Runs as a harness's accounts are read, before they answer: `all` is a move's read of every one. */
   readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
+  /** A pull request as GitHub would say it stands (`AgentsDeps.readPull`): a stub, never the network. */
+  readPull?: AgentsDeps["readPull"]
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -315,6 +317,7 @@ export class AgentsWorld {
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
+      ...(this.options.readPull && { readPull: this.options.readPull }),
       ...(this.options.now && { now: this.options.now }),
       archived: (conversation) => this.archived.has(conversation),
     }

@@ -348,11 +348,43 @@ Fin but couldn't be stamped stays pending, and the next start finds it under
 its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
 `test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`). A
-report with a question may name what it waits on outside its tree
+report may name what it waits on outside its tree
 (`waitingOn`: a pull request until its checks, review or merge, the person,
 or `other` in a few words), carried on the blocked state and the open
 decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,
-the front door and the strip; nothing watches it yet. A Fin's strip, its crew
+the front door and the strip. A progress report that names it, with the
+Fin's turn ended, reads as idle waiting since the report (`ChildState`'s
+`idle.waitingOn`, `since`), in the crew row, the strip and the front door
+as "Waiting on acme/app#371 checks · 12m" (`waitingStateWords`); the
+orchestration text tells a Fin to report so and end its turn rather than
+poll checks. `PullWatch` (`conversations/pull-watch.ts`) reads only the pull
+requests open Fins' latest reports name, rebuilt from the stored reports on
+each tick and so on start, through `readPull` (the same `gh pr view` and
+check normalising `pull_request_status` uses), on the job `read the pull
+requests Fins wait on`, which runs only while something is watched: each
+read a minute after it's first watched, doubling while unchanged up to
+`PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
+outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
+(checks settled, or one failed since the report while others run; a review
+submitted since, by anyone but the author; merged or closed, which end any
+wait) is claimed once per Fin, report and pull request
+(`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
+never its Apex, through `deliver` under a named request as Mako's words
+(the `pull-watch` service actor): one line, "Mako: PR acme/app#371 checks
+settled: 2 failed (lint, e2e). <url>" (`pullWakeNote`), queued after a
+working Fin's turn, never steered. It never reopens, resumes or takes over
+a stopped Fin (`deliver`'s automatic send), and goes through the one
+admission point every prompt does, the handoff with its Stop latch
+(`LiveDispatch`, #391): there `Agents.admits` reads the wait again, the
+Fin's exact newest report still naming the pull request and its delegation
+open, and one that no longer holds is refused (`HandoffRefused`'s
+`withdrawn`, the request canceled) and its claim retired as obsolete
+(`retirePullWake`), never sent. The same reading runs before the claim and
+before delivery. A host that stopped first sends a claim once on start
+(`undeliveredPullWakes`), if its wait still holds. The Fin's transcript
+draws it as an event line by its words (`pullWakeWords`, `MakoPrompt`'s
+`pull`). `test:fin-pull-waits` covers it with a stub reader and a fake clock.
+A Fin's strip, its crew
 mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree

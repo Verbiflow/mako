@@ -287,6 +287,7 @@ export class LiveDispatch {
       // Stop reached while it was prepared, and one the journal can't record as sent all go no further.
       if (handoff && (!own || target?.status !== "dispatching" || target.nativeDelivery?.evidence.kind !== "prepared")) throw new HandoffRefused("superseded")
       if (handoff && target?.pause === "stop") throw new HandoffRefused("stopped")
+      if (handoff && target && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, target) === false) throw new HandoffRefused("withdrawn")
       if (!own || !target?.nativeDelivery) return
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
@@ -373,10 +374,12 @@ export class LiveDispatch {
             candidate.id === request.id && candidate.status === "dispatching"
         )
         if (generation !== resident.generation || !target) return
-        // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's.
+        // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's. One whose
+        // reason went away is canceled, never to go.
         if (error instanceof HandoffRefused) {
+          const status = error.why === "withdrawn" ? "canceled" : "held"
           resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((candidate) =>
-            candidate === target ? { ...candidate, status: "held", error: undefined, snapshots: undefined } : candidate) }
+            candidate === target ? { ...candidate, status, error: undefined, snapshots: undefined } : candidate) }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           hostWarn("live", "a message went no further than its handoff", { conversation: resident.snapshot.session.id, request: request.id, why: error.why })
           try {

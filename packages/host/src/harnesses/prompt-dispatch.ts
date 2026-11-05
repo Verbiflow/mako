@@ -32,11 +32,12 @@ export class TurnInProgressError extends Error {
 /**
  * The handoff refused (`handOff`): nothing was sent. `stopped`: a Stop reached the message while it was prepared.
  * `superseded`: a newer attempt or owner has the conversation. `unsaved`: the journal couldn't record it as sent.
+ * `withdrawn`: a message Mako sent by itself no longer holds, as what made it says (`ConversationChildren.admits`).
  */
 export class HandoffRefused extends Error {
-  readonly why: "stopped" | "superseded" | "unsaved"
+  readonly why: "stopped" | "superseded" | "unsaved" | "withdrawn"
   constructor(why: HandoffRefused["why"], options?: ErrorOptions) {
-    super(why === "stopped" ? "Stopped before it was sent" : why === "superseded" ? "Another send of this conversation took its place" : "Mako couldn't save this message as sent, so it wasn't sent", options)
+    super(why === "stopped" ? "Stopped before it was sent" : why === "superseded" ? "Another send of this conversation took its place" : why === "withdrawn" ? "What it was sent for no longer holds" : "Mako couldn't save this message as sent, so it wasn't sent", options)
     this.name = "HandoffRefused"
     this.why = why
   }

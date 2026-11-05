@@ -224,6 +224,11 @@ export interface ConversationChildren {
   ruleLines(conversation: string): RoleRuleLines
   /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
   pinnedAccount?(conversation: string, harness: string): string | undefined
+  /**
+   * At a request's handoff: whether a message Mako sent a Fin by itself (a pull request's outcome) still holds. False
+   * refuses it with nothing sent; any other request is always admitted.
+   */
+  admits?(conversation: string, request: Pick<LiveRequest, "id" | "actor">): boolean
 }
 
 /** What a launch of `conversation` on `harness` reads its account from: the Fin's pin, else the selected account. */
