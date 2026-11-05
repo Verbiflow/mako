@@ -241,7 +241,7 @@ async function check() {
   await grok.until("the compaction to settle", () => settled() && grok.session()?.status === "ready")
   assert.deepEqual(settled().result, { kind: "completed" }, "Grok's own compaction notice confirms the /compact Mako sent")
   assert.deepEqual(grok.events.slice(beforeCompact).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update.detail] : []),
-    ["Manual · 23k → 9k tokens"], "a compaction Mako asked for is labelled manual")
+    ["Manual · 23.3K → 9.1K tokens"], "a compaction Mako asked for is labelled manual")
   assert.equal(grok.session()?.lastStop, "completed")
   console.log("PASS: Compact on Grok sends /compact and settles on Grok's own completion notice, marked manual")
 
@@ -251,7 +251,7 @@ async function check() {
   assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-activity" ? [event.activity] : []), [{ kind: "compacting" }, null],
     "Grok's auto-compaction shows while it runs and ends with its marker; another session's does not")
   assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    [{ kind: "event", label: "Context compacted", detail: "Automatic · 404k → 21k tokens · took 1m 34s" }])
+    [{ kind: "event", label: "Context compacted", detail: "Automatic · 404K → 21.3K tokens · took 1m 34s" }])
   const titles = since(beforeNative).flatMap((event) => event.type === "live-session" && event.session.title ? [event.session.title] : [])
   // The SDK dispatches vendor notifications through more handlers than session
   // updates, so the two channels are not ordered against each other.
@@ -267,7 +267,7 @@ async function check() {
   assert.deepEqual(refusedActivity, [{ kind: "compacting" }, null, null],
     "Grok's kinds on ACP's own method reach its decoder instead of being dropped by the SDK")
   assert.deepEqual(since(beforeRefused).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    [{ kind: "event", id: "fixture-2", source: { harness: "provider-turn-grok", record: "fixture-2" }, label: "Context compacted", detail: "Automatic · 1k → 200 tokens · took 4s" }],
+    [{ kind: "event", id: "fixture-2", source: { harness: "provider-turn-grok", record: "fixture-2" }, label: "Context compacted", detail: "Automatic · 1K → 200 tokens · took 4s" }],
     "the replayed completion, named by Grok's event id, is drawn once")
   await hostLog.flush()
   const logged = await readFile(hostLogFile, "utf8")
@@ -346,9 +346,13 @@ async function check() {
   const devinSince = devin.events.slice(beforeDevinNative)
   assert.deepEqual(devinSince.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
     [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
-  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
+  // How long the retry took is the clock's, so it isn't part of what's compared.
+  const clockless = (update) => (update.retries ? { ...update, retries: { ...update.retries, durationMs: 0 } } : update)
+  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [clockless(event.update)] : []), [
+    { kind: "event", label: "Retried once", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "gave-up" } },
     // Devin's quota is a usage limit, as every harness's is, with nothing more it says of the window.
-    [{ kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} }])
+    { kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} },
+  ])
   assert.equal(devin.opened().length, 2, "a failed prompted turn opens no provider turn")
   console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker")
   await devin.close()
