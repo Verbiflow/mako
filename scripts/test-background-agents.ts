@@ -300,7 +300,8 @@ async function finLimit(): Promise<void> {
 
 /**
  * A freed place goes to the next waiting Fin at once, event-driven: a stop, a turn's end, or a raised number starts
- * the first waiter that fits within milliseconds, first come first started across Apexes. One whose `after` isn't
+ * the first waiter that fits, first come first started across Apexes. With no room watch each start can come only
+ * from the event that freed its place, so one that comes at all came before the next look. One whose `after` isn't
  * finished is passed over, and one whose harness hangs as it starts holds its place without holding up the rest.
  */
 async function slotsGoAtOnce(): Promise<void> {
@@ -311,6 +312,7 @@ async function slotsGoAtOnce(): Promise<void> {
   let w!: AgentsWorld
   w = new AgentsWorld({
     root: join(root, "slots"),
+    noRoomWatch: true,
     finLimit: () => limit,
     starting: async (conversation) => {
       launched.set(conversation, performance.now())
@@ -367,7 +369,6 @@ async function slotsGoAtOnce(): Promise<void> {
     await waitFor(() => launched.has(key(two, "e")), "e to start once the number rose")
     latency.push(launched.get(key(two, "e"))! - freed)
     console.log(`slot to launch: ${latency.map((ms) => `${ms.toFixed(1)} ms`).join(", ")}`)
-    for (const ms of latency) assert.ok(ms < 100, `a freed place goes within 100 ms: ${latency.map((each) => each.toFixed(1)).join(", ")} ms`)
     release?.()
     await w.agents.stop(one.caller, { child: "all" })
     await w.agents.stop(two.caller, { child: "all" })
@@ -458,7 +459,7 @@ async function launchesBeforeTheirEdge(): Promise<void> {
 /**
  * A Fin shown stopped holds its place until its harness has stopped: with one place, a Fin waiting behind one whose
  * cancel is slow never starts while that turn still runs, so two turns never write in one worktree at once, and it
- * starts the moment the cancel finishes.
+ * starts from the cancel finishing: after it, with no room watch to start it otherwise.
  */
 async function stopHoldsUntilCancelled(): Promise<void> {
   let release: () => void = () => {}
@@ -467,9 +468,10 @@ async function stopHoldsUntilCancelled(): Promise<void> {
   let cancelled = 0
   const w = new AgentsWorld({
     root: join(root, "slow-cancel"),
+    noRoomWatch: true,
     finLimit: () => 1,
     // Only the first stop is slow; the ones after go at once.
-    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = performance.now(); resolve() }))),
+    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = Date.now(); resolve() }))),
     script: async (turn) => {
       if (!turn.text.includes("You're fin:")) return "ok"
       if (active.size) overlapped = true
@@ -495,7 +497,7 @@ async function stopHoldsUntilCancelled(): Promise<void> {
     await waitFor(() => active.size === 1 && w.store.queuedSpawns().length === 0, "the second to start once the first stopped")
     assert.equal(overlapped, false, "the second started only after the first's turn ended")
     const started = w.prompts.find((prompt) => prompt.text.includes("You're fin:second,"))!.at
-    assert.ok(started - (Date.now() - (performance.now() - cancelled)) < 100, "and at once once it did")
+    assert.ok(started >= cancelled, "and from the cancel finishing")
     await w.agents.stop(apex.caller, { child: "all" })
   } finally {
     release()
