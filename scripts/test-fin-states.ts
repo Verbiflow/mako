@@ -7,6 +7,7 @@ import type { AgentCaller, ChildState } from "@mako/host/contracts/agents"
 import type { AgentsSendResult } from "@mako/host/contracts/agent-tools"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -111,6 +112,9 @@ try {
       // The Apex sends again while the person edits: the message being edited stays theirs, paused, in its place.
       sent(await world.agents.send(apex.caller, { to: "labels", text: "And the LICENSE.", clientKey: "license" }))
       assert.equal(requestOf(world, fin, "Then the README.")?.status, "held", `${harness}: a new message doesn't resume one the person is editing`)
+      const journal = new LiveJournal(join(world.root, "journals"), fin)
+      assert.equal(journal.read()?.requests.find((request) => request.text.includes("Then the README."))?.editing, true, "the journal keeps that it's being edited")
+      journal.close()
       world.release(fin)
       await until("its turn to end", () => world.live.session(fin)?.status === "ready")
       await pause(300)
