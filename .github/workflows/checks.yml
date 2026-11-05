@@ -237,10 +237,10 @@ jobs:
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      # How a row is judged, on simulated machines: unchanged code as noisy as this runner is never slower, twice as slow always is.
-      - run: npx tsx scripts/test-perf-reference.ts
       # The rows read `@mako/*` from the packages' builds.
       - run: npm run build:control-runtime
+      # How a row is judged, on simulated machines: unchanged code as noisy as this runner is never slower, twice as slow always is.
+      - run: npx tsx scripts/test-perf-reference.ts
       - run: npm run perf:decoders -- --reference HEAD^1
         env:
           MAKO_PERFORMANCE_UNSURE_REPORTED: "1"
