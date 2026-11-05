@@ -362,7 +362,9 @@ export class CursorSdkClient {
       const message = parsed.data
       if ("event" in message) {
         if (message.event === "log") {
-          hostWarn("cursor-sdk", message.message, { owner: this.options.owner, level: message.level })
+          // An open's phase lines are info: they reset the silence watch and say where an open was. A warning stays a warning.
+          if (message.level === "warn") hostWarn("cursor-sdk", message.message, { owner: this.options.owner })
+          else hostLog("cursor-sdk", message.message, { owner: this.options.owner })
           continue
         }
         this.options.onEvent(message)

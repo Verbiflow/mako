@@ -51,6 +51,7 @@ import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInpu
 import { departMove, followMove, MoveDepartureInputSchema, MoveFollowInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveFollowInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { FileReadPurpose } from "../contracts/git-workspace-search.js"
+import type { FileFoldersOptions, FileGrepOptions } from "../contracts/file-index.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
@@ -585,6 +586,15 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const dataDir = environments ? () => environments.fileDataDir({ conversationId: id, cwd: session.cwd }) : undefined
     return files.read(session.cwd, path, dataDir, purpose)
   })
+  /** A conversation's folder, browsed from wherever its window is: another device's Files view. */
+  const folderIndex = (id: string) => {
+    const session = live.session(id)
+    if (!session) throw new Error("That conversation is unavailable")
+    return files.index(session.cwd)
+  }
+  methods.handle("mako:live-files-folders", (id: string, paths: string[], options?: FileFoldersOptions) => folderIndex(id).folders(paths, options))
+  methods.handle("mako:live-files-find", (id: string, query: string, limit?: number) => folderIndex(id).find(query, limit))
+  methods.handle("mako:live-files-grep", (id: string, query: string, options?: FileGrepOptions) => folderIndex(id).grep(query, options))
   methods.handle("mako:live-snapshot", (id: string) => live.refreshedSnapshot(id))
   methods.handle("mako:live-context-breakdown", (id: string) => live.contextBreakdown(id))
   methods.handle("mako:live-read", (id: string, input: LiveHistoryRead) =>

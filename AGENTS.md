@@ -2146,6 +2146,35 @@ steady 20 ms a daemon 2.6 s behind was asked 130 times a read.
 late. Tests that start apps reap them in `finally` and on a signal
 (`scripts/lib/reap-apps.ts`): they're detached, so they outlived failed runs.
 
+## Files
+
+The Files view (the right sidebar's Files, the web app's Files over a Thread or beside its transcript, and the
+composer's `@` list and the palette's Open file) reads one index per folder on the host that has the folder
+(`workspaces/file-index.ts`, its pure core `contracts/file-index.ts`). It's built once: what Git tracks from its
+index alone, so a 100,000-file repository is browsable in milliseconds, then the untracked files, which take a walk
+of every folder, join it. A folder that isn't a repository is a bounded walk that asks each repository inside it for
+its own files. After that every path the tab's watcher hears is asked of Git again at that path (`listFileStates`,
+`ls-files -t` with the path as a literal pathspec), so ignore rules and new folders come out as Git says and the
+index adds or removes what differs; only a lost event, a burst of more than 500 paths or an index nobody watches and
+nobody read for five seconds reads the folder again. A conversation's folder browsed from another device has an index
+of its own with a watch of its own, dropped three minutes after the last look (`ConversationFiles.index`).
+
+A window asks for folders a few at a time (`mako:files-folders`, `mako:live-files-folders` for a conversation's),
+each listed folders first and to 2,000 entries, a chain of lone folders folded into one row, and says which version
+it holds, so a refresh with nothing changed is one small answer; Git's changed marks follow a step behind and never
+hold a listing up. A name is found at every keystroke (`mako:files-find`): a character mask rules most paths out, a
+query that only grew searches only the last one's matches, a match in the file name outweighs one across folders,
+and letters strewn far from the best are dropped. Text inside files (`mako:files-grep`) waits for a pause, runs
+`git grep` over what each repository tracks without `--untracked` (which walks every folder before its first match:
+5.4 s against 76 ms on 100,000 files), reads the untracked files the index already knows itself, and stops at its
+limit; a newer search in the same folder stops the last. A host older than these calls is answered in the window by
+the same core over `listFiles`. Highlighting runs in Pierre's worker pool (`lib/highlight-pool.tsx`) with one theme,
+`lib/syntax-theme.ts`, onto the `--syntax-*` tokens; each file wears its kind's mark (`lib/file-kinds.ts`,
+`components/ui/file-icon.tsx`), drawn in one stroke on one grid and told apart by shape, never hue.
+`scripts/test-file-index.ts` holds it to that, and `scripts/bench-file-search.ts` (CI's `file-search`) times it against
+the old way in the same run on this checkout and 100,000 generated files. `node scripts/files-ui.mjs` serves the real
+panel and viewer over a folder's index, and `scripts/files-ui-shots.mjs` draws them, `--phone` as the web app does.
+
 ## Git
 
 Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.

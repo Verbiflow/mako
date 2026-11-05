@@ -280,9 +280,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     web()?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
-  const conversationFiles = new ConversationFiles(git, previews)
   const watchReadings = new WatchReadings((message, fields) => hostLog("watch", message, fields))
   const watchBackend = childBackend(undefined, watchReadings)
+  const conversationFiles = new ConversationFiles(git, previews, (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped))
   const fileEvents = new FileEventsServiceWatch({
     mac: onMac(),
     readDaemon: readFseventsd,
@@ -1595,6 +1595,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       late.agentServers?.close()
       threads.close()
       workspaces.close()
+      conversationFiles.close()
       turnMedia.close()
       void workspaceClients.dispose()
       // What an owner left running ends with the host rather than outliving it; children that exited while stopping
