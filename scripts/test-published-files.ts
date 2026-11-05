@@ -11,7 +11,10 @@
 //   up with FileLockBusyError once its wait runs out, and writes once it's free;
 // - nothing is locked while bytes are staged: an asynchronous write stalled
 //   mid-stream never makes a synchronous save of the same folder, or of the same
-//   file, wait, fail, or lose its write (the real Fin settings store).
+//   file, wait (a save allowed no wait at all still lands), fail, or lose its
+//   write (the real Fin settings store);
+// - an asynchronous write that does wait for a holder waits on timers: what is
+//   scheduled meanwhile runs first, and the write ends after the holder lets go.
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -155,16 +158,17 @@ try {
     })())
     try {
       await streaming
-      // The same host's synchronous save, in the same folder, while the other is stalled: no wait, no refusal.
-      const began = performance.now()
+      // The same host's synchronous save, in the same folder, while the other is stalled. It is refused if it would
+      // have to wait at all (`waitMs: 0` is no busy wait), so a save that lands never waited on anyone.
+      publishFileSync(defaults, JSON.stringify({ version: 1, chosen: {}, used: {}, policy: { rules: [] }, limit: 4 }), { waitMs: 0 })
+      assert.equal(JSON.parse(readFileSync(defaults, "utf8")).limit, 4)
+      // The real store's save takes the default wait; had it met a holder it would fail with FileLockBusyError.
       store.setLimit(3)
-      const took = performance.now() - began
       assert.equal(store.reading().limit, 3)
       assert.equal(JSON.parse(readFileSync(defaults, "utf8")).limit, 3, "the save reached the disk, not only the cache")
-      assert.ok(took < 1_000, `the save took ${Math.round(took)} ms behind a stalled write, which holds no lock`)
       // And the stalled write's own file is free to a synchronous writer too: nothing is locked until its rename.
-      assert.doesNotThrow(() => withFileLockSync(`${profiles}.mako-place-lock`, () => undefined, { waitMs: 50 }), "a write still staging holds its file's lock")
-      publishFileSync(profiles, "{\"sync\":true}", { waitMs: 100 })
+      assert.doesNotThrow(() => withFileLockSync(`${profiles}.mako-place-lock`, () => undefined, { waitMs: 0 }), "a write still staging holds its file's lock")
+      publishFileSync(profiles, "{\"sync\":true}", { waitMs: 0 })
       assert.equal(readFileSync(profiles, "utf8"), "{\"sync\":true}")
     } finally {
       release()
@@ -173,6 +177,32 @@ try {
     assert.equal(readFileSync(profiles, "utf8"), "{}", "the stalled write placed whole once it finished")
     assert.deepEqual(readdirSync(folder).filter((name) => !publisherFile(name)).sort(), ["fin-defaults.json", "provider-profiles.json"])
     assert.deepEqual(staged(folder), [])
+  }
+
+  {
+    // An asynchronous write that has to wait for a holder waits on a timer, not on the thread: what is scheduled
+    // meanwhile runs first, and the write finishes only once the holder lets go.
+    const folder = join(root, "waiting")
+    const file = join(folder, "state.json")
+    await publishFile(file, "seed")
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    let holding: () => void = () => undefined
+    const locked = new Promise<void>((resolve) => { holding = resolve })
+    const holder = withFileLock(`${file}.mako-place-lock`, async () => { holding(); await held })
+    await locked
+    const order: string[] = []
+    const writing = publishFile(file, "after", { waitMs: 30_000 }).then(() => { order.push("written") })
+    for (let round = 0; round < 5; round++) {
+      await new Promise<void>((resolve) => setTimeout(() => { order.push("timer"); resolve() }, 0))
+    }
+    assert.deepEqual(order, ["timer", "timer", "timer", "timer", "timer"], "the write waits for its holder without holding up the event loop, and doesn't finish before it")
+    assert.equal(readFileSync(file, "utf8"), "seed")
+    release()
+    await holder
+    await writing
+    assert.deepEqual(order.at(-1), "written")
+    assert.equal(readFileSync(file, "utf8"), "after")
   }
 
   {
