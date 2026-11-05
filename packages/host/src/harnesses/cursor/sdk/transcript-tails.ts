@@ -1,10 +1,13 @@
 import { closeSync, fstatSync, ftruncateSync, openSync, readdirSync, readSync, unlinkSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
+import { withTranscriptLock, type LockOptions } from "./transcript-lock.js"
 
 const BLOCK = 64 * 1024
+/** An open waits this long for a child still writing a transcript: under the host's 20 s of silence. */
+const REPAIR_WAIT_MS = 10_000
 /** A full write staged beside its transcript by the patched SDK (`scripts/patch-cursor-sdk.mjs`), and its writer's pid. */
-const STAGED = /\.mako-(\d+)\.tmp$/
+const STAGED = /\.mako-\d+\.tmp$/
 
 /**
  * Where SDK 1.2.0 writes an agent's transcripts: under `CURSOR_DATA_DIR/projects`
@@ -20,15 +23,41 @@ export function cursorTranscriptFolder(cwd: string, agentId: string, env: NodeJS
 }
 
 /**
- * Makes an agent's transcripts whole again after a child was killed writing
- * them. A full write is renamed into place whole, so only its staged file can
- * be left behind, and is deleted once its writer is gone. An append can stop
- * inside a line: the SDK ends every line it writes with a newline, so a file
- * that doesn't end in one is cut back to its last complete line. Returns the
- * transcripts it cut.
+ * Makes one transcript whole after the process writing it died: deletes the
+ * full write it staged, and cuts a torn append back to its last complete line,
+ * since the SDK ends every line it writes with a newline. Only for a caller
+ * holding the transcript's lock (`withTranscriptLock`), which no live writer
+ * does. Returns whether it cut the file.
  */
-export function repairCursorTranscripts(folder: string): string[] {
-  const cut: string[] = []
+export function recoverTranscript(file: string): boolean {
+  const prefix = `${basename(file)}.mako-`
+  let names: string[] = []
+  try {
+    names = readdirSync(dirname(file))
+  } catch {
+    // No folder, nothing written.
+  }
+  for (const name of names) if (name.startsWith(prefix) && STAGED.test(name)) removeIfThere(join(dirname(file), name))
+  return cutTornTail(file)
+}
+
+/**
+ * The function the patched SDK runs each transcript write inside: the file's
+ * lock, taken over from a dead holder only after that holder's file is made
+ * whole.
+ */
+export const transcriptLock = <T>(file: string, work: () => Promise<T>): Promise<T> => withTranscriptLock(file, work, recoverTranscript)
+
+/**
+ * Makes the transcripts of the agent a child is about to open whole again
+ * after a child was killed writing them, each under its own lock so a writer
+ * still running in another child is waited for, never cut. Only this agent's
+ * files: its transcript and its subagents'. Returns the transcripts it cut,
+ * and throws, after trying every file, naming those it left because a writer
+ * held them.
+ */
+export async function repairCursorTranscripts(folder: string, options: LockOptions = { waitMs: REPAIR_WAIT_MS }): Promise<string[]> {
+  const files = new Set<string>()
   for (const dir of [folder, join(folder, "subagents")]) {
     let names: string[]
     try {
@@ -37,27 +66,43 @@ export function repairCursorTranscripts(folder: string): string[] {
       continue
     }
     for (const name of names) {
-      const path = join(dir, name)
-      const staged = STAGED.exec(name)
-      if (staged) {
-        if (!alive(Number(staged[1]))) unlinkSync(path)
-      } else if (name.endsWith(".jsonl") && cutTornTail(path)) cut.push(path)
+      const file = name.replace(STAGED, "")
+      if (file.endsWith(".jsonl")) files.add(join(dir, file))
     }
   }
+  const cut: string[] = []
+  const left: string[] = []
+  for (const file of files) {
+    // A lock taken over from a dead writer is recovered before it is taken, which may be the cut.
+    let cutOnTakeover = false
+    const recover = (target: string) => { cutOnTakeover = recoverTranscript(target) || cutOnTakeover }
+    try {
+      const cutUnderLock = await withTranscriptLock(file, async () => recoverTranscript(file), recover, options)
+      if (cutUnderLock || cutOnTakeover) cut.push(file)
+    } catch {
+      left.push(file)
+    }
+  }
+  if (left.length) throw new Error(`left ${left.join(", ")}: another process holds the lock`)
   return cut
 }
 
-function alive(pid: number): boolean {
+function removeIfThere(path: string): void {
   try {
-    process.kill(pid, 0)
-    return true
+    unlinkSync(path)
   } catch (cause) {
-    return (cause as NodeJS.ErrnoException).code === "EPERM"
+    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause
   }
 }
 
 function cutTornTail(path: string): boolean {
-  const fd = openSync(path, "r+")
+  let fd: number
+  try {
+    fd = openSync(path, "r+")
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false
+    throw cause
+  }
   try {
     const size = fstatSync(fd).size
     const buffer = Buffer.alloc(BLOCK)

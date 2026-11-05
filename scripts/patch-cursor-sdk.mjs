@@ -24,9 +24,13 @@
 //    hydrated every summary archive at once: one turn on an 80-turn conversation
 //    peaked at 2.1 GB (2026-11-04). The patch appends with `writeFile`.
 //    A full write, streamed or not, goes to a file of its own beside the
-//    transcript, synced and then renamed over it, so a child killed mid-write
-//    leaves the transcript as it was. An append killed mid-write leaves a torn
-//    last line, which the Cursor child cuts off when it next opens the agent
+//    transcript, synced, renamed over it, and the folder synced, so a child
+//    killed mid-write leaves the transcript as it was and a crash of the
+//    machine doesn't lose the rename. Every write of a transcript, an append
+//    or a rewrite, runs inside the file's lock (`transcript-lock.ts`), so one
+//    child writes a file at a time. An append killed mid-write leaves a torn
+//    last line, which whoever next takes the lock from the dead writer, a
+//    writer or the Cursor child opening the agent, cuts off first
 //    (`transcript-tails.ts`).
 // 3. Each bidi stream races every read, of what the backend sends and of what
 //    the client appends, against a promise pending for the stream's life, and
@@ -63,7 +67,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const VERSION = "1.2.0"
-const MARKER = "/*mako:patched:9*/"
+const MARKER = "/*mako:patched:10*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -149,20 +153,30 @@ export const BIDI_READS = [
  * `writeFile` with flag `a` is the same call.
  */
 function transcripts({ writer, store, write, fs, child, chunks }) {
-  const options = `writeText:!1,writeJsonl:!0,appendFile:(p,d)=>${fs}.writeFile(p,d,{flag:"a"}),streamFullJsonlWrites:!0,`
+  const lock = "makoLock"
+  const options = `writeText:!1,writeJsonl:!0,appendFile:(p,d)=>${lock}(p,(()=>${fs}.writeFile(p,d,{flag:"a"}))),streamFullJsonlWrites:!0,`
   const staged = `+".mako-"+process.pid+".tmp"`
   return [
     [
       `async function ${write}(e,t){const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0}),await(0,${fs}.writeFile)(e,t,"utf-8")}`,
-      `async function ${write}(e,t){const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0});const n=e${staged},o=await(0,${fs}.open)(n,"w");try{await o.writeFile(t,"utf-8"),await o.sync()}finally{await o.close()}await(0,${fs}.rename)(n,e)}`,
+      `async function ${write}(e,t){return ${lock}(e,(async()=>{const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0});const n=e${staged},o=await(0,${fs}.open)(n,"w");try{await o.writeFile(t,"utf-8"),await o.sync()}finally{await o.close()}await(0,${fs}.rename)(n,e),await makoSyncDir(e)}))}` +
+        // Runs `work` inside the process's transcript lock (`transcript-lock.ts`); outside Mako's child there is none.
+        `function ${lock}(p,w){const k=globalThis[Symbol.for("mako:cursor-transcript-lock")];return k?k(p,w):w()}` +
+        // A rename is durable once its folder is synced. A platform that can't open or sync a folder (Windows) has nothing to sync.
+        `async function makoSyncDir(p){const d=(0,s.dirname)(p),x=new Set(["EINVAL","ENOTSUP","EOPNOTSUPP","EPERM","EISDIR"]);let h;try{h=await(0,${fs}.open)(d,"r")}catch(e){if(x.has(e?.code))return;throw e}try{await h.sync()}catch(e){if(!x.has(e?.code))throw e}finally{await h.close()}}`,
     ],
     [
       `async writeJsonlStreamed(e,t){const{filePath:r,appendFile:n}=t;let o=[],s=0,${chunks}=0,`,
-      `async writeJsonlStreamed(e,t){const{filePath:f,appendFile:n}=t,r=f${staged};let o=[],s=0,${chunks}=0,`,
+      // The whole rewrite runs under the file's lock. Its chunks go to a file of its own, so they need no lock of theirs.
+      `async writeJsonlStreamed(e,t){return ${lock}(t.filePath,(()=>this.makoWriteJsonlStreamed(e,t)))}async makoWriteJsonlStreamed(e,t){const{filePath:f}=t,r=f${staged};let o=[],s=0,${chunks}=0,`,
+    ],
+    [
+      `0===${chunks}?await this.writeFile(r,e):await n(r,e),${chunks}++`,
+      `await(0,${fs}.writeFile)(r,e,{flag:0===${chunks}?"w":"a"}),${chunks}++`,
     ],
     [
       `await l(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
-      `await l(),${chunks}>0&&await(async()=>{const t=await(0,${fs}.open)(r,"r+");try{await t.sync()}finally{await t.close()}await(0,${fs}.rename)(r,f)})(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
+      `await l(),${chunks}>0&&await(async()=>{const t=await(0,${fs}.open)(r,"r+");try{await t.sync()}finally{await t.close()}await(0,${fs}.rename)(r,f),await makoSyncDir(f)})(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
     ],
     [
       `class ${writer}{constructor(e){this.writeChain=Promise.resolve(),`,
@@ -214,11 +228,17 @@ const resumeAccount = proto => [
     `if("userMessageAction"===g.action.case){const e=g.action.value;return u({...e,userMessage:new ${proto}.RGk({...e.userMessage,text:(e.userMessage?.text??"")+"\\n\\n"+t.text})})}return g})():g,`,
 ]
 
+/** The names `transcripts` takes, in each build of 1.2.0's local executor. */
+export const TRANSCRIPT_BUILDS = {
+  esm: { target: "dist/esm/336.js", writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n", chunks: "a" },
+  cjs: { target: "dist/cjs/336.js", writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n", chunks: "i" },
+}
+
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
   { target: "dist/cjs/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
-  { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n", chunks: "a" }), runLog("BF"), resumeAccount("jr")], change: "incremental transcripts, the run log and the resume account" },
-  { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n", chunks: "i" }), runLog("qF"), resumeAccount("Ur")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/esm/336.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.esm), runLog("BF"), resumeAccount("jr")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/cjs/336.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.cjs), runLog("qF"), resumeAccount("Ur")], change: "incremental transcripts, the run log and the resume account" },
   { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
   { target: "dist/cjs/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
 ]

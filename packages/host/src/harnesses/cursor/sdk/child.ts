@@ -71,7 +71,8 @@ import {
 } from "./wire.js"
 import { adoptedEnvironment } from "./adopt.js"
 import { CURSOR_SDK_RESUME_HOOK, RunCallLog, resumedCalls, resumeWords, type LoggedCall, type ResumeAnswer, type ResumeQuestion } from "./resumed-calls.js"
-import { cursorTranscriptFolder, repairCursorTranscripts } from "./transcript-tails.js"
+import { cursorTranscriptFolder, repairCursorTranscripts, transcriptLock } from "./transcript-tails.js"
+import { CURSOR_TRANSCRIPT_LOCK } from "./transcript-lock.js"
 import { resumeAccountText } from "../../../contracts/resume-account.js"
 import { checkoutSince } from "../../../base/checkout-since.js"
 
@@ -409,14 +410,6 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   log("info", "opening the store")
   const store = await SqliteLocalAgentStore.open({ workspaceRef: params.cwd, stateRoot: params.stateRoot })
   log("info", "store opened")
-  if (!params.create) {
-    try {
-      for (const path of repairCursorTranscripts(cursorTranscriptFolder(params.cwd, params.agentId)))
-        log("warn", `cut a torn last line from ${path}`)
-    } catch (cause) {
-      log("warn", `the transcripts could not be repaired: ${cursorSdkWireError(cause).message}`)
-    }
-  }
   // `send` persists the active run before loading its checkpoint, and can
   // die during that load before returning a Run. Record its owner before
   // the SDK writes the run, so a crash there is recoverable too.
@@ -468,6 +461,17 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     await store.dispose().catch(() => undefined)
     if (cause instanceof CursorImportError || cause instanceof CursorForkError) throw new ConfigurationError(cause.message)
     throw cause
+  }
+  // Before the SDK reads or writes this agent's transcripts, and only this agent's: each file under the lock its
+  // writers take, so a child still writing it is waited for. A file that stays locked is left as it is.
+  if (!params.create) {
+    log("info", "checking the transcripts")
+    try {
+      for (const path of await repairCursorTranscripts(cursorTranscriptFolder(params.cwd, agentId)))
+        log("warn", `cut a torn last line from ${path}`)
+    } catch (cause) {
+      log("warn", `the transcripts were not repaired: ${cursorSdkWireError(cause).message}`)
+    }
   }
   const base: Omit<OpenAgent, "handle"> = {
     agentId,
@@ -1337,6 +1341,7 @@ function main(): void {
   console.log = (...args) => console.error(...args)
   console.info = (...args) => console.error(...args)
   console.debug = (...args) => console.error(...args)
+  Object.assign(globalThis, { [CURSOR_TRANSCRIPT_LOCK]: transcriptLock })
   if (process.argv[2] === CURSOR_SDK_HEADLESS) return headlessMain(process.argv[3])
   Object.assign(globalThis, { [CURSOR_SDK_RESUME_HOOK]: resumeHook })
   process.on(CURSOR_SDK_LOG_EVENT, (...args: unknown[]) => {
