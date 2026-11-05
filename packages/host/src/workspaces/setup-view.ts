@@ -42,6 +42,8 @@ export interface SetupViewDeps {
     account?: { snapshot(since: number): Promise<BorrowSnapshot | null>; answer(ask: string, answer: SourceAnswer): Promise<void>; revoke(grant: string): Promise<void> }
     /** The asking Thread as the person knows it. */
     asker?(thread: string): Asker | undefined
+    /** A saved record's version now (`GrantedSecrets.version`), to say yes to a credential ask; never its value. */
+    secretVersion?(kind: SecretKind, name: string): Promise<string | undefined>
   }
   now?(): number
 }
@@ -244,11 +246,20 @@ export class SetupViews {
     let said: SourceAnswer
     if (answer === "decline") said = { answer: "no", by: { kind: "person", account: ask.borrower.account } }
     else if (ask.resource.kind === "file" || ask.resource.kind === "tree") said = await checkoutSource({ ...ask, borrower: { ...ask.borrower, repository: root } })
-    else return { done: false, why: "This Mac can't serve that kind of thing yet." }
-    if (said.answer === "unavailable") return { done: false, why: `${ask.ref} isn't in the main checkout as it is now.` }
+    else if (ask.resource.kind === "credential") said = await this.#credential(ask.ref)
+    else return { done: false, why: "This Mac can't run or reach that for another place yet; only Decline answers it." }
+    if (said.answer === "unavailable") return { done: false, why: ask.resource.kind === "credential" ? `Nothing is saved on this Mac as ${ask.ref}.` : `${ask.ref} isn't in the main checkout as it is now.` }
     if (held.held.from === "local") await held.held.broker.answer(id, said)
     else await this.#deps.borrowing?.account?.answer(id, said)
     return { done: true }
+  }
+
+  /** A credential ask's yes: the saved record's version as its leases name it, or why there's none. */
+  async #credential(ref: string): Promise<SourceAnswer> {
+    const [kind, ...rest] = ref.split("/")
+    const known = SECRET_KINDS.find((each) => each === kind)
+    const version = known && rest.length ? await this.#deps.borrowing?.secretVersion?.(known, rest.join("/")) : undefined
+    return version ? { answer: "yes", version } : { answer: "unavailable", reason: "not-found" }
   }
 
   /** The person's Stop: the grant ends wherever it's kept, and every lease under it with it. */

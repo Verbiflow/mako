@@ -251,7 +251,10 @@ export type AskAnswer = z.infer<typeof AskAnswerSchema>
 export function askAnswers(ask: SetupAsk): AskAnswer[] {
   if (ask.kind === "tool") return ["add-to-setup", "decline"]
   // A source's yes is for the borrower that asked; widening it is a grant of its own, given in Setup.
-  return ask.answer === "source" ? ["allow-thread", "decline"] : ["allow-thread", "allow-project", "decline"]
+  if (ask.answer === "grant") return ["allow-thread", "allow-project", "decline"]
+  // A command or a port is run or reached by its device's own source, which no device has yet: only no can be said.
+  const { kind } = ask.offer.resource
+  return kind === "command" || kind === "port" ? ["decline"] : ["allow-thread", "decline"]
 }
 
 /**
@@ -800,11 +803,56 @@ export const SETUP_ADDITIONS = [
   { part: "services", title: "A service on your network", detail: "Reached through this Mac while it's online" },
 ] as const satisfies ReadonlyArray<{ part: SetupListPart; title: string; detail: string }>
 
+/** A device as the account lists it, for the places a browser away from the Mac shows. */
+export type AccountDevice = { id: string; name: string; platform: string; lastSeenAt?: string }
+
+function platformOf(text: string): Platform {
+  return /mac/i.test(text) ? "mac" : /linux/i.test(text) ? "linux" : /windows/i.test(text) ? "windows" : "other"
+}
+
 /**
- * Where a browser away from the Mac reads a project's Setup, and acts on it: the account's broker answers both with the
- * same `SetupView` and `SetupActOutcome` a device's host does. `project` is the project's folder name.
+ * A project's page as a browser away from the Mac builds it from the account broker alone (`/v1/borrow/grants`,
+ * `/leases`, `/events`, `/asks`): the cloud's place and each device of the account's, every row by `setupView`. The
+ * project is its folder's name; its repository is the one the broker's grants, leases or asks name that ends with it.
+ * A device's own readings (its recipe, its own brokers) are its host's to say, so a device place here shows only what
+ * the account's broker holds for it.
  */
-export const SETUP_PATHS = {
-  view: (account: string, project: string) => `/v1/accounts/${encodeURIComponent(account)}/setup?project=${encodeURIComponent(project)}`,
-  act: (account: string, project: string) => `/v1/accounts/${encodeURIComponent(account)}/setup/act?project=${encodeURIComponent(project)}`,
-} as const
+export function accountSetupView(input: { now: number; project: string; snapshot: BorrowSnapshot; devices: readonly AccountDevice[] }): SetupView {
+  const { now, project, snapshot } = input
+  const named = [
+    ...snapshot.grants.flatMap((grant) => (grant.scope.level === "project" ? [grant.scope.repository] : [])),
+    ...snapshot.leases.map((lease) => lease.borrower.repository),
+    ...snapshot.asks.map((waiting) => waiting.ask.borrower.repository),
+  ]
+  const repository = named.find((name) => name.split("/").at(-1) === project) ?? null
+  const places: PlaceReading[] = [
+    {
+      place: { kind: "cloud" },
+      rows: repository ? [{ reading: "repository", part: "code", icon: "repository", name: repository, mono: true, detail: "Clones main, pushes its own branch, opens pull requests as Mako", sync: { state: "synced", at: now } }] : [],
+    },
+    ...input.devices.map((device): PlaceReading => {
+      const lastSeen = device.lastSeenAt ? Date.parse(device.lastSeenAt) : undefined
+      const place: SetupPlace = { kind: "device", device: device.id, name: device.name, platform: platformOf(device.platform), here: false, online: false }
+      if (lastSeen !== undefined && Number.isFinite(lastSeen)) place.lastSeen = lastSeen
+      return { place, rows: [] }
+    }),
+  ]
+  const ours = (borrower: { repository: string }) => repository !== null && borrower.repository === repository
+  const asks = snapshot.asks
+    .filter((waiting) => waiting.ask.askPerson && ours(waiting.ask.borrower))
+    .map((waiting) => {
+      const where = waiting.ask.borrower.place
+      return sourceAskOf(waiting, where.kind === "machine" ? "cloud" : `device:${where.device}`, { thread: waiting.ask.borrower.thread, title: "A Thread", fin: false })
+    })
+  const broker: BrokerReading = {
+    account: snapshot.grants[0]?.scope.account ?? "",
+    grants: snapshot.grants,
+    leases: snapshot.leases,
+    refusals: snapshot.events.filter((event) => event.event === "refused"),
+    asks,
+    sourceVersions: {},
+    devices: Object.fromEntries(input.devices.map((device) => [device.id, { name: device.name, platform: platformOf(device.platform), online: false, lastSeen: device.lastSeenAt ? Date.parse(device.lastSeenAt) || null : null }])),
+  }
+  const threads = [...new Set([...snapshot.leases.filter((lease) => ours(lease.borrower)).map((lease) => lease.borrower.thread), ...asks.map((ask) => ask.by.thread)])]
+  return setupView({ now, project: { name: project, root: project, repository }, places, broker, threads })
+}

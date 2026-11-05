@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { ChevronLeftIcon } from "lucide-react"
 import { PhoneSetup } from "@/components/setup/setup-page"
 import { setSetupSource } from "@/state/setup"
+import { accountListStore } from "./account-list"
 import { useWebClient } from "./client"
 import { webSetup } from "./setup-source"
 
@@ -9,7 +10,7 @@ import { webSetup } from "./setup-source"
 export function SetupScreen({ project, onBack }: { project: string; onBack: () => void }) {
   const client = useWebClient()
   useEffect(() => {
-    setSetupSource(webSetup(client.gateway, client.account.id))
+    setSetupSource(webSetup(client.gateway, client.account.id, () => [...accountListStore.get().devices.values()]))
     return () => setSetupSource(undefined)
   }, [client])
   return <SetupScreenView project={project} onBack={onBack} />

@@ -1287,6 +1287,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             await late.cloud.borrow.revoke(grant)
           },
         },
+        secretVersion: (kind, name) => (fixtureDesk ? Promise.resolve(undefined) : secrets.secretVersion(kind, name)),
         asker: (thread) => {
           const parsed = ThreadIdSchema.safeParse(thread)
           const title = parsed.success ? threads.store?.thread(parsed.data)?.title : undefined

@@ -3,7 +3,7 @@ import { heavy } from "./heavy-packages.js"
 import type { HostEnvironment } from "./host-environment.js"
 import { processKeychain } from "./keychain.js"
 import { onMac } from "./platform.js"
-import { adoptingLegacy, aesSealer, fileKey, fileSecrets, handedKey, legacyFiles, memorySecrets, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
+import { adoptingLegacy, aesSealer, fileKey, fileSecrets, handedKey, legacyFiles, memorySecrets, wrappedKey, type LegacyFiles, type SecretKey, type SecretKind, type Secrets } from "./secrets.js"
 import { chromiumSafeStorage, type SecretEncryption } from "./secure-storage.js"
 import { GrantedSecrets } from "./secret-grants.js"
 import type { LocalBorrowing } from "./local-borrowing.js"
@@ -114,6 +114,8 @@ export interface HostSecretStore extends DomainSecrets {
   readonly handover: SecretKeyHandover
   /** The broker the saved records stand as grants of (`GrantedSecrets`), seeded with every record saved before grants were kept. */
   borrowing(): Promise<LocalBorrowing | undefined>
+  /** A saved record's version as its grant's leases name it (`GrantedSecrets.version`), never its value. */
+  secretVersion(kind: SecretKind, name: string): Promise<string | undefined>
 }
 
 /**
@@ -147,6 +149,10 @@ export function hostSecretStore({ userRoot, appName }: Pick<HostEnvironment, "us
       if (!(secrets instanceof GrantedSecrets)) return undefined
       await secrets.seed()
       return secrets.broker
+    },
+    secretVersion: async (kind, name) => {
+      const { secrets } = host()
+      return secrets instanceof GrantedSecrets ? secrets.version(kind, name) : undefined
     },
     adoptLegacy: (files) => {
       legacy.push(files)

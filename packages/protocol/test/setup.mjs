@@ -802,3 +802,31 @@ test("an answer grants exactly what was asked: its kind and ref, never a pattern
     }
   }
 })
+
+test("a browser builds a project's page from the account broker alone, by the same rows", async () => {
+  const { accountSetupView } = await import("../dist/setup.js")
+  const lentFromMac = grant("g-lent", { resource: { kind: "tree", ref: "~/notes" }, source: { kind: "device", device: MAC }, mode: "live" })
+  const other = grant("g-other-project", { resource: { kind: "file", ref: ".env" }, source: { kind: "vault" }, mode: "copy", scope: { level: "project", account: ACCOUNT, repository: "acme/other" } })
+  const page = accountSetupView({
+    now: NOW,
+    project: "shop",
+    devices: [{ id: MAC, name: "MacBook Pro", platform: "macOS 26.1", lastSeenAt: new Date(NOW - HOUR).toISOString() }],
+    snapshot: { grants: [pricing, lentFromMac, other], leases: [lease("l-pricing", pricing, "t-build", "cloud", NOW - 12 * MIN)], events: [], asks: [] },
+  })
+  assert.equal(page.repository, REPO, "the repository the broker names that ends with the project's folder")
+  assert.deepEqual(page.places.map((place) => place.id), ["cloud", `device:${MAC}`])
+  const atCloud = page.places[0]
+  assert.deepEqual(rows(atCloud).map((row) => row.name), [REPO, "acme/pricing", "~/notes"])
+  assert.ok(!rows(atCloud).some((row) => row.name === ".env"), "another project's grant")
+  assert.equal(syncWords(named(atCloud, "acme/pricing").sync, NOW).words, "Synced 12 min ago")
+  const atMac = page.places[1]
+  assert.equal(rowAction(named(atMac, "~/notes"), NOW), "stop", "what the Mac lends, stoppable from the phone")
+  assert.match(atMac.line, /Last online 1 h ago/)
+})
+
+test("a command or a port ask can only be declined, until a device can run or reach it for another place", () => {
+  for (const kind of ["command", "port"]) {
+    const asked = { ...ask, answer: "source", offer: { ...ask.offer, resource: { kind, ref: kind === "command" ? "infra plan" : "db.internal:5432" }, mode: "relay" } }
+    assert.deepEqual(askAnswers(asked), ["decline"])
+  }
+})

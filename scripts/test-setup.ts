@@ -234,6 +234,7 @@ test("the host reads this device's own brokers and the account's, and answers an
         local: async () => [checkouts, saved.broker],
         account: { snapshot: async () => ({ grants: [lent], leases: [], events: [], asks: [] }), answer: async () => undefined, revoke: async (id) => void revoked.push(id) },
         asker: (thread) => (thread === "t-2" ? { thread, title: "Pricing notes", fin: false } : undefined),
+        secretVersion: (kind, name) => saved.version(kind, name),
       },
     })
     const page = await views.view(root)
@@ -251,6 +252,30 @@ test("the host reads this device's own brokers and the account's, and answers an
     assert.deepEqual(await views.act(root, { act: "answer", ask: here.asks[0]!.id, answer: "allow-thread" }), { done: true })
     assert.equal((await checkouts.asks()).length, 0)
     assert.equal((await checkouts.leases()).filter((held) => held.resource.ref === "notes.md").length, 1)
+
+    // A credential ask is answered yes by the saved record's version alone, and the lease names that version.
+    await checkouts.grant({
+      id: "g-key-first",
+      resource: { kind: "credential", ref: "saved-key/openai" },
+      source: { kind: "device", device: LOCAL_DEVICE },
+      scope: { level: "thread", account: "local", thread: "t-3" },
+      within: "source-device",
+      mode: "copy",
+      access: "read",
+      lifetime: { until: "revoked" },
+      ask: "first-use",
+      secret: true,
+      grantedBy: { kind: "person", account: "local" },
+      grantedAt: NOW - DAY,
+      version: 1,
+    })
+    const keyAsk = await checkouts.borrow({ kind: "credential", ref: "saved-key/openai", for: { ...borrower, thread: "t-3" }, why: "call the model", correlationId: "c-key", mode: "copy" })
+    assert.ok("pending" in keyAsk)
+    const askedKey = (await views.view(root)).places[0]!.asks.find((entry) => askLine(entry).thing === "saved-key/openai")!
+    assert.deepEqual(await views.act(root, { act: "answer", ask: askedKey.id, answer: "allow-thread" }), { done: true })
+    const keyLease = (await checkouts.leases()).find((held) => held.resource.ref === "saved-key/openai")!
+    assert.equal(keyLease.version, await saved.version("saved-key", "openai"))
+    assert.ok(!JSON.stringify(keyLease).includes("sk-never-shown"))
 
     const stopLent = rows(here).find((row) => row.name === "~/notes")!
     assert.deepEqual(await views.act(root, { act: "row", place: here.id, row: stopLent.id, action: "stop" }), { done: true })
