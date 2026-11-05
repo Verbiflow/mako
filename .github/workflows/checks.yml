@@ -150,9 +150,8 @@ jobs:
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/bench-file-search.ts --files 100000
 
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
-  # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief
-  # still sends the brief once (`test:orch-update`); and with the host killed at thirteen points on all six harnesses
-  # (`test:orch-crash`), each run ending with every brief, report and message delivered once.
+  # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three
+  # doors. What must get through a crash or an update is `orchestration-recovery`, so neither job nears its limit.
   orchestration:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -182,19 +181,38 @@ jobs:
       - run: npm run test:fin-resume
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
-      # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
-      # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
-      - run: npm run test:delivery-retry
-      # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
-      - run: npm run test:handoff
       - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
-      - run: npm run test:orch-deliver
       # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
       - run: npm run test:steer-landing
       - run: npm run test:agents-doors
       - run: npm run test:agents-cli
       - run: npm run test:thread-move-tool
+
+  # What must get through: a message its harness can't take for now, a prompt across a crash, a Fin's launch cut by an
+  # update before its brief, which still goes once (`test:orch-update`), and the host killed at thirteen points on all
+  # six harnesses (`test:orch-crash`), each run ending with every brief, report and message delivered once.
+  orchestration-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+      # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
+      # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
+      - run: npm run test:delivery-retry
+      # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
+      - run: npm run test:handoff
+      - run: npm run test:orch-deliver
       - run: npm run test:orch-update
       - run: npm run test:orch-crash
 
