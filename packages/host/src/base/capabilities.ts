@@ -14,7 +14,7 @@ import { nodePlatform } from "./platform.js"
  * the command-line tools on its PATH. Each is a fact read from the device, never a value: a CLI is advertised by its
  * presence alone, so nothing a tool is signed in with is read or sent.
  */
-export const ADVERTISED_CLIS = ["git", "gh", "node", "npm", "bun", "python3", "docker", "kubectl", "terraform", "aws", "gcloud", "az", "wrangler", "vercel", "flyctl", "fastlane", "xcodebuild", "adb"] as const
+export const ADVERTISED_CLIS = ["git", "gh", "node", "npm", "bun", "python3", "docker", "kubectl", "terraform", "aws", "gcloud", "az", "fastlane", "xcodebuild", "adb"] as const
 
 /** The most capabilities one advertisement carries (`advertise`'s bound): simulators past it are left out, oldest runtime first. */
 export const MAX_CAPABILITIES = 64
