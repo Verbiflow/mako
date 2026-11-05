@@ -93,7 +93,7 @@ export function mockSetup() {
     lease("l-notes-mac", grants[4]!, "t-build", "cloud", start - 25 * MIN),
   ]
   const refusals: BrokerReading["refusals"] = [
-    { event: "refused", at: start - 3 * HOUR, grant: "g-outreach", borrower: borrower("t-studio", "studio"), resource: { kind: "tree", ref: "ignore/outreach" }, refused: "unavailable", detail: "disk full", correlationId: "c-studio-outreach" },
+    { event: "refused", at: start - 3 * HOUR, grant: "g-outreach", borrower: borrower("t-studio", "studio"), resource: { kind: "tree", ref: "ignore/outreach" }, refused: "unavailable", reason: "disk-full", correlationId: "c-studio-outreach" },
   ]
   const apex = params.get("app") === "apex"
   const asker = (thread: string, title: string, harness: string, fin: boolean) => (apex ? { thread: APEX_THREAD, title: APEX_TITLE, harness: "claude", fin: false } : { thread, title, harness, fin })
@@ -105,6 +105,7 @@ export function mockSetup() {
           {
             id: "ask-ledger",
             kind: "borrow",
+            answer: "grant",
             by: asker("t-build", "Shop build", "claude", false),
             at: start - 4 * MIN,
             why: "borrow the payout batching from the ledger service",

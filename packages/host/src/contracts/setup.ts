@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { AskOffer, Grant, Kind, Lease, LeaseEvent, Scope } from "@mako/protocol/borrow"
+import type { AskOffer, Grant, Kind, Lease, LeaseEvent, Scope, SourceAsk, UnavailableReason } from "@mako/protocol/borrow"
 
 /**
  * Setup: what each place a project's Threads run in has for the project, and where each thing stands against its
@@ -213,8 +213,10 @@ export const AskerSchema = z
 export type Asker = z.infer<typeof AskerSchema>
 
 /**
- * An agent's ask, waiting on the person: a borrow nothing grants yet (the broker's `AskOffer`), or a tool the place
- * lacks. An answer becomes a grant, or the tool goes into the recipe's prepare; agents never add to Setup themselves.
+ * An agent's ask, waiting on the person: a borrow nothing grants yet (the broker's `AskOffer`, `answer: "grant"`), a
+ * borrow whose grant asks this device's person first (a `SourceAsk` with `askPerson`, `answer: "source"`), or a tool
+ * the place lacks. An answer becomes a grant, the source's yes or no, or the tool goes into the recipe's prepare;
+ * agents never add to Setup themselves.
  */
 export type SetupAsk = {
   id: string
@@ -223,7 +225,7 @@ export type SetupAsk = {
   why: string
   /** The place the asking Thread runs in. */
   place: string
-} & ({ kind: "borrow"; offer: AskOffer } | { kind: "tool"; tool: string; version?: string })
+} & ({ kind: "borrow"; offer: AskOffer; answer: "grant" | "source" } | { kind: "tool"; tool: string; version?: string })
 
 export const ASK_ANSWERS = ["allow-thread", "allow-project", "decline", "add-to-setup"] as const
 export const AskAnswerSchema = z.enum(ASK_ANSWERS)
@@ -231,7 +233,33 @@ export type AskAnswer = z.infer<typeof AskAnswerSchema>
 
 /** The answers an ask offers, the one for the narrowest reach first. */
 export function askAnswers(ask: SetupAsk): AskAnswer[] {
-  return ask.kind === "borrow" ? ["allow-thread", "allow-project", "decline"] : ["add-to-setup", "decline"]
+  if (ask.kind === "tool") return ["add-to-setup", "decline"]
+  // A source's yes is for the borrower that asked; widening it is a grant of its own, given in Setup.
+  return ask.answer === "source" ? ["allow-thread", "decline"] : ["allow-thread", "allow-project", "decline"]
+}
+
+/**
+ * A source's ask of this device's person (`LocalBorrowing.asks`, the account broker's `/v1/borrow/asks`) as Setup's:
+ * the borrower's Thread as the person knows it, what it wants and why, at the place it runs.
+ */
+export function sourceAskOf(waiting: { ask: SourceAsk; at: number }, place: string, by: Asker): SetupAsk {
+  const { ask } = waiting
+  return {
+    id: ask.ask,
+    kind: "borrow",
+    answer: "source",
+    by,
+    at: waiting.at,
+    why: ask.why,
+    place,
+    offer: {
+      resource: { kind: ask.resource.kind, ref: ask.ref },
+      borrower: ask.borrower,
+      why: ask.why,
+      scope: { level: "thread", account: ask.borrower.account, thread: ask.borrower.thread },
+      mode: ask.mode,
+    },
+  }
 }
 
 /** An answer's button. `compact` for a side panel or a phone, where the shorter words fit. */
@@ -326,14 +354,17 @@ export type BrokerReading = {
   account: string
   grants: Grant[]
   leases: Lease[]
-  /** Recent refusals (`refused` events), newest last, each with the source's own words when it gave some ("disk full"). */
-  refusals: Array<LeaseEvent & { detail?: string }>
+  /** Recent refusals (`refused` events), newest last, each with its fixed reason when one was given; never a source's words. */
+  refusals: Array<LeaseEvent & { reason?: SetupFailure }>
   asks: SetupAsk[]
   /** Each grant's current version at its source, when the source reports one: a copy behind it is "newer" there. */
   sourceVersions: Record<string, string>
   /** The account's devices, by ID: a device-sourced row names it. */
   devices: Record<string, { name: string; platform: Platform; online: boolean; lastSeen: number | null }>
 }
+
+/** What one broker says, as Setup reads it: standing grants, live leases, its log since a time, and the asks waiting on this device's person. */
+export type BorrowSnapshot = { grants: Grant[]; leases: Lease[]; events: LeaseEvent[]; asks: Array<{ ask: SourceAsk; at: number }> }
 
 export type SetupInput = {
   now: number
@@ -462,8 +493,25 @@ export function bytes(count: number): string {
   return `${value >= 10 || Number.isInteger(value) ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
 }
 
-/** A refusal's code as a copy that didn't land says it, when its source gave no words of its own. */
-function refusalWords(code: string): string {
+/**
+ * Why a copy didn't land, as a fixed reason: the source's (`UnavailableReason`), or the borrower's own when it couldn't
+ * place what it was given. Never a source's words, which can hold anything.
+ */
+export type SetupFailure = UnavailableReason | "disk-full"
+
+const FAILURE_WORDS = {
+  "not-found": "not at its source",
+  outside: "outside its folder",
+  unreadable: "couldn't be read",
+  changed: "it changed while copying",
+  "no-value": "nothing saved for it",
+  error: "its source failed",
+  "disk-full": "disk full",
+} as const satisfies Record<SetupFailure, string>
+
+/** A refusal as a copy that didn't land says it: by its reason, else by its code. */
+function refusalWords(code: string, reason: SetupFailure | undefined): string {
+  if (reason) return FAILURE_WORDS[reason]
   switch (code) {
     case "too-large":
       return "too large"
@@ -490,7 +538,7 @@ export function grantSync(grant: Grant, leases: Lease[], broker: BrokerReading, 
   const latest = leases.reduce<Lease | undefined>((newest, lease) => (!newest || lease.issuedAt > newest.issuedAt ? lease : newest), undefined)
   if (latest) return { state: "synced", at: latest.issuedAt }
   const refused = [...broker.refusals].reverse().find((event) => event.grant === grant.id && (place.kind === "cloud" ? event.borrower.place.kind === "machine" : event.borrower.place.kind === "device" && event.borrower.place.device === place.device))
-  if (refused?.refused && refused.refused !== "no-grant") return { state: "failed", why: refused.detail ?? refusalWords(refused.refused) }
+  if (refused?.refused && refused.refused !== "no-grant") return { state: "failed", why: refusalWords(refused.refused, refused.reason) }
   if (grant.source.kind === "device" && (grant.mode === "live" || grant.mode === "relay")) {
     const device = broker.devices[grant.source.device]
     if (device && !device.online) return grant.resource.kind === "port" ? { state: "offline", through: device.name } : { state: "stale", since: device.lastSeen ?? grant.grantedAt }
@@ -520,12 +568,41 @@ function lentSync(grant: Grant, leases: Lease[], broker: BrokerReading, place: S
   return { state: "synced", at: latest || grant.grantedAt }
 }
 
-function grantRows(broker: BrokerReading, place: SetupPlace, repository: string | null, threads: ReadonlySet<string>): SetupRow[] {
+/** Whether a ref is a pattern (`**`, `*.env`): its leases, one per thing taken, are rows of their own. */
+const PATTERN = /[*?]/
+
+function leaseRows(grant: Grant, leases: Lease[]): SetupRow[] {
+  const byRef = new Map<string, Lease[]>()
+  for (const lease of leases) byRef.set(lease.resource.ref, [...(byRef.get(lease.resource.ref) ?? []), lease])
+  return [...byRef].map(([ref, held]): SetupRow => {
+    const worktrees = new Set(held.map((lease) => lease.borrower.thread)).size
+    const latest = held.reduce((newest, lease) => Math.max(newest, lease.issuedAt), 0)
+    const kind = held[0]!.resource.kind
+    const placed = grant.mode === "live" ? "Linked into" : "Copied into"
+    return {
+      id: `lease:${grant.id}:${ref}`,
+      part: kindPart(kind, ref),
+      icon: kindIcon(kind, ref),
+      name: ref,
+      mono: true,
+      detail: `${placed} ${worktrees} ${worktrees === 1 ? "Thread's worktree" : "Threads' worktrees"}${grant.secret ? " · agents see names only" : ""}`,
+      scope: grant.scope.level,
+      sync: { state: "synced", at: latest },
+      origin: { from: "lease", lease: held[0]!.id, grant: grant.id },
+      target: grant.id,
+    }
+  })
+}
+
+function grantRows(broker: BrokerReading, place: SetupPlace, project: { repository: string | null; root: string }, threads: ReadonlySet<string>): SetupRow[] {
   const rows: SetupRow[] = []
+  const repository = project.repository
+  // A device's own broker names a borrower's project by its main checkout's folder; the account's by owner/name.
+  const ours = (lease: Lease) => lease.borrower.repository === repository || lease.borrower.repository === project.root
   for (const grant of broker.grants) {
     const shown = grantAt(grant, place, repository, threads)
     if (!shown) continue
-    const leases = broker.leases.filter((lease) => lease.grant === grant.id && (shown === "lent" ? !atPlace(lease, place) : atPlace(lease, place)))
+    const leases = broker.leases.filter((lease) => lease.grant === grant.id && ours(lease) && (shown === "lent" ? !atPlace(lease, place) : atPlace(lease, place)))
     // Another device holds a grant only once something was leased or refused there; the cloud's machines take every one as they start.
     if (shown === "held" && place.kind === "device" && grant.within !== "source-device" && !leases.length && !refusedAt(broker, grant, place)) continue
     const { kind, ref } = grant.resource
@@ -542,8 +619,11 @@ function grantRows(broker: BrokerReading, place: SetupPlace, repository: string 
       origin: leases.length === 1 ? { from: "lease", lease: leases[0]!.id, grant: grant.id } : { from: "grant", grant: grant.id },
       target: grant.id,
     }
-    if (shown === "lent" && row.sync.state !== "newer") row.action = "stop"
+    // What this device is the source of, the person can stop here: lent to other places, or kept to its own Threads.
+    const own = place.kind === "device" && grant.source.kind === "device" && grant.source.device === place.device
+    if (own && row.sync.state !== "newer") row.action = "stop"
     rows.push(row)
+    if (PATTERN.test(ref) && shown === "held") rows.push(...leaseRows(grant, leases))
   }
   return rows
 }
@@ -613,7 +693,7 @@ export function setupView(input: SetupInput): SetupView {
     places: places.map((reading) => {
       const id = placeId(reading.place)
       const asks = (broker?.asks ?? []).filter((ask) => ask.place === id).sort((left, right) => left.at - right.at)
-      const granted = broker ? grantRows(broker, reading.place, project.repository, threads) : []
+      const granted = broker ? grantRows(broker, reading.place, project, threads) : []
       const asked = asks.map((ask) => askRow(ask, now))
       const names = new Set([...granted, ...asked].map((row) => `${row.part}\0${row.name}`))
       const read = reading.rows

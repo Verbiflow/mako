@@ -15,7 +15,9 @@ import {
   bytes,
   grantForAnswer,
   partSummary,
+  askLine,
   rowAction,
+  sourceAskOf,
   SETUP_LIST_PARTS,
   SETUP_PARTS,
   setupView,
@@ -96,6 +98,7 @@ const mine = grant("g-mine", { resource: { kind: "file", ref: "scratch.md" }, so
 const ask: SetupAsk = {
   id: "ask-ledger",
   kind: "borrow",
+  answer: "grant",
   by: { thread: "t-build", title: "Shop build", harness: "claude", fin: false },
   at: NOW - 4 * MIN,
   why: "borrow the payout batching",
@@ -124,7 +127,7 @@ function broker(extra: Partial<BrokerReading> = {}): BrokerReading {
       lease("l-env-studio", env, "t-studio", "studio", NOW - 3 * HOUR, { stale: { heldSince: NOW - 3 * HOUR, sourceLastSeen: NOW - 3 * HOUR } }),
     ],
     refusals: [
-      { event: "refused", at: NOW - 3 * HOUR, grant: outreach.id, borrower: { account: ACCOUNT, repository: REPO, thread: "t-studio", place: { kind: "device", device: STUDIO } }, resource: outreach.resource, refused: "unavailable", detail: "disk full", correlationId: "c1" },
+      { event: "refused", at: NOW - 3 * HOUR, grant: outreach.id, borrower: { account: ACCOUNT, repository: REPO, thread: "t-studio", place: { kind: "device", device: STUDIO } }, resource: outreach.resource, refused: "unavailable", reason: "disk-full", correlationId: "c1" },
     ],
     asks: [ask, toolAsk],
     sourceVersions: { [env.id]: HASH_A },
@@ -267,11 +270,63 @@ test("the source device lists what it lends, with Stop, or Send where its own co
   const lentEnv = rows(atMac).filter((row) => row.name === ".env.local" && row.origin.from !== "reading")
   assert.equal(lentEnv.length, 1)
   assert.equal(rowAction(lentEnv[0]!, NOW), "send")
-  // A grant kept to its source device is the device's own, held, never lent.
+  // A grant kept to its source device is the device's own, held, never lent, and the person can stop it here.
   const kept = named(atMac, "fixtures/recordings")
-  assert.equal(kept.action, undefined)
+  assert.equal(kept.action, "stop")
+  assert.ok(!/Read by|Lent/.test(kept.detail))
   // A Studio-sourced relay isn't the Mac's to lend, and nothing reached the Mac under it.
   assert.ok(!rows(atMac).some((row) => row.name === "Staging database"))
+})
+
+test("this device's own brokers: a pattern grant lists each entry taken, for this project's worktrees alone", () => {
+  const LOCAL = "this-device"
+  const here: SetupPlace = { kind: "device", device: LOCAL, name: "MacBook Pro", platform: "mac", here: true, online: true }
+  const copies = grant("device-checkouts-copy", { resource: { kind: "tree", ref: "**" }, source: { kind: "device", device: LOCAL }, mode: "copy", scope: { level: "account", account: ACCOUNT }, within: "source-device", label: "Files Git ignores, copied into worktrees" })
+  const local = (id: string, ref: string, thread: string, repository: string): Lease => ({
+    ...lease(id, copies, thread, "mac", NOW - HOUR),
+    resource: { kind: "file", ref },
+    borrower: { account: ACCOUNT, repository, thread, place: { kind: "device", device: LOCAL } },
+  })
+  const page = setupView({
+    now: NOW,
+    project: { name: "shop", root: "/work/shop", repository: REPO },
+    places: [{ place: here, rows: [{ reading: "recipe-carry", part: "files", icon: "file", name: ".env.local", mono: true, detail: "Copied into each new worktree", sync: { state: "synced", at: NOW - DAY } }] }],
+    broker: {
+      ...broker({ grants: [copies], leases: [local("a", ".env.local", "t1", "/work/shop"), local("b", ".env.local", "t2", "/work/shop"), local("c", "secret.json", "t3", "/work/other")], asks: [], refusals: [] }),
+      devices: { [LOCAL]: { name: "MacBook Pro", platform: "mac", online: true, lastSeen: NOW } },
+    },
+  }).places[0]!
+  const names = rows(page).map((row) => row.name)
+  assert.deepEqual(names, ["Files Git ignores, copied into worktrees", ".env.local"])
+  const entry = named(page, ".env.local")
+  assert.equal(entry.origin.from, "lease")
+  assert.equal(entry.detail, "Copied into 2 Threads' worktrees")
+  assert.equal(said(entry), "Synced 1 h ago")
+  assert.equal(rowAction(named(page, "Files Git ignores, copied into worktrees"), NOW), "stop")
+})
+
+test("a source's ask of this device's person waits in Needs you, answered for its Thread or declined", () => {
+  const waiting = {
+    at: NOW - 2 * MIN,
+    ask: {
+      ask: "src-1",
+      grant: notes.id,
+      resource: notes.resource,
+      ref: "~/notes/plan.md",
+      mode: "live" as const,
+      borrower: { account: ACCOUNT, repository: REPO, thread: "t-build", place: { kind: "machine" as const, machine: "m-1" } },
+      why: "read the pricing notes",
+      askPerson: true,
+    },
+  }
+  const asked = sourceAskOf(waiting, "cloud", { thread: "t-build", title: "Shop build", fin: false })
+  assert.equal(asked.kind === "borrow" && asked.answer, "source")
+  assert.deepEqual(askAnswers(asked), ["allow-thread", "decline"])
+  assert.equal(askLine(asked).thing, "~/notes/plan.md")
+  const page = setupView({ now: NOW, project: { name: "shop", root: "/work/shop", repository: REPO }, places: readings(), broker: broker({ asks: [asked] }), threads: ["t-build"] })
+  const atCloud = page.places.find((place) => place.id === "cloud")!
+  assert.deepEqual(atCloud.asks.map((entry) => entry.id), ["src-1"])
+  assert.equal(said(rows(atCloud).find((row) => row.origin.from === "ask")!), "Waiting on you")
 })
 
 test("a grant's row takes the place of a reading of the same thing", () => {
@@ -458,7 +513,7 @@ test("the host reads this device's place and the cloud's from what it holds, and
       label: (harness) => (harness === "claude" ? "Claude Code" : harness),
     })
     const page = await views.view(root)
-    assert.deepEqual(page.places.map((place) => place.id), ["device:mac-1", "cloud"])
+    assert.deepEqual(page.places.map((place) => place.id), ["device:this-device", "cloud"])
     const [here, there] = page.places
     const words = (place: SetupPlaceView) => Object.fromEntries(rows(place).map((row) => [row.name, syncWords(row.sync, NOW).words]))
     assert.deepEqual(words(here!), {
@@ -478,6 +533,85 @@ test("the host reads this device's place and the cloud's from what it holds, and
     assert.deepEqual(kept, [[".env.local", false]])
     const answered = await views.act(root, { act: "answer", ask: "a", answer: "decline" })
     assert.equal(answered.done, false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("the host reads this device's own brokers and the account's, and answers and stops where each is kept", async () => {
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { SetupViews } = await import("@mako/host/workspaces/setup-view")
+  const { LocalBorrowing } = await import("@mako/host/base/local-borrowing")
+  const { CHECKOUT_SOURCES, LOCAL_DEVICE, checkoutGrants } = await import("@mako/host/workspaces/checkout-borrowing")
+  const { GrantedSecrets } = await import("@mako/host/base/secret-grants")
+  const { memorySecrets } = await import("@mako/host/base/secrets")
+  const root = await mkdtemp(join(tmpdir(), "mako-setup-brokers-"))
+  try {
+    await writeFile(join(root, ".env.local"), "NAME=never-read\n")
+    await writeFile(join(root, "notes.md"), "# notes\n")
+    const checkouts = new LocalBorrowing({ device: LOCAL_DEVICE, account: "local", sources: CHECKOUT_SOURCES })
+    for (const seeded of checkoutGrants(LOCAL_DEVICE, "local", NOW - DAY)) await checkouts.grant(seeded)
+    await checkouts.grant({
+      id: "g-notes-first",
+      resource: { kind: "file", ref: "notes.md" },
+      source: { kind: "device", device: LOCAL_DEVICE },
+      scope: { level: "thread", account: "local", thread: "t-2" },
+      within: "source-device",
+      mode: "copy",
+      access: "read",
+      lifetime: { until: "revoked" },
+      ask: "first-use",
+      secret: false,
+      grantedBy: { kind: "person", account: "local" },
+      grantedAt: NOW - DAY,
+      version: 1,
+    })
+    const borrower = { account: "local", repository: root, thread: "t-1", place: { kind: "device" as const, device: LOCAL_DEVICE } }
+    const copied = await checkouts.borrow({ kind: "file", ref: ".env.local", for: borrower, why: "the recipe's carry", correlationId: "c-env", mode: "copy" })
+    assert.ok("lease" in copied)
+    const waiting = await checkouts.borrow({ kind: "file", ref: "notes.md", for: { ...borrower, thread: "t-2" }, why: "read the notes", correlationId: "c-notes" })
+    assert.ok("pending" in waiting)
+    const saved = new GrantedSecrets(memorySecrets())
+    await saved.write("saved-key", "openai", "sk-never-shown")
+    const revoked: string[] = []
+    const lent: Grant = { ...grant("g-lent", { resource: { kind: "tree", ref: "~/notes" }, source: { kind: "device", device: "cloud-mac-id" }, mode: "live" }), scope: { level: "account", account: ACCOUNT } }
+    const views = new SetupViews({
+      now: () => NOW,
+      recipe: async () => ({ project: "shop", root, recipe: { kind: "none" } }),
+      accounts: async () => ({ providers: [], accounts: [] }),
+      keys: async () => ({ connections: [], issues: [], secureStorage: true, harnesses: [] }),
+      device: async () => ({ id: "cloud-mac-id", name: "MacBook Pro" }),
+      label: (harness) => harness,
+      borrowing: {
+        local: async () => [checkouts, saved.broker],
+        account: { snapshot: async () => ({ grants: [lent], leases: [], events: [], asks: [] }), answer: async () => undefined, revoke: async (id) => void revoked.push(id) },
+        asker: (thread) => (thread === "t-2" ? { thread, title: "Pricing notes", fin: false } : undefined),
+      },
+    })
+    const page = await views.view(root)
+    const here = page.places[0]!
+    assert.equal(here.id, `device:${LOCAL_DEVICE}`)
+    const names = rows(here).map((row) => row.name)
+    assert.ok(names.includes(".env.local"), names.join(", "))
+    assert.equal(named(here, ".env.local").origin.from, "lease")
+    assert.ok(names.includes("Saved key: openai"))
+    assert.equal(named(here, "Saved key: openai").part, "access")
+    assert.equal(rowAction(named(here, "~/notes"), NOW), "stop", "the account's grant sourced from this Mac is lent from here")
+    assert.ok(!JSON.stringify(page).includes("never-read") && !JSON.stringify(page).includes("sk-never-shown"))
+
+    assert.deepEqual(here.asks.map((ask) => [ask.by.title, askLine(ask).thing]), [["Pricing notes", "notes.md"]])
+    assert.deepEqual(await views.act(root, { act: "answer", ask: here.asks[0]!.id, answer: "allow-thread" }), { done: true })
+    assert.equal((await checkouts.asks()).length, 0)
+    assert.equal((await checkouts.leases()).filter((held) => held.resource.ref === "notes.md").length, 1)
+
+    const stopLent = rows(here).find((row) => row.name === "~/notes")!
+    assert.deepEqual(await views.act(root, { act: "row", place: here.id, row: stopLent.id, action: "stop" }), { done: true })
+    assert.deepEqual(revoked, ["g-lent"])
+    const stopLocal = rows((await views.view(root)).places[0]!).find((row) => row.name.startsWith("Files Git ignores") && row.name.includes("copied"))!
+    assert.deepEqual(await views.act(root, { act: "row", place: here.id, row: stopLocal.id, action: "stop" }), { done: true })
+    assert.ok(!(await checkouts.grants()).some((held) => held.id === "device-checkouts-copy"))
   } finally {
     await rm(root, { recursive: true, force: true })
   }

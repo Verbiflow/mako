@@ -1270,6 +1270,29 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       keys: () => providerHost.modelConnections.snapshot(),
       device: async () => ({ id: await late.cloud?.deviceId().catch(() => undefined), name: (await describeThisDevice(environment.version)).name }),
       label: (harness) => harnessLabel(providerHost, harness),
+      borrowing: {
+        local: async () => {
+          const checkouts = workspaces.worktrees?.borrowing.borrowing
+          const saved = fixtureDesk ? undefined : await secrets.borrowing()
+          return [checkouts, saved].filter((broker) => broker !== undefined)
+        },
+        account: {
+          snapshot: async (since) => (await late.cloud?.borrow?.snapshot(since)) ?? null,
+          answer: async (ask, answer) => {
+            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            await late.cloud.borrow.answer(ask, answer)
+          },
+          revoke: async (grant) => {
+            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            await late.cloud.borrow.revoke(grant)
+          },
+        },
+        asker: (thread) => {
+          const parsed = ThreadIdSchema.safeParse(thread)
+          const title = parsed.success ? threads.store?.thread(parsed.data)?.title : undefined
+          return title ? { thread, title, fin: false } : undefined
+        },
+      },
     })
   )
   declareControlMethods(methods, control, environment.appRoot, config.executable)

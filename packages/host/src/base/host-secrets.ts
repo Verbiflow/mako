@@ -6,6 +6,7 @@ import { onMac } from "./platform.js"
 import { adoptingLegacy, aesSealer, fileKey, fileSecrets, handedKey, legacyFiles, memorySecrets, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
 import { chromiumSafeStorage, type SecretEncryption } from "./secure-storage.js"
 import { GrantedSecrets } from "./secret-grants.js"
+import type { LocalBorrowing } from "./local-borrowing.js"
 
 /** How long the host waits after it starts for the desktop's handover before reading the keychain itself. */
 const HANDOVER_GRACE_MS = 5_000
@@ -111,6 +112,8 @@ export interface DomainSecrets {
 /** A host's secrets: every domain's, and the desktop's handover of the key that opens them. */
 export interface HostSecretStore extends DomainSecrets {
   readonly handover: SecretKeyHandover
+  /** The broker the saved records stand as grants of (`GrantedSecrets`), seeded with every record saved before grants were kept. */
+  borrowing(): Promise<LocalBorrowing | undefined>
 }
 
 /**
@@ -138,6 +141,12 @@ export function hostSecretStore({ userRoot, appName }: Pick<HostEnvironment, "us
     handover: {
       wanted: () => host().handover.wanted(),
       offer: (key) => host().handover.offer(key),
+    },
+    borrowing: async () => {
+      const { secrets } = host()
+      if (!(secrets instanceof GrantedSecrets)) return undefined
+      await secrets.seed()
+      return secrets.broker
     },
     adoptLegacy: (files) => {
       legacy.push(files)
