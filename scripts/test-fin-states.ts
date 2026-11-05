@@ -20,8 +20,10 @@ import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
  * nobody presses on a Fin, while the queue read as work. Covered, a Fin on
  * each of the six harnesses: a message after a stop goes, what the stop
  * paused follows it, and the room it held is free; a message behind one the
- * person paused reads as no work; a stopped Fin that's an Apex hears its own Fins only once resumed,
- * after the message that resumed it, a restart between; a stopped Fin never
+ * person paused to edit reads as no work, and nothing goes ahead of it, a
+ * new message or a stop and a restart between; a stopped Fin that's an Apex
+ * hears its own Fins only once resumed, after the message that resumed it, a
+ * restart between; a stopped Fin never
  * reads working, and a stop ends a turn still running in it; a turn the
  * harness failed leaves no message stuck behind it.
  */
@@ -123,6 +125,40 @@ try {
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
       await until("all three to go, in order", () => promptsOf(world, fin).length === 4)
       assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Then the CHANGELOG\.|And the LICENSE\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE."])
+      await world.close()
+    }
+
+    // A stop beside the person's edit: the message that resumes the Fin waits behind the one being edited, across a restart.
+    {
+      let fin = ""
+      let turns = 0
+      const world = worldOf(`edit-and-stop-${harness}`, (turn) => {
+        if (turn.conversation !== fin && !turn.text.includes("fin:labels")) return undefined
+        turns += 1
+        return turns === 1 ? turn.world.hold(turn.conversation).then(() => "Cut short.") : "Done."
+      })
+      const apex = await world.apex("cursor", "full")
+      fin = await startFin(world, apex.caller, "labels", harness)
+      await until("the Fin to work", () => world.live.session(fin)?.status === "running")
+      sent(await world.agents.send(apex.caller, { to: "labels", text: "Then the README.", clientKey: "a" }))
+      sent(await world.agents.send(apex.caller, { to: "labels", text: "Then the CHANGELOG.", clientKey: "b" }))
+      const readme = requestOf(world, fin, "Then the README.")!
+      world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "pause" } })
+      await world.agents.stop(apex.caller, { child: "labels", reason: "pausing" })
+      await until("the stop", () => world.live.session(fin)?.status !== "running")
+      sent(await world.agents.send(apex.caller, { to: "labels", text: "Carry on.", clientKey: "c" }))
+      await pause(300)
+      assert.equal(promptsOf(world, fin).length, 1, `${harness}: nothing jumps ahead of the message the person is editing`)
+      await world.restart()
+      await pause(300)
+      assert.equal(requestOf(world, fin, "Then the README.")?.status, "held", `${harness}: a restart keeps the person's edit hold`)
+      assert.equal(requestOf(world, fin, "Then the README.")?.editing, true)
+      assert.equal(promptsOf(world, fin).length, 1, `${harness}: nor does a restart send anything past it`)
+      world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
+      await until("all three to go", () => promptsOf(world, fin).length === 4)
+      // The journal keeps requests as they came, so after a restart the two behind it go in that order.
+      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Carry on\.|Then the CHANGELOG\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "Carry on."],
+        "the person's message first, once they resume it")
       await world.close()
     }
 
