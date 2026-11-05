@@ -517,8 +517,16 @@ export function secretGrantId({ kind, name, version }: Pick<SecretListing, "kind
 
 /**
  * Format 1 sealed under the store's own context; format 2 under borrowing's one seal, as every value Mako lends is.
- * A format 1 record is sealed again as format 2 the first time it's read.
+ * This build reads both and writes `SECRET_WRITE_FORMAT`, and never rewrites a record it reads: the store is shared by
+ * the installed app, development hosts and an app rolled back, and builds before this one read format 1 only.
  */
+export const SECRET_READ_FORMATS = [1, 2] as const
+/**
+ * The format new records are written in. It stays 1 until the oldest build that may still open this store (the app's
+ * rollback floor) reads format 2; raising it then is the whole migration, since records move as they're rewritten.
+ */
+export const SECRET_WRITE_FORMAT: (typeof SECRET_READ_FORMATS)[number] = 1
+
 const FileRecordSchema = z.object({
   format: z.union([z.literal(1), z.literal(2)]),
   sealer: z.enum(["aes-256-gcm", "plain"]),
@@ -532,7 +540,7 @@ const FileRecordSchema = z.object({
 type FileRecord = z.infer<typeof FileRecordSchema>
 const MAX_FILE_BYTES = 2 * MAX_VALUE_BYTES
 
-function sealContext(record: Pick<SecretListing, "kind" | "name" | "version">, format: FileRecord["format"] = 2): string {
+function sealContext(record: Pick<SecretListing, "kind" | "name" | "version">, format: FileRecord["format"]): string {
   if (format === 1) return `mako-secret\0${record.kind}\0${record.name}\0${record.version}`
   return borrowSealContext(DEVICE_ACCOUNT, secretGrantId(record), record.version)
 }
@@ -581,9 +589,9 @@ export function fileSecrets(root: string, sealer: SecretSealer): Secrets {
     return parsed.data
   }
 
-  /** The record as one file, sealed under the one seal, replacing what was there by rename. */
+  /** The record as one file, in the format this build writes, replacing what was there by rename. */
   const put = async (record: SecretRecord): Promise<void> => {
-    const file: FileRecord = { format: 2, sealer: sealer.format, ...listing(record), sealed: await sealer.seal(record.value, sealContext(record)) }
+    const file: FileRecord = { format: SECRET_WRITE_FORMAT, sealer: sealer.format, ...listing(record), sealed: await sealer.seal(record.value, sealContext(record, SECRET_WRITE_FORMAT)) }
     const path = pathOf(record.kind, record.name)
     await mkdir(dirname(path), { recursive: true, mode: 0o700 })
     const temporary = `${path}.${randomUUID()}.tmp`
@@ -594,14 +602,6 @@ export function fileSecrets(root: string, sealer: SecretSealer): Secrets {
       await rm(temporary, { force: true })
     }
   }
-  /** An older record sealed again under the one seal, same version and dates, unless a write replaced it meanwhile. */
-  const reseal = (stored: FileRecord, value: string): Promise<void> =>
-    queued(async () => {
-      const now = await load(stored.kind, stored.name).catch(() => null)
-      if (now?.format !== 1 || now.version !== stored.version) return
-      await put({ ...listing(stored), value })
-    }).catch(() => undefined)
-
   return {
     durable: () => sealer.available(),
     async read(kind, name) {
@@ -617,9 +617,7 @@ export function fileSecrets(root: string, sealer: SecretSealer): Secrets {
       }
       if (!stored) return null
       if (stored.sealer !== sealer.format) throw new SecretLocked("unreadable")
-      const value = await sealer.open(stored.sealed, sealContext(stored, stored.format))
-      if (stored.format === 1) await reseal(stored, value)
-      return { ...listing(stored), value }
+      return { ...listing(stored), value: await sealer.open(stored.sealed, sealContext(stored, stored.format)) }
     },
     async write(kind, name, value, options = {}) {
       const record = written(kind, name, value, options)

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
-import type { Borrower, Grant, Lease, Refusal, SourceAnswer, SourceAsk } from "@mako/protocol/borrow"
-import { LocalBorrowing } from "./local-borrowing.js"
+import type { Borrower, Grant, Kind, Lease, Refusal, SourceAnswer, SourceAsk } from "@mako/protocol/borrow"
+import { LocalBorrowing, type LocalBorrowingOptions, type SourceFn } from "./local-borrowing.js"
 import { DEVICE_ACCOUNT, SECRET_KINDS, secretGrantId, type SecretKind, type SecretListing, type SecretRecord, type Secrets, type SecretWrite } from "./secrets.js"
 
 /**
@@ -48,10 +48,12 @@ export class GrantedSecrets implements Secrets {
   readonly #inner: Secrets
   #seeded: Promise<void> | undefined
 
-  constructor(inner: Secrets, folder?: string) {
+  /** `more`: the sources of any other broker sharing `folder` (the device's checkouts), so either answers what the other asks. */
+  constructor(inner: Secrets, folder?: string, more: Partial<Record<Kind, SourceFn>> = {}) {
     this.#inner = inner
-    const source = (ask: SourceAsk) => this.#source(ask)
-    this.broker = new LocalBorrowing(folder ? { folder, device: SECRET_DEVICE, account: DEVICE_ACCOUNT, source } : { device: SECRET_DEVICE, account: DEVICE_ACCOUNT, source })
+    const options: LocalBorrowingOptions = { device: SECRET_DEVICE, account: DEVICE_ACCOUNT, sources: { ...more, credential: (ask: SourceAsk) => this.#source(ask) } }
+    if (folder) options.folder = folder
+    this.broker = new LocalBorrowing(options)
   }
 
   durable(): Promise<boolean> {
@@ -105,11 +107,11 @@ export class GrantedSecrets implements Secrets {
       mode: "copy",
     })
     if ("refusal" in answer) return answer
-    if (!("lease" in answer)) return { refusal: { refused: "unavailable", detail: "Waiting on the person" } }
+    if (!("lease" in answer)) return { refusal: { refused: "unavailable", reason: "error" } }
     const record = await this.#inner.read(kind, name)
     if (!record || secretVersion(record) !== answer.lease.version) {
       await this.broker.release(answer.lease.id)
-      return { refusal: { refused: "unavailable", detail: "The value changed while it was lent; ask again" } }
+      return { refusal: { refused: "unavailable", reason: "changed" } }
     }
     return { lease: answer.lease, record }
   }
@@ -125,9 +127,9 @@ export class GrantedSecrets implements Secrets {
   async #source(ask: SourceAsk): Promise<SourceAnswer> {
     const [kind, ...rest] = ask.ref.split("/")
     const found = SECRET_KINDS.find((known) => known === kind)
-    if (!found) return { answer: "unavailable", detail: `${ask.ref} isn't a saved secret` }
+    if (!found) return { answer: "unavailable", reason: "not-found" }
     const listed = (await this.#inner.list(found).catch((): SecretListing[] => [])).find((record) => record.name === rest.join("/"))
-    if (!listed || listed.version === "legacy") return { answer: "unavailable", detail: `${ask.ref} isn't saved here` }
+    if (!listed || listed.version === "legacy") return { answer: "unavailable", reason: "not-found" }
     return { answer: "yes", version: secretVersion(listed) }
   }
 }
