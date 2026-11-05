@@ -161,6 +161,7 @@ export const LiveRequestSchema = z.object({
     since: z.number(),
     cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
     reason: z.string(),
+    until: z.number().optional(),
   }).optional(),
   interruption: z
     .object({

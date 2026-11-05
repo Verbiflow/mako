@@ -60,6 +60,17 @@ interface Rule {
 }
 
 /**
+ * The words that say an account ran out rather than that a service is busy: `Your team has reached its usage limit`,
+ * `You've hit your weekly limit · resets 1pm`, `Claude usage limit reached`, `Quota exhausted`.
+ */
+const USAGE_LIMIT = /\bhit your (?:[\w-]+ )?limit|\breached (?:your|its|the) (?:[\w-]+ )?(?:usage |rate )?limit|\busage limit\b|\b(?:session|weekly|daily|monthly|five-hour|5-hour) limit (?:reached|hit)|\bquota (?:exhausted|exceeded)\b|usage_limit_(?:reached|exceeded)/i
+
+/** Whether `message` says an account ran out, whatever a plan's words sit beside it. */
+export function usageLimitWords(message: string | undefined): boolean {
+  return USAGE_LIMIT.test(message ?? "")
+}
+
+/**
  * Order matters: the first rule that matches wins, and the specific faults
  * (a rejected transcript names request items; a context overflow names
  * tokens) precede the broad HTTP families they could also trip.
@@ -83,6 +94,11 @@ const rules: Rule[] = [
     kind: "context-exhausted",
     match:
       /context[_ ]?(?:window|length|limit)|prompt is too long|too many tokens|maximum (?:context|number of tokens)|exceeds? the (?:model|maximum|context)|input (?:length|is too long)|token limit|max_tokens.*exceed|request too large|content too large/i,
+  },
+  {
+    // A harness's own words that the account ran out, before a plan's or an account's words they often carry.
+    kind: "rate-limited",
+    match: USAGE_LIMIT,
   },
   {
     // ExecutionIdentityMismatch's own words, before "sign in again" reads as signed out.
@@ -151,6 +167,8 @@ const PERMANENT = new Set<ProviderFailureKind>([
  */
 export function permanentFailure(message: string | undefined): boolean {
   const text = message ?? ""
+  // "You've hit your limit. Upgrade your plan to keep going" clears by itself at its reset.
+  if (USAGE_LIMIT.test(text)) return false
   return rules.some((rule) => PERMANENT.has(rule.kind) && rule.match.test(text)) ||
     /\b4\d\d (?:Bad Request|Unauthorized|Payment Required|Forbidden|Not Found|Method Not Allowed|Not Acceptable|Conflict|Gone|Unprocessable)/i.test(text)
 }

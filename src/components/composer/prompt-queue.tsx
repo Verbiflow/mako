@@ -421,7 +421,7 @@ function QueueRow({
           {request.wake
             ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
             : request.retry
-              ? `Sends again by itself at ${clockText(request.retry.at)}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
+              ? `Sends again by itself${request.retry.until === undefined ? ` at ${clockText(request.retry.at)}` : ""}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
               : "Paused until you resume or edit this message"}
         </p>
       ) : null}
