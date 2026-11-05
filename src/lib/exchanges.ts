@@ -579,7 +579,16 @@ export function turnExchange(exchanges: readonly Exchange[]): Exchange | undefin
   return exchanges.findLast((exchange) => !exchange.direct)
 }
 
+/** Each turn's label, by the turn: a stream renders the navigator again every batch, and its turns are kept as they were. */
+const labels = new WeakMap<Exchange, string>()
+
 export function promptLabel(exchange: Exchange): string {
+  let label = labels.get(exchange)
+  if (label === undefined) labels.set(exchange, (label = labelOf(exchange)))
+  return label
+}
+
+function labelOf(exchange: Exchange): string {
   if (exchange.unloaded !== undefined) return exchange.unloaded
   const direct = exchange.direct?.note
   if (direct?.direct) return `To ${direct.direct.to}: ${(direct.body ?? "").replace(/\s+/g, " ").trim()}`

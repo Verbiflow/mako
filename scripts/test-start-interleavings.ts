@@ -16,6 +16,8 @@ import { AgentsWorld, fakeCatalog } from "./lib/agents-world.ts"
  * that a stop came after without a start after it, every call answered once, and nothing left held by a start.
  */
 const SCHEDULES = Number(process.env.SCHEDULES ?? 96)
+/** Seeds a schedule once failed on, each run every time whatever `SCHEDULES` is: an engine they caught never comes back unseen. */
+const FAILED_ONCE = [6, 12, 15, 24, 29, 117, 198]
 const KEYS = ["alpha", "beta", "gamma", "delta", "epsilon"] as const
 type Key = (typeof KEYS)[number]
 /** What the per-step check reads of a queue row: whether it's held by a refusal or waits on other Fins. */
@@ -337,9 +339,9 @@ try {
   await budgetsTakenOnce(root, { running: 1, started: 100 })
   await budgetsTakenOnce(root, { running: 4, started: 1 })
   await failedStartFreesItsPlace(root)
-  for (let seed = 1; seed <= SCHEDULES; seed += 1) await run(seed, root)
+  for (const seed of [...Array.from({ length: SCHEDULES }, (_, at) => at + 1), ...FAILED_ONCE.filter((seed) => seed > SCHEDULES)]) await run(seed, root)
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
 
-console.log(`start interleavings: ${SCHEDULES} generated schedules, one Fin per key, none after a stop, every start answered, nothing left held`)
+console.log(`start interleavings: ${SCHEDULES} generated schedules and the seeds that once failed, one Fin per key, none after a stop, every start answered, nothing left held`)

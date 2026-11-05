@@ -54,6 +54,9 @@ jobs:
       - run: npx tsx scripts/test-host-liveness.ts
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
+      # Every whole file a harness writes, through one publisher: a writer killed mid-write, writers in several
+      # processes, create-once, another program's folder, and the folder lock they share.
+      - run: npx tsx scripts/test-published-files.ts
       # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
       - run: npm run test:device-join
       - run: npm run test:cloud-conversations
@@ -98,6 +101,9 @@ jobs:
       - run: npm run test:tuning
       # Model connections: the store's keys stay in the secrets, a locked keychain, removal, and the OpenCode providers they become.
       - run: npm run test:model-connections
+      # Accounts: usage, routing, roots and profiles, removal with running work, the keychain's reads, and the account,
+      # identity, switching and sign-in recovery views.
+      - run: npm run test:accounts
       # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
       - run: npm run test:notifications
       # What a local update builds from: its checkout against origin, fetched, and how Settings › Updates says it.
@@ -160,11 +166,14 @@ jobs:
       - run: npm run build:control-runtime
       - run: npm run test:background-agents
       - run: npm run test:start-interleavings
+      - run: npm run test:followed-stop-crash
       - run: npm run test:agents-migrate
       # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
       # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
       - run: npm run test:thread-split
       - run: npm run test:agents-wake
+      # An Apex let go of while at rest still hears its Fins move, so a window coming back shows them as they are.
+      - run: npm run test:fins-reach-released-apex
       - run: npm run test:orch-answer
       - run: npm run test:fin-resume
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
@@ -267,6 +276,33 @@ jobs:
       - run: npm ci
       - run: npx tsgo -b packages/host
       - run: npx tsx scripts/ci-update-checks.ts
+
+  # A long Apex Thread on the desk, the web app and the phone opens at its end with no blank room, and a message sent
+  # there, between turns and in one, overlaps no row in any frame it paints (`test:transcript-send-ui`). Geometry
+  # only, read where each frame paints; no timing passes or fails it. Then the highlight pool's workers end once no
+  # view holds them, an abandoned render's too (`test:highlight-pool-ui`). On a Mac, where the tests' Electron runs.
+  transcript-ui:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run build:control-runtime
+      - run: npm run test:transcript-send-ui
+        env:
+          MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
+      - run: npm run test:highlight-pool-ui
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transcript-send
+          path: ${{ runner.temp }}/transcript-send
 
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,

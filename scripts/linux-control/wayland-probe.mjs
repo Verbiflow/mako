@@ -48,6 +48,7 @@ try {
   evidence.corner = [...corner]
   assert.deepEqual(evidence.corner, [224,88,69], "Screenshot preserves the actual far corner at the action scale")
   evidence.gestures = await exerciseGestures({cell, readState, until});
+  assert.equal((await until(async () => { const state = await readState(); return state.stalledMs === undefined ? null : state })).stalledMs, 300, "The app was held mid-drag, as a busy runner holds it")
   await exec("swaymsg", [`[con_id=${window.window_id ?? window.id}] move container to workspace 2`])
   cover = spawn("python3", ["/repo/scripts/linux-control/recording-fixture.py", "Human work", "/tmp/wayland-cover.json", "ba3084"], { stdio: "ignore" })
   const coverState = await until(async () => JSON.parse(await readFile("/tmp/wayland-cover.json", "utf8")))

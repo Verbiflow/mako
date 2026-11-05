@@ -136,6 +136,22 @@ function continuableInterruption(request: LiveRequest, session: LiveSessionState
   return failure === "network" ? "connection-lost" : undefined
 }
 
+/**
+ * A message a host began sending but never handed its harness: a driver goes on to its transport call only once
+ * `submitted` is written (`handOff`), so one still `prepared` was never sent. As the host quits, or as the next one
+ * takes on the journal of one that died, it waits again, paused as the others waiting are, rather than standing for a
+ * turn the harness never ran; its message is drawn already. A journal written before that guarantee (`gated` absent)
+ * keeps the cautious reading: the turn may have run.
+ */
+export function unhandedRequest(request: LiveRequest): LiveRequest {
+  if (request.status !== "dispatching" || !request.nativeDelivery?.gated || request.nativeDelivery.evidence.kind !== "prepared") return request
+  return {
+    ...request,
+    status: "held",
+    nativeDelivery: { ...request.nativeDelivery, evidence: { kind: "not-accepted", source: "preflight", reason: "Mako closed before handing it to its harness" } },
+  }
+}
+
 /** Mark every in-flight request cut short by the host itself, with the reason and the moment. */
 export function interruptRequests(
   requests: LiveRequest[],
@@ -143,7 +159,7 @@ export function interruptRequests(
   error: string
 ): LiveRequest[] {
   const at = Date.now()
-  return requests.map((request) =>
+  return requests.map(unhandedRequest).map((request) =>
     request.status === "dispatching"
       ? {
           ...request,

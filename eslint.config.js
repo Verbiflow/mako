@@ -45,7 +45,7 @@ export default defineConfig([
   },
   {
     // The generated start schedules (`test:start-interleavings`) guard the engine's admission; they're linted as code.
-    files: ["scripts/test-start-interleavings.ts"],
+    files: ["scripts/test-start-interleavings.ts", "scripts/test-followed-stop-crash.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: { globals: globals.node },
   },
