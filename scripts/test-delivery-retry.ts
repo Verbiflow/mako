@@ -271,6 +271,48 @@ try {
       await world.close()
     }
 
+    // The person closes a session right after a restart, before anything read its journal in: what waited to go stays put.
+    {
+      const { world, faults } = worldOf(`${harness}-close-after-restart`)
+      const { conversation } = await world.apex(harness, "full")
+      world.say(conversation, "First.")
+      await until("the first turn", () => requestOf(world, conversation, "First.")?.status === "completed")
+      faults.refuse.set(conversation, "429 Too Many Requests")
+      world.say(conversation, "Second.")
+      await until(`${harness} close after restart: it to wait`, () => requestOf(world, conversation, "Second.")?.status === "held")
+      await world.restart()
+      await world.live.close(conversation)
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      assert.equal(sentTimes(world, conversation, "Second."), 0, `${harness}: the person's close after a restart stops it waiting to go`)
+      assert.equal(requestOf(world, conversation, "Second.")?.retry, undefined)
+      await world.close()
+    }
+
+    // An Apex's message to a Fin refused on a rate limit keeps its retry across a normal restart: it goes at its time, not before.
+    {
+      let fin = ""
+      const { world, faults } = worldOf(`${harness}-fin-429`)
+      const apex = await world.apex("cursor", "full")
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Label" }, harness, name: "labels", clientKey: "labels", cwd: world.root })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      fin = started.conversation!
+      await until("the Fin to work", () => world.live.session(fin)?.status === "running")
+      world.release(fin)
+      await until("the Fin's brief", () => requestOf(world, fin, "fin:labels")?.status === "completed")
+      faults.refuse.set(fin, "429 Too Many Requests")
+      const sent = await world.agents.send(apex.caller, { to: "labels", text: "Carry on.", clientKey: "go" })
+      assert.ok(!("refused" in sent), JSON.stringify(sent))
+      await until(`${harness} Fin 429: it to wait`, () => requestOf(world, fin, "Carry on.")?.retry?.cause === "rate-limited")
+      const due = requestOf(world, fin, "Carry on.")!.retry!.at
+      await world.restart()
+      await pause(500)
+      assert.equal(requestOf(world, fin, "Carry on.")?.retry?.at, due, `${harness}: a restart keeps the retry and its time`)
+      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness}: nothing sends it before its time`)
+      await goesOnce(world, fin, "Carry on.", `${harness} Fin 429`)
+      await world.close()
+    }
+
     // A message refused unsent on a rate limit goes again after Mako's normal restart; once the person closes the session, nothing waits to go.
     {
       const { world, faults } = worldOf(`${harness}-restart`)

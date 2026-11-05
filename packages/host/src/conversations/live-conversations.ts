@@ -446,7 +446,7 @@ export class LiveConversations {
     const resident = this.records.require(id)
     const resuming = new Set(ids)
     const requests = resident.snapshot.requests.map((request) =>
-      resuming.has(request.id) && request.status === "held" && !request.signIn && !request.wake && !request.editing ? { ...request, status: "queued" as const } : request)
+      resuming.has(request.id) && request.status === "held" && !request.signIn && !request.wake && !request.retry && !request.editing ? { ...request, status: "queued" as const } : request)
     const own = first === undefined ? undefined : requests.find((request) => request.id === first && request.status === "queued")
     const rest = own ? requests.filter((request) => request !== own) : requests
     // Nothing goes ahead of a message the person is editing: `first` goes ahead of what waits after the last of those.
@@ -1554,7 +1554,8 @@ export class LiveConversations {
    * those, so the next host sends them when their time comes.
    */
   close(id: string): Promise<void> {
-    const resident = this.records.get(id)
+    // Read in if it isn't: right after a restart its journal may not be loaded yet, and its times must still stop.
+    const resident = this.records.load(id)
     if (resident?.snapshot.requests.some((request) => request.status === "held" && (request.retry || request.wake))) {
       resident.snapshot = {
         ...resident.snapshot,

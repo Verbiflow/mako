@@ -419,7 +419,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      if (request.status !== "held" || request.signIn || request.wake || request.editing || request.actor?.kind !== "agent") continue
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.actor?.kind !== "agent") continue
       const relaunched = !launched
       try {
         if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
@@ -439,7 +439,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** An exit or a crash pauses the digests waiting for an Apex with the person's messages; they're Mako's, so they go on. */
   private resumeWakes(conversation: string): void {
     for (const request of this.deps.live.snapshot(conversation)?.requests ?? []) {
-      if (request.status !== "held" || request.signIn || request.wake || request.editing || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
       try {
         this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         hostLog("agents", "resumed", { conversation, request: request.id, wake: true })
@@ -2175,7 +2175,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private resumeFin(conversation: string, first: string): void {
     const paused = (this.deps.live.held(conversation)?.requests ?? []).filter((request) =>
-      request.status === "held" && !request.signIn && !request.wake && !request.editing && request.actor?.kind === "agent")
+      request.status === "held" && !request.signIn && !request.wake && !request.retry && !request.editing && request.actor?.kind === "agent")
     if (paused.length) {
       try {
         this.deps.live.resumeHeld(conversation, paused.map((request) => request.id), first)
