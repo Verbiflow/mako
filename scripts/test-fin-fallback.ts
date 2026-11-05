@@ -263,6 +263,81 @@ try {
   }
   console.log("a harness that only starts new sessions: mid-run it hands off to the next harness")
 
+  // A hand-off with messages queued behind it: the move and its context reach the next harness first, each message once, in order.
+  {
+    const held = { claude: named("personal"), codex: named("default") }
+    let cut = () => {}
+    const cutting = new Promise<void>((resolve) => (cut = resolve))
+    const r = await run("queued-behind", {
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 1) return "Done."
+        await cutting
+        held.claude[0]!.spentUntil = RESET
+        end({ limit: { resetsAt: RESET }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    await until("its first turn", () => r.finTurns().length === 1)
+    r.world.say(r.fin(), "After: verify the labels.")
+    r.world.say(r.fin(), "After that: write them up.")
+    cut()
+    await until("all three to reach the next harness", () => r.finTurns().filter((turn) => turn.harness !== "claude").length === 3)
+    const there = r.finTurns().filter((turn) => turn.harness !== "claude")
+    assert.ok(there[0]!.text.includes("[mako · moved after a usage limit]"), `the move goes first, not: ${there[0]!.text.slice(0, 60)}`)
+    assert.ok(there[1]!.text.includes("After: verify the labels."), "then what was queued, in order")
+    assert.ok(there[2]!.text.includes("After that: write them up."), "and the next")
+    const requests = r.world.live.snapshot(r.fin())!.requests
+    const carrying = requests.filter((request) => request.context?.length)
+    assert.equal(carrying.length, 1, "one row carries the hand-over's context")
+    assert.ok(carrying[0]!.text.includes("[mako · moved after a usage limit]"), "and it's the move's")
+    await r.world.close()
+  }
+  console.log("a hand-off with messages queued behind it: the move and its context go first, then each message once, in order")
+
+  // A message that arrives while the next harness prepares can't overtake the move: it's refused in words, and sent after the move lands it goes behind it.
+  {
+    const held = { claude: named("personal"), codex: named("default") }
+    let release = () => {}
+    const released = new Promise<void>((resolve) => (release = resolve))
+    let preparing = false
+    const r = await run("arrives-preparing", {
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      starting: async (_conversation, harness) => {
+        if (harness !== "codex") return
+        preparing = true
+        await released
+      },
+      fin: (turn, end) => {
+        if (turn > 1) return "Done."
+        held.claude[0]!.spentUntil = RESET
+        end({ limit: { resetsAt: RESET }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    await until("Codex to prepare", () => preparing)
+    assert.throws(() => r.world.say(r.fin(), "After: verify the labels."), /A provider switch is pending/)
+    assert.equal(r.finTurns().filter((turn) => turn.harness === "codex").length, 0, "nothing reaches the next harness while it prepares")
+    release()
+    await until("the move to reach the next harness", () => r.finTurns().some((turn) => turn.harness === "codex"))
+    r.world.say(r.fin(), "After: verify the labels.")
+    await until("both to reach the next harness", () => r.finTurns().filter((turn) => turn.harness === "codex").length === 2)
+    const there = r.finTurns().filter((turn) => turn.harness === "codex")
+    assert.ok(there[0]!.text.includes("[mako · moved after a usage limit]"), `the move goes first, not: ${there[0]!.text.slice(0, 60)}`)
+    assert.ok(there[1]!.text.includes("After: verify the labels."), "then what arrived while it prepared")
+    const carrying = r.world.live.snapshot(r.fin())!.requests.filter((request) => request.context?.length)
+    assert.equal(carrying.length, 1, "one row carries the hand-over's context")
+    assert.ok(carrying[0]!.text.includes("[mako · moved after a usage limit]"), "and it's the move's")
+    await r.world.close()
+  }
+  console.log("a message arriving while the next harness prepares: refused in words, and sent again it goes after the move and its context")
+
   // The person's own message in the Fin's Thread is theirs to drive: a limit there ends the turn as before.
   {
     const held = accounts()

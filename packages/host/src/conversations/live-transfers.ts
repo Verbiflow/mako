@@ -12,7 +12,7 @@ import type {
 } from "../contracts/conversation-control.js"
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
-import type { TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
+import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
@@ -24,6 +24,15 @@ import type {
   Resident,
   ProviderConnection,
 } from "./live-runtime.js"
+
+/**
+ * The queue as a switch lands: its message goes ahead of what's queued, which waited behind it or came after it, so the
+ * hand-over's context reaches the harness first.
+ */
+function arrival(requests: readonly LiveRequest[], arrived: LiveRequest): LiveRequest[] {
+  const at = requests.findIndex((request) => request.status === "queued")
+  return at < 0 ? [...requests, arrived] : [...requests.slice(0, at), arrived, ...requests.slice(at)]
+}
 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
@@ -487,8 +496,8 @@ export class LiveTransfers {
         // The base retains its own native identity. The active native path changes independently.
         threadPath: binding.path,
         permissions: [],
-        requests: [
-          ...previous.requests,
+        requests: arrival(
+          previous.requests,
           LiveRequestSchema.parse({
             actor: transfer.actor,
             continues: transfer.continues,
@@ -505,7 +514,7 @@ export class LiveTransfers {
                 : [],
             status: "queued",
           }),
-        ],
+        ),
         control: {
           ...this.host.control(resident),
           activeBindingId: bindingId,
