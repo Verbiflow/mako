@@ -312,6 +312,7 @@ export class ThreadProcesses {
   /** The apps' overview, shared as the table is (`overview`). */
   private sharedOverview: { at: number; apps: Promise<AppOverview[]> } | undefined
   private readonly containers: () => Promise<ContainerLook | undefined>
+  private readonly exitListeners = new Set<(app: AppKey, key: string) => void>()
 
   constructor(dependencies: ThreadProcessDependencies) {
     this.dependencies = dependencies
@@ -356,6 +357,12 @@ export class ThreadProcesses {
       await this.save(app, runs)
     })
     return { started, refused }
+  }
+
+  /** Hears each run this host started as it ends, the moment its process exits: a build slot it held goes at once. */
+  onExit(listener: (app: AppKey, key: string) => void): () => void {
+    this.exitListeners.add(listener)
+    return () => this.exitListeners.delete(listener)
   }
 
   /** Stops the named runs, or all of them, with their whole process trees. */
@@ -1017,6 +1024,9 @@ export class ThreadProcesses {
       const pid = await new Promise<number>((resolve, reject) => {
         child.once("spawn", () => resolve(child.pid!))
         child.once("error", reject)
+      })
+      child.once("exit", () => {
+        for (const listener of this.exitListeners) listener(app, key)
       })
       child.unref()
       const release = child.stdin!

@@ -31,6 +31,8 @@ export class FinCapacity {
   #mix: Record<string, number> = {}
   #pressure: string | undefined
   #allowed: number | undefined
+  #load: number | undefined
+  #pressedNow = false
   readonly #listeners = new Set<() => void>()
 
   constructor(deps: FinCapacityDeps) {
@@ -39,14 +41,30 @@ export class FinCapacity {
 
   /** `fins`, the Fins at work here by conversation, when this look should also read what they cost. */
   async observe(working: number, mix: Readonly<Record<string, number>>, fins?: readonly FinAtWork[]): Promise<void> {
-    const before = this.atOnce()
+    const before = { fins: this.atOnce(), builds: this.builds() }
     this.#mix = { ...mix }
     if (fins && this.#deps.sampler) for (const reading of await this.#deps.sampler.sample(fins).catch(() => [])) this.#deps.costs.add(reading)
     const reading = await this.#deps.read().catch(() => undefined)
-    if (reading) this.#governor.read(this.#now(), pressureOf(reading, working, this.#hardware()))
+    if (reading) {
+      const pressure = pressureOf(reading, working, this.#hardware())
+      this.#governor.read(this.#now(), pressure)
+      this.#load = reading.load
+      this.#pressedNow = Object.values(pressure).some(Boolean)
+    }
     this.#deps.costs.save()
     this.#allow()
-    if (this.atOnce() > before) this.changed()
+    if (this.atOnce() > before.fins || this.builds() > before.builds) this.changed()
+  }
+
+  /**
+   * Builds that run at once (`BuildSlots`): the room capacity keeps for them, and one more while nothing presses on the
+   * machine and its load leaves a build's cores free, so an idle machine isn't held to one.
+   */
+  builds(): number {
+    const base = this.#base()
+    const hardware = this.#hardware()
+    const idle = !this.#pressedNow && this.#load !== undefined && this.#load + base.cost.buildCores <= hardware.cores - reserveOf(hardware).cores
+    return base.builds + (idle ? 1 : 0)
   }
 
   /** Hears each time this device may take more than before: what waits for it goes then, not at the next look. */

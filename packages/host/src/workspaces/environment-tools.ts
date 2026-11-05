@@ -21,6 +21,7 @@ import { freeMemory, runKey, type AppOverview, type Leftover, type MemoryLook, t
 import { memoryPressure, type MemoryPressure } from "../base/machine-load.js"
 import type { FileHistory } from "./watch-backend.js"
 import type { HistoryMark } from "../contracts/watcher-child.js"
+import type { BuildSlots } from "./build-slots.js"
 import { installCommand, installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
 import { installStatus, settleHanded } from "./spare-install.js"
 import {
@@ -128,6 +129,8 @@ interface Deps {
   /** The app in a folder, for a person at the desk; `claim` gives it ports if it has none. */
   folder?(cwd: string, claim: boolean): Promise<FolderApp>
   processes: ThreadProcesses
+  /** The host's build slots: each check run holds one while it runs, and the rest wait their turn. Without it, checks run at once. */
+  buildSlots?: BuildSlots
   /** Refreshes the traces of the apps in `processes`' records. */
   traces: TraceRefresh
   /** Where Mako keeps projects' recipes, one file per repository. */
@@ -943,6 +946,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (conversation !== undefined) owed.delete(owedKey(app, tier, conversation))
     return (await checkReport(app, tier, status, plan)) + (joinedNote ? `\n${joinedNote.trim()}` : "")
   }
+  interface PendingCheck {
+    callers: Set<string>
+    started: Promise<boolean>
+  }
   const checkIn = async (current: Ready, tier: CheckTier, again: () => Promise<StartOutcome>, conversation?: string, target?: string, only?: string[]): Promise<string> => {
     if (target !== undefined && !current.recipe.targets?.[target])
       throw new Error(`The recipe has no target named ${target}; it has ${Object.keys(current.recipe.targets ?? {}).join(", ") || "none"}.`)
@@ -978,11 +985,67 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const preparing = await prepare(current)
       if (preparing) return preparing.message
     }
+    const slot = slotKey(app, tier)
+    const waited = pendingChecks.get(slot)
+    if (waited) {
+      if (mine !== undefined) waited.callers.add(mine)
+      return waitForSlot(app, tier, plan, conversation, waited)
+    }
+    // Before it joins the line: its slot, once it comes, goes straight to starting the run.
     await keepOwedResults(app, tier, plan)
-    const { started } = await deps.processes.start(app, [{ kind: "check", name: tier, command: plan.command, cwd: current.checkout, env: env(current, current.recipe) }])
-    const run = await checkRun(app, tier)
-    if (mine !== undefined && run?.startedAt !== undefined) owed.set(mine, { startedAt: run.startedAt })
-    return awaitCheck(app, tier, plan, conversation, !started.includes(tier))
+    const slots = deps.buildSlots
+    const fresh = slots !== undefined && !slots.has(slot)
+    const ticket = slots?.take({ key: slot, label: `the ${tier} check of ${(conversation && deps.conversation?.(conversation)?.title) || current.checkout}` })
+    const run = async (): Promise<boolean> => {
+      let started: string[]
+      try {
+        ({ started } = await deps.processes.start(app, [{ kind: "check", name: tier, command: plan.command, cwd: current.checkout, env: env(current, current.recipe) }]))
+      } catch (error) {
+        if (fresh) slots!.release(slot)
+        throw error
+      }
+      // A run already under way holds its own slot; one that didn't start holds none.
+      if (fresh && !started.includes(tier)) slots!.release(slot)
+      return !started.includes(tier)
+    }
+    if (ticket && !ticket.held()) {
+      const pending: PendingCheck = { callers: new Set(mine === undefined ? [] : [mine]), started: ticket.granted.then(async () => {
+        try {
+          const joined = await run()
+          const status = await checkRun(app, tier)
+          for (const caller of pending.callers) if (status?.startedAt !== undefined) owed.set(caller, { startedAt: status.startedAt })
+          return joined
+        } finally {
+          pendingChecks.delete(slot)
+        }
+      }) }
+      pendingChecks.set(slot, pending)
+      return waitForSlot(app, tier, plan, conversation, pending)
+    }
+    const joined = await run()
+    const status = await checkRun(app, tier)
+    if (mine !== undefined && status?.startedAt !== undefined) owed.set(mine, { startedAt: status.startedAt })
+    return awaitCheck(app, tier, plan, conversation, joined)
+  }
+  /** Checks that wait for a build slot, by app and tier: each starts on its own the moment one frees, and a repeat call joins it. */
+  const pendingChecks = new Map<string, PendingCheck>()
+  const slotKey = (app: AppKey, tier: CheckTier) => `${app}\0${tier}`
+  deps.processes.onExit((app, key) => {
+    for (const tier of ["quick", "full"] as const) if (key === runKey("check", tier)) deps.buildSlots?.release(slotKey(app, tier))
+  })
+  /** Waits for a check's build slot within the call's window: its result once it ran, else where it stands in line. */
+  const waitForSlot = async (app: AppKey, tier: CheckTier, plan: CheckPlan, conversation: string | undefined, pending: PendingCheck): Promise<string> => {
+    const window = checkWait(conversation)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const came = await Promise.race([pending.started.then(() => true), new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), window) })]).finally(() => clearTimeout(timer))
+    if (came) return awaitCheck(app, tier, plan, conversation, false)
+    return `The ${tier} check ${slotWait(app, tier)}. It starts on its own the moment one frees; your next app_check with tier "${tier}" waits for this same run and returns its result.`
+  }
+  /** Where a check waiting for a build slot stands: "waits for a build slot: 1 of 1 in use (…), and it's next". */
+  const slotWait = (app: AppKey, tier: CheckTier): string => {
+    const reading = deps.buildSlots!.reading()
+    const ahead = deps.buildSlots!.ahead(slotKey(app, tier))
+    return `waits for a build slot: ${reading.holders.length} of ${reading.slots} in use (${reading.holders.join("; ")})${ahead ? `, ${ahead} ahead of it` : ", and it's next"}`
   }
   /** Why the install step runs now: the first step due, in words. */
   const prepareReason = async (recipe: Recipe, checkout: string): Promise<string> => {
@@ -1657,7 +1720,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         ...targetChecks,
       ].flatMap(([label, tier, check]) => {
         const status = runs.find((entry) => entry.kind === "check" && entry.name === tier)
-        return check !== undefined || (status && label === tier) ? [checkSummary(environment.app, tier, check, status, now).then((line) => [label, line] as const)] : []
+        const waits = label === tier && pendingChecks.has(slotKey(environment.app, tier))
+        return check !== undefined || (status && label === tier) ? [checkSummary(environment.app, tier, check, status, now).then((line) => [label, waits ? `${slotWait(environment.app, tier)}; before it, ${line}` : line] as const)] : []
       }))
       const report = {
         app: read.kind === "ready" ? appAddress(read.recipe, environment, runs) : `http://${environment.host}:${environment.port}`,
@@ -2376,7 +2440,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_check",
     {
       description:
-        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app (or a target's processes) first, then checks it while it runs. Returns the result and how long it took, and for a failure the run's whole output; a check of named steps says how each step went and how long it took, and gives each failed step's own output. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
+        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app (or a target's processes) first, then checks it while it runs. Returns the result and how long it took, and for a failure the run's whole output; a check of named steps says how each step went and how long it took, and gives each failed step's own output. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Checks on this machine take turns for its few build slots: one that waits says where it stands and starts the moment one frees. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
       inputSchema: z.object({
         tier: z.enum(["quick", "full"]),
         target: z.string().min(1).max(32).optional().describe("For a recipe with targets: whose full check, and whose processes it starts; the first target's when left out."),
