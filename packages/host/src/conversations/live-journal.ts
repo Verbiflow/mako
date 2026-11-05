@@ -200,6 +200,7 @@ export const LiveRequestSchema = z.object({
       requestId: z.string(),
       ...StoredReason,
       auto: z.boolean(),
+      brief: z.string().optional(),
     })
     .transform(readStoredReason)
     .optional(),

@@ -4,6 +4,7 @@ import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
+import { admittedInPlace } from "../contracts/turn-continuation.js"
 import { TransferInputSchema, resumable } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
@@ -30,8 +31,8 @@ import type {
  * hand-over's context reaches the harness first.
  */
 function arrival(requests: readonly LiveRequest[], arrived: LiveRequest): LiveRequest[] {
-  const at = requests.findIndex((request) => request.status === "queued")
-  return at < 0 ? [...requests, arrived] : [...requests.slice(0, at), arrived, ...requests.slice(at)]
+  const at = arrived.continues?.brief ? -1 : requests.findIndex((request) => request.status === "queued")
+  return at < 0 ? admittedInPlace(requests, arrived) : [...requests.slice(0, at), arrived, ...requests.slice(at)]
 }
 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
