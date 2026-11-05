@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { describe, test } from "node:test"
 import {
   BorrowAnswerSchema,
+  SourceAnswerSchema,
   BorrowPushSchema,
   GrantSchema,
   KIND_ACCESS,
@@ -428,7 +429,17 @@ describe("borrowing: exact cases", () => {
     state = step(state, { type: "borrow", need: need(), at: 2, lease: "l1", ask: "a1" }).state
     const failed = step(state, { type: "source-answer", ask: "a1", answer: { answer: "unavailable", reason: "unreadable" }, at: 3 })
     assert.deepEqual(failed.answer, { refusal: { refused: "unavailable", reason: "unreadable" } })
-    assert.throws(() => step(state, { type: "source-answer", ask: "a1", answer: { answer: "unavailable", detail: "API_KEY=sk-live" }, at: 3 }).answer.refusal.reason.length)
+    assert.equal(SourceAnswerSchema.safeParse({ answer: "unavailable", detail: "API_KEY=sk-live" }).success, false, "a source's own words aren't an answer")
+    const leaked = step(state, { type: "source-answer", ask: "a1", answer: { answer: "unavailable", detail: "API_KEY=sk-live" }, at: 3 })
+    assert.ok(!JSON.stringify([leaked.answer ?? null, leaked.effects]).includes("sk-live"), "nor do they reach an answer, a push or the log")
+  })
+
+  test("an ended Thread stays ended however long after: a fresh need under an account grant is refused", () => {
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: base({ scope: { level: "account", account: ACCOUNT } }), at: 1 }).state
+    state = step(state, { type: "thread-ended", account: ACCOUNT, thread: mac.thread, at: 2 }).state
+    const late = step(state, { type: "borrow", need: need({ correlationId: "after-a-year" }), at: 2 + 400 * 24 * 60 * 60_000, lease: "l1", ask: "a1", content: { version: sha("x"), size: 1 } })
+    assert.equal(late.answer.refusal?.refused, "thread-ended")
+    assert.equal(liveLeases(late.state).length, 0)
   })
 
   test("a long-lived broker keeps only what's live: ended leases and their answers retire", () => {

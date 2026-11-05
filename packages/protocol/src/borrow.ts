@@ -524,17 +524,15 @@ function threadKey(account: string, thread: string): string {
 }
 
 /**
- * How long an ended lease, the answers naming it and an ended Thread are kept before they're let go, so a broker's
- * state stays the size of what's live: a replayed need older than this is decided afresh. The log keeps the history.
+ * How long an ended lease and the answers naming it are kept before they're let go, so a broker's state stays the
+ * size of what's live: a replayed need older than this is decided afresh. The log keeps the history. An ended Thread
+ * is never let go: ending is terminal, and its mark (one key and a time) is all a broker keeps of it.
  */
 export const RETIRE_MS = 7 * 24 * 60 * 60_000
-/** An ended Thread is remembered far longer, since a need it sent late must still find it ended. */
-export const RETIRE_THREAD_MS = 90 * 24 * 60 * 60_000
 
 function retire(state: BrokerState, at: number): void {
   for (const [id, held] of Object.entries(state.leases)) if (held.ended && at - held.ended.at >= RETIRE_MS) delete state.leases[id]
   for (const [key, answer] of Object.entries(state.answers)) if ("lease" in answer && !state.leases[answer.lease.id]) delete state.answers[key]
-  for (const [key, endedAt] of Object.entries(state.endedThreads)) if (at - endedAt >= RETIRE_THREAD_MS) delete state.endedThreads[key]
 }
 
 /** The grant that decides a need, by the narrowest scope and then the newest; or why none does. */
