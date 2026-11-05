@@ -514,6 +514,11 @@ export class LiveConversations {
     return { ...turnReply(resident, requestId), request: resident.snapshot.requests.find((request) => request.id === requestId) }
   }
 
+  /** The conversation a binding's session belongs to: its own ID where it isn't another's. */
+  ownerOf(bindingId: string): string {
+    return this.records.owners.get(bindingId) ?? bindingId
+  }
+
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
   loaded(id: string): boolean {
     return this.records.has(id)

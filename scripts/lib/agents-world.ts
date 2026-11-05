@@ -375,7 +375,8 @@ export class AgentsWorld {
         await this.options.starting?.(options.conversationId, harness)
         return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
       },
-      prompt: async (id, text, _attachments, _settings, dispatch) => {
+      prompt: async (binding, text, _attachments, _settings, dispatch) => {
+        const id = this.live.ownerOf(binding)
         const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
@@ -390,12 +391,13 @@ export class AgentsWorld {
         }
         this.prompts.push({ conversation: id, harness, text, at: Date.now() })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
-        const session = this.live.snapshot(id)?.session ?? state(id)
+        // A hand-off's new session reports under its own binding.
+        const session = { ...(this.live.snapshot(id)?.session ?? state(binding)), id: binding }
         this.live.observe({ type: "live-session", session: { ...session, status: "running", nativeRunId: `run-${this.prompts.length}` } })
         const turn = (async () => {
           const reply = await this.options.script({ world: this, conversation: id, harness, text, caller: this.caller(id) })
-          this.live.observe({ type: "live-update", id, update: { kind: "text", text: reply } })
-          this.live.observe({ type: "live-session", session: { ...(this.live.snapshot(id)?.session ?? session), status: "ready" } })
+          this.live.observe({ type: "live-update", id: binding, update: { kind: "text", text: reply } })
+          this.live.observe({ type: "live-session", session: { ...(this.live.snapshot(id)?.session ?? session), id: binding, status: "ready" } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))

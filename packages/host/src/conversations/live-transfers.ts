@@ -13,7 +13,9 @@ import type {
 } from "../contracts/conversation-control.js"
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
-import type { TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
+import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
+import { FROM_AGENTS } from "../contracts/children.js"
+import { releaseHolds } from "../contracts/delivery-retry.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
@@ -25,6 +27,18 @@ import type {
   Resident,
   ProviderConnection,
 } from "./live-runtime.js"
+
+/**
+ * The queue as a switch lands, `arrived` its message. On another harness what held on the one it left goes: the digest
+ * of Fins' reports first, with the hand-over's context, since it's the first thing the destination hears.
+ */
+function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, otherHarness: boolean): LiveRequest[] {
+  if (!otherHarness) return admittedInPlace(requests, arrived)
+  const released = releaseHolds(requests)
+  const digest = released.find((request, at) => request.status !== requests[at]!.status && request.text.startsWith(FROM_AGENTS))
+  if (!digest) return admittedInPlace(released, arrived)
+  return admittedInPlace(released.map((request) => (request === digest ? { ...request, context: arrived.context } : request)), { ...arrived, context: [] })
+}
 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
@@ -487,7 +501,7 @@ export class LiveTransfers {
         // The base retains its own native identity. The active native path changes independently.
         threadPath: binding.path,
         permissions: [],
-        requests: admittedInPlace(previous.requests,
+        requests: arrival(previous.requests,
           LiveRequestSchema.parse({
             actor: transfer.actor,
             continues: transfer.continues,
@@ -503,7 +517,7 @@ export class LiveTransfers {
                 ? [manifest]
                 : [],
             status: "queued",
-          })),
+          }), prepared.session.harness !== previous.session.harness),
         control: {
           ...this.host.control(resident),
           activeBindingId: bindingId,

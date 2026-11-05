@@ -89,6 +89,16 @@ export function holdForRetry(requests: readonly LiveRequest[], cause: RetryCause
   })
 }
 
+/**
+ * What waited on the account a conversation just left goes now, in its order: a limit, an outage or a sign-out there is
+ * no reason to wait on another harness. A Stop's latch and an edit are the person's, so they stay.
+ */
+export function releaseHolds(requests: readonly LiveRequest[]): LiveRequest[] {
+  return requests.map((request) => request.status === "held" && (request.retry !== undefined || request.signIn !== undefined) && request.pause !== "stop" && !request.editing
+    ? { ...request, status: "queued" as const, retry: undefined, signIn: undefined }
+    : request)
+}
+
 /** Whether `after` holds a message to go again that `before` had queued: the failure between them is waited out. */
 export function retriesBegun(before: readonly LiveRequest[], after: readonly LiveRequest[]): boolean {
   const queued = new Set(before.filter((request) => request.status === "queued").map((request) => request.id))

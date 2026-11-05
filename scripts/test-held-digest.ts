@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -11,8 +12,8 @@ import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
  * Reports that arrive while an Apex can't run wait as one digest and go once, in the first turn after it can
  * (`npm run test:held-digest`), on each of the six harnesses. The case of 2026-11-05: an Apex's plan ran out, its Fin
  * posted 25 reports, each woke the Apex and every turn failed the same way. Covered: a wake refused unsent, a wake its
- * harness accepted and failed with nothing done, a restart in the wait, a crash as the digest is written, a Stop in
- * the wait and a message of the person's in the wait.
+ * harness accepted and failed with nothing done, a restart in the wait, a crash as the digest is written, a switch by hand, a Stop
+ * in the wait and a message of the person's in the wait.
  */
 
 const root = mkdtempSync(join(tmpdir(), "mako-held-digest-"))
@@ -31,6 +32,8 @@ async function until(what: string, ready: () => boolean, ms = 10_000): Promise<v
 interface Limits {
   refused: Set<string>
   failing: Set<string>
+  /** The harness whose account ran out: any other takes what's sent. */
+  on?: string
   knocks: string[]
 }
 
@@ -47,8 +50,8 @@ function worldOf(name: string) {
   const world = new AgentsWorld({
     root: join(root, name),
     script,
-    refusePrompt: (conversation) => {
-      if (!limits.refused.has(conversation)) return undefined
+    refusePrompt: (conversation, harness) => {
+      if (!limits.refused.has(conversation) || (limits.on && harness !== limits.on)) return undefined
       limits.knocks.push(conversation)
       return LIMIT
     },
@@ -174,6 +177,46 @@ try {
       await world.close()
     }
 
+    // What the person did on 2026-11-05, switching the Thread by hand: a hold about the old harness's account goes with
+    // it, so the Thread goes at once, its digest first with the hand-over's context, then their message.
+    {
+      const { world, limits } = worldOf(`${harness}-switch`)
+      const { conversation, fins } = await apexWithFins(world, harness, names)
+      limits.refused.add(conversation)
+      limits.on = harness
+      await report(world, conversation, fins, names)
+      const knocks = limits.knocks.length
+      const next = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      world.live.transfer(conversation, { id: randomUUID(), provider: next, text: "Carry on here.", attachments: [] })
+      await until(`${harness} switch: their message to be taken`, () => rows(world, conversation).some((request) => request.text === "Carry on here." && request.status === "completed"))
+      assert.equal(limits.knocks.length, knocks, `${harness} switch: the spent harness wasn't tried again`)
+      const there = world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.harness === next)
+      assert.equal(there.length, 2, `${harness} switch: its digest and their message, each once`)
+      assert.ok(there[0]!.text.includes(FROM_AGENTS), `${harness} switch: the digest goes first`)
+      for (const name of names) assert.equal(readFinReports(there[0]!.text).text.split(`"${name}"`).length - 1, 1, `${harness} switch: ${name} was heard once`)
+      assert.ok(there[1]!.text.includes("Carry on here."), `${harness} switch: then their message`)
+      const carrying = rows(world, conversation).filter((request) => request.context?.length)
+      assert.equal(carrying.length, 1, `${harness} switch: one row carries the hand-over`)
+      assert.ok(carrying[0]!.text.startsWith(FROM_AGENTS), `${harness} switch: the digest, the first thing the destination hears`)
+      assert.ok(!rows(world, conversation).some((request) => request.status === "held"), `${harness} switch: nothing is left holding`)
+      await world.close()
+    }
+
+    // A Stop outlasts a switch: what it paused stays paused on the destination.
+    {
+      const { world, limits } = worldOf(`${harness}-stop-switch`)
+      const { conversation, fins } = await apexWithFins(world, harness, names)
+      limits.refused.add(conversation)
+      await report(world, conversation, fins.slice(0, 1), names)
+      await world.live.cancel(conversation)
+      const next = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      world.live.transfer(conversation, { id: randomUUID(), provider: next, text: "Carry on here.", attachments: [] })
+      await until(`${harness} stop-switch: the switch to land`, () => rows(world, conversation).some((request) => request.text === "Carry on here."))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      assert.equal(digests(world, conversation).filter((prompt) => prompt.harness === next).length, 0, `${harness} stop-switch: the digest stays the Stop's`)
+      await world.close()
+    }
+
     // A Stop in the wait: the digest stays, Stop's, and goes on a Resume alone.
     {
       const { world, limits } = worldOf(`${harness}-stop`)
@@ -209,7 +252,7 @@ try {
       assert.ok(order.indexOf(went[0]!.text) < order.findIndex((text) => text.includes("Then this.")), `${harness} person: the digest went first`)
       await world.close()
     }
-    console.log(`${harness}: a wake refused or failed at a limit knocked once for three reports, which waited as one digest and went once, across a restart, a crash mid-write, a Stop and the person's own message`)
+    console.log(`${harness}: a wake refused or failed at a limit knocked once for three reports, which waited as one digest and went once, across a restart, a crash mid-write, a switch, a Stop and the person's own message`)
   }
   console.log("held digest: ok")
 } finally {
