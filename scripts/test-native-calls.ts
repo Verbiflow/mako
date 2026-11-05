@@ -44,14 +44,14 @@ const CASES: Case[] = [
   { name: "listing worktrees", thread: inMain, command: "git worktree list", cwd: main, route: "allow" },
   { name: "a new branch in the main checkout", thread: inMain, command: "git checkout -b fix/login", cwd: main, route: "deny", rule: "git-new-branch-in-checkout" },
   { name: "git switch -c in the main checkout", thread: inMain, command: "git switch -c fix/login", cwd: main, route: "deny", rule: "git-new-branch-in-checkout" },
-  { name: "switching the main checkout's branch", thread: inMain, command: "git switch release", cwd: main, route: "deny", rule: "git-switch-in-checkout" },
+  { name: "switching the main checkout's branch", thread: inMain, command: "git switch release", cwd: main, route: "warn", rule: "git-switch-in-checkout" },
   { name: "a new branch in the Thread's worktree", thread: inWorktree, command: "git checkout -b other", cwd: worktree, route: "warn", rule: "git-new-branch-in-worktree" },
   { name: "restoring a file", thread: inMain, command: "git checkout -- src/a.ts", cwd: main, route: "allow" },
   { name: "updating from main by hand", thread: inWorktree, command: "git fetch origin && git rebase origin/main", cwd: worktree, route: "warn", rule: "git-update-from-main" },
   { name: "commit and push", thread: inWorktree, command: "git add -A && git commit -m 'x' && git push -u origin HEAD", cwd: worktree, route: "allow" },
   // pull requests
-  { name: "gh pr create", thread: inWorktree, command: `gh pr create --title "Fix" --body "$(cat body.md)"`, cwd: worktree, route: "deny", rule: "gh-pr-create" },
-  { name: "gh pr create with -R", thread: inWorktree, command: "gh -R Verbiflow/mako pr create --fill", cwd: worktree, route: "deny", rule: "gh-pr-create" },
+  { name: "gh pr create", thread: inWorktree, command: `gh pr create --title "Fix" --body "$(cat body.md)"`, cwd: worktree, route: "warn", rule: "gh-pr-create" },
+  { name: "gh pr create with -R", thread: inWorktree, command: "gh -R Verbiflow/mako pr create --fill", cwd: worktree, route: "warn", rule: "gh-pr-create" },
   { name: "gh pr merge", thread: inWorktree, command: "gh pr merge 297 --squash", cwd: worktree, route: "deny", rule: "gh-pr-merge" },
   { name: "gh pr checks", thread: inWorktree, command: "gh pr checks", cwd: worktree, route: "warn", rule: "gh-pr-status" },
   { name: "gh pr checks --watch", thread: inWorktree, command: "gh pr checks --watch --interval 30", cwd: worktree, route: "warn", rule: "gh-watch" },
@@ -59,10 +59,10 @@ const CASES: Case[] = [
   { name: "reading an issue", thread: inWorktree, command: "gh issue view 12", cwd: worktree, route: "allow" },
   { name: "a PR in a repository elsewhere", thread: inWorktree, command: "cd /tmp/other && gh pr create --fill", cwd: worktree, route: "allow" },
   // the app
-  { name: "npm run dev with a recipe", thread: inWorktree, command: "npm run dev", cwd: worktree, route: "deny", rule: "dev-server" },
-  { name: "nohup'd vite with a recipe", thread: inMain, command: "nohup npx vite --port 5173 > /tmp/vite.log 2>&1 &", cwd: main, route: "deny", rule: "dev-server" },
-  { name: "wrangler dev in a subfolder", thread: inMain, command: "cd mako-backend/apps/gateway && npx wrangler dev --port 8787", cwd: main, route: "deny", rule: "dev-server" },
-  { name: "electron with a recipe", thread: inWorktree, command: "npx electron .", cwd: worktree, route: "deny", rule: "dev-server" },
+  { name: "npm run dev with a recipe", thread: inWorktree, command: "npm run dev", cwd: worktree, route: "warn", rule: "dev-server" },
+  { name: "nohup'd vite with a recipe", thread: inMain, command: "nohup npx vite --port 5173 > /tmp/vite.log 2>&1 &", cwd: main, route: "warn", rule: "dev-server" },
+  { name: "wrangler dev in a subfolder", thread: inMain, command: "cd mako-backend/apps/gateway && npx wrangler dev --port 8787", cwd: main, route: "warn", rule: "dev-server" },
+  { name: "electron with a recipe", thread: inWorktree, command: "npx electron .", cwd: worktree, route: "warn", rule: "dev-server" },
   { name: "a dev server without a recipe", thread: noRecipe, command: "pnpm dev", cwd: worktree, route: "warn", rule: "dev-server-no-recipe" },
   { name: "a build", thread: inWorktree, command: "npm run build && npx vite build", cwd: worktree, route: "allow" },
   { name: "tests", thread: inWorktree, command: "npm test -- --run", cwd: worktree, route: "allow" },
@@ -77,16 +77,16 @@ const CASES: Case[] = [
   { name: "killing a port's holder", thread: inMain, command: "kill -9 $(lsof -ti :3000)", cwd: main, route: "warn", rule: "lsof-port" },
   { name: "pkill by pattern", thread: inMain, command: "pkill -f vite", cwd: main, route: "warn", rule: "kill-by-pattern" },
   // agent CLIs
-  { name: "claude -p", thread: inMain, command: `claude -p "review this diff" --output-format json`, cwd: main, route: "deny", rule: "agent-cli-claude" },
-  { name: "codex exec in the background", thread: inMain, command: `nohup codex exec --full-auto "port the handlers" > /tmp/c.log 2>&1 &`, cwd: main, route: "deny", rule: "agent-cli-codex" },
-  { name: "cursor-agent -p", thread: inMain, command: `cursor-agent -p "write tests"`, cwd: main, route: "deny", rule: "agent-cli-cursor-agent" },
-  { name: "opencode run", thread: inMain, command: `opencode run "fix lint"`, cwd: main, route: "deny", rule: "agent-cli-opencode" },
+  { name: "claude -p", thread: inMain, command: `claude -p "review this diff" --output-format json`, cwd: main, route: "warn", rule: "agent-cli-claude" },
+  { name: "codex exec in the background", thread: inMain, command: `nohup codex exec --full-auto "port the handlers" > /tmp/c.log 2>&1 &`, cwd: main, route: "warn", rule: "agent-cli-codex" },
+  { name: "cursor-agent -p", thread: inMain, command: `cursor-agent -p "write tests"`, cwd: main, route: "warn", rule: "agent-cli-cursor-agent" },
+  { name: "opencode run", thread: inMain, command: `opencode run "fix lint"`, cwd: main, route: "warn", rule: "agent-cli-opencode" },
   { name: "claude --version", thread: inMain, command: "claude --version", cwd: main, route: "allow" },
   { name: "codex login status", thread: inMain, command: "codex login status", cwd: main, route: "allow" },
   { name: "mako agents report", thread: inMain, command: "mako agents report --text done", cwd: main, route: "allow" },
   // browser and computer
-  { name: "a screenshot", thread: inMain, command: "screencapture -x /tmp/s.png", cwd: main, route: "deny", rule: "screencapture" },
-  { name: "System Events keystrokes", thread: inMain, command: `osascript -e 'tell application "System Events" to keystroke "a"'`, cwd: main, route: "deny", rule: "osascript-ui" },
+  { name: "a screenshot", thread: inMain, command: "screencapture -x /tmp/s.png", cwd: main, route: "warn", rule: "screencapture" },
+  { name: "System Events keystrokes", thread: inMain, command: `osascript -e 'tell application "System Events" to keystroke "a"'`, cwd: main, route: "warn", rule: "osascript-ui" },
   { name: "opening a page", thread: inMain, command: "open http://localhost:20540", cwd: main, route: "warn", rule: "open-browser" },
   { name: "opening a file in Finder", thread: inMain, command: "open .", cwd: main, route: "allow" },
   { name: "a screenshot without Mako's computer server", thread: noRecipe, command: "screencapture -x /tmp/s.png", cwd: worktree, route: "allow" },
@@ -98,6 +98,7 @@ const CASES: Case[] = [
   { name: "a long sleep", thread: inMain, command: "sleep 300 && tail -5 /tmp/log", cwd: main, route: "warn", rule: "long-sleep" },
   { name: "a short sleep", thread: inMain, command: "sleep 2 && tail -5 /tmp/build.log", cwd: main, route: "allow" },
   { name: "a deny wins over a warn on the same line", thread: inWorktree, command: "gh pr checks; gh pr merge --squash", cwd: worktree, route: "deny", rule: "gh-pr-merge" },
+  { name: "a dev server under the escape hatch", thread: inWorktree, command: `${NATIVE_OVERRIDE} npm run dev`, cwd: worktree, route: "allow" },
 ]
 
 for (const entry of CASES) {
@@ -112,13 +113,13 @@ for (const entry of CASES) {
 
 // Messages name Mako's tools as the harness calls them.
 {
-  const route = routeShellCall(inWorktree, { command: "gh pr create --fill", cwd: worktree }, (tool) => `mcp__mako__${tool}`)
-  assert.ok(route.kind === "deny" && route.message.includes("mcp__mako__pull_request_open"))
+  const route = routeShellCall(inWorktree, { command: "gh pr merge --squash", cwd: worktree }, (tool) => `mcp__mako__${tool}`)
+  assert.ok(route.kind === "deny" && route.message.includes("mcp__mako__pull_request_merge"))
 }
 
 // The harness's own tools.
 assert.equal(routeNativeTool(inMain, { tool: "EnterWorktree" }).kind, "deny")
-assert.equal(routeNativeTool(inMain, { tool: "mcp__claude-in-chrome__navigate", server: "claude-in-chrome" }).kind, "deny")
+assert.equal(routeNativeTool(inMain, { tool: "mcp__claude-in-chrome__navigate", server: "claude-in-chrome" }).kind, "warn", "a browser beside mako-computer is a warn: its misses come after js fails")
 assert.equal(routeNativeTool(noRecipe, { tool: "mcp__claude-in-chrome__navigate", server: "claude-in-chrome" }).kind, "allow", "without Mako's computer server the person's browser tools stay")
 assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: "linear" }).kind, "allow")
 
@@ -130,15 +131,15 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
     const routed = claudeRoutedCall({ calls: () => inWorktree, teams: false, conversation: "c" }, hook)
     return routed && Answer.parse(routed).hookSpecificOutput
   }
-  const denied = answer("Bash", { command: "gh pr create --fill" })
+  const denied = answer("Bash", { command: "gh pr merge --squash" })
   assert.equal(denied?.permissionDecision, "deny")
-  assert.match(denied?.permissionDecisionReason ?? "", /mcp__mako__pull_request_open/)
+  assert.match(denied?.permissionDecisionReason ?? "", /mcp__mako__pull_request_merge/)
   const warned = answer("Bash", { command: "gh pr checks" })
   assert.equal(warned?.permissionDecision, undefined, "a warn leaves the approval as it was")
   assert.match(warned?.additionalContext ?? "", /mcp__mako__pull_request_status/)
   assert.equal(answer("Bash", { command: "npm test" }), undefined)
   assert.equal(answer("EnterWorktree", { name: "x" })?.permissionDecision, "deny")
-  assert.equal(answer("mcp__claude-in-chrome__navigate", { url: "x" })?.permissionDecision, "deny")
+  assert.match(answer("mcp__claude-in-chrome__navigate", { url: "x" })?.additionalContext ?? "", /mako-computer/)
   assert.equal(answer("mcp__mako__worktree_move", {}), undefined, "Mako's own tools go ahead")
   assert.equal(answer("Agent", { subagent_type: "general-purpose" }), undefined, "without spawn routing a spawn is the harness's own")
 }
@@ -148,12 +149,12 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   const run = (hookEventName: string, command: string, toolName = "run_terminal_command") => GROK_CALL_HOOKS.answer({ hookEventName, toolName, toolInput: { command }, cwd: worktree, sessionId: "s" }, inWorktree)
   assert.equal(GROK_CALL_HOOKS.method, "_x.ai/hooks/run")
   assert.deepEqual(Object.keys(z.record(z.string(), z.json()).parse(GROK_CALL_HOOKS.meta["x.ai/hooks"])), ["pre_tool_use", "post_tool_use"])
-  const denied = z.object({ decision: z.literal("deny"), reason: z.string() }).parse(run("pre_tool_use", "gh pr create --fill"))
-  assert.match(denied.reason, /pull_request_open/)
-  assert.deepEqual(run("post_tool_use", "gh pr create --fill"), {}, "a deny is answered once, before the call")
+  const denied = z.object({ decision: z.literal("deny"), reason: z.string() }).parse(run("pre_tool_use", "gh pr merge --squash"))
+  assert.match(denied.reason, /pull_request_merge/)
+  assert.deepEqual(run("post_tool_use", "gh pr merge --squash"), {}, "a deny is answered once, before the call")
   assert.deepEqual(run("pre_tool_use", "gh pr checks"), {}, "Grok drops a pre-tool note")
   assert.match(z.object({ additionalContext: z.string() }).parse(run("post_tool_use", "gh pr checks")).additionalContext, /pull_request_status/)
-  assert.deepEqual(run("pre_tool_use", "gh pr create", "read_file"), {})
+  assert.deepEqual(run("pre_tool_use", "gh pr merge", "read_file"), {})
 }
 
 // The gate a command hook posts to: Devin's block, Codex's PreToolUse deny, a note after the call, argv read as its script.
@@ -183,12 +184,12 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   })
   const before = (body: JsonObject) => callGateAnswer("before", HookCall.parse(body), inWorktree, "c")
   const Specific = z.object({ hookSpecificOutput: z.object({ hookEventName: z.string(), permissionDecision: z.string().optional(), additionalContext: z.string().optional() }) })
-  assert.equal(Specific.parse(before({ tool_name: "Bash", tool_input: { command: "gh pr create --fill" } })).hookSpecificOutput.permissionDecision, "deny")
+  assert.equal(Specific.parse(before({ tool_name: "Bash", tool_input: { command: "gh pr merge --squash" } })).hookSpecificOutput.permissionDecision, "deny")
   const warned = Specific.parse(before({ tool_name: "Bash", tool_input: { command: "gh pr checks" } })).hookSpecificOutput
   assert.equal(warned.hookEventName, "PreToolUse")
   assert.equal(warned.permissionDecision, undefined, "a note before the call carries no decision, which Codex would fail on")
   assert.match(warned.additionalContext ?? "", /pull_request_status/)
-  assert.equal(Specific.parse(before({ tool_name: "mcp__node_repl__js", tool_input: { code: "1" } })).hookSpecificOutput.permissionDecision, "deny", "Codex's own browser goes to mako-computer")
+  assert.match(Specific.parse(before({ tool_name: "mcp__node_repl__js", tool_input: { code: "1" } })).hookSpecificOutput.additionalContext ?? "", /mako-computer/, "Codex's own browser hears of mako-computer")
 }
 
 // The conversation server answers a hook's post for the grant's conversation, and refuses one without a grant.
@@ -201,10 +202,10 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   try {
     const grant = servers.mint("b", "conv")
     const url = grant.makoUrl!.replace(/\/mako$/, "/calls/pre")
-    const post = (headers: Record<string, string>) => fetch(url, { method: "POST", headers, body: JSON.stringify({ tool_name: "exec", tool_input: { command: "gh pr create" } }) })
+    const post = (headers: Record<string, string>) => fetch(url, { method: "POST", headers, body: JSON.stringify({ tool_name: "exec", tool_input: { command: "gh pr merge" } }) })
     const answered = await post({ authorization: `Bearer ${grant.token}` })
     assert.equal(answered.status, 200)
-    assert.match(z.object({ reason: z.string() }).parse(await answered.json()).reason, /pull_request_open/)
+    assert.match(z.object({ reason: z.string() }).parse(await answered.json()).reason, /pull_request_merge/)
     assert.deepEqual(seen, ["conv pre"])
     assert.equal((await post({})).status, 401)
   } finally {
@@ -227,7 +228,7 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
     type HookedCall = { tool: string; input: JsonObject; status?: string; result?: { content: string } }
     const hooks = new Map<string, (call: HookedCall) => Promise<void>>()
     await loaded.setup({ options: plugin.options, tool: { hook: async (name: string, run: (call: HookedCall) => Promise<void>) => { hooks.set(name, run) } } })
-    await assert.rejects(hooks.get("execute.before")!({ tool: "shell", input: { command: "gh pr create --fill", workdir: worktree } }), /pull_request_open/)
+    await assert.rejects(hooks.get("execute.before")!({ tool: "shell", input: { command: "gh pr merge --squash", workdir: worktree } }), /pull_request_merge/)
     await hooks.get("execute.before")!({ tool: "shell", input: { command: "npm test", workdir: worktree } })
     const after: HookedCall = { tool: "shell", input: { command: "gh pr checks", workdir: worktree }, status: "completed", result: { content: "all green" } }
     await hooks.get("execute.after")!(after)
@@ -264,7 +265,7 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   }
 }
 
-assert.equal(NATIVE_CALL_POLICY.shell(inWorktree, { command: "gh pr create", cwd: worktree }).kind, "deny", "the policy as one value answers as its functions do")
+assert.equal(NATIVE_CALL_POLICY.shell(inWorktree, { command: "gh pr merge", cwd: worktree }).kind, "deny", "the policy as one value answers as its functions do")
 assert.equal(NATIVE_CALL_POLICY.tool(inMain, { tool: "EnterWorktree" }).kind, "deny")
 
 console.log(`native calls: ${CASES.length} shell cases and the native tools pass`)
