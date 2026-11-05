@@ -443,10 +443,11 @@ async function launchesBeforeTheirEdge(): Promise<void> {
     assert.ok(!("refused" in bad) && bad.state === "queued", JSON.stringify(bad))
     limit = 3
     w.agents.capacityChanged()
-    await waitFor(() => w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && /^Not started: its worktree couldn't be made/.test(entry.state.reason ?? "")), "the refusal to show on its row")
+    // Its Apex hears once the digest is in its queue, which can come before the row is read.
+    await waitFor(() => w.store.queuedSpawns().length === 0 || w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && /^Not started: its worktree couldn't be made/.test(entry.state.reason ?? "")), "the refusal to show on its row")
     await waitFor(() => w.store.queuedSpawns().length === 0, "it to go once its Apex heard", 15_000)
-    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
-    assert.match(wake, /"bad" \(Claude\) failed: It didn't start: its worktree couldn't be made/, "its Apex hears why it didn't start")
+    const told = /"bad" \(Claude\) failed: It didn't start: its worktree couldn't be made/
+    await waitFor(() => w.prompts.some((prompt) => prompt.conversation === apex.conversation && told.test(prompt.text)), "its Apex to hear why it didn't start")
     assert.equal(w.store.queuedSpawns().length, 0, "and it goes once its Apex heard")
     await w.agents.stop(apex.caller, { child: "all" })
   } finally {
@@ -621,7 +622,9 @@ async function afterOrder(): Promise<void> {
     const stopped = await w.agents.stop(apex.caller, { child: "second" })
     assert.deepEqual("stopped" in stopped && stopped.stopped, ["second"])
     await waitFor(() => w.store.queuedSpawns().length === 0, "third to be dropped once its Apex heard second was stopped")
-    assert.match(w.prompts.filter((prompt) => prompt.conversation === apex.conversation).at(-1)?.text ?? "", /"third" \(Claude\) failed: It didn't start: it was to start after second, which was stopped \(it never started\)/)
+    // Heard once its digest is in the Apex's queue; the digest reaches the harness as the queue sends it.
+    const told = /"third" \(Claude\) failed: It didn't start: it was to start after second, which was stopped \(it never started\)/
+    await waitFor(() => w.prompts.some((prompt) => prompt.conversation === apex.conversation && told.test(prompt.text)), "its Apex to be told why")
     await w.agents.stop(apex.caller, { child: "all" })
   } finally {
     await w.close()
