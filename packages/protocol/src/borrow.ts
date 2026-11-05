@@ -248,12 +248,35 @@ export type Delivery = z.infer<typeof DeliverySchema>
 export const PROGRESS_PHASES = ["preparing", "booting", "building", "testing", "running", "uploading", "stopping"] as const
 export const ProgressSchema = z.object({ phase: z.enum(PROGRESS_PHASES), percent: z.number().min(0).max(100).optional() }).strict()
 export type Progress = z.infer<typeof ProgressSchema>
+
+/** A stream a session serves its borrower alone (a simulator's screen as video, a build's log as text), by name. */
+export const StreamSchema = z.object({ name: Id, kind: z.enum(["video", "text"]) }).strict()
+export type Stream = z.infer<typeof StreamSchema>
+
+/** A file name, never a path or contents: one segment, no slash, backslash or NUL, and not `.` or `..`. */
+export const ArtifactNameSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[^/\\\0]+$/)
+  .refine((name) => name !== "." && name !== "..", "An artifact's name is a file's name")
+/** A file a session made (a build, test results, a recording), as its lease lists it: by name, hash and size, never its contents. */
+export const ArtifactSchema = z.object({ name: ArtifactNameSchema, hash: ChunkHashSchema, size: z.number().int().nonnegative() }).strict()
+export type Artifact = z.infer<typeof ArtifactSchema>
+/** The most streams and artifacts one session lists. */
+export const SESSION_STREAMS_MAX = 8
+export const SESSION_ARTIFACTS_MAX = 64
+
 export const SessionSchema = z
   .object({
     state: z.enum(["starting", "running"]),
     heartbeatMs: z.number().int().positive(),
     lastBeat: Ms,
     progress: ProgressSchema.optional(),
+    /** What it serves its borrower to watch, as its device said in a heartbeat. */
+    streams: z.array(StreamSchema).max(SESSION_STREAMS_MAX).optional(),
+    /** What it made, as its device gave each, while the lease lives: an ended lease lists none. */
+    artifacts: z.array(ArtifactSchema).max(SESSION_ARTIFACTS_MAX).optional(),
   })
   .strict()
 export type Session = z.infer<typeof SessionSchema>
@@ -554,15 +577,21 @@ export type BrokerInput =
   | { type: "tick"; at: number }
   /** A device's capabilities and slots, as it probed them: it's online, and what it can serve is this. */
   | { type: "advertise"; device: string; capabilities: Capability[]; slots: Slots; at: number }
-  | { type: "heartbeat"; lease: string; at: number }
-  | { type: "progress"; lease: string; progress: Progress; at: number }
+  /** From the lease's own device alone: it's alive, with the streams it serves when they changed. */
+  | { type: "heartbeat"; lease: string; device: string; streams?: Stream[]; at: number }
+  | { type: "progress"; lease: string; device: string; progress: Progress; at: number }
+  /** The borrower's or the person's: the session stops. */
   | { type: "cancel"; lease: string; by: Actor; at: number }
+  /** From the lease's own device alone, while it lives: a file the session made, its value kept sealed by the adapter. */
+  | { type: "artifact"; lease: string; device: string; artifact: Artifact; at: number }
 
 /** What a step asks its adapter to do: log, ask a device, push to a borrower, or let go of a sealed value no lease names. */
 export type BrokerEffect =
   | { effect: "log"; event: LeaseEvent }
   | { effect: "ask"; device: string; ask: SourceAsk }
   | { effect: "push"; borrower: Borrower; push: BorrowPush }
+  /** Tells the device serving a lease that it ended (every way it ends), so it stops what it runs and frees its slot. */
+  | { effect: "tell"; device: string; push: Extract<BorrowPush, { push: "ended" }> }
   | { effect: "unreferenced"; grant: string; version: string }
 
 export type BrokerResult = {
@@ -683,6 +712,14 @@ function endLease(state: BrokerState, effects: BrokerEffect[], id: string, why: 
   state.leases[id] = { ...held, ended: { at, why } }
   effects.push(leaseEvent(why, at, held, by ? { by } : {}))
   if (why !== "released") effects.push({ effect: "push", borrower: held.lease.borrower, push: { push: "ended", lease: id, why } })
+  if (held.lease.device) effects.push({ effect: "tell", device: held.lease.device, push: { push: "ended", lease: id, why } })
+  // A session's files go with it: listed only while it lives, and let go once no lease names them.
+  const session = held.lease.session
+  if (session?.artifacts?.length) {
+    const { artifacts, ...kept } = session
+    state.leases[id] = { ...state.leases[id]!, lease: { ...held.lease, session: kept } }
+    for (const artifact of artifacts) effects.push({ effect: "unreferenced", grant: held.lease.grant, version: artifact.hash })
+  }
   const { grant, version } = held.lease
   if (held.lease.mode === "copy" && !Object.values(state.leases).some((other) => !other.ended && other.lease.grant === grant && other.lease.version === version))
     effects.push({ effect: "unreferenced", grant, version })
@@ -939,13 +976,29 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
     case "progress": {
       const held = state.leases[input.lease]
       if (!held || held.ended || !held.lease.session) return done({ rejected: "No such live session" })
+      if (held.lease.device !== input.device) return done({ rejected: "Only the lease's device speaks for its session" })
       const session: Session = { ...held.lease.session, state: "running", lastBeat: input.at }
       if (input.type === "progress") {
         const progress = ProgressSchema.safeParse(input.progress)
         if (!progress.success) return done({ rejected: "Not a progress" })
         session.progress = progress.data
+      } else if (input.streams) {
+        const streams = z.array(StreamSchema).max(SESSION_STREAMS_MAX).safeParse(input.streams)
+        if (!streams.success) return done({ rejected: "Not a session's streams" })
+        session.streams = streams.data
       }
       state.leases[input.lease] = { ...held, lease: { ...held.lease, session } }
+      return done()
+    }
+    case "artifact": {
+      const held = state.leases[input.lease]
+      if (!held || held.ended || !held.lease.session) return done({ rejected: "No such live session" })
+      if (held.lease.device !== input.device) return done({ rejected: "Only the lease's device gives its session files" })
+      const artifact = ArtifactSchema.safeParse(input.artifact)
+      if (!artifact.success) return done({ rejected: artifact.error.issues[0]?.message ?? "Not an artifact" })
+      const listed = (held.lease.session.artifacts ?? []).filter((each) => each.hash !== artifact.data.hash)
+      if (listed.length >= SESSION_ARTIFACTS_MAX) return done({ rejected: `A session lists at most ${SESSION_ARTIFACTS_MAX} files` })
+      state.leases[input.lease] = { ...held, lease: { ...held.lease, session: { ...held.lease.session, artifacts: [...listed, artifact.data] } } }
       return done()
     }
     case "cancel": {
