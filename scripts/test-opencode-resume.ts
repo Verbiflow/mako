@@ -9,7 +9,7 @@ import { resumable, type ProviderBinding } from "@mako/host/contracts/conversati
 import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
 import { sameNativeSource } from "@mako/host/harnesses/native-source"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { createOpenCodeDriver, openCodeForkBoundary, openCodeSessionMessages } from "@mako/host/harnesses/opencode/live-driver"
+import { createOpenCodeDriver, openCodeForkBoundary, openCodeForkUnderWatch, openCodeSessionMessages } from "@mako/host/harnesses/opencode/live-driver"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { errorMessage } from "@mako/host/base/error-message"
 import { locateOpenCodeSession, verifyOpenCodeSession } from "@mako/host/harnesses/opencode/installation"
@@ -117,6 +117,33 @@ try {
   }
   assert.deepEqual((await openCodeSessionMessages(list, "ses_one")).map(message => message.id), stored.map(message => message.id), "every page, in order")
   assert.equal(pages.length, 3, "and no page after a short one")
+  // The page read is a startup step of its own, begun before the first page, and the fork is the next step.
+  const order: string[] = []
+  let pending: string | undefined
+  const watched = async <T>(name: string, work: Promise<T>): Promise<T> => {
+    assert.equal(pending, undefined, "one startup step at a time")
+    pending = name
+    order.push(name)
+    try { return await work } finally { pending = undefined }
+  }
+  const forked = await openCodeForkUnderWatch(
+    watched,
+    async (input) => {
+      await new Promise(resolve => setImmediate(resolve))
+      assert.equal(pending, "fork history", "a page that has not come back is under its own step")
+      assert.equal(input.sessionID, "ses_one")
+      return { data: [{ id: "u1", type: "user" }, { id: "r1", type: "assistant" }, { id: "u2", type: "user" }], cursor: { next: null } }
+    },
+    async (before) => {
+      await new Promise(resolve => setImmediate(resolve))
+      assert.equal(pending, "session", "the fork's answer is under the next step")
+      assert.equal(before, "u2")
+      return "forked"
+    },
+    { nativeId: "ses_one", runId: "u1" },
+  )
+  assert.equal(forked, "forked")
+  assert.deepEqual(order, ["fork history", "session"])
   assert.equal(errorMessage({ error: { _tag: "InvalidCursorError", message: "Cursor cannot be combined with order" } }), "Cursor cannot be combined with order", "a tagged rejection says what it was")
 
   // Messages shaped as OpenCode 2.0.1 keeps them: Console's sealed reasoning is `state.reasoningEncryptedContent`.
