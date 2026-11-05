@@ -610,6 +610,49 @@ function signalsTo(pid: number) {
 }
 
 /**
+ * A link's look at the pid it names: a stalled read of a running process is read again, one that stays unreadable
+ * says so, and only a process that's gone is called gone.
+ */
+async function linkTellsUnreadableFromGone(): Promise<void> {
+  let failures = 0
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, "link-reads"),
+    catalog: fake.catalog,
+    processes: {
+      ...PROCESS_READS,
+      startedAt: (pid, signal) => (failures-- > 0 ? Promise.reject(new Error("ps ran past its limit")) : PROCESS_READS.startedAt(pid, signal)),
+    },
+    script: () => "ok",
+  })
+  const shell = spawn("/bin/sh", ["-c", "sleep 60"], { detached: true, stdio: "ignore" })
+  try {
+    const apex = await w.apex("claude", "full")
+    const write = (nativeId: string) => fake.write({ harness: "claude", nativeId, path: join(w.root, `${nativeId}.jsonl`), cwd: w.root, startedAt: new Date().toISOString() }, [{ type: "tool", id: "one", name: "Bash", input: "{}", status: "completed" }])
+    const stalled = randomUUID()
+    write(stalled)
+    failures = 2
+    const linked = await w.agents.link(apex.caller, { harness: "claude", session: stalled, pid: shell.pid! })
+    assert.ok(!("refused" in linked), `two stalled reads of a running process aren't its end: ${JSON.stringify(linked)}`)
+    const unreadable = randomUUID()
+    write(unreadable)
+    failures = Infinity
+    const refused = await w.agents.link(apex.caller, { harness: "claude", session: unreadable, pid: shell.pid! })
+    assert.ok("refused" in refused && refused.refused === "unavailable", JSON.stringify(refused))
+    assert.match(refused.why, new RegExp(`Process ${shell.pid} is running, but Mako couldn't read when it started \\(ps ran past its limit\\)`))
+    const exited = spawn("/bin/sh", ["-c", "exit 0"], { stdio: "ignore" })
+    await new Promise((resolve) => exited.once("exit", resolve))
+    const gone = await w.agents.link(apex.caller, { harness: "claude", session: unreadable, pid: exited.pid! })
+    assert.ok("refused" in gone && gone.refused === "unknown-child", JSON.stringify(gone))
+    assert.match(gone.why, new RegExp(`No process ${exited.pid} runs on this device`))
+    failures = 0
+  } finally {
+    shell.kill("SIGKILL")
+    await w.close()
+  }
+}
+
+/**
  * A stopped run whose identity can't be read is neither gone nor proven its own: it keeps its place, Mako
  * sends it nothing and says it couldn't confirm it stopped, and once its identity reads again the stop goes on.
  */
@@ -1169,7 +1212,7 @@ async function relinkedRuns(): Promise<void> {
       marked: async () => (successor === undefined ? [] : [{ pid: successor, value: apex.session }]),
       holding: async (_file, pids) => new Set(pids.filter((pid) => pid === successor)),
       folders: async () => new Map(),
-      startedAt: async () => Date.now(),
+      startedAt: PROCESS_READS.startedAt,
     },
   })
   const [first, second, third] = [sleeper(folder), sleeper(folder), sleeper(folder)]
@@ -1228,7 +1271,7 @@ async function messagesReachLinkedRuns(): Promise<void> {
     root: join(root, "taken-over"),
     script: (turn) => (turn.text.includes("fix the footer") ? "Footer fixed." : "ok"),
     catalog: fake.catalog,
-    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: async () => Date.now() },
+    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: PROCESS_READS.startedAt },
   })
   const run = sleeper(w.root)
   try {
@@ -1289,7 +1332,7 @@ async function staleEndsStayOut(): Promise<void> {
     root: join(root, "stale-ends"),
     script: (turn) => (turn.text === "Hold on." ? turn.world.hold(turn.conversation).then(() => "Done holding.") : "ok"),
     catalog: fake.catalog,
-    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: async () => Date.now() },
+    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: PROCESS_READS.startedAt },
   })
   const run = sleeper(w.root)
   try {
@@ -1624,6 +1667,7 @@ try {
   await launchesBeforeTheirEdge()
   await stopHoldsUntilCancelled()
   await followedStopHoldsUntilExit()
+  await linkTellsUnreadableFromGone()
   await followedStopUnknownIdentity()
   await followedStopStaleIdentity()
   await followedStopStuck()

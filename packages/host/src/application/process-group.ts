@@ -64,7 +64,9 @@ export async function runProcessGroup(command: string, args: string[], options: 
       process.kill(-child.pid, name)
       return true
     } catch (error) {
-      if (errnoSchema.safeParse(error).data?.code !== "ESRCH") failure ??= error instanceof Error ? error : new Error(String(error))
+      // macOS answers EPERM for a group of only zombies: this one's last member, gone and not yet reaped.
+      const code = errnoSchema.safeParse(error).data?.code
+      if (code !== "ESRCH" && code !== "EPERM") failure ??= error instanceof Error ? error : new Error(String(error))
       return false
     }
   }

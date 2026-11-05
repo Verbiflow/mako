@@ -143,6 +143,21 @@ try {
   const result = await timed
   assert.equal(result.stopped, "timeout")
   assert.ok(gone(holdout), "a child ignoring SIGTERM was killed before the step settled")
+  // On macOS a group holding only zombies, its last member gone and not yet reaped, answers EPERM until it's reaped.
+  const realKill = process.kill
+  let zombies = 0
+  process.kill = (target, signal) => {
+    if (target >= 0 || signal !== 0) return realKill.call(process, target, signal)
+    zombies++
+    throw Object.assign(new Error("kill EPERM"), { code: "EPERM" })
+  }
+  try {
+    const zombie = await runProcessGroup("sh", ["-c", "sleep 30"], { cwd: root, env: process.env, stdio: "pipe", timeoutMs: 100, graceMs: 200 })
+    assert.equal(zombie.stopped, "timeout", "a group gone but for its zombies has ended")
+    assert.ok(zombies > 0, "its look at the group was answered EPERM")
+  } finally {
+    process.kill = realKill
+  }
   // A step that ends by itself is waited for as before: its code, nothing stopped.
   assert.deepEqual(await runProcessGroup("sh", ["-c", "exit 4"], { cwd: root, env: process.env, stdio: "pipe" }), { code: 4, stopped: null })
 

@@ -69,6 +69,9 @@ export interface ProcessReads {
   matches?(pid: number, startedAt: number, signal: AbortSignal): Promise<boolean>
 }
 
+/** How many times a link reads a running process's start before it says it can't. */
+const PROCESS_READ_TRIES = 3
+
 export const PROCESS_READS: ProcessReads = {
   marked: markedProcesses,
   holding: processesHolding,
@@ -294,10 +297,21 @@ export class AgentRuns {
     this.deps.changed(edge, false)
   }
 
-  /** The pid a link names, checked to run on this device now. */
+  /**
+   * The pid a link names, checked to run on this device now: nothing once it's gone. A read that fails while the
+   * process runs says nothing of the process (`ps` ran past its limit at load 15), so it's read again, and what it
+   * can't be read after `PROCESS_READ_TRIES` is thrown, for the link to say.
+   */
   async processOf(pid: number): Promise<FollowedRun["process"] | undefined> {
-    const startedAt = await processStartedAt(pid, this.abort.signal).catch(() => undefined)
-    return startedAt === undefined ? undefined : { pid, startedAt }
+    const reads = this.deps.processes ?? PROCESS_READS
+    for (let tries = 1; ; tries++) {
+      try {
+        return { pid, startedAt: await reads.startedAt(pid, this.abort.signal) }
+      } catch (error) {
+        if (!signalable(pid)) return undefined
+        if (tries === PROCESS_READ_TRIES) throw error
+      }
+    }
   }
 
   /** Stops a followed run on this device: its whole process group, killed after `STOP_GRACE_MS`. */
