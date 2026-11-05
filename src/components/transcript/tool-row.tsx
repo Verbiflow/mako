@@ -124,7 +124,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
             rel="noreferrer noopener"
             title={`Open ${link}`}
             aria-label={`Open ${link}`}
-            className="pressable mr-1 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
+            className="pressable mr-1 p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
           >
             <ExternalLinkIcon className="size-3" />
           </a>
