@@ -80,10 +80,11 @@ async function check() {
       await new Promise((done) => setTimeout(done, 40))
     }
   }
-  // Fonts in, finite animations done (a card entering), and two frames painted.
+  // Fonts in, finite animations done (a card entering), and two frames painted. Only what's rendered: a transition in
+  // a turn scrolled out (`content-visibility: auto`) stops where it was and never finishes, and paints nothing.
   const settle = () =>
     evaluate(
-      "document.fonts.ready.then(() => Promise.all(document.getAnimations().filter((each) => each.effect?.getTiming().iterations !== Infinity).map((each) => each.finished.catch(() => undefined)))).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
+      "document.fonts.ready.then(() => new Promise((done) => { const look = () => document.getAnimations().some((each) => each.playState === \"running\" && each.effect?.getTiming().iterations !== Infinity && each.effect.target?.checkVisibility({ contentVisibilityAuto: true }) !== false) ? requestAnimationFrame(look) : done(); requestAnimationFrame(look) })).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
     )
   const capture = async (name, prefix = "orch-build-ui-") => {
     await settle()
