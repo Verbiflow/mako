@@ -244,6 +244,8 @@ const inputs = {
           ])
           .optional(),
         timeoutMs: z.number().optional(),
+        after: z.array(z.string()).optional(),
+        queue: z.boolean().optional(),
         clientKey: z.string(),
         cwd: z.string().optional(),
       }),
@@ -486,6 +488,7 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:fin-ceiling-set": () => z.tuple([z.number()]),
   "mako:fin-default-choose": () =>
     z.tuple([
       z.string(),
@@ -500,6 +503,7 @@ const inputs = {
       ]),
     ]),
   "mako:fin-defaults": () => z.tuple([]),
+  "mako:fin-limit-set": () => z.tuple([z.union([z.null(), z.number()])]),
   "mako:fin-policy-save": () =>
     z.tuple([
       z.object({
@@ -2653,8 +2657,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:files-find", "workspaces"],
   ["mako:files-folders", "workspaces"],
   ["mako:files-grep", "workspaces"],
+  ["mako:fin-ceiling-set", "harnesses"],
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
+  ["mako:fin-limit-set", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],

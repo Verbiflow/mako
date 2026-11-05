@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { HarnessLimit } from "@mako/host/contracts/account-usage"
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
+import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
@@ -48,8 +50,16 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
-  /** This Mac's capacity as admission reads it (`AgentsDeps.capacity`); none holds without it. */
+  /** This Mac's load as a start reads it (`AgentsDeps.capacity`); a start says nothing of it without one. */
   capacity?: AgentsDeps["capacity"]
+  /** The person's limit of Fins at once (`AgentsDeps.finLimit`); `FIN_LIMIT` without it. */
+  finLimit?: () => number
+  /** Runs as a harness is asked to cancel a turn, before the turn stops: a harness slow to stop. */
+  cancelling?: (conversation: string) => Promise<void> | void
+  /** Runs as a Fin's start prepares its worktree and profile, before its edge is written (`mako:live-start`). */
+  preparing?: (options: LiveStartOptions) => Promise<void> | void
+  /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
+  finCeiling?: () => number
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
@@ -138,7 +148,7 @@ export class AgentsWorld {
     this.store = new ThreadStore(join(this.root, "threads.sqlite"), { now: () => Date.now() })
     this.jobs = new HostJobs()
     const drivers = new Map<string, ProviderLiveDriver>(HARNESSES.map((harness) => [harness, this.driver(harness)]))
-    this.live = new LiveConversations({
+    const live = new LiveConversations({
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
@@ -156,13 +166,18 @@ export class AgentsWorld {
       autoContinueDelayMs: this.options.autoContinueDelayMs ?? 10,
       resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
     })
+    this.live = live
     const deps: AgentsDeps = {
       store: () => this.store,
       catalog: this.options.catalog ?? emptyCatalog(),
       jobs: this.jobs,
       live: this.live,
       startLive: async (harness, cwd, options) => {
-        await this.live.start(harness, cwd, options)
+        // As `mako:live-start` does: a Fin's worktree and profile are prepared, then a stopped one writes no edge. Each
+        // host starts on its own conversations: a start the last one left preparing never reaches the next host's.
+        await this.options.preparing?.(options)
+        if (options.parent && !options.resume && !agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
+        await live.start(harness, cwd, options)
       },
       harnesses: () => HARNESSES,
       runs: () => this.options.catalog !== undefined,
@@ -181,13 +196,17 @@ export class AgentsWorld {
       ...(this.options.movePending && { movePending: this.options.movePending }),
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.capacity && { capacity: this.options.capacity }),
+      ...(this.options.finLimit && { finLimit: this.options.finLimit }),
+      ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       archived: (conversation) => this.archived.has(conversation),
     }
-    this.agents = new Agents(deps)
-    this.agents.resume()
+    const agents = new Agents(deps)
+    this.agents = agents
+    // As the host does (`openConversations`): the turns an exit cut short go on before the engine looks at what waits.
     this.live.continueRestarted()
+    this.agents.resume()
   }
 
   /** Closes the host as Mako's exit does: running turns are cut short and left for the next host, their scripts never answering. */
@@ -346,6 +365,8 @@ export class AgentsWorld {
         }, 0)
       },
       cancel: async (id) => {
+        // A harness slow to stop: its turn goes on until this resolves.
+        await this.options.cancelling?.(id)
         this.holds.get(id)?.()
         // A cancelled turn takes its open asks with it, unanswered.
         for (const [key, asked] of this.asking) {
@@ -384,5 +405,35 @@ function emptyCatalog(): AgentsDeps["catalog"] {
     activity: () => ({}),
     subscribe: () => () => {},
     announce: () => {},
+  }
+}
+
+/** A catalog of the Sessions a Thread's shell runs started, written by the test: what `agents_link` and the follower read. */
+export function fakeCatalog() {
+  const sessions = new Map<string, { ref: ThreadRef; entries: Entry[] }>()
+  const subscribers = new Set<(event: HostEvent) => void>()
+  const catalog: AgentsDeps["catalog"] = {
+    nativePath: (identity) => [...sessions.values()].find((session) => session.ref.harness === identity.harness && session.ref.nativeId === identity.nativeId)?.ref.path,
+    ref: (path) => sessions.get(path)?.ref,
+    async page(path, before, limit = 50) {
+      const session = sessions.get(path)
+      if (!session) return null
+      const end = before ?? session.entries.length
+      const start = Math.max(0, end - limit)
+      return { ref: session.ref, entries: session.entries.slice(start, end), start, total: session.entries.length, hasEarlier: start > 0 } satisfies ThreadPage
+    },
+    activity: () => ({}),
+    subscribe(subscriber) {
+      subscribers.add(subscriber)
+      return () => subscribers.delete(subscriber)
+    },
+    announce: () => {},
+  }
+  return {
+    catalog,
+    write(ref: ThreadRef, entries: Entry[]) {
+      sessions.set(ref.path, { ref, entries })
+      for (const subscriber of subscribers) subscriber({ type: "thread-ref", ref })
+    },
   }
 }
