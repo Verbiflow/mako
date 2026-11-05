@@ -4089,6 +4089,11 @@ card. A cause the person must fix anywhere in the words is never waited out,
 whatever transient words wrap it (`permanentFailure`: "API error: 400 Bad
 Request: unknown model …"). A turn continued by itself leaves its session
 ready, so what the person queued behind it goes in the order they sent it.
+A first start that fails so, with no session yet to resume (a Fin's brief),
+holds its message the same way, and its release starts the conversation
+again (`LiveLaunches.relaunch`); a transfer that does (a message to a
+session with nothing to wake, a reconnect) stays queued with its own
+`retry`, gated until its time (`LiveTransfers.start`, `transferDue`).
 Signed out still pauses for Sign in, and anything else fails at once with its
 card.
 The queue row says when it goes and why (`retryWords`). This holds for the

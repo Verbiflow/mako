@@ -1,4 +1,5 @@
 import type { RequestRetry } from "./delivery-retry.js"
+import type { ConversationControl } from "./conversation-control.js"
 import type { LiveRequest, RequestWake, SignInHold } from "./live-conversations.js"
 
 /**
@@ -70,4 +71,17 @@ export function nextInLine<T extends Pick<LiveRequest, "status" | "signIn" | "ed
     if (hold && keepsLine(hold)) return next
   }
   return next
+}
+
+/** When a reconnect waiting to go again (`ContextTransfer.retry`) is due, for the one timer and the listing. */
+export function transferDue(control: Pick<ConversationControl, "transfers"> | undefined): number | undefined {
+  let soonest: number | undefined
+  for (const transfer of control?.transfers ?? [])
+    if (transfer.state.kind === "queued" && transfer.retry && (soonest === undefined || transfer.retry.at < soonest)) soonest = transfer.retry.at
+  return soonest
+}
+
+/** The sooner of two times, either of which may be missing. */
+export function sooner(left: number | undefined, right: number | undefined): number | undefined {
+  return left === undefined ? right : right === undefined ? left : Math.min(left, right)
 }

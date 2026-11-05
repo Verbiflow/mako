@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -244,6 +245,36 @@ try {
       await world.close()
     }
 
+    // A first start that fails at capacity, with nothing yet to resume (a Fin's brief): it starts again by itself, once.
+    {
+      const { world, faults } = worldOf(`${harness}-first-start`)
+      const conversation = randomUUID()
+      faults.start.set(conversation, "[unavailable] Server at capacity")
+      await world.live.start(harness, world.root, { conversationId: conversation, initialRequest: { id: randomUUID(), text: "Brief.", attachments: [] } })
+      await until(`${harness} first start: it to wait`, () => requestOf(world, conversation, "Brief.")?.status === "held")
+      waits(world, conversation, "Brief.", "rate-limited", `${harness} first start`)
+      await goesOnce(world, conversation, "Brief.", `${harness} first start`)
+      await world.close()
+    }
+
+    // A message that starts its session through a transfer (no driver, nothing to wake), at capacity: the transfer goes again by itself, once.
+    {
+      const { world, faults } = worldOf(`${harness}-transfer`)
+      const conversation = randomUUID()
+      faults.start.set(conversation, "[unavailable] Server at capacity")
+      await world.live.start(harness, world.root, { conversationId: conversation })
+      await until("its start to fail", () => world.live.session(conversation)?.status === "failed")
+      faults.start.set(conversation, "[unavailable] Server at capacity")
+      world.say(conversation, "Hello.")
+      await until(`${harness} transfer: it to wait`, () => world.live.snapshot(conversation)?.control?.transfers.some((transfer) => transfer.retry?.cause === "rate-limited") === true)
+      const transfers = () => world.live.snapshot(conversation)?.control?.transfers ?? []
+      assert.ok(!transfers().some((transfer) => transfer.state.kind === "failed"), `${harness}: no failed transfer`)
+      world.live.wakeDue(Date.now() + LATER)
+      await until(`${harness} transfer: it to go`, () => requestOf(world, conversation, "Hello.")?.status === "completed")
+      assert.equal(sentTimes(world, conversation, "Hello."), 1, `${harness} transfer: once`)
+      await world.close()
+    }
+
     // A permanent cause wrapped in a service's words fails at once too.
     {
       const { world, faults } = worldOf(`${harness}-wrapped`)
@@ -416,7 +447,7 @@ try {
       assert.equal(requestOf(world, conversation, "Second.")?.retry, undefined)
       await world.close()
     }
-    console.log(`${harness}: a wake on capacity, the service, the network, a stalled start or a session open elsewhere waited and went once; an Apex woken for a Fin's report too; a refused prompt went again; a turn failed partway continued by itself or gave way to a new message; a permanent failure failed at once`)
+    console.log(`${harness}: a wake on capacity, the service, the network, a stalled start or a session open elsewhere waited and went once; an Apex woken for a Fin's report too; a refused prompt went again; a turn failed partway continued by itself or gave way to a new message; a first start and a transfer at capacity went again once; a permanent failure, wrapped or not, failed at once; the person's order held; a retry survived a restart and stopped at the person's close`)
   }
 } finally {
   rmSync(root, { recursive: true, force: true })

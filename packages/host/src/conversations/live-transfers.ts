@@ -14,6 +14,8 @@ import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
+import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
@@ -129,6 +131,8 @@ export class LiveTransfers {
     const transfer = this.pending(resident)
     if (
       !transfer ||
+      // One waiting to go again goes at its time (`wakeDue` opens it), not on every drain.
+      (transfer.retry && transfer.retry.at > Date.now()) ||
       resident.transferOperation ||
       resident.storageFault ||
       resident.hibernating ||
@@ -653,15 +657,17 @@ export class LiveTransfers {
           continues: transfer.continues?.reason ?? "",
           error: errorMessage({ error }),
         })
+        const words = errorMessage({ error })
+        const failure = classifyStartFailure(words, reconnect)
+        // A cause that clears by itself: the transfer stays queued and goes again at its time (`wakeDue`), once.
+        const cause = transientCause(words, failure, error instanceof SessionBusyError || error instanceof SessionHeldError)
+        const retry = cause && nextRetry(transfer.retry, cause, words, Date.now())
         try {
-          this.save(resident, {
-            ...transfer,
-            state: {
-              kind: "failed",
-              error: errorMessage({ error }),
-              failure: classifyStartFailure(errorMessage({ error }), reconnect),
-            },
-          })
+          if (retry) {
+            this.save(resident, { ...transfer, state: { kind: "queued" }, retry })
+            hostLog("transfer", "goes again by itself", { conversation: resident.snapshot.session.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+          } else
+            this.save(resident, { ...transfer, state: { kind: "failed", error: words, failure } })
         } catch (failure) {
           this.host.storageFailed(resident, { error: failure })
         }

@@ -63,7 +63,7 @@ import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { latchedByStop } from "../contracts/delivery-retry.js"
-import { holdDue, holdOf, released } from "../contracts/request-hold.js"
+import { holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -440,7 +440,7 @@ export class LiveConversations {
     const { session, requests } = resident.snapshot
     if (session.status === "running" || session.status === "starting" || requests.some((request) => request.status === "dispatching") || resident.autoContinue) return true
     // A message waiting to go again goes by itself: work, as a continuation Mako scheduled is.
-    if (requests.some((request) => holdOf(request)?.kind === "retry")) return true
+    if (requests.some((request) => holdOf(request)?.kind === "retry") || this.transfers.pending(resident)?.retry) return true
     const next = session.status === "failed" ? undefined : nextQueued(resident.snapshot)
     if (!next || next.ownerCheck) return false
     return Boolean(resident.driver || resident.starting || resident.opening || resident.waking || resident.hibernating || resident.transferring)
@@ -918,7 +918,13 @@ export class LiveConversations {
         const at = hold && holdDue(hold)
         return at !== undefined && at <= now
       })
-      if (!ready.length) continue
+      // A reconnect waiting to go again goes at its time too: its gate opens now (`LiveTransfers.start`).
+      const transfer = this.transfers.pending(resident)
+      if (transfer?.retry && transfer.retry.at <= now) this.transfers.save(resident, { ...transfer, retry: { ...transfer.retry, at: Math.min(transfer.retry.at, Date.now()) } })
+      if (!ready.length) {
+        if (transfer?.retry && transfer.retry.at <= now) this.release(resident)
+        continue
+      }
       const ids = new Set(ready.map((request) => request.id))
       const session = resident.snapshot.session
       resident.snapshot = {
@@ -1164,6 +1170,8 @@ export class LiveConversations {
     if (resident.snapshot.session.status === "closed" && !resident.closing && !resident.driver && launched(activeBinding(resident)))
       this.reopenClosed(resident)
     if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) void this.hibernation.wake(resident)
+    // A conversation whose first start failed before any session existed starts again for what waited for it.
+    else if (!resident.driver && !launched(activeBinding(resident)) && this.launches.relaunch(resident)) return
     else this.dispatch.drain(resident)
   }
 
@@ -1688,7 +1696,7 @@ export class LiveConversations {
       activityAt: resident.activityAt,
     }
     resident.journal.commit(snapshot, previous, previous.blocks === resident.snapshot.blocks ? delivery.grown : undefined)
-    if (snapshot.requests !== previous.requests) this.armWakes(wakeAt(snapshot.requests))
+    if (snapshot.requests !== previous.requests || snapshot.control !== previous.control) this.armWakes(sooner(wakeAt(snapshot.requests), transferDue(snapshot.control)))
     resident.flushedAt = performance.now()
     resident.storageFault = false
     resident.updates = []

@@ -3,7 +3,7 @@ import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
-import { holdDue, holdOf } from "../contracts/request-hold.js"
+import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
@@ -776,7 +776,7 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
 
 /** The listing's line for a conversation, loaded or not. */
 function residentSummary(snapshot: LiveSnapshot): LiveSummary {
-  const wakes = wakeAt(snapshot.requests)
+  const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),

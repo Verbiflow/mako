@@ -152,6 +152,15 @@ export function readStoredReason<Fields extends { reason: InterruptionReason; ex
   return { ...fields, reason: readReason(fields.reason, exactReason) }
 }
 
+/** A message's next attempt after a failure that clears by itself (`RequestRetry`, `delivery-retry.ts`), as the journal keeps it. */
+export const RequestRetrySchema = z.object({
+  at: z.number(),
+  attempt: z.number().int().positive(),
+  since: z.number(),
+  cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
+  reason: z.string(),
+})
+
 export const ContextTransferSchema = z.object({
   inputDigest: z.string().optional(),
   input: TransferInputSchema,
@@ -165,6 +174,8 @@ export const ContextTransferSchema = z.object({
   }).transform(readStoredReason).optional(),
   createdAt: z.number(),
   state: TransferStateSchema,
+  /** A reconnect that failed for a cause that clears by itself: it stays queued and goes again at `at` (`nextRetry`). */
+  retry: RequestRetrySchema.optional(),
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
 export const ConversationControlSchema = z.object({

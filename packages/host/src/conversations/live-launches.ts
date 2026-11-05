@@ -12,7 +12,7 @@ import { promptFingerprint } from "./live-assets.js"
 import { LiveJournal, LiveRequestSchema } from "./live-journal.js"
 import { releaseHold } from "./live-ledger.js"
 import { snapshotFacts } from "./live-moves.js"
-import { launchCalls, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, launchCalls, launched, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
 
@@ -215,6 +215,29 @@ export class LiveLaunches {
     dependencies.opened?.(id)
     this.launch(resident, driver, provider, cwd, options, modeId, tuning)
     return snapshot.session
+  }
+
+  /**
+   * Starts again a conversation whose first launch failed before any native session existed, as it was asked to
+   * start, for the messages that waited for it (`LiveRequest.retry`): nothing to resume, so a launch, not a wake.
+   * False when there's nothing to start: its harness isn't here, or it has a session or a start already.
+   */
+  relaunch(resident: Resident): boolean {
+    const { dependencies } = this.access
+    const binding = activeBinding(resident)
+    const { session } = resident.snapshot
+    const driver = dependencies.driver(session.harness)
+    if (!binding || launched(binding) || resident.driver || resident.opening || resident.closing || !driver?.available(dependencies.appPath)) return false
+    resident.driver = driver
+    resident.opening = true
+    resident.snapshot = { ...resident.snapshot, session: { ...session, status: "starting", connection: "starting", error: undefined } }
+    hostLog("residency", "a conversation whose first start failed for now starts again", { conversation: session.id, harness: session.harness })
+    this.launch(resident, driver, session.harness, session.cwd, {
+      conversationId: session.id,
+      ...session.title !== undefined && { title: session.title },
+      ...binding.modeId !== undefined && { modeId: binding.modeId },
+    }, binding.modeId, binding.tuning ?? session.settings)
+    return true
   }
 
   /** Start the conversation's first native session; its outcome lands on the resident. */

@@ -16,6 +16,7 @@ import {
   StoredReason,
   NativeTotalsSchema,
   PromptAttachmentSchema,
+  RequestRetrySchema,
 } from "../contracts/conversation-control.js"
 import { existsSync, mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -43,7 +44,7 @@ import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import { sharedBase } from "./shared-entries.js"
 import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
 import { atOnce, inSlices, type Steps } from "@mako/sessions/slices"
-import { holdDue, holdOf } from "../contracts/request-hold.js"
+import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -156,13 +157,7 @@ export const LiveRequestSchema = z.object({
   pause: z.literal("stop").optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
-  retry: z.object({
-    at: z.number(),
-    attempt: z.number().int().positive(),
-    since: z.number(),
-    cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
-    reason: z.string(),
-  }).optional(),
+  retry: RequestRetrySchema.optional(),
   interruption: z
     .object({
       ...StoredReason,
@@ -527,6 +522,7 @@ export function journalSummary(metadata: string) {
       binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []
     ),
     steeredAt: personPromptedAt(undefined, control?.actions),
+    transferWakeAt: transferDue(control),
   }
 }
 
@@ -679,8 +675,8 @@ export class LiveJournal {
   summary() {
     const metadata = this.metadata()
     if (!metadata) return null
-    const { steeredAt, ...summary } = journalSummary(metadata)
-    const wakeAt = this.wakeAt()
+    const { steeredAt, transferWakeAt, ...summary } = journalSummary(metadata)
+    const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
     return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled } }
