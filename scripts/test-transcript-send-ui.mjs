@@ -143,11 +143,11 @@ async function sendOn(BrowserWindow, base, shots, { surface, path, width, height
       await wait(40)
     }
   }
-  if (mobile) {
-    await window.loadURL("about:blank")
-    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 3, mobile: true })
-    await page.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 })
-  }
+  // The viewport each surface is drawn at, whatever the screen: a runner's 1024 px screen clamps the window, and a
+  // desk that narrow gives its pane to the workbench. A page first: emulating a window that has drawn nothing crashes.
+  await window.loadURL("about:blank")
+  await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: mobile ? 3 : 2, mobile })
+  if (mobile) await page.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 })
   // A cold dev server reloads the page once its dependencies are bundled, aborting this load; the waits below hold.
   await window.loadURL(new URL(path, base).href).catch((error) => {
     if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
