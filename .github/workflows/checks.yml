@@ -271,6 +271,13 @@ jobs:
       - run: npm ci
       - run: npm run build:control-runtime
       - run: npm run test:transcript-send-ui
+        env:
+          MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transcript-send
+          path: ${{ runner.temp }}/transcript-send
 
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,

@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url"
  * message starts one) and in one (it steers or waits): from the keypress until the answer has landed, no two rows of the transcript overlap in any frame, nor the last row and what follows it. Each frame reads
  * every painted turn's box; a failure names the frame, the two rows and by how much, and leaves a screenshot.
  *
- * Pass a dev server's URL to use it; with none it serves its own. Screenshots go to the printed directory.
+ * Pass a dev server's URL to use it; with none it serves its own. Screenshots go to the printed directory, or to
+ * `MAKO_SEND_SHOTS`.
  */
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -91,7 +92,7 @@ const WATCH = `(() => {
 async function check() {
   const { app, BrowserWindow } = await import("electron")
   const root = process.env.MAKO_SEND_ROOT
-  const shots = join(root, "shots")
+  const shots = process.env.MAKO_SEND_SHOTS ?? join(root, "shots")
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
@@ -111,17 +112,17 @@ async function check() {
 
 const SURFACES = [
   {
-    surface: "desk", path: "?mock&app=apex&turns=260", width: 1440, height: 900, input: ".composer-input",
+    surface: "desk", path: "?mock&app=apex&turns=260", width: 1440, height: 900, composer: "document.querySelector('.composer-input')",
     open: "(() => { const row = [...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')); row?.click(); return Boolean(row) })()",
   },
-  { surface: "web", path: "scripts/web-desk.html?app=apex&thread=apex&turns=260", width: 1280, height: 800, input: "textarea" },
+  { surface: "web", path: "scripts/web-desk.html?app=apex&thread=apex&turns=260", width: 1280, height: 800, composer: "document.querySelector('textarea')" },
   {
-    surface: "phone", path: "scripts/phone-apex.html?app=apex&turns=260", width: 390, height: 844, mobile: true, input: ".web-dock textarea",
+    surface: "phone", path: "scripts/phone-apex.html?app=apex&turns=260", width: 390, height: 844, mobile: true, composer: "document.querySelector('.web-dock textarea')",
     open: "(() => { const row = document.querySelector('[data-thread]'); row?.click(); return Boolean(row) })()",
   },
 ]
 
-async function sendOn(BrowserWindow, base, shots, { surface, path, width, height, mobile = false, input, open }) {
+async function sendOn(BrowserWindow, base, shots, { surface, path, width, height, mobile = false, composer, open }) {
   const window = new BrowserWindow({ width, height, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
   page.debugger.attach("1.3")
@@ -132,7 +133,8 @@ async function sendOn(BrowserWindow, base, shots, { surface, path, width, height
   const evaluate = (code) => page.executeJavaScript(code)
   const wait = (ms) => new Promise((done) => setTimeout(done, ms))
   const until = async (code, what = code) => {
-    const deadline = Date.now() + 30_000
+    // Generous: a cold dev server bundles its dependencies and reloads the page first. Nothing here is timed.
+    const deadline = Date.now() + 120_000
     while (!(await evaluate(code))) {
       if (Date.now() > deadline) {
         await writeFile(join(shots, `${surface}-timeout.png`), (await page.capturePage()).toPNG())
@@ -153,13 +155,13 @@ async function sendOn(BrowserWindow, base, shots, { surface, path, width, height
   if (open) await until(open, `the Apex on the ${surface}`)
   await until("Boolean(document.querySelector('[data-transcript-viewport][data-virtualized] [data-exchange]'))", "the long Apex's windowed transcript")
   await evaluate("document.fonts.ready.then(() => true)")
-  await until(`Boolean(document.querySelector(${JSON.stringify(input)}))`, "the composer")
+  await until(`Boolean(${composer})`, "the composer")
   await wait(600)
   await evaluate(WATCH)
   await wait(300)
   const before = await evaluate("window.__overlaps.length")
   const turns = await evaluate("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length")
-  await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(input)}); node.focus(); return true })()`)
+  await evaluate(`${composer}.focus(), true`)
   await page.debugger.sendCommand("Input.insertText", { text: "Which of the queued ones goes next?" })
   // The phone's return key writes a new line; its send control sends, or steers mid-turn.
   if (!(await evaluate("(() => { const send = document.querySelector('[data-send-action=send],[data-send-action=steer]'); send?.click(); return Boolean(send) })()")))
