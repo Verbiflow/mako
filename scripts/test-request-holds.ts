@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import { latchedByStop } from "@mako/host/contracts/delivery-retry"
 import { holdOf, nextInLine } from "@mako/host/contracts/request-hold"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
@@ -89,6 +90,9 @@ try {
     assert.deepEqual(holdOf(row("a", "held")), { kind: "paused", by: "mako" })
     assert.deepEqual(holdOf(row("a", "held", { pause: "stop", retry })), { kind: "paused", by: "stop" }, "a Stop overrides a retry")
     assert.deepEqual(holdOf(row("a", "held", { pause: "stop", wake: { at: 9, after: "x" } })), { kind: "paused", by: "stop" }, "and a timed send")
+    // A send the Stop latched as it went, whose 429 came back after: written held as the Stop's pause, no time left on it.
+    const [late] = latchedByStop([{ ...row("l", "held", { pause: "stop", retry }), text: "", attachments: [] }])
+    assert.deepEqual([holdOf(late!), late!.retry], [{ kind: "paused", by: "stop" }, undefined], "a late refusal after a Stop is the Stop's pause")
     const next = (rows: Row[], newestOnly = false) => nextInLine(rows, newestOnly)?.id
     assert.equal(next([row("p", "held", { pause: "stop" }), row("q", "queued")]), "q", "what a Stop paused lets a later message go")
     assert.equal(next([row("p", "held"), row("q", "queued")]), undefined, "what Mako's exit or a crash paused keeps its place")

@@ -1440,7 +1440,7 @@ export class LiveConversations {
     // order is kept in memory alone (the journal keeps requests as they came): it must hold only until this message
     // starts, and a host that restarts holds its queue anyway.
     const requests = resident.snapshot.requests.map((request) =>
-      request.id === requestId || (waiting.has(request.id) && request.status === "held") ? { ...request, status: "queued" as const } : request)
+      request.id === requestId || (waiting.has(request.id) && request.status === "held") ? { ...request, status: "queued" as const, pause: undefined } : request)
     const own = requests.find((request) => request.id === requestId)
     const rest = requests.filter((request) => request.id !== requestId)
     const ahead = rest.findIndex((request) => request.status === "queued" || request.status === "held")

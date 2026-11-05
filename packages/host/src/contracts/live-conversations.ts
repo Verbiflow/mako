@@ -332,8 +332,10 @@ export interface LiveRequest {
    */
   editing?: true
   /**
-   * A `held` request the person's Stop paused (or an Apex's stop of its Fin): what is sent after it goes ahead, and
-   * Resume sends it. One an exit, a crash or a lost steer paused carries none and keeps its place in line.
+   * A Stop's latch on a request it found waiting or being sent: the person's Stop, or an Apex's of its Fin. Whatever
+   * comes back for it later (a refusal, a retry, a time), it's held as the Stop's pause and never goes by itself,
+   * across a restart too, until a deliberate resume clears the mark: Resume, or for a Fin its next message. What is
+   * sent after it goes ahead. One an exit, a crash or a lost steer paused carries none and keeps its place in line.
    */
   pause?: "stop"
   /**
