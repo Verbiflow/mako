@@ -256,8 +256,16 @@ async function finLimit(): Promise<void> {
     const refused = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3-refused", cwd: w.root })
     assert.ok("refused" in refused && refused.refused === "budget", "past the limit a start is refused, never queued unasked")
     assert.equal(refused.why, "2 of the 2 Fins this device runs at once are at work. Pass queue: true to start it when one ends, or after: to start it after one of yours.")
+    const heard = w.events.length
     const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
     assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "with queue it waits")
+    // The sidebar, pips and crew card read the Apex's conversation: it hears a spawn held as it hears a Fin start.
+    await waitFor(() => w.events.slice(heard).some((event) => JSON.stringify(event).includes("Queued: 0 ahead, your limit of Fins at once is in use")), "the Apex's conversation to hear the spawn queued")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children.map((strip) => [strip.name, strip.state.kind]), [["one", "working"], ["two", "working"], ["three", "queued"]], "agents_list shows a queued Fin")
+    const read = await w.agents.read(apex.caller, { child: "fin:three" })
+    assert.ok(!("refused" in read) && read.state.kind === "queued" && /your limit of Fins at once is in use/.test(read.text), `agents_read reads a queued Fin: ${JSON.stringify(read)}`)
     assert.equal(three.why, "2 of the 2 Fins this device runs at once are at work; it starts when one ends (0 ahead).")
     assert.deepEqual(three.atOnce, { working: 2, of: 2 }, "the answer carries the limit")
     const four = await w.agents.start(other.caller, { brief, name: "four", queue: true, clientKey: "4", cwd: w.root })
@@ -699,6 +707,116 @@ async function followedStopStuck(): Promise<void> {
 }
 
 /**
+ * One entry per Fin, by its op, and every Apex hears its line move: a queued Fin whose edge is written while its
+ * launch is still coming up shows once, as its edge; and when one Apex's refused start leaves the line, another
+ * Apex's waiting Fin hears its place move up without doing anything.
+ */
+async function queueProjection(): Promise<void> {
+  let limit = 1
+  let hold: (() => void) | undefined
+  let failing = ""
+  const w = new AgentsWorld({
+    root: join(root, "projection"),
+    finLimit: () => limit,
+    preparing: (options) => {
+      if (options.parent?.name === failing) throw new Error("its worktree couldn't be made")
+    },
+    replying: async (options) => {
+      if (options.conversationId === holdFor) await new Promise<void>((resolve) => (hold = resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  let holdFor = ""
+  try {
+    const a = await w.apex("claude")
+    const b = await w.apex("codex")
+    const brief = { objective: "Hold" }
+    const key = (apex: { conversation: string }, clientKey: string) => namedUuid(`start:${w.store.journalPlacement(apex.conversation)!.session}:${clientKey}`)
+    await w.agents.start(a.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:first,")), "the first at work")
+    // A queued Fin launching: its edge is written, its start not yet answered.
+    holdFor = key(a, "next")
+    const queued = await w.agents.start(a.caller, { brief, name: "next", queue: true, clientKey: "next", cwd: w.root })
+    assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    await w.agents.stop(a.caller, { child: "first" })
+    await waitFor(() => hold !== undefined && w.store.edges().all.some((edge) => edge.name === "next"), "next's edge written while its start answers")
+    const listed = await w.agents.list(a.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children.filter((strip) => strip.name === "next").length, 1, `one entry for a Fin whose launch is still answering: ${JSON.stringify(listed.children.map((strip) => [strip.name, strip.state.kind]))}`)
+    assert.equal(w.agents.roster(a.conversation).filter((entry) => entry.child?.name === "next").length, 1, "and one on its Apex's roster")
+    hold!()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "next to settle")
+
+    // A's queued start fails to prepare while the device stays full; B's Fin waits behind it, then moves up once A heard.
+    failing = "doomed"
+    await w.agents.start(a.caller, { brief, name: "doomed", queue: true, clientKey: "doomed", cwd: w.root })
+    await w.agents.start(b.caller, { brief, name: "behind", queue: true, clientKey: "behind", cwd: w.root })
+    // What B's conversation shows, as its windows read it: only what it was told.
+    const reason = () => w.live.snapshot(b.conversation)?.nativeAgents?.agents.find((entry) => entry.child?.name === "behind")?.state
+    await waitFor(() => reason()?.kind === "waiting", "B's conversation to show its waiting Fin")
+    assert.deepEqual(reason(), { kind: "waiting", reason: "Queued: 1 ahead, your limit of Fins at once is in use" })
+    limit = 2
+    w.agents.capacityChanged()
+    limit = 1
+    await waitFor(() => w.store.queuedSpawns().some((row) => row.record.includes("refused")), "doomed to be refused and kept for its Apex")
+    await waitFor(() => w.store.queuedSpawns().length === 1, "doomed to go once its Apex heard", 15_000)
+    await waitFor(() => JSON.stringify(reason()) === JSON.stringify({ kind: "waiting", reason: "Queued: 0 ahead, your limit of Fins at once is in use" }), `the other Apex's line to move up with it: ${JSON.stringify(reason())}`, 3_000)
+    await w.agents.stop(a.caller, { child: "all" })
+    await w.agents.stop(b.caller, { child: "all" })
+  } finally {
+    hold?.()
+    await w.close()
+  }
+}
+
+/**
+ * An Apex behind a launch hears its place move the moment that launch's edge is written, not when the launch answers:
+ * A's next takes a place with its reply held, and B's waiting Fin, which was behind it, reads 0 ahead at once.
+ */
+async function edgeWriteMovesTheLine(): Promise<void> {
+  let limit = 1
+  let hold: (() => void) | undefined
+  let holdFor = ""
+  const w = new AgentsWorld({
+    root: join(root, "edge-moves-line"),
+    finLimit: () => limit,
+    replying: async (options) => {
+      if (options.conversationId === holdFor) await new Promise<void>((resolve) => (hold = resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  try {
+    const a = await w.apex("claude")
+    const b = await w.apex("codex")
+    const brief = { objective: "Hold" }
+    await w.agents.start(a.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:first,")), "the first at work")
+    holdFor = namedUuid(`start:${w.store.journalPlacement(a.conversation)!.session}:next`)
+    await w.agents.start(a.caller, { brief, name: "next", queue: true, clientKey: "next", cwd: w.root })
+    await w.agents.start(b.caller, { brief, name: "behind", queue: true, clientKey: "behind", cwd: w.root })
+    const shown = () => w.live.snapshot(b.conversation)?.nativeAgents?.agents.find((entry) => entry.child?.name === "behind")?.state
+    await waitFor(() => JSON.stringify(shown()) === JSON.stringify({ kind: "waiting", reason: "Queued: 1 ahead, your limit of Fins at once is in use" }), "B to show its Fin behind A's")
+    limit = 2
+    w.agents.capacityChanged()
+    await waitFor(() => hold !== undefined && w.store.edges().all.some((edge) => edge.name === "next"), "next's edge written, its start not answered")
+    await waitFor(() => JSON.stringify(shown()) === JSON.stringify({ kind: "waiting", reason: "Queued: 0 ahead, your limit of Fins at once is in use" }), `B to hear its place move while next's start still answers: ${JSON.stringify(shown())}`, 2_000)
+    assert.ok(hold !== undefined, "next's reply was still held")
+    hold!()
+    await w.agents.stop(a.caller, { child: "all" })
+    await w.agents.stop(b.caller, { child: "all" })
+  } finally {
+    hold?.()
+    await w.close()
+  }
+}
+
+/**
  * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
  */
@@ -902,10 +1020,57 @@ async function stopAllUnqueues(): Promise<void> {
     assert.ok(!("refused" in waits) && waits.state === "queued")
     const again = await w.agents.start(apex.caller, { brief, name: "waits", queue: true, clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in again) && again.deduped && again.state === "queued", "a repeated queued spawn is the same spawn")
+    await w.agents.start(apex.caller, { brief, name: "later", queue: true, clientKey: "3", cwd: w.root })
+    const one = await w.agents.stop(apex.caller, { child: "fin:later" })
+    assert.deepEqual("stopped" in one && one.stopped, ["later"], "a queued Fin stops by its name, before it starts")
+    assert.deepEqual(w.agents.roster(apex.conversation).map((entry) => entry.child?.name).sort(), ["runs", "waits"], "and its Apex's roster drops it")
     const all = await w.agents.stop(apex.caller, { child: "all" })
     assert.deepEqual("stopped" in all && [...all.stopped].sort(), ["runs", "waits"], "stopping all also drops what's queued")
     assert.equal(w.store.queuedSpawns().length, 0)
   } finally {
+    await w.close()
+  }
+}
+
+/**
+ * What a Fin costs is read from the processes its harness runs, owned by its conversation's active binding: one that
+ * switched harness is sampled by its new binding, and counted as the harness it runs on now.
+ */
+async function finsAtWorkByBinding(): Promise<void> {
+  const looks: { mix: Readonly<Record<string, number>>; fins?: readonly { conversation: string; harness: string }[] }[] = []
+  const every = HostJobs.prototype.every
+  let look: (() => void | Promise<void>) | undefined
+  HostJobs.prototype.every = function (this: HostJobs, name, everyMs, run, options) {
+    if (name === "read this device's capacity") look = run
+    return every.call(this, name, everyMs, run, options)
+  }
+  const w = new AgentsWorld({
+    root: join(root, "fins-by-binding"),
+    script: (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok"),
+    observeCapacity: async (_working, mix, fins) => void looks.push({ mix, ...(fins && { fins }) }),
+  })
+  HostJobs.prototype.every = every
+  try {
+    const apex = await w.apex("claude")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, harness: "cursor", name: "switched", clientKey: "s", cwd: w.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    await waitFor(() => w.live.session(started.conversation!)?.status === "running", "the Fin at work")
+    await look!()
+    assert.deepEqual(looks.at(-1), { mix: { cursor: 1 }, fins: [{ conversation: started.conversation, harness: "cursor" }] }, "its first binding is its conversation's own")
+    // Its harness switched: a new binding, on Codex, is the active one.
+    const snapshot = w.live.snapshot.bind(w.live)
+    const moved = "7a0d6c3e-9a51-4c2e-8f6b-1d2e3f4a5b6c"
+    w.live.snapshot = (id) => {
+      const real = snapshot(id)
+      if (id !== started.conversation || !real?.control) return real
+      return { ...real, control: { ...real.control, activeBindingId: moved, bindings: [...real.control.bindings, { ...real.control.bindings[0]!, id: moved, provider: "codex" }] } }
+    }
+    await look!()
+    assert.deepEqual(looks.at(-1), { mix: { codex: 1 }, fins: [{ conversation: moved, harness: "codex" }] }, "it's sampled by the binding its processes run under, as the harness it runs on now")
+    w.live.snapshot = snapshot
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    HostJobs.prototype.every = every
     await w.close()
   }
 }
@@ -1465,9 +1630,12 @@ try {
   await followedStopUnknownIdentity()
   await followedStopStaleIdentity()
   await followedStopStuck()
+  await queueProjection()
+  await edgeWriteMovesTheLine()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()
+  await finsAtWorkByBinding()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()

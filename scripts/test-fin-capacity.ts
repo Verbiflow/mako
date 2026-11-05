@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { CapacityGovernor, cloudCapacity, deviceCapacity, PRIOR_COST, DEVICE_CEILING } from "@mako/host/conversations/fin-capacity"
 import { FinCapacity, pressureOf } from "@mako/host/conversations/fin-capacity-host"
 import { FinCostModel } from "@mako/host/conversations/fin-cost"
+import { FinCostSampler } from "@mako/host/conversations/fin-cost-sampler"
+import type { ProcessRow } from "@mako/host/usage/mako-footprint"
 import type { MacReading } from "@mako/host/conversations/mac-capacity"
 
 /**
@@ -159,6 +161,38 @@ const GB = 1024 ** 3
   assert.match(pressed.pressure ?? "", /memory pressure/)
   const fixed = new FinCapacity({ read: async () => reading, costs: new FinCostModel(), own: () => 3, fixed: 8 })
   assert.equal(fixed.atOnce(), 8, "MAKO_FIN_SLOTS sets a test host's whatever else")
+}
+
+// ── What a Fin costs here is learned from its processes, read only on the looks that pass the Fins at work.
+{
+  let now = 0
+  let reads = 0
+  let cpuSeconds = 100
+  const table = async (): Promise<ProcessRow[]> => {
+    reads += 1
+    return [{ pid: 10, ppid: 1, rssKb: 400 * 1024, cpuPercent: 0, cpuSeconds, command: "/opt/codex/bin/codex app-server" }]
+  }
+  const costs = new FinCostModel()
+  const capacity = new FinCapacity({
+    read: async () => ({ cores: 14, memoryBytes: 36 * GB, load: 2 }),
+    costs,
+    sampler: new FinCostSampler({ table, owned: () => [{ pid: 10, owner: "codex-fin" }], now: () => now }),
+    own: () => undefined,
+    hardware: () => ({ cores: 14, memoryBytes: 36 * GB }),
+    now: () => now,
+  })
+  const fins = [{ conversation: "codex-fin", harness: "codex" }]
+  await capacity.observe(1, { codex: 1 })
+  assert.equal(reads, 0, "a start's look doesn't read every Fin's processes")
+  for (let at = 0; at < 6; at += 1) {
+    now += 10_000
+    cpuSeconds += 1
+    await capacity.observe(1, { codex: 1 }, fins)
+  }
+  assert.equal(reads, 6)
+  const codex = costs.of("codex")
+  assert.ok(codex.cores < PRIOR_COST.cores && codex.memoryBytes < PRIOR_COST.memoryBytes, `a lighter Fin than the prior moves its cost down: ${JSON.stringify(codex)}`)
+  assert.deepEqual(costs.of("claude"), PRIOR_COST, "a harness not at work isn't read")
 }
 
 console.log("fin capacity: each machine's number from its hardware and its Fins' cost, steady under one busy minute")

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rm } from "node:fs/promises"
 import { z } from "zod"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -21,6 +21,7 @@ import {
   type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
+import { publishFile } from "../../base/published-files.js"
 import { acpReadable, acpWritable } from "../acp-stream.js"
 import type { JsonValue } from "../../contracts/json.js"
 import { resolveExecutable } from "../../base/executable.js"
@@ -252,7 +253,7 @@ async function prepareAccountLogin(root: AccountRoot, { name, renew }: AccountLo
 async function confirmAccountLogin(root: AccountRoot, { name }: AccountLoginTarget): Promise<void> {
   const email = await fileEmail(accountAuthPath(root, name))
   if (email === undefined) throw new Error("Grok finished, but no login was saved. Try again.")
-  await writeFile(identityPath(root, name), JSON.stringify({ email }), { mode: 0o600 })
+  await publishFile(identityPath(root, name), JSON.stringify({ email }), { mode: 0o600 })
 }
 
 async function accountUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
