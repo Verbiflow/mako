@@ -509,22 +509,22 @@ export class LiveConversations {
     // A switch or reconnect not yet made, waiting or under way, is retired: an attempt under way sees its transfer no
     // longer waiting and drops whatever it comes back with, a session or a failure to wait out alike
     // (`LiveTransfers.perform`). The resident's generation stays, so the source binding's events still count. One
-    // whose destination is committed completes, and the Stop pauses its message instead (`Resident.transferPhase`).
+    // whose destination is committed is no longer waiting: it completes, and its message, in the queue now, is
+    // paused with the rest; the Stop is noted, should the switch go back before its commit (`Resident.transferPhase`).
     const transfer = resident && this.transfers.pending(resident)
-    const phase = transfer && resident.transferPhase?.id === transfer.input.id ? resident.transferPhase : undefined
-    const committed = phase !== undefined && phase.phase !== "preparing" && phase.phase !== "opening"
-    const count = (resident?.snapshot.requests.filter(stops).length ?? 0) + (transfer ? 1 : 0)
+    const phase = resident?.transferPhase
+    const committed = phase !== undefined && (phase.phase === "committed" || phase.phase === "closing")
+    const count = (resident?.snapshot.requests.filter(stops).length ?? 0) + (transfer || committed ? 1 : 0)
     if (!resident || !count) return 0
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: previous.requests.map((request) => stops(request)
       ? { ...request, pause: "stop" as const, ...request.status !== "dispatching" && { status: "held" as const, retry: undefined, wake: undefined } }
       : request) }
     try {
-      // Committed, the journal is ahead of this snapshot until the switch installs it: the marks go onto what it holds.
-      if (committed) this.transfers.stopCommitted(resident, phase)
+      if (committed) phase.stopped = true
       else if (transfer)
         this.transfers.save(resident, { ...transfer, retry: undefined, state: { kind: "failed", error: "Stopped before it was sent", stopped: true } })
-      if (!committed) this.flush(resident)
+      this.flush(resident)
     } catch (error) {
       resident.snapshot = previous
       throw error

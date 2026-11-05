@@ -283,36 +283,58 @@ try {
       await world.close()
     }
 
-    // A switch whose destination is committed completes, a Stop or not: a Stop while its source closes pauses the
-    // switch's message, unsent, and the destination is the conversation's binding, so the next message goes on it.
-    for (const stopped of [true, false]) {
+    // A switch whose destination is committed completes, a Stop or not, and what the person does to the queue while
+    // its source closes stands: a Stop pauses the switch's message, unsent, with what waited; an edit, a Resume or a
+    // removal after it is kept as they did it. The destination is the binding, and the next message goes on it.
+    for (const during of ["control", "stop", "stop, edit", "stop, resume", "stop, remove"] as const) {
       const to = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
       let gate: (() => void) | undefined
       let gating = false
       const world = new AgentsWorld({
-        root: join(root, `${harness}-switch-retire-${stopped ? "stop" : "control"}`),
+        root: join(root, `${harness}-switch-retire-${during.replaceAll(", ", "-")}`),
         script,
         closing: (_binding, closing) => (gating && closing === harness ? new Promise<void>((resolve) => { gate = resolve }) : undefined),
       })
-      const label = `${harness} switch retiring its source${stopped ? ", stopped" : ""}`
+      const label = `${harness} switch retiring its source (${during})`
       const { conversation } = await world.apex(harness, "full")
+      // A message waiting for its time, which the switch carries over.
+      const later = randomUUID()
+      world.live.submit(conversation, later, "Later.", [], undefined, undefined, undefined, undefined, { wake: { at: Date.now() + 60 * 60_000, after: "earlier" } })
       gating = true
       world.live.transfer(conversation, { id: randomUUID(), provider: to, text: "Switch.", attachments: [] })
       await until(`${label}: the source closing`, () => gate !== undefined)
-      if (stopped) await world.live.cancel(conversation)
+      if (during !== "control") await world.live.cancel(conversation)
+      if (during === "stop, edit") world.live.editQueued(conversation, { requestId: later, expectedText: "Later.", change: { kind: "edit", text: "Edited." } })
+      if (during === "stop, resume") world.live.editQueued(conversation, { requestId: later, expectedText: "Later.", change: { kind: "resume" } })
+      if (during === "stop, remove") world.live.editQueued(conversation, { requestId: later, expectedText: "Later.", change: { kind: "remove" } })
       gate!()
       gating = false
-      await until(`${label}: the switch done`, () => world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind === "accepted")
-      const own = requestOf(world, conversation, "Switch.")
-      if (stopped) {
+      await until(`${label}: the switch done`, () => world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind === "accepted" && world.live.snapshot(conversation)?.session.harness === to)
+      const own = () => requestOf(world, conversation, "Switch.")
+      const waiting = () => world.live.snapshot(conversation)?.requests.find((request) => request.id === later)
+      if (during === "control") await until(`${label}: its message to go`, () => own()?.status === "completed")
+      else {
         await pause(200)
-        assert.deepEqual([own?.status, own?.pause, sentTimes(world, conversation, "Switch.")], ["held", "stop", 0], `${label}: its message is the Stop's, unsent`)
-      } else await until(`${label}: its message to go`, () => requestOf(world, conversation, "Switch.")?.status === "completed")
+        assert.deepEqual([own()?.status, own()?.pause, sentTimes(world, conversation, "Switch.")], ["held", "stop", 0], `${label}: its message is the Stop's, unsent`)
+      }
+      if (during === "stop" || during === "control") assert.equal(waiting()?.status, "held", `${label}: what waited still waits`)
+      if (during === "stop") assert.equal(waiting()?.pause, "stop", `${label}: paused by the Stop`)
+      if (during === "stop, edit") {
+        await until(`${label}: the edit to go`, () => requestOf(world, conversation, "Edited.")?.status === "completed")
+        assert.deepEqual([sentTimes(world, conversation, "Edited."), sentTimes(world, conversation, "Later.")], [1, 0], `${label}: the person's words went, once, and the old ones never`)
+      }
+      if (during === "stop, resume") await until(`${label}: the resumed message to go`, () => waiting()?.status === "completed")
+      if (during === "stop, remove") {
+        await pause(200)
+        assert.ok(waiting() === undefined || waiting()?.status === "canceled", `${label}: removed stays removed (${waiting()?.status})`)
+        assert.equal(sentTimes(world, conversation, "Later."), 0, `${label}: and never goes`)
+      }
       world.say(conversation, "Fresh message.")
       await until(`${label}: the next message to complete`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
       assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), to, `${label}: on the destination, once`)
       await world.restart()
-      assert.equal(requestOf(world, conversation, "Switch.")?.pause, stopped ? "stop" : undefined, `${label}: the Stop's mark survives a restart`)
+      assert.equal(requestOf(world, conversation, "Switch.")?.pause, during === "control" ? undefined : "stop", `${label}: the Stop's mark survives a restart`)
+      if (during === "stop, edit") assert.equal(requestOf(world, conversation, "Later."), undefined, `${label}: and the edit does`)
       await world.close()
     }
 

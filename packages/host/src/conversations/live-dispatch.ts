@@ -165,6 +165,8 @@ export class LiveDispatch {
       resident.waking
     )
       return
+    // Nor while a transfer is under way: once committed, its source may still be closing, and nothing goes on it.
+    if (resident.transferring) return
     if (transfers.pending(resident)) {
       transfers.start(resident)
       return
