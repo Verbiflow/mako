@@ -325,6 +325,11 @@ export interface LiveRequest {
    */
   ownerCheck?: { since: number }
   /**
+   * A `held` request the person paused to edit it (`editQueued` `pause`): it keeps its place and waits for them,
+   * whatever resumes what a stop or an exit paused. Gone once they resume, edit or remove it.
+   */
+  editing?: true
+  /**
    * The sign-out this request waits on. A `held` request is unsent and goes
    * when the user resumes; the turn the sign-out cut short keeps its own
    * outcome and is continued, or left for review, on Resume.

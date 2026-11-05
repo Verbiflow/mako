@@ -108,14 +108,17 @@ try {
       sent(await world.agents.send(apex.caller, { to: "labels", text: "Then the CHANGELOG.", clientKey: "changelog" }))
       const readme = requestOf(world, fin, "Then the README.")!
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "pause" } })
+      // The Apex sends again while the person edits: the message being edited stays theirs, paused, in its place.
+      sent(await world.agents.send(apex.caller, { to: "labels", text: "And the LICENSE.", clientKey: "license" }))
+      assert.equal(requestOf(world, fin, "Then the README.")?.status, "held", `${harness}: a new message doesn't resume one the person is editing`)
       world.release(fin)
       await until("its turn to end", () => world.live.session(fin)?.status === "ready")
       await pause(300)
       assert.equal(promptsOf(world, fin).length, 1, "nothing jumps ahead of a message being edited")
       assert.notEqual(stateOf(world, apex.conversation, "labels")?.kind, "working", `${harness}: a queue held by the person's edit is no work`)
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
-      await until("both to go, in order", () => promptsOf(world, fin).length === 3)
-      assert.ok(promptsOf(world, fin)[1]!.includes("Then the README.") && promptsOf(world, fin)[2]!.includes("Then the CHANGELOG."))
+      await until("all three to go, in order", () => promptsOf(world, fin).length === 4)
+      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Then the CHANGELOG\.|And the LICENSE\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE."])
       await world.close()
     }
 

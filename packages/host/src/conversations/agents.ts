@@ -144,7 +144,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "atWork" | "resumeHeld" | "holdQueued" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -417,7 +417,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      if (request.status !== "held" || request.signIn || request.wake || request.actor?.kind !== "agent") continue
+      if (request.status !== "held" || request.signIn || request.wake || request.editing || request.actor?.kind !== "agent") continue
       const relaunched = !launched
       try {
         if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
@@ -437,7 +437,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** An exit or a crash pauses the digests waiting for an Apex with the person's messages; they're Mako's, so they go on. */
   private resumeWakes(conversation: string): void {
     for (const request of this.deps.live.snapshot(conversation)?.requests ?? []) {
-      if (request.status !== "held" || request.signIn || request.wake || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
+      if (request.status !== "held" || request.signIn || request.wake || request.editing || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
       try {
         this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         hostLog("agents", "resumed", { conversation, request: request.id, wake: true })
@@ -1662,14 +1662,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const turn = status === "running" || status === "starting" || Boolean(this.deps.live.held(conversation)?.requests.some((request) => request.status === "dispatching"))
     if (turn) await this.deps.live.cancel(conversation).catch((error) => hostWarn("agents", "a Fin's turn could not be stopped", { op: edge.op, error: errorMessage({ error }) }))
     let paused = 0
-    for (const request of this.deps.live.held(conversation)?.requests ?? []) {
-      if (request.status !== "queued") continue
-      try {
-        this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "pause" } })
-        paused += 1
-      } catch (error) {
-        hostWarn("agents", "a stopped Fin's message couldn't be paused", { op: edge.op, request: request.id, error: errorMessage({ error }) })
-      }
+    try {
+      paused = this.deps.live.holdQueued(conversation)
+    } catch (error) {
+      hostWarn("agents", "a stopped Fin's messages couldn't be paused", { op: edge.op, error: errorMessage({ error }) })
     }
     return turn || paused > 0
   }
@@ -2176,7 +2172,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private resumeFin(conversation: string, first: string): void {
     const paused = (this.deps.live.held(conversation)?.requests ?? []).filter((request) =>
-      request.status === "held" && !request.signIn && !request.wake && request.actor?.kind === "agent")
+      request.status === "held" && !request.signIn && !request.wake && !request.editing && request.actor?.kind === "agent")
     if (paused.length) {
       try {
         this.deps.live.resumeHeld(conversation, paused.map((request) => request.id), first)

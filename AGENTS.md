@@ -277,7 +277,8 @@ stop also pauses what was queued for the Fin (`halt`), and a stop of one
 stopped already ends whatever still runs there. A paused message first in
 line holds the ones behind it (the person editing it keeps its place), and
 nobody presses Resume on a Fin's queue, so a message that reaches a Fin
-sends on what its stop or an exit paused behind it (`resumeFin`); a stopped
+sends on what its stop or an exit paused behind it (`resumeFin`), never
+one the person paused to edit (`LiveRequest.editing`); a stopped
 Fin that is an Apex hears its own Fins' digests only then (`ready`). A Fin
 reads working only from `LiveConversations.atWork`: a turn running, a
 message being sent, or the next in line (`nextQueued`) about to go, never a
