@@ -7,8 +7,8 @@ import type { AgentCaller, Report } from "@mako/host/contracts/agents"
 import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema, agentToolText } from "@mako/host/conversations/agent-tools"
-import { digest, finishedLine, type Notice } from "@mako/host/conversations/agent-wakes"
-import { readFinReports } from "@mako/host/contracts/fin-reports"
+import { AgentWakes, digest, finishedLine, WAKE_COALESCE_MS, type Notice } from "@mako/host/conversations/agent-wakes"
+import { FIN_REPORTS_MAX, readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
 /**
@@ -276,15 +276,64 @@ function digestTwins(): void {
   assert.equal(readFinReports(`${words}\n\n<mako-reports>\n{"version":2,"reports":[]}\n</mako-reports>`).reports.length, 0, "a block it can't read stays words")
 }
 
+/**
+ * A burst past what one wake's cards hold: a digest of more never throws and keeps what its block can carry, and the
+ * Apex's wakes take them `FIN_REPORTS_MAX` at a time, every report heard and none lost.
+ */
+async function manyReports(): Promise<void> {
+  const many = Array.from({ length: FIN_REPORTS_MAX + 6 }, (_, index): Notice => ({
+    ...notice(`Fin ${index} finished.`, { id: `report:many:${index}` }),
+    id: `notice:many:${index}`,
+    label: `"fin-${index}" (Codex)`,
+    fin: { name: `fin-${index}`, harness: "codex" },
+    from: "00000000-0000-4000-8000-000000000001",
+  }))
+  const read = readFinReports(digest(many, "70 ended."))
+  assert.equal(read.reports.length, FIN_REPORTS_MAX, "a digest of more than a block holds carries as many cards as it can")
+  assert.ok(many.every((_, index) => read.text.includes(`"fin-${index}" (Codex)`)), "and its words say every one")
+
+  const long: Notice = { ...many[0]!, id: "notice:long", fin: { name: "x".repeat(500), harness: "codex" }, label: `"${"x".repeat(500)}" (Codex)` }
+  const kept = readFinReports(digest([long, many[1]!], "2 ended."))
+  assert.deepEqual(kept.reports.map((card) => card.name), ["fin-1"], "a card its schema refuses is left to the words, the rest kept")
+
+  const wakes: string[] = []
+  const wakesOf = new AgentWakes({
+    ready: () => "idle",
+    wake: (_conversation, _request, text) => void wakes.push(text),
+    steer: () => false,
+    assign: () => {},
+    delivered: () => {},
+    counts: () => "70 ended.",
+  })
+  try {
+    const wakesBy = async (count: number) => {
+      const deadline = Date.now() + WAKE_COALESCE_MS + 3_000
+      while (wakes.length < count && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    for (const each of many) wakesOf.notice("apex", "apex", each)
+    await wakesBy(1)
+    assert.equal(wakes.length, 1, "a burst of more than a wake holds starts one wake")
+    assert.equal(readFinReports(wakes[0]!).reports.length, FIN_REPORTS_MAX, "of as many as it holds")
+    wakesOf.settled("apex")
+    await wakesBy(2)
+    assert.equal(wakes.length, 2, "the rest go once its turn ends")
+    assert.equal(readFinReports(wakes[1]!).reports.length, many.length - FIN_REPORTS_MAX)
+    assert.equal(wakesOf.pending(), 0, "and none waits")
+  } finally {
+    wakesOf.dispose()
+  }
+}
+
 try {
   compactAnswers()
   finishedLines()
   replyDigest()
   doors()
   digestTwins()
+  await manyReports()
   await crew()
   await apexes()
-  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, the crew view and its brief line, and other Apexes read and messaged pass")
+  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the crew view and its brief line, and other Apexes read and messaged pass")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

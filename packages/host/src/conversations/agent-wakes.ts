@@ -1,7 +1,7 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
 import { APEX_WORD, reportPhase, type Report } from "../contracts/agents.js"
-import { appendFinReports, type FinReportCard } from "../contracts/fin-reports.js"
+import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -193,7 +193,13 @@ export class AgentWakes {
     const batch = nextBatch(ready === "steer" ? steerable : waiting.notices)
     const ids = batch.map((notice) => notice.report.id)
     const request = batch[0]!.wake ?? namedUuid(`wake:${conversation}:${ids.join("\n")}`)
-    const text = digest(batch, this.deps.counts(conversation))
+    let text: string
+    try {
+      text = digest(batch, this.deps.counts(conversation))
+    } catch (error) {
+      hostWarn("agents", "a digest could not be written; its notices wait for the next", { conversation, error: errorMessage({ error }) })
+      return this.after(conversation, waiting, WAKE_COALESCE_MS)
+    }
     if (ready === "steer") {
       const steer = this.deps.steer(conversation, namedUuid(`steer:${request}`), text)
       if (!steer) {
@@ -257,7 +263,7 @@ export class AgentWakes {
 function nextBatch(notices: readonly Notice[]): Notice[] {
   const named = notices.find((notice) => notice.wake)?.wake
   if (named) return notices.filter((notice) => notice.wake === named)
-  return notices.filter((notice) => !notice.wake)
+  return notices.filter((notice) => !notice.wake).slice(0, FIN_REPORTS_MAX)
 }
 
 const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])

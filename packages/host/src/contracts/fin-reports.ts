@@ -26,15 +26,24 @@ export const FinReportCardSchema = z.object({
 }).strict()
 export type FinReportCard = z.infer<typeof FinReportCardSchema>
 
-const BlockSchema = z.object({ version: z.literal(1), reports: z.array(FinReportCardSchema).min(1).max(64) }).strict()
+/** The most cards one wake carries; a digest of more notices than this goes as wakes of this many (`nextBatch`). */
+export const FIN_REPORTS_MAX = 64
+const BlockSchema = z.object({ version: z.literal(1), reports: z.array(FinReportCardSchema).min(1).max(FIN_REPORTS_MAX) }).strict()
 const OPEN = "\n\n<mako-reports>\n"
 const CLOSE = "\n</mako-reports>"
 const MAX_BLOCK = 256 * 1024
 
-/** The digest with its reports as data after it, the way a prompt carries its attachments (`appendPromptAttachments`). */
+/**
+ * The digest with its reports as data after it, the way a prompt carries its attachments (`appendPromptAttachments`).
+ * Never throws: a card the schema refuses, or one past `FIN_REPORTS_MAX`, is left to the words, which say every report.
+ */
 export function appendFinReports(text: string, reports: readonly FinReportCard[]): string {
-  if (!reports.length) return text
-  const block = JSON.stringify(BlockSchema.parse({ version: 1, reports })).replaceAll("<", "\\u003c")
+  const cards = reports.flatMap((report) => {
+    const read = FinReportCardSchema.safeParse(report)
+    return read.success ? [read.data] : []
+  }).slice(0, FIN_REPORTS_MAX)
+  if (!cards.length) return text
+  const block = JSON.stringify({ version: 1, reports: cards }).replaceAll("<", "\\u003c")
   return block.length > MAX_BLOCK ? text : `${text}${OPEN}${block}${CLOSE}`
 }
 
