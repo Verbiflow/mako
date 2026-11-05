@@ -671,7 +671,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     own: () => finDefaults.reading().limit,
     ...(finSlots() !== undefined && { fixed: finSlots()! }),
   })
-  declareFinDefaultMethods(methods, finDefaults, () => finCapacity.reading())
+  declareFinDefaultMethods(methods, finDefaults, () => finCapacity.reading(), () => finCapacity.changed())
   late.cloud = declareCloudAccountMethods(methods, {
     accessChoices: {
       heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),

@@ -262,8 +262,13 @@ tree's running budget (32) caps one Apex's fan-out. A refused start names
 the places a start may name that have room. This Mac's load also shows in
 the start's answer when it's busy (`macLoad`, `mac`) beside the device's
 number (`atOnce`). `MAKO_FIN_SLOTS` fixes the number, as a test's host does.
-What waits goes as Fins end, and every 10 s
-(`test:background-agents`). One a
+What waits goes the moment a place frees, by event, never a timer: a Fin
+that stops holding one (its turn ended, it stopped, failed, was archived or
+waits on its own Fins) or a place whose number rose (`capacityChanged`)
+starts the first waiter that fits, first come first started, one whose
+`after` isn't done passed over. Each queued start launches on its own, so
+a harness slow to come up holds its place, never the queue; a freed place
+is taken within a few milliseconds (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
 across the host), its end written once. Linking it again with another pid

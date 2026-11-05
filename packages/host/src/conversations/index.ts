@@ -170,7 +170,7 @@ export interface ConversationsDeps {
   /** The person's model choices for Fins (Settings › Fins) and what they use on each harness. */
   finDefaults?: Pick<FinDefaultsStore, "reading">
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
-  finCapacity?: Pick<FinCapacity, "atOnce" | "observe">
+  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -328,6 +328,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
     })
+    deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     agents.resume()
   }
   const native = new NativeRequests(join(dataRoot, "native-requests"), {

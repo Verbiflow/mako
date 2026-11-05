@@ -28,17 +28,31 @@ export class FinCapacity {
   #mix: Record<string, number> = {}
   #pressure: string | undefined
   #allowed: number | undefined
+  readonly #listeners = new Set<() => void>()
 
   constructor(deps: FinCapacityDeps) {
     this.#deps = deps
   }
 
   async observe(working: number, mix: Readonly<Record<string, number>>): Promise<void> {
+    const before = this.atOnce()
     this.#mix = { ...mix }
     const reading = await this.#deps.read().catch(() => undefined)
     if (reading) this.#governor.read(this.#now(), pressureOf(reading, working, this.#hardware()))
     this.#deps.costs.save()
     this.#allow()
+    if (this.atOnce() > before) this.changed()
+  }
+
+  /** Hears each time this device may take more than before: what waits for it goes then, not at the next look. */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  /** The number may be higher: it rose here, or the person changed theirs. */
+  changed(): void {
+    for (const listener of this.#listeners) listener()
   }
 
   /** The number in force now. */

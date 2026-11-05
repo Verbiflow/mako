@@ -350,6 +350,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private seen: unknown
   private draining = false
   private drainAgain = false
+  /** Queued starts launching now, before their edge is written: they hold their place and their tree's. */
+  private readonly launching = new Map<string, { where: string; tree: string }>()
+  /** Fins holding a place now (`occupies`): one that lets go frees it for what waits, at once. */
+  private readonly occupying = new Set<string>()
   private stopped = false
   private readonly stopRoomWatch: () => void
   /** This Mac's load as a start last read it, which every answer carries while it's busy. */
@@ -387,10 +391,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       current: (notice) => this.current(notice),
       now: deps.now,
     })
-    this.stopRoomWatch = deps.jobs.every("start the Fins there's room for", ROOM_EVERY_MS, async () => {
-      await this.observe()
-      if (this.store()?.queuedSpawns().length) void this.drain()
-    })
+    // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
+    this.stopRoomWatch = deps.jobs.every("read this device's capacity", ROOM_EVERY_MS, () => this.observe())
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
@@ -1471,6 +1473,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       let totalStarted = 0
       const everywhere = this.workingEverywhere()
       for (const spawn of store.queuedSpawns()) {
+        if (this.launching.has(spawn.op)) continue
         const queued = parseQueued(spawn.record)
         if (queued?.after?.length) {
           const stand = this.afterStand(queued)
@@ -1487,11 +1490,21 @@ export class Agents implements AgentOperations, ConversationChildren {
         totalStarted += 1
         filled.set(where, started + 1)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
-        if (queued && !store.edges().byOp(spawn.op)) {
-          hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at, ...(queued.after?.length && { after: queued.after.map((ref) => ref.name).join(" ") }) })
-          await this.launch(spawn.op, queued)
+        if (!queued || store.edges().byOp(spawn.op)) {
+          store.unqueueSpawn(spawn.op)
+          continue
         }
-        store.unqueueSpawn(spawn.op)
+        hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at, ...(queued.after?.length && { after: queued.after.map((ref) => ref.name).join(" ") }) })
+        // Each starts on its own: one whose harness is slow to come up holds its place, never the queue behind it.
+        this.launching.set(spawn.op, { where, tree: spawn.tree })
+        void this.launch(spawn.op, queued)
+          .catch((error: Error) => hostWarn("agents", "a queued start failed", { op: spawn.op, error: errorMessage({ error }) }))
+          .finally(() => {
+            this.launching.delete(spawn.op)
+            store.unqueueSpawn(spawn.op)
+            this.forget(queued.lead.thread)
+            void this.drain()
+          })
       }
     } catch (error) {
       hostWarn("agents", "queued starts could not be released; they wait for the next end", { error: errorMessage({ error }) })
@@ -1822,6 +1835,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const store = this.store()!
     const closed = store.keepEdge({ ...edge, closedAt: this.now(), closedReason: why.slice(0, 2000) })
+    // Closed, it holds no place: the next waiting Fin starts now, not once its turn has been cancelled.
+    this.occupying.delete(edge.child)
+    void this.drain()
     this.runs.stop(edge.child, why.slice(0, 2000))
     if (conversation) await this.halt(edge, conversation)
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why })
@@ -1961,7 +1977,12 @@ export class Agents implements AgentOperations, ConversationChildren {
         this.checkAwaiting(above)
       }
     }
-    if (before && before.state.kind === "working" && entry.state.kind !== "working") void this.drain()
+    // A place it let go of is the next waiting Fin's at once: its turn ended, it stopped, failed or waits on its own Fins.
+    const holds = this.occupies(edge)
+    const held = this.occupying.has(edge.child)
+    if (holds) this.occupying.add(edge.child)
+    else this.occupying.delete(edge.child)
+    if ((held && !holds) || (before && before.state.kind === "working" && entry.state.kind !== "working")) void this.drain()
   }
 
   private checkHolds(child: string): void {
@@ -2146,9 +2167,22 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.mac
   }
 
-  /** The person's Fins at work in one place, every tree's. */
+  /** The person's Fins at work in one place, every tree's, with the queued starts launching there. */
   private working(where: string): number {
-    return (this.store()?.edges().all ?? []).filter((edge) => placeOf(edge.asked.place) === where && this.occupies(edge)).length
+    return (this.store()?.edges().all ?? []).filter((edge) => placeOf(edge.asked.place) === where && this.occupies(edge)).length + this.unwritten((launch) => launch.where === where)
+  }
+
+  /** Queued starts launching that have no edge yet, so nothing else counts them. */
+  private unwritten(which: (launch: { where: string; tree: string }) => boolean): number {
+    const edges = this.store()?.edges()
+    let count = 0
+    for (const [op, launch] of this.launching) if (which(launch) && !edges?.byOp(op)) count += 1
+    return count
+  }
+
+  /** A place has more room: its capacity rose, or the person raised a number. What waits goes now. */
+  capacityChanged(): void {
+    void this.drain()
   }
 
   /** What a place's Fins at once are held to: a device's own count, or the cloud's plan and spend (`placeFull`). */
@@ -2177,7 +2211,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   private workingEverywhere(): number {
-    return (this.store()?.edges().all ?? []).filter((edge) => this.occupies(edge)).length
+    return (this.store()?.edges().all ?? []).filter((edge) => this.occupies(edge)).length + this.unwritten(() => true)
   }
 
   /** This device's Fins at work and their harnesses, for its capacity. */
@@ -2218,7 +2252,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       }
     }
     visit(root, 0)
-    return { running, started }
+    // A queued start launching holds a running place; it's counted as started while it's still queued.
+    return { running: running + this.unwritten((launch) => launch.tree === root), started }
   }
 
   /** The digest's last line, for the parent `conversation`. */

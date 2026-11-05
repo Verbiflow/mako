@@ -20,6 +20,7 @@ import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-ide
 import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
 import { END_CONFIRM_MS, lastStep } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
+import { namedUuid } from "@mako/host/conversations/cloud-moves"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
 import { macLoad } from "@mako/host/conversations/mac-capacity"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
@@ -295,6 +296,85 @@ async function finLimit(): Promise<void> {
     await capped.agents.stop(apex.caller, { child: "all" })
   } finally {
     await capped.close()
+  }
+}
+
+/**
+ * A freed place goes to the next waiting Fin at once, event-driven: a stop, a turn's end, or a raised number starts
+ * the first waiter that fits within milliseconds, first come first started across Apexes. One whose `after` isn't
+ * finished is passed over, and one whose harness hangs as it starts holds its place without holding up the rest.
+ */
+async function slotsGoAtOnce(): Promise<void> {
+  const launched = new Map<string, number>()
+  const done = new Map<string, number>()
+  let release: (() => void) | undefined
+  let limit = 2
+  let w!: AgentsWorld
+  w = new AgentsWorld({
+    root: join(root, "slots"),
+    finLimit: () => limit,
+    starting: async (conversation) => {
+      launched.set(conversation, performance.now())
+      if (conversation === stuck) await new Promise<void>((resolve) => (release = resolve))
+    },
+    script: async (turn) => {
+      if (!turn.text.includes("You're fin:")) return "ok"
+      if (turn.text.includes("Quick")) {
+        done.set(turn.conversation, performance.now())
+        return "Done."
+      }
+      await turn.world.hold(turn.conversation)
+      return "stopped"
+    },
+  })
+  let stuck = ""
+  try {
+    const one = await w.apex("claude")
+    const two = await w.apex("codex")
+    const key = (apex: { conversation: string }, clientKey: string) => namedUuid(`start:${w.store.journalPlacement(apex.conversation)!.session}:${clientKey}`)
+    const hold = { objective: "Hold" }
+    for (const name of ["a", "b"]) assert.ok(!("refused" in await w.agents.start(one.caller, { brief: hold, name, clientKey: name, cwd: w.root })))
+    await waitFor(() => launched.has(key(one, "a")) && launched.has(key(one, "b")), "two Fins at work")
+    stuck = key(two, "s")
+    // In line: g waits for b too; s's harness hangs as it starts; then c, which finishes at once, and d.
+    const queued = [
+      await w.agents.start(one.caller, { brief: hold, name: "g", after: ["b"], queue: true, clientKey: "g", cwd: w.root }),
+      await w.agents.start(two.caller, { brief: hold, name: "s", queue: true, clientKey: "s", cwd: w.root }),
+      await w.agents.start(one.caller, { brief: { objective: "Quick" }, name: "c", queue: true, clientKey: "c", cwd: w.root }),
+      await w.agents.start(two.caller, { brief: hold, name: "d", queue: true, clientKey: "d", cwd: w.root }),
+    ]
+    assert.ok(queued.every((answer) => !("refused" in answer) && answer.state === "queued"), JSON.stringify(queued))
+    const latency: number[] = []
+    // A stop frees a place: s goes, past g, whose b still works.
+    let freed = performance.now()
+    await w.agents.stop(one.caller, { child: "a" })
+    await waitFor(() => launched.has(stuck), "s to start once a stopped")
+    latency.push(launched.get(stuck)! - freed)
+    assert.equal(launched.has(key(one, "g")), false, "g waits for b, without holding up s")
+    // Another: b's stop holds g, and c goes though s is still coming up.
+    freed = performance.now()
+    await w.agents.stop(one.caller, { child: "b" })
+    await waitFor(() => launched.has(key(one, "c")), "c to start though s hangs")
+    latency.push(launched.get(key(one, "c"))! - freed)
+    // c's turn ends: d, another Apex's, takes its place.
+    await waitFor(() => launched.has(key(two, "d")), "d to start once c finished")
+    latency.push(launched.get(key(two, "d"))! - done.get(key(one, "c"))!)
+    assert.equal(launched.has(key(one, "g")), false, "g, whose b was stopped, never starts")
+    // A raised number takes what waits at once, with no Fin ending.
+    await w.agents.start(two.caller, { brief: hold, name: "e", queue: true, clientKey: "e", cwd: w.root })
+    limit = 3
+    freed = performance.now()
+    w.agents.capacityChanged()
+    await waitFor(() => launched.has(key(two, "e")), "e to start once the number rose")
+    latency.push(launched.get(key(two, "e"))! - freed)
+    console.log(`slot to launch: ${latency.map((ms) => `${ms.toFixed(1)} ms`).join(", ")}`)
+    for (const ms of latency) assert.ok(ms < 100, `a freed place goes within 100 ms: ${latency.map((each) => each.toFixed(1)).join(", ")} ms`)
+    release?.()
+    await w.agents.stop(one.caller, { child: "all" })
+    await w.agents.stop(two.caller, { child: "all" })
+  } finally {
+    release?.()
+    await w.close()
   }
 }
 
@@ -1081,6 +1161,7 @@ try {
   await refusals()
   await finLimit()
   await afterOrder()
+  await slotsGoAtOnce()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()

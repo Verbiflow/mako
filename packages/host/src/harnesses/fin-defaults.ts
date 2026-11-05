@@ -140,7 +140,7 @@ function withOwn(stored: Stored, key: "limit" | "ceiling", value: number | undef
 }
 
 /** Settings › Fins on every window and the web app's Macs: read, with this device's capacity, and chosen. */
-export function declareFinDefaultMethods(methods: MethodTable, store: FinDefaultsStore, capacity?: () => FinCapacityReading | undefined): void {
+export function declareFinDefaultMethods(methods: MethodTable, store: FinDefaultsStore, capacity?: () => FinCapacityReading | undefined, changed?: () => void): void {
   const read = (reading: FinChoicesReading): FinChoicesReading => {
     const held = capacity?.()
     return held ? { ...reading, capacity: held } : reading
@@ -148,6 +148,15 @@ export function declareFinDefaultMethods(methods: MethodTable, store: FinDefault
   methods.handle("mako:fin-defaults", () => read(store.reading()))
   methods.handle("mako:fin-default-choose", (harness: string, settings: SessionSettings | null) => read(store.choose(harness, settings)))
   methods.handle("mako:fin-policy-save", (policy: FinPolicy) => read(store.savePolicy(policy)))
-  methods.handle("mako:fin-limit-set", (limit: number | null) => read(store.setLimit(limit)))
-  methods.handle("mako:fin-ceiling-set", (ceiling: number) => read(store.setCeiling(ceiling)))
+  // A number the person raised takes what waits at once.
+  methods.handle("mako:fin-limit-set", (limit: number | null) => {
+    const reading = read(store.setLimit(limit))
+    changed?.()
+    return reading
+  })
+  methods.handle("mako:fin-ceiling-set", (ceiling: number) => {
+    const reading = read(store.setCeiling(ceiling))
+    changed?.()
+    return reading
+  })
 }
