@@ -94,10 +94,10 @@ function LayoutChoice({ value, chosen, title, description, children }: {
         "pressable flex flex-col gap-3 p-3 text-left transition-[background-color,box-shadow] duration-150 ease-[var(--ease-out)]",
         selected
           ? "bg-fill-selected [box-shadow:inset_0_0_0_1px_var(--border)]"
-          : "bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] hover:bg-fill-hover"
+          : "bg-raised hover:bg-fill-hover"
       )}
     >
-      <span aria-hidden className="block h-28 overflow-hidden bg-surface [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+      <span aria-hidden className="block h-28 overflow-hidden bg-surface">
         {children}
       </span>
       <span>
@@ -127,7 +127,7 @@ function PictureLines({ lines }: { lines: readonly PictureLine[] }) {
 function ReviewPicture() {
   const file = (lines: readonly PictureLine[]) => (
     <span className="block">
-      <span className="flex h-3 items-center gap-1 border-b border-hairline px-1.5">
+      <span className="flex h-3 items-center gap-1 px-1.5">
         <span className="h-1 w-1 rounded-full bg-caution/70" />
         <span className="h-1 w-12 rounded-full bg-foreground/25" />
         <span className="ml-auto h-1 w-4 rounded-full bg-foreground/15" />
@@ -156,7 +156,7 @@ function FilesPicture() {
           </span>
         ))}
       </span>
-      <span className="mt-auto block border-t border-hairline py-1">
+      <span className="mt-auto block py-1">
         <PictureLines lines={["same", "remove", "add", "same"]} />
       </span>
     </span>
@@ -227,7 +227,7 @@ function CommitMessages() {
             if (draft !== null) setPref("commitPrompt", draft.trim() ? draft : undefined)
             setDraft(null)
           }}
-          className="w-full resize-y bg-raised px-2.5 py-2 font-mono text-ui leading-relaxed ring-1 ring-hairline focus:outline-none focus-visible:ring-border"
+          className="w-full resize-y bg-raised px-2.5 py-2 font-mono text-ui leading-relaxed focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
         />
         <div>
           <Action

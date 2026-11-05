@@ -119,8 +119,8 @@ function LoadoutTile({
       onDragEnd={() => setDragging(false)}
       {...events}
       className={cn(
-        "group/tile relative flex h-[5.5rem] cursor-grab flex-col justify-between bg-shell/55 p-3 active:cursor-grabbing",
-        "[box-shadow:inset_0_0_0_0.5px_var(--hairline)] transition-[background-color,opacity,box-shadow] duration-150",
+        "group/tile relative flex h-[5.5rem] cursor-grab flex-col justify-between bg-raised p-3 active:cursor-grabbing",
+        "transition-[background-color,opacity,box-shadow] duration-150",
         target && "bg-fill-hover [box-shadow:inset_0_0_0_1px_var(--border)]",
         dragging && "opacity-40"
       )}

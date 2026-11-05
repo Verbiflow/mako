@@ -550,7 +550,7 @@ export function AppshotShortcutReadout() {
           : "Off"
   const watched = [watching.preferences !== "off" && `System Settings’ shortcuts (${watching.preferences})`, watching.activations && "apps coming to the front"].filter(Boolean)
   return (
-    <div className="mt-2 bg-surface px-3 py-2 ring-1 ring-hairline" data-appshot-shortcut-readout>
+    <div className="mt-2 bg-raised px-3 py-2" data-appshot-shortcut-readout>
       <div className="flex items-center justify-between gap-3">
         <p className="text-ui">Appshot shortcut</p>
         <Action tone="ghost" size="xs" onClick={() => void navigator.clipboard.writeText(JSON.stringify(watch, null, 2))}>

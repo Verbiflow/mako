@@ -41,7 +41,7 @@ export function KeyboardSection() {
     <section className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 bg-shell/55 px-2.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
+          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 bg-raised px-2.5 focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
             <SearchIcon className="size-3.5 shrink-0 text-faint" />
             <input
               value={query}

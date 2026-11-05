@@ -829,7 +829,6 @@ function HarnessFilter({
                 <HarnessIcon
                   harness={harness}
                   className="size-3.5"
-                  tinted={active}
                 />
                 <span className="flex-1">{harnessLabel(harness)}</span>
                 {active ? (

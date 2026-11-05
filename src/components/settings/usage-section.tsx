@@ -40,7 +40,7 @@ function ChangesMade() {
   if (data === undefined) return <p className="text-ui"><Shimmer text="Reading Mako's record of changes…" /></p>
   if (!data || !data.total.files) {
     return (
-      <p className="bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline" data-changes-empty>
+      <p className="bg-raised px-3 py-4 text-center text-ui text-faint" data-changes-empty>
         {data
           ? `No agent changes in the last ${data.days} days. They appear here as agents edit files in your projects.`
           : "Mako's record of changes isn't open yet. It opens a few seconds after Mako starts."}
@@ -52,7 +52,7 @@ function ChangesMade() {
   const peak = Math.max(...data.projects.map((project) => project.added + project.removed), 0)
   return (
     <div className="flex flex-col gap-1">
-      <div className="bg-surface px-3 py-3 ring-1 ring-hairline">
+      <div className="bg-raised px-3 py-3">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="tabular text-title font-medium" data-changes-total>
             {files(total.files)}

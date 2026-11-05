@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useState, type ComponentProps, type ReactNode } from "react"
+import { CheckIcon } from "lucide-react"
 
 /* ------------------------------------------------------------------ */
 /* Buttons                                                             */
@@ -195,6 +196,53 @@ export function Toggle({
           on ? "translate-x-3" : "translate-x-0"
         )}
       />
+    </button>
+  )
+}
+
+/** A field's look: the raised plane, no outline until the keyboard is on it (`docs/design.md`). */
+export const FIELD = "h-8 min-w-0 bg-raised px-2.5 text-ui text-foreground placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border disabled:opacity-60"
+
+/** A line of text to type: Settings', a sheet's, a dialog's. */
+export function Field({ className, ...props }: ComponentProps<"input">) {
+  return <input {...props} className={cn(FIELD, className)} />
+}
+
+/** One of a few named choices, as the platform's own menu: the same plane as a field. */
+export function Select({ className, ...props }: ComponentProps<"select">) {
+  return <select {...props} className={cn(FIELD, "pr-7", className)} />
+}
+
+/**
+ * One choice of several that can all be on (a model kept, a place chosen): a square of the text colour with a check
+ * when on, the raised plane when off. A single setting that's on or off is a `Toggle`.
+ */
+export function Check({
+  label,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string
+  checked: boolean
+  onChange: () => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-label={label}
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        "pressable flex size-3.5 shrink-0 items-center justify-center",
+        "[transition:background-color_120ms_ease] disabled:pointer-events-none disabled:opacity-40",
+        checked ? "bg-foreground text-background" : "bg-foreground/15"
+      )}
+    >
+      {checked ? <CheckIcon aria-hidden className="size-2.5" strokeWidth={3} /> : null}
     </button>
   )
 }

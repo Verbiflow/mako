@@ -101,7 +101,7 @@ export function PluginsSection() {
         loaded.map((plugin) => {
           const editing = open === plugin.id
           return (
-            <div key={plugin.id} className="border-b border-hairline last:border-b-0">
+            <div key={plugin.id} className="">
               <button
                 type="button"
                 onClick={() => edit(plugin.id, plugin.source)}
@@ -156,7 +156,7 @@ export function PluginsSection() {
                     }}
                     spellCheck={false}
                     rows={Math.min(24, Math.max(10, draft.split("\n").length + 1))}
-                    className="w-full resize-y bg-surface p-2.5 font-mono text-label leading-relaxed text-foreground/90 focus:ring-1 focus:ring-hairline focus:outline-none"
+                    className="w-full resize-y bg-raised p-2.5 font-mono text-label leading-relaxed text-foreground/90 focus-visible:ring-1 focus-visible:ring-border focus:outline-none"
                   />
                   <div className="flex items-center gap-2 pt-1.5">
                     <Action disabled={saving || draft === plugin.source} onClick={() => void save(plugin.id)}>
