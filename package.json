@@ -285,6 +285,7 @@
     "test:fin-resume": "tsx scripts/test-fin-resume.ts",
     "test:fin-move": "tsx scripts/test-fin-move.ts",
     "test:fin-states": "tsx scripts/test-fin-states.ts",
+    "test:held-digest": "tsx scripts/test-held-digest.ts",
     "test:delivery-retry": "tsx scripts/test-delivery-retry.ts",
     "test:handoff": "tsx scripts/test-handoff.ts",
     "test:request-holds": "tsx scripts/test-request-holds.ts",
