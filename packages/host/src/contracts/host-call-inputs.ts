@@ -1933,6 +1933,15 @@ const inputs = {
             at: z.object({ x: z.number(), y: z.number() }),
           }),
           z.object({
+            kind: z.literal("touch"),
+            phase: z.union([
+              z.literal("move"),
+              z.literal("begin"),
+              z.literal("end"),
+            ]),
+            at: z.object({ x: z.number(), y: z.number() }),
+          }),
+          z.object({
             kind: z.literal("swipe"),
             from: z.object({ x: z.number(), y: z.number() }),
             to: z.object({ x: z.number(), y: z.number() }),
@@ -2173,6 +2182,8 @@ const inputs = {
         viewer: z.string(),
         box: z.object({ width: z.number(), height: z.number() }).optional(),
         waitMs: z.number().optional(),
+        decoded: z.number().optional(),
+        leave: z.boolean().optional(),
       }),
     ]),
   "mako:skills-discover": () => z.tuple([]),
