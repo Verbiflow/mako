@@ -7,7 +7,7 @@ import "./lib/scratch-git.mjs"
 // Vendor RSS is printed and never fails the run. There is no timing budget;
 // a step that never finishes hits the hang guard.
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { chmod, mkdtemp, readFile, rm, writeFile, appendFile } from "node:fs/promises"
 import { appendFileSync, readdirSync, readFileSync } from "node:fs"
@@ -34,7 +34,7 @@ import { pointAt, SCRIPTED_GETS } from "./scripted-harness-env.ts"
 import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
 import { scriptedWindsurf } from "./scripted-windsurf.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
-import { controlText, heapMarkers, plantControls, REPRESENTATIONS } from "./heap-markers.ts"
+import { BEHIND_A_VIEW, behindAViewText, controlText, heapMarkers, plantControls, REPRESENTATIONS } from "./heap-markers.ts"
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/native-failure-agent.mjs", import.meta.url))
 const HARNESS_SRC = fileURLToPath(new URL("../packages/host/src/harnesses", import.meta.url))
@@ -621,6 +621,8 @@ async function memory(harness: string, driver: ProviderLiveDriver, sandbox: Sand
     controls.release()
     for (const kind of REPRESENTATIONS)
       assert.ok(found.some((hit) => hit.in === kind && hit.text === controlText(`${HEAP_MARK}control-`, kind, control)), `the heap search can't see text kept as a ${kind}, so it can't prove what the heap dropped`)
+    for (const kind of BEHIND_A_VIEW)
+      assert.ok(found.some((hit) => hit.in === kind && hit.text === behindAViewText(`${HEAP_MARK}control-`, kind, control)), `the heap search can't see text in a ${kind} a small view keeps, so it can't prove what the heap holds`)
     const tokens = readFileSync(listed, "utf8").trim().split("\n")
     const kept = harness === "opencode" ? OPENCODE_WINDOW : 1
     const gone = tokens.slice(0, Math.max(0, tokens.length - kept))
@@ -640,15 +642,39 @@ async function stopAll(): Promise<void> {
 }
 
 /**
+ * What holds this process's event loop open, by kind: every referenced handle and timer but its own stdin, stdout
+ * and stderr, which never end and are terminals in a shell and pipes on CI. Read from `until`'s check, whose own
+ * timer has fired by then, so a timer here is someone else's.
+ */
+function leftOpen(): string[] {
+  const open = process.getActiveResourcesInfo()
+  // SAFETY: only `_getActiveHandles` says whose a handle is; were it gone this throws rather than counting stdio as a leak.
+  const handles = (process as unknown as { _getActiveHandles(): { fd?: number; isTTY?: boolean }[] })._getActiveHandles()
+  for (const stream of handles.filter(({ fd }) => fd === 0 || fd === 1 || fd === 2)) open.splice(open.indexOf(stream.isTTY ? "TTYWrap" : "PipeWrap"), 1)
+  return open
+}
+
+/**
  * Fails the run when anything still keeps Node running once every driver is stopped: a worker, a port, a server, a
  * process or a timer a driver left behind would hold a real host's event loop the same way. Closing is
  * asynchronous, so it waits for what is closing, up to the hang guard; anything still there is named.
  */
-async function nothingLeftOpen(): Promise<void> {
-  const open = () => process.getActiveResourcesInfo().filter((kind) => kind !== "TTYWrap" && kind !== "Timeout")
-  await until("every handle the drivers opened closes", () => open().length === 0, 20_000).catch(() => {
-    throw new Error(`still open after every driver stopped: ${open().join(", ")}`)
+async function nothingLeftOpen(ms = 20_000): Promise<void> {
+  await until("every handle the drivers opened closes", () => leftOpen().length === 0, ms).catch(() => {
+    throw new Error(`still open after every driver stopped: ${leftOpen().join(", ")}`)
   })
+}
+
+/** What the guard is for: each of these left running has to fail it, so it can't pass by not looking. */
+async function leftOpenControls(): Promise<void> {
+  const interval = setInterval(() => {}, 1_000)
+  await assert.rejects(nothingLeftOpen(100), /still open after every driver stopped: Timeout$/, "a referenced interval left running fails the guard")
+  clearInterval(interval)
+  const child = spawn("sleep", ["30"])
+  await assert.rejects(nothingLeftOpen(100), /still open after every driver stopped: .*ProcessWrap/, "a process left running fails the guard")
+  child.kill("SIGKILL")
+  setTimeout(() => {}, 60_000).unref()
+  await nothingLeftOpen()
 }
 
 try {
@@ -673,4 +699,5 @@ try {
   await stopAll()
 }
 await nothingLeftOpen()
+await leftOpenControls()
 console.log("harness conformance passed")
