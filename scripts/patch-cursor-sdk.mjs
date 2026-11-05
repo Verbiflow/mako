@@ -16,6 +16,14 @@
 //    a new child starts at zero, so both rewrite the file in full, which the
 //    SDK's own streamed writer (`streamFullJsonlWrites`) does a megabyte at a
 //    time instead of as one string.
+// 3. Each bidi stream races every read, of what the backend sends and of what
+//    the client appends, against a promise pending for the stream's life, and
+//    each race leaves a reaction on that promise. Every message the stream
+//    carried stays reachable through them, with the network chunk its fields
+//    were decoded from, and the appending side outlives its run: one idle
+//    child held 53,360 such messages, most of its 233 MB (2026-11-04). The
+//    patched reads leave one subscription on each such promise, and that
+//    subscription settles every read still waiting.
 // Separately, an agent store waits 5 s for a lock before a write fails, and
 // Mako's checkpoint collector compacts a quiet store with a VACUUM that holds
 // the lock for as long as rewriting what's kept takes (10.7 s for 1.9 GB on
@@ -43,7 +51,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const VERSION = "1.2.0"
-const MARKER = "/*mako:patched:5*/"
+const MARKER = "/*mako:patched:7*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -96,6 +104,27 @@ const BLOB_STORE = [
   [
     "const a=new n.pH(this.setBlobStore(t,e),o);",
     "const a=new n.pH(this.createPersistingBlobStore(t),o);",
+  ],
+]
+
+/**
+ * The same in the esm and cjs builds. `J` rejects when an append fails, `w`
+ * when the stream is aborted. One subscription on `J` rejects every read
+ * still waiting, not only the latest: two outstanding `next()` calls both
+ * reject in the unpatched SDK. A read after the failure rejects at once.
+ */
+export const BIDI_READS = [
+  [
+    "b={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();return{next:()=>Promise.race([t.next(),J]),",
+    "b={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();let f;const o=[];J.catch((t=>{f=[t];for(const r of o)r(t);o.length=0}));return{next:()=>f?Promise.reject(f[0]):new Promise(((r,e)=>{o.push(e),t.next().then((t=>{const n=o.indexOf(e);n<0||o.splice(n,1),r(t)}),(t=>{const n=o.indexOf(e);n<0||o.splice(n,1),e(t)}))})),",
+  ],
+  [
+    "let g,_;const w=new Promise(((t,r)=>{_=()=>r(new p)}));",
+    "let g,_,z;const w=new Promise(((t,r)=>{_=()=>{const t=new p;r(t),z?.(t)}}));",
+  ],
+  [
+    "const r=await Promise.race([m.next(),w]);",
+    "const r=await new Promise(((t,r)=>{z=r,m.next().then(t,r)}));",
   ],
 ]
 
@@ -157,8 +186,8 @@ const resumeAccount = proto => [
 ]
 
 export const CURSOR_SDK_PATCHES = [
-  { target: "dist/esm/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
-  { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
+  { target: "dist/esm/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
+  { target: "dist/cjs/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
   { target: "dist/esm/336.js", replacements: [...transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), runLog("BF"), resumeAccount("jr")], change: "incremental transcripts, the run log and the resume account" },
   { target: "dist/cjs/336.js", replacements: [...transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), runLog("qF"), resumeAccount("Ur")], change: "incremental transcripts, the run log and the resume account" },
   { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
@@ -168,7 +197,7 @@ export const CURSOR_SDK_PATCHES = [
 function assertVersion(read) {
   const { version } = JSON.parse(read("package.json"))
   if (version !== VERSION)
-    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes, the store's lock wait, the run log and the resume account, then port or delete this patch.`)
+    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, bidi reads, transcript writes, the store's lock wait, the run log and the resume account, then port or delete this patch.`)
 }
 
 /** Checks every replacement, including the SDK bytes inside the built archive. */
