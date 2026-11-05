@@ -189,6 +189,8 @@ jobs:
       - run: npm run test:handoff
       - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
+      # The person's rules for every Fin and Apex: kept, carried by every brief, said once and on change, nothing when empty.
+      - run: npm run test:person-rules
       - run: npm run test:orch-deliver
       # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
       - run: npm run test:steer-landing
