@@ -182,7 +182,7 @@ export interface AgentsDeps {
   /** How many of the person's Fins run at once on this device, every tree's: its capacity or their own number (`FinCapacity`); `FIN_LIMIT` without it. */
   finLimit?(): number
   /** Reads the machine for its capacity, with the Fins at work here and their harnesses, as what waits is looked at. */
-  observeCapacity?(working: number, mix: Readonly<Record<string, number>>): Promise<void>
+  observeCapacity?(working: number, mix: Readonly<Record<string, number>>, fins?: readonly { conversation: string; harness: string }[]): Promise<void>
   /** The person's Fins at once across every place (Settings › Fins): a safety net over the places' own. */
   finCeiling?(): number
   /** The places a start may name (`here`, `device:<name>`, `cloud`); only `here` until placement lands. */
@@ -426,7 +426,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: deps.now,
     })
     // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
-    this.stopRoomWatch = deps.jobs.every("read this device's capacity", ROOM_EVERY_MS, () => this.observe())
+    this.stopRoomWatch = deps.jobs.every("read this device's capacity", ROOM_EVERY_MS, () => this.observe(true))
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
@@ -2401,13 +2401,22 @@ export class Agents implements AgentOperations, ConversationChildren {
     return (this.store()?.edges().all ?? []).filter((edge) => this.occupies(edge)).length + this.unwritten(() => true)
   }
 
-  /** This device's Fins at work and their harnesses, for its capacity. */
-  private async observe(): Promise<void> {
+  /**
+   * This device's Fins at work and their harnesses, for its capacity; with `sample`, each by its conversation too, so
+   * what they cost is read. Only the periodic look samples: a start reads the machine, not every Fin's processes.
+   */
+  private async observe(sample = false): Promise<void> {
     if (!this.deps.observeCapacity) return
     const mix: Record<string, number> = {}
-    for (const edge of this.store()?.edges().all ?? [])
-      if (placeOf(edge.asked.place) === HERE && this.occupies(edge)) mix[this.harnessOf(edge)] = (mix[this.harnessOf(edge)] ?? 0) + 1
-    await this.deps.observeCapacity(Object.values(mix).reduce((sum, count) => sum + count, 0), mix).catch((error: Error) =>
+    const fins: { conversation: string; harness: string }[] = []
+    for (const edge of this.store()?.edges().all ?? []) {
+      if (placeOf(edge.asked.place) !== HERE || !this.occupies(edge)) continue
+      const harness = this.harnessOf(edge)
+      mix[harness] = (mix[harness] ?? 0) + 1
+      const conversation = this.conversationOf(edge.child)
+      if (conversation) fins.push({ conversation, harness })
+    }
+    await this.deps.observeCapacity(Object.values(mix).reduce((sum, count) => sum + count, 0), mix, sample ? fins : undefined).catch((error: Error) =>
       hostWarn("agents", "this device's capacity couldn't be read; it keeps its last", { error: errorMessage({ error }) }))
   }
 

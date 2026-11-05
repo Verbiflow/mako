@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
-import { dirname } from "node:path"
+import { readFileSync, statSync } from "node:fs"
+import { publishFileSync } from "../base/published-files.js"
 import { z } from "zod"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { FIN_CEILING, FinCeilingSchema, FinLimitSchema, FinPolicySchema, FinRuleSchema, FinTargetSchema, type FinCapacityReading, type FinChoicesReading, type FinDefaults, type FinPolicy } from "../contracts/fin-tuning.js"
@@ -123,10 +123,7 @@ export class FinDefaultsStore {
 
   #write(next: Stored): void {
     this.#stored = next
-    mkdirSync(dirname(this.#file), { recursive: true })
-    const temporary = `${this.#file}.${process.pid}.tmp`
-    writeFileSync(temporary, `${JSON.stringify({ version: 1, ...next })}\n`)
-    renameSync(temporary, this.#file)
+    publishFileSync(this.#file, `${JSON.stringify({ version: 1, ...next })}\n`)
     this.#readAt = statSync(this.#file).mtimeMs
   }
 }
