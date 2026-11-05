@@ -36,6 +36,9 @@ def save(_):state['saves']+=1
 button.connect('clicked',save)
 for view in [entry,button,area]:box.pack_start(view,view==area,view==area,0)
 window.add(box);window.show_all();entry.grab_focus()
+# GDK merges the motions queued behind a busy frame into the last one: a runner that held the app 300 ms mid-drag
+# left 8 of a drag's 22 in its log. The log is of every motion the compositor sent.
+for view in (window,area):view.get_window().set_event_compression(False)
 def tick():
     command=Path(output+'.command')
     if command.exists():
