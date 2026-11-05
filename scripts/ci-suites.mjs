@@ -4,21 +4,23 @@ import { appendFile } from "node:fs/promises"
 /**
  * The npm test scripts no other job runs, whole or in part, on a Mac, where the tests' Electron runs: every suite in
  * turn however the last went, so one run shows all that fail, each once, with no second try. The job's three
- * shards take one suite in three. A script that needs a person's sign-in, a window or a real harness isn't here.
+ * shards take one suite in three. A script that needs a person's sign-in, a window or a real harness isn't here:
+ * `test:shared-runtime` reads the Devin CLI, `test:opencode-native-forms` runs a real OpenCode, and
+ * `test:simulators-ui` draws with Chrome, none of which works on this runner.
  *
  *   node scripts/ci-suites.mjs <shard> <shards>     what CI runs, shards counted from 1
  */
 const SUITES = [
   "test:acp-background-work", "test:action-recovery", "test:attachment-sweep", "test:automations",
   "test:background-work", "test:checkout-heads", "test:client", "test:cloud-account", "test:codex-archived-resume",
-  "test:codex-background-work", "test:codex-protocol", "test:control-driver-install", "test:control-media-sources",
-  "test:control-cli", "test:control-packages", "test:control-preview", "test:control-recording-continuous", "test:desktop-answers",
-  "test:desktop-crashes", "test:dev-updates", "test:execution-ownership", "test:file-previews", "test:git", "test:git-remote", "test:host",
-  "test:host-shutdown", "test:host-signals", "test:host-single", "test:lazy", "test:listed-repositories", "test:mcp",
-  "test:message-queue", "test:mobile-behavior", "test:moves", "test:native-authoring", "test:opencode-agents",
-  "test:opencode-api", "test:opencode-native-forms", "test:owner-check", "test:plugins", "test:proposed-plans",
-  "test:provider-launch-options", "test:queued-steering", "test:rail-list", "test:scripted-model", "test:shared-runtime",
-  "test:simulators-remote", "test:simulators-ui", "test:skills", "test:telemetry", "test:terminal",
+  "test:codex-background-work", "test:codex-protocol", "test:control-cli", "test:control-driver-install",
+  "test:control-media-sources", "test:control-packages", "test:control-preview", "test:control-recording-continuous",
+  "test:desktop-answers", "test:desktop-crashes", "test:dev-updates", "test:execution-ownership",
+  "test:file-previews", "test:git", "test:git-remote", "test:host", "test:host-shutdown", "test:host-signals",
+  "test:host-single", "test:lazy", "test:listed-repositories", "test:mcp", "test:message-queue",
+  "test:mobile-behavior", "test:moves", "test:native-authoring", "test:opencode-agents", "test:opencode-api",
+  "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:queued-steering",
+  "test:rail-list", "test:scripted-model", "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal",
   "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
   "test:tree-watcher", "test:update-local", "test:usage-worker", "test:window-boot",
 ]

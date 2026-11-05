@@ -327,6 +327,8 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: npm ci
+      # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
+      - run: brew install ffmpeg
       - run: npm run build:control-runtime
       - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
 
