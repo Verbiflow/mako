@@ -1051,6 +1051,37 @@ async function unreadableQueuedStarts(): Promise<void> {
   }
 }
 
+/**
+ * A host that wrote a Fin's edge and died before taking its row off the queue, then a build that can't read that row:
+ * the edge is the start, so the Fin holds its place and goes on, and its Apex hears no "It didn't start".
+ */
+async function startedFinsOldQueueRow(): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, "started-old-row"),
+    script: (turn) => turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok",
+    finLimit: () => 1,
+  })
+  try {
+    const apex = await w.apex("claude")
+    const placed = w.store.journalPlacement(apex.conversation)!
+    const lead = { session: placed.session, thread: placed.thread, conversation: apex.conversation }
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "kept", clientKey: "kept", cwd: w.root })
+    assert.ok(!("refused" in started), JSON.stringify(started))
+    await waitFor(() => w.store.edges().all.some((edge) => edge.name === "kept"), "its edge")
+    const edge = w.store.edges().all.find((each) => each.name === "kept")!
+    w.store.queueSpawn({ op: edge.op, tree: placed.thread, at: Date.now(), record: JSON.stringify({ lead, input: { name: "kept", brief: "a brief before briefs were objects" }, harness: "claude", slots: 6 }) })
+    w.agents.resume()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "the row its start left to leave the queue, the only place in use")
+    assert.ok(w.store.edges().byOp(edge.op), "its edge stays")
+    await w.agents.stop(apex.caller, { child: "all" })
+    await w.settle()
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.doesNotMatch(wake, /didn't start/, `a Fin that started isn't said not to have: ${wake}`)
+  } finally {
+    await w.close()
+  }
+}
+
 async function waitFor(check: () => boolean, what: string, ms = 8_000): Promise<void> {
   const deadline = Date.now() + ms
   while (!check()) {
@@ -1612,6 +1643,7 @@ try {
   await accessFits()
   await stopAllUnqueues()
   await unreadableQueuedStarts()
+  await startedFinsOldQueueRow()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()

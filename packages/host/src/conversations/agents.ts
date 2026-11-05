@@ -1636,14 +1636,15 @@ export class Agents implements AgentOperations, ConversationChildren {
       const everywhere = this.workingEverywhere()
       for (const spawn of store.queuedSpawns()) {
         if (this.starts.has(spawn.op)) continue
+        // Its Fin started, and a host that died before taking it off the queue left it: it holds no place, and whether
+        // this build can read the row, there's nothing to say of it. Its edge is the start.
+        if (store.edges().byOp(spawn.op)) {
+          this.changeQueue((held) => held.unqueueSpawn(spawn.op))
+          continue
+        }
         const queued = parseQueued(spawn.record)
         if (!queued) {
           this.tellUnreadable(spawn.op, spawn.record)
-          continue
-        }
-        // Its Fin started, and a host that died before taking it off the queue left it: it holds no place.
-        if (store.edges().byOp(spawn.op)) {
-          this.changeQueue((held) => held.unqueueSpawn(spawn.op))
           continue
         }
         if (queued.refused) {
