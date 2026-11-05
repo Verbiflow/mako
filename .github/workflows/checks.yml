@@ -88,6 +88,7 @@ jobs:
       - run: npm run test:transcript-events
       - run: npm run test:stage
       - run: npm run test:fin-words
+      - run: npm run test:fin-decisions
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
@@ -220,6 +221,10 @@ jobs:
       - run: npm run test:provider-startup
       # OpenCode reads a fork's history as its own startup step, begun before the first page comes back.
       - run: npx tsx scripts/test-opencode-resume.ts
+      # Grok's and Devin's forks run each request under the watch, and a failed fork names the request it died in.
+      - run: npx tsx scripts/test-fork-watches.ts
+      # Devin's fork against its real CLI on recorded stores; skips on a runner without a signed-in Devin.
+      - run: npx tsx --tsconfig tsconfig.app.json scripts/test-devin-fork.ts
       # Native routing's policy, each harness's control and Diagnostics' reading of them; then every
       # eval:orch-tools case's first request for Claude and Codex, built and its grading checked, at $0.
       - run: npm run test:native-routing

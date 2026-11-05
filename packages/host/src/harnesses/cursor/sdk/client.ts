@@ -6,7 +6,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
-import { spawnProviderProcess } from "../../provider-process.js"
+import { closeProviderProcess, endProviderProcess, spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../base/headless-node.js"
 import { reownProviderPid } from "../../../base/provider-children.js"
 import {
@@ -315,19 +315,20 @@ export class CursorSdkClient {
     })
   }
 
-  /** Asks the child to close its agent and waits for it; kills it when it lingers. */
+  /** Asks the child to close its agent and waits for it; kills it when it lingers, and rejects if it outlives that. */
   async close(graceMs = 5_000): Promise<void> {
     if (!this.alive) {
       await this.exited
       return
     }
-    const timer = setTimeout(() => this.child.kill("SIGKILL"), graceMs)
+    const timer = setTimeout(() => void endProviderProcess(this.child), graceMs)
     try {
       await this.request("close", undefined).catch(() => undefined)
-      await this.exited
+      await closeProviderProcess(this.child, "input", graceMs)
     } finally {
       clearTimeout(timer)
     }
+    await this.exited
   }
 
   /** Ends the process without a goodbye; for a session that is already lost. */

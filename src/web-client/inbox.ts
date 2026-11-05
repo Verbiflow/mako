@@ -49,7 +49,12 @@ export function webFinAsks(state: AcpState): readonly WebFinAsk[] {
     asks.push(...finAsksOfApex(children, { thread: conversation.threadId, title, conversation: conversation.key }))
   }
   if (!asks.length) return NONE
-  return asks.sort((left, right) => left.agent.observedAt - right.agent.observedAt)
+  return asks.sort(longestWaitingFirst)
+}
+
+/** The longest waiting first; asks of the same moment by their key, so the list reads the same each time. */
+export function longestWaitingFirst(left: WebFinAsk, right: WebFinAsk): number {
+  return left.agent.observedAt - right.agent.observedAt || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
 }
 
 function sameAsks(left: readonly WebFinAsk[], right: readonly WebFinAsk[]): boolean {

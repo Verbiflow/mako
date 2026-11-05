@@ -34,8 +34,18 @@ interface ChildFixture {
   said?: string
 }
 
+/**
+ * `&fins=decisions`: two of the done Fins finished with a decision their work leaves, one the person's (Thread list
+ * swipe: merge its PR?) and one its Apex's (Pull to refresh), so the scene shows done · needs you beside the rest.
+ */
+const DECIDED = new Map<string, ChildState>([
+  ["swipe", { kind: "ended", outcome: "done", decision: { question: "Merge #371 into main?", on: "person", ask: { kind: "report", id: "report:swipe:merge", options: [{ label: "Merge", detail: "Squash it into main; every check is green." }, { label: "Leave open", detail: "Keep it for a review first." }], recommended: 0, action: "Decide whether the swipe fix lands now." } } }],
+  ["pull-refresh", { kind: "ended", outcome: "done", decision: { question: "Ship the cached list or the fresh read on pull?", on: "lead", ask: { kind: "report", id: "report:pull-refresh:read", options: [{ label: "Fresh read" }, { label: "Cached list" }], recommended: 0 } } }],
+])
+const DECISIONS_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
+
 /** The twelve, as the prototype has them: 2 need you, 5 working (one asking its Apex), 2 queued, 3 done. */
-const CHILDREN: ChildFixture[] = [
+const CHILDREN: ChildFixture[] = ([
   { name: "push-wording", title: "Quiet-hours push wording", harness: "codex", model: "gpt-5.6-sol", state: { kind: "blocked", on: "person", question: "Which tone for the quiet-hours notice? Plain or friendly?", ask: { kind: "report", id: "report:push-wording:tone", options: [{ label: "Plain", detail: "Pushes are held until 7:00." }, { label: "Friendly", detail: "Quiet hours: we'll tell you at 7:00." }], recommended: 0, action: "Pick the tone the phone ships with." } }, minutes: 14, toolUses: 22, objective: "Write the quiet-hours notice the phone shows when pushes are held, in both tones, and ask which one ships." },
   { name: "sheet-motion", title: "Sheet motion on iPad", harness: "cursor", model: "composer-2.5", state: { kind: "blocked", on: "approval", question: "Approve: npm ci", ask: { kind: "approval", id: "a7c0ffee-0000-4000-8000-00000000a11c", options: [{ label: "Allow once" }, { label: "Always allow" }, { label: "Reject" }] } }, minutes: 22, toolUses: 41, objective: "Make the sheet's open and close motion match the iPad's split view, on the composer branch. Done when the sheet case passes on an iPad in both themes. Report with what you changed and the shots.", said: "The sheet animates from its own height, so in split view it starts off screen. I'll measure the container instead, then run the iPad case." },
   { name: "composer-chips", title: "Composer chips on iPad", harness: "claude", model: "claude-opus-5-5", state: { kind: "working", phase: "Running the iPad cases", step: "Shell npm run test:phone" }, minutes: 18, toolUses: 64, objective: "Make the composer's chips wrap on an iPad the way they do on a Mac." },
@@ -48,7 +58,7 @@ const CHILDREN: ChildFixture[] = [
   { name: "swipe", title: "Thread list swipe", harness: "codex", model: "gpt-5.6-sol", state: { kind: "ended", outcome: "done", reason: "Swipe to archive now springs back below the threshold; PR on your branch." }, minutes: 31, toolUses: 52, objective: "Make the list's swipe to archive spring back below its threshold." },
   { name: "deep-links", title: "Settings deep links", harness: "claude", model: "claude-opus-5-5", state: { kind: "idle" }, minutes: 27, toolUses: 19, objective: "Open each settings page from a link." },
   { name: "pull-refresh", title: "Pull to refresh", harness: "grok", model: "grok-4.7", state: { kind: "ended", outcome: "done", reason: "Pull to refresh reads the account list again and keeps its place." }, minutes: 40, toolUses: 33, objective: "Pull to refresh reads the account list again." },
-]
+] satisfies ChildFixture[]).map((fixture) => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : fixture))
 
 function childThread(index: number): string {
   return `1ead1ead-3000-4000-8000-${String(index + 1).padStart(12, "0")}`
@@ -86,8 +96,13 @@ function shown(state: ChildState, child: string, at: number): ChildShowing {
       return { thread: { waiting: { question: state.question, on: state.on, ...(state.ask && { ask: state.ask }) } }, journal: {} }
     case "idle":
       return { thread: {}, journal: {} }
-    case "ended":
-      return { thread: { ended: { outcome: state.outcome, ...(state.reason && { reason: state.reason }), at } }, journal: {} }
+    case "ended": {
+      const decision = state.decision
+      if (!decision) return { thread: { ended: { outcome: state.outcome, ...(state.reason && { reason: state.reason }), at } }, journal: {} }
+      const { options, recommended, action } = decision.ask
+      const latest = { id: decision.ask.id, child: ThreadIdSchema.parse(child), status: "done" as const, summary: "It's finished and green.", question: decision.question, ...(options && { options }), ...(recommended !== undefined && { recommended }), ...(action && { action }), ...(decision.on === "person" && { decides: "person" as const }), ownerGeneration: 1, at }
+      return { thread: {}, journal: { latest } }
+    }
   }
 }
 
