@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { HarnessLimit } from "@mako/host/contracts/account-usage"
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
@@ -404,5 +405,35 @@ function emptyCatalog(): AgentsDeps["catalog"] {
     activity: () => ({}),
     subscribe: () => () => {},
     announce: () => {},
+  }
+}
+
+/** A catalog of the Sessions a Thread's shell runs started, written by the test: what `agents_link` and the follower read. */
+export function fakeCatalog() {
+  const sessions = new Map<string, { ref: ThreadRef; entries: Entry[] }>()
+  const subscribers = new Set<(event: HostEvent) => void>()
+  const catalog: AgentsDeps["catalog"] = {
+    nativePath: (identity) => [...sessions.values()].find((session) => session.ref.harness === identity.harness && session.ref.nativeId === identity.nativeId)?.ref.path,
+    ref: (path) => sessions.get(path)?.ref,
+    async page(path, before, limit = 50) {
+      const session = sessions.get(path)
+      if (!session) return null
+      const end = before ?? session.entries.length
+      const start = Math.max(0, end - limit)
+      return { ref: session.ref, entries: session.entries.slice(start, end), start, total: session.entries.length, hasEarlier: start > 0 } satisfies ThreadPage
+    },
+    activity: () => ({}),
+    subscribe(subscriber) {
+      subscribers.add(subscriber)
+      return () => subscribers.delete(subscriber)
+    },
+    announce: () => {},
+  }
+  return {
+    catalog,
+    write(ref: ThreadRef, entries: Entry[]) {
+      sessions.set(ref.path, { ref, entries })
+      for (const subscriber of subscribers) subscriber({ type: "thread-ref", ref })
+    },
   }
 }

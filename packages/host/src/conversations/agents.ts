@@ -1987,7 +1987,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private childReading(edge: ThreadParent): ChildThread {
     const run = edge.run
     const conversation = this.conversationOf(edge.child)
-    if (run && (!run.ended || !conversation)) return this.runs.reading(edge.child) ?? { source: "followed", harness: run.harness }
+    // A run Mako stopped is read from its process until that has exited (`AgentRuns.isTerminating`), whatever reads after it.
+    if (run && (!run.ended || !conversation || this.runs.isTerminating(edge.child))) return this.runs.reading(edge.child) ?? { source: "followed", harness: run.harness }
     if (!conversation) return { source: "live", ...(this.starting.has(edge.op) && { starting: "launching" as const }) }
     const live = this.deps.live
     const session = live.session(conversation)
@@ -2078,11 +2079,19 @@ export class Agents implements AgentOperations, ConversationChildren {
   private childMoved(edge: ThreadParent, progressOnly: boolean): void {
     if (this.stopped) return
     this.sync()
+    // A place it let go of is the next waiting Fin's at once, whether or not how it reads changed: a Fin shown stopped
+    // lets go only when its harness or its process has actually stopped (`occupies`).
+    const holds = this.occupies(edge)
+    const held = this.occupying.has(edge.child)
+    if (holds) this.occupying.add(edge.child)
+    else this.occupying.delete(edge.child)
+    const released = held && !holds
     const before = this.entries.get(edge.child)
     this.entries.delete(edge.child)
     const entry = this.entryOf(edge)
     if (before && JSON.stringify(before) === JSON.stringify(entry)) {
       this.entries.set(edge.child, before)
+      if (released) void this.drain()
       return
     }
     this.rosters.delete(edge.parent)
@@ -2098,12 +2107,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         this.checkAwaiting(above)
       }
     }
-    // A place it let go of is the next waiting Fin's at once: its turn ended, it stopped, failed or waits on its own Fins.
-    const holds = this.occupies(edge)
-    const held = this.occupying.has(edge.child)
-    if (holds) this.occupying.add(edge.child)
-    else this.occupying.delete(edge.child)
-    if ((held && !holds) || (before && before.state.kind === "working" && entry.state.kind !== "working")) void this.drain()
+    if (released || (before && before.state.kind === "working" && entry.state.kind !== "working")) void this.drain()
   }
 
   private checkHolds(child: string): void {

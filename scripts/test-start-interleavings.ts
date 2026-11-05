@@ -5,7 +5,9 @@ import { join } from "node:path"
 import type { AgentsStartResult } from "@mako/host/contracts/agent-tools"
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import { z } from "zod"
-import { AgentsWorld } from "./lib/agents-world.ts"
+import { spawn, type ChildProcess } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { AgentsWorld, fakeCatalog } from "./lib/agents-world.ts"
 
 /**
  * Starts against stops, generated (`npm run test:start-interleavings`): seeded schedules of starts, starts again with
@@ -42,6 +44,8 @@ type Step =
   | { kind: "resolve" }
   | { kind: "fail" }
   | { kind: "halt" }
+  | { kind: "link" }
+  | { kind: "stop-linked" }
   | { kind: "crash" }
 
 function schedule(next: () => number): Step[] {
@@ -54,7 +58,9 @@ function schedule(next: () => number): Step[] {
     else if (roll < 0.6) steps.push({ kind: "stop-all" })
     else if (roll < 0.74) steps.push({ kind: "resolve" })
     else if (roll < 0.84) steps.push({ kind: "fail" })
-    else if (roll < 0.93) steps.push({ kind: "halt" })
+    else if (roll < 0.89) steps.push({ kind: "halt" })
+    else if (roll < 0.92) steps.push({ kind: "link" })
+    else if (roll < 0.94) steps.push({ kind: "stop-linked" })
     else steps.push({ kind: "crash" })
   }
   return steps
@@ -77,6 +83,10 @@ async function run(seed: number, root: string): Promise<void> {
   const budget = seed % 4 === 0 ? { running: 1, started: 3 } : seed % 4 === 1 ? { running: 2, started: 100 } : { running: 32, started: 100 }
   const gates: Gate[] = []
   const running = new Set<string>()
+  // Runs a Thread's shell started and linked: real processes that take a few milliseconds to go after SIGTERM.
+  const fake = fakeCatalog()
+  const shells: { name: string; process: ChildProcess }[] = []
+  const starts: number[] = []
   const halts: (() => void)[] = []
   const stopping: { done: boolean }[] = []
   const stop = (caller: AgentCaller, child: string) => {
@@ -87,6 +97,7 @@ async function run(seed: number, root: string): Promise<void> {
   const overlaps: number[] = []
   const w = new AgentsWorld({
     root: join(root, `seed-${seed}`),
+    catalog: fake.catalog,
     budget,
     finLimit: () => limit,
     preparing: () => new Promise<void>((resolve, reject) => gates.push({ resolve, reject })),
@@ -95,6 +106,8 @@ async function run(seed: number, root: string): Promise<void> {
     script: async (turn) => {
       if (!turn.text.includes("You're fin:")) return "ok"
       // What the harnesses run, not what the engine counts: never more turns at once than the device runs.
+      // It starts only below the device's number, counting the linked runs whose processes still go.
+      starts.push(running.size + shells.filter((shell) => shell.process.exitCode === null && shell.process.signalCode === null).length)
       running.add(turn.conversation)
       overlaps.push(running.size)
       await turn.world.hold(turn.conversation)
@@ -115,6 +128,7 @@ async function run(seed: number, root: string): Promise<void> {
     await new Promise((resolve) => setImmediate(resolve))
     await new Promise((resolve) => setImmediate(resolve))
     assert.ok(Math.max(0, ...overlaps) <= limit, `${when}: ${Math.max(...overlaps)} turns ran at once on a device that runs ${limit}`)
+    assert.ok(starts.every((before) => before < limit), `${when}: a Fin started with ${Math.max(...starts)} already at work on a device that runs ${limit}`)
     const seen = w.agents.diagnostics()
     const rows = w.store.queuedSpawns()
     assert.ok(seen.running <= limit, `${when}: ${seen.running} running on a device that runs ${limit}`)
@@ -154,6 +168,23 @@ async function run(seed: number, root: string): Promise<void> {
       } else if (step.kind === "resolve") take("any")?.resolve()
       else if (step.kind === "fail") take("any")?.reject(new Error("its worktree couldn't be made"))
       else if (step.kind === "halt") halts.splice(Math.floor(next() * halts.length), 1)[0]?.()
+      else if (step.kind === "link") {
+        // Linked only while the device and the tree have room: a link is adopted whatever the limits, so the schedule keeps within them.
+        const seen = w.agents.diagnostics()
+        if (seen.running < limit && seen.trees.every((tree) => tree.running < budget.running && tree.started < budget.started)) {
+          const exitMs = Math.floor(next() * 60)
+          const shell = spawn(process.execPath, ["-e", `process.on("SIGTERM", () => setTimeout(() => process.exit(0), ${exitMs})); console.log("ready"); setInterval(() => {}, 1000)`], { detached: true, stdio: ["ignore", "pipe", "ignore"] })
+          await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
+          const name = `shell-${shells.length}`
+          shells.push({ name, process: shell })
+          const nativeId = randomUUID()
+          fake.write({ harness: "claude", nativeId, path: join(w.root, `${name}.jsonl`), cwd: w.root, startedAt: new Date().toISOString() }, [{ type: "tool", id: "one", name: "Bash", input: "{}", status: "completed" }])
+          await w.agents.link(apex.caller, { harness: "claude", session: nativeId, pid: shell.pid!, name })
+        }
+      } else if (step.kind === "stop-linked") {
+        const shell = shells.find((each) => each.process.exitCode === null && each.process.signalCode === null)
+        if (shell) stop(apex.caller, shell.name)
+      }
       else {
         // A crash takes every preparation under way, and every turn, with it; the next host starts from the store.
         running.clear()
@@ -194,6 +225,7 @@ async function run(seed: number, root: string): Promise<void> {
   } finally {
     for (const gate of gates.splice(0)) gate.resolve()
     for (const halt of halts.splice(0)) halt()
+    for (const shell of shells) shell.process.kill("SIGKILL")
     await w.close()
   }
 }

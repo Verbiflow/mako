@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { ThreadPage, ThreadRef } from "@mako/sessions"
+import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { HostJobs } from "@mako/host/base/host-jobs"
@@ -13,7 +13,6 @@ import { accessModeId } from "@mako/host/contracts/access"
 import { childEntry, childMode, childState, modeWithin, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { AFTER_LIMIT, CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -21,14 +20,14 @@ import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
 import { END_CONFIRM_MS, lastStep } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { namedUuid } from "@mako/host/conversations/cloud-moves"
-import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
+import { Agents } from "@mako/host/conversations/agents"
 import { macLoad } from "@mako/host/conversations/mac-capacity"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
 import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
 import { CURSOR_SDK_MODES } from "@mako/host/harnesses/cursor/sdk/modes"
 import { openCodeModes } from "@mako/host/harnesses/opencode/access"
 import { ThreadStore } from "@mako/host/threads/store"
-import { AgentsWorld, noConversations, type Heard, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, fakeCatalog, noConversations, type Heard, type Script } from "./lib/agents-world.ts"
 import { cloudWords, placeFull, type FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
 
@@ -505,6 +504,55 @@ async function stopHoldsUntilCancelled(): Promise<void> {
 }
 
 /**
+ * A shell-linked run Mako stops holds its place until its process has exited, its kill's grace included: one that
+ * ignores SIGTERM keeps writing for five seconds, and the Fin waiting for its place starts only once it's gone.
+ */
+async function followedStopHoldsUntilExit(): Promise<void> {
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, "followed-stop"),
+    finLimit: () => 1,
+    catalog: fake.catalog,
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) {
+        writeFileSync(join(turn.world.root, "shared.txt"), "next")
+        await turn.world.hold(turn.conversation)
+      }
+      return "ok"
+    },
+  })
+  // A run its Apex's shell started, deaf to SIGTERM, writing the shared file every 10 ms until it's killed.
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+  await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
+  let exited = 0
+  shell.once("exit", () => (exited = performance.now()))
+  try {
+    const apex = await w.apex("claude", "full")
+    const nativeId = randomUUID()
+    fake.write({ harness: "claude", nativeId, path: join(w.root, "linked.jsonl"), cwd: w.root, startedAt: new Date().toISOString() }, [{ type: "tool", id: "one", name: "Bash", input: "{}", status: "completed" }])
+    const linked = await w.agents.link(apex.caller, { harness: "claude", session: nativeId, pid: shell.pid!, name: "linked" })
+    assert.ok(!("refused" in linked), JSON.stringify(linked))
+    await waitFor(() => w.agents.diagnostics().running === 1, "the linked run counted")
+    const queued = await w.agents.start(apex.caller, { name: "next", clientKey: "next", cwd: w.root, queue: true, brief: { objective: "Edit the shared file" } })
+    assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    await w.agents.stop(apex.caller, { child: "linked" })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(w.prompts.length, 0, "a stopped run still exiting keeps its place")
+    assert.equal(readFileSync(join(w.root, "shared.txt"), "utf8"), "linked")
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:next,")), "next to start once the linked run is gone", 12_000)
+    const started = w.prompts.find((prompt) => prompt.text.includes("You're fin:next,"))!.at
+    assert.ok(exited > 0, "the linked run had exited before next started")
+    assert.ok(started - (Date.now() - (performance.now() - exited)) >= 0, "next started after the linked run's exit")
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(readFileSync(join(w.root, "shared.txt"), "utf8"), "next", "and nothing overwrote its file after")
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    shell.kill("SIGKILL")
+    await w.close()
+  }
+}
+
+/**
  * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
  */
@@ -719,34 +767,6 @@ async function waitFor(check: () => boolean, what: string, ms = 8_000): Promise<
   }
 }
 
-function fakeCatalog() {
-  const sessions = new Map<string, { ref: ThreadRef; entries: Entry[] }>()
-  const subscribers = new Set<(event: HostEvent) => void>()
-  const catalog: AgentsDeps["catalog"] = {
-    nativePath: (identity) => [...sessions.values()].find((session) => session.ref.harness === identity.harness && session.ref.nativeId === identity.nativeId)?.ref.path,
-    ref: (path) => sessions.get(path)?.ref,
-    async page(path, before, limit = 50) {
-      const session = sessions.get(path)
-      if (!session) return null
-      const end = before ?? session.entries.length
-      const start = Math.max(0, end - limit)
-      return { ref: session.ref, entries: session.entries.slice(start, end), start, total: session.entries.length, hasEarlier: start > 0 } satisfies ThreadPage
-    },
-    activity: () => ({}),
-    subscribe(subscriber) {
-      subscribers.add(subscriber)
-      return () => subscribers.delete(subscriber)
-    },
-    announce: () => {},
-  }
-  return {
-    catalog,
-    write(ref: ThreadRef, entries: Entry[]) {
-      sessions.set(ref.path, { ref, entries })
-      for (const subscriber of subscribers) subscriber({ type: "thread-ref", ref })
-    },
-  }
-}
 
 /** A harness CLI a Thread's shell started: found by `MAKO_SESSION_ID`, followed by its Session and process, ended once with its last reply as its report. */
 async function followsShellRuns(): Promise<void> {
@@ -1290,6 +1310,7 @@ try {
   await slotsGoAtOnce()
   await launchesBeforeTheirEdge()
   await stopHoldsUntilCancelled()
+  await followedStopHoldsUntilExit()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()
