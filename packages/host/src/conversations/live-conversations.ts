@@ -33,7 +33,7 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { rollup } from "../contracts/children.js"
+import { childGroup, childStateOf, rollup } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -160,15 +160,16 @@ export class LiveConversations {
     this.records = new LiveRecords(dependencies, {
       busy: (resident) => {
         const id = resident.snapshot.session.id
-        return Boolean(this.transfers.pending(resident)) || this.launches.starting(id) || this.sources.refreshing(id) || this.stops.has(id)
+        return Boolean(this.transfers.pending(resident)) || this.launches.starting(id) || this.sources.refreshing(id) || this.stops.has(id) || this.finsAtWork(id)
       },
       flush: (resident) => this.flush(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
       loaded: (resident) => {
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
-        // A journal keeps no children: their engine says how they are now.
-        this.takeChildren(resident)
+        // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
+        // hears what moved while none was in memory.
+        if (this.takeChildren(resident)) this.schedule(resident)
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
       paged: (id) => this.dependencies.historyPaged?.(id),
@@ -1439,14 +1440,30 @@ export class LiveConversations {
   /**
    * The conversation's children moved: a loaded conversation's roster takes
    * them from their engine, which keeps each entry's identity while it's
-   * unchanged. A start or an end goes out at once, progress with the frame;
-   * one not loaded reads them when it is (`loaded`).
+   * unchanged. A start or an end goes out at once, progress with the frame.
+   * One memory let go of is read back in, so its windows hear the move as it
+   * happens; it then stays while its Fins are at work (`finsAtWork`).
    */
   childrenChanged(id: string, progressOnly = false): void {
     const resident = this.records.get(id)
-    if (!resident || this.records.isReleased(resident) || !this.takeChildren(resident)) return
+    if (!resident) return this.readForChildren(id)
+    if (this.records.isReleased(resident) || !this.takeChildren(resident)) return
     if (progressOnly) this.schedule(resident)
     else this.keep(resident)
+  }
+
+  private readForChildren(id: string): void {
+    void this.records.loadSliced(id).then((resident) => {
+      if (resident && !this.records.isReleased(resident) && (this.takeChildren(resident) || resident.timer)) this.keep(resident)
+    }).catch((error) => hostWarn("live", "a conversation whose Fins moved couldn't be read in", { conversation: id, error: errorMessage({ error }) }))
+  }
+
+  /** Whether any of the conversation's Fins is at work, queued or waiting on the person: its roster still moves. */
+  private finsAtWork(id: string): boolean {
+    return (this.dependencies.agents?.()?.roster(id) ?? []).some((agent) => {
+      const group = childGroup(childStateOf(agent))
+      return group === "working" || group === "queued" || group === "needs"
+    })
   }
 
   /**

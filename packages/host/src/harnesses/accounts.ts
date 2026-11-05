@@ -29,8 +29,8 @@
 
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { readdir, rm } from "node:fs/promises"
+import { join } from "node:path"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import type {
   AccountCatalog,
@@ -45,6 +45,7 @@ import type {
 } from "../contracts/accounts.js"
 import { clearLoginPending, loginPending, type AccountRoot } from "./accounts-common.js"
 import { childProcessEnv } from "../base/child-environment.js"
+import { publishFile } from "../base/published-files.js"
 import type {
   AccountLoginLaunch,
   AccountLoginTarget,
@@ -225,8 +226,7 @@ export class HarnessAccounts {
       // The marker goes before holds are read: a holder letting go meanwhile
       // either finds it and finishes the removal, or is already gone below.
       const marker = removalMarker(this.root, harness, name)
-      await mkdir(dirname(marker), { recursive: true, mode: 0o700 })
-      await writeFile(marker, JSON.stringify({ version: 1, requestedAt: new Date().toISOString() }), { mode: 0o600 })
+      await publishFile(marker, JSON.stringify({ version: 1, requestedAt: new Date().toISOString() }), { mode: 0o600, dirMode: 0o700 })
       if (await this.held(harness, name)) return { status: "pending" }
       return this.finishRemoval(capability, name)
     })

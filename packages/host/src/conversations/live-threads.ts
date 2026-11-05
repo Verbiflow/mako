@@ -18,12 +18,12 @@ type CapturedRef = NonNullable<LiveSnapshot["base"]>["ref"]
  * store conversations run as before and carry no Thread identity.
  */
 export class LiveThreads {
-  private readonly dependencies: Pick<Dependencies, "threads" | "emit">
+  private readonly dependencies: Pick<Dependencies, "threads" | "emit" | "agents">
   /** What each journal last told the Thread store, so a flush registers only news. */
   private readonly registered = new Map<string, string>()
   private placementWarned = false
 
-  constructor(dependencies: Pick<Dependencies, "threads" | "emit">) {
+  constructor(dependencies: Pick<Dependencies, "threads" | "emit" | "agents">) {
     this.dependencies = dependencies
   }
 
@@ -102,6 +102,8 @@ export class LiveThreads {
     const edge = threads.keepEdge({ ...asked, child: placed.thread, createdAt: Date.now() })
     if (edge.op !== asked.op) throw new Error("That Thread already has a parent.")
     hostLog("agents", "edge written", { op: asked.op, child: placed.thread, parent: asked.parent, name: edge.name })
+    // The Fin is its edge from now: what shows it waiting changes this moment, not when its start answers.
+    this.dependencies.agents?.()?.edgeWritten?.(asked.op)
   }
 
   /**

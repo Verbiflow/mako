@@ -5,21 +5,26 @@ import { inspectNativeSession } from "../native-continuation.js"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
 import type { NativeForkSource } from "../live-driver.js"
 import type { ProviderProcessProbe } from "../../threads/index.js"
-import { openCodeRecordLocator, type OpenCodeResumeRecord } from "./resume-store.js"
+import { openCodeRecordLocator, type OpenCodeOpening, type OpenCodeResumeRecord } from "./resume-store.js"
 
 const recordSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("available"), checkpoint: z.string(), generation: z.literal("v2") }),
   z.object({ kind: z.literal("unavailable"), reason: z.string() }),
 ])
 
+const openingSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("opens") }),
+  z.object({ kind: z.literal("unavailable"), reason: z.string() }),
+])
+
 const holdsSchema = z.object({ kind: z.literal("holds"), holds: z.boolean() })
 
-const unavailable: OpenCodeResumeRecord = { kind: "unavailable", reason: "The OpenCode recovery reader did not complete. Retry after the native store is available." }
+const unavailable: Extract<OpenCodeResumeRecord, { kind: "unavailable" }> = { kind: "unavailable", reason: "The OpenCode recovery reader did not complete. Retry after the native store is available." }
 
 const sealedSchema = z.object({ kind: z.literal("sealed"), sealed: z.boolean() })
 
 type WorkerRead =
-  | { read: "record" | "holds"; path: string; nativeId: string }
+  | { read: "record" | "holds" | "opens"; path: string; nativeId: string }
   | { read: "sealed"; path: string; nativeId: string; runId: string; steers: number }
 
 /** Reads in a worker that opens OpenCode's store as `stores` would. */
@@ -52,6 +57,14 @@ export async function readOpenCodeRecord(stores: NativeStores, binding: Provider
   if (!binding.path || !target || target.nativeId !== binding.nativeId)
     return { kind: "unavailable", reason: "The saved OpenCode source does not match its native session ID." }
   return readInWorker(stores, { path: binding.path, nativeId: target.nativeId, read: "record" }, recordSchema, unavailable)
+}
+
+/** Whether OpenCode can load the session as saved at `path`, and why not. */
+export async function openCodeSessionOpening(stores: NativeStores, path: string, nativeId: string): Promise<OpenCodeOpening> {
+  const target = openCodeRecordLocator(path)
+  if (!target || target.nativeId !== nativeId)
+    return { kind: "unavailable", reason: "The saved OpenCode source does not match its native session ID." }
+  return readInWorker(stores, { path, nativeId, read: "opens" }, openingSchema, unavailable)
 }
 
 /** Whether the store this locator names holds the session's row, pending inputs or not. */

@@ -54,6 +54,9 @@ jobs:
       - run: npx tsx scripts/test-host-liveness.ts
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
+      # Every whole file a harness writes, through one publisher: a writer killed mid-write, writers in several
+      # processes, create-once, another program's folder, and the folder lock they share.
+      - run: npx tsx scripts/test-published-files.ts
       # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
       - run: npm run test:device-join
       - run: npm run test:cloud-conversations
@@ -98,6 +101,9 @@ jobs:
       - run: npm run test:tuning
       # Model connections: the store's keys stay in the secrets, a locked keychain, removal, and the OpenCode providers they become.
       - run: npm run test:model-connections
+      # Accounts: usage, routing, roots and profiles, removal with running work, the keychain's reads, and the account,
+      # identity, switching and sign-in recovery views.
+      - run: npm run test:accounts
       # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
       - run: npm run test:notifications
       # What a local update builds from: its checkout against origin, fetched, and how Settings › Updates says it.
@@ -166,6 +172,8 @@ jobs:
       # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
       - run: npm run test:thread-split
       - run: npm run test:agents-wake
+      # An Apex let go of while at rest still hears its Fins move, so a window coming back shows them as they are.
+      - run: npm run test:fins-reach-released-apex
       - run: npm run test:orch-answer
       - run: npm run test:fin-resume
       - run: npm run test:fin-fallback

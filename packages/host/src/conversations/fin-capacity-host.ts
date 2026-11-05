@@ -3,6 +3,7 @@ import { onLinux } from "../base/platform.js"
 import type { FinCapacityReading } from "../contracts/fin-tuning.js"
 import { CapacityGovernor, deviceCapacity, reserveOf, type FinHardware, type PressureReading } from "./fin-capacity.js"
 import type { FinCostModel } from "./fin-cost.js"
+import type { FinAtWork, FinCostReading } from "./fin-cost-sampler.js"
 import { DISK_FREE_LEAST, FIN_LOAD, SWAP_FREE_LEAST, type MacReading } from "./mac-capacity.js"
 
 export interface FinCapacityDeps {
@@ -13,6 +14,8 @@ export interface FinCapacityDeps {
   own(): number | undefined
   /** `MAKO_FIN_SLOTS`: a test's host sets the number whatever the machine. */
   fixed?: number
+  /** What each Fin at work here costs, read from its processes (`FinCostSampler`); the cost model learns from it. */
+  sampler?: { sample(fins: readonly FinAtWork[]): Promise<FinCostReading[]> }
   hardware?(): FinHardware
   now?(): number
 }
@@ -34,9 +37,11 @@ export class FinCapacity {
     this.#deps = deps
   }
 
-  async observe(working: number, mix: Readonly<Record<string, number>>): Promise<void> {
+  /** `fins`, the Fins at work here by conversation, when this look should also read what they cost. */
+  async observe(working: number, mix: Readonly<Record<string, number>>, fins?: readonly FinAtWork[]): Promise<void> {
     const before = this.atOnce()
     this.#mix = { ...mix }
+    if (fins && this.#deps.sampler) for (const reading of await this.#deps.sampler.sample(fins).catch(() => [])) this.#deps.costs.add(reading)
     const reading = await this.#deps.read().catch(() => undefined)
     if (reading) this.#governor.read(this.#now(), pressureOf(reading, working, this.#hardware()))
     this.#deps.costs.save()

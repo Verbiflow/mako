@@ -65,6 +65,7 @@ import { harnessOrder } from "../contracts/harness-defaults.js"
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { FinCapacity } from "./fin-capacity-host.js"
 export { FinCostModel } from "./fin-cost.js"
+export { FinCostSampler } from "./fin-cost-sampler.js"
 export { MacCapacity, finSlots } from "./mac-capacity.js"
 export { callThreadOf } from "./live-runtime.js"
 export { makoNote } from "./mako-note.js"
@@ -339,7 +340,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       },
       ...(deps.finCapacity && {
         finLimit: () => deps.finCapacity!.atOnce(),
-        observeCapacity: (working: number, mix: Readonly<Record<string, number>>) => deps.finCapacity!.observe(working, mix),
+        observeCapacity: (working: number, mix: Readonly<Record<string, number>>, fins?: readonly { conversation: string; harness: string }[]) => deps.finCapacity!.observe(working, mix, fins),
       }),
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
