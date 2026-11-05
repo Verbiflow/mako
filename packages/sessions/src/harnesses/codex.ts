@@ -23,7 +23,8 @@ export const CODEX_VOCABULARY = defineVocabulary({
   tools: {
     // Codex draws a code cell only when it failed, after its calls' own rows.
     exec: { kind: "code", wraps: { form: "script", callsShown: true } },
-    exec_command: { kind: "shell", aliases: ["shell", "local_shell"] },
+    // A failed command that printed nothing answers `Exited with code 1` (`codexCommandOutput`); a rollout without typed items keeps Codex's own header.
+    exec_command: { kind: "shell", aliases: ["shell", "local_shell"], effects: { exitText: /^(?:Chunk ID: \S+\nWall time: [^\n]*\nProcess e|E)xited with code (-?\d+)/ } },
     write_stdin: { kind: "shell-input" },
     wait: { kind: "shell-output", label: "Command output" },
     apply_patch: { kind: "edit" },

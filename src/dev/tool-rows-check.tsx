@@ -21,6 +21,7 @@ import { installBuiltins } from "@/desk/builtins"
 import { listedFacts, type WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
+import { wordsBlocks } from "./tool-words-fixture"
 
 /**
  * A Cursor turn's file edits streaming as the host's batches bring them, for `test-tool-rows-ui.mjs`: each call opens
@@ -33,7 +34,9 @@ import { installMockBridge } from "./mock-bridge"
 const search = new URLSearchParams(location.search)
 const surface = search.get("surface") === "phone" ? "phone" : "desk"
 const theme = search.get("theme") === "light" ? "light" : "dark"
-const TURNS = Number(search.get("turns") ?? 12)
+// `?rows=words` draws one turn of every tool of Mako's own server and the row facts (`tool-words-fixture.ts`) instead.
+const words = search.get("rows") === "words"
+const TURNS = Number(search.get("turns") ?? (words ? 0 : 12))
 await (surface === "phone" ? import("../web-client/style.css") : import("../index.css"))
 applyTheme(theme)
 
@@ -73,9 +76,14 @@ for (let index = 0; index < TURNS; index += 1) {
   blocks.push({ type: "text", text: `Part ${index} of the notes is up to date.` })
 }
 const live = requestId(TURNS + 1)
-requests.push({ id: live, text: "Write the design notes, then the preview's", attachments: [], status: "completed" })
-blocks.push({ type: "user", text: "Write the design notes, then the preview's", requestId: live })
-blocks.push({ type: "text", id: "lead", text: "Writing both notes now, one after the other." })
+if (words) {
+  requests.push({ id: live, text: "Start the Fins, open the PR and check the app", attachments: [], status: "completed" })
+  blocks.push(...wordsBlocks(live))
+} else {
+  requests.push({ id: live, text: "Write the design notes, then the preview's", attachments: [], status: "completed" })
+  blocks.push({ type: "user", text: "Write the design notes, then the preview's", requestId: live })
+  blocks.push({ type: "text", id: "lead", text: "Writing both notes now, one after the other." })
+}
 
 const snapshot: LiveSnapshot = {
   session: {
