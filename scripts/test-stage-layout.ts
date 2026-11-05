@@ -146,11 +146,10 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.link-bead[data-state="offline"]::before', { animation: "link-bead-breathe", reduced: "global" }],
   // A side question's mark pulses only while it's being answered.
   [".side-panel-glyph", { animation: "side-glyph", reduced: /\.side-panel-glyph\s*\{\s*animation:\s*none;/ }],
-  // The live mark: the fin's own gesture for each state (bob, glide and wake, brace, breathe, drift). Each rests
+  // The live mark: the fin's own gesture for each state (bob, glide, brace, breathe, drift, and the glint). Each rests
   // on the gate (`observePhaseLockedAnimation`), which also stills it under reduced motion.
   ['.live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body', { animation: "live-mark-glide", reduced: "global" }],
-  [".live-mark-wake", { animation: "live-mark-wake", reduced: "global" }],
   [".live-mark-glint > i", { animation: "live-mark-glint", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="tool"] .live-mark-body', { animation: "live-mark-brace", reduced: "global" }],
   ['.live-mark[data-live-mark="background"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],

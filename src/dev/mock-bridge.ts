@@ -345,6 +345,10 @@ export function installMockBridge() {
   const nativeRequests: NativeRequest[] = []
   const liveSnapshots = new Map<string, LiveSnapshot>()
   const directCalls: Array<AgentsDirectInput & { conversation: string }> = []
+  /** `?app=apex&resting=1`: the Apex's session rests, as a hibernated one does, until the composer's first keys wake it. */
+  let apexResting = false
+  let apexPrewarms = 0
+  let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
@@ -440,6 +444,7 @@ export function installMockBridge() {
    * `churn` moves one Fin a tick. `&apexes=50` adds that many more Apexes of twenty Fins each, for the rail's bench.
    */
   if (scene === "apex") {
+    apexResting = new URLSearchParams(window.location.search).get("resting") === "1"
     for (const snapshot of [...apexSnapshots(), ...benchScene.snapshots]) {
       liveSnapshots.set(snapshot.session.id, snapshot)
       acpSessions.set(snapshot.session.id, snapshot.session)
@@ -453,6 +458,19 @@ export function installMockBridge() {
       liveSnapshots.set(APEX_CONVERSATION, next)
       // Through JSON, as the host's batch crosses to the window: every entry a new object, unchanged ones equal.
       emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], nativeAgents })) })
+    }
+    const setApexSession = (patch: Partial<Pick<LiveSessionState, "status" | "connection" | "error" | "harness">>) => {
+      const snapshot = liveSnapshots.get(APEX_CONVERSATION)
+      if (!snapshot) return
+      const session: LiveSessionState = { ...(acpSessions.get(APEX_CONVERSATION) ?? snapshot.session), ...patch }
+      acpSessions.set(APEX_CONVERSATION, session)
+      const next = { ...snapshot, session, revision: snapshot.revision + 1 }
+      liveSnapshots.set(APEX_CONVERSATION, next)
+      emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session } })
+    }
+    wakeApex = () => {
+      setApexSession({ connection: "starting", status: "starting" })
+      setTimeout(() => setApexSession({ connection: "connected", status: "ready" }), 1_200)
     }
     Reflect.set(window, "apexScene", {
       setChildren,
@@ -481,6 +499,10 @@ export function installMockBridge() {
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
        * roster untouched.
        */
+      /** The Apex's session goes through a transition as its host would say it: starting, reconnecting, hibernated, failed. */
+      setSession: setApexSession,
+      /** How many times writing in the composer woke the Apex (`livePrewarm`). */
+      prewarms: () => apexPrewarms,
       setRunning(running: boolean) {
         const snapshot = liveSnapshots.get(APEX_CONVERSATION)
         if (!snapshot) return
@@ -2991,7 +3013,14 @@ export function installMockBridge() {
         }
       }
     },
-    livePrewarm: async () => "unchanged" as const,
+    livePrewarm: async (id: string) => {
+      // The Apex rests until written to: the first keys wake it as its host would, starting, then ready.
+      if (id !== APEX_CONVERSATION || !wakeApex || !apexResting) return "unchanged" as const
+      apexResting = false
+      apexPrewarms += 1
+      wakeApex()
+      return "waking" as const
+    },
     launchPrewarm: async () => {},
     cloudPrepare: async () => "none" as const,
     cloudOfferProjects: async () => "none" as const,
