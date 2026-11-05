@@ -38,6 +38,7 @@ import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
+import { busySinceLastAsk } from "./base/machine-load.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
@@ -299,6 +300,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     evidenceRoot: crashes.directory,
     history: () => late.fileHistory,
     uid: process.getuid?.() ?? -1,
+    machineBusy: busySinceLastAsk(),
+    noticeFile: join(environment.dataRoot, "file-events", "notice.json"),
   })
   watchReadings.follow(fileEvents)
   if (onMac()) shell.jobs.every("read fseventsd's health", 60_000, () => fileEvents.tick(), { firstAfterMs: 5_000 })

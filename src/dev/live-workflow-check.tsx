@@ -194,7 +194,7 @@ const nativeScenes = {
   compacted: () => ({
     activity: undefined,
     blocks: [
-      { type: "event", label: "Context compacted", detail: "Automatic · 182k → 24k tokens", body: "## Where things stand\n\nThe route guard now keeps the destination through sign-in. Remaining: the session-expiry deep link and its regression test.\n\n- `src/router/guard.ts` — keeps `returnTo`\n- `src/session/refresh.ts` — retries once before signing out" },
+      { type: "event", label: "Context compacted", detail: "Automatic · 182K → 24K tokens", body: "## Where things stand\n\nThe route guard now keeps the destination through sign-in. Remaining: the session-expiry deep link and its regression test.\n\n- `src/router/guard.ts` — keeps `returnTo`\n- `src/session/refresh.ts` — retries once before signing out" },
       { type: "event", label: "Model changed", detail: "claude-opus-4 → claude-sonnet-4 · after a refusal" },
       { type: "event", label: "Rate limited", detail: "Reached your 5-hour limit · resets 3:40 PM", tone: "warning" },
       { type: "event", label: "Turn failed", detail: "Server overloaded", body: "stream disconnected before completion: Our servers are currently overloaded. Please try again later.", tone: "error" },

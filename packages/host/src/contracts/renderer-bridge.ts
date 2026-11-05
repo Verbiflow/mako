@@ -506,6 +506,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     fileEventsService: () => invokeTrustedHost<FileEventsService>("mako:file-events-service"),
     /** Restarts fseventsd through macOS's password dialog, evidence first, and answers with how it went. */
     fileEventsRestart: () => invokeTrustedHost<FileEventsService>("mako:file-events-restart"),
+    /** "Not now", or closing the restart's outcome: not said again this episode or today unless it gets worse. */
+    fileEventsDismiss: () => invokeTrustedHost<FileEventsService>("mako:file-events-dismiss"),
     /** Each continue in the cloud this Mac pressed or its list says, latest first, for Diagnostics. */
     continueReadings: () => invokeTrustedHost<ContinueReading[]>("mako:continue-readings"),
     cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),

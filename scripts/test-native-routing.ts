@@ -12,7 +12,8 @@ import { CallBounds } from "@mako/host/harnesses/call-bounds"
 import { claudeCallHooks } from "@mako/host/harnesses/claude/call-hooks"
 import { CLAUDE_START_TOOL, ClaudeAgentInput, claudeRoutedCall, claudeSpawn } from "@mako/host/harnesses/claude/routing"
 import { codexRoutingConfig } from "@mako/host/harnesses/codex/routing"
-import { launchSpawnsOff, nativeRoutingReadings, type NativeRoutingSources } from "@mako/host/harnesses/native-routing"
+import { nativeRoutingReadings, type NativeRoutingSources } from "@mako/host/harnesses/native-routing"
+import { layerOf, spawnsRemoved } from "@mako/host/harnesses/mako-layer"
 import type { NativeRoutingCapability } from "@mako/host/contracts/native-routing"
 import { configureOpenCodePermissions, configureOpenCodeRouting, OPENCODE_SPAWN_ACTION } from "@mako/host/harnesses/opencode/permissions"
 import { prepareDevinMcp } from "@mako/host/harnesses/devin/session-mcp"
@@ -174,8 +175,9 @@ for (const harness of ["codex", "grok", "opencode", "devin"]) {
     updateSources: { get: (harness) => harness === "shipped" ? { versions: { tested: "2.0.0", bundled: { package: "a-sdk", version: "0.2.0" } } } : undefined },
     launchReadings: { read: async (harness) => installed.get(harness) },
   }
-  assert.equal(launchSpawnsOff("same", "a switch", "conversation", () => ({ role: "apex" })), true)
-  assert.equal(launchSpawnsOff("same", "a switch", "conversation", () => ({ role: "thread" })), false)
+  assert.equal(spawnsRemoved(layerOf({ nativeRouting: () => ({ role: "apex" }) }), "same", "a switch", "conversation"), true)
+  assert.equal(spawnsRemoved(layerOf({ nativeRouting: () => ({ role: "thread" }) }), "same", "a switch", "conversation"), false)
+  assert.equal(spawnsRemoved(layerOf({}), "same", "a switch", "conversation"), false)
   const readings = new Map((await nativeRoutingReadings(host)).map((reading) => [reading.harness, reading]))
   assert.deepEqual(Object.fromEntries([...readings].map(([harness, reading]) => [harness, reading.state])), { same: "control", moved: "unverified", unread: "unverified", shipped: "control", spoken: "words" })
   assert.equal(readings.get("moved")?.installed, "1.1.0")

@@ -412,7 +412,9 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
 /**
  * The composer's doorway to the Agents panel, there while the roster holds
  * anything. It counts what still runs, and wears the hourglass while the
- * turn has ended and that work is what the session waits on.
+ * turn has ended and that work is what the session waits on. An Apex's Fins
+ * are their number and, when any needs the person, the needs pip; the whole
+ * line is its name and tooltip.
  */
 export function AgentsToggle() {
   useHarnessIdentity()
@@ -427,6 +429,8 @@ export function AgentsToggle() {
       total: agents.length,
       fins: children.total ? rollupChip(children) : "",
       finsLabel: children.total ? rollupLabel(children) : "",
+      finsTotal: children.total,
+      needs: children.needs,
       running: running.length,
       // The harnesses at work, as one string so a step elsewhere in the roster re-renders nothing.
       harnesses: [...new Set(running.filter((agent) => (agent.work ?? "agent") === "agent").map((agent) => agent.provider))].slice(0, SHOWN_MARKS).join(" "),
@@ -442,6 +446,7 @@ export function AgentsToggle() {
       data-agents-toggle
       data-fin-counts={reading.finsLabel || undefined}
       onClick={() => stage.toggle("agents")}
+      aria-label={reading.fins || undefined}
       title={reading.finsLabel ? `${reading.finsLabel}; open the Agents panel` : reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
       className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
     >
@@ -460,7 +465,8 @@ export function AgentsToggle() {
       ) : (
         <GitBranchIcon className="size-3" />
       )}
-      {label}
+      {reading.fins ? <span className="tabular">{reading.finsTotal}</span> : label}
+      {reading.needs ? <span aria-hidden className="fin-pip" data-pip="needs" /> : null}
     </button>
   )
 }

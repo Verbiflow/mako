@@ -8,14 +8,17 @@ const FIN = "M4.97 5.01C14.94 6.3 20.86 13.77 27.77 26.99L4.97 26.99C8.16 22.52 
 const FACE = "M4.97 26.99L27.77 26.99L8.3 14.6C8.2 18.6 6.9 23.2 4.97 26.99Z"
 
 const MOVING: ReadonlySet<LiveMarkState> = new Set(["working", "background", "starting", "needs", "lead"])
+/** Work in progress: light crosses the fin itself, the one sign that reads at 20 px across a list. */
+const GLINTS: ReadonlySet<LiveMarkState> = new Set(["working", "background", "starting"])
 
 /**
  * Who and how, as Mako's own fin (`MakoMark`'s path): a Thread is the two-tone fin of the app icon, a Fin the plain
  * fin, and the harness it runs on (`children`, its glyph) a small square badge in the corner. The fin itself moves
  * with what it does, one calm gesture a state, as a character would rather than a spinner beside it:
  *
- * - working, by `motion`: thinking it bobs, writing it glides with a short wake behind it, running a tool it braces
- *   in two steps; `background` (its turn done, work it waits on still running) bobs at half speed, dimmer;
+ * - working: a glint of the brand's sea crosses the fin itself, the sign that reads at 20 px down a list, and by
+ *   `motion` thinking it bobs, writing it glides side to side, running a tool it braces in two steps;
+ *   `background` (its turn done, work it waits on still running) bobs and glints at half speed, dimmer;
  * - needs you: it turns the attention hue over a waterline that breathes, never below 40%;
  * - asking its Apex: it drifts, dimmed; queued: faint and still; starting: it fades in and out;
  * - failed: it lists over in negative; an answer to read: still, with the unread sphere at its shoulder;
@@ -73,12 +76,16 @@ export function LiveMark({
       {state === "needs" || (kind === "thread" && (state === "working" || state === "background")) ? (
         <span key={`water:${state}`} aria-hidden ref={state === "needs" ? observePhaseLockedAnimation : undefined} className="live-mark-water" />
       ) : null}
-      {state === "working" && motion === "writing" ? <span key="wake" aria-hidden ref={observePhaseLockedAnimation} className="live-mark-wake" /> : null}
       <span key={`body:${gesture}`} aria-hidden ref={moving ? observePhaseLockedAnimation : undefined} className="live-mark-body">
         <svg viewBox="2 2 28 28" aria-hidden>
           <path d={FIN} fill="currentColor" />
           {kind === "thread" ? <path d={FACE} className="live-mark-face" /> : null}
         </svg>
+        {GLINTS.has(state) ? (
+          <span className="live-mark-glint">
+            <i />
+          </span>
+        ) : null}
       </span>
       {children ? (
         <span aria-hidden className="live-mark-badge">

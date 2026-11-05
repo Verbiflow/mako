@@ -273,7 +273,8 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
             preparing={preparing && session?.status !== "running"}
             hosted={exchanges.length > 0}
           />
-          {running ? null : <CrewCard compact={compact} fallback={<BackgroundWorkLine />} />}
+          {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
+          <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
         </>
       }
     />

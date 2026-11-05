@@ -887,7 +887,7 @@ try {
       { kind: "assistant", at: at(1), usage: { input: 1000, output: 10, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "partial" }] },
       { kind: "event", id: "m_retried", source: { harness: "opencode", record: "m_retried" }, at: at(1), label: "Retried", detail: "attempt 2 · The provider response ended with an unknown finish reason.", tone: "warning" },
       { kind: "assistant", at: at(3), usage: { input: 1500, output: 20, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "done" }] },
-      { kind: "event", id: "m_compacted", source: { harness: "opencode", record: "m_compacted" }, at: at(4), label: "Context compacted", detail: "Automatic · from 2k tokens", body: "Worked on the task." },
+      { kind: "event", id: "m_compacted", source: { harness: "opencode", record: "m_compacted" }, at: at(4), label: "Context compacted", detail: "Automatic · from 1.52K tokens", body: "Worked on the task." },
       { kind: "event", id: "m_compaction_failed", source: { harness: "opencode", record: "m_compaction_failed" }, at: at(5), label: "Compaction failed", detail: "The model could not summarize", tone: "warning" },
       { kind: "user", id: "m_again", at: at(7), text: "again" },
       { kind: "event", id: "m_failed", source: { harness: "opencode", record: "m_failed" }, at: at(8), label: "Turn failed", detail: "Request rejected", body: "Invalid request: context too long\nsee provider logs", tone: "error" },

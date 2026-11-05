@@ -328,6 +328,10 @@
    */
   --sea: oklch(0.74 0.08 245);
   --sea-soft: color-mix(in oklab, var(--sea) 14%, transparent);
+  /* The composer while you type in it: a breath lighter than its raised tone. */
+  --composer-lift: color-mix(in oklab, var(--foreground) 3.5%, transparent);
+  /* The light that crosses a working fin: the sea itself on the light fin of the dark theme. */
+  --fin-glint: var(--sea);
 
   /*
    * The unread mark is a small sphere in the text colour: a specular point
@@ -446,6 +450,9 @@
 
   --sea: oklch(0.5 0.09 248);
   --sea-soft: color-mix(in oklab, var(--sea) 12%, transparent);
+  --composer-lift: color-mix(in oklab, white 32%, transparent);
+  /* On the dark fin of the light theme, the sea lifted toward white so the band reads. */
+  --fin-glint: color-mix(in oklab, var(--sea) 45%, white);
 
   /* A dark sphere in daylight: the highlight is a grey sheen, the rim near black. */
   --mark-highlight: oklch(0.5 0.004 45);
@@ -1214,8 +1221,8 @@ diffs-container {
  * The live mark (`LiveMark`): Mako's fin, the two-tone fin of the app icon for
  * a Thread and the plain fin for a Fin, with its harness as a square badge in
  * the corner. The fin itself carries the state, one calm gesture a state: it
- * bobs while thinking, glides with a wake while writing, braces in two steps
- * on a tool, turns caution over a breathing waterline when it needs you,
+ * bobs while thinking, glides while writing, braces in two steps
+ * on a tool, turns the attention hue over a breathing waterline when it needs you,
  * drifts while asking its Apex and lists over when it failed. Square, like
  * every mark of Mako's. Every moving part is a box of its own that moves on
  * `transform` or `opacity`, so the compositor runs it and a frame costs the
@@ -1288,8 +1295,7 @@ diffs-container {
   background: none;
 }
 /* The line the fin rides: a Thread at work, or anyone waiting on the person. */
-.live-mark-water,
-.live-mark-wake {
+.live-mark-water {
   position: absolute;
   bottom: 4%;
   height: max(1px, calc(var(--lm-size) * 0.07));
@@ -1300,23 +1306,42 @@ diffs-container {
   right: 6%;
   background: color-mix(in oklab, var(--foreground) 20%, transparent);
 }
-.live-mark-wake {
-  left: -12%;
-  width: 62%;
-  overflow: hidden;
-  background: repeating-linear-gradient(to right, color-mix(in oklab, var(--foreground) 55%, transparent) 0 18%, transparent 18% 34%);
-}
-.live-mark[data-lit] .live-mark-wake {
-  background: repeating-linear-gradient(to right, var(--sea) 0 18%, transparent 18% 34%);
-}
 .live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body {
-  animation: live-mark-bob 2.4s ease-in-out infinite;
+  animation: live-mark-bob 2s ease-in-out infinite;
 }
 .live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body {
   animation: live-mark-glide 1.4s ease-in-out infinite;
 }
-.live-mark-wake {
-  animation: live-mark-wake 0.7s linear infinite;
+/*
+ * Work in progress, on the fin itself: a band of the brand's sea (`--fin-glint`) crosses it, clipped to its outline,
+ * the way light runs along the app icon's fin. The band only translates, on a layer of its own.
+ */
+.live-mark-glint {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='2 2 28 28'%3E%3Cpath d='M4.97 5.01C14.94 6.3 20.86 13.77 27.77 26.99L4.97 26.99C8.16 22.52 10.88 13.84 4.97 5.01Z'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+}
+.live-mark-glint > i {
+  position: absolute;
+  top: -10%;
+  bottom: -10%;
+  left: 0;
+  width: 55%;
+  background: linear-gradient(100deg, transparent 0%, var(--fin-glint) 42%, color-mix(in oklab, var(--fin-glint) 55%, white) 52%, var(--fin-glint) 62%, transparent 100%);
+  transform: translateX(-110%);
+  animation: live-mark-glint 2s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.live-mark[data-motion="writing"] .live-mark-glint > i {
+  animation-duration: 1.4s;
+}
+.live-mark[data-live-mark="background"] .live-mark-glint > i {
+  opacity: 0.6;
+  animation-duration: 4s;
+}
+.live-mark[data-live-mark="starting"] .live-mark-glint > i {
+  animation-duration: 1.6s;
 }
 .live-mark[data-live-mark="working"][data-motion="tool"] .live-mark-body {
   animation: live-mark-brace 0.9s steps(2, jump-none) infinite;
@@ -1382,10 +1407,19 @@ diffs-container {
  * reset it: the gate's play state.
  */
 .live-mark[data-live-mark][data-kind] .live-mark-body,
-.live-mark[data-live-mark][data-kind] .live-mark-wake,
-.live-mark[data-live-mark][data-kind] .live-mark-water {
+.live-mark[data-live-mark][data-kind] .live-mark-water,
+.live-mark[data-live-mark][data-kind] .live-mark-glint > i {
   animation-play-state: var(--visible-animation-state, running);
   will-change: var(--visible-animation-will-change, auto);
+}
+@keyframes live-mark-glint {
+  0% {
+    transform: translateX(-110%);
+  }
+  65%,
+  100% {
+    transform: translateX(200%);
+  }
 }
 @keyframes live-mark-bob {
   0%,
@@ -1393,7 +1427,7 @@ diffs-container {
     transform: translateY(0) rotate(0);
   }
   50% {
-    transform: translateY(-9%) rotate(-4deg);
+    transform: translateY(-13%) rotate(-6deg);
   }
 }
 @keyframes live-mark-glide {
@@ -1403,14 +1437,6 @@ diffs-container {
   }
   50% {
     transform: translateX(5%);
-  }
-}
-@keyframes live-mark-wake {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-34%);
   }
 }
 @keyframes live-mark-brace {
@@ -1580,9 +1606,55 @@ diffs-container {
   --row-over: transparent;
 }
 
-.composer-send:not(:disabled) {
-  border: 1px solid color-mix(in srgb, var(--foreground) 70%, var(--surface));
-  background: linear-gradient(160deg, var(--foreground), color-mix(in srgb, var(--foreground) 75%, var(--surface)) 52%, var(--foreground));
+/*
+ * The composer: one square box a tone up from the conversation, nothing around it. Typing in it lifts it a breath,
+ * and its send is an arrow alone until there is something to send, when a solid square grows in behind it. Both are
+ * an opacity (and the square's scale) on a layer of their own, so the compositor runs them.
+ */
+.composer-box {
+  isolation: isolate;
+}
+.composer-box::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--composer-lift);
+  opacity: 0;
+  transition: opacity 220ms var(--ease-out);
+}
+.composer-box:focus-within::after {
+  opacity: 1;
+}
+.composer-send {
+  isolation: isolate;
+}
+.composer-send::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--foreground);
+  opacity: 0;
+  transform: scale(0.82);
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.composer-send:not(:disabled)::before {
+  opacity: 1;
+  transform: none;
+}
+.composer-send > svg {
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.composer-send:active:not(:disabled) > svg {
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-box::after,
+  .composer-send::before {
+    transition: none;
+  }
 }
 
 .attachment-preview {

@@ -10,6 +10,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   CheckIcon,
+  ChevronRightIcon,
   CornerUpLeftIcon,
   GitPullRequestIcon,
   SquareIcon,
@@ -69,13 +70,25 @@ const BAR_TONE = {
 type CrewRow =
   | { kind: "heading"; group: ChildGroup; count: number }
   | { kind: "child"; agent: NativeAgent; group: ChildGroup }
+  | { kind: "settled"; done: number; idle: number; open: boolean }
 
-function buildRows(children: readonly NativeAgent[]): CrewRow[] {
-  const out: CrewRow[] = []
+/** Finished and idle: nothing to watch or answer, so they fold into one line the person opens when they want them. */
+const SETTLED: ReadonlySet<ChildGroup> = new Set(["idle", "done"])
+
+/**
+ * What needs the person and what's live (needs you, working, queued, failed) as headed groups, then the settled ones
+ * as one "24 done · 1 idle" line, their groups under it once it's open.
+ */
+function buildRows(children: readonly NativeAgent[], settledOpen: boolean): CrewRow[] {
+  const live: CrewRow[] = []
+  const settled: CrewRow[] = []
+  const counts = { done: 0, idle: 0 }
   let group: ChildGroup | undefined
   let heading: Extract<CrewRow, { kind: "heading" }> | undefined
   for (const agent of children) {
     const next = childGroup(childStateOf(agent))
+    const out = SETTLED.has(next) ? settled : live
+    if (next === "done" || next === "idle") counts[next] += 1
     if (next !== group) {
       group = next
       heading = { kind: "heading", group: next, count: 0 }
@@ -84,7 +97,8 @@ function buildRows(children: readonly NativeAgent[]): CrewRow[] {
     heading!.count += 1
     out.push({ kind: "child", agent, group: next })
   }
-  return out
+  if (!settled.length) return live
+  return [...live, { kind: "settled", ...counts, open: settledOpen }, ...(settledOpen ? settled : [])]
 }
 
 /** An Apex's name as its Thread's title, read the same way the Agents panel does. */
@@ -401,22 +415,45 @@ const CrewLineRow = memo(function CrewLineRow({
   )
 })
 
+/** The settled Fins, folded: "24 done · 1 idle", which opens their list and closes it again. */
+function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
+  const words = [row.done ? `${row.done} done` : "", row.idle ? `${row.idle} idle` : ""].filter(Boolean).join(" · ")
+  return (
+    <button
+      type="button"
+      data-crew-settled={row.open ? "open" : "folded"}
+      aria-expanded={row.open}
+      onClick={onToggle}
+      className="pressable flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+    >
+      <ChevronRightIcon aria-hidden className={cn("size-3 shrink-0 transition-transform duration-150 ease-[var(--ease-out)]", row.open && "rotate-90")} />
+      <span className="tabular">{words}</span>
+    </button>
+  )
+}
+
 /**
- * An Apex's crew, at the end of its transcript: every Fin, needs-you first, its asks answered in place through the
+ * An Apex's crew, at the end of its transcript: what needs the person and what's live, needs-you first, the settled
+ * ones folded into one line, its asks answered in place through the
  * same action the Agents panel and the dock use. Replaces `BackgroundWorkLine` while the Thread has Fins; `fallback`
- * (the background-work line) draws instead for a Thread with none. Past about twenty rows it scrolls inside itself;
+ * (the background-work line) draws instead for a Thread with none. It stays through whatever its Apex's session does
+ * (a turn, starting, waking, reconnecting): the Fins are theirs, not the session's. Past about twenty rows it scrolls inside itself;
  * rows are drawn as they scroll into view, so a crew of forty costs what a screenful does. Each row reads its own
  * Fin's entry alone, so a step changing repaints that row, not this card.
  */
 export function CrewCard({
   compact = false,
   fallback = null,
+  thread: shownThread,
 }: {
   compact?: boolean
   fallback?: ReactNode
+  /** The Thread whose Fins it shows, where that isn't the conversation in scope: a saved transcript's own. */
+  thread?: string
 }) {
   const scope = useConversationScope()
-  const thread = useAcp((state) => scopedAcp(state, scope)?.threadId)
+  const scoped = useAcp((state) => scopedAcp(state, scope)?.threadId)
+  const thread = shownThread ?? scoped
   const conversation = useAcp((state) =>
     thread ? apexConversation(state, thread)?.key : undefined
   )
@@ -439,14 +476,15 @@ export function CrewCard({
       unmountCrewCard(thread)
     }
   }, [thread, children.length])
-  const rows = useMemo(() => buildRows(children), [children])
+  const [settledOpen, setSettledOpen] = useState(false)
+  const rows = useMemo(() => buildRows(children, settledOpen), [children, settledOpen])
   const counts = useMemo(() => rollup(children), [children])
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller.current,
     estimateSize: (index) => {
       const row = rows[index]
-      if (!row || row.kind === "heading") return 28
+      if (!row || row.kind === "heading" || row.kind === "settled") return 28
       if (row.group === "needs") return compact ? 176 : 128
       return compact ? 52 : 32
     },
@@ -455,7 +493,9 @@ export function CrewCard({
       const row = rows[index]
       return row?.kind === "heading"
         ? `heading:${row.group}`
-        : row
+        : row?.kind === "settled"
+          ? "settled"
+          : row
           ? `child:${row.agent.nativeId}`
           : index
     },
@@ -525,7 +565,9 @@ export function CrewCard({
                 className="absolute inset-x-0 top-0 pb-1.5"
                 style={{ transform: `translateY(${item.start}px)` }}
               >
-                {row.kind === "heading" ? (
+                {row.kind === "settled" ? (
+                  <SettledLine row={row} onToggle={() => setSettledOpen((open) => !open)} />
+                ) : row.kind === "heading" ? (
                   <h4
                     data-crew-needs={row.group === "needs" || undefined}
                     className="flex items-center gap-1.5 px-1.5 pb-1 text-label text-faint"

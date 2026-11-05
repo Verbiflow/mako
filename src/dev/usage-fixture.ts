@@ -3,6 +3,7 @@
 // summed from one set of hourly amounts, so the chart, the lists and the
 // totals agree as they do on a real host. Deterministic for a given `now`.
 import { USAGE_WINDOWS, type UsageAmount, type UsageSummary, type UsageTotals, type UsageWindow } from "@mako/host/contracts/automations-usage-updates"
+import { CURRENT_PRICE_TABLE } from "@mako/host/contracts/usage-ledger"
 
 interface FixtureSource {
   source: string
@@ -18,9 +19,9 @@ interface FixtureSource {
 }
 
 const SOURCES: FixtureSource[] = [
-  { source: "Codex", harness: "codex", models: [["gpt-6.1-sol", 0.82], ["gpt-6.1-sol-mini", 0.18]], price: 0.9, reported: false, weight: 1 },
-  { source: "Claude Code", harness: "claude", models: [["claude-opus-5-5", 0.7], ["claude-haiku-5-5", 0.3]], price: 1.3, reported: true, weight: 0.8 },
-  { source: "Cursor", harness: "cursor", models: [["composer-2", 1]], price: 0.6, reported: true, weight: 0.35 },
+  { source: "Codex", harness: "codex", models: [["gpt-6.1-sol", 0.82], ["gpt-6.1-sol-mini", 0.18]], price: 0.3, reported: false, weight: 1 },
+  { source: "Claude Code", harness: "claude", models: [["claude-opus-5-5", 0.7], ["claude-haiku-5-5", 0.3]], price: 0.34, reported: true, weight: 0.8 },
+  { source: "Cursor", harness: "cursor", models: [["composer-2", 1]], price: 0.46, reported: true, weight: 0.35 },
   { source: "Devin", harness: "devin", models: [["swe-1.6", 1]], reported: false, weight: 0.18 },
   { source: "Grok", harness: "grok", models: [["grok-build", 1]], price: 0.4, reported: true, weight: 0.12 },
   { source: "OpenCode", harness: "opencode", models: [["anthropic/claude-haiku-4-5", 1]], price: 0.5, reported: false, weight: 0.06 },
@@ -63,7 +64,7 @@ export function fixtureUsageSummary(now = Date.now()): UsageSummary {
     const working = at.getHours() >= 9 && at.getHours() < 19 ? 1 : at.getHours() >= 7 && at.getHours() < 23 ? 0.35 : 0.04
     const weekday = at.getDay() === 0 || at.getDay() === 6 ? 0.3 : 1
     const burst = next() < 0.06 ? 3 : 1
-    hours.push({ start, tokens: SOURCES.map((source) => Math.round(source.weight * working * weekday * burst * next() * 900_000)) })
+    hours.push({ start, tokens: SOURCES.map((source) => Math.round(source.weight * working * weekday * burst * next() * 60_000_000)) })
   }
 
   const windows = USAGE_WINDOWS.map((id): UsageWindow => {
@@ -109,7 +110,7 @@ export function fixtureUsageSummary(now = Date.now()): UsageSummary {
         .sort((left, right) => right.cost - left.cost),
       projects: projectRows.slice(0, 12),
       otherProjects: { count: projectRows.length - 12, ...sumTotals(projectRows.slice(12)) },
-      priceTables: ["2026-10-06"],
+      priceTables: [CURRENT_PRICE_TABLE.id],
     }
   })
   return { windows, truncated: false }
@@ -138,7 +139,7 @@ function totalsOf(source: FixtureSource, tokens: number): UsageTotals {
     cacheRead: Math.round(tokens * 0.9),
     cacheWrite: Math.round(tokens * 0.03),
     output: tokens - Math.round(tokens * 0.04) - Math.round(tokens * 0.9) - Math.round(tokens * 0.03),
-    messages: Math.round(tokens / 40_000),
+    messages: Math.round(tokens / 350_000),
     pricedTokens: priced ? tokens : 0,
     unpricedTokens: priced ? 0 : tokens,
   }

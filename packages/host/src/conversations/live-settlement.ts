@@ -75,7 +75,8 @@ export function measuredSpend(from: UsageMark | undefined, session: LiveSessionS
   const spend = spendBetween(from, session.usage)
   if (!spend.tokens && spend.cost === undefined && !spend.unrecorded) return undefined
   const model = session.settings?.model
-  const estimate = spend.cost === undefined && spend.tokens ? priceEstimate(model, { ...spend.tokens, summed: true }) : null
+  const fast = session.settings?.options?.fast === true
+  const estimate = spend.cost === undefined && spend.tokens ? priceEstimate(model, { ...spend.tokens, summed: true, ...fast && { fast } }) : null
   return { provider: session.harness, model, at: Date.now(), ...spend, ...estimate && { estimate } }
 }
 

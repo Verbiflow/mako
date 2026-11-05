@@ -153,7 +153,7 @@ export function LiveRow({ step, open = false, answering = false }: { step: LiveS
     </Shimmer>
   )
   const glyph = waiting ? (
-    <PauseIcon className="size-3.5 text-caution" />
+    <PauseIcon className="size-3.5 text-attention" />
   ) : status.native === "retrying" ? (
     <RefreshCwIcon className="size-3.5 text-foreground/80" />
   ) : call ? (

@@ -21,6 +21,7 @@ import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { AccountLaunch } from "./accounts.js"
 import type { UsageAmendment } from "./account-usage-readings.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
+import type { LayerCapabilities } from "../contracts/mako-layer.js"
 import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
 import type { ModelRouteAdapter } from "./model-routes.js"
@@ -443,6 +444,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   nativeAgents: NativeAgentsCapability
   /** How a lead's native spawns go to Mako instead (`contracts/native-routing.ts`). */
   nativeRouting: NativeRoutingCapability
+  /** How the harness takes the Mako layer (`contracts/mako-layer.ts`): its adapter's capabilities. Every installed harness declares it (`test-harness-definitions.ts`). */
+  layer?: LayerCapabilities
   /** Which of the person's model connections it runs on, and how (`contracts/model-routes.ts`). */
   modelRoutes: ModelRouteAdapter
   contextBreakdown: ContextBreakdownCapability

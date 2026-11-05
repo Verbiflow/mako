@@ -5,7 +5,7 @@ import { Action, Eyebrow, IconAction } from "@/components/ui/kit"
 import { HarnessIcon, ProviderIcon } from "@/components/ui/provider-icon"
 import { Spinner } from "@/components/ui/spinner"
 import { useCopy } from "@/components/ui/use-copy"
-import { formatContextWindow } from "@/lib/format"
+import { formatTokens } from "@/lib/format"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { accounts, useAccounts } from "@/state/accounts"
@@ -507,7 +507,7 @@ function ModelChecklist({ check, kept, filter, onFilter, onKept, disabled }: {
                 <input type="checkbox" checked={kept.has(model.id)} disabled={disabled} onChange={() => toggle(model)} className="size-3.5 accent-foreground" />
                 <span className="min-w-0 flex-1 truncate text-ui">{model.name ?? model.id}</span>
                 <span className="shrink-0 truncate text-label text-faint">
-                  {[model.name ? model.id : undefined, model.contextTokens ? formatContextWindow(model.contextTokens) : undefined].filter(Boolean).join(" · ")}
+                  {[model.name ? model.id : undefined, model.contextTokens ? formatTokens(model.contextTokens) : undefined].filter(Boolean).join(" · ")}
                 </span>
               </label>
             </li>

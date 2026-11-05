@@ -9,7 +9,7 @@ import { ApexMark } from "@/components/ui/apex-mark"
 import { acp, acpStore, activeAcp, useAcp } from "@/state/acp"
 import { followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { APEX_WORD, FIN_WORD } from "@mako/host/contracts/agents"
-import { addressableFins, backToApex, childConversation, apexConversation, threadChildren, unaddress, useAddressee, useApexView, useThreadChildren, type FinInApex } from "@/state/apex-fins"
+import { backToApex, childConversation, apexConversation, threadChildren, unaddress, useAddressee, useApexView, useThreadChildren, type FinInApex } from "@/state/apex-fins"
 import { useOnScreen } from "@/state/thread-sessions"
 
 /** The Fin open in place on screen, with its entry in its Apex's roster: nothing while anything else is shown. */
@@ -87,18 +87,12 @@ export function ChildComposerNote() {
   const conversation = useAcp((state) => (shown ? undefined : activeAcp(state)?.key))
   const addressee = useAddressee((state) => (conversation ? state.to[conversation] : undefined))
   const apexTitle = useAcp((state) => (conversation ? state.conversations[conversation]?.title : undefined))
-  if (shown)
-    return (
-      <div data-child-note="fin" className="flex items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
-        <ApexMark className="size-3" />
-        Straight to {shown.agent?.title ?? `this ${FIN_WORD}`} · {shown.open.apexTitle} sees what you said
-      </div>
-    )
+  if (shown) return null
   if (!fins.length) return null
   if (addressee && conversation)
     return (
       <div data-child-note="direct" data-addressee={addressee.name} className="flex min-w-0 items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
-        <span className="flex h-6 min-w-0 shrink items-center gap-1.5 rounded-md bg-fill-hover pr-0.5 pl-2 text-ui text-foreground">
+        <span title={`Straight to ${addressee.title}, with no turn of ${apexTitle ?? `the ${APEX_WORD}`}; it sees what you said`} className="flex h-6 min-w-0 shrink items-center gap-1.5 bg-fill-hover pr-0.5 pl-2 text-ui text-foreground">
           <StillMark harness={addressee.provider} size={16} cut="var(--fill-hover)" />
           <span className="min-w-0 truncate">To {addressee.title}</span>
           <button
@@ -111,16 +105,7 @@ export function ChildComposerNote() {
             <XIcon className="size-3" />
           </button>
         </span>
-        <span className="min-w-0 truncate">Straight · {apexTitle ?? `its ${APEX_WORD}`} sees what you said</span>
       </div>
     )
-  return (
-    <div data-child-note="apex" className="flex items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
-      <ApexMark className="size-3" />
-      <span className="min-w-0 truncate">
-        To the {APEX_WORD} · it passes it on to the right {FIN_WORD}
-        {addressableFins(fins).length ? <>, or @ a {FIN_WORD} to write to it straight</> : null}
-      </span>
-    </div>
-  )
+  return null
 }

@@ -10,15 +10,21 @@ export interface FileCursor {
   unread?: string
 }
 
+/** The reader of Mako's own journals, which counts a harness only while the harness's own store keeps no counts. */
+export const JOURNALS = "Mako journals"
+
 /**
  * What harnesses' records said they spent, kept between summaries: each file
  * is read from where its last read stopped and each store from its own
  * cursor, so a summary costs what was written since the last one. Events
  * older than the window are dropped; a file's events stay after it is gone.
+ * Each event keeps the reader that wrote it, so a harness that gains its own
+ * history drops what Mako's journals measured of it, never counting a call
+ * twice.
  */
 export class UsageLedger {
   /** Bump when a reader or this schema changes what a record counts as: an older ledger is dropped and every file read again. */
-  static readonly VERSION = 4
+  static readonly VERSION = 5
 
   private readonly db: DatabaseSync
   private queue: Promise<unknown> = Promise.resolve()
@@ -30,7 +36,9 @@ export class UsageLedger {
       PRAGMA journal_size_limit = 4194304;
       PRAGMA synchronous = NORMAL;
     `)
-    if (Number(this.db.prepare("PRAGMA user_version").get()?.user_version) !== UsageLedger.VERSION) {
+    const version = Number(this.db.prepare("PRAGMA user_version").get()?.user_version)
+    if (version === 4) this.fromVersion4()
+    else if (version !== UsageLedger.VERSION) {
       this.db.exec(`
         DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS stores; DROP TABLE IF EXISTS events; DROP TABLE IF EXISTS sessions;
         PRAGMA user_version = ${UsageLedger.VERSION};
@@ -42,11 +50,32 @@ export class UsageLedger {
       CREATE TABLE IF NOT EXISTS events (
         key TEXT PRIMARY KEY, source TEXT NOT NULL, session TEXT NOT NULL, at INTEGER NOT NULL, model TEXT NOT NULL, cwd TEXT NOT NULL,
         input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, cache_write_1h INTEGER NOT NULL, cost REAL, summed INTEGER NOT NULL,
-        incomplete INTEGER NOT NULL, estimate REAL, price_table TEXT
+        incomplete INTEGER NOT NULL, estimate REAL, price_table TEXT, fast INTEGER NOT NULL DEFAULT 0, reader TEXT
       ) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS events_at ON events (at);
       CREATE TABLE IF NOT EXISTS sessions (source TEXT NOT NULL, session TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (source, session)) WITHOUT ROWID;
     `)
+  }
+
+  /**
+   * A version 4 ledger kept no reader, and holds what Mako's journals
+   * measured of Cursor before Cursor's own history was read, beside the same
+   * runs from Cursor's store. Its events are kept, since the files of some
+   * are gone; the journals' are told apart by their keys (`<source>:<conversation>:<request>`
+   * on a turn's sum), and the next summary drops those of a harness that has a history.
+   * Every file is read again, so a call made in fast mode, which version 4
+   * didn't mark, merges into its event marked.
+   */
+  private fromVersion4(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        ALTER TABLE events ADD COLUMN fast INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE events ADD COLUMN reader TEXT;
+        UPDATE events SET reader = '${JOURNALS}' WHERE summed = 1 AND key GLOB source || ':????????-????-????-????-????????????:*';
+        DELETE FROM files;
+        PRAGMA user_version = ${UsageLedger.VERSION};
+      `)
+    })
   }
 
   /** Runs summaries one at a time: two reads of one file must not race on its cursor. */
@@ -69,7 +98,7 @@ export class UsageLedger {
   /** Records a file's events and where its read stopped, together. */
   advance(source: string, identity: string, cursor: FileCursor, events: readonly UsageEvent[]): void {
     this.transaction(() => {
-      this.insert(events)
+      this.insert(source, events)
       this.db.prepare("INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?)")
         .run(source, identity, cursor.offset, JSON.stringify(cursor.state), cursor.unread ?? null)
     })
@@ -89,6 +118,23 @@ export class UsageLedger {
     })
   }
 
+  /**
+   * Drops what Mako's journals measured of every harness but `recorded`, the
+   * labels whose own stores keep no counts: another harness's calls are its
+   * history's to count. A session left with no call goes with them.
+   */
+  keepRecorded(recorded: ReadonlySet<string>): void {
+    const labels = JSON.stringify([...recorded])
+    const stale = (e: string) => `${e}.reader = '${JOURNALS}' AND ${e}.source NOT IN (SELECT value FROM json_each(?))`
+    this.transaction(() => {
+      this.db.prepare(`
+        DELETE FROM sessions WHERE EXISTS (SELECT 1 FROM events e WHERE e.source = sessions.source AND e.session = sessions.session AND ${stale("e")})
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.source = sessions.source AND e.session = sessions.session AND NOT (${stale("e")}))
+      `).run(labels, labels)
+      this.db.prepare(`DELETE FROM events WHERE ${stale("events")}`).run(labels)
+    })
+  }
+
   storeCursor(source: string, id: string): number | undefined {
     const row = this.db.prepare("SELECT cursor FROM stores WHERE source = ? AND id = ?").get(source, id)
     return row ? Number(row.cursor) : undefined
@@ -96,7 +142,7 @@ export class UsageLedger {
 
   advanceStore(source: string, id: string, cursor: number | undefined, events: readonly UsageEvent[]): void {
     this.transaction(() => {
-      this.insert(events)
+      this.insert(source, events)
       if (cursor === undefined) this.db.prepare("DELETE FROM stores WHERE source = ? AND id = ?").run(source, id)
       else this.db.prepare("INSERT OR REPLACE INTO stores VALUES (?, ?, ?)").run(source, id, cursor)
     })
@@ -135,6 +181,7 @@ export class UsageLedger {
       }
       if (Number(row.cache_write_1h)) event.cacheWrite1h = Number(row.cache_write_1h)
       if (Number(row.summed)) event.summed = true
+      if (Number(row.fast)) event.fast = true
       if (Number(row.incomplete)) event.incomplete = true
       if (row.cost !== null) event.reportedCost = Number(row.cost)
       if (row.estimate !== null && row.price_table !== null) event.estimate = { amount: Number(row.estimate), currency: "USD", table: String(row.price_table) }
@@ -147,15 +194,15 @@ export class UsageLedger {
   }
 
   /** A key read again keeps the larger counts: a streamed call's later reading, or the same call in a fork. */
-  private insert(events: readonly UsageEvent[]): void {
+  private insert(reader: string, events: readonly UsageEvent[]): void {
     if (!events.length) return
     const statement = this.db.prepare(`
-      INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (key) DO UPDATE SET
         input = max(input, excluded.input), output = max(output, excluded.output),
         cache_read = max(cache_read, excluded.cache_read), cache_write = max(cache_write, excluded.cache_write),
         cache_write_1h = max(cache_write_1h, excluded.cache_write_1h),
-        incomplete = max(incomplete, excluded.incomplete),
+        incomplete = max(incomplete, excluded.incomplete), fast = max(fast, excluded.fast),
         cost = CASE WHEN excluded.cost IS NULL THEN cost WHEN cost IS NULL THEN excluded.cost ELSE max(cost, excluded.cost) END,
         estimate = coalesce(estimate, excluded.estimate), price_table = coalesce(price_table, excluded.price_table)
     `)
@@ -166,7 +213,7 @@ export class UsageLedger {
       statement.run(
         event.key, event.source, event.session, at, event.model, event.cwd,
         event.input, event.output, event.cacheRead, event.cacheWrite, event.cacheWrite1h ?? 0, event.reportedCost ?? null, event.summed ? 1 : 0,
-        event.incomplete ? 1 : 0, event.estimate?.amount ?? null, event.estimate?.table ?? null
+        event.incomplete ? 1 : 0, event.estimate?.amount ?? null, event.estimate?.table ?? null, event.fast ? 1 : 0, reader
       )
       session.run(event.source, event.session, at)
     }
