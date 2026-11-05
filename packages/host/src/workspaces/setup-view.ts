@@ -12,7 +12,7 @@ import type { LocalBorrowing } from "../base/local-borrowing.js"
 import { SECRET_KINDS, type SecretKind } from "../base/secrets.js"
 import { setupView, SetupActSchema, sourceAskOf, type AskAnswer, type Asker, type BorrowSnapshot, type BrokerReading, type PlaceReading, type Platform, type SetupAct, type SetupActOutcome, type SetupAsk, type SetupPlace, type SetupView } from "../contracts/setup.js"
 import { carriedCloudRows, carryRows, cloudSignInRows, prepareRows, processRows, repositoryRow, savedKeyRows, signInRows } from "../contracts/setup-readings.js"
-import { checkoutSource, LOCAL_DEVICE } from "./checkout-borrowing.js"
+import { CHECKOUT_GRANTS, checkoutSource, LOCAL_DEVICE } from "./checkout-borrowing.js"
 
 /** One of this device's own brokers, as Setup reads and answers it: the worktrees' checkouts, the saved secrets. */
 export type LocalBroker = Pick<LocalBorrowing, "device" | "account" | "grants" | "leases" | "events" | "asks" | "answer" | "revoke">
@@ -58,7 +58,11 @@ const SECRET_WORDS = {
   "mako-sign-in": "Mako sign-in",
 } as const satisfies Record<SecretKind, string>
 
+/** The device's two checkout grants, by the few words a row has room for. */
+const CHECKOUT_WORDS = { [CHECKOUT_GRANTS.copy]: "Files Git ignores, copied", [CHECKOUT_GRANTS.live]: "Files Git ignores, linked" } as const satisfies Record<string, string>
+
 function named(grant: Grant): Grant {
+  if (grant.id === CHECKOUT_GRANTS.copy || grant.id === CHECKOUT_GRANTS.live) return { ...grant, label: CHECKOUT_WORDS[grant.id] }
   if (grant.resource.kind !== "credential") return grant
   const [kind, ...rest] = grant.resource.ref.split("/")
   const known = SECRET_KINDS.find((each) => each === kind)

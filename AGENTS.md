@@ -2561,7 +2561,7 @@ segmented control picks the place (this Mac, each device, Cloud); six parts
 follow in a fixed order (Needs you, Code, Files, Accounts and secrets, Tools,
 Services), and every row ends in one dot and a few words against its source
 (`syncWords`: "Synced 2 d ago", "Mac's is newer" with Send, "Copy · 3 h old",
-"Waiting on you", "Not here" with Add, "Didn't copy: disk full" with Retry,
+"Waiting on you", "Not here" with Add, "Didn't copy: couldn't be read" with Retry,
 "Stays here"), never colour alone. Every row is a borrowing grant or lease
 (`@mako/protocol/borrow`), an agent's ask, or a place's own reading (the
 recipe's carry, prepare and processes, sign-ins and saved keys by name), and

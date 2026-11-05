@@ -127,7 +127,7 @@ function broker(extra: Partial<BrokerReading> = {}): BrokerReading {
       lease("l-env-studio", env, "t-studio", "studio", NOW - 3 * HOUR, { stale: { heldSince: NOW - 3 * HOUR, sourceLastSeen: NOW - 3 * HOUR } }),
     ],
     refusals: [
-      { event: "refused", at: NOW - 3 * HOUR, grant: outreach.id, borrower: { account: ACCOUNT, repository: REPO, thread: "t-studio", place: { kind: "device", device: STUDIO } }, resource: outreach.resource, refused: "unavailable", reason: "disk-full", correlationId: "c1" },
+      { event: "refused", at: NOW - 3 * HOUR, grant: outreach.id, borrower: { account: ACCOUNT, repository: REPO, thread: "t-studio", place: { kind: "device", device: STUDIO } }, resource: outreach.resource, refused: "unavailable", reason: "unreadable", correlationId: "c1" },
     ],
     asks: [ask, toolAsk],
     sourceVersions: { [env.id]: HASH_A },
@@ -170,7 +170,7 @@ test("every state is said in words, with one tone and at most one button", () =>
     [{ state: "stale", since: NOW - 3 * HOUR }, "Copy · 3 h old", "caution", undefined],
     [{ state: "asked" }, "Waiting on you", "attention", undefined],
     [{ state: "missing" }, "Not here", "negative", "add"],
-    [{ state: "failed", why: "disk full" }, "Didn't copy: disk full", "negative", "retry"],
+    [{ state: "failed", why: "couldn't be read" }, "Didn't copy: couldn't be read", "negative", "retry"],
     [{ state: "here" }, "Stays here", "neutral", undefined],
     [{ state: "thread" }, "This Thread only", "neutral", "keep"],
     [{ state: "up", port: 20000 }, "Up on 20000", "positive", undefined],
@@ -255,7 +255,7 @@ test("another device shows only what reached it or failed to", () => {
   const atStudio = placeOf(`device:${STUDIO}`)
   assert.equal(said(named(atStudio, ".env.local")), "Copy · 3 h old")
   const failed = named(atStudio, "ignore/outreach")
-  assert.equal(said(failed), "Didn't copy: disk full")
+  assert.equal(said(failed), "Didn't copy: couldn't be read")
   assert.equal(rowAction(failed, NOW), "retry")
   const names = rows(atStudio).map((row) => row.name)
   assert.ok(!names.includes("Deploy token"))

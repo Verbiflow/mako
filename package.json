@@ -284,7 +284,7 @@
     "test:orch-ui": "node scripts/test-orch-ui.mjs",
     "test:animations-ui": "node scripts/test-animations-ui.mjs",
     "test:fin-words": "tsx scripts/test-fin-words.ts",
-    "test:setup": "tsx scripts/test-setup.ts",
+    "test:setup": "tsx scripts/test-setup.ts && tsx scripts/test-setup-host.ts",
     "test:fin-counts-ui": "node scripts/test-fin-counts-ui.mjs",
     "bench:live-marks": "node scripts/bench-live-marks.mjs",
     "bench:fin-pips": "node scripts/bench-fin-pips.mjs",
