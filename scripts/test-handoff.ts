@@ -20,9 +20,13 @@ import { AgentsWorld, HARNESSES, type Heard, type Script } from "./lib/agents-wo
  *   and its transcript doesn't show it: the next host sends the brief again, framed so a Fin that did get it carries
  *   on (`BRIEF_AGAIN`).
  * - `heard`: the harness took it and its transcript shows it: the next host continues the Fin's turn.
+ * - `twice`: as `submitted`, and the next host dies the same way sending the brief again: the third sends it again too.
+ * - `stopped`: as `submitted`, and its Apex stops the Fin while the next host reads the transcript: nothing goes.
+ * - `overtaken`: as `submitted`, and the person writes to the Fin while the next host reads the transcript: the
+ *   brief goes first, in its own place, and then the person's words.
  * In none does a Fin that never had its brief get only "Continue where you left off".
  */
-const POINTS = ["unsaved", "submitted", "heard"] as const
+const POINTS = ["unsaved", "submitted", "heard", "twice", "stopped", "overtaken"] as const
 type Point = (typeof POINTS)[number]
 const BRIEF = "You're fin:worker"
 const CONTINUE = "Continue where you left off"
@@ -38,8 +42,8 @@ async function until(what: string, done: () => boolean, timeoutMs = 15_000): Pro
 
 const script: Script = async () => "Done."
 
-/** The host that dies at `point` of the brief's handoff. */
-async function host(dir: string, harness: string, point: Point): Promise<void> {
+/** The host that dies at `point` of the brief's handoff; `again`, a next host that dies at it sending the brief again. */
+async function host(dir: string, harness: string, point: Point, again: boolean): Promise<void> {
   mkdirSync(dir, { recursive: true })
   const heard = (line: Heard) => {
     appendFileSync(join(dir, "heard.ndjson"), `${JSON.stringify(line)}\n`)
@@ -53,7 +57,7 @@ async function host(dir: string, harness: string, point: Point): Promise<void> {
     if (submitted && point === "unsaved") readOnly = true
     if (readOnly) throw Object.assign(new Error("attempt to write a readonly database"), { code: "ERR_SQLITE_ERROR", errcode: 8 })
     commit.apply(this, args)
-    if (submitted && point === "submitted") process.kill(process.pid, "SIGKILL")
+    if (submitted && point !== "unsaved" && point !== "heard") process.kill(process.pid, "SIGKILL")
   })
   followHostLog((line) => {
     if (line.message !== "a message went no further than its handoff") return
@@ -61,16 +65,18 @@ async function host(dir: string, harness: string, point: Point): Promise<void> {
     process.kill(process.pid, "SIGKILL")
   })
   const world = new AgentsWorld({ root: dir, script, heard, transcripts: true })
+  if (again) return void (await new Promise(() => {}))
   const apex = await world.apex("cursor", "full")
+  writeFileSync(join(dir, "apex"), apex.conversation)
   const started = await world.agents.start(apex.caller, { brief: { objective: "Review the sidebar." }, harness, name: "worker", clientKey: "worker", cwd: dir })
   assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
   writeFileSync(join(dir, "fin"), started.conversation!)
   await new Promise(() => {})
 }
 
-function run(dir: string, harness: string, point: Point): Promise<{ signal: NodeJS.Signals | null; stderr: string }> {
+function run(dir: string, harness: string, point: Point, again = false): Promise<{ signal: NodeJS.Signals | null; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["--import", "tsx", import.meta.filename, "--host", dir, harness, point], { stdio: ["ignore", "ignore", "pipe"] })
+    const child = spawn(process.execPath, ["--import", "tsx", import.meta.filename, "--host", dir, harness, point, ...again ? ["again"] : []], { stdio: ["ignore", "ignore", "pipe"] })
     let stderr = ""
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
     const timer = setTimeout(() => child.kill("SIGKILL"), 60_000)
@@ -88,9 +94,30 @@ async function check(dir: string, harness: string, point: Point): Promise<void> 
   const had = before.filter((line) => line.conversation === fin && line.text.includes(BRIEF)).length
   assert.equal(had, point === "heard" ? 1 : 0, `${label}: what reached the harness before the kill`)
   if (point === "unsaved") assert.equal(JSON.parse(readFileSync(join(dir, "refused"), "utf8")).why, "unsaved")
-  const world = new AgentsWorld({ root: dir, script, transcripts: true })
+  let read: (() => void) | undefined
+  const gated = point === "stopped" || point === "overtaken"
+  const world = new AgentsWorld({ root: dir, script, transcripts: true, reading: () => (gated && !read ? new Promise<void>((resolve) => { read = resolve }) : undefined) })
   try {
     const told = () => world.prompts.filter((prompt) => prompt.conversation === fin)
+    if (gated) {
+      await until(`${label}: the transcript read`, () => read !== undefined)
+      if (point === "stopped") {
+        const apex = readFileSync(join(dir, "apex"), "utf8")
+        const stopped = await world.agents.stop(world.caller(apex), { child: "worker", reason: "enough" })
+        assert.ok("stopped" in stopped, JSON.stringify(stopped))
+      } else world.say(fin, "The person's words.")
+      read!()
+      if (point === "stopped") {
+        await pause(500)
+        world.live.wakeDue(Date.now() + 11 * 60_000)
+        await pause(300)
+        assert.deepEqual(told().map((prompt) => prompt.text.slice(0, 40)), [], `${label}: nothing reaches a Fin stopped while its brief's recovery was read`)
+        return
+      }
+      await until(`${label}: both to go`, () => told().some((prompt) => prompt.text.includes("The person's words.")))
+      const order = told().map((prompt) => (prompt.text.includes(BRIEF) ? "brief" : prompt.text.includes("The person's words.") ? "person" : "other"))
+      assert.deepEqual(order.filter((each) => each !== "other"), ["brief", "person"], `${label}: the brief goes in its own place, ahead of what came after the crash`)
+    }
     await until(`${label}: the Fin to be told`, () => told().length > 0)
     await pause(500)
     const briefs = told().filter((prompt) => prompt.text.includes(BRIEF))
@@ -100,7 +127,7 @@ async function check(dir: string, harness: string, point: Point): Promise<void> 
       return
     }
     assert.equal(briefs.length, 1, `${label}: the brief went once`)
-    assert.equal(briefs[0]!.text.includes(BRIEF_AGAIN), point === "submitted", `${label}: framed as sent again only when it may have reached the Fin`)
+    assert.equal(briefs[0]!.text.includes(BRIEF_AGAIN), point !== "unsaved", `${label}: framed as sent again only when it may have reached the Fin`)
     assert.equal(continued.length, 0, `${label}: no bare "Continue" to a Fin that may never have had its brief`)
   } finally {
     await world.close()
@@ -123,6 +150,10 @@ async function main(): Promise<void> {
         try {
           const killed = await run(dir, harness, point)
           assert.equal(killed.signal, "SIGKILL", `${point} on ${harness}: ${killed.stderr.slice(-800)}`)
+          if (point === "twice") {
+            const again = await run(dir, harness, point, true)
+            assert.equal(again.signal, "SIGKILL", `${point} on ${harness}, the second host: ${again.stderr.slice(-800)}`)
+          }
           await check(dir, harness, point)
         } catch (error) {
           failures.push(`${point} on ${harness}: ${error instanceof Error ? error.message : String(error)}`)
@@ -138,5 +169,5 @@ async function main(): Promise<void> {
   console.log("handoff: a brief the journal couldn't record as sent went once after SIGKILL; one recorded but maybe unsent went again as such; one its transcript showed was continued; on all six harnesses")
 }
 
-if (process.argv[2] === "--host") await host(process.argv[3]!, process.argv[4]!, POINTS.find((point) => point === process.argv[5]) ?? "unsaved")
+if (process.argv[2] === "--host") await host(process.argv[3]!, process.argv[4]!, POINTS.find((point) => point === process.argv[5]) ?? "unsaved", process.argv[6] === "again")
 else await main()

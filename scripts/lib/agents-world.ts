@@ -66,6 +66,8 @@ export interface WorldOptions {
   autoContinueDelayMs?: number
   /** Each scripted harness keeps its own transcript on disk, a user entry for each prompt it takes, which `history` reads. */
   transcripts?: true
+  /** Awaited before a transcript is read, as a slow store makes it wait. */
+  reading?: (path: string) => Promise<void> | void
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
   launching?: (conversation: string) => Promise<void> | void
   /** Every steer is refused, as a harness whose turn moved on refuses one. */
@@ -163,7 +165,9 @@ export class AgentsWorld {
       history: async (path) => {
         const ref = this.options.catalog?.ref(path)
         if (ref) return this.options.catalog!.page(path)
-        if (!this.options.transcripts || !existsSync(path)) return null
+        if (!this.options.transcripts) return null
+        await this.options.reading?.(path)
+        if (!existsSync(path)) return null
         const entries = readFileSync(path, "utf8").split("\n").filter(Boolean).map((line): Entry => EntrySchema.parse(JSON.parse(line)))
         return { ref: { harness: "claude", nativeId: path, path }, entries, start: 0, total: entries.length, hasEarlier: false }
       },
@@ -413,7 +417,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, snapshot: () => null, editQueued: none, transfer: none, submit: none,
-    act: async () => none(), cancel: async () => {}, continueTurn: none, promptInTranscript: async () => false, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
+    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
 }
