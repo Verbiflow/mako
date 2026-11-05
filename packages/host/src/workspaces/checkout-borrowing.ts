@@ -115,8 +115,9 @@ async function survey(path: string): Promise<Owned[]> {
 type Granted = { entry: string; link: boolean; lease: string; thread: string; root: string; checkout: string; generation: number }
 
 function withoutPlacing(entry: Placed): Placed {
-  const { placing: _placing, ...rest } = entry
-  return rest
+  const settled: Placed = { ...entry }
+  delete settled.placing
+  return settled
 }
 
 export interface CheckoutBorrowingOptions {
