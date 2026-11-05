@@ -13,9 +13,12 @@ import { pathToFileURL } from "node:url"
  * public too.
  *
  *   node scripts/check-public-text.mjs <base> <head>
+ *   node scripts/check-public-text.mjs --event "$GITHUB_EVENT_PATH"
  *
- * reads the added lines of `<base>...<head>`, the file names it adds, the
- * messages of `<base>..<head>`, and `PR_TITLE` and `PR_BODY` when set.
+ * reads the added lines of `<base>...<head>`, the file names it adds and the
+ * messages of `<base>..<head>`; given a pull request's event, its base, head,
+ * title and body. The title and body come from the event's file, never the
+ * step's environment, which Actions prints in the log.
  */
 
 /** Files that must spell what they check for: the denylist and this check's own test. */
@@ -166,13 +169,22 @@ export function changeLeaks(base, head, { cwd = process.cwd(), title = "", body 
   return out
 }
 
+/** A pull request's base, head, title and body, from the event GitHub writes for its workflow. */
+export function pullRequestEvent(file) {
+  const event = JSON.parse(readFileSync(file, "utf8"))
+  const pull = event.pull_request
+  if (!pull?.base?.sha || !pull?.head?.sha) throw new Error(`${file} is not a pull request's event`)
+  return { base: pull.base.sha, head: pull.head.sha, title: pull.title ?? "", body: pull.body ?? "" }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const [base, head] = process.argv.slice(2)
+  const args = process.argv.slice(2)
+  const { base, head, title = "", body = "" } = args[0] === "--event" && args[1] ? pullRequestEvent(args[1]) : { base: args[0], head: args[1] }
   if (!base || !head) {
-    console.error("Use: node scripts/check-public-text.mjs <base> <head>")
+    console.error("Use: node scripts/check-public-text.mjs <base> <head>, or --event <pull request event file>")
     process.exit(2)
   }
-  const leaks = changeLeaks(base, head, { title: process.env.PR_TITLE ?? "", body: process.env.PR_BODY ?? "" })
+  const leaks = changeLeaks(base, head, { title, body })
   if (leaks.length) {
     console.error(`${leaks.length} places add what public text may not (values not printed; see scripts/check-public-text.mjs):\n${leaks.map((leak) => `  ${leak}`).join("\n")}`)
     process.exit(1)

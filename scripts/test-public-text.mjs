@@ -103,7 +103,7 @@ const commit = async (files, message) => {
   run(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "-m", message])
   return run(["rev-parse", "HEAD"])
 }
-const cli = (base, head, env = {}) => spawnSync(process.execPath, [check, base, head], { cwd: root, encoding: "utf8", env: { ...process.env, PR_TITLE: "", PR_BODY: "", ...env } })
+const cli = (base, head) => spawnSync(process.execPath, [check, base, head], { cwd: root, encoding: "utf8" })
 try {
   run(["init", "-q", "-b", "main"])
   const base = await commit({ "docs/old.md": "Built in /Users/jordan/app once.\n", "README.md": "# Fixture\n" }, "Start")
@@ -127,7 +127,11 @@ try {
   const short = run(["rev-parse", "--short", "HEAD"])
   assert.deepEqual(changeLeaks(removed, message, { cwd: root }), [`commit ${short}, message line 3:13: temporary folder`])
 
-  const body = cli(message, message, { PR_TITLE: "Moves to wrangler", PR_BODY: "Thanks!\nReach me at jordan@gmail.com" })
+  // A pull request's title and body come from its event's file, which nothing prints.
+  const event = `${root}-event.json`
+  await writeFile(event, JSON.stringify({ pull_request: { base: { sha: message }, head: { sha: message }, title: "Moves to wrangler", body: "Thanks!\nReach me at jordan@gmail.com" } }))
+  const body = spawnSync(process.execPath, [check, "--event", event], { cwd: root, encoding: "utf8" })
+  await rm(event, { force: true })
   assert.equal(body.status, 1)
   assert.match(body.stderr, /pull request title, line 1:10: hosted name/)
   assert.match(body.stderr, /pull request body, line 2:13: email/)

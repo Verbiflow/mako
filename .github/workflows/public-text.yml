@@ -33,10 +33,6 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: node scripts/test-public-text.mjs
+      # The title and body are read from the event's file: a step's env is printed in its log.
       - name: What this pull request adds
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: node scripts/check-public-text.mjs "$BASE" "$HEAD"
+        run: node scripts/check-public-text.mjs --event "$GITHUB_EVENT_PATH"
