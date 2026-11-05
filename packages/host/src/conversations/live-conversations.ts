@@ -62,6 +62,7 @@ import { LiveTurnReview } from "./live-turn-review.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
+import { latchedByStop } from "../contracts/delivery-retry.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -472,11 +473,15 @@ export class LiveConversations {
    */
   stopHolds(id: string): number {
     const resident = this.records.load(id)
-    const stops = (request: LiveRequest) => request.status === "queued" || (request.status === "held" && !request.editing && !request.signIn && request.pause !== "stop")
+    // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
+    const stops = (request: LiveRequest) => request.pause !== "stop" &&
+      (request.status === "queued" || request.status === "dispatching" || (request.status === "held" && !request.editing && !request.signIn))
     const count = resident?.snapshot.requests.filter(stops).length ?? 0
     if (!resident || !count) return 0
     const previous = resident.snapshot
-    resident.snapshot = { ...previous, requests: previous.requests.map((request) => stops(request) ? { ...request, status: "held" as const, retry: undefined, wake: undefined, pause: "stop" as const } : request) }
+    resident.snapshot = { ...previous, requests: previous.requests.map((request) => stops(request)
+      ? { ...request, pause: "stop" as const, ...request.status !== "dispatching" && { status: "held" as const, retry: undefined, wake: undefined } }
+      : request) }
     try {
       this.flush(resident)
     } catch (error) {
@@ -1621,6 +1626,9 @@ export class LiveConversations {
     }
     if (resident.timer) clearTimeout(resident.timer)
     resident.timer = null
+    // A Stop's latch holds whatever its requests became since, in the one place every change is written.
+    const latched = latchedByStop(resident.snapshot.requests)
+    if (latched !== resident.snapshot.requests) resident.snapshot = { ...resident.snapshot, requests: latched }
     const previous = resident.journalSnapshot ?? resident.snapshot
     if (
       !resident.updates.length &&

@@ -352,8 +352,9 @@ export interface LiveRequest {
    */
   retry?: RequestRetry
   /**
-   * A `held` request a Stop paused: the person's, or an Apex's of its Fin. Nothing of it goes by itself, a time it had
-   * included, across a restart too, until a deliberate resume: Resume, or for a Fin its next message.
+   * A Stop's latch on a request it found waiting or being sent: the person's Stop, or an Apex's of its Fin. Whatever
+   * comes back for it later (a refusal, a retry, a time), it's held as the Stop's pause and goes by itself never,
+   * across a restart too, until a deliberate resume clears the mark: Resume, or for a Fin its next message.
    */
   pause?: "stop"
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */

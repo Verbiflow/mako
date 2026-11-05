@@ -167,6 +167,8 @@ export class LiveAutoContinue {
   continueFailed(resident: Resident, settled: string): void {
     const failed = resident.snapshot.requests.find((request) => request.id === settled)
     if (failed?.status !== "failed" || this.access.admission.closed) return
+    // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
+    if (failed.pause === "stop") return
     const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false)
     // Only a turn its harness ran is continued: one it never took has nothing to pick up.
     const ran = failed.nativeRun !== undefined || failed.nativeDelivery?.evidence.kind === "accepted"

@@ -110,3 +110,14 @@ export function retryWords(retry: Pick<RequestRetry, "cause">, harness: string):
       return `${harness} still has this session open`
   }
 }
+
+/**
+ * A Stop's latch, kept on each request it found waiting or being sent (`LiveRequest.pause`): whatever comes back for
+ * one later (a refusal, a retry, a time) leaves it held as the Stop's pause, never to go by itself, until a deliberate
+ * resume clears the mark. `requests` itself when nothing changes.
+ */
+export function latchedByStop(requests: LiveRequest[]): LiveRequest[] {
+  const loose = (request: LiveRequest) => request.pause === "stop" && (request.status === "queued" || (request.status === "held" && (request.retry !== undefined || request.wake !== undefined)))
+  if (!requests.some(loose)) return requests
+  return requests.map((request) => loose(request) ? { ...request, status: "held" as const, retry: undefined, wake: undefined } : request)
+}

@@ -314,6 +314,44 @@ try {
     }
 
     // A Stop, the Apex's, the person's from the Apex's Fins or the person's own, ends a message's wait to go again: nothing sends after it, nor after a restart.
+    // A Stop while a message is still being sent latches it: its 429, coming back after the Stop, holds it as the Stop's pause, never to go by itself.
+    for (const stop of ["apex", "person-fin", "person"] as const) {
+      let answer: ((words: string) => void) | undefined
+      let late = false
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-late-${stop}`),
+        script,
+        refusePrompt: () => (late ? new Promise<string>((resolve) => { answer = resolve }) : undefined),
+      })
+      const apex = await world.apex("cursor", "full")
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Label" }, harness, name: "labels", clientKey: "labels", cwd: world.root })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      const fin = started.conversation!
+      await until("the Fin to work", () => world.live.session(fin)?.status === "running")
+      world.release(fin)
+      await until("the Fin's brief", () => requestOf(world, fin, "fin:labels")?.status === "completed")
+      late = true
+      const sent = await world.agents.send(apex.caller, { to: "labels", text: "Carry on.", clientKey: "go" })
+      assert.ok(!("refused" in sent), JSON.stringify(sent))
+      await until(`${harness} late ${stop}: the send under way`, () => requestOf(world, fin, "Carry on.")?.status === "dispatching" && answer !== undefined)
+      if (stop === "apex") await world.agents.stop(apex.caller, { child: "labels", reason: "enough" })
+      else if (stop === "person-fin") assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
+      else await world.live.cancel(fin)
+      answer!("429 Too Many Requests")
+      await until(`${harness} late ${stop}: the late refusal`, () => requestOf(world, fin, "Carry on.")?.status === "held")
+      assert.equal(requestOf(world, fin, "Carry on.")?.retry, undefined, `${harness} late ${stop}: a refusal after the Stop is no retry`)
+      assert.equal(requestOf(world, fin, "Carry on.")?.pause, "stop")
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} late ${stop}: nothing sends after the Stop`)
+      await world.restart()
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(500)
+      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} late ${stop}: nor after a restart`)
+      assert.equal(requestOf(world, fin, "Carry on.")?.pause, "stop")
+      await world.close()
+    }
+
     for (const stop of ["apex", "person-fin", "person"] as const) {
       const { world, faults } = worldOf(`${harness}-stop-${stop}`)
       const apex = await world.apex("cursor", "full")

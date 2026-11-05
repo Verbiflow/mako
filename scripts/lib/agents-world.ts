@@ -90,8 +90,8 @@ export interface WorldOptions {
   apexAnswerMs?: number
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
-  /** A harness refusing a prompt before taking it, with its words: nothing was sent. */
-  refusePrompt?: (conversation: string, harness: string) => string | undefined
+  /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
+  refusePrompt?: (conversation: string, harness: string) => string | undefined | Promise<string | undefined>
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -326,7 +326,7 @@ export class AgentsWorld {
         return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
       },
       prompt: async (id, text, _attachments, _settings, dispatch) => {
-        const refused = this.options.refusePrompt?.(id, harness)
+        const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
           throw new Error(refused)
