@@ -5,7 +5,10 @@
 //    on the first checkpoint save, and when reading the conversation. A 2.4 GB
 //    conversation needs 3.2 GB of base64 and exhausts the child's V8 heap; smaller
 //    ones keep the whole store resident until the child exits. The patched store
-//    reads through to SQLite one blob at a time.
+//    reads through to SQLite one blob at a time, and tells the process how many
+//    bytes each read took (`mako:cursor-sdk-read`): the backend reads the whole
+//    conversation back every turn, and the Cursor child collects that garbage
+//    (`turn-garbage.ts`).
 // 2. The transcript writer rewrites the full JSONL transcript, hydrating every
 //    message blob, at each checkpoint, and again for every subagent the
 //    conversation ever spawned. The patched writer uses the SDK's own incremental
@@ -15,7 +18,11 @@
 //    server-side summary replaces the root messages and adds an archive, and
 //    a new child starts at zero, so both rewrite the file in full, which the
 //    SDK's own streamed writer (`streamFullJsonlWrites`) does a megabyte at a
-//    time instead of as one string.
+//    time instead of as one string. That writer only runs when `appendFile` is
+//    set. The bundle's fs binding lacks it (it only carries functions the
+//    bundle already calls), so the option was `undefined` and every rewrite
+//    hydrated every summary archive at once: one turn on an 80-turn conversation
+//    peaked at 2.1 GB (2026-11-04). The patch appends with `writeFile`.
 // 3. Each bidi stream races every read, of what the backend sends and of what
 //    the client appends, against a promise pending for the stream's life, and
 //    each race leaves a reaction on that promise. Every message the stream
@@ -51,7 +58,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const VERSION = "1.2.0"
-const MARKER = "/*mako:patched:7*/"
+const MARKER = "/*mako:patched:8*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -91,7 +98,7 @@ const BLOB_STORE = [
   ],
   [
     "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
-    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return null==e?void 0:T(e)}}",
+    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return null==e?void 0:(globalThis[Symbol.for(\"mako:cursor-sdk-read\")]?.(e.length),T(e))}}",
   ],
   [
     "const e=await f(this.localStore,t,r.latestCheckpoint),n=this.setBlobStore(t,e),o=await n.getBlob((0,s.q6)(),k(e.rootBlobId));",
@@ -131,9 +138,12 @@ export const BIDI_READS = [
 /**
  * `writer` is the transcript writer's class, `store` the transcript store's, `write` its file writer, `fs`
  * node:fs/promises, `child` the variable holding each subagent's state where the writer writes their transcripts.
+ * The bundle's `fs` only carries the functions it already calls, so `appendFile` is not among them: passing
+ * `fs.appendFile` stores `undefined`, and every transcript write then hydrates the whole conversation at once.
+ * `writeFile` with flag `a` is the same call.
  */
 function transcripts({ writer, store, write, fs, child }) {
-  const options = `writeText:!1,writeJsonl:!0,appendFile:${fs}.appendFile,streamFullJsonlWrites:!0,`
+  const options = `writeText:!1,writeJsonl:!0,appendFile:(p,d)=>${fs}.writeFile(p,d,{flag:"a"}),streamFullJsonlWrites:!0,`
   return [
     [
       `class ${writer}{constructor(e){this.writeChain=Promise.resolve(),`,
