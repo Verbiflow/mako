@@ -65,7 +65,7 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
         disabled={!target}
         onClick={() => target && openTarget(target)}
         title={target ? `Open ${name}` : undefined}
-        className="pressable flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-ui text-foreground hover:bg-fill-hover disabled:pointer-events-none"
+        className="pressable flex h-6 max-w-full min-w-0 items-center gap-1.5 px-1.5 text-ui text-foreground hover:bg-fill-hover disabled:pointer-events-none"
       >
         {target ? <FinMark agent={target} state={childStateOf(target)} read cut="var(--surface)" size={16} /> : null}
         <span className="min-w-0 truncate">{name}</span>
@@ -78,7 +78,7 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
           data-routed-reply
           onClick={reply}
           title={`Write your next message to ${replyTo.name}, with no turn of this Thread's`}
-          className="pressable flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+          className="pressable flex h-6 shrink-0 items-center gap-1 px-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
         >
           <ReplyIcon aria-hidden className="size-3" />
           Reply
@@ -92,7 +92,7 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
       ) : others.length && landed && source.liveId && routed.forward ? (
         <Popover>
           <PopoverTrigger asChild>
-            <button type="button" data-routed-elsewhere className="pressable flex h-6 shrink-0 items-center rounded-md px-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground">
+            <button type="button" data-routed-elsewhere className="pressable flex h-6 shrink-0 items-center px-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground">
               Send elsewhere
             </button>
           </PopoverTrigger>
@@ -103,7 +103,7 @@ export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed:
                 key={agent.nativeId}
                 type="button"
                 onClick={() => void redirect(agent)}
-                className="pressable flex h-8 items-center gap-2 rounded-md px-2 text-left text-ui text-foreground hover:bg-fill-hover"
+                className="pressable flex h-8 items-center gap-2 px-2 text-left text-ui text-foreground hover:bg-fill-hover"
               >
                 <FinMark agent={agent} state={childStateOf(agent)} read cut="var(--popover)" size={16} />
                 <span className="min-w-0 truncate">{agent.title}</span>

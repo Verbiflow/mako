@@ -314,7 +314,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
         aria-label="Settings"
         aria-current={settings ? "page" : undefined}
         onClick={onSettings}
-        className={cn("pressable flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", settings && "bg-fill-selected")}
+        className={cn("pressable flex w-full min-w-0 items-center gap-2 px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", settings && "bg-fill-selected")}
       >
         <Avatar name={client.account.name} src={client.account.image ?? undefined} size={5} />
         <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">{client.account.name || client.account.email}</span>
@@ -376,10 +376,10 @@ function DeskEmpty({ onNew }: { onNew: () => void }) {
     <div className="web-enter flex min-h-0 flex-1 flex-col items-center justify-center gap-6 text-center">
       <MakoMark className="size-9 opacity-25" />
       <div className="flex flex-col gap-1.5 text-ui text-muted-foreground">
-        <button type="button" onClick={onNew} className="pressable flex h-8 items-center justify-between gap-8 rounded-md px-2.5 hover:bg-fill-hover hover:text-foreground">
+        <button type="button" onClick={onNew} className="pressable flex h-8 items-center justify-between gap-8 px-2.5 hover:bg-fill-hover hover:text-foreground">
           New thread <Keys keys={formatChord(NEW_THREAD_KEYS)} />
         </button>
-        <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))} className="pressable flex h-8 items-center justify-between gap-8 rounded-md px-2.5 hover:bg-fill-hover hover:text-foreground">
+        <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))} className="pressable flex h-8 items-center justify-between gap-8 px-2.5 hover:bg-fill-hover hover:text-foreground">
           Search threads and commands <Keys keys={formatChord("mod+k")} />
         </button>
       </div>
@@ -495,7 +495,7 @@ function DeskStart({ startIn, onDismiss, onStarted }: { startIn: StartIn | undef
           </IconAction>
         }
       >
-        <div role="tab" aria-selected data-active className="relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-1.5 overflow-hidden rounded-md bg-raised px-1.5 text-ui font-medium text-foreground">
+        <div role="tab" aria-selected data-active className="relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-1.5 overflow-hidden bg-raised px-1.5 text-ui font-medium text-foreground">
           <MakoMark className="size-4" />
           <span className="truncate">New thread</span>
         </div>

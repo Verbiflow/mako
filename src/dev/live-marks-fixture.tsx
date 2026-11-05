@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 
 function Row({ state, motion, kind, harness, title, end, lit, size }: { state: LiveMarkState; motion?: LiveMotion; kind?: LiveMarkKind; harness: string; title: string; end?: string; lit?: boolean; size?: number }) {
   return (
-    <div data-active={lit || undefined} data-mark-row={state} className={cn("flex items-center gap-2 rounded-md pr-2 pl-1.5", size ? "h-12" : "h-7", lit && "bg-raised")}>
+    <div data-active={lit || undefined} data-mark-row={state} className={cn("flex items-center gap-2 pr-2 pl-1.5", size ? "h-12" : "h-7", lit && "bg-raised")}>
       <LiveMark state={state} motion={motion} kind={kind} lit={lit} size={size} cut={lit ? "var(--raised)" : undefined}>
         <HarnessIcon harness={harness} />
       </LiveMark>

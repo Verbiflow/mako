@@ -18,7 +18,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 
 const inputClass =
-  "h-9 w-full rounded-md bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
+  "h-9 w-full bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
 
 export function ConnectModel({
   provider,

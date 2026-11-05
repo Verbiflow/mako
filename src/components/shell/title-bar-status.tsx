@@ -36,7 +36,7 @@ function ConnectionPill() {
       type="button"
       onClick={() => location.reload()}
       title="Reconnect the agent host"
-      className="no-drag flex items-center gap-1 rounded px-1.5 text-negative transition-colors duration-100 hover:bg-negative/10"
+      className="no-drag flex items-center gap-1 px-1.5 text-negative transition-colors duration-100 hover:bg-negative/10"
     >
       <PlugZapIcon className="size-3" />
       {!connected
@@ -63,7 +63,7 @@ function UpdatePill() {
       type="button"
       onClick={() => updates.install()}
       title={`Restart into ${version ?? "the new version"}`}
-      className="no-drag flex items-center gap-1 rounded px-1.5 text-foreground/80 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+      className="no-drag flex items-center gap-1 px-1.5 text-foreground/80 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
     >
       <ArrowUpCircleIcon className="size-3" />
       <span>Update ready</span>

@@ -24,7 +24,7 @@ export function UnreadRecords({ report }: { report: UnreadReport | null }) {
   }, [report])
   if (!report) return null
   return (
-    <div data-unread-records className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-unread-records className="mt-2 bg-surface ring-1 ring-hairline">
       <div className="px-3 py-2">
         <p className="text-ui">Unread records</p>
         <p className="text-label leading-relaxed text-faint">{unreadSummary(report)}</p>

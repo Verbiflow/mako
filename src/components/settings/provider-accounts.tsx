@@ -151,7 +151,7 @@ function AccountActions({ account, renewable }: { account: ProviderAccount; rene
 }
 
 const CARD =
-  "animate-enter rounded-lg bg-shell/55 px-4 py-3.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
+  "animate-enter bg-shell/55 px-4 py-3.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
 
 function pageHost(url: string | undefined): string | undefined {
   if (!url) return undefined
@@ -324,7 +324,7 @@ function PasteEntry({
               maxLength={4096}
               disabled={sending}
               placeholder={kind === "address" ? "http://localhost:…" : "Code"}
-              className="h-7 min-w-0 flex-1 rounded-md bg-raised px-2 font-mono text-code text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-ui placeholder:text-faint focus:outline-none focus-visible:ring-border"
+              className="h-7 min-w-0 flex-1 bg-raised px-2 font-mono text-code text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-ui placeholder:text-faint focus:outline-none focus-visible:ring-border"
             />
             <Action tone="solid" size="sm" type="submit" disabled={!value.trim() || sending}>
               Continue

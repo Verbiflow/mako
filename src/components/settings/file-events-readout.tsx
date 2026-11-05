@@ -19,7 +19,7 @@ const LISTED = 6
 export function FileEventsReadout({ service }: { service: FileEventsService }) {
   const degraded = service.state === "degraded"
   return (
-    <div data-file-events-readout={service.state} className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-file-events-readout={service.state} className="mt-2 bg-surface ring-1 ring-hairline">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-ui">macOS file-change service</p>

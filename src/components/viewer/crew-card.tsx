@@ -236,7 +236,7 @@ const NeedsRow = memo(function NeedsRow({
                 data-chosen={sent?.allow === true || undefined}
                 onClick={() => send({ allow: true })}
                 className={cn(
-                  "pressable flex items-center gap-1.5 rounded-md bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
+                  "pressable flex items-center gap-1.5 bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
                   compact ? "h-9" : "h-7"
                 )}
               >
@@ -273,7 +273,7 @@ const NeedsRow = memo(function NeedsRow({
                   data-chosen={sent?.option === index || undefined}
                   onClick={() => send({ option: index })}
                   className={cn(
-                    "pressable flex items-center gap-1.5 rounded-md px-2.5 text-label font-medium disabled:opacity-50",
+                    "pressable flex items-center gap-1.5 px-2.5 text-label font-medium disabled:opacity-50",
                     compact ? "h-9" : "h-7",
                     primary
                       ? "bg-foreground text-background hover:bg-foreground/90"
@@ -371,7 +371,7 @@ const CrewLineRow = memo(function CrewLineRow({
       data-child-state={state.kind}
       onClick={() => onOpen(agent)}
       className={cn(
-        "pressable group flex w-full items-center gap-2 rounded-md px-1.5 text-left hover:bg-fill-hover",
+        "pressable group flex w-full items-center gap-2 px-1.5 text-left hover:bg-fill-hover",
         compact ? "min-h-11 py-1.5" : "h-8"
       )}
     >
@@ -424,7 +424,7 @@ function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled
       data-crew-settled={row.open ? "open" : "folded"}
       aria-expanded={row.open}
       onClick={onToggle}
-      className="pressable flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+      className="pressable flex h-7 w-full items-center gap-1.5 px-1.5 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
     >
       <ChevronRightIcon aria-hidden className={cn("size-3 shrink-0 transition-transform duration-150 ease-[var(--ease-out)]", row.open && "rotate-90")} />
       <span className="tabular">{words}</span>
@@ -539,7 +539,7 @@ export function CrewCard({
             type="button"
             onClick={stopAll}
             title={`Stop ${finsWord(stoppable)} under ${apexTitle}; the ${APEX_WORD} keeps running`}
-            className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             <SquareIcon className="size-2.5 fill-current" aria-hidden />
             Stop all

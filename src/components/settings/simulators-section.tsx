@@ -45,7 +45,7 @@ function SetupCard({ setup }: { setup: SimulatorSetup }) {
   const [details, setDetails] = useState(false)
   const settled = setup.phase === "ready" || setup.phase === "unavailable"
   return (
-    <section data-simulators={setup.phase} className="rounded-2xl border border-hairline bg-raised/40 px-5 pt-5 pb-2">
+    <section data-simulators={setup.phase} className="border border-hairline bg-raised/40 px-5 pt-5 pb-2">
       <div className="flex items-center gap-4">
         <SimulatorMark state={said.mark} />
         <div className="min-w-0 flex-1">
@@ -90,7 +90,7 @@ function Disclosure({ open, onToggle, data, children }: { open: boolean; onToggl
       onClick={onToggle}
       aria-expanded={open}
       data-simulators-toggle={data}
-      className="pressable mt-3 -ml-1 flex items-center gap-1 rounded px-1 py-1 text-label text-faint hover:text-muted-foreground"
+      className="pressable mt-3 -ml-1 flex items-center gap-1 px-1 py-1 text-label text-faint hover:text-muted-foreground"
     >
       <ChevronRightIcon className={cn("size-3 transition-transform duration-200 ease-[var(--ease-out)]", open && "rotate-90")} />
       {children}
@@ -103,7 +103,7 @@ type MarkState = "idle" | "working" | "ready" | "broken"
 /** A phone, wearing the line's state as an app icon wears a badge. */
 function SimulatorMark({ state }: { state: MarkState }) {
   return (
-    <span data-simulators-mark={state} className="relative flex size-11 shrink-0 items-center justify-center rounded-xl bg-background text-muted-foreground shadow-xs ring-1 ring-hairline" aria-hidden>
+    <span data-simulators-mark={state} className="relative flex size-11 shrink-0 items-center justify-center bg-background text-muted-foreground shadow-xs ring-1 ring-hairline" aria-hidden>
       <SmartphoneIcon className="size-5" strokeWidth={1.6} />
       {state === "idle" ? null : (
         <span
@@ -420,7 +420,7 @@ function Details({ setup }: { setup: SimulatorSetup }) {
   ]
   return (
     <div data-simulators-details className="pt-1 pb-3">
-      <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-1.5 rounded-xl px-1 py-2 text-label">
+      <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-1.5 px-1 py-2 text-label">
         {rows.map((row) => (
           <div key={row.label} className="contents">
             <dt className="text-faint">{row.label}</dt>

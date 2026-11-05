@@ -54,7 +54,7 @@ export function SkillsSection() {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Filter skills"
               aria-label="Filter skills"
-              className="h-7 w-48 rounded-md bg-surface px-2 text-label text-foreground ring-1 ring-hairline placeholder:text-faint focus:ring-border focus:outline-none"
+              className="h-7 w-48 bg-surface px-2 text-label text-foreground ring-1 ring-hairline placeholder:text-faint focus:ring-border focus:outline-none"
             />
             <span className="flex-1 text-label text-faint">
               {snapshot.skills.length === 1
@@ -78,7 +78,7 @@ export function SkillsSection() {
           {rows.length > 0 ? (
             <SkillMatrix rows={rows} columns={columns} />
           ) : (
-            <p className="rounded-lg bg-surface px-3 py-8 text-center text-ui text-faint ring-1 ring-hairline">
+            <p className="bg-surface px-3 py-8 text-center text-ui text-faint ring-1 ring-hairline">
               {snapshot.skills.length === 0
                 ? "No Agent Skills were found in the universal, provider, or project folders."
                 : "No skills match this filter."}

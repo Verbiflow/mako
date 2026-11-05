@@ -21,7 +21,7 @@ page.className = "p-8 text-ui"
 const button = document.createElement("button")
 const clipboardOnly = new URL(location.href).searchParams.get("check") === "clipboard"
 button.className =
-  "pressable rounded-md bg-primary px-3 py-2 text-primary-foreground"
+  "pressable bg-primary px-3 py-2 text-primary-foreground"
 button.textContent = clipboardOnly ? "Run clipboard regression checks" : "Run UI regression checks"
 const output = document.createElement("pre")
 output.className = "my-4 whitespace-pre-wrap text-ui"

@@ -77,7 +77,7 @@ export function ShowOriginal({ origins, className, always = false }: {
         data-show-original=""
         onClick={() => setOpen(true)}
         title="The bytes this was read from, as the harness wrote them"
-        className={cn("pressable flex h-5 items-center gap-1 rounded px-1 hover:text-foreground focus-visible:text-foreground", className)}
+        className={cn("pressable flex h-5 items-center gap-1 px-1 hover:text-foreground focus-visible:text-foreground", className)}
       >
         <FileCode2Icon className="size-3" />
         <span>Original</span>
@@ -153,7 +153,7 @@ function OriginalDialog({ entries, onClose }: { entries: readonly Recorded[]; on
                     onClick={() => select(each)}
                     className={cn(
                       // Focus roves with the selection, so the selected fill is the focus mark.
-                      "pressable flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-ui outline-none transition-colors duration-100",
+                      "pressable flex h-7 w-full min-w-0 items-center gap-2 px-2 text-left text-ui outline-none transition-colors duration-100",
                       chosen ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
                     )}
                   >
@@ -196,7 +196,7 @@ function FilePath({ file }: { file: string }) {
         type="button"
         aria-label="Copy the file's path"
         onClick={() => { void copy() }}
-        className="pressable ml-1 flex size-6 shrink-0 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+        className="pressable ml-1 flex size-6 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
       >
         {copied ? <CheckIcon className="size-3 text-positive" /> : <CopyIcon className="size-3" />}
       </button>
@@ -249,7 +249,7 @@ function Parts({ parts, kept }: { parts: readonly OriginalPart[]; kept: boolean 
       {kept ? <p className="text-label text-muted-foreground">Read from the copy Mako kept: the harness no longer has this session.</p> : null}
       {parts.slice(0, shown).map((part, index) => <OriginalPartView key={index} part={part} />)}
       {rest > 0 ? (
-        <button type="button" onClick={() => setShown(parts.length)} className="pressable self-start rounded px-1 text-label text-muted-foreground hover:text-foreground">
+        <button type="button" onClick={() => setShown(parts.length)} className="pressable self-start px-1 text-label text-muted-foreground hover:text-foreground">
           Show {rest} more {parts[shown]!.kind === "row" ? "rows" : "parts"}
         </button>
       ) : null}
@@ -278,7 +278,7 @@ function RowView({ table, rowKey, columns }: { table: string; rowKey: Readonly<R
   const long = all.filter((column) => !short.includes(column))
   return (
     <div className="flex flex-col gap-2">
-      <div className="rounded-lg border border-hairline px-3 py-2">
+      <div className="border border-hairline px-3 py-2">
         <p className="pb-1 text-label text-muted-foreground">{table} · {keyWords(rowKey)}</p>
         <dl className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)] gap-x-4 gap-y-0.5 font-mono text-label">
           {short.map(([column, value]) => (
@@ -311,7 +311,7 @@ function SourceBlock({ head, text }: { head: string; text: string }) {
         <div className="mako-code-head">
           <span className="min-w-0 truncate font-mono text-label text-faint tabular select-none">{head}</span>
           {formatted !== undefined ? (
-            <button type="button" className="pressable shrink-0 rounded px-1 text-label text-faint hover:text-foreground" onClick={() => setRaw((value) => !value)}>
+            <button type="button" className="pressable shrink-0 px-1 text-label text-faint hover:text-foreground" onClick={() => setRaw((value) => !value)}>
               {raw ? "Formatted" : "As written"}
             </button>
           ) : null}
@@ -319,7 +319,7 @@ function SourceBlock({ head, text }: { head: string; text: string }) {
             type="button"
             aria-label="Copy the record"
             onClick={() => { void copy() }}
-            className="pressable ml-auto flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-label text-faint hover:text-foreground"
+            className="pressable ml-auto flex h-5 shrink-0 items-center gap-1 px-1.5 text-label text-faint hover:text-foreground"
           >
             {copied ? <CheckIcon className="size-3 text-positive" /> : <CopyIcon className="size-3" />}
             <span role="status" className="min-w-8"><ChangingLabel text={copied ? "Copied" : "Copy"} /></span>

@@ -745,7 +745,7 @@ function DirRow({
   const state = row.staged === 0 ? "off" : row.staged === row.files ? "on" : "partial"
   const FolderGlyph = row.collapsed ? FolderIcon : FolderOpenIcon
   return (
-    <div className="group relative flex h-6 items-center gap-1 rounded select-none transition-colors duration-100 hover:bg-fill-hover">
+    <div className="group relative flex h-6 items-center gap-1 select-none transition-colors duration-100 hover:bg-fill-hover">
       <Guides depth={row.depth} />
       <button
         type="button"
@@ -808,7 +808,7 @@ function FileRow({
   const mark = MARK[file.status]
   return (
     <div className={cn(
-      "group relative flex h-6 items-center gap-1 rounded select-none transition-colors duration-100",
+      "group relative flex h-6 items-center gap-1 select-none transition-colors duration-100",
       active ? "bg-fill-selected" : "hover:bg-fill-hover"
     )}>
       <Guides depth={row.depth} />

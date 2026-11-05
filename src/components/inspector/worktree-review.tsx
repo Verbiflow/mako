@@ -109,7 +109,7 @@ export function WorktreeReview() {
         </p>
       ) : null}
       {merge && conflicts.length ? (
-        <div role="status" className="animate-in fade-in-0 mt-1.5 flex items-center gap-2 rounded-md bg-fill-hover px-2 py-1.5 duration-200 ease-[var(--ease-out)]">
+        <div role="status" className="animate-in fade-in-0 mt-1.5 flex items-center gap-2 bg-fill-hover px-2 py-1.5 duration-200 ease-[var(--ease-out)]">
           <span className="min-w-0 flex-1 text-muted-foreground">
             {conflicts.length === 1 ? "1 file conflicts" : `${conflicts.length} files conflict`} with {updatedFrom ?? from}
           </span>

@@ -47,7 +47,7 @@ export function ChildBreadcrumb() {
         type="button"
         onClick={backToApex}
         title={`Back to ${open.apexTitle}`}
-        className="pressable flex h-6 shrink-0 items-center gap-1 rounded-md pr-1.5 pl-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        className="pressable flex h-6 shrink-0 items-center gap-1 pr-1.5 pl-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       >
         <ChevronLeftIcon className="size-3.5" />
         <ApexMark className="size-3" />
@@ -100,7 +100,7 @@ export function ChildComposerNote() {
             aria-label={`Write to ${apexTitle ?? `the ${APEX_WORD}`} instead`}
             title={`Write to ${apexTitle ?? `the ${APEX_WORD}`} instead`}
             onClick={() => unaddress(conversation)}
-            className="pressable flex size-5 shrink-0 items-center justify-center rounded text-faint hover:text-foreground"
+            className="pressable flex size-5 shrink-0 items-center justify-center text-faint hover:text-foreground"
           >
             <XIcon className="size-3" />
           </button>

@@ -29,7 +29,7 @@ export function AttentionRow({
         openItem(item)
         onOpen()
       }}
-      className="pressable flex w-full items-start gap-2.5 rounded px-2 py-2 text-left hover:bg-fill-hover"
+      className="pressable flex w-full items-start gap-2.5 px-2 py-2 text-left hover:bg-fill-hover"
     >
       <span className="mt-0.5 flex shrink-0 items-center text-muted-foreground">
         <ActivityMark state={state} size={20} />

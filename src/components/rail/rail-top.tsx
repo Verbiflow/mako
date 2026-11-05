@@ -48,7 +48,7 @@ function TopRow({ icon, label, spoken, open, end, onSelect, ...rest }: { icon: R
       aria-current={open ? "page" : undefined}
       data-open={open || undefined}
       className={cn(
-        "pressable group/top flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-ui text-foreground/85 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
+        "pressable group/top flex h-7 w-full items-center gap-2 px-1.5 text-left text-ui text-foreground/85 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
         open && "bg-raised text-foreground hover:bg-raised"
       )}
       {...rest}

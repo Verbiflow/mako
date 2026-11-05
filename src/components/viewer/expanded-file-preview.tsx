@@ -45,7 +45,7 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
         <FileTypeIcon path={name} mimeType={file?.mimeType} className="size-4 shrink-0 text-muted-foreground" />
         <DialogTitle className="min-w-0 flex-1 truncate">{name}</DialogTitle>
         {file && !file.binary ? <div className="flex gap-1 text-label" aria-label="Document view">
-          {(["preview", "source"] as const).map((value) => <button key={value} type="button" aria-pressed={selectedMode === value} onClick={() => setView({ open, identity, mode: value })} className={`pressable rounded-md px-2 py-1 ${selectedMode === value ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover"}`}>{value === "preview" ? "Preview" : "Source"}</button>)}
+          {(["preview", "source"] as const).map((value) => <button key={value} type="button" aria-pressed={selectedMode === value} onClick={() => setView({ open, identity, mode: value })} className={`pressable px-2 py-1 ${selectedMode === value ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover"}`}>{value === "preview" ? "Preview" : "Source"}</button>)}
         </div> : null}
         {navigation && navigation.count > 1 ? <div className="flex shrink-0 items-center gap-1 text-label">
           <button type="button" aria-label="Previous attachment" disabled={navigation.index === 0} onClick={navigation.previous} className="pressable p-1.5 text-muted-foreground hover:bg-fill-hover disabled:opacity-30"><ChevronLeftIcon className="size-4" /></button>
@@ -53,7 +53,7 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
           <button type="button" aria-label="Next attachment" disabled={navigation.index + 1 === navigation.count} onClick={navigation.next} className="pressable p-1.5 text-muted-foreground hover:bg-fill-hover disabled:opacity-30"><ChevronRightIcon className="size-4" /></button>
         </div> : null}
         {actions}
-        <DialogClose aria-label="Close preview" className="pressable rounded-md p-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
+        <DialogClose aria-label="Close preview" className="pressable p-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
           <XIcon className="size-4" />
         </DialogClose>
       </div>

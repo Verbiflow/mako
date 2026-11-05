@@ -96,7 +96,7 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
         </div>
       )}
       {empty && !source ? null : (
-        <span className="media-control pointer-events-none absolute top-2 left-2 max-w-[calc(100%-8rem)] truncate rounded-md px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/page:opacity-100">{name}</span>
+        <span className="media-control pointer-events-none absolute top-2 left-2 max-w-[calc(100%-8rem)] truncate px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/page:opacity-100">{name}</span>
       )}
       {file ? (
         <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity duration-150 group-hover/page:opacity-100 focus-within:opacity-100">
@@ -116,7 +116,7 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
         </div>
       ) : null}
       {long && !source ? (
-        <button type="button" aria-expanded={whole} onClick={() => setWhole(!whole)} className="media-control pressable absolute bottom-2 left-1/2 -translate-x-1/2 rounded-md px-2.5 py-1 text-label">
+        <button type="button" aria-expanded={whole} onClick={() => setWhole(!whole)} className="media-control pressable absolute bottom-2 left-1/2 -translate-x-1/2 px-2.5 py-1 text-label">
           {whole ? "Show less" : "Show all"}
         </button>
       ) : null}
@@ -126,7 +126,7 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
 
 function PageButton({ label, title, pressed, onClick, children }: { label: string; title: string; pressed?: boolean; onClick(): void; children: ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={title} aria-pressed={pressed} onClick={onClick} className="media-control pressable grid size-7 place-items-center rounded-md aria-pressed:bg-popover">
+    <button type="button" aria-label={label} title={title} aria-pressed={pressed} onClick={onClick} className="media-control pressable grid size-7 place-items-center aria-pressed:bg-popover">
       {children}
     </button>
   )

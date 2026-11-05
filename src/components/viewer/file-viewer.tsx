@@ -326,7 +326,7 @@ function DocumentView({ document }: { document: ViewerDocument }) {
           </span>
         )}
         {document.file?.truncated ? (
-          <span className="shrink-0 rounded bg-raised px-1.5 py-px text-label text-caution">
+          <span className="shrink-0 bg-raised px-1.5 py-px text-label text-caution">
             first 2 MB
           </span>
         ) : null}

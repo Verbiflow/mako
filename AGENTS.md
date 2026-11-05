@@ -2287,6 +2287,10 @@ deliberate action and never rides along with a commit.
 
 ## Design rules
 
+`docs/design.md` is the one reference: tokens, shape, the fin, the components to use and the motion rules, in a page.
+`npm run lint` refuses radius classes, literal colours in classes and stylesheets, and the old accent
+(`scripts/check-design-tokens.mjs`); the rest is review.
+
 - Tokens live in `src/index.css` and nowhere else. No literal colors in
   components. Chrome (`--shell`) carries no shadow, ever. **No lines in the
   chrome.** The title strip, the rail and each pane's tab strip sit on the
@@ -2315,11 +2319,10 @@ deliberate action and never rides along with a commit.
   without this; `npm run test:fin-counts-ui` draws every surface from one
   roster and requires the same numbers, and `test:fin-words` holds the words.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
-  the person's own face beside their prompt, an agent's tile (its harness's
-  glyph on the raised plane) on its reply's byline, and the sender's tile on
-  words another Thread wrote in (an Apex's brief, a Fin's report). Every
-  avatar is square with a corner just soft enough not to cut, the rail
-  footer's too. Real shadows exist only on
+  the person's own face beside their prompt, at its last line; an agent's
+  fin, still, with its harness as the badge, on its reply's byline; and a
+  Fin's own fin beside each report it sent its Apex (`FinReports`), where the
+  person's face stands. Every avatar is square, the rail footer's too. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
 - **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
   text — and stays that quiet.** The one accent is the brand's sea
@@ -2327,8 +2330,8 @@ deliberate action and never rides along with a commit.
   (`mako-icons/_masters`, #415f81 to #6386a6) and the marketing site's own
   `--sea` (mako-cloud `apps/site`), hue 245. Until November 2026 the accent
   was an orange "ember" that appeared nowhere in the brand. It is
-  punctuation: the open Thread's working comet, the live dot, the composer
-  caret, at most one badge. Never on links, borders, focus, selection, hover
+  punctuation: the open Thread's lit fin, the glint crossing a working fin,
+  the composer caret, at most one badge. Never on links, borders, focus, selection, hover
   fills, icons at rest, or any fill larger than a badge; if two sea moments
   are visible in one pane, one is wrong. Selection and hover are tints of the
   text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
@@ -2340,10 +2343,12 @@ deliberate action and never rides along with a commit.
   a Fin the plain fin, and the harness a small square badge in the corner:
   the harness is secondary, the brand's fin is who. The fin itself moves, one
   calm gesture a state, as Grok Bot's character does rather than a spinner
-  beside an icon: thinking it bobs, writing it glides with a short wake,
+  beside an icon: a working fin catches the light (a band of the sea crosses
+  it, clipped to its outline), and thinking it bobs, writing it glides,
   running a tool it braces in two steps (`motionOf` reads which from the
   status line or step), its turn done with work still running it bobs at
-  half speed, needing you it turns caution over a breathing waterline,
+  half speed, needing you it turns the attention violet over a breathing
+  waterline,
   asking its Apex it drifts, failed it lists over in negative; queued, idle
   and open elsewhere are still and dimmed, and an answer to read wears the
   unread sphere. The open Thread's face takes the sea, the pane's one accent.

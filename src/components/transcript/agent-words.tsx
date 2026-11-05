@@ -24,7 +24,7 @@ export const AgentWordsCard = memo(function AgentWordsCard({ words, raw, timesta
   const name = from === YOUR_APEX ? (apexTitle ?? `its ${APEX_WORD}`) : from === YOUR_FINS ? `its ${FIN_WORD}s` : from
   const kind = passedOn ? "Passed on" : from === YOUR_FINS ? "Reports" : isBrief(raw) ? "Brief" : "Message"
   return (
-    <div data-agent-words={kind} className="rounded-lg bg-shell/55 px-4 py-3 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <div data-agent-words={kind} className="bg-shell/55 px-4 py-3 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
       <div className="flex items-center gap-2 text-label text-faint">
         <AgentAvatar harness={harness} kind={from === YOUR_APEX ? "thread" : "fin"} label={name} className="bg-surface" />
         <span className="font-medium text-muted-foreground">{passedOn ? `Your message, passed on by ${name}` : `From ${name}`}</span>

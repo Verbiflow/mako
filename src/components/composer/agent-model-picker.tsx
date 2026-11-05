@@ -100,7 +100,7 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
           aria-label={`Model: ${view.modelLabel}`}
           title={issues.length ? issues.map((issue) => issue.message).join(" ") : undefined}
           className={cn(
-            "pressable no-drag flex h-7 max-w-[22rem] min-w-0 items-center gap-1.5 rounded-md px-2",
+            "pressable no-drag flex h-7 max-w-[22rem] min-w-0 items-center gap-1.5 px-2",
             "text-ui font-medium text-foreground/85",
             "[transition:transform_var(--duration-press)_var(--ease-out),background-color_120ms_ease]",
             "hover:bg-fill-hover data-[state=open]:bg-fill-selected"
@@ -286,7 +286,7 @@ function LoadoutRow({
           event.stopPropagation()
           removeFromLoadout(index)
         }}
-        className="rounded p-0.5 text-faint opacity-0 transition-opacity duration-150 group-data-[highlighted]/loadout:opacity-100 hover:text-foreground"
+        className="p-0.5 text-faint opacity-0 transition-opacity duration-150 group-data-[highlighted]/loadout:opacity-100 hover:text-foreground"
       >
         <PinOffIcon className="size-3" />
       </button>
@@ -412,7 +412,7 @@ export function ModelList({
               if (event.key.length === 1 || event.key === "Backspace") event.stopPropagation()
             }}
             placeholder={`Search ${harnessLabel(harness)} models`}
-            className="h-7 w-full rounded-md bg-raised px-2 text-ui placeholder:text-faint focus:outline-none"
+            className="h-7 w-full bg-raised px-2 text-ui placeholder:text-faint focus:outline-none"
           />
         </div>
       ) : (
@@ -506,7 +506,7 @@ function ModelRow({
           onLoadout()
         }}
         className={cn(
-          "rounded p-0.5 text-faint transition-opacity duration-150 hover:text-foreground",
+          "p-0.5 text-faint transition-opacity duration-150 hover:text-foreground",
           pinned ? "text-foreground/70" : "opacity-0 group-data-[highlighted]/model:opacity-100"
         )}
       >

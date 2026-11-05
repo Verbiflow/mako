@@ -78,14 +78,14 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
 
   return (
     <div data-transcript-tool={call.id}>
-      <div className="group/row -mx-1.5 flex min-w-0 items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
+      <div className="group/row -mx-1.5 flex min-w-0 items-center transition-colors duration-100 hover:bg-fill-hover">
         <button
           type="button"
           aria-expanded={open}
           data-open={open || undefined}
           data-pending={call.pending || undefined}
           onClick={() => setOpen((value) => !value)}
-          className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-ui"
+          className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 px-1.5 text-left text-ui"
         >
           <LeadSlot open={open} glyph={<CallGlyph call={call} icon={view?.icon} />} />
           <ToolWords call={call} />
@@ -106,7 +106,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
                 source.liveId
               )
             }
-            className="pressable mr-1 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
+            className="pressable mr-1 p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
           >
             <FileTextIcon className="size-3" />
           </button>
@@ -288,7 +288,7 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
     <div className="space-y-2">
       {args ? (
         <CopyableBlock label="input" text={input}>
-          <pre className="rounded bg-raised px-2 py-1.5 font-mono text-label leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+          <pre className="bg-raised px-2 py-1.5 font-mono text-label leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
             {input}
           </pre>
         </CopyableBlock>
@@ -374,7 +374,7 @@ function CopyableBlock({
           void copy()
         }}
         className={cn(
-          "pressable absolute top-1 right-1 rounded-md bg-raised p-1 ring-1 ring-hairline backdrop-blur-sm",
+          "pressable absolute top-1 right-1 bg-raised p-1 ring-1 ring-hairline backdrop-blur-sm",
           "text-faint transition-opacity duration-100 hover:text-foreground",
           copied
             ? "opacity-100"

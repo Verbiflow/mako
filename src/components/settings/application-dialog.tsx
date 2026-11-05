@@ -186,7 +186,7 @@ export function ApplicationDialog() {
           </p>
         </div>
         {work.length > 0 && (
-          <div className="mx-6 overflow-hidden rounded-lg border border-hairline bg-surface">
+          <div className="mx-6 overflow-hidden border border-hairline bg-surface">
             <div className="flex items-center justify-between border-b border-hairline px-3 py-2 text-label text-faint">
               <span>Across all Mako windows</span>
               <span>{work.length} active</span>
@@ -271,7 +271,7 @@ export function ApplicationDialog() {
         {error && (
           <p
             role="alert"
-            className="mx-6 mb-4 rounded-md bg-negative/10 p-3 text-ui text-negative"
+            className="mx-6 mb-4 bg-negative/10 p-3 text-ui text-negative"
           >
             {error}
           </p>

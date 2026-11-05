@@ -62,7 +62,7 @@ export function AgentGroup({ calls, provider }: { calls: readonly ToolCall[]; pr
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="pressable group/row -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-ui transition-colors duration-100 hover:bg-fill-hover"
+        className="pressable group/row -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 px-1.5 text-left text-ui transition-colors duration-100 hover:bg-fill-hover"
       >
         <LeadSlot open={open} glyph={<AgentMark harness={harnesses[0]} className={cn("size-3.5", working ? "text-foreground/80" : "text-faint")} />} />
         {running ? <Shimmer text={`Running ${title}`} className="shrink-0" /> : <span className="shrink-0 text-muted-foreground">{title}</span>}

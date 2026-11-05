@@ -192,7 +192,7 @@ export function Fixtures() {
               key={value}
               type="button"
               aria-pressed={mode === value}
-              className="pressable rounded border border-hairline px-2 py-1 text-ui"
+              className="pressable border border-hairline px-2 py-1 text-ui"
               onClick={() => setMode(value)}
             >
               {value}
