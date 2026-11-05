@@ -9,7 +9,7 @@ const OUT = "Out of accounts: personal and work are at their limits until 3:10 P
 const MOVED = "Moved to Claude (work): personal is at its limit until 3:10 PM PST"
 
 function fin(moved: string, state: NonNullable<NativeAgent["child"]>["state"]): NativeAgent {
-  return { nativeId: "fin", title: "Labels", work: "agent", background: true, stoppable: false, state: { kind: "completed" }, bindingId: "children", provider: "claude", observedAt: 0, startedAt: 0, child: { thread: "11111111-1111-4111-8111-111111111111", name: "labels", origin: "tool", moved, state } } as unknown as NativeAgent
+  return { nativeId: "fin", title: "Labels", work: "agent", state: { kind: "working" }, bindingId: "children", provider: "claude", observedAt: 0, child: { thread: "11111111-1111-4111-8111-111111111111", name: "labels", origin: "started", moved, ...(state && { state }) } }
 }
 
 const shown = renderToStaticMarkup(<FinMovedLine agent={fin(MOVED, { kind: "working" })} />)

@@ -406,7 +406,7 @@ export interface ChildThread {
   /** Its model, reasoning and fast lane in words, from its harness's catalog. */
   runsOn?: FinTuningWords
   /** The admission queue holds it: for a place, and for the Fins it starts after (`after`, `held`). */
-  queued?: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string }
+  queued?: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string; apexStopped?: true }
   starting?: "placing" | "preparing" | "booting" | "launching"
   /** A turn or its process is at work. */
   working?: boolean
@@ -446,8 +446,8 @@ export function reportPhase(report: Report | undefined): string | undefined {
  */
 export function childState(edge: ThreadParent, thread: ChildThread, journal: ChildJournal): ChildState {
   if (thread.queued) {
-    const { reason, ahead, after, held, refused } = thread.queued
-    return { kind: "queued", reason, ahead, ...(after?.length && { after }), ...(held && { held }), ...(refused && { refused }) }
+    const { reason, ahead, after, held, refused, apexStopped } = thread.queued
+    return { kind: "queued", reason, ahead, ...(after?.length && { after }), ...(held && { held }), ...(refused && { refused }), ...(apexStopped && { apexStopped }) }
   }
   const latest = journal.latest
   // A stop after its last report is how it ended, in the words of whoever stopped it, whatever its harness still winds down.
@@ -569,6 +569,7 @@ const NOTE_LIMIT = 8192
 export function queuedWords(state: Extract<ChildState, { kind: "queued" }>): string {
   if (state.refused) return `Not started: ${state.refused.replace(/^It didn't start: /, "")}`
   if (state.held) return `Not started: ${state.held} didn't finish, so its ${APEX_WORD} decides`
+  if (state.apexStopped) return `Waiting: its ${APEX_WORD} was stopped`
   if (state.after?.length) return `Starts after ${state.after.join(", ")} ${state.after.length === 1 ? "finishes" : "finish"}`
   if (state.reason === "tree-running") return `Queued: ${state.ahead} ahead, the tree's running budget is in use`
   if (state.reason === "place-full") return `Queued: ${state.ahead} ahead, your limit of Fins at once is in use`

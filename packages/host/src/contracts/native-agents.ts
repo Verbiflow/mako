@@ -97,6 +97,8 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
     held: note.optional(),
     /** Why it couldn't start once released: it stays, saying so, until its Apex has heard. */
     refused: note.optional(),
+    /** Its Apex is a Fin that was stopped: it waits, whatever room there is, until that Fin resumes. */
+    apexStopped: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
   z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional() }),

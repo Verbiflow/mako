@@ -57,6 +57,9 @@ jobs:
       # Every whole file a harness writes, through one publisher: a writer killed mid-write, writers in several
       # processes, create-once, another program's folder, and the folder lock they share.
       - run: npx tsx scripts/test-published-files.ts
+      # Every registered harness: a silent startup names its step, a torn append keeps the lines that finished,
+      # and two conversations are charged for their own process trees. The scripted sections run where the CLI is installed.
+      - run: npm run test:harness-conformance
       # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
       - run: npm run test:device-join
       - run: npm run test:cloud-conversations

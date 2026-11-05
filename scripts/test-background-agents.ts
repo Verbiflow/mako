@@ -1072,6 +1072,45 @@ async function finsAtWorkByBinding(): Promise<void> {
   }
 }
 
+/** A stopped Fin's own queued Fins wait for it, whatever room there is, and start once it resumes. */
+async function stoppedApexHolds(): Promise<void> {
+  let working = 0
+  const w = new AgentsWorld({
+    root: join(root, "stopped-apex"),
+    script: (turn) => turn.text.includes("You're fin:") || turn.text.includes("Carry on") ? (working++, turn.world.hold(turn.conversation).then(() => (working--, "stopped"))) : "ok",
+    finLimit: () => 2,
+  })
+  try {
+    const person = await w.apex("claude")
+    const brief = { objective: "Hold" }
+    const lead = await w.agents.start(person.caller, { brief, name: "lead", clientKey: "lead", cwd: w.root })
+    assert.ok(!("refused" in lead) && lead.conversation, JSON.stringify(lead))
+    await waitFor(() => working === 1, "the lead at work")
+    const leadCaller = w.caller(lead.conversation)
+    await w.agents.start(leadCaller, { brief, name: "helper", clientKey: "helper", cwd: w.root })
+    await waitFor(() => working === 2, "its helper at work")
+    const later = await w.agents.start(leadCaller, { brief, name: "later", queue: true, clientKey: "later", cwd: w.root })
+    assert.ok(!("refused" in later) && later.state === "queued", JSON.stringify(later))
+    const waiting = () => w.agents.roster(lead.conversation!).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
+
+    await w.agents.stop(person.caller, { child: "lead" })
+    await w.agents.stop(leadCaller, { child: "helper" })
+    await waitFor(() => working === 0 || w.store.queuedSpawns().length === 0, "both places free")
+    await w.settle()
+    assert.equal(w.store.queuedSpawns().length, 1, "a stopped Apex's queued Fin doesn't start in the room its stop left")
+    assert.deepEqual(waiting(), ["Waiting: its Apex was stopped"])
+
+    const sent = await w.agents.send(person.caller, { to: "lead", text: "Carry on.", clientKey: "resume" })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    await waitFor(() => w.store.queuedSpawns().length === 0 && working === 2, "the queued Fin to start once its Apex resumed")
+    assert.ok(w.store.edges().all.some((edge) => edge.name === "later"))
+    await w.agents.stop(leadCaller, { child: "all" })
+    await w.agents.stop(person.caller, { child: "all" })
+  } finally {
+    await w.close()
+  }
+}
+
 async function waitFor(check: () => boolean, what: string, ms = 8_000): Promise<void> {
   const deadline = Date.now() + ms
   while (!check()) {
@@ -1633,6 +1672,7 @@ try {
   await accessFits()
   await stopAllUnqueues()
   await finsAtWorkByBinding()
+  await stoppedApexHolds()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()
