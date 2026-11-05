@@ -11,6 +11,7 @@ import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { chmod, mkdtemp, readFile, rm, writeFile, appendFile } from "node:fs/promises"
 import { appendFileSync, readdirSync, readFileSync } from "node:fs"
+import { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -643,14 +644,17 @@ async function stopAll(): Promise<void> {
 
 /**
  * What holds this process's event loop open, by kind: every referenced handle and timer but its own stdin, stdout
- * and stderr, which never end and are terminals in a shell and pipes on CI. Read from `until`'s check, whose own
- * timer has fired by then, so a timer here is someone else's.
+ * and stderr, which never end and are terminals in a shell and pipes on CI (to a file they have no handle at all).
+ * Read from `until`'s check, whose own timer has fired by then, so a timer here is someone else's.
  */
 function leftOpen(): string[] {
+  // Read first: `process.stdin` opens its handle the first time it's asked for.
+  const stdio = [process.stdin, process.stdout, process.stderr].filter((stream) => stream instanceof Socket)
   const open = process.getActiveResourcesInfo()
-  // SAFETY: only `_getActiveHandles` says whose a handle is; were it gone this throws rather than counting stdio as a leak.
-  const handles = (process as unknown as { _getActiveHandles(): { fd?: number; isTTY?: boolean }[] })._getActiveHandles()
-  for (const stream of handles.filter(({ fd }) => fd === 0 || fd === 1 || fd === 2)) open.splice(open.indexOf(stream.isTTY ? "TTYWrap" : "PipeWrap"), 1)
+  for (const stream of stdio) {
+    const at = open.indexOf("isTTY" in stream && stream.isTTY ? "TTYWrap" : "PipeWrap")
+    if (at >= 0) open.splice(at, 1)
+  }
   return open
 }
 
