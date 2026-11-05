@@ -843,11 +843,12 @@ test("rescans of different roots take turns, each next one resting while it's be
   const [first, second] = walks.sort((a, b) => a.start - b.start)
   assert.ok(second!.start - first!.end >= 15 * (first!.end - first!.start), `the second waited out a rest (${second!.start - first!.end} ms after a ${first!.end - first!.start} ms walk)`)
   walks.length = 0
-  const settling = Date.now()
   w.events.restore()
   await w.tracker.settled()
   assert.equal(walks.length, 2)
-  assert.ok(Date.now() - settling < 15 * 60, "settled rescans both without resting between them")
+  const [settledFirst, settledSecond] = walks.sort((a, b) => a.start - b.start)
+  const walked = settledFirst!.end - settledFirst!.start
+  assert.ok(settledSecond!.start - settledFirst!.end < 15 * walked, `settled rescans both without resting between them (${settledSecond!.start - settledFirst!.end} ms after a ${walked} ms walk)`)
   await w.tracker.close()
 })
 
