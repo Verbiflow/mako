@@ -254,6 +254,24 @@ jobs:
       - run: npx tsgo -b packages/host
       - run: npx tsx scripts/ci-update-checks.ts
 
+  # A message sent at the end of a long Apex Thread, on the desk, the web app and the phone, between turns and in one:
+  # no two rows of the transcript overlap in any frame it paints (`test:transcript-send-ui`). Geometry only, read
+  # where each frame paints; no timing passes or fails it. On a Mac, where the test's Electron runs.
+  transcript-ui:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run build:control-runtime
+      - run: npm run test:transcript-send-ui
+
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
   # the owner's Codex at the tested build sealed against the bench's stand-in model.
