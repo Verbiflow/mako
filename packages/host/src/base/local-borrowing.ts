@@ -17,6 +17,7 @@ import {
   type Grant,
   type Kind,
   type Lease,
+  type LeaseEnd,
   type LeaseEvent,
   type Need,
   type SourceAnswer,
@@ -147,7 +148,7 @@ export class LocalBorrowing implements Borrowing {
     return standingGrants((await this.#read()).state, this.#now())
   }
 
-  async lease(id: string): Promise<{ lease: Lease; ended?: "revoked" | "expired" | "released" } | undefined> {
+  async lease(id: string): Promise<{ lease: Lease; ended?: LeaseEnd } | undefined> {
     const held = (await this.#read()).state.leases[id]
     if (!held) return undefined
     return held.ended ? { lease: held.lease, ended: held.ended.why } : { lease: held.lease }
