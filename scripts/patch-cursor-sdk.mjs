@@ -22,7 +22,8 @@
 //    carried stays reachable through them, with the network chunk its fields
 //    were decoded from, and the appending side outlives its run: one idle
 //    child held 53,360 such messages, most of its 233 MB (2026-11-04). The
-//    patched reads leave one reaction on each such promise.
+//    patched reads leave one subscription on each such promise, and that
+//    subscription settles every read still waiting.
 // Separately, an agent store waits 5 s for a lock before a write fails, and
 // Mako's checkpoint collector compacts a quiet store with a VACUUM that holds
 // the lock for as long as rewriting what's kept takes (10.7 s for 1.9 GB on
@@ -50,7 +51,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const VERSION = "1.2.0"
-const MARKER = "/*mako:patched:6*/"
+const MARKER = "/*mako:patched:7*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -108,13 +109,14 @@ const BLOB_STORE = [
 
 /**
  * The same in the esm and cjs builds. `J` rejects when an append fails, `w`
- * when the stream is aborted; a read still pending then rejects with it, and
- * a read after it rejects at once.
+ * when the stream is aborted. One subscription on `J` rejects every read
+ * still waiting, not only the latest: two outstanding `next()` calls both
+ * reject in the unpatched SDK. A read after the failure rejects at once.
  */
 export const BIDI_READS = [
   [
     "b={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();return{next:()=>Promise.race([t.next(),J]),",
-    "b={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();let a,f;J.catch((t=>{f=[t],a?.(t)}));return{next:()=>f?Promise.reject(f[0]):new Promise(((r,e)=>{a=e,t.next().then(r,e)})),",
+    "b={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();let f;const o=[];J.catch((t=>{f=[t];for(const r of o)r(t);o.length=0}));return{next:()=>f?Promise.reject(f[0]):new Promise(((r,e)=>{o.push(e),t.next().then((t=>{const n=o.indexOf(e);n<0||o.splice(n,1),r(t)}),(t=>{const n=o.indexOf(e);n<0||o.splice(n,1),e(t)}))})),",
   ],
   [
     "let g,_;const w=new Promise(((t,r)=>{_=()=>r(new p)}));",

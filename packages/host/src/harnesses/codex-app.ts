@@ -164,6 +164,13 @@ const CODEX_INITIALIZE = {
   capabilities: CODEX_CLIENT_CAPABILITIES,
 }
 
+/** The process a session or a prefetch starts. The package manager is read from the env that process gets. */
+export async function codexChildLaunch(env: NodeJS.ProcessEnv, command: string): Promise<{ command: string, env: NodeJS.ProcessEnv }> {
+  const seen = environmentForExecutable(command, codexApprovalEnvironment(env))
+  const launch = await codexLaunch(command, undefined, seen)
+  return { command: launch.executable, env: { ...seen, ...launch.env } }
+}
+
 /**
  * A start's app-server, through `initialize` and a `thread/start` in `cwd`, for the driver's `startPrefetch`. The
  * thread is ephemeral and never takes a turn, so Codex keeps nothing of it: a process's first `thread/start` costs it
@@ -172,13 +179,13 @@ const CODEX_INITIALIZE = {
 export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): Promise<PrefetchLaunch | undefined> {
   const command = await resolveCodexExecutable(base)
   if (!command) return undefined
-  const launch = await codexLaunch(command)
+  const launch = await codexChildLaunch(base, command)
   const initialize = { jsonrpc: "2.0", id: 0, method: "initialize", params: CODEX_INITIALIZE }
   const open = { jsonrpc: "2.0", id: 1, method: "thread/start", params: { cwd, ephemeral: true } }
   return {
-    command: launch.executable,
+    command: launch.command,
     args: CODEX_APP_SERVER_ARGS,
-    env: { ...codexApprovalEnvironment({ ...base }), ...launch.env },
+    env: launch.env,
     exchange: [
       { send: JSON.stringify(initialize), answer: answersId(0) },
       { send: `${JSON.stringify({ jsonrpc: "2.0", method: "initialized" })}\n${JSON.stringify(open)}`, answer: answersId(1) },
@@ -204,10 +211,10 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     applyThreadEnvironment(env, options.threadEnvironment)
     const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
     if (!executable) throw new Error("Codex is not installed")
-    const launch = await trace.step("runtime-discovery", () => codexLaunch(executable))
-    const child = trace.sync("spawn", () => spawnProviderProcess(launch.executable, CODEX_APP_SERVER_ARGS, {
+    const launch = await trace.step("runtime-discovery", () => codexChildLaunch(env, executable))
+    const child = trace.sync("spawn", () => spawnProviderProcess(launch.command, CODEX_APP_SERVER_ARGS, {
       cwd: workingDir,
-      env: { ...environmentForExecutable(executable, codexApprovalEnvironment(env)), ...launch.env },
+      env: launch.env,
       shell: false,
       windowsHide: true,
     }, { kind: "codex:app-server", owner: id }))

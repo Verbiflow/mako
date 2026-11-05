@@ -86,6 +86,32 @@ async function retention(Transport) {
   return { sent: await alive(stream.sent), appended: await alive(stream.appended), reader: stream.reader }
 }
 
+/** Two reads outstanding while the backend is quiet: an append failure rejects both, as the unpatched race does. */
+async function concurrent(Transport) {
+  let rejectAppend
+  const appending = new Promise((_, reject) => { rejectAppend = reject })
+  const inputs = (async function* () {
+    yield { toBinary: () => new Uint8Array(1) }
+    await never
+  })()
+  const transport = new Transport(
+    { map: (method) => method },
+    { bidiAppend: () => appending },
+    { stream: async () => ({ message: (async function* () { await never; yield undefined })() }) },
+    () => {},
+  )
+  const response = await transport.stream({}, { kind: "bidi" }, undefined, undefined, { "x-request-id": "r" }, inputs, undefined)
+  const reader = response.message[Symbol.asyncIterator]()
+  const states = ["pending", "pending"]
+  reader.next().then(() => { states[0] = "resolved" }, () => { states[0] = "rejected" })
+  reader.next().then(() => { states[1] = "resolved" }, () => { states[1] = "rejected" })
+  await nextTurn()
+  rejectAppend(new Error("append failed"))
+  await nextTurn()
+  await nextTurn()
+  return states
+}
+
 async function failures(Transport) {
   // An append that fails rejects the read waiting on the backend, and every read after it.
   const failure = new Error("append failed")
@@ -120,5 +146,9 @@ for (const target of ["dist/esm/index.js", "dist/cjs/index.js"]) {
   assert.ok(after.sent <= 1, `${target} keeps ${after.sent} of ${MESSAGES} messages it read from the backend`)
   assert.ok(after.appended <= 1, `${target} keeps ${after.appended} of ${MESSAGES} messages it appended`)
   await failures(transportClass(source))
+  const Transport = transportClass(source)
+  const original = transportClass(unpatch(source))
+  assert.deepEqual(await concurrent(original), ["rejected", "rejected"], `${target} unpatched no longer rejects both outstanding reads; this test no longer sees the race`)
+  assert.deepEqual(await concurrent(Transport), ["rejected", "rejected"], `${target} leaves an earlier outstanding read pending when an append fails`)
 }
-console.log(`Cursor bidi reads (@cursor/sdk ${version}): ESM/CJS let go of each message once read on both sides of an open stream (the unpatched reads kept all ${MESSAGES}); an append failure and an abort still reach a read`)
+console.log(`Cursor bidi reads (@cursor/sdk ${version}): ESM/CJS let go of each message once read on both sides of an open stream (the unpatched reads kept all ${MESSAGES}); an append failure rejects every outstanding read, and an abort still reaches a read`)
