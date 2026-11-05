@@ -89,6 +89,10 @@ const PINNED: { name: string; steps: Step[] }[] = [
     steps: steps({ kind: "move", to: "cursor" }, { kind: "crash" }, { kind: "message" }),
   },
   {
+    name: "seed 24, as generated then: a resume releases a held switch ahead of the one under way, which stays next, one at a time",
+    steps: steps({ kind: "switch", to: "cursor" }, { kind: "stop" }, { kind: "open-fail" }, { kind: "switch", to: "grok" }, { kind: "resume" }, { kind: "open" }, { kind: "close-ok" }),
+  },
+  {
     name: "a crash while a stopped switch's message waits in the queue",
     steps: steps({ kind: "switch", to: "cursor" }, { kind: "stop" }, { kind: "open" }, { kind: "edit" }, { kind: "crash" }, { kind: "resume" }),
   },
@@ -150,7 +154,7 @@ interface Work {
   gone: boolean
   /** The Stop that holds it, until a resume or nothing. */
   stopped: boolean
-  /** A failed switch's retry is its card's: the work stands, and its words stay there. */
+  /** How many times its words reached a harness: once at most. */
   sent: number
 }
 

@@ -574,14 +574,19 @@ export class LiveTransfers {
       // Its message is already in the queue when this switch was held or taken back: it stays as the person left it.
       const own = previous.requests.find((request) => request.id === transfer.input.id)
       const quiet = quietSwitch(transfer)
-      // A move's queue lands with it: every row stays a row, and a hold about the account it left goes (`arriving`).
-      const staying = quiet
-        ? arriving(previous.requests, { harness: transfer.input.provider, account: transfer.input.account, tuning: transfer.input.tuning }, previous.session.harness !== transfer.input.provider, transfer.first)
+      // On another place the queue lands with it: every row stays a row, and a hold about the account it left goes.
+      const leaving = previous.session.harness !== transfer.input.provider
+      const staying = quiet || leaving
+        ? arriving(previous.requests, { harness: transfer.input.provider, account: transfer.input.account, tuning: transfer.input.tuning }, leaving, transfer.first)
         : previous.requests
+      // The transcript goes with the first to go: this switch's message, unless a row goes ahead of it.
+      const followsRow = staying.find((request) => request.status === "queued")?.id !== own?.id || (!own && staying.some((request) => request.status === "queued"))
+      const transcript = manifest.includesBase || manifest.toBlock > manifest.fromBlock ? [manifest] : []
+      const merged = quiet || (leaving && followsRow)
       const carries = {
         targetBindingId: transfer.input.bindingId ? bindingId : undefined,
         tuning: prior ? transfer.input.tuning : undefined,
-        context: manifest.includesBase || manifest.toBlock > manifest.fromBlock ? [manifest] : [],
+        context: merged ? [] : transcript,
       }
       const nextSnapshot: LiveSnapshot = {
         ...previous,
@@ -595,12 +600,12 @@ export class LiveTransfers {
         threadPath: binding.path,
         permissions: [],
         requests: own
-          ? staying.map((request) => (request === own ? { ...own, ...carries } : request))
+          ? staying.map((request) => (request.id === own.id ? { ...request, ...carries } : request))
           : quiet ? staying : admittedInPlace(staying, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
         control: {
           ...this.host.control(resident),
-          // With no message of its own, its history goes with whichever goes next.
-          ...quiet && carries.context.length > 0 && { merges: [...previousControl.merges, { id: transfer.input.id, sourceId: transfer.input.id, sourceRevision: 0, manifest, status: "pending" as const }] },
+          // Its history goes with whichever goes next.
+          ...merged && transcript.length > 0 && { merges: [...previousControl.merges, { id: transfer.input.id, sourceId: transfer.input.id, sourceRevision: 0, manifest, status: "pending" as const }] },
           activeBindingId: bindingId,
           bindings: (prior ? latestBindings : [...latestBindings, binding]).map(
             (candidate) =>
@@ -661,7 +666,7 @@ export class LiveTransfers {
         // Back before its commit: only what this switch did to the binding is undone, on the state as it is now, so
         // whatever else was accepted meanwhile (a Stop, an edit, a removal, another switch behind it) stands. Its
         // message stays in the queue, and the switch waits with it under whatever hold it has.
-        resident.snapshot = undoSwitch(resident.snapshot, this.host.control(resident), previous, previousControl, transfer.input.id)
+        resident.snapshot = undoSwitch(resident.snapshot, this.host.control(resident), previous, previousControl, transfer.input.id, nextSnapshot.requests)
         phase.phase = "opening"
         try {
           this.host.flush(resident)
@@ -856,7 +861,7 @@ function supersedeMoves(snapshot: LiveSnapshot, id: string): LiveSnapshot {
  * keeps its words, its place and its holds, losing only the destination's context, and the switch waits with it to go
  * again; a message the person removed took the switch with it.
  */
-function undoSwitch(current: LiveSnapshot, control: ConversationControl, before: LiveSnapshot, beforeControl: ConversationControl, id: string): LiveSnapshot {
+function undoSwitch(current: LiveSnapshot, control: ConversationControl, before: LiveSnapshot, beforeControl: ConversationControl, id: string, landed: LiveSnapshot["requests"]): LiveSnapshot {
   const was = beforeControl.transfers.find((transfer) => transfer.input.id === id)
   const gone = current.requests.find((request) => request.id === id)?.status === "canceled"
   return {
@@ -865,7 +870,7 @@ function undoSwitch(current: LiveSnapshot, control: ConversationControl, before:
     session: before.session,
     threadPath: before.threadPath,
     permissions: before.permissions,
-    requests: was && quietSwitch(was) ? departing(current.requests, before.requests) : current.requests.map((request) => (request.id === id ? { ...request, context: undefined, targetBindingId: undefined } : request)),
+    requests: departing(current.requests.map((request) => (request.id === id ? { ...request, context: undefined, targetBindingId: undefined } : request)), before.requests, landed),
     control: {
       ...control,
       activeBindingId: beforeControl.activeBindingId,

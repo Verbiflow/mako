@@ -94,11 +94,12 @@ export interface Landing {
 }
 
 /**
- * The queue as a moved Thread lands (`docs/delivery-queue.md`): a hold about the source's account goes with the move,
- * and a hold about the person doesn't. What waited for a limit or a sign-in goes on the target in its order, and that
- * sign-out's notice goes with it, which `signInPause` reads from these marks; a sign-in of the very account it lands on
- * still stands. A Stop and an edit stay as they are, and a row a Stop paused keeps waiting for its Resume with the
- * sign-in gone. `leaving` says the model a row chose was its harness's, so it runs on the target's.
+ * The queue as a switch lands on another place, a harness or an account, whoever asked (`docs/delivery-queue.md`): a
+ * hold about the source's account goes, and a hold about the person doesn't. What waited for a limit or a sign-in goes on
+ * the target in its order, and that sign-out's notice goes with it, which `signInPause` reads from these marks; a
+ * sign-in of the very account it lands on still stands. A Stop and an edit stay as they are, and a row a Stop paused
+ * keeps waiting for its Resume with the sign-in gone. `first` goes ahead of what waited longer, as a digest the landing
+ * freed does by itself. `leaving` says the model a row chose was its harness's, so it runs on the target's.
  */
 export function arriving(requests: readonly LiveRequest[], to: Landing, leaving: boolean, first?: string): LiveRequest[] {
   const landed = requests.map((request) => {
@@ -109,7 +110,8 @@ export function arriving(requests: readonly LiveRequest[], to: Landing, leaving:
     }
     return retuned(holdOf(request)?.kind === "retry" ? { ...request, status: "queued" as const, retry: undefined } : request, to, leaving)
   })
-  return [...(first === undefined ? landed : goingFirst(landed, first))]
+  const ahead = first ?? landed.find((request, index) => request.digest && request.status === "queued" && requests[index]?.status === "held")?.id
+  return [...(ahead === undefined ? landed : goingFirst(landed, ahead))]
 }
 
 function retuned(request: LiveRequest, to: Landing, leaving: boolean): LiveRequest {
@@ -118,13 +120,21 @@ function retuned(request: LiveRequest, to: Landing, leaving: boolean): LiveReque
   return leaving && request.tuning ? { ...request, tuning: undefined } : request
 }
 
-/** The queue as it was before a move that was taken back: what it freed waits again, in its place, and what's changed since stands. */
-export function departing(requests: readonly LiveRequest[], before: readonly LiveRequest[]): LiveRequest[] {
-  const place = new Map(before.map((request, index) => [request.id, index]))
+/**
+ * The queue as it was before a landing that was taken back: what it freed waits again, as it did, and its order goes
+ * back if it changed it. Anything else that changed since stands. `landed` is what the landing made of `before`.
+ */
+export function departing(requests: readonly LiveRequest[], before: readonly LiveRequest[], landed: readonly LiveRequest[]): LiveRequest[] {
+  const was = new Map(before.map((request) => [request.id, request]))
   const back = requests.map((request) => {
-    const was = before.find((candidate) => candidate.id === request.id)
-    return was && request.status === "queued" && was.status === "held" ? { ...request, status: was.status, retry: was.retry, signIn: was.signIn, tuning: was.tuning } : was && request.status === "held" ? { ...request, tuning: was.tuning, signIn: was.signIn } : request
+    const earlier = was.get(request.id)
+    if (!earlier) return request
+    const freed = request.status === "queued" && earlier.status === "held" && (earlier.retry !== undefined || earlier.signIn !== undefined)
+    return freed ? { ...request, status: earlier.status, retry: earlier.retry, signIn: earlier.signIn, tuning: earlier.tuning } : request.status === "held" ? { ...request, tuning: earlier.tuning, signIn: earlier.signIn } : request
   })
+  const same = before.every((request, index) => landed[index]?.id === request.id)
+  if (same) return back
+  const place = new Map(before.map((request, index) => [request.id, index]))
   return back.map((request, index) => ({ request, index })).sort((left, right) => (place.get(left.request.id) ?? before.length + left.index) - (place.get(right.request.id) ?? before.length + right.index)).map(({ request }) => request)
 }
 

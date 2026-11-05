@@ -24,7 +24,7 @@ schedules, and a failing schedule is pinned there.
    as any message is. Resume sends the row's words through the switch. Removing
    the row takes the switch with it (`LiveTransfers.withdraw`). While a switch's
    row is held, the switch holds nothing else up: a new message, or a new switch,
-   goes ahead of it. A move has no message to wait with: rule 11.
+   goes ahead of it. A move is the exception: rule 11.
 
 3. **A committed switch completes, a Stop or not.** Once the journal names the
    destination as the binding, the conversation is on it. The Stop pauses the
@@ -70,24 +70,28 @@ schedules, and a failing schedule is pinned there.
    waited longer, as a held digest does. A move that fails leaves every row where
    it was, on the source.
 
-10. **A hold about the source's account goes with the move; a hold about the
+10. **A hold about the source's account goes with the switch; a hold about the
     person doesn't.** A retry on its limit and a sign-out's hold belong to the
-    account the Thread is leaving, and mean nothing on the target, so at commit
-    those rows go, and the sign-in notice with them. That's so moving to another
-    account of the same harness too. Landing on the very account that signed out
-    changes nothing, and its hold stays. A Stop and a person's edit stay whatever
-    the move: a row a Stop paused while it waited on a sign-in stops waiting on
-    the sign-in and goes on waiting for its Resume (`arriving`).
+    account the Thread is leaving, and mean nothing on the target. So when any
+    switch lands on another harness or account, a person's or a move, those rows
+    go, in their order, and the sign-in notice with them. A digest that was held
+    with them goes first. The transcript goes with the first row to go, not
+    with the switch's message when one goes ahead of it. Landing on the very
+    account that signed out changes nothing, and its hold stays. A Stop and a
+    person's edit stay whatever the switch: a row a Stop paused while it waited on
+    a sign-in stops waiting on the sign-in and goes on waiting for its Resume
+    (`arriving`). A close that fails puts the rows back (`departing`).
 
-11. **A Stop retires a move not yet committed.** With no row to wait in, it goes
-    no further, so no binding comes after the Stop, and whoever asked is told, and
-    can ask again. A move asked for after a Stop can go, since it sends nothing: the
-    Stop's holds stay, the Thread stays stopped, and what it paused goes on the
-    target at its Resume. An automatic move yields instead (`unlessStopped`), and
-    what it was decided on is read at its admission and again right before its
-    commit, with nothing awaited between (`stillDecided`). A restart retires one
-    too, since what it was decided on went with the last host, and whoever asked
-    hears.
+11. **A Stop retires a move not yet committed.** This is the one exception to
+    rule 2. A move has no row to be held in and never owns one, so it can't wait
+    with a message: it goes no further, no binding comes after the Stop, and
+    whoever asked is told, and can ask again. A move asked for after a Stop can go,
+    since it sends nothing: the Stop's holds stay, the Thread stays stopped, and
+    what it paused goes on the target at its Resume. An automatic move yields
+    instead (`unlessStopped`), and what it was decided on is read at its admission
+    and again right before its commit, with nothing awaited between
+    (`stillDecided`). A restart retires one too, since what it was decided on went
+    with the last host, and whoever asked hears.
 
 ## What each failure leaves
 

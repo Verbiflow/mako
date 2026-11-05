@@ -309,6 +309,26 @@ async function landing(): Promise<void> {
     await f.world.close()
   }
   {
+    // The person's switch lands the same way: what waited out the limit goes first, carrying the transcript, then their words.
+    let out = false
+    const f = await fixture("codex", { refusePrompt: (_conversation, harness) => (out && harness === "codex" ? "You've hit your usage limit." : undefined) })
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    out = true
+    const row = randomUUID()
+    f.world.live.submit(conversation, row, "row-waited", [])
+    await until("it to wait", () => f.world.live.snapshot(conversation)!.requests.some((request) => request.id === row && request.retry))
+    const id = randomUUID()
+    await f.world.continueOn(conversation, { kind: "words", input: { id, provider: "claude", text: "row-words", attachments: [] } })
+    await until("both", () => ["row-waited", "row-words"].every((words) => f.prompts().some((prompt) => prompt.text.includes(words))))
+    await f.world.settle(40, 20_000)
+    assert.deepEqual(f.prompts().filter((prompt) => prompt.text.includes("row-")).map((prompt) => (prompt.text.includes("row-words") ? "row-words" : "row-waited")), ["row-waited", "row-words"])
+    const requests = f.world.live.snapshot(conversation)!.requests
+    assert.equal(requests.find((request) => request.id === row)?.context?.length, 1, "the transcript goes with the first to go")
+    assert.ok(!requests.find((request) => request.id === id)?.context?.length)
+    await f.world.close()
+  }
+  {
     // A Stop while it opens retires it: no binding changes, the caller hears, and it can ask again.
     let open: (() => void) | undefined
     let gated = false
@@ -453,6 +473,9 @@ async function landing(): Promise<void> {
       assert.equal(gone[1]!.pause, "stop")
       assert.equal(gone[2]!.editing, true)
     }
+    const digest = LiveRequestSchema.parse({ id: randomUUID(), createdAt: Date.now(), text: "digest", attachments: [], status: "held", retry: { at: Date.now() + 60_000, attempt: 1, since: Date.now(), cause: "rate-limited", reason: "limit" }, digest: { notices: [] }, actor: { kind: "agent", session: SessionIdSchema.parse(randomUUID()) } })
+    const older = LiveRequestSchema.parse({ ...digest, id: randomUUID(), text: "older", digest: undefined })
+    assert.deepEqual(arriving([older, digest], { harness: "codex" }, true).map((row) => row.text), ["digest", "older"], "a digest the landing freed goes first")
     await f.world.close()
   }
 }
