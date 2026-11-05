@@ -166,6 +166,8 @@ jobs:
       # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
       - run: npm run test:thread-split
       - run: npm run test:agents-wake
+      # An Apex let go of while at rest still hears its Fins move, so a window coming back shows them as they are.
+      - run: npm run test:fins-reach-released-apex
       - run: npm run test:orch-answer
       - run: npm run test:fin-resume
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
