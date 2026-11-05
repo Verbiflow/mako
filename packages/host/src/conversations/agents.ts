@@ -146,7 +146,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "holdQueued" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -419,7 +419,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.actor?.kind !== "agent") continue
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || request.actor?.kind !== "agent") continue
       const relaunched = !launched
       try {
         if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
@@ -439,7 +439,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** An exit or a crash pauses the digests waiting for an Apex with the person's messages; they're Mako's, so they go on. */
   private resumeWakes(conversation: string): void {
     for (const request of this.deps.live.snapshot(conversation)?.requests ?? []) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
       try {
         this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         hostLog("agents", "resumed", { conversation, request: request.id, wake: true })
@@ -1666,7 +1666,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (turn) await this.deps.live.cancel(conversation).catch((error) => hostWarn("agents", "a Fin's turn could not be stopped", { op: edge.op, error: errorMessage({ error }) }))
     let paused = 0
     try {
-      paused = this.deps.live.holdQueued(conversation)
+      paused = this.deps.live.stopHolds(conversation)
     } catch (error) {
       hostWarn("agents", "a stopped Fin's messages couldn't be paused", { op: edge.op, error: errorMessage({ error }) })
     }

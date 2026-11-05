@@ -446,7 +446,7 @@ export class LiveConversations {
     const resident = this.records.require(id)
     const resuming = new Set(ids)
     const requests = resident.snapshot.requests.map((request) =>
-      resuming.has(request.id) && request.status === "held" && !request.signIn && !request.wake && !request.retry && !request.editing ? { ...request, status: "queued" as const } : request)
+      resuming.has(request.id) && request.status === "held" && !request.signIn && !request.wake && !request.retry && !request.editing ? { ...request, status: "queued" as const, pause: undefined } : request)
     const own = first === undefined ? undefined : requests.find((request) => request.id === first && request.status === "queued")
     const rest = own ? requests.filter((request) => request !== own) : requests
     // Nothing goes ahead of a message the person is editing: `first` goes ahead of what waits after the last of those.
@@ -464,20 +464,26 @@ export class LiveConversations {
     this.release(resident)
   }
 
-  /** Pauses every message queued for `id`, as a stop pauses them (`resumeHeld` sends them on); how many it paused. */
-  holdQueued(id: string): number {
-    const resident = this.records.get(id)
-    const queued = resident?.snapshot.requests.filter((request) => request.status === "queued").length ?? 0
-    if (!resident || !queued) return 0
+  /**
+   * A Stop of `id`, the person's or an Apex's of its Fin: every message waiting there pauses, and one that was to go by
+   * itself (again, or at a time) stops being so, so nothing sends until a deliberate resume (`resumeHeld`, Resume),
+   * across a restart too. A message being edited or waiting for a sign-in keeps its own hold. Read in if it isn't
+   * loaded. How many it paused.
+   */
+  stopHolds(id: string): number {
+    const resident = this.records.load(id)
+    const stops = (request: LiveRequest) => request.status === "queued" || (request.status === "held" && !request.editing && !request.signIn && request.pause !== "stop")
+    const count = resident?.snapshot.requests.filter(stops).length ?? 0
+    if (!resident || !count) return 0
     const previous = resident.snapshot
-    resident.snapshot = { ...previous, requests: previous.requests.map((request) => request.status === "queued" ? { ...request, status: "held" as const } : request) }
+    resident.snapshot = { ...previous, requests: previous.requests.map((request) => stops(request) ? { ...request, status: "held" as const, retry: undefined, wake: undefined, pause: "stop" as const } : request) }
     try {
       this.flush(resident)
     } catch (error) {
       resident.snapshot = previous
       throw error
     }
-    return queued
+    return count
   }
 
   /** Whether a message to its running turn lands at the agent's next step (`steer` with `step`), not at the turn's end. */
@@ -1072,7 +1078,7 @@ export class LiveConversations {
         break
       // A message waiting on a sign-out keeps waiting; only the session's Resume releases it.
       case "resume":
-        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined, retry: undefined, editing: undefined }
+        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined, retry: undefined, editing: undefined, pause: undefined }
         break
       case "edit":
         next = {
@@ -1081,6 +1087,7 @@ export class LiveConversations {
           wake: undefined,
           retry: undefined,
           editing: undefined,
+          pause: undefined,
           text: command.change.text,
           displayText: undefined,
           nativeDelivery: undefined,
@@ -1460,6 +1467,8 @@ export class LiveConversations {
 
   /** Stop: the person's (`mako:live-cancel`) unless `why` names Mako's own reason. */
   async cancel(id: string, why: ProviderStop = "person"): Promise<void> {
+    // The person's Stop: nothing of this conversation goes by itself after it (`stopHolds`).
+    if (why === "person") this.stopHolds(id)
     const loaded = this.records.get(id)
     const pauseGoal = loaded ? await this.goals.stopping(loaded) : undefined
     await this.cancelTurn(id, why)

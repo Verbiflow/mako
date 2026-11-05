@@ -313,6 +313,36 @@ try {
       await world.close()
     }
 
+    // A Stop, the Apex's, the person's from the Apex's Fins or the person's own, ends a message's wait to go again: nothing sends after it, nor after a restart.
+    for (const stop of ["apex", "person-fin", "person"] as const) {
+      const { world, faults } = worldOf(`${harness}-stop-${stop}`)
+      const apex = await world.apex("cursor", "full")
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Label" }, harness, name: "labels", clientKey: "labels", cwd: world.root })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      const fin = started.conversation!
+      await until("the Fin to work", () => world.live.session(fin)?.status === "running")
+      world.release(fin)
+      await until("the Fin's brief", () => requestOf(world, fin, "fin:labels")?.status === "completed")
+      faults.refuse.set(fin, "429 Too Many Requests")
+      const sent = await world.agents.send(apex.caller, { to: "labels", text: "Carry on.", clientKey: "go" })
+      assert.ok(!("refused" in sent), JSON.stringify(sent))
+      await until(`${harness} ${stop}: it to wait`, () => requestOf(world, fin, "Carry on.")?.retry?.cause === "rate-limited")
+      if (stop === "apex") await world.agents.stop(apex.caller, { child: "labels", reason: "enough" })
+      else if (stop === "person-fin") assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
+      else await world.live.cancel(fin)
+      assert.equal(requestOf(world, fin, "Carry on.")?.retry, undefined, `${harness} ${stop}: the Stop ends its wait`)
+      assert.equal(requestOf(world, fin, "Carry on.")?.pause, "stop")
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} ${stop}: nothing sends after a Stop`)
+      await world.restart()
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(500)
+      assert.equal(sentTimes(world, fin, "Carry on."), 0, `${harness} ${stop}: nor after a restart`)
+      assert.equal(requestOf(world, fin, "Carry on.")?.status, "held")
+      await world.close()
+    }
+
     // A message refused unsent on a rate limit goes again after Mako's normal restart; once the person closes the session, nothing waits to go.
     {
       const { world, faults } = worldOf(`${harness}-restart`)

@@ -351,6 +351,11 @@ export interface LiveRequest {
    * second failure counts on from this one; gone once it's sent.
    */
   retry?: RequestRetry
+  /**
+   * A `held` request a Stop paused: the person's, or an Apex's of its Fin. Nothing of it goes by itself, a time it had
+   * included, across a restart too, until a deliberate resume: Resume, or for a Fin its next message.
+   */
+  pause?: "stop"
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**

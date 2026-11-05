@@ -152,6 +152,7 @@ export const LiveRequestSchema = z.object({
   accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS).catch("operation") }).optional(),
   ownerCheck: z.object({ since: z.number() }).optional(),
   editing: z.literal(true).optional(),
+  pause: z.literal("stop").optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   retry: z.object({
