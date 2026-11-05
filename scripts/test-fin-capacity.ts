@@ -65,7 +65,10 @@ const GB = 1024 ** 3
   assert.equal(governor.allow(now, 17).atOnce, 17, "and then it's back")
   assert.equal(governor.allow(now, 17).why, undefined)
   const small = new CapacityGovernor()
-  for (let at = 0; at < 600; at += 1) small.read(at * 10_000, { thermal: true }), small.allow(at * 10_000, 2)
+  for (let at = 0; at < 600; at += 1) {
+    small.read(at * 10_000, { thermal: true })
+    small.allow(at * 10_000, 2)
+  }
   assert.equal(small.allow(6_000_000, 2).atOnce, 1, "a small machine keeps at least one")
 }
 
