@@ -56,6 +56,8 @@ export interface WorldOptions {
   capacity?: AgentsDeps["capacity"]
   /** The person's limit of Fins at once (`AgentsDeps.finLimit`); `FIN_LIMIT` without it. */
   finLimit?: () => number
+  /** Runs after a Fin's start has written its edge, before the start answers: a launch slow to reply. */
+  replying?: (options: LiveStartOptions) => Promise<void> | void
   /** Runs as a harness is asked to cancel a turn, before the turn stops: a harness slow to stop. */
   cancelling?: (conversation: string) => Promise<void> | void
   /** Runs as a Fin's start prepares its worktree and profile, before its edge is written (`mako:live-start`). */
@@ -184,6 +186,7 @@ export class AgentsWorld {
         await this.options.preparing?.(options)
         if (options.parent && !options.resume && !agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
         await live.start(harness, cwd, options)
+        await this.options.replying?.(options)
       },
       harnesses: () => HARNESSES,
       runs: () => this.options.catalog !== undefined,

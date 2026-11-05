@@ -704,6 +704,72 @@ async function followedStopStuck(): Promise<void> {
 }
 
 /**
+ * One entry per Fin, by its op, and every Apex hears its line move: a queued Fin whose edge is written while its
+ * launch is still coming up shows once, as its edge; and when one Apex's refused start leaves the line, another
+ * Apex's waiting Fin hears its place move up without doing anything.
+ */
+async function queueProjection(): Promise<void> {
+  let limit = 1
+  let hold: (() => void) | undefined
+  let failing = ""
+  const w = new AgentsWorld({
+    root: join(root, "projection"),
+    finLimit: () => limit,
+    preparing: (options) => {
+      if (options.parent?.name === failing) throw new Error("its worktree couldn't be made")
+    },
+    replying: async (options) => {
+      if (options.conversationId === holdFor) await new Promise<void>((resolve) => (hold = resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  let holdFor = ""
+  try {
+    const a = await w.apex("claude")
+    const b = await w.apex("codex")
+    const brief = { objective: "Hold" }
+    const key = (apex: { conversation: string }, clientKey: string) => namedUuid(`start:${w.store.journalPlacement(apex.conversation)!.session}:${clientKey}`)
+    await w.agents.start(a.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:first,")), "the first at work")
+    // A queued Fin launching: its edge is written, its start not yet answered.
+    holdFor = key(a, "next")
+    const queued = await w.agents.start(a.caller, { brief, name: "next", queue: true, clientKey: "next", cwd: w.root })
+    assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    await w.agents.stop(a.caller, { child: "first" })
+    await waitFor(() => hold !== undefined && w.store.edges().all.some((edge) => edge.name === "next"), "next's edge written while its start answers")
+    const listed = await w.agents.list(a.caller, {})
+    assert.ok("children" in listed)
+    assert.deepEqual(listed.children.filter((strip) => strip.name === "next").length, 1, `one entry for a Fin whose launch is still answering: ${JSON.stringify(listed.children.map((strip) => [strip.name, strip.state.kind]))}`)
+    assert.equal(w.agents.roster(a.conversation).filter((entry) => entry.child?.name === "next").length, 1, "and one on its Apex's roster")
+    hold!()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "next to settle")
+
+    // A's queued start fails to prepare while the device stays full; B's Fin waits behind it, then moves up once A heard.
+    failing = "doomed"
+    await w.agents.start(a.caller, { brief, name: "doomed", queue: true, clientKey: "doomed", cwd: w.root })
+    await w.agents.start(b.caller, { brief, name: "behind", queue: true, clientKey: "behind", cwd: w.root })
+    // What B's conversation shows, as its windows read it: only what it was told.
+    const reason = () => w.live.snapshot(b.conversation)?.nativeAgents?.agents.find((entry) => entry.child?.name === "behind")?.state
+    await waitFor(() => reason()?.kind === "waiting", "B's conversation to show its waiting Fin")
+    assert.deepEqual(reason(), { kind: "waiting", reason: "Queued: 1 ahead, your limit of Fins at once is in use" })
+    limit = 2
+    w.agents.capacityChanged()
+    limit = 1
+    await waitFor(() => w.store.queuedSpawns().some((row) => row.record.includes("refused")), "doomed to be refused and kept for its Apex")
+    await waitFor(() => w.store.queuedSpawns().length === 1, "doomed to go once its Apex heard", 15_000)
+    await waitFor(() => JSON.stringify(reason()) === JSON.stringify({ kind: "waiting", reason: "Queued: 0 ahead, your limit of Fins at once is in use" }), `the other Apex's line to move up with it: ${JSON.stringify(reason())}`, 3_000)
+    await w.agents.stop(a.caller, { child: "all" })
+    await w.agents.stop(b.caller, { child: "all" })
+  } finally {
+    hold?.()
+    await w.close()
+  }
+}
+
+/**
  * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
  */
@@ -1474,6 +1540,7 @@ try {
   await followedStopUnknownIdentity()
   await followedStopStaleIdentity()
   await followedStopStuck()
+  await queueProjection()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()

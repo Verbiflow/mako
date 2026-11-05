@@ -375,6 +375,8 @@ export class Agents implements AgentOperations, ConversationChildren {
    * stop, and only its own settle gives them back (`StartRecord`).
    */
   private readonly starts = new Map<string, StartRecord>()
+  /** What each Apex's conversations last heard of its waiting Fins (`queueRefresh`), by its Thread. */
+  private readonly queueHeard = new Map<string, string>()
   /** Fins holding a place now (`occupies`): one that lets go frees it for what waits, at once. */
   private readonly occupying = new Set<string>()
   private stopped = false
@@ -838,9 +840,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         : `${upper(full ?? `${working} ${FIN_WORD}s are at work here`)}${waiting ? ` and ${waiting} wait for one to end` : ""}.${this.elsewhere(where)} Pass queue: true to start it when one ends, or after: to start it after one of yours.`)
     if (why || after.length) {
       const record: QueuedStart = { lead: apex, input, tier, harness, tuned, ...(why && { why }), ...(after.length && { after }) }
-      store.queueSpawn({ op, tree, record: JSON.stringify(record), at: this.now() })
+      this.changeQueue((held) => held.queueSpawn({ op, tree, record: JSON.stringify(record), at: this.now() }))
       hostLog("agents", "start queued", { op, ...(why && { why }), ...(after.length && { after: after.map((ref) => ref.name).join(" ") }), running: counts.running, budget: this.budget.running, working, place: where })
-      this.queueMoved([apex.thread], false)
       const answer = this.queuedAnswer(op, apex, false)
       // Its queue row stands for it now: the drain that takes the row makes it a record of its own.
       this.retire(start)
@@ -1279,9 +1280,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!waiting && !under) return unknownFin(input.child)
       // One under way writes no edge, or ends at once if it wrote one: a stop is never undone by its start.
       if (under) this.cancel(under)
-      if (waiting) this.store()?.unqueueSpawn(waiting.spawn.op)
       // Its Apex's conversations hear it go, and every other Apex's held Fins move up the line.
-      this.queueMoved([apex.thread, ...this.holdingThreads()], false)
+      if (waiting) this.changeQueue((held) => held.unqueueSpawn(waiting.spawn.op))
       hostLog("agents", "end", { op: waiting?.spawn.op ?? under!.op, outcome: "stopped", queued: true, ...(under && { underWay: true }) })
       // What was to start after it is its Apex's to decide now.
       void this.drain()
@@ -1299,13 +1299,13 @@ export class Agents implements AgentOperations, ConversationChildren {
       for (const spawn of store.queuedSpawns()) {
         const queued = parseQueued(spawn.record)
         if (queued?.lead.thread !== apex.thread) continue
-        store.unqueueSpawn(spawn.op)
+        this.changeQueue((held) => held.unqueueSpawn(spawn.op))
         if (!this.starts.has(spawn.op)) stopped.add(queued.input.name ?? queued.input.title ?? spawn.op)
         hostLog("agents", "end", { op: spawn.op, outcome: "stopped", queued: true })
       }
     }
     for (const edge of targets) if (await this.end(edge, why)) stopped.add(edge.name)
-    this.queueMoved([apex.thread, ...this.holdingThreads()], false)
+    this.forget(apex.thread)
     return { stopped: [...stopped] }
   }
 
@@ -1450,6 +1450,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const edge = store.edges().byOp(op)
     if (!edge) return this.refuse(op, "unavailable", `Its Thread was made without its edge; it was not started as a ${FIN_WORD}.`)
+    // Its edge is its entry now: the row it was is out of the line, and every Apex behind it hears its place move.
+    this.queueRefresh()
     // Stopped while its edge was being written: it ends now, as a stop would have.
     if (start.cancelled) {
       await this.end(edge, `its ${APEX_WORD} stopped it before it started`)
@@ -1624,7 +1626,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         filled.set(where, started + 1)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
         if (!queued || store.edges().byOp(spawn.op)) {
-          store.unqueueSpawn(spawn.op)
+          this.changeQueue((held) => held.unqueueSpawn(spawn.op))
           continue
         }
         hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at, ...(queued.after?.length && { after: queued.after.map((ref) => ref.name).join(" ") }) })
@@ -1640,11 +1642,9 @@ export class Agents implements AgentOperations, ConversationChildren {
             // One its Apex stopped is gone; one that couldn't start stays, saying why, until its Apex has heard (`tellHeld`).
             if (refused && !start.cancelled && store.queuedSpawns().some((each) => each.op === spawn.op)) {
               hostWarn("agents", "a queued start couldn't start; its Apex is told", { op: spawn.op, why: refused })
-              store.keepQueuedSpawn(spawn.op, JSON.stringify({ ...queued, refused: refused.slice(0, 2000) } satisfies QueuedStart))
-            } else store.unqueueSpawn(spawn.op)
+              this.changeQueue((held) => held.keepQueuedSpawn(spawn.op, JSON.stringify({ ...queued, refused: refused.slice(0, 2000) } satisfies QueuedStart)))
+            } else this.changeQueue((held) => held.unqueueSpawn(spawn.op))
             // Its Apex hears it start or say why it couldn't; those still held moved up the line, their places, not their kind.
-            this.queueMoved([queued.lead.thread], false)
-            this.queueMoved(this.holdingThreads().filter((thread) => thread !== queued.lead.thread), true)
             // Its row is settled first, so the drain its place wakes sees it as it now stands.
             this.retire(start)
           })
@@ -1653,6 +1653,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       hostWarn("agents", "queued starts could not be released; they wait for the next end", { error: errorMessage({ error }) })
     } finally {
       this.draining = false
+      this.queueRefresh()
       if (this.drainAgain) {
         this.drainAgain = false
         void this.drain()
@@ -2449,11 +2450,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.heldFor(thread).map(({ placeholder, queued }) => childEntry(placeholder, { source: "live", queued }, {}))
   }
 
-  /** Spawns held for a parent, each as the edge it becomes once it starts, with why it waits and how many are ahead. */
+  /**
+   * Spawns held for a parent, with why each waits and how many wait ahead of it. One projection, by op: a row is a
+   * Fin's entry until its edge is written, then the edge is, so a Fin never shows twice while its launch answers. The
+   * placeholder's `child` is the waiting entry's own ID, for agents_read and agents_stop; the Fin's Thread gets its own
+   * ID once it starts.
+   */
   private heldFor(thread: string): Array<{ op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } }> {
     const store = this.store()
     if (!store) return []
-    const spawns = store.queuedSpawns()
+    const spawns = store.queuedSpawns().filter((spawn) => !store.edges().byOp(spawn.op))
     return spawns.flatMap((spawn, at) => {
       const queued = parseQueued(spawn.record)
       if (queued?.lead.thread !== thread) return []
@@ -2476,19 +2482,40 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
   }
 
-  /** A held spawn of the Apex's, by name or by the ID its Fin will have. */
+  /** A held spawn of the Apex's, by name or by its waiting entry's ID (`heldFor`). */
   private heldNamed(apex: Apex, ref: string): { op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } } | undefined {
     const name = finName(ref)
     return this.heldFor(apex.thread).find(({ placeholder }) => placeholder.child === ref || placeholder.name === name)
   }
 
   /**
-   * The queue moved for these parents: a spawn held, released or dropped. Their rosters are read again and their
-   * conversations hear it, as they do when an edge moves, so the sidebar, pips and crew card show a held Fin at once.
+   * Every change to the queue goes through here: a spawn held, rewritten or dropped. It's applied, then every Apex
+   * whose waiting Fins moved hears it (`queueRefresh`), so no path can leave another Apex's line stale.
    */
-  private queueMoved(threads: Iterable<string>, progressOnly: boolean): void {
+  private changeQueue(change: (store: ThreadStore) => void): void {
+    const store = this.store()
+    if (!store) return
+    change(store)
+    this.queueRefresh()
+  }
+
+  /**
+   * Each Apex's waiting Fins as they stand now (`heldFor`), against what its conversations last heard: one whose
+   * entries changed (one joined or left, or its place in line moved) has its roster read again and its conversations
+   * told, as they are when an edge moves. Also after an edge is written, which takes its row out of the projection.
+   */
+  private queueRefresh(): void {
     if (this.stopped) return
-    for (const thread of new Set(threads)) {
+    const now = new Map<string, string>()
+    for (const thread of new Set([...this.holdingThreads(), ...this.queueHeard.keys()]))
+      now.set(thread, JSON.stringify(this.heldFor(thread).map(({ op, queued }) => [op, queued])))
+    for (const [thread, entries] of now) {
+      if (this.queueHeard.get(thread) === entries) continue
+      const kinds = (text: string | undefined) => (text ? JSON.parse(text).length : 0)
+      // Only places in line moved: the same Fins wait, so it's progress, not a change of kind.
+      const progressOnly = this.queueHeard.has(thread) && kinds(this.queueHeard.get(thread)) === kinds(entries)
+      if (entries === "[]") this.queueHeard.delete(thread)
+      else this.queueHeard.set(thread, entries)
       this.forget(thread)
       for (const conversation of this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, progressOnly)
     }
@@ -2926,15 +2953,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** A spawn left the queue without starting: its Apex's roster drops it. */
-  private unqueued(op: string, thread: string): void {
-    this.store()?.unqueueSpawn(op)
-    this.queueChanged(thread)
+  private unqueued(op: string): void {
+    this.changeQueue((store) => store.unqueueSpawn(op))
   }
 
-  /** A spawn of this Apex's queue changed: its roster is read again, and its conversations hear it (`queueMoved`). */
-  private queueChanged(thread: string): void {
-    this.queueMoved([thread], false)
-  }
+
 
   /** Its Apex heard that a Fin it was to start after didn't finish (`tellHeld`): it's the Apex's to start again. */
   private dropHeld(op: string): void {
@@ -2942,7 +2965,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = spawn && parseQueued(spawn.record)
     if (!queued) return
     hostLog("agents", "end", { op, outcome: "stopped", queued: true, why: queued.refused ? "it couldn't start" : "a Fin it was to start after didn't finish" })
-    this.unqueued(op, queued.lead.thread)
+    this.unqueued(op)
   }
 
   private store(): ThreadStore | undefined {
