@@ -114,6 +114,23 @@ async function world(provider: string, landing: SteerLanding | undefined, name: 
   }
 }
 
+/** The timers that ran out while `work` ran, by what each was set to: a wait as Mako set it, whatever the runner's clock did. */
+async function ranOut<T>(work: () => Promise<T>): Promise<{ result: T; waits: number[] }> {
+  const real = globalThis.setTimeout
+  const waits: number[] = []
+  const recording = (run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => real((...given: unknown[]) => {
+    waits.push(ms ?? 0)
+    run(...given)
+  }, ms, ...args)
+  // SAFETY: the same function with the same arguments, recording when it fires; `__promisify__` is carried over.
+  globalThis.setTimeout = Object.assign(recording, real) as typeof setTimeout
+  try {
+    return { result: await work(), waits }
+  } finally {
+    globalThis.setTimeout = real
+  }
+}
+
 async function until(what: string, test: () => boolean): Promise<void> {
   const by = performance.now() + HELD_MS
   while (!test()) {
@@ -185,11 +202,12 @@ try {
         ? { kind, id: randomUUID(), requestId: w.first, text: words, attachments: [] }
         : { kind, id: randomUUID(), requestId: w.first, queuedRequestId: queuedId, text: words, attachments: [] }
       const sent = performance.now()
-      const receipt = await held("the steer's receipt", w.owner.act(w.id, input))
+      const { result: receipt, waits } = await ranOut(() => held("the steer's receipt", w.owner.act(w.id, input)))
       const answered = performance.now() - sent
       assert.equal(receipt.state.kind, "accepted")
       assert.deepEqual(w.steers, [words], "Cursor's own steer is tried first")
       assert.ok(answered >= STEER_LANDS_MS - 5, `Cursor had its second to confirm (answered in ${Math.round(answered)} ms)`)
+      assert.deepEqual(waits.filter((ms) => ms >= STEER_LANDS_MS), [STEER_LANDS_MS], "the wait for Cursor's confirmation is the landing's second, and the receipt comes when it runs out")
       await until("the message reaching the agent", () => w.prompts.length === 2)
       assert.equal(w.cancels, 1, "it reached the agent through Mako's stop, not at the turn's end")
       assert.ok(w.prompts[1]!.text.endsWith(words))

@@ -24,6 +24,7 @@ import { Gateway } from "../src/web-client/gateway.ts"
 import { assertOwnHarnessStores } from "./lib/proof-host.ts"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 import { fakeCloud, helperCloud, type BenchCloud } from "./lib/sync-bench-cloud.ts"
+import { failures, type Check } from "./lib/sync-bench-judge.ts"
 import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
 
 /**
@@ -51,10 +52,10 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * time (and a change a device never showed, which may be over before it's heard) is read where a runner's noise can't
  * move it: past the owner's own showing, so the harness's own time is left out, and at the median, which a stall of a
  * few samples doesn't move. One over its limit
- * is measured again in a second run, and fails only if it's over in both: the regressions these guard (a report
- * waiting for a tick, a hop held for a frame, a reconnect waiting a second) are in every run. `--once` skips the
- * second run; past a budget it exits 1, unless `--report-only`. A run that fails to finish exits 2 either way. Every
- * check goes to the job's summary (`GITHUB_STEP_SUMMARY`).
+ * is measured again in a second run, and the bench fails unless that run meets every budget, whole, counts included
+ * (`failures`): the regressions these guard (a report waiting for a tick, a hop held for a frame, a reconnect waiting
+ * a second) are in every run. `--once` skips the second run; past a budget it exits 1, unless `--report-only`. A run
+ * that fails to finish exits 2 either way. Every check goes to the job's summary (`GITHUB_STEP_SUMMARY`).
  *
  *   npm run bench:sync-latency [-- --report-only] [--once] [--out <file>] [--quiet] [--trace <file>] [--messages <file>]
  *   npm run bench:sync-latency -- --cloud <url> [--presence]   with a helper on stdin and stdout
@@ -397,14 +398,14 @@ async function secondRun(): Promise<{ checks: Check[] } | { error: string }> {
   }
 }
 
-/** Every check, and what a second run measured of a time the first had over, in the job's summary. */
+/** Every check, and what a second run measured of it, in the job's summary. */
 function summarize(failed: Check[]) {
   if (!process.env.GITHUB_STEP_SUMMARY) return
   const shown = (value: number | null | undefined) => (value === undefined ? "" : value === null ? "none" : String(value))
   const lines = [
     `### bench:sync-latency: ${failed.length ? `over: ${failed.map((item) => item.name).join(", ")}` : "passed"}`,
     "",
-    "A count fails at once; a time fails only when a second run has it over too.",
+    "A count fails in any run; a time over gets a second run, which must meet every budget.",
     "",
     "| check | kind | value | limit | second run |",
     "|---|---|---|---|---|",
@@ -423,8 +424,6 @@ const root = mkdtempSync(join(tmpdir(), "mako-sync-bench-"))
 const head = { version: 1, at: new Date().toISOString(), gateway: cloud.name, local: cloud.local, pace: PACE, words: WORDS, turns: TURNS }
 /** The report as printed: the run's settings, then what it measured against the budgets, or why it stopped. */
 let report = JSON.stringify(head, null, 2)
-/** `count`: work done, which a busy machine doesn't change, failing at once. `time`: failing only when over in a second run too. */
-type Check = { name: string; kind: "count" | "time"; value: number | null; limit: number; ok: boolean; again?: number | null }
 const checks: Check[] = []
 /** What the run measured, once it finished. */
 let judged: object | undefined
@@ -1070,15 +1069,12 @@ try {
   await cloud.close()
   if (judged) {
     const over = checks.filter((item) => !item.ok)
-    const timed = over.filter((item) => item.kind === "time")
     let again: { checks: Check[] } | { error: string } | undefined
-    if (timed.length && !values.once && !values["report-only"] && !values.cloud) {
-      progress(`${timed.map((item) => item.name).join(", ")} over; measuring again in a second run`)
+    if (over.length && over.every((item) => item.kind === "time") && !values.once && !values["report-only"] && !values.cloud) {
+      progress(`${over.map((item) => item.name).join(", ")} over; measuring again in a second run`)
       again = await secondRun()
-      if ("checks" in again) for (const item of timed) item.again = again.checks.find((other) => other.name === item.name)?.value ?? null
     }
-    const confirmed = (item: Check) => !again || ("checks" in again && again.checks.find((other) => other.name === item.name)?.ok !== true)
-    const failed = over.filter((item) => item.kind === "count" || confirmed(item))
+    const failed = failures(checks, again && "checks" in again ? again.checks : undefined)
     report = JSON.stringify({
       ...judged,
       budgets: { local: cloud.local, checked: checks.length, failed: failed.length, over: failed, ...again && "error" in again && { again: again.error }, checks },

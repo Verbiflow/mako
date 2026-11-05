@@ -19,12 +19,16 @@ import { largeCursorChat } from "./large-cursor-chat.mjs"
 // on a large one. Each is timed here on a Cursor chat of 25MB, as a headless
 // agent writes one: one exchange holding the whole conversation.
 const HOLD_MS = 50
+/** How many turns the loop takes through a store lock's wait before the lock goes. */
+const TURNS_THROUGH_WAIT = 20
+/** What releases the store's lock if the loop never turns through its wait. */
+const LOCK_HANG_MS = 30_000
 
 /**
  * The longest the loop went without a turn while `work` ran, in this thread's own CPU time: a runner that takes the
  * CPU away mid-slice stretches the slice's wall time (117 ms once on CI, unchanged code), not the work it held.
  */
-async function longestHold(work) {
+async function longestHold(work, onTurn = () => {}) {
   const cpu = () => {
     const { user, system } = process.threadCpuUsage()
     return (user + system) / 1000
@@ -43,6 +47,7 @@ async function longestHold(work) {
     last = now
     lastWall = wall
     turns++
+    onTurn(turns)
   }
   const timer = setInterval(turn, 1)
   try {
@@ -200,25 +205,39 @@ try {
   const captured = await longestHold(async () => store.capture({ ...ref, home, path, records: await provider.records(path) }))
   assert.ok(captured.result.taken > rows.length / 2, `the chat's rows are captured (${captured.result.taken})`)
   held("a capture of the whole chat", captured)
+  // The lock goes only once the loop has turned through the write's wait, so a write that sleeps in the lock's wait,
+  // holding the loop without using the CPU, keeps it until the hang guard. No clock judges this: a runner that takes
+  // the CPU away mid-wait, as the stall here does, delays those turns and fails nothing.
+  const turnedThrough = new Int32Array(new SharedArrayBuffer(4))
   const holder = new Worker(
     `const { DatabaseSync } = require("node:sqlite")
     const { parentPort, workerData } = require("node:worker_threads")
-    const db = new DatabaseSync(workerData)
+    const db = new DatabaseSync(workerData.path)
     db.exec("BEGIN IMMEDIATE")
     parentPort.postMessage("locked")
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000)
+    const waited = Atomics.wait(workerData.turnedThrough, 0, 0, ${LOCK_HANG_MS})
     db.exec("COMMIT")
-    db.close()`,
-    { eval: true, workerData: join(records, "records.sqlite") }
+    db.close()
+    parentPort.postMessage(waited)`,
+    { eval: true, workerData: { path: join(records, "records.sqlite"), turnedThrough } }
   )
-  const released = new Promise((resolve) => holder.once("exit", resolve))
+  const released = new Promise((resolve) => holder.once("message", (first) => {
+    assert.equal(first, "locked")
+    holder.once("message", resolve)
+  }))
   await new Promise((resolve) => holder.once("message", resolve))
-  const pushed = await longestHold(() => store.notePushed("account", ref.harness, ref.nativeId, 1, Date.now()))
-  await released
+  let written = false
+  const pushed = await longestHold(() => store.notePushed("account", ref.harness, ref.nativeId, 1, Date.now()).then(() => { written = true }), (turn) => {
+    if (turn === 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)
+    if (turn === TURNS_THROUGH_WAIT) {
+      assert.equal(written, false, "the write can't have gone in while the lock is held")
+      Atomics.store(turnedThrough, 0, 1)
+      Atomics.notify(turnedThrough, 0)
+    }
+  })
+  assert.notEqual(await released, "timed-out", `the loop turned ${pushed.turns} times in the write's wait, and the lock never went`)
   assert.equal(store.pushed("account").get(`${ref.harness}\n${ref.nativeId}`)?.capture, 1, "the write waited for the lock, then went in")
   held("a write the store's lock kept waiting", pushed)
-  // A write that sleeps in the lock's wait holds the loop without using the CPU: the loop turns all through the wait.
-  assert.ok(pushed.turns >= pushed.tookMs / 20, `the loop turned ${pushed.turns} times in the ${Math.round(pushed.tookMs)} ms the write waited`)
 
   // A push of a chat of 30,000 messages: its batches of 10,000 versions read from the store, to a remote that takes them all.
   const many = manyMessages(home, 30_000)

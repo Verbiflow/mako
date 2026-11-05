@@ -332,6 +332,8 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - uses: ./.github/actions/codex-sandbox
+      # How two runs are judged: a count fails in either, and only a time gets a second try.
+      - run: npx tsx scripts/test-sync-bench-judge.ts
       - name: The sync bench at the tested Codex
         run: |
           version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')

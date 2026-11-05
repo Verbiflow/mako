@@ -55,15 +55,23 @@ assert.deepEqual(medianInterval(Array.from({ length: 15 }, (_, index) => 15 - in
 
 assert.equal(judge(row([1.05, 0.98, 1.1], false), ALLOWED).outcome, "within", "a quiet machine's row under the allowance passes on its first rounds")
 assert.equal(judge(row([1.4, 1.35, 1.38], false), ALLOWED).outcome, undefined, "one over on its first rounds is measured again")
+assert.equal(judge(row([1.05, 1.1, 2.2], false), ALLOWED).outcome, undefined, "so is one whose median is under it with a round over it: twice as slow can read that way")
 assert.equal(judge(row([1.4, 1.35, 1.38, 1.42, 1.3, 1.36, 1.39], false), ALLOWED).outcome, "slower", "and called slower when it stays over")
 assert.equal(judge(row([1.05, 0.98, 1.1], true), ALLOWED).outcome, undefined, "a busy machine's median alone settles nothing")
 assert.equal(judge(row([2.1, 1.9, 2.3, 2, 1.8], true), ALLOWED).outcome, "slower", "a real regression blocks however busy the machine")
-assert.equal(judge(row(Array.from({ length: 15 }, (_, index) => [0.7, 1, 1.4][index % 3]!), true), ALLOWED).outcome, "unsure", "noise as wide as the allowance, on a busy machine, is unsure")
+assert.equal(judge(row(Array.from({ length: 15 }, (_, index) => [0.7, 1, 1.4][index % 3]!), true), ALLOWED, true).outcome, "unsure", "noise as wide as the allowance, on a busy machine out of time, is unsure")
 // Unchanged code, as a quiet CI runner read it on 2026-11-05: over at the median, between -8% and +44%.
 const ciNoise = [1.4, 1.36, 1.04, 1.385, 1, 0.92, 1.44]
 assert.equal(judge(row(ciNoise, false), ALLOWED).outcome, undefined, "a quiet machine's median over the allowance alone isn't slower: it's measured again")
-assert.equal(judge(row([...ciNoise, ...ciNoise, ciNoise[0]!], false), ALLOWED).outcome, "unsure", "and is unsure when fifteen rounds can't settle it")
+assert.equal(judge(row(Array.from({ length: 15 }, (_, index) => ciNoise[index % 7]!), false), ALLOWED).outcome, undefined, "fifteen rounds don't end it")
+assert.equal(judge(row(Array.from({ length: MAX_ROUNDS }, (_, index) => ciNoise[index % 7]!), false), ALLOWED).outcome, "unsure", "and it's unsure when all of them can't settle it")
 assert.equal(judge(row(ciNoise.map((ratio) => ratio * 2), false), ALLOWED).outcome, "slower", "twice as slow through that noise is slower")
+// Seed 1085's fifteen rounds of the noise below as the shape of a row: most near twice, four down near the allowance.
+const grossRounds = Array.from({ length: MAX_ROUNDS }, (_, index) => (index % 3 ? 1.76 : 1.21))
+assert.equal(judge(row(grossRounds, false), ALLOWED).interval![0], 1.21, "an interval reaching under the allowance")
+assert.equal(judge(row(grossRounds, false), ALLOWED).outcome, "slower", "doesn't let a median past twice the allowance go unsure")
+assert.equal(judge(row(grossRounds.slice(0, 7), true), ALLOWED, true).outcome, "slower", "nor does running out of time")
+assert.equal(judge(row(Array.from({ length: MAX_ROUNDS }, (_, index) => [0.7, 1.7, 1.7][index % 3]!), false), ALLOWED).outcome, "unsure", "though a median that high with rounds on both sides of the reference stays unsure")
 console.log("PASS: a row is within, slower, measured again, or unsure, by its rounds and the machine")
 
 /** The same pseudo-random draws every run, so the test reads the same wherever it runs. */
@@ -107,10 +115,8 @@ async function settled(slower: number, busyReads: number, quietWaitMs = 0, busyM
 
 const noise = await settled(1, Infinity)
 assert.deepEqual(noise.failed, [], "unchanged code on a busy machine is never called slower")
-assert.equal(noise.rows[0]!.rounds, MAX_ROUNDS, "it's measured in every round a busy machine gets")
-assert.equal(noise.rows[0]!.outcome, "unsure", "a busy row the rounds can't settle is unsure")
-assert.equal(noise.unsure.length, 1)
-assert.deepEqual(noise.busy, ["other work kept 12.6 of 14 cores busy"], "and the verdict says why")
+assert.equal(noise.rows[0]!.outcome, "within", "more rounds, for as long as a busy machine gets them, settle what the first didn't")
+assert.ok(noise.rows[0]!.rounds > ROUNDS + CONFIRM_ROUNDS && noise.rows[0]!.rounds <= MAX_ROUNDS, `it took ${noise.rows[0]!.rounds} rounds`)
 
 const regression = await settled(2, Infinity)
 assert.equal(regression.rows[0]!.outcome, "slower", "a real regression on a busy machine still fails")
@@ -124,13 +130,15 @@ assert.equal(waited.rows[0]!.outcome, "within", "and measured quiet, 10% slower 
 assert.equal(waited.rows[0]!.rounds, ROUNDS, "on its first rounds")
 
 const impatient = await settled(1, Infinity, 30_000)
-assert.match(impatient.said, /Still busy after 30 s .*measuring anyway, in up to 15 rounds/)
+assert.match(impatient.said, /Still busy after 30 s .*measuring anyway, in up to 31 rounds/)
 
 // Rounds on a busy machine have a time of their own, so a check with many rows ends inside the updater's.
 const hurried = await settled(1, Infinity, 0, 0)
 assert.equal(hurried.rows[0]!.outcome, "unsure", "out of time on a busy machine, an unsettled row is unsure")
 assert.equal(hurried.rows[0]!.rounds, ROUNDS + CONFIRM_ROUNDS, "after the seven rounds that bound its median")
 assert.match(hurried.said, /Measured for the 0 s a busy machine gets; rows it hasn't settled are unsure\./)
+assert.equal(hurried.unsure.length, 1)
+assert.deepEqual(hurried.busy, ["other work kept 12.6 of 14 cores busy"], "and the verdict says why")
 assert.equal((await settled(2, Infinity, 0, 0)).rows[0]!.outcome, "slower", "a real regression is caught in those seven")
 console.log("PASS: a busy machine is waited out, measured in more rounds for as long as it gets, and never fails unchanged code")
 
@@ -142,7 +150,8 @@ const quietly = (slower: number, seed: number) => {
     measurer: async () => async (tree) => ({ [KEY]: (tree === here ? slower : 1) * (1 + 0.3 * (random() * 2 - 1)) }),
   })
 }
-const seeds = Array.from({ length: 200 }, (_, index) => index + 1)
+// Seed 1085 is the one that held a doubled row at unsure after fifteen rounds (+76%, between +21% and +104%).
+const seeds = Array.from({ length: 2_000 }, (_, index) => index + 1)
 const unchanged = await Promise.all(seeds.map((seed) => quietly(1, seed)))
 assert.deepEqual(unchanged.flatMap((result) => result.failed), [], "unchanged code on a noisy quiet machine is never slower")
 const doubled = await Promise.all(seeds.map((seed) => quietly(2, seed)))
@@ -152,7 +161,7 @@ console.log("PASS: on a quiet machine as noisy as CI's, unchanged code is never 
 const folder = mkdtempSync(join(tmpdir(), "mako-perf-verdict-"))
 try {
   const file = join(folder, "verdict.jsonl")
-  const busy = { ...noise, unsure: [`${KEY}: unsure`], rows: noise.rows.map((measured) => ({ ...measured, outcome: "unsure" as const })) }
+  const busy = { ...hurried, unsure: [`${KEY}: unsure`] }
   assert.deepEqual(await concluded("perf:decoders", busy, ALLOWED, file), [], "under the updater an unsure row doesn't fail the script")
   assert.deepEqual(await concluded("perf:decoders", regression, ALLOWED, file), regression.failed, "a slower one does")
   const verdicts = parseVerdicts(readFileSync(file, "utf8"))

@@ -38,9 +38,17 @@ export const ROUNDS = 3
 export const CONFIRM_ROUNDS = 4
 /**
  * The rounds a row gets at most before it's called unsure. A quiet CI runner's median alone read unchanged code 29%
- * to 36% slower (between -29% and +52% at 95%), so no machine's median decides a row over its allowance.
+ * to 36% slower (between -29% and +52% at 95%), so no machine's median decides a row over its allowance. Fifteen
+ * rounds of noise that wide leave one row in a thousand twice as slow with an interval reaching under the allowance
+ * (+76%, between +21% and +104%), and CI passes an unsure row, so a row over at its median gets twice that.
  */
-export const MAX_ROUNDS = 15
+export const MAX_ROUNDS = 31
+/**
+ * How far past its allowance, in multiples of it, a row's median is too large to pass as unsure once its rounds are
+ * spent, so long as those rounds put head over reference at all: +50% against CI's 25%. No run of unchanged code has
+ * read a median of many rounds past +36%.
+ */
+const GROSS_ALLOWANCES = 2
 /** A row with at least this share of its runs measured busy is read as a busy machine's. */
 export const BUSY_RUNS = 0.25
 /** How long a comparison waits for a quiet window, all told, before it measures anyway. */
@@ -345,11 +353,14 @@ export interface Judged {
  * Whether a row is within `allowed` of its reference, slower, or can't be
  * told apart from the machine's noise. An interval wholly over the allowance
  * is slower and one wholly under it within, busy or not; past that a quiet
- * machine's median under the allowance is within. A row over it at the
- * median alone gets up to `MAX_ROUNDS`, or past `ROUNDS + CONFIRM_ROUNDS`
+ * machine's median under the allowance is within, on its first rounds only
+ * if none of them is over. A row over it at the median alone gets up to `MAX_ROUNDS`, or past `ROUNDS + CONFIRM_ROUNDS`
  * until the time a busy machine gets is spent (`outOfTime`), before it's
- * unsure: slower is every round of seven over it, nine of eleven or twelve
- * of fifteen.
+ * unsure: slower is every round of seven over it, nine of eleven, twelve of
+ * fifteen, up to twenty-one of thirty-one. A row whose rounds are spent is
+ * slower too, not unsure, when they put head over reference at 95% and its
+ * median is `GROSS_ALLOWANCES` past the allowance: a run that passes on
+ * "unsure" mustn't pass a slowdown that large.
  */
 export function judge({ reference, head, busy }: Paired, allowed: number, outOfTime = false): Judged {
   const rounds = Math.min(reference.length, head.length)
@@ -361,9 +372,11 @@ export function judge({ reference, head, busy }: Paired, allowed: number, outOfT
   const judged = (outcome: Judged["outcome"]): Judged => ({ outcome, change, interval, busyShare })
   if (interval && interval[0] > allowed) return judged("slower")
   if (interval && interval[1] <= allowed) return judged("within")
-  if (quiet && change <= allowed) return judged("within")
+  // Three rounds have no interval, and a median of three can lie under the allowance with a round over it.
+  if (quiet && change <= allowed && (interval || Math.max(...ratios) <= allowed)) return judged("within")
   // Seven rounds bound the median, so a regression that holds through the noise is caught before time runs out.
-  return judged(rounds >= MAX_ROUNDS || (outOfTime && rounds >= ROUNDS + CONFIRM_ROUNDS) ? "unsure" : undefined)
+  if (rounds < MAX_ROUNDS && !(outOfTime && rounds >= ROUNDS + CONFIRM_ROUNDS)) return judged(undefined)
+  return judged(interval && interval[0] > 1 && change - 1 >= GROSS_ALLOWANCES * (allowed - 1) ? "slower" : "unsure")
 }
 
 /** A row over its budget, or one asked to be measured beside a reference. */
@@ -545,7 +558,7 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
  * updater, which names a verdict file (`PERFORMANCE_VERDICT_VARIABLE`), the
  * verdict goes there and an unsure row doesn't fail. In CI
  * (`UNSURE_REPORTED_VARIABLE`) an unsure row is printed and passes: CI fails
- * only a row its rounds show slower at 95%, not one a runner's noise moved. Anywhere
+ * only a row `judge` calls slower, not one a runner's noise moved. Anywhere
  * else a person runs it, so an unsure row fails beside a slower one, to be
  * measured again. `null` names no file even under the updater.
  */
