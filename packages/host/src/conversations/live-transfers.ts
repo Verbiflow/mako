@@ -4,6 +4,7 @@ import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
+import { admittedInPlace } from "../contracts/turn-continuation.js"
 import { TransferInputSchema, resumable } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
@@ -486,8 +487,7 @@ export class LiveTransfers {
         // The base retains its own native identity. The active native path changes independently.
         threadPath: binding.path,
         permissions: [],
-        requests: [
-          ...previous.requests,
+        requests: admittedInPlace(previous.requests,
           LiveRequestSchema.parse({
             actor: transfer.actor,
             continues: transfer.continues,
@@ -503,8 +503,7 @@ export class LiveTransfers {
                 ? [manifest]
                 : [],
             status: "queued",
-          }),
-        ],
+          })),
         control: {
           ...this.host.control(resident),
           activeBindingId: bindingId,

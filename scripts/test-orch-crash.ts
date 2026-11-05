@@ -138,6 +138,8 @@ async function host(root: string, harness: string, point: Point | "none"): Promi
   const world: AgentsWorld = new AgentsWorld({
     root,
     script,
+    // Each harness keeps its transcript, as real ones do, so the next host can see whether a cut brief reached it.
+    transcripts: true,
     ...(!held && { budget: { running: 1, started: 100 } }),
     catalog: fileCatalog(root),
     heard: (heard) => {

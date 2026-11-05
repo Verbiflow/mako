@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
+import { BRIEF_AGAIN } from "../contracts/children.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -129,18 +130,20 @@ export class LiveAutoContinue {
    * of it (`Interruption.stopped`). `stayed`: the move didn't happen and the turn goes on where it was, which its words
    * say (`continueTurnPrompt`). Asked again under the same `requestId`, it changes nothing.
    */
-  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor }): void {
+  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string }): void {
     const resident = this.access.resident(id)
     if (!resident) throw new Error("This conversation is no longer available")
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
     this.decline(resident)
     const tuning = [...resident.snapshot.requests].reverse().find((request) => request.tuning)?.tuning
-    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true }
+    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...input.brief && { brief: input.brief } }
+    // A brief carried again goes as itself, framed; as it's sent, a transcript that shows it has a Continue go instead.
+    const brief = input.brief && resident.snapshot.requests.find((request) => request.id === input.brief)
     const request = LiveRequestSchema.parse({
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
-      text: continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
+      text: brief ? `${BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
       attachments: [],
       tuning,
       status: "queued",

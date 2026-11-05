@@ -12,6 +12,11 @@ const LEGACY_FROM: ReadonlyMap<string, string> = new Map([[`your ${LEGACY_APEX_W
 
 /** The header every delivery an agent wrote starts with: the model reads it as an agent's words, never the person's. */
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
+/**
+ * What opens a Fin's brief sent again after Mako closed unexpectedly while sending it, with nothing to say its harness
+ * had it: one that did carries on, one that didn't starts from it.
+ */
+export const BRIEF_AGAIN = "Your brief again, in case it didn't reach you: Mako closed unexpectedly while sending it. If you already have it and started on it, carry on where you are; otherwise start from it."
 export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }
