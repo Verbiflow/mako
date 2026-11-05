@@ -37,9 +37,10 @@ const DISCOVER_MS = 10 * 60_000
 const DISCOVER_START_MS = 60_000
 /** A stopped run gets this long before its process group is killed. */
 export const STOP_GRACE_MS = 5_000
-/** How often a stopped run's exit is looked for, and how long past its kill before Mako takes it as gone. */
+/** How often a stopped run's exit is looked for; how long past its kill before Mako says it couldn't stop it; and how often after. */
 const GONE_EVERY_MS = 50
 const GONE_AFTER_KILL_MS = 2_000
+const STUCK_EVERY_MS = 1_000
 /**
  * How long a run's Session stays quiet after its process went before the run
  * is declared ended: a chat resumed in a new process (to hand it a message)
@@ -64,9 +65,17 @@ export interface ProcessReads {
   holding(file: string, pids: readonly number[], signal: AbortSignal): Promise<Set<number>>
   folders(pids: readonly number[], signal: AbortSignal): Promise<Map<number, string>>
   startedAt(pid: number, signal: AbortSignal): Promise<number>
+  /** Whether `pid` is still the process that started at `startedAt`; it throws when that can't be read. */
+  matches?(pid: number, startedAt: number, signal: AbortSignal): Promise<boolean>
 }
 
-const PROCESS_READS: ProcessReads = { marked: markedProcesses, holding: processesHolding, folders: processFolders, startedAt: processStartedAt }
+export const PROCESS_READS: ProcessReads = {
+  marked: markedProcesses,
+  holding: processesHolding,
+  folders: processFolders,
+  startedAt: processStartedAt,
+  matches: (pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, exact: true, signal }),
+}
 
 export interface AgentRunsDeps {
   store(): ThreadStore | undefined
@@ -83,6 +92,8 @@ export interface AgentRunsDeps {
   changed(edge: ThreadParent, progressOnly: boolean): void
   /** A followed run ended, once: written to its edge before this is called. */
   ended(edge: ThreadParent, ended: RunEnd): void
+  /** A run Mako stopped outlived its kill: its process still runs, so its Fin says so (`stuckWords`) and keeps its place. */
+  stuck?(edge: ThreadParent): void
   processes?: ProcessReads
   now?(): number
 }
@@ -297,12 +308,11 @@ export class AgentRuns {
     const store = this.deps.store()
     if (!followed || !run || !store || run.ended || !run.process || run.device !== store.deviceId) return false
     const process = run.process
-    const { pid } = process
+    const at = this.now()
     this.terminating.set(child, process)
-    this.end(followed, { at: this.now(), kind: "stopped", ...(detail && { detail }), ...(followed.reading.toolUses && { toolUses: followed.reading.toolUses }) })
-    signalGroup(pid, "SIGTERM")
-    setTimeout(() => signalGroup(pid, "SIGKILL"), STOP_GRACE_MS).unref()
-    void this.untilGone(child, process)
+    // Its end and its stopping are kept together: a host that dies before its process does leaves the next one to finish the stop.
+    this.end(followed, { at, kind: "stopped", ...(detail && { detail }), ...(followed.reading.toolUses && { toolUses: followed.reading.toolUses }) }, { stopping: { at } })
+    void this.untilGone(child, process, at)
     return true
   }
 
@@ -312,20 +322,96 @@ export class AgentRuns {
   }
 
   /**
-   * Waits for a stopped run's process group to exit, its kill's grace included, then lets its place go: its Fin's
-   * entry moves, and what waits for the place hears it then. A host can't wait on a process it didn't spawn, so it
-   * looks every `GONE_EVERY_MS`, as long as the kill can take.
+   * Stops a stopped run's process and waits for it to exit, then lets its place go: its Fin's entry moves, and what
+   * waits for the place hears it then. It's signalled only while it's proven the same process (`identity`): SIGTERM
+   * at once, SIGKILL `STOP_GRACE_MS` after its stop. A host can't wait on a process it didn't spawn, so it looks every
+   * `GONE_EVERY_MS`, and only an exit it has seen lets the place go. A process whose identity can't be read keeps its
+   * place unsignalled, its Fin saying Mako couldn't confirm it stopped, and one that outlives its kill keeps its place,
+   * its Fin saying Mako couldn't stop it; either is looked at every `STUCK_EVERY_MS` until it settles. A host that
+   * shuts down leaves the stop to the next one.
    */
-  private async untilGone(child: string, process: NonNullable<FollowedRun["process"]>): Promise<void> {
-    const deadline = this.now() + STOP_GRACE_MS + GONE_AFTER_KILL_MS
-    try {
-      while (!this.stopped && this.now() < deadline && (groupRuns(process.pid) || await processIdentityMatches({ pid: process.pid, startedAt: process.startedAt, exact: process.startedAt !== undefined, signal: this.abort.signal }).catch(() => false)))
-        await new Promise((resolve) => setTimeout(resolve, GONE_EVERY_MS))
-    } finally {
-      if (this.terminating.get(child) === process) this.terminating.delete(child)
-      const followed = this.followed.get(child)
-      if (followed && !this.stopped) this.deps.changed(followed.edge, false)
+  private async untilGone(child: string, process: NonNullable<FollowedRun["process"]>, since: number): Promise<void> {
+    const killAt = since + STOP_GRACE_MS
+    let termed = false
+    let killed = false
+    const kept = this.followed.get(child)?.edge.run?.stopping
+    let stuck = kept?.stuck === true
+    let unconfirmed = kept?.unconfirmed === true
+    while (!this.stopped) {
+      const identity = await this.identity(process)
+      // Another process's pid now: a pid isn't reused while its group lives, so the group under that id is the new one's.
+      // Gone: only once nothing of its group is left either.
+      if (identity === "other" && (signalable(process.pid) || !groupRuns(process.pid))) break
+      const now = this.now()
+      if (identity === "same") {
+        if (!termed) signalGroup(process.pid, "SIGTERM")
+        termed = true
+        if (!killed && now >= killAt) {
+          killed = true
+          signalGroup(process.pid, "SIGKILL")
+        }
+      }
+      if (unconfirmed !== (identity === "unknown")) {
+        unconfirmed = identity === "unknown"
+        this.keepStopping(child, { unconfirmed })
+      }
+      if (!stuck && killed && now >= killAt + GONE_AFTER_KILL_MS) {
+        stuck = true
+        this.keepStopping(child, { stuck })
+        hostWarn("agents", "a stopped run outlived its kill; it keeps its place until it exits", { child, pid: process.pid })
+      }
+      await new Promise((resolve) => setTimeout(resolve, stuck || unconfirmed ? STUCK_EVERY_MS : GONE_EVERY_MS))
     }
+    if (this.stopped) return
+    if (this.terminating.get(child) === process) this.terminating.delete(child)
+    const followed = this.followed.get(child)
+    const store = this.deps.store()
+    if (!followed || !store) return
+    const edge = store.edges().of(child) ?? followed.edge
+    const run = edge.run
+    if (run?.stopping) {
+      const rest: FollowedRun = { ...run }
+      delete rest.stopping
+      try {
+        followed.edge = store.keepEdge({ ...edge, run: rest })
+      } catch (error) {
+        hostWarn("agents", "a stopped run's exit could not be kept", { child, error: errorMessage({ error }) })
+      }
+    }
+    this.deps.changed(followed.edge, false)
+  }
+
+  /**
+   * Whether a stopped run's pid is still its process: "same" only when its start time is read and matches, the one
+   * answer that lets Mako signal it; "other" when it's gone or another process holds the pid; "unknown" when that
+   * can't be read, or there's no start time to compare, which keeps its place and signals nothing.
+   */
+  private async identity(process: NonNullable<FollowedRun["process"]>): Promise<"same" | "other" | "unknown"> {
+    if (process.startedAt === undefined) return signalable(process.pid) ? "unknown" : "other"
+    const matches = this.deps.processes?.matches ?? PROCESS_READS.matches!
+    return matches(process.pid, process.startedAt, this.abort.signal).then(
+      (same) => (same ? "same" : "other"),
+      () => "unknown",
+    )
+  }
+
+  /** How a stop stands, kept so the next host knows and its Fin says so: stuck past its kill, or not confirmed. */
+  private keepStopping(child: string, patch: { stuck?: boolean; unconfirmed?: boolean }): void {
+    const followed = this.followed.get(child)
+    const store = this.deps.store()
+    const edge = store?.edges().of(child) ?? followed?.edge
+    const run = edge?.run
+    if (!followed || !store || !edge || !run) return
+    const was = run.stopping
+    const stuck = patch.stuck ?? was?.stuck === true
+    const unconfirmed = patch.unconfirmed ?? was?.unconfirmed === true
+    try {
+      followed.edge = store.keepEdge({ ...edge, run: { ...run, stopping: { at: was?.at ?? this.now(), ...(stuck && { stuck: true as const }), ...(unconfirmed && { unconfirmed: true as const }) } } })
+    } catch (error) {
+      hostWarn("agents", "a stop's standing could not be kept", { child, error: errorMessage({ error }) })
+    }
+    if (patch.unconfirmed) hostWarn("agents", "a stopped run's process can't be confirmed as its own; it keeps its place, unsignalled", { child, pid: run.process?.pid })
+    this.deps.stuck?.(followed.edge)
   }
 
   /**
@@ -401,6 +487,13 @@ export class AgentRuns {
     const followed: Followed = { edge, reading: {}, counted: 0, lastRead: 0, inFlight: false, again: false, checked: false }
     this.followed.set(edge.child, followed)
     this.index(followed)
+    // A stop the last host didn't see through: its process holds its place from now, before anything is drained,
+    // until this host has seen it exit, killing it in its turn once its grace is up.
+    const run = edge.run
+    if (run?.stopping && run.process && run.device === this.deps.store()?.deviceId && !this.terminating.has(edge.child)) {
+      this.terminating.set(edge.child, run.process)
+      void this.untilGone(edge.child, run.process, run.stopping.at)
+    }
     this.wantChecks()
     if (followed.reading.session && !edge.run?.ended) void this.read(followed)
     return followed
@@ -419,12 +512,12 @@ export class AgentRuns {
   }
 
   /** Writes how the run ended, once: an end already kept stands. */
-  private end(followed: Followed, ended: RunEnd): void {
+  private end(followed: Followed, ended: RunEnd, more: Partial<FollowedRun> = {}): void {
     const store = this.deps.store()
     const run = followed.edge.run
     if (!store || this.stopped || !run || run.ended) return
     try {
-      followed.edge = store.keepEdge({ ...followed.edge, run: { ...run, ended } })
+      followed.edge = store.keepEdge({ ...followed.edge, run: { ...run, ...more, ended } })
     } catch (error) {
       hostWarn("agents", "a followed run's end could not be kept", { child: followed.edge.child, error: errorMessage({ error }) })
       return

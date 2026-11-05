@@ -10,7 +10,7 @@ import { releaseHold } from "./live-ledger.js"
 import type { LiveRecords } from "./live-records.js"
 import type { LeftTurn, LiveRestarts } from "./live-restarts.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
-import { interruptRequests } from "./live-settlement.js"
+import { interruptRequests, unhandedRequest } from "./live-settlement.js"
 import type { LiveTransfers } from "./live-transfers.js"
 
 type ClosingAccess = Pick<LiveAccess,
@@ -88,6 +88,8 @@ export class LiveClosing {
    * continuation will tell the agent.
    */
   private cutForNextHost(resident: Resident): LeftTurn | undefined {
+    // One never handed its harness is no turn to continue: it waits, as those queued do, to be sent again.
+    resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(unhandedRequest) }
     const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
     if (!running) return undefined
     const stopped = stoppedWork(resident.snapshot, true)

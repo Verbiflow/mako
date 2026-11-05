@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { basename, dirname, join } from "node:path"
+import { readFileSync, rmSync } from "node:fs"
+import { publishFileSync } from "../../../base/published-files.js"
+import { basename, join } from "node:path"
 import { z } from "zod"
 import { cursorSdkAgentDirectory } from "@mako/sessions/cursor-sdk-paths"
 import { processIdentityMatches } from "../../../base/process-liveness.js"
@@ -45,10 +46,7 @@ function read(path: string): CursorRunRecord | undefined {
 export function recordCursorRun(stateRoot: string, agentId: string, record: CursorRunRecord): string | undefined {
   const path = cursorRunRecordPath(stateRoot, agentId)
   try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-    const draft = `${path}.${process.pid}.tmp`
-    writeFileSync(draft, JSON.stringify(record), { mode: 0o600 })
-    renameSync(draft, path)
+    publishFileSync(path, JSON.stringify(record), { mode: 0o600, dirMode: 0o700 })
     return undefined
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
