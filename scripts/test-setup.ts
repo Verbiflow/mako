@@ -262,3 +262,50 @@ test("the host reads this device's own brokers and the account's, and answers an
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test("one file's Add never copies the project's other files: the project's word has a row of its own naming them all", async () => {
+  const { SetupViews } = await import("@mako/host/workspaces/setup-view")
+  for (const decision of ["unasked", "declined"] as const) {
+    const calls: string[] = []
+    const carriedView = {
+      project: "/work/shop",
+      repository: "https://github.com/acme/shop",
+      decision,
+      files: [
+        { path: "selected.env", bytes: 10, credentials: true, cloud: null, kept: false },
+        { path: "unselected.env", bytes: 10, credentials: true, cloud: null, kept: false },
+      ],
+      staying: [],
+    }
+    const views = new SetupViews({
+      now: () => NOW,
+      recipe: async () => ({ project: "shop", root: "/work/shop", recipe: { kind: "none" } }),
+      carried: {
+        view: async () => carriedView,
+        decide: async (_folder, allowed) => {
+          calls.push(`decide:${allowed}`)
+          return carriedView
+        },
+        keep: async (_folder, path, keep) => {
+          calls.push(`keep:${path}:${keep}`)
+          return carriedView
+        },
+      },
+      accounts: async () => ({ providers: [], accounts: [] }),
+      keys: async () => ({ connections: [], issues: [], secureStorage: true, harnesses: [] }),
+      device: async () => ({ id: undefined, name: "MacBook Pro" }),
+      label: (harness) => harness,
+    })
+    const cloudPlace = (await views.view("/work/shop")).places.find((place) => place.id === "cloud")!
+    const selected = named(cloudPlace, "selected.env")
+    assert.equal(rowAction(selected, NOW), undefined, `${decision}: a file's own row offers no Add`)
+    const forced = await views.act("/work/shop", { act: "row", place: "cloud", row: selected.id, action: "add" })
+    assert.equal(forced.done, false, `${decision}: Add on one file is refused`)
+    assert.deepEqual(calls, [], `${decision}: neither file was sent, and the project's word wasn't given`)
+    const project = rows(cloudPlace).find((row) => row.target === "carried:all")!
+    assert.match(project.detail, /selected\.env and unselected\.env/, "the project's row names every file its Add covers")
+    assert.equal(rowAction(project, NOW), "add")
+    assert.deepEqual(await views.act("/work/shop", { act: "row", place: "cloud", row: project.id, action: "add" }), { done: true })
+    assert.deepEqual(calls, ["decide:true"])
+  }
+})

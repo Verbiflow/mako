@@ -43,10 +43,19 @@ const bridgeSource: SetupSource = {
   act: (folder, request) => getMako().setupAct(folder, request),
 }
 let source: SetupSource | undefined
+/** Folders a page asked for before any source could answer: read as soon as one is installed. */
+const wanted = new Set<string>()
 
-/** The web app away from a Mac reads Setup through its own source. */
+/**
+ * The web app away from a Mac reads Setup through its own source. A page's first read can come before its screen
+ * installs the source (a child's effect runs before its parent's), so what was asked is read now.
+ */
 export function setSetupSource(next: SetupSource | undefined) {
   source = next
+  if (!next) return
+  const asked = [...wanted]
+  wanted.clear()
+  for (const folder of asked) void readSetup(folder)
 }
 
 function currentSource(): SetupSource | undefined {
@@ -55,7 +64,10 @@ function currentSource(): SetupSource | undefined {
 
 export async function readSetup(folder: string): Promise<SetupView | undefined> {
   const from = currentSource()
-  if (!from) return undefined
+  if (!from) {
+    wanted.add(folder)
+    return undefined
+  }
   try {
     const view = await from.read(folder)
     setupStore.set((state) => {

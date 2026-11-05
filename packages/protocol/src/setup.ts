@@ -201,6 +201,8 @@ export const SetupRowSchema = z
     /** Where it comes from and how it's held, in one line. Names only, never a value. */
     detail: z.string().max(1000),
     scope: z.enum(["thread", "project", "account"]).optional(),
+    /** The Thread a Thread-scoped grant reaches, so one Thread's own place leaves out another's. */
+    thread: Id.optional(),
     sync: SyncStateSchema,
     origin: RowOriginSchema,
     /** The row's button when it isn't its state's own (Stop on what this device lends). */
@@ -604,6 +606,7 @@ function leaseRows(grant: Grant, leases: Lease[]): SetupRow[] {
       mono: true,
       detail: `${placed} ${worktrees} ${worktrees === 1 ? "Thread's worktree" : "Threads' worktrees"}${grant.secret ? " · agents see names only" : ""}`,
       scope: grant.scope.level,
+      ...(grant.scope.level === "thread" && { thread: grant.scope.thread }),
       sync: { state: "synced", at: latest },
       origin: { from: "lease", lease: held[0]!.id, grant: grant.id },
       target: grant.id,
@@ -632,6 +635,7 @@ function grantRows(broker: BrokerReading, place: SetupPlace, project: { reposito
       mono: !grant.label || Boolean(github),
       detail: grantDetail(grant, broker, leases, shown === "lent"),
       scope: grant.scope.level,
+      ...(grant.scope.level === "thread" && { thread: grant.scope.thread }),
       sync: shown === "lent" ? lentSync(grant, leases, broker, place) : grantSync(grant, leases, broker, place),
       origin: leases.length === 1 && !PATTERN.test(ref) ? { from: "lease", lease: leases[0]!.id, grant: grant.id } : { from: "grant", grant: grant.id },
       target: grant.id,
@@ -753,10 +757,9 @@ export function viewAsks(view: SetupView): SetupAsk[] {
  * One Thread's own place, for its side panel: its place's rows, with its own asks alone and grants scoped to other
  * Threads left out.
  */
-export function threadPlace(view: SetupView, place: string, thread: string, grants: readonly Grant[] = []): SetupPlaceView | undefined {
+export function threadPlace(view: SetupView, place: string, thread: string): SetupPlaceView | undefined {
   const found = view.places.find((entry) => entry.id === place)
   if (!found) return undefined
-  const others = new Set(grants.filter((grant) => grant.scope.level === "thread" && grant.scope.thread !== thread).map((grant) => grant.id))
   const asks = found.asks.filter((ask) => ask.by.thread === thread)
   const keepAsk = new Set(asks.map((ask) => ask.id))
   return {
@@ -766,8 +769,7 @@ export function threadPlace(view: SetupView, place: string, thread: string, gran
       part: part.part,
       rows: part.rows.filter((row) => {
         if (row.origin.from === "ask") return keepAsk.has(row.origin.ask)
-        if (row.origin.from === "grant" || row.origin.from === "lease") return !others.has(row.origin.grant)
-        return true
+        return !row.thread || row.thread === thread
       }),
     })),
   }

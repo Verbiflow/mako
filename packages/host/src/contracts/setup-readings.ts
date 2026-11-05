@@ -59,19 +59,38 @@ export function carryRows(recipe: RecipeView, present: ReadonlyMap<string, { at:
   })
 }
 
-/** The project's carried files in the cloud, as this Mac's store and the account's say they stand. */
+/** The target of the one row whose Add copies every carried file of the project: the person's word is for all of them. */
+export const CARRIED_ALL = "carried:all"
+
+/**
+ * The project's carried files in the cloud, as this Mac's store and the account's say they stand. Copying them is one
+ * word for the whole project (`CloudCarriedFiles.decide`), so until it's given, one row names every file it covers
+ * and offers it; no file's own row does, so a tap on one file never sends the others.
+ */
 export function carriedCloudRows(view: CarriedFilesView, from: string): ReadingRow[] {
-  const rows: ReadingRow[] = view.files.map((file): ReadingRow => {
+  const allowed = view.decision === "allowed"
+  const rows: ReadingRow[] = []
+  if (!allowed && view.files.length)
+    rows.push({
+      reading: "carried-cloud",
+      part: "files",
+      icon: "folder",
+      name: view.decision === "declined" ? "Kept on this Mac" : "Not copied yet",
+      mono: false,
+      detail: `Add copies ${list(view.files.map((file) => file.path))} from ${from}, encrypted, to every cloud Thread of this project; agents see names only`,
+      sync: { state: "missing" },
+      target: CARRIED_ALL,
+    })
+  for (const file of view.files) {
     const sync: SyncState =
-      view.decision !== "allowed" ? { state: "missing" }
-      : file.kept ? { state: "here" }
+      !allowed || file.kept ? { state: "here" }
       : !file.cloud ? { state: "missing" }
       : !file.cloud.current ? { state: "newer", source: "Mac's" }
       : { state: "synced", at: Date.parse(file.cloud.savedAt) }
-    const parts = [file.kept ? `Kept on ${from}; you took it out of the cloud` : `From ${from}`, bytes(file.bytes)]
+    const parts = [file.kept ? `Kept on ${from}; you took it out of the cloud` : allowed ? `From ${from}` : `On ${from}; it goes with the project's other files or not at all`, bytes(file.bytes)]
     if (file.credentials) parts.push("encrypted", "agents see names only")
-    return { reading: "carried-cloud", part: "files", icon: "file", name: file.path, mono: true, detail: parts.join(" · "), sync, target: file.path }
-  })
+    rows.push({ reading: "carried-cloud", part: "files", icon: "file", name: file.path, mono: true, detail: parts.join(" · "), sync, target: file.path })
+  }
   for (const staying of view.staying)
     rows.push({ reading: "carried-cloud", part: "files", icon: "folder", name: staying.path, mono: true, detail: `Stays on ${from}: ${staying.why}`, sync: { state: "here" }, target: staying.path })
   return rows
@@ -113,7 +132,7 @@ export function savedKeyRows(names: readonly string[]): ReadingRow[] {
 export function cloudSignInRows(state: CloudSignInsState | undefined, labels: (harness: string) => string): ReadingRow[] {
   if (!state) return []
   if (!state.sharing || state.blocked)
-    return [{ reading: "sign-in", part: "access", icon: "key", name: "Your sign-ins", mono: false, detail: "Cloud Threads sign in with yours once you share them; agents never see them", scope: "account", sync: { state: "missing" }, target: "share-sign-ins" }]
+    return [{ reading: "sign-in", part: "access", icon: "key", name: "Your sign-ins", mono: false, detail: "Add shares every harness sign-in on this Mac with all your cloud Threads, in every project; agents never see them", scope: "account", sync: { state: "missing" }, target: "share-sign-ins" }]
   const sent = state.harnesses.filter((row) => row.status === "sent")
   const failed = state.harnesses.filter((row) => row.status === "failed")
   const rows: ReadingRow[] = []

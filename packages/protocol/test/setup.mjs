@@ -746,7 +746,7 @@ test("an answer makes the grant the person chose, and Decline makes none", () =>
 })
 test("a Thread's own place keeps its own asks and leaves out other Threads' grants", () => {
   const whole = view()
-  const own = threadPlace(whole, "cloud", "t-pool", broker().grants)
+  const own = threadPlace(whole, "cloud", "t-pool")
   assert.deepEqual(
     own.asks.map((entry) => entry.id),
     ["ask-tf"]
@@ -754,7 +754,7 @@ test("a Thread's own place keeps its own asks and leaves out other Threads' gran
   assert.ok(rows(own).some((row) => row.name === "terraform"))
   assert.ok(!rows(own).some((row) => row.name === "acme/ledger"))
   assert.ok(rows(own).some((row) => row.name === "scratch.md"))
-  const build = threadPlace(whole, "cloud", "t-build", broker().grants)
+  const build = threadPlace(whole, "cloud", "t-build")
   assert.ok(!rows(build).some((row) => row.name === "scratch.md"))
 })
 test("a part folds to one line led by what needs a look", () => {
@@ -788,4 +788,17 @@ test("a page parses by its own schema, as the account's broker and a browser rea
       places: [{ ...page.places[0], parts: [{ part: "needs", rows: [] }] }],
     })
   )
+})
+
+test("an answer grants exactly what was asked: its kind and ref, never a pattern or the project's whole carry", () => {
+  const made = { id: "g-exact", account: ACCOUNT, source: { kind: "device", device: MAC }, at: NOW }
+  for (const ref of ["selected.env", "~/notes/plan.md", "github:acme/ledger"]) {
+    const kind = ref.startsWith("github:") ? "credential" : "file"
+    const asked = { ...ask, offer: { ...ask.offer, resource: { kind, ref }, mode: kind === "file" ? "copy" : "minted" } }
+    for (const answer of ["allow-thread", "allow-project"]) {
+      const given = grantForAnswer(asked, answer, made)
+      assert.deepEqual(given.resource, { kind, ref }, `${answer} on ${ref}`)
+      assert.ok(!/[*?]/.test(given.resource.ref))
+    }
+  }
 })

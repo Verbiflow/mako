@@ -11,7 +11,7 @@ import type { Borrower, Grant, Lease, LeaseEvent, SourceAnswer, SourceAsk } from
 import type { LocalBorrowing } from "../base/local-borrowing.js"
 import { SECRET_KINDS, type SecretKind } from "../base/secrets.js"
 import { setupView, SetupActSchema, sourceAskOf, type AskAnswer, type Asker, type BorrowSnapshot, type BrokerReading, type PlaceReading, type Platform, type SetupAct, type SetupActOutcome, type SetupAsk, type SetupPlace, type SetupView } from "../contracts/setup.js"
-import { carriedCloudRows, carryRows, cloudSignInRows, prepareRows, processRows, repositoryRow, savedKeyRows, signInRows } from "../contracts/setup-readings.js"
+import { CARRIED_ALL, carriedCloudRows, carryRows, cloudSignInRows, prepareRows, processRows, repositoryRow, savedKeyRows, signInRows } from "../contracts/setup-readings.js"
 import { CHECKOUT_GRANTS, checkoutSource, LOCAL_DEVICE } from "./checkout-borrowing.js"
 
 /** One of this device's own brokers, as Setup reads and answers it: the worktrees' checkouts, the saved secrets. */
@@ -216,9 +216,14 @@ export class SetupViews {
     const row = view.places.find((place) => place.id === act.place)?.parts.flatMap((part) => part.rows).find((entry) => entry.id === act.row)
     if (!row) return { done: false, why: "That row isn't on the page anymore." }
     if (row.origin.from === "reading" && row.origin.reading === "carried-cloud" && row.target && deps.carried) {
+      // The project's word covers every file its row names; one file's row only copies that file again, once given.
+      if (row.target === CARRIED_ALL) {
+        await deps.carried.decide(folder, true)
+        return { done: true }
+      }
       const carried = await deps.carried.view(folder)
-      if (carried.decision !== "allowed") await deps.carried.decide(folder, true)
-      else await deps.carried.keep(folder, row.target, false)
+      if (carried.decision !== "allowed") return { done: false, why: "This project's files go to the cloud together: Add on its own row first." }
+      await deps.carried.keep(folder, row.target, false)
       return { done: true }
     }
     if (row.target === "share-sign-ins" && deps.cloudSignIns) {
