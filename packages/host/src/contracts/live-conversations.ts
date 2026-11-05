@@ -331,6 +331,11 @@ export interface LiveRequest {
    */
   editing?: true
   /**
+   * A `held` request the person's Stop paused (or an Apex's stop of its Fin): what is sent after it goes ahead, and
+   * Resume sends it. One an exit, a crash or a lost steer paused carries none and keeps its place in line.
+   */
+  pause?: "stop"
+  /**
    * The sign-out this request waits on. A `held` request is unsent and goes
    * when the user resumes; the turn the sign-out cut short keeps its own
    * outcome and is continued, or left for review, on Resume.

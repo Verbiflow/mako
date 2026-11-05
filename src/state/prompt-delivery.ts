@@ -231,6 +231,8 @@ export interface PendingPrompt {
   retry?: LiveRequest["retry"]
   /** Set on a held message the person paused to edit: it keeps its place. */
   editing?: LiveRequest["editing"]
+  /** Set on a held message the person's Stop paused: what they send next goes ahead of it. */
+  pause?: LiveRequest["pause"]
   /** Set on a queued message waiting for this Mac to hear its account after it was away. */
   ownerCheck?: LiveRequest["ownerCheck"]
   displayText?: string

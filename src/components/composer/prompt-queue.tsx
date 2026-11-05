@@ -424,7 +424,9 @@ function QueueRow({
               ? `Sends again by itself at ${clockText(request.retry.at)}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
               : request.editing
                 ? "Held while you edit it. Nothing behind it goes until you save or resume it."
-                : "Paused. Messages you send now go ahead of it; Resume sends it."}
+                : request.pause === "stop"
+                  ? "Paused by Stop. Messages you send now go ahead of it; Resume sends it."
+                  : "Paused when Mako stopped. Resume sends it, then what waits behind it."}
         </p>
       ) : null}
       {target.kind === "live" && !editable && !editing && !request.status ? (

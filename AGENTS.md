@@ -4044,12 +4044,15 @@ journal's request queue (`LiveRequest`), sent by `LiveDispatch` alone; the
 design and its steps are in the orchestration notes (`delivery-queue.md`).
 Step one: why a held message waits has one reading (`holdOf`, in
 `contracts/request-hold.ts`): `edit` (the person paused it to edit it),
-`sign-in`, `retry`, `until` (a usage limit's timed resume) or `paused` (a
-Stop, Mako's exit or a crash). What goes next has one rule (`nextInLine`,
-behind `nextQueued`): an edit, a sign-out's pause or a message about to go
-again keeps its place and holds what's behind it; anything else held lets
-later messages go, so after a Stop a new message goes while what the Stop
-paused waits for Resume, as its row says. A new message makes a message
+`sign-in`, `retry`, `until` (a usage limit's timed resume) or `paused`, by
+the person's Stop (or an Apex's of its Fin, `LiveRequest.pause`) or by Mako
+(its exit, a crash, a lost steer). What goes next has one rule
+(`nextInLine`, behind `nextQueued`): an edit, a sign-out's pause, a message
+about to go again or one Mako paused keeps its place and holds what's behind
+it, since nobody chose to put it off; a timed resume or what a Stop paused
+lets later messages go, so after a Stop a new message goes while what the
+Stop paused waits for Resume, as its row says. (`test:send-race` holds a
+restart's pause to the order messages came in.) A new message makes a message
 about to go again due now, so it goes first. Every release goes through
 `released`, and every held message's time through one timer, armed for the
 soonest by each commit that gives one a time (`LiveConversations.armWakes`),

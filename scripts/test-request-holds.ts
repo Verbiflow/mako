@@ -13,9 +13,9 @@ import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
  * One reading of why a queued message waits, and one rule for what goes next
  * (`npm run test:request-holds`), step one of the one delivery queue
  * (`AGENTS.md`, "One delivery queue"). Covered: the hold each held message is
- * under; only an edit, a sign-out or a message about to go again keeps the
- * line, so after a Stop a new message goes while what the Stop paused waits
- * for Resume; a message about to go again goes first when a new one comes;
+ * under; an edit, a sign-out, a message about to go again or one Mako's exit
+ * paused keeps the line, while after the person's Stop a new message goes and
+ * what the Stop paused waits for Resume; a message about to go again goes first when a new one comes;
  * one timer sends a held message at its time with nothing polling; the
  * queue's order, moved by an interrupt or a resume, survives the journal
  * being read again; and a message waiting to go again survives the host
@@ -33,7 +33,7 @@ async function until(what: string, done: () => boolean, timeoutMs = 8_000): Prom
   }
 }
 
-type Row = Pick<LiveRequest, "status" | "signIn" | "editing" | "retry" | "wake"> & { id: string }
+type Row = Pick<LiveRequest, "status" | "signIn" | "editing" | "retry" | "wake" | "pause"> & { id: string }
 const row = (id: string, status: LiveRequest["status"], marks: Partial<Row> = {}): Row => ({ id, status, ...marks })
 const retry = { at: 5, attempt: 1, since: 0, cause: "rate-limited" as const, reason: "429" }
 const signIn = { harness: "claude", account: "", credential: "", at: 0 }
@@ -85,17 +85,19 @@ try {
     assert.equal(holdOf(row("a", "held", { signIn, editing: true }))?.kind, "sign-in")
     assert.equal(holdOf(row("a", "held", { retry }))?.kind, "retry")
     assert.equal(holdOf(row("a", "held", { wake: { at: 9, after: "x" } }))?.kind, "until")
-    assert.equal(holdOf(row("a", "held"))?.kind, "paused")
+    assert.deepEqual(holdOf(row("a", "held", { pause: "stop" })), { kind: "paused", by: "stop" })
+    assert.deepEqual(holdOf(row("a", "held")), { kind: "paused", by: "mako" })
     const next = (rows: Row[], newestOnly = false) => nextInLine(rows, newestOnly)?.id
-    assert.equal(next([row("p", "held"), row("q", "queued")]), "q", "what a Stop paused lets a later message go")
+    assert.equal(next([row("p", "held", { pause: "stop" }), row("q", "queued")]), "q", "what a Stop paused lets a later message go")
+    assert.equal(next([row("p", "held"), row("q", "queued")]), undefined, "what Mako's exit or a crash paused keeps its place")
     assert.equal(next([row("u", "held", { wake: { at: 9, after: "x" } }), row("q", "queued")]), "q", "a timed resume lets one go too")
     assert.equal(next([row("e", "held", { editing: true }), row("q", "queued")]), undefined, "nothing goes ahead of an edit")
     assert.equal(next([row("s", "held", { signIn }), row("q", "queued")]), undefined, "nor ahead of a sign-out's pause")
     assert.equal(next([row("r", "held", { retry }), row("q", "queued")]), undefined, "nor ahead of a message about to go again")
     assert.equal(next([row("q1", "queued"), row("e", "held", { editing: true }), row("q2", "queued")], true), "q1", "after a failure, the newest before the line's hold")
-    assert.equal(next([row("q1", "queued"), row("p", "held"), row("q2", "queued")], true), "q2")
+    assert.equal(next([row("q1", "queued"), row("p", "held", { pause: "stop" }), row("q2", "queued")], true), "q2")
   }
-  console.log("holds: one reading; only an edit, a sign-out or a retry keeps the line")
+  console.log("holds: one reading; an edit, a sign-out, a retry or Mako's own pause keeps the line, a Stop's lets later messages go")
 
   for (const harness of HARNESSES) {
     // After a Stop, a new message goes while what the Stop paused waits for Resume.
@@ -107,7 +109,7 @@ try {
       world.say(conversation, "One.")
       assert.equal(await world.live.stopRequest(conversation, held), true)
       await until("the stop", () => requestOf(world, conversation, "One.")?.status === "held")
-      assert.equal(holdOf(requestOf(world, conversation, "One.")!)?.kind, "paused")
+      assert.deepEqual(holdOf(requestOf(world, conversation, "One.")!), { kind: "paused", by: "stop" })
       world.say(conversation, "Two.")
       await until(`${harness}: the new message to go`, () => requestOf(world, conversation, "Two.")?.status === "completed")
       assert.equal(requestOf(world, conversation, "One.")?.status, "held", "what the Stop paused waits")

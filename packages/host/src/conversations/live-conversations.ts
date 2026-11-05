@@ -1308,7 +1308,9 @@ export class LiveConversations {
     if (this.activeRequest(id) !== requestId) return Promise.resolve(false)
     const resident = this.records.require(id)
     const snapshot = resident.snapshot
-    resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => request.status === "queued" && request.id !== requestId ? { ...request, status: "held" } : request) }
+    // The person's Stop pauses what waited, and what they send next goes ahead of it; any other stop keeps its order.
+    const pause = why === "person" ? { pause: "stop" as const } : {}
+    resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => request.status === "queued" && request.id !== requestId ? { ...request, status: "held", ...pause } : request) }
     try { this.flush(resident) } catch (error) { resident.snapshot = snapshot; return Promise.reject(error) }
     const opening = resident.opening
     // A turn Mako already stopped because it couldn't save it stays Mako's, whoever presses Stop after.

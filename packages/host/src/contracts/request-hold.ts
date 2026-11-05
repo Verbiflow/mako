@@ -14,29 +14,32 @@ import type { LiveRequest, RequestWake, SignInHold } from "./live-conversations.
  *   at `at`, first: nothing goes ahead of it, and a new message makes it due now.
  * - `until`: the person asked to send it at a time, a usage limit's reset.
  *   Messages they send meanwhile go.
- * - `paused`: a Stop, Mako's exit or a crash paused it. Messages sent after go
- *   ahead; Resume sends it, and a Fin's next message sends a Fin's on.
+ * - `paused`: a Stop (`by: "stop"`, the person's or an Apex's of its Fin)
+ *   paused it, and what's sent after goes ahead; or Mako did, on its exit, a
+ *   crash or a lost steer (`by: "mako"`), and it keeps its place, since
+ *   nobody chose to put it off. Resume sends it, and a Fin's next message
+ *   sends a Fin's on.
  */
 export type Hold =
   | { kind: "edit" }
   | { kind: "sign-in"; hold: SignInHold }
   | { kind: "retry"; retry: RequestRetry }
   | { kind: "until"; wake: RequestWake }
-  | { kind: "paused" }
+  | { kind: "paused"; by: "stop" | "mako" }
 
 /** The hold a held request is under, or undefined for one that isn't held. */
-export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing" | "retry" | "wake">): Hold | undefined {
+export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing" | "retry" | "wake" | "pause">): Hold | undefined {
   if (request.status !== "held") return undefined
   if (request.signIn) return { kind: "sign-in", hold: request.signIn }
   if (request.editing) return { kind: "edit" }
   if (request.retry) return { kind: "retry", retry: request.retry }
   if (request.wake) return { kind: "until", wake: request.wake }
-  return { kind: "paused" }
+  return { kind: "paused", by: request.pause === "stop" ? "stop" : "mako" }
 }
 
 /** Whether a message held so keeps its place in line: nothing behind it goes first. */
 export function keepsLine(hold: Hold): boolean {
-  return hold.kind === "edit" || hold.kind === "sign-in" || hold.kind === "retry"
+  return hold.kind === "edit" || hold.kind === "sign-in" || hold.kind === "retry" || (hold.kind === "paused" && hold.by === "mako")
 }
 
 /** When a message held so goes by itself, or undefined when only someone's word releases it. */
@@ -51,11 +54,11 @@ export function holdDue(hold: Hold): number | undefined {
  */
 export function released<T extends LiveRequest>(request: T): T {
   if (request.status !== "held" || request.signIn) return request
-  return { ...request, status: "queued", wake: undefined, editing: undefined }
+  return { ...request, status: "queued", wake: undefined, editing: undefined, pause: undefined }
 }
 
 /** The message a conversation sends next, once nothing else holds it back; undefined when none would go. */
-export function nextInLine<T extends Pick<LiveRequest, "status" | "signIn" | "editing" | "retry" | "wake">>(requests: readonly T[], newestOnly: boolean): T | undefined {
+export function nextInLine<T extends Pick<LiveRequest, "status" | "signIn" | "editing" | "retry" | "wake" | "pause">>(requests: readonly T[], newestOnly: boolean): T | undefined {
   let next: T | undefined
   for (const request of requests) {
     if (request.status === "queued") {
