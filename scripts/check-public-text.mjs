@@ -55,19 +55,25 @@ const FILE_EXTENSIONS = new Set(["json", "jsonl", "ndjson", "png", "jpg", "jpeg"
 /** Coding agents' own addresses, which their `Co-authored-by` trailers carry. */
 const AGENT_ADDRESSES = new Set(["cursoragent@cursor.com"])
 
-function allowedEmail(local, domain, tld) {
+/** An SSH remote, `git@github.com:owner/repo` or `ssh://git@github.com/owner/repo`, by what's around its `git@host`. */
+const sshRemote = (before, after) => /^:[A-Za-z0-9._~-]+\//.test(after) || (/ssh:\/\/$/.test(before) && /^\/[A-Za-z0-9._~-]/.test(after))
+
+function allowedEmail(local, domain, tld, before, after) {
   if (FILE_EXTENSIONS.has(tld.toLowerCase())) return true
   if (/no-?reply/i.test(local) || /(?:^|\.)users\.noreply\.github\.com$/i.test(domain)) return true
   if (AGENT_ADDRESSES.has(`${local}@${domain}`.toLowerCase())) return true
-  // An SSH remote, `git@github.com:owner/repo`, not an address.
-  if (local === "git") return true
+  if (local === "git" && sshRemote(before, after)) return true
   return PLACEHOLDER_DOMAIN.test(domain)
 }
 
-/** Whether a home folder's name is a placeholder, or a file's (`/home/pace.jsonl`): in a folded form (`-Users-ada-work-app`) it is the first word. */
-function allowedHome(name, folded) {
+/**
+ * Whether a home folder's name is a placeholder, or a file's (`/home/pace.jsonl`, the path's last part and no folder
+ * of anything, unless `strict`): in a folded form (`-Users-ada-work-app`) it is the first word.
+ */
+function allowedHome(name, folded, after, strict) {
   const trimmed = name.replace(/[._-]+$/, "")
-  if (!folded && FILE_EXTENSIONS.has(/\.([A-Za-z0-9]+)$/.exec(trimmed)?.[1]?.toLowerCase() ?? "")) return true
+  const last = !/^(?:[/\\]|%2F)/i.test(after)
+  if (!strict && !folded && last && FILE_EXTENSIONS.has(/\.([A-Za-z0-9]+)$/.exec(trimmed)?.[1]?.toLowerCase() ?? "")) return true
   return PLACEHOLDER.test(folded ? (trimmed.split("-")[0] ?? "") : trimmed)
 }
 
@@ -82,16 +88,17 @@ export function denylistPatterns(text) {
 
 const DENYLIST = denylistPatterns(readFileSync(new URL("public-text-denylist.txt", import.meta.url), "utf8"))
 
-/** What `text` holds that public text may not, each with its column (1-based), by kind and never by value. */
-export function findLeaks(text, denylist = DENYLIST) {
+/** What `text` holds that public text may not, each with its column (1-based), by kind and never by value. `strict` takes a home folder that reads as a file for one. */
+export function findLeaks(text, denylist = DENYLIST, { strict = false } = {}) {
   const found = []
+  const after = (match) => text.slice(match.index + match[0].length)
   for (const [index, pattern] of HOME_FORMS.entries())
     for (const match of text.matchAll(pattern)) {
-      if (!allowedHome(match[1] ?? "", index === 1)) found.push({ column: match.index + 1, kind: "home path" })
+      if (!allowedHome(match[1] ?? "", index === 1, after(match), strict)) found.push({ column: match.index + 1, kind: "home path" })
     }
   for (const match of text.matchAll(TEMP_FOLDER)) found.push({ column: match.index + 1, kind: "temporary folder" })
   for (const match of text.matchAll(EMAIL))
-    if (!allowedEmail(match[1] ?? "", match[2] ?? "", match[3] ?? "")) found.push({ column: match.index + 1, kind: "email" })
+    if (!allowedEmail(match[1] ?? "", match[2] ?? "", match[3] ?? "", text.slice(0, match.index), after(match))) found.push({ column: match.index + 1, kind: "email" })
   for (const pattern of denylist) for (const match of text.matchAll(pattern)) found.push({ column: match.index + 1, kind: "hosted name" })
   return found.sort((a, b) => a.column - b.column)
 }
@@ -153,9 +160,13 @@ const git = (args, cwd) => execFileSync("git", ["-c", "core.quotePath=false", ..
 export function changeLeaks(base, head, { cwd = process.cwd(), title = "", body = "" } = {}) {
   const out = []
   const { lines, files } = addedLines(git(["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", `${base}...${head}`], cwd))
-  // A file whose name holds what it may not is named by its place in the diff, or the log would print the value.
-  const where = (file, index) => (findLeaks(file).length ? `file #${index} (name withheld)` : file)
-  for (const { file, index } of files) if (!EXEMPT.has(file)) for (const { kind } of findLeaks(file)) out.push(`${where(file, index)}, its name: ${kind}`)
+  // A name is read as the path it is from the repository's root, where `Users/<name>/x.md` lies.
+  const nameLeaks = (file) => findLeaks(`/${file}`)
+  // What a line may say a log may not repeat: a name with any `@` in it, even one that reads as a file's
+  // (`<address>.md`), or that holds what it may not, goes by its place in the diff.
+  const named = (file) => !/@|%40/i.test(file) && !findLeaks(`/${file}`, DENYLIST, { strict: true }).length
+  const where = (file, index) => (named(file) ? file : `file #${index} (name withheld)`)
+  for (const { file, index } of files) if (!EXEMPT.has(file)) for (const { kind } of nameLeaks(file)) out.push(`${where(file, index)}, its name: ${kind}`)
   for (const { file, index, line, text } of lines) {
     if (EXEMPT.has(file)) continue
     for (const { column, kind } of findLeaks(text)) if (!(kind === "email" && LOCKFILE.test(file))) out.push(`${where(file, index)}:${line}:${column}: ${kind}`)

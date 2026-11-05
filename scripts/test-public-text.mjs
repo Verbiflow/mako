@@ -20,6 +20,10 @@ for (const text of [
   "sessions/%2FUsers%2Fjordan%2Fwork",
   "opencode?directory=%2Fhome%2Fjordan",
   "`/Users/jordan`.",
+  "/home/jordan.jsonl/work/app",
+  "/Users/jordan.md/",
+  "C:\\\\Users\\\\jordan.log\\\\AppData",
+  "sessions/%2FUsers%2Fjordan.txt%2Fwork",
 ])
   assert.deepEqual(kinds(text), ["home path"], text)
 for (const text of [
@@ -41,13 +45,14 @@ for (const text of ["/var/folders/ab/xyz/T/run", "/private/var/folders/ab/xyz/T"
 assert.deepEqual(kinds("/private/tmp/mako-run and $TMPDIR/mako-run"), [])
 
 // A personal address; documentation domains, no-reply senders, agents' trailers, remotes and file names pass.
-for (const text of ["mail jordan@gmail.com.", "Signed-off-by: Jo <jo.smith+x@company.io>"]) assert.deepEqual(kinds(text), ["email"], text)
+for (const text of ["mail jordan@gmail.com.", "Signed-off-by: Jo <jo.smith+x@company.io>", "git@jordan-family.com", "mail git@jordan-family.com: soon", "git@jordan-family.com:42", "git@jordan-family.com/repo"]) assert.deepEqual(kinds(text), ["email"], text)
 for (const text of [
   "a@example.com b@mail.example.org c@example.net f@example.invalid t@host.test x@mako.local",
   "Co-authored-by: Claude <noreply@anthropic.com>",
   "Co-authored-by: Cursor <cursoragent@cursor.com>",
   "123+bot[bot]@users.noreply.github.com",
   "git@github.com:Verbiflow/mako.git",
+  "ssh://git@github.com/Verbiflow/mako.git and git+ssh://git@gitlab.com:22/team/app and git@bitbucket.org:team/app",
   "effect@4.0.0-beta.78.patch native-1@launch-1.jsonl icon@2x.png @scope/pkg",
 ])
   assert.deepEqual(kinds(text), [], text)
@@ -162,9 +167,42 @@ try {
   assert.doesNotMatch(leakyOut.stdout + leakyOut.stderr, /jordan|gmail/, "neither a name nor a line's value is printed")
   assert.match(leakyOut.stderr, /file #N is line N of `git diff --name-only --no-renames /)
 
+  // A name the file exceptions let through is withheld all the same: what a line may hold, a log may not repeat.
+  const suffixed = await commit({
+    "docs/jordan@gmail.com.md": "Reach jordan@gmail.com\n",
+    "Users/jordan/notes.md": "clean\n",
+    "home/jordan.jsonl/notes.md": "Built in /home/jordan/app\n",
+    "home/jordan.md": "Built in /home/jordan/app\n",
+    "native-1@launch-1.jsonl": "Built in /home/jordan/app\n",
+  }, "Files whose names read as files'")
+  const suffixedOut = cli(leakyName, suffixed)
+  assert.equal(suffixedOut.status, 1)
+  assert.deepEqual(changeLeaks(leakyName, suffixed, { cwd: root }), [
+    "file #1 (name withheld), its name: home path",
+    "file #3 (name withheld), its name: home path",
+    "file #2 (name withheld):1:7: email",
+    "file #3 (name withheld):1:10: home path",
+    "file #4 (name withheld):1:10: home path",
+    "file #5 (name withheld):1:10: home path",
+  ])
+  assert.doesNotMatch(suffixedOut.stdout, /jordan|gmail|launch/)
+  assert.doesNotMatch(suffixedOut.stderr, /jordan|gmail|launch/, "stderr, which CI prints, holds no name either")
+
+  // What only reads like a leak passes the check whole: a leaf file, a remote, an address that's a file's name.
+  const legitimate = await commit({ "docs/kept.md": "/home/pace.jsonl\ngit@github.com:Verbiflow/mako.git\nssh://git@github.com/Verbiflow/mako.git\nnative-1@launch-1.jsonl\n", "icon@2x.png": "x\n" }, "What only reads like a leak")
+  const legitimateOut = cli(suffixed, legitimate)
+  assert.equal(legitimateOut.status, 0, legitimateOut.stderr)
+
+  // And what the file and remote exceptions must not cover fails through the check itself, its value unprinted.
+  const exceptions = await commit({ "docs/gaps.md": "Built in /home/jordan.jsonl/work/app\nMail git@jordan-family.com\n" }, "What reads like a file or a remote")
+  const exceptionsOut = cli(legitimate, exceptions)
+  assert.equal(exceptionsOut.status, 1)
+  assert.match(exceptionsOut.stderr, /docs\/gaps\.md:1:10: home path\n\s+docs\/gaps\.md:2:6: email/)
+  assert.doesNotMatch(exceptionsOut.stdout + exceptionsOut.stderr, /jordan/)
+
   // npm writes a lockfile, with the addresses packages publish; anything else in it still counts.
   const locked = await commit({ "package-lock.json": '{ "author": "jordan@gmail.com",\n  "home": "/Users/jordan" }\n' }, "Lock a dependency")
-  assert.deepEqual(changeLeaks(leakyName, locked, { cwd: root }), ["package-lock.json:2:12: home path"])
+  assert.deepEqual(changeLeaks(exceptions, locked, { cwd: root }), ["package-lock.json:2:12: home path"])
 
   // The denylist and this test spell what they check for.
   const exempt = await commit({ "scripts/public-text-denylist.txt": "axiom\n", "scripts/test-public-text.mjs": "// /Users/jordan\n" }, "The guard's own files")
