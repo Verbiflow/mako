@@ -237,20 +237,43 @@ full) sends a Fin that named no harness, model or rule to the person's next
 harness that offers it, and otherwise runs it on the harness's nearest mode
 within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
 which; only a mode wider than the Apex's is refused. It starts
-here only (`place` other than `here` is refused); past a tree's running
-budget it queues with why, past its started budget it is refused with the
-count (`TREE_BUDGET`); a cycle is refused and there's no depth limit. Past
-this Mac's room it queues too, behind every Fin of any tree that waits for
-room ("Queued: this Mac is busy, 3 ahead"): `macSlots` gives the person a
-seventh of the cores and 4 GB, and each working Fin `FIN_LOAD` (2) cores of
-load and `FIN_MEMORY`, measured 2026-11-03 when 13 Fins at once held a 14-core
-Mac's load at 26.8 and its host and sync daemon timed out the person's
-requests; load the working Fins don't account for is the person's own work,
-a Mac always runs one, and one out of swap or short of disk runs none.
-`MAKO_FIN_SLOTS` sets the count instead, as a test's host does whatever
-machine runs it. The start's answer carries
-the Mac's room (`mac`), and what waits goes as Fins end or every 10 s as the
-Mac frees up (`test:background-agents`). One a
+here only (`place` other than `here` is refused). It never waits unasked:
+past its place's bound or a tree's running budget, a start is refused with
+the count unless it passes `queue: true`, when it waits behind every spawn
+that waits for that place ("Queued: 3 ahead, your limit of Fins at once is
+in use"). Each place has its own bound (`placeFull`). A device runs its
+capacity (`fin-capacity.ts`): its cores and memory, less a reserve for the
+person (a seventh of the cores and a fifth of memory where they work at it,
+less on a headless box), less room for a few builds, divided by what a Fin
+costs there, its light cores and memory outside builds, learned per harness
+on that machine (`FinCostModel`, 75th percentiles moving over days, priors
+from 2026-11-03: 0.35 core, 0.8 GB, builds 6 cores and 3 GB). That is 17 on
+a 14-core, 36 GB Mac, 2 on a 2 vCPU 8 GB box, and at most `DEVICE_CEILING`
+(64). `CapacityGovernor` lowers it only under pressure that holds (memory
+pressure or swap, heat, the person's own load, disk; a 5-minute average,
+held 3 minutes, then a Fin a minute, never below half) and brings it back
+after relief holds 5 minutes; running Fins are never touched. The person
+can fix a number per device instead of Auto (Settings › Fins), and
+`FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
+machine per Fin, is bounded by the plan and the daily spend ceiling only
+(`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
+every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
+tree's running budget (32) caps one Apex's fan-out. A refused start names
+the places a start may name that have room. This Mac's load also shows in
+the start's answer when it's busy (`macLoad`, `mac`) beside the device's
+number (`atOnce`). `MAKO_FIN_SLOTS` fixes the number, as a test's host does.
+What waits goes the moment a place frees, by event, never a timer: a Fin
+that stops holding one (its turn ended, it stopped, failed, was archived or
+waits on its own Fins) or a place whose number rose (`capacityChanged`)
+starts the first waiter that fits, first come first started, one whose
+`after` isn't done passed over. Every start is one record per Apex and
+client key (`StartRecord`), made before its call awaits anything: the same
+key again joins it, and the record alone holds its name, its place and its
+stop until it settles; a stop marks it, and `mako:live-start` writes no
+edge for a stopped one (`test:start-interleavings` generates schedules of
+starts, stops, preparations and crashes against it). Each queued start launches on its own, so
+a harness slow to come up holds its place, never the queue; a freed place
+is taken within a few milliseconds (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads
 across the host), its end written once. Linking it again with another pid
@@ -2146,6 +2169,35 @@ steady 20 ms a daemon 2.6 s behind was asked 130 times a read.
 late. Tests that start apps reap them in `finally` and on a signal
 (`scripts/lib/reap-apps.ts`): they're detached, so they outlived failed runs.
 
+## Files
+
+The Files view (the right sidebar's Files, the web app's Files over a Thread or beside its transcript, and the
+composer's `@` list and the palette's Open file) reads one index per folder on the host that has the folder
+(`workspaces/file-index.ts`, its pure core `contracts/file-index.ts`). It's built once: what Git tracks from its
+index alone, so a 100,000-file repository is browsable in milliseconds, then the untracked files, which take a walk
+of every folder, join it. A folder that isn't a repository is a bounded walk that asks each repository inside it for
+its own files. After that every path the tab's watcher hears is asked of Git again at that path (`listFileStates`,
+`ls-files -t` with the path as a literal pathspec), so ignore rules and new folders come out as Git says and the
+index adds or removes what differs; only a lost event, a burst of more than 500 paths or an index nobody watches and
+nobody read for five seconds reads the folder again. A conversation's folder browsed from another device has an index
+of its own with a watch of its own, dropped three minutes after the last look (`ConversationFiles.index`).
+
+A window asks for folders a few at a time (`mako:files-folders`, `mako:live-files-folders` for a conversation's),
+each listed folders first and to 2,000 entries, a chain of lone folders folded into one row, and says which version
+it holds, so a refresh with nothing changed is one small answer; Git's changed marks follow a step behind and never
+hold a listing up. A name is found at every keystroke (`mako:files-find`): a character mask rules most paths out, a
+query that only grew searches only the last one's matches, a match in the file name outweighs one across folders,
+and letters strewn far from the best are dropped. Text inside files (`mako:files-grep`) waits for a pause, runs
+`git grep` over what each repository tracks without `--untracked` (which walks every folder before its first match:
+5.4 s against 76 ms on 100,000 files), reads the untracked files the index already knows itself, and stops at its
+limit; a newer search in the same folder stops the last. A host older than these calls is answered in the window by
+the same core over `listFiles`. Highlighting runs in Pierre's worker pool (`lib/highlight-pool.tsx`) with one theme,
+`lib/syntax-theme.ts`, onto the `--syntax-*` tokens; each file wears its kind's mark (`lib/file-kinds.ts`,
+`components/ui/file-icon.tsx`), drawn in one stroke on one grid and told apart by shape, never hue.
+`scripts/test-file-index.ts` holds it to that, and `scripts/bench-file-search.ts` (CI's `file-search`) times it against
+the old way in the same run on this checkout and 100,000 generated files. `node scripts/files-ui.mjs` serves the real
+panel and viewer over a folder's index, and `scripts/files-ui-shots.mjs` draws them, `--phone` as the web app does.
+
 ## Git
 
 Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
@@ -4008,6 +4060,40 @@ continuation the user declined is not revived by a later provider-started
 turn or compaction ending. Codex and Claude retry dropped streams inside a
 turn without ending it; only their turn-end signals (`turn/completed`, the
 SDK `result`) settle, so a retry never triggers a continuation.
+
+A message its harness can't take for now waits and goes again by itself,
+never as a failure (`packages/host/src/contracts/delivery-retry.ts`). On
+2026-11-04 an Apex woken for its Fin's report showed "Could not reopen this
+session" twice: once on Cursor's "Server at capacity", once because the
+session was still open in the process Mako had just put to sleep. Neither
+needed the person. A start or a wake that fails for a cause that clears by
+itself (`retryCause`: the harness at capacity or rate-limited, its service
+failing, the network, a stalled start, or the session open in another
+process, `SessionBusyError` or another host's `SessionHeldError`) holds
+each queued message with `LiveRequest.retry` instead of failing it, and
+leaves the session asleep rather than failed (`LiveAccounts.failedStart`,
+`retriesBegun`). A prompt the harness refuses unsent for such a cause does
+the same (`LiveDispatch`). A turn it fails partway for one, having run it, is
+continued as a dropped connection's is, by a continuation held first in line
+(`LiveAutoContinue.continueFailed`); the failed turn carries the same
+`retry`, so its row reads "Continues by itself at …" with nothing to press,
+and a new message supersedes the continuation. The held-wakes job sends each
+again when its time comes (`wakeDue`), across restarts, as it does a usage
+limit's timed resume; a Resume sends it now. A session Mako's exit closed
+reopens for it, while the person's own close stops it waiting. The waits grow
+from ten seconds to ten minutes and repeat (`RETRY_STEPS_MS`), and every
+cause ends (`GIVE_UP_MS`): a rate limit after six hours, so a usage limit's
+window is waited out, the service, the network or a stalled start after an
+hour, a session open elsewhere after half an hour, each then failing with its
+card. A cause the person must fix anywhere in the words is never waited out,
+whatever transient words wrap it (`permanentFailure`: "API error: 400 Bad
+Request: unknown model …"). A turn continued by itself leaves its session
+ready, so what the person queued behind it goes in the order they sent it.
+Signed out still pauses for Sign in, and anything else fails at once with its
+card.
+The queue row says when it goes and why (`retryWords`). This holds for the
+person's messages, an Apex's wakes and a Fin's messages alike, on every
+harness (`test:delivery-retry`).
 
 Drivers owe the receipt early, the death in one update, and the native
 path a new session resumes from. Each declares that in `turnRecovery`

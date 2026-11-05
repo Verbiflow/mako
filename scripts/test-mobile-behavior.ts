@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { BUDGETS, CASES, type MobileCase } from "./mobile-behavior/cases.ts"
+import { BUDGETS, CASES, deviceLabel, type MobileCase } from "./mobile-behavior/cases.ts"
 import { caseVerdict, failsRun, gradeFrames, gradeReadings, judge, ReadingSchema, verdict, type Frame } from "./mobile-behavior/grade.ts"
 
 /**
@@ -107,4 +107,13 @@ test("every case is graded on measures with budgets, runs on a form, and has a d
     assert.ok(behavior.forms.length > 0, behavior.id)
     for (const metric of behavior.measures) assert.ok(metric in BUDGETS, `${behavior.id} measures ${metric}`)
   }
+})
+
+test("a summary names the device a case ran on as it is, not as its form is expected to be", () => {
+  assert.equal(
+    deviceLabel({ name: "Mako iPhone 18 Pro", type: "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro", runtime: "iOS 27.2" }),
+    "Mako iPhone 18 Pro (iPhone 18 Pro, iOS 27.2)"
+  )
+  assert.equal(deviceLabel({ name: "Mako iPad Pro 13-inch (M5)", runtime: "iOS 27.2" }), "Mako iPad Pro 13-inch (M5) (iOS 27.2)")
+  assert.equal(deviceLabel({ name: "WebKit at iPhone 17 Pro's size" }), "WebKit at iPhone 17 Pro's size")
 })

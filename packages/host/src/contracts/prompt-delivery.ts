@@ -33,6 +33,11 @@ export const PromptDeliverySchema = z.object({
    * host runs without it.
    */
   ownerGeneration: z.number().int().positive().optional(),
+  /**
+   * Sent by a build whose drivers hand a prompt over only once `submitted` is written (`handOff`): left `prepared`,
+   * it never reached the harness. Absent in older journals, where `prepared` proves nothing.
+   */
+  gated: z.literal(true).optional(),
   evidence: PromptDeliveryEvidenceSchema,
 })
 export type PromptDelivery = z.infer<typeof PromptDeliverySchema>

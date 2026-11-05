@@ -31,7 +31,7 @@ import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { viewer } from "@/state/viewer"
 import type { GitDiff, GitFile, GitStatus } from "@/lib/types"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { LineCounts } from "@/components/inspector/change-marks"
 import { MARK, type StatusMark } from "@/lib/git-marks"
 import {
@@ -821,7 +821,7 @@ function FileRow({
       >
         {/* Files sit under their folder's label, past the chevron column. */}
         <span className="w-3 shrink-0" />
-        <FileTypeIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
+        <FileIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
         <span className={cn(
           "min-w-0 truncate text-ui",
           file.status === "deleted" ? "text-faint line-through decoration-faint/60" : file.status === "conflicted" ? "text-removed" : active ? "text-foreground" : "text-foreground/85"

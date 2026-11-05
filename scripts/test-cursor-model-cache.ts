@@ -101,7 +101,7 @@ const modelRequest = listCursorSdkModels({ env: keyA, signal: modelOwner.signal,
 let finished = false
 const refusedModels = assert.rejects(modelRequest, /cancelled fixture models/).then(() => { finished = true })
 modelOwner.abort(new Error("cancelled fixture models"))
-helloGate.resolve({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version })
+helloGate.resolve({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "1.2.0", node: process.version })
 await new Promise<void>(resolve => setImmediate(resolve))
 assert.equal(closes, 1, "cancellation closes the exact discovery client once")
 assert.equal(modelRequests, 0, "a cancelled handshake cannot advance to model discovery")
@@ -127,7 +127,8 @@ const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => {
   let owner = options.owner
   return {
   alive: true, exited: new Promise(() => {}), kill() {}, close: async () => { closed.push(owner) },
-  hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
+  // `1.2.0` names a build, so this kept child's hello is a reported runtime.
+  hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "1.2.0", node: process.version }),
   adopt: async (input) => {
     adoptions.push({ from: owner, owner: input.owner, cwd: input.cwd, thread: input.env.MAKO_THREAD_DATA_DIR })
     owner = input.owner

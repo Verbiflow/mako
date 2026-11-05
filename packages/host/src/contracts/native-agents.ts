@@ -2,6 +2,8 @@ import { z } from "zod"
 
 export const NATIVE_AGENT_LIMIT = 256
 const note = z.string().max(8192)
+/** The most Fins one start waits on (`agents_start` `after`): admission refuses more, so a queued state never carries more. */
+export const AFTER_LIMIT = 20
 /**
  * What a roster entry is: a subagent, a workflow, a command the agent left
  * running, a monitor that watches a command and wakes the agent on its
@@ -51,7 +53,17 @@ export type FinAsk = z.infer<typeof FinAskSchema>
  * phone) reads that one computation and never infers it from `state`'s words.
  */
 export const ChildStateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("queued"), reason: z.enum(["tree-running", "place-full", "device-offline"]), ahead: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal("queued"),
+    reason: z.enum(["tree-running", "place-full", "device-offline"]),
+    ahead: z.number().int().nonnegative(),
+    /** The Fins it starts after that haven't finished, by name: while any is listed, `reason` is what it waits for next. */
+    after: z.array(note).max(AFTER_LIMIT).optional(),
+    /** The one of them that failed or was stopped: it won't start, and its Apex is told to decide. */
+    held: note.optional(),
+    /** Why it couldn't start once released: it stays, saying so, until its Apex has heard. */
+    refused: note.optional(),
+  }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
   z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional() }),
   z.object({ kind: z.literal("idle") }),

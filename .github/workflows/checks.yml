@@ -113,6 +113,33 @@ jobs:
       - run: npx tsx scripts/test-package-links.ts
       # fseventsd's health and its restart, against fakes: what's degraded, the samples, the evidence, recovery.
       - run: npx tsx scripts/test-file-events-service.ts
+      # Settings › Simulators' setup line and the local simulator host, against Xcode's recorded words and fakes of its
+      # tools: the hub's gate, the screen stream, touches however the device is turned, and the agent tools' offer.
+      - run: npm run test:simulator-setup
+      - run: npm run test:simulator-host
+
+  # The Files view's index (`test-file-index.ts`): the tree a folder at a time, names found as they're typed, text
+  # search stopping at a screenful, and a real repository kept current path by path. Then how fast it finds things
+  # against the old way in the same run, on this checkout and 100,000 generated files (`bench-file-search.ts`): every
+  # number goes to the job's summary, and it fails only on a gross regression, never on a fixed number of milliseconds.
+  file-search:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+      - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-index.ts
+      - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-kinds.ts
+      - run: npx tsx --tsconfig tsconfig.scripts.json scripts/bench-file-search.ts --files 100000
 
   # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
   # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief
@@ -134,6 +161,8 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
       - run: npm run test:background-agents
+      - run: npm run test:start-interleavings
+      - run: npm run test:followed-stop-crash
       - run: npm run test:agents-migrate
       # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
       # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
@@ -143,6 +172,11 @@ jobs:
       - run: npm run test:fin-resume
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
+      # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
+      # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
+      - run: npm run test:delivery-retry
+      # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
+      - run: npm run test:handoff
       - run: npm run test:orch-comms
       - run: npm run test:orch-front-door
       - run: npm run test:orch-deliver
@@ -175,6 +209,10 @@ jobs:
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
       # Each harness's concepts against its self-report fixture, Mako's reads against them, and harness-concepts.md.
       - run: npx tsx scripts/test-harness-concepts.ts
+      # Startup watches: a quiet process fails its step, and a kept Cursor child's hello is a reported runtime.
+      - run: npm run test:provider-startup
+      # OpenCode reads a fork's history as its own startup step, begun before the first page comes back.
+      - run: npx tsx scripts/test-opencode-resume.ts
       # Native routing's policy, each harness's control and Diagnostics' reading of them; then every
       # eval:orch-tools case's first request for Claude and Codex, built and its grading checked, at $0.
       - run: npm run test:native-routing

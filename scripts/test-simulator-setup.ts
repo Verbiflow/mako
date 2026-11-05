@@ -8,6 +8,7 @@ import { setupStep, type SetupStepId, type SimulatorSetup, XCODE_APP_STORE_URL }
 import { CLAIM_IDLE_MS, type SimulatorAgent, type SimulatorCaller, type SimulatorSummary } from "@mako/host/contracts/simulators"
 import {
   chooseForms,
+  chooseRuntime,
   chooseXcode,
   makoSimulators,
   parseCheck,
@@ -145,6 +146,39 @@ test("simctl's list gives iOS runtimes, their simulators and the newest iPhone P
   assert.equal(parseWantedRuntime(SDKS), "26.1")
 })
 
+test("on Xcode 27, which lists types newest first and adds a runtime for one device, Mako makes the newest models on the general runtime", () => {
+  const type = (id: string, name: string, family: string, minRuntimeVersion: number) => ({ identifier: `com.apple.CoreSimulator.SimDeviceType.${id}`, name, productFamily: family, minRuntimeVersion })
+  const types = [
+    type("iPhone-18-Pro", "iPhone 18 Pro", "iPhone", 1769472),
+    type("iPhone-18-Pro-Max", "iPhone 18 Pro Max", "iPhone", 1769472),
+    type("iPhone-17-Pro", "iPhone 17 Pro", "iPhone", 1703936),
+    type("iPhone-11-Pro", "iPhone 11 Pro", "iPhone", 851968),
+    type("iPhone-Duo", "iPhone Duo", "iPhone", 1769984),
+    type("iPad-Pro-13-inch-M5-16GB", "iPad Pro 13-inch (M5) (16GB)", "iPad", 1703936),
+    type("iPad-Pro-13-inch-M5-12GB", "iPad Pro 13-inch (M5)", "iPad", 1703936),
+    type("iPad-Pro-13-inch-M4-8GB", "iPad Pro 13-inch (M4)", "iPad", 1115136),
+  ]
+  const general = types.filter((entry) => entry.name !== "iPhone Duo").map((entry) => ({ identifier: entry.identifier }))
+  const list = parseSimctlList(
+    JSON.stringify({
+      devicetypes: types,
+      runtimes: [
+        { identifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4", name: "iOS 27.2", version: "27.2", buildversion: "24B91016s", platform: "iOS", isAvailable: true, supportedDeviceTypes: [{ identifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-Duo" }] },
+        { identifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2", name: "iOS 27.2", version: "27.2", buildversion: "24B8117", platform: "iOS", isAvailable: true, supportedDeviceTypes: general },
+      ],
+      devices: {},
+    })
+  )
+  assert.equal(chooseRuntime(list.runtimes, "27.2", list.runtimeTypes)?.build, "24B8117")
+  assert.deepEqual(
+    makoSimulators({ ...list, wantedRuntime: "27.2" }).map((simulator) => [simulator.name, simulator.type]),
+    [
+      ["Mako iPhone 18 Pro", "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro"],
+      ["Mako iPad Pro 13-inch (M5)", "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB"],
+    ]
+  )
+})
+
 test("Mako's simulators are its own: the person's iPhone 17 Pro is never taken for one", () => {
   const wouldMake = makoSimulators(parseSimctlList(simctl()))
   assert.deepEqual(wouldMake.map((simulator) => [simulator.name, simulator.udid]), [["Mako iPhone 17 Pro", undefined], ["Mako iPad Pro 13-inch (M5)", undefined]])
@@ -183,6 +217,12 @@ test("an Xcode not yet finished is one password prompt away, and nothing past it
   const finish = setupStep(setup, "finish")
   assert.deepEqual([finish?.selected, finish?.license, finish?.firstLaunch, finish?.fix], [false, "needed", "needed", "finish-xcode"])
   assert.equal(setupStep(setup, "xcode")?.disk.needBytes, RUNTIME_NEEDS_BYTES)
+})
+
+test("an Xcode whose license and first launch are done is finished, though the Command Line Tools stay selected", () => {
+  const setup = setupFromFacts({ ...everythingDone, developerDir: "/Library/Developer/CommandLineTools" })
+  assert.equal(setup.phase, "ready")
+  assert.deepEqual([setupStep(setup, "finish")?.state, setupStep(setup, "finish")?.selected, setupStep(setup, "finish")?.fix], ["done", false, undefined])
 })
 
 test("with the license accepted, the runtime is next, and Mako's simulators after it", () => {
@@ -264,7 +304,7 @@ test("the follower on a Mac with only the Command Line Tools: one read, Get Xcod
   follower.stop()
 })
 
-test("the follower finds a finished Xcode in Applications and asks it through its own folder", async () => {
+test("the follower finds Xcode in Applications, asks it through its own folder, and offers to finish it", async () => {
   const dataRoot = join(scratch, "xcode")
   const applications = join(scratch, "xcode-applications")
   await mkdir(join(applications, "Xcode.app", "Contents", "Developer", "usr", "bin"), { recursive: true })
@@ -277,10 +317,8 @@ test("the follower finds a finished Xcode in Applications and asks it through it
     "/usr/bin/xcode-select -p": { code: 0, stdout: CLT.developerDir },
     [`/usr/bin/plutil -convert json -o - ${join(applications, "Xcode.app", "Contents", "Info.plist")}`]: { code: 0, stdout: JSON.stringify({ CFBundleShortVersionString: "26.1" }) },
     [`/usr/bin/plutil -convert json -o - ${join(applications, "Xcode.app", "Contents", "version.plist")}`]: { code: 0, stdout: JSON.stringify({ ProductBuildVersion: "17B55" }) },
-    [`${developer}/usr/bin/xcodebuild -license check`]: { code: 0 },
+    [`${developer}/usr/bin/xcodebuild -license check`]: { code: 69, stderr: "You have not agreed to the Xcode license agreements." },
     [`${developer}/usr/bin/xcodebuild -checkFirstLaunchStatus`]: { code: 0 },
-    [`${developer}/usr/bin/xcodebuild -showsdks -json`]: { code: 0, stdout: SDKS },
-    "/usr/bin/xcrun simctl list -j": { code: 0, stdout: simctl() },
     "/usr/bin/osascript": prompt,
   })
   const follower = new SimulatorSetupFollower({ dataRoot, jobs: new HostJobs(), emit: () => {}, run, platform: "darwin", applications: [applications] })
@@ -288,8 +326,8 @@ test("the follower finds a finished Xcode in Applications and asks it through it
   assert.deepEqual(setupStep(setup, "xcode")?.xcode, { path: join(applications, "Xcode.app"), version: "26.1", build: "17B55" })
   assert.equal(setupStep(setup, "finish")?.selected, false)
   assert.equal(states(setup).finish, "yours")
-  assert.equal(states(setup).runtime, "done")
-  assert.equal(states(setup).simulators, "yours")
+  assert.equal(states(setup).runtime, "later")
+  assert.equal(ran.some((line) => line.includes("simctl")), false, "simctl isn't asked before the license is accepted")
 
   const started = await follower.press("finish-xcode")
   assert.equal(started.progress?.step, "finish")
@@ -488,7 +526,7 @@ test("archiving a Thread lets go of what it holds, by its conversation or its Se
 
 test("on a Mac without Xcode, every door hears why, in the setup line's words", async () => {
   const setup = setupFromFacts(cltOnly)
-  const simulators = new Simulators({ hosts: [new LocalSimulatorHost(async () => setup)], consent: async () => [], agent: () => undefined })
+  const simulators = new Simulators({ hosts: [new LocalSimulatorHost({ setup: async () => setup, folder: scratch })], consent: async () => [], agent: () => undefined })
   const listed = await simulators.list({ kind: "person" })
   assert.ok("hosts" in listed)
   assert.deepEqual(listed.hosts[0]?.platforms.ios, { ready: false, blocker: "no-xcode", why: "This Mac has no Xcode, so no iOS Simulator.", fix: "Settings › Simulators" })
@@ -496,8 +534,8 @@ test("on a Mac without Xcode, every door hears why, in the setup line's words", 
   const opened = await simulators.open({ kind: "person" }, { host: "local", simulator: "anything" })
   assert.deepEqual(opened, { refused: "unavailable", why: "This Mac has no Xcode, so no iOS Simulator." })
 
-  const ready = new LocalSimulatorHost(async () => setupFromFacts(everythingDone))
+  const ready = new LocalSimulatorHost({ setup: async () => setupFromFacts(everythingDone), folder: scratch })
   assert.equal((await ready.summary()).platforms.ios.ready, false)
   assert.equal((await ready.list()).length, 2)
-  await assert.rejects(ready.boot(), { name: SimulatorUnsupported.name, message: /built once it can be checked against a real Xcode/ })
+  await assert.rejects(ready.boot("MAKO-PHONE"), { name: SimulatorUnsupported.name, message: /no way to drive them/ })
 })

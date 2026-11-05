@@ -28,11 +28,13 @@ import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
-import { MacCapacity, finSlots } from "./mac-capacity.js"
+import { MacCapacity } from "./mac-capacity.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
+import { FIN_CEILING } from "../contracts/fin-tuning.js"
+import type { FinCapacity } from "./fin-capacity-host.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { HostTelemetry } from "../usage/index.js"
@@ -51,6 +53,7 @@ import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInpu
 import { departMove, followMove, MoveDepartureInputSchema, MoveFollowInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveFollowInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { FileReadPurpose } from "../contracts/git-workspace-search.js"
+import type { FileFoldersOptions, FileGrepOptions } from "../contracts/file-index.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
@@ -59,6 +62,9 @@ import { z } from "zod"
 import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { FinCapacity } from "./fin-capacity-host.js"
+export { FinCostModel } from "./fin-cost.js"
+export { MacCapacity, finSlots } from "./mac-capacity.js"
 export { callThreadOf } from "./live-runtime.js"
 export { makoNote } from "./mako-note.js"
 export { OwnerFiles } from "./owner-files.js"
@@ -163,6 +169,8 @@ export interface ConversationsDeps {
   invoke: HostMethods["invoke"]
   /** The person's model choices for Fins (Settings › Fins) and what they use on each harness. */
   finDefaults?: Pick<FinDefaultsStore, "reading">
+  /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
+  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -313,8 +321,14 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
       },
-      capacity: new MacCapacity({ ...finSlots() !== undefined && { fixed: finSlots() } }),
+      ...(deps.finCapacity && {
+        finLimit: () => deps.finCapacity!.atOnce(),
+        observeCapacity: (working: number, mix: Readonly<Record<string, number>>) => deps.finCapacity!.observe(working, mix),
+      }),
+      finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
+      capacity: new MacCapacity(),
     })
+    deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     agents.resume()
   }
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
@@ -503,6 +517,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     // A resume goes on in the mode its session ran in; a new session starts in the person's, unless its start said one.
     const modeId = options.modeId ?? (options.resume ? undefined : deps.accessMode?.(harness))
     try {
+      // A Fin its Apex stopped while its worktree and profile were prepared writes no edge: its worktree goes back below.
+      if (options.parent && !options.resume && conversations.agents && !conversations.agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
       await live.start(
         harness,
         startCwd,
@@ -585,6 +601,15 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const dataDir = environments ? () => environments.fileDataDir({ conversationId: id, cwd: session.cwd }) : undefined
     return files.read(session.cwd, path, dataDir, purpose)
   })
+  /** A conversation's folder, browsed from wherever its window is: another device's Files view. */
+  const folderIndex = (id: string) => {
+    const session = live.session(id)
+    if (!session) throw new Error("That conversation is unavailable")
+    return files.index(session.cwd)
+  }
+  methods.handle("mako:live-files-folders", (id: string, paths: string[], options?: FileFoldersOptions) => folderIndex(id).folders(paths, options))
+  methods.handle("mako:live-files-find", (id: string, query: string, limit?: number) => folderIndex(id).find(query, limit))
+  methods.handle("mako:live-files-grep", (id: string, query: string, options?: FileGrepOptions) => folderIndex(id).grep(query, options))
   methods.handle("mako:live-snapshot", (id: string) => live.refreshedSnapshot(id))
   methods.handle("mako:live-context-breakdown", (id: string) => live.contextBreakdown(id))
   methods.handle("mako:live-read", (id: string, input: LiveHistoryRead) =>

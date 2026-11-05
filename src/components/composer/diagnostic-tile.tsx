@@ -1,5 +1,5 @@
 import { XIcon } from "lucide-react"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { useState } from "react"
 import { diagnosticFormat } from "@mako/host/contracts/file-preview"
 import type { Attachment } from "@/lib/attachments"
@@ -29,7 +29,7 @@ export function FilePreviewTile({
             aria-label={`Show ${item.name}`}
             className="pressable flex h-14 w-60 items-center gap-3 overflow-hidden asset-surface bg-raised px-3 text-left ring-1 ring-hairline ring-inset hover:ring-border focus-visible:outline focus-visible:outline-ring"
           >
-            <FileTypeIcon path={item.name} mimeType={item.mimeType} className="size-5 shrink-0 text-muted-foreground" />
+            <FileIcon path={item.name} mimeType={item.mimeType} className="size-5 shrink-0 text-muted-foreground" />
             <span className="min-w-0">
               <span className="block truncate text-ui font-medium">
                 {item.name}

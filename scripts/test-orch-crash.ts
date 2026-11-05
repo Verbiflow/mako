@@ -127,7 +127,7 @@ async function host(root: string, harness: string, point: Point | "none"): Promi
     if (turn.conversation === state().apex) {
       if (held) return "Linked."
       const sidebar = await turn.world.agents.start(turn.caller, { brief: { objective: "Review the sidebar." }, harness, name: "sidebar", clientKey: "sidebar", cwd: root })
-      await turn.world.agents.start(turn.caller, { brief: { objective: "Review the header." }, harness: next(harness), name: "header", clientKey: "header", cwd: root })
+      await turn.world.agents.start(turn.caller, { brief: { objective: "Review the header." }, harness: next(harness), name: "header", queue: true, clientKey: "header", cwd: root })
       if (!("refused" in sidebar)) await turn.world.agents.send(turn.caller, { to: "sidebar", text: SEND, clientKey: "readme" })
       return "Started both."
     }

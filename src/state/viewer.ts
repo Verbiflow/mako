@@ -132,7 +132,7 @@ let documentSequence = 0
 let watchGeneration = 0
 const requests = new Map<string, number>()
 
-function activeDocument(
+export function activeDocument(
   documents: Record<string, ViewerDocument>,
   panes: ViewerPane[],
   focusedPaneId: string

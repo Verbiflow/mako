@@ -378,9 +378,10 @@ export class SimulatorSetupFollower {
     const list = await this.#run("/usr/bin/xcrun", ["simctl", "list", "-j"], { env, timeoutMs: 30_000 })
     if (list.code !== 0) throw new Error(`simctl didn't list this Mac's simulators: ${list.stderr.trim()}`)
     const parsed = parseSimctlList(list.stdout)
-    const runtime = chooseRuntime(parsed.runtimes, setupStep(this.#last, "runtime")?.wanted)
+    const wanted = setupStep(this.#last, "runtime")?.wanted
+    const runtime = chooseRuntime(parsed.runtimes, wanted, parsed.runtimeTypes)
     if (!runtime) throw new Error("There's no iOS runtime to make the simulators on yet.")
-    for (const simulator of makoSimulators(parsed)) {
+    for (const simulator of makoSimulators({ ...parsed, ...(wanted && { wantedRuntime: wanted }) })) {
       if (simulator.udid) continue
       const made = await this.#run("/usr/bin/xcrun", ["simctl", "create", simulator.name, simulator.type, runtime.identifier], { env, timeoutMs: 60_000 })
       if (made.code !== 0) throw new Error(`simctl didn't make ${simulator.name}: ${made.stderr.trim()}`)

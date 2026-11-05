@@ -1,6 +1,6 @@
 import { lazy, Suspense, useMemo, useState, useRef, useContext } from "react"
 import { ChevronDownIcon, ExpandIcon } from "lucide-react"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
 import { AssetPreviewContext, useAssetPreview } from "@/components/viewer/asset-preview-context"
 import { toast } from "sonner"
@@ -53,7 +53,7 @@ export function InlineDocumentAttachment({
       data-inline-document={name}
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
-        <FileTypeIcon path={name} mimeType={mimeType} className="size-4 shrink-0 text-muted-foreground" />
+        <FileIcon path={name} mimeType={mimeType} className="size-4 shrink-0 text-muted-foreground" />
         <button
           type="button"
           className="pressable flex min-w-0 flex-1 items-center gap-2 text-left"

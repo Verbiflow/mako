@@ -244,6 +244,8 @@ const inputs = {
           ])
           .optional(),
         timeoutMs: z.number().optional(),
+        after: z.array(z.string()).optional(),
+        queue: z.boolean().optional(),
         clientKey: z.string(),
         cwd: z.string().optional(),
       }),
@@ -462,6 +464,31 @@ const inputs = {
   "mako:file-events-dismiss": () => z.tuple([]),
   "mako:file-events-restart": () => z.tuple([]),
   "mako:file-events-service": () => z.tuple([]),
+  "mako:files-find": () => z.tuple([z.string(), z.number().optional()]),
+  "mako:files-folders": () =>
+    z.tuple([
+      z.array(z.string()),
+      z
+        .object({
+          limit: z.number().optional(),
+          since: z.number().optional(),
+          epoch: z.string().optional(),
+        })
+        .optional(),
+    ]),
+  "mako:files-grep": () =>
+    z.tuple([
+      z.string(),
+      z
+        .object({
+          regex: z.boolean().optional(),
+          caseSensitive: z.boolean().optional(),
+          wholeWord: z.boolean().optional(),
+          limit: z.number().optional(),
+        })
+        .optional(),
+    ]),
+  "mako:fin-ceiling-set": () => z.tuple([z.number()]),
   "mako:fin-default-choose": () =>
     z.tuple([
       z.string(),
@@ -476,6 +503,7 @@ const inputs = {
       ]),
     ]),
   "mako:fin-defaults": () => z.tuple([]),
+  "mako:fin-limit-set": () => z.tuple([z.union([z.null(), z.number()])]),
   "mako:fin-policy-save": () =>
     z.tuple([
       z.object({
@@ -738,6 +766,33 @@ const inputs = {
           z.object({ kind: z.literal("resume") }),
         ]),
       }),
+    ]),
+  "mako:live-files-find": () =>
+    z.tuple([z.string(), z.string(), z.number().optional()]),
+  "mako:live-files-folders": () =>
+    z.tuple([
+      z.string(),
+      z.array(z.string()),
+      z
+        .object({
+          limit: z.number().optional(),
+          since: z.number().optional(),
+          epoch: z.string().optional(),
+        })
+        .optional(),
+    ]),
+  "mako:live-files-grep": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z
+        .object({
+          regex: z.boolean().optional(),
+          caseSensitive: z.boolean().optional(),
+          wholeWord: z.boolean().optional(),
+          limit: z.number().optional(),
+        })
+        .optional(),
     ]),
   "mako:live-fork": () =>
     z.tuple([
@@ -1912,6 +1967,15 @@ const inputs = {
             at: z.object({ x: z.number(), y: z.number() }),
           }),
           z.object({
+            kind: z.literal("touch"),
+            phase: z.union([
+              z.literal("move"),
+              z.literal("begin"),
+              z.literal("end"),
+            ]),
+            at: z.object({ x: z.number(), y: z.number() }),
+          }),
+          z.object({
             kind: z.literal("swipe"),
             from: z.object({ x: z.number(), y: z.number() }),
             to: z.object({ x: z.number(), y: z.number() }),
@@ -2152,6 +2216,8 @@ const inputs = {
         viewer: z.string(),
         box: z.object({ width: z.number(), height: z.number() }).optional(),
         waitMs: z.number().optional(),
+        decoded: z.number().optional(),
+        leave: z.boolean().optional(),
       }),
     ]),
   "mako:skills-discover": () => z.tuple([]),
@@ -2618,8 +2684,13 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:file-events-dismiss", "workspaces"],
   ["mako:file-events-restart", "workspaces"],
   ["mako:file-events-service", "workspaces"],
+  ["mako:files-find", "workspaces"],
+  ["mako:files-folders", "workspaces"],
+  ["mako:files-grep", "workspaces"],
+  ["mako:fin-ceiling-set", "harnesses"],
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
+  ["mako:fin-limit-set", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
@@ -2687,6 +2758,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-continue-turn", "conversations"],
   ["mako:live-earlier", "conversations"],
   ["mako:live-edit-queued", "conversations"],
+  ["mako:live-files-find", "conversations"],
+  ["mako:live-files-folders", "conversations"],
+  ["mako:live-files-grep", "conversations"],
   ["mako:live-fork", "conversations"],
   ["mako:live-goal", "conversations"],
   ["mako:live-hold-until", "conversations"],
