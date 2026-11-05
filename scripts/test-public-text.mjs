@@ -85,8 +85,12 @@ const diff = [
   "\\ No newline at end of file",
 ].join("\n")
 assert.deepEqual(addedLines(diff), {
-  lines: [{ file: "a.md", line: 2, text: "++ added, not a header" }, { file: "a.md", line: 3, text: "second" }, { file: "new.txt", line: 1, text: "only" }],
-  files: ["new.txt"],
+  lines: [
+    { file: "a.md", index: 1, line: 2, text: "++ added, not a header" },
+    { file: "a.md", index: 1, line: 3, text: "second" },
+    { file: "new.txt", index: 2, line: 1, text: "only" },
+  ],
+  files: [{ file: "new.txt", index: 2 }],
 })
 
 // The check itself, in a scratch repository: it trips on what a change adds, by place and kind, and never prints it.
@@ -138,11 +142,29 @@ try {
   assert.doesNotMatch(body.stderr, /jordan|wrangler/)
 
   const named = await commit({ "scripts/axiom-setup.sh": "echo\n" }, "A new file named for a vendor")
-  assert.deepEqual(changeLeaks(message, named, { cwd: root }), ["scripts/axiom-setup.sh (its name): hosted name"])
+  assert.deepEqual(changeLeaks(message, named, { cwd: root }), ["file #1 (name withheld), its name: hosted name"])
+
+  // A name that holds a value is withheld wherever it would locate a finding, by its place in `git diff --name-only`.
+  const leakyName = await commit({
+    "docs/a-clean.md": "clean\n",
+    "docs/jordan@gmail.com/notes.md": "clean\n",
+    "docs/-Users-jordan-app.md": "Built in /home/jordan/app\n",
+  }, "Files whose names hold values")
+  const leakyOut = cli(named, leakyName)
+  assert.equal(leakyOut.status, 1)
+  const listed = run(["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", `${named}...${leakyName}`]).split("\n")
+  assert.deepEqual(listed.map((file, at) => `${at + 1} ${file}`), ["1 docs/-Users-jordan-app.md", "2 docs/a-clean.md", "3 docs/jordan@gmail.com/notes.md"])
+  assert.deepEqual(changeLeaks(named, leakyName, { cwd: root }), [
+    "file #1 (name withheld), its name: home path",
+    "file #3 (name withheld), its name: email",
+    "file #1 (name withheld):1:10: home path",
+  ])
+  assert.doesNotMatch(leakyOut.stdout + leakyOut.stderr, /jordan|gmail/, "neither a name nor a line's value is printed")
+  assert.match(leakyOut.stderr, /file #N is line N of `git diff --name-only --no-renames /)
 
   // npm writes a lockfile, with the addresses packages publish; anything else in it still counts.
   const locked = await commit({ "package-lock.json": '{ "author": "jordan@gmail.com",\n  "home": "/Users/jordan" }\n' }, "Lock a dependency")
-  assert.deepEqual(changeLeaks(named, locked, { cwd: root }), ["package-lock.json:2:12: home path"])
+  assert.deepEqual(changeLeaks(leakyName, locked, { cwd: root }), ["package-lock.json:2:12: home path"])
 
   // The denylist and this test spell what they check for.
   const exempt = await commit({ "scripts/public-text-denylist.txt": "axiom\n", "scripts/test-public-text.mjs": "// /Users/jordan\n" }, "The guard's own files")

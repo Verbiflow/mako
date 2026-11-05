@@ -101,13 +101,15 @@ function unquote(path) {
 }
 
 /**
- * The lines a unified diff adds, by file and line, and the files it creates (a rename is one, read `--no-renames`).
- * Each hunk is read by its own line counts, so an added line that starts with `+++` is a line, not a header.
+ * The lines a unified diff adds, by file and line, and the files it creates (a rename is one, read `--no-renames`),
+ * each with its file's place in the diff (from 1, as `git diff --name-only` lists them). Each hunk is read by its own
+ * line counts, so an added line that starts with `+++` is a line, not a header.
  */
 export function addedLines(diff) {
   const lines = []
   const files = []
   let file
+  let index = 0
   let created = false
   let added = 0
   let removed = 0
@@ -115,7 +117,7 @@ export function addedLines(diff) {
   for (const text of diff.split("\n")) {
     if (added > 0 || removed > 0) {
       if (text.startsWith("+")) {
-        if (file) lines.push({ file, line, text: text.slice(1) })
+        if (file) lines.push({ file, index, line, text: text.slice(1) })
         line++
         added--
       } else if (text.startsWith("-")) removed--
@@ -134,10 +136,11 @@ export function addedLines(diff) {
     } else if (text.startsWith("+++ ")) {
       const target = unquote(text.slice(4))
       file = target === "/dev/null" ? undefined : target.replace(/^b\//, "")
-      if (file && created) files.push(file)
+      if (file && created) files.push({ file, index })
     } else if (text.startsWith("new file mode ")) created = true
     else if (text.startsWith("diff --git ")) {
       file = undefined
+      index++
       created = false
     }
   }
@@ -150,10 +153,12 @@ const git = (args, cwd) => execFileSync("git", ["-c", "core.quotePath=false", ..
 export function changeLeaks(base, head, { cwd = process.cwd(), title = "", body = "" } = {}) {
   const out = []
   const { lines, files } = addedLines(git(["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", `${base}...${head}`], cwd))
-  for (const path of files) if (!EXEMPT.has(path)) for (const { kind } of findLeaks(path)) out.push(`${path} (its name): ${kind}`)
-  for (const { file, line, text } of lines) {
+  // A file whose name holds what it may not is named by its place in the diff, or the log would print the value.
+  const where = (file, index) => (findLeaks(file).length ? `file #${index} (name withheld)` : file)
+  for (const { file, index } of files) if (!EXEMPT.has(file)) for (const { kind } of findLeaks(file)) out.push(`${where(file, index)}, its name: ${kind}`)
+  for (const { file, index, line, text } of lines) {
     if (EXEMPT.has(file)) continue
-    for (const { column, kind } of findLeaks(text)) if (!(kind === "email" && LOCKFILE.test(file))) out.push(`${file}:${line}:${column}: ${kind}`)
+    for (const { column, kind } of findLeaks(text)) if (!(kind === "email" && LOCKFILE.test(file))) out.push(`${where(file, index)}:${line}:${column}: ${kind}`)
   }
   const log = git(["log", "--format=%h%x00%B%x00", `${base}..${head}`], cwd).split("\0")
   for (let at = 0; at + 1 < log.length; at += 2) {
@@ -186,7 +191,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
   const leaks = changeLeaks(base, head, { title, body })
   if (leaks.length) {
-    console.error(`${leaks.length} places add what public text may not (values not printed; see scripts/check-public-text.mjs):\n${leaks.map((leak) => `  ${leak}`).join("\n")}`)
+    const withheld = leaks.some((leak) => leak.startsWith("file #")) ? `; file #N is line N of \`git diff --name-only --no-renames ${base}...${head}\`` : ""
+    console.error(`${leaks.length} places add what public text may not (values not printed${withheld}; see scripts/check-public-text.mjs):\n${leaks.map((leak) => `  ${leak}`).join("\n")}`)
     process.exit(1)
   }
   console.log(`Nothing ${base}...${head} adds names a machine, a person's address or the hosted service`)
