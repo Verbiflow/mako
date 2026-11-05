@@ -3,7 +3,7 @@ import { FIN_LIMIT } from "./fin-tuning.js"
 import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
-import type { AskOption, FinAsk } from "./native-agents.js"
+import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
 
 /**
  * The orchestration operations, each defined once: a host call
@@ -487,7 +487,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         mode: "background (default): returns at once; work on or end your turn. wait: only when your next step needs its result; you get it here if it's quick, else your turn ends and the result starts your next turn. Never wait on work that can run while you do other things.",
         wake: "What wakes you: decisions (default: it finished, failed, is blocked or asks), finish (only its result; its questions go to the person), or never (nothing; read it with agents_read; its questions go to the person).",
         timeoutMs: `For wait: how long to hold for its result here, at most ${WAIT_LIMIT_MS} (the default).`,
-        after: `Only to order work: your ${FIN_WORD}s, by name or Thread (queued ones too), that must finish first. It waits until each has; if one fails or is stopped it doesn't start, and you're woken to decide.`,
+        after: `Only to order work: your ${FIN_WORD}s, by name or Thread (queued ones too), at most ${AFTER_LIMIT}, that must finish first. It waits until each has; if one fails or is stopped it doesn't start, and you're woken to decide.`,
         queue: `true: if its place is full (a device's limit of ${FIN_WORD}s at once, ${FIN_LIMIT} unless the person set another, or the cloud's plan) or this tree's running budget is, it waits for one to end. Absent: a full place refuses the start, saying so.`,
         clientKey: `Your own key for this spawn: a repeat with it answers the same ${FIN_WORD}.`,
       },

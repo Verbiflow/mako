@@ -14,7 +14,7 @@ import { childEntry, childMode, childState, modeWithin, type ThreadParent } from
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
+import { AFTER_LIMIT, CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
@@ -305,6 +305,8 @@ async function afterOrder(): Promise<void> {
     assert.ok(!("refused" in announce) && announce.state === "queued" && announce.after?.[0] === "deploy", "a queued spawn can be waited on too")
     const waiting = () => w.agents.roster(apex.conversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
     assert.deepEqual(waiting(), ["Starts after build finishes", "Starts after deploy finishes"], "the crew card says what each waits on")
+    const many = await w.agents.start(apex.caller, { brief: { objective: "x" }, after: Array.from({ length: AFTER_LIMIT + 1 }, (_, at) => `fin-${at}`), clientKey: "many", cwd: w.root })
+    assert.ok("refused" in many && many.refused === "conflict" && w.store.queuedSpawns().length === 2, "more than a queued state carries is refused before anything is kept")
     const unknown = await w.agents.start(apex.caller, { brief: { objective: "x" }, after: ["nobody"], clientKey: "x", cwd: w.root })
     assert.ok("refused" in unknown && unknown.refused === "unknown-child")
     await new Promise((resolve) => setTimeout(resolve, 200))

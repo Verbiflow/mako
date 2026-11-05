@@ -81,7 +81,7 @@ import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, CHI
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
-import { ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
+import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
@@ -728,6 +728,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree).length
     if (counts.started + queued >= this.budget.started)
       return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
+    if ((input.after?.length ?? 0) > AFTER_LIMIT)
+      return this.refuse(op, "conflict", `A start waits on at most ${AFTER_LIMIT} ${FIN_WORD}s; it names ${input.after!.length}. Name the last of a chain instead of each one.`)
     const after = this.afterOf(apex, input.after ?? [])
     if ("refused" in after) return this.refuse(op, after.refused, after.why)
     await this.readMac()
@@ -1456,7 +1458,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.draining = true
     try {
       // Each place's own room: a device's count, or the cloud's plan and spend.
+      // Counted once as the drain begins, plus what it starts: a Fin it launched isn't counted again as it comes up.
       const filled = new Map<string, number>()
+      const working = new Map<string, number>()
       for (const spawn of store.queuedSpawns()) {
         const queued = parseQueued(spawn.record)
         if (queued?.after?.length) {
@@ -1469,7 +1473,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         // First come, first started: once a place is full, a later spawn of another tree doesn't go ahead of this one there.
         const where = placeOf(queued?.input.place)
         const started = filled.get(where) ?? 0
-        if (this.full(where, started)) continue
+        if (!working.has(where)) working.set(where, this.working(where))
+        if (placeFull(this.placeLimit(where), working.get(where)! + started)) continue
         filled.set(where, started + 1)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
         if (queued && !store.edges().byOp(spawn.op)) {
