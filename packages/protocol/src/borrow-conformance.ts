@@ -246,6 +246,27 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     assert.equal(await person.answer(second.ask, { answer: "yes", version }), undefined, "an ask is answered once")
   })
 
+  scenario("a source that can't serve says why as a reason alone, which is all its borrower hears", async (broker) => {
+    const person = await broker.person()
+    granted(await person.grant(vaultCopy(person.account, "notes", { resource: { kind: "tree", ref: "~/notes" }, source: { kind: "device", device: person.device }, ask: "never", secret: false })))
+    await person.asks()
+    const mine = await broker.borrower(REPOSITORY)
+    const waiting = await mine.borrow(need("c-1", { ref: "~/notes/a.md" }))
+    assert.ok("pending" in waiting, JSON.stringify(waiting))
+    const [ask] = await person.asks()
+    assert.ok(ask)
+    const secret = `cat: ${new TextDecoder().decode(canary()).trim()}: Permission denied`
+    assert.equal(await person.answer(ask.ask, { answer: "unavailable", reason: "unreadable", detail: secret } as never), undefined, "an answer with words of its own isn't taken")
+    const answered = await person.answer(ask.ask, { answer: "unavailable", reason: "unreadable" })
+    assert.ok(answered)
+    assert.deepEqual("refusal" in answered && answered.refusal, { refused: "unavailable", reason: "unreadable" })
+    const pushed = (await mine.pushes()).pushes.find((entry) => entry.push.push === "decided" && entry.push.correlationId === "c-1")
+    assert.ok(pushed && pushed.push.push === "decided")
+    assert.deepEqual(pushed.push.answer, { refusal: { refused: "unavailable", reason: "unreadable" } })
+    assert.deepEqual(await mine.borrow(need("c-1", { ref: "~/notes/a.md" })), { refusal: { refused: "unavailable", reason: "unreadable" } })
+    assert.ok((await person.events()).some((event) => event.event === "refused" && event.refused === "unavailable"))
+  })
+
   scenario("a source that isn't there is typed: source-offline, never a missing file", async (broker) => {
     const person = await broker.person()
     granted(await person.grant(vaultCopy(person.account, "far", { resource: { kind: "tree", ref: "~/far" }, source: { kind: "device", device: "conformance-away" }, ask: "never", secret: false })))
