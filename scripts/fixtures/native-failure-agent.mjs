@@ -86,6 +86,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (protocol === "claude") return claude(JSON.parse(line))
   const { id, method, params } = JSON.parse(line)
   if (id === undefined) return
+  // A turn that never answers, so cancel is reached with the session running. Every other method still answers.
+  if (behavior === "hang-on-prompt" && method === prompts) return
   if (method === prompts) process.exit(1)
   send({ id, result: results[method]?.(params) ?? {} })
 })
