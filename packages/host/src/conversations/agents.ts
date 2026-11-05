@@ -455,6 +455,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (edges.of(apex)?.closedAt !== undefined) continue
       for (const conversation of this.conversationsOfThread(apex)) if (this.deps.live.leftUnsettled(conversation)) this.resumeWakes(conversation)
     }
+    // The places Fins hold as this host takes over, the turns the last one cut short going on among them: each that lets
+    // go of one later wakes what waits (`childMoved`).
+    for (const edge of edges.all) if (this.occupies(edge)) this.occupying.add(edge.child)
     void this.drain()
   }
 
@@ -921,7 +924,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ownerGeneration: this.generation,
       at: this.now(),
     }
-    this.wakes.notice(conversation, this.rootOf(queued.lead.thread), { id: `notice:${report.id}`, report, label: `"${name}" (${this.deps.harnessLabel(queued.harness)})`, from: ("session" in held && held.session) || queued.lead.session })
+    this.wakes.notice(conversation, this.rootOf(queued.lead.thread), { id: `notice:${report.id}`, report, label: `"${name}" (${this.deps.harnessLabel(queued.harness)})`, fin: { name, harness: queued.harness }, from: ("session" in held && held.session) || queued.lead.session })
   }
 
   async link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult> {

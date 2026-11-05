@@ -145,7 +145,7 @@ export class AgentsWorld {
     this.store = new ThreadStore(join(this.root, "threads.sqlite"), { now: () => Date.now() })
     this.jobs = new HostJobs()
     const drivers = new Map<string, ProviderLiveDriver>(HARNESSES.map((harness) => [harness, this.driver(harness)]))
-    this.live = new LiveConversations({
+    const live = new LiveConversations({
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
@@ -163,16 +163,18 @@ export class AgentsWorld {
       autoContinueDelayMs: this.options.autoContinueDelayMs ?? 10,
       resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
     })
+    this.live = live
     const deps: AgentsDeps = {
       store: () => this.store,
       catalog: this.options.catalog ?? emptyCatalog(),
       jobs: this.jobs,
       live: this.live,
       startLive: async (harness, cwd, options) => {
-        // As `mako:live-start` does: a Fin's worktree and profile are prepared, then a stopped one writes no edge.
+        // As `mako:live-start` does: a Fin's worktree and profile are prepared, then a stopped one writes no edge. Each
+        // host starts on its own conversations: a start the last one left preparing never reaches the next host's.
         await this.options.preparing?.(options)
-        if (options.parent && !options.resume && !this.agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
-        await this.live.start(harness, cwd, options)
+        if (options.parent && !options.resume && !agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
+        await live.start(harness, cwd, options)
       },
       harnesses: () => HARNESSES,
       runs: () => this.options.catalog !== undefined,
@@ -197,9 +199,11 @@ export class AgentsWorld {
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       archived: (conversation) => this.archived.has(conversation),
     }
-    this.agents = new Agents(deps)
-    this.agents.resume()
+    const agents = new Agents(deps)
+    this.agents = agents
+    // As the host does (`openConversations`): the turns an exit cut short go on before the engine looks at what waits.
     this.live.continueRestarted()
+    this.agents.resume()
   }
 
   /** Closes the host as Mako's exit does: running turns are cut short and left for the next host, their scripts never answering. */
