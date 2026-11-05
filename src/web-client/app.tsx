@@ -33,6 +33,7 @@ const deskChunk = chunk(() => import("./desk"))
 const Toaster = lazy(() => import("@/components/ui/sonner").then((module) => ({ default: module.Toaster })))
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
 const InboxScreen = lazy(() => import("./inbox-screen").then((module) => ({ default: module.InboxScreen })))
+const SetupScreen = lazy(() => import("./setup-screen").then((module) => ({ default: module.SetupScreen })))
 
 /** A Thread's code first, the screen most often opened next, then New's: one after the other, each has the line to itself. */
 async function readNextScreens(): Promise<void> {
@@ -196,11 +197,15 @@ export function WebApp() {
       )
     ) : under.kind === "settings" ? (
       <Suspense fallback={null}>
-        <Settings onBack={wide ? undefined : back} />
+        <Settings onBack={wide ? undefined : back} onSetup={(project) => open({ kind: "setup", project })} />
       </Suspense>
     ) : under.kind === "inbox" ? (
       <Suspense fallback={null}>
         <InboxScreen onBack={wide ? undefined : back} onOpen={(thread) => open({ kind: "thread", thread: thread.id })} />
+      </Suspense>
+    ) : under.kind === "setup" ? (
+      <Suspense fallback={null}>
+        <SetupScreen project={under.project} onBack={back} />
       </Suspense>
     ) : null
   // Changes belongs to the Thread on screen: anywhere else, it's closed.

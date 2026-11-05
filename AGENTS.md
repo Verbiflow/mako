@@ -2554,6 +2554,24 @@ chip second, and what still overflows scrolls behind a faded edge instead of
 being cut off silently. The model and its reasoning are what people read
 there and are never shortened.
 
+Setup is what each place a project's Threads run in has for the project:
+Settings › Apps › a project › Setup, a Setup tab in a Thread's side panel
+showing that Thread's own place, and the phone's Settings › Setup. A
+segmented control picks the place (this Mac, each device, Cloud); six parts
+follow in a fixed order (Needs you, Code, Files, Accounts and secrets, Tools,
+Services), and every row ends in one dot and a few words against its source
+(`syncWords`: "Synced 2 d ago", "Mac's is newer" with Send, "Copy · 3 h old",
+"Waiting on you", "Not here" with Add, "Didn't copy: disk full" with Retry,
+"Stays here"), never colour alone. Every row is a borrowing grant or lease
+(`@mako/protocol/borrow`), an agent's ask, or a place's own reading (the
+recipe's carry, prepare and processes, sign-ins and saved keys by name), and
+`setupView` in `packages/host/src/contracts/setup.ts` derives them all, so the
+host (`workspaces/setup-view.ts`), the mock bridge and the broker answer one
+page. Agents propose; only the person's tap adds: an ask is in Needs you, in
+the Inbox and above its Thread's composer, and Keep, Add to setup and the Add
+menu draft the recipe change in a new Thread for the person to send. No value
+is ever shown. `npm run test:setup` covers the rows and words.
+
 ## Notifications
 
 Five kinds, the same on every surface (desktop, web app, Web Push), declared

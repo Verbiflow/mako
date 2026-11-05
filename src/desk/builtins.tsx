@@ -1,4 +1,7 @@
 import { AgentsPanel } from "@/components/inspector/agents-panel"
+import { SetupPanel } from "@/components/inspector/setup-panel"
+import { setSetupDrafter } from "@/state/setup"
+import { actions } from "@/state/session"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
 import { AppshotButton } from "@/components/composer/appshot-button"
 import { AppshotShortcutHost } from "@/components/composer/appshot-flight"
@@ -9,6 +12,7 @@ import { ControlPreviewPanel } from "@/components/inspector/control-preview-pane
 import {
   GitBranchIcon,
   MonitorIcon,
+  PackageIcon,
   FilesIcon,
   GitCompareIcon,
   TerminalSquareIcon,
@@ -80,6 +84,8 @@ export function installBuiltins(): () => void {
       minWidth: 360,
     }),
     registerSurface({ id: "agents", label: "Agents", icon: GitBranchIcon, render: AgentsPanel, order: 4, minWidth: 360 }),
+    registerSurface({ id: "setup", label: "Setup", icon: PackageIcon, render: SetupPanel, order: 5, minWidth: 360 }),
+    installSetupDrafter(),
     // Identity, through the same slots a plugin would use. It lives in the
     // rail's footer and only there: the titlebar carried the same avatar six
     // inches away from it, and one account needs one place to be.
@@ -148,6 +154,16 @@ export function installBuiltins(): () => void {
     ),
   ]
   return () => disposers.forEach((dispose) => dispose())
+}
+
+/** Setup's requests (a tool into the recipe, a file into its carry) start a Thread of the project with the words written. */
+function installSetupDrafter(): () => void {
+  setSetupDrafter(async (root, text) => {
+    window.dispatchEvent(new CustomEvent("mako:close-settings"))
+    if (!(await actions.newConversationIn(root))) return
+    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("mako:compose", { detail: { text } })))
+  })
+  return () => setSetupDrafter(undefined)
 }
 
 function fileSummary(call: ToolCall, note?: string) {

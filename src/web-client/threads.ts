@@ -79,7 +79,7 @@ function standingOf(state: ListedState, quiet: boolean, moving: boolean): Thread
   return state === "moving" ? "moving" : state
 }
 
-function projectOf(folder: string | undefined): string | undefined {
+export function projectOf(folder: string | undefined): string | undefined {
   if (!folder) return undefined
   const parts = folder.split("/").filter(Boolean)
   return parts.at(-1)

@@ -4,7 +4,7 @@ import { describeFollow, describeList } from "@mako/host/contracts/sync-readings
 import { webContinues } from "./continue-actions"
 import { readingWords, useReadings } from "./probe"
 import { webSync } from "./sync-readings"
-import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
+import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
@@ -15,6 +15,7 @@ import { Avatar } from "@/components/ui/avatar"
 import { copyAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
+import { projectOf } from "./threads"
 import { useWebClient } from "./client"
 import type { PushStanding, QuietHours } from "./push"
 import { install, onIos, useInstallWay } from "./install"
@@ -29,7 +30,7 @@ const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
 const READINGS_SHOWN = 8
 
 /** Settings: a screen of its own on a phone, Back to the list; wide, the pane beside the rail, opened from its foot. */
-export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
+export function Settings({ onBack, onSetup }: { onBack: (() => void) | undefined; onSetup?: (project: string) => void }) {
   const client = useWebClient()
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-shell">
@@ -52,6 +53,7 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
               </div>
             </div>
           </Group>
+          {onSetup ? <Setups onOpen={onSetup} /> : null}
           <Notifications />
           <Conversation />
           <Fins />
@@ -62,6 +64,22 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Each project's Setup, one row a project: what each place has for it, and where agents' asks wait. */
+function Setups({ onOpen }: { onOpen: (project: string) => void }) {
+  const rows = useAccountList((state) => state.rows)
+  const projects = useMemo(() => [...new Set(rows.map((row) => projectOf(row.folder)).filter((name): name is string => Boolean(name)))].sort(), [rows])
+  if (!projects.length) return null
+  return (
+    <Group title="Setup" footer="What each place has for a project, from your Mac to the cloud. Agents ask here; only your tap adds.">
+      {projects.map((project) => (
+        <button key={project} type="button" data-setup-project={project} onClick={() => onOpen(project)} className="pressable text-left">
+          <Row label={project} end={<ChevronRightIcon aria-hidden className="size-4 text-faint" />} />
+        </button>
+      ))}
+    </Group>
   )
 }
 
