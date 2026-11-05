@@ -3,7 +3,7 @@
   "updatedAt": "2026-09-24T23:25:02.165989Z",
   "candidateBuild": "3c1d563e25a9bd78",
   "previousBuild": "345bfd91c64009c6",
-  "candidate": "/Users/kashyab/makomono/mako/release/control-mcp-reviewed-20260924/mac-arm64/Mako.app",
+  "candidate": "release/control-mcp-reviewed-20260924/mac-arm64/Mako.app",
   "installedBuild": "3c1d563e25a9bd78",
   "previousFailure": {
     "state": "installed-validation-failed",

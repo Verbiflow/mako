@@ -176,7 +176,7 @@ in 6 calls, with no errors and no help lookups. Following its reports:
   shows it.
 - Reading the installed MCP tool from Cursor found U26: text blocks run
   together in clients that join them with nothing between them.
-- A connected Brave profile listed as "Chrome · Kashyab" (U27). Brave copies
+- A connected Brave profile listed as "Chrome · Ana" (U27). Brave copies
   Chrome's user agent and launched Chrome's native-host helper. Listing now
   names a browser from the application that launched its host.
 - All three are fixed in source, not installed. With the fixed runtime, the
