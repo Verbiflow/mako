@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
-import { isProviderWork, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
+import { isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
 import { readFinReports, type FinReportCard } from "./fin-reports.js"
 
 /** Who an agent's words in a Thread are from, as their header names them: a Fin's Apex, or an Apex's Fins (a digest of their reports). */
@@ -211,9 +211,10 @@ export function childStateOf(agent: NativeAgent): ChildState {
 
 /**
  * Where a Fin stands for the person. A question on its Apex is the Apex's
- * to answer, so that Fin is still at work as far as the person goes. An
- * idle one has nothing running and nothing asked, and is open for a next
- * message, so it is neither working nor done.
+ * to answer, so that Fin is still at work as far as the person goes, and one
+ * that finished with a decision its Apex makes is done. An idle one has
+ * nothing running and nothing asked, and is open for a next message, so it
+ * is neither working nor done.
  */
 export function childGroup(state: ChildState): ChildGroup {
   switch (state.kind) {
@@ -227,8 +228,36 @@ export function childGroup(state: ChildState): ChildGroup {
     case "idle":
       return "idle"
     case "ended":
-      return state.outcome === "failed" ? "failed" : "done"
+      return state.outcome === "failed" ? "failed" : state.decision?.on === "person" ? "needs" : "done"
   }
+}
+
+/** What a Fin waits on someone to answer, whatever its state: a blocked Fin's question or approval, or the decision a done one leaves. */
+export interface OpenAsk {
+  question: string
+  on: "lead" | "person" | "approval"
+  ask?: FinAsk
+  /** It finished: what's asked is a decision its work leaves, not what it waits on to go on. */
+  done?: true
+}
+
+export function openAsk(state: ChildState): OpenAsk | undefined {
+  if (state.kind === "blocked") return { question: state.question, on: state.on, ...(state.ask && { ask: state.ask }) }
+  if (state.kind === "ended" && state.decision) return { ...state.decision, done: true }
+  return undefined
+}
+
+/** How a done Fin's decision for the person reads, before its question: "Done · needs you: Merge #371?". */
+export const DONE_NEEDS_YOU = "Done · needs you"
+
+/** An open ask's words where the person reads it: its question, after `DONE_NEEDS_YOU` for a decision. */
+export function askWords(ask: Pick<OpenAsk, "question" | "done">): string {
+  return ask.done ? `${DONE_NEEDS_YOU}: ${ask.question}` : ask.question
+}
+
+/** Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". */
+export function answeredWords(answered: FinAnswered): string {
+  return `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answered.answer}`
 }
 
 const NO_CHILDREN: readonly NativeAgent[] = []
@@ -374,13 +403,13 @@ export function childLine(state: ChildState): string | undefined {
     case "starting":
       return "Starting"
     case "working":
-      return state.phase ?? readableStep(state.step)
+      return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step)
     case "blocked":
       return state.question
     case "idle":
       return "Idle: a message gives it its next turn"
     case "ended":
-      return state.reason
+      return state.decision?.question ?? state.reason
   }
 }
 
@@ -398,6 +427,6 @@ export function childWord(state: ChildState): string {
     case "idle":
       return "Idle"
     case "ended":
-      return state.outcome === "done" ? "Done" : state.outcome === "failed" ? "Failed" : "Stopped"
+      return state.outcome === "done" ? (state.decision?.on === "person" ? DONE_NEEDS_YOU : "Done") : state.outcome === "failed" ? "Failed" : "Stopped"
   }
 }

@@ -25,7 +25,8 @@ function said(card: FinReportCard): Said {
     case "blocked":
       return { word: card.forPerson ? "waits on you" : "is blocked", tone: "text-attention" }
     case "done":
-      return { word: "finished", tone: "text-positive" }
+      if (card.decides === "person") return { word: "finished · needs you", tone: "text-attention" }
+      return card.decides === "lead" ? { word: "finished · asks", tone: "text-attention" } : { word: "finished", tone: "text-positive" }
     case "failed":
       return { word: "failed", tone: "text-negative" }
     case "progress":
@@ -102,6 +103,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
           ) : null}
         </p>
         {card.line ? <p className="mt-0.5 text-prose leading-[1.6] text-foreground [overflow-wrap:anywhere]">{card.line}</p> : null}
+        {card.waiting ? <p data-fin-report-waiting className="mt-0.5 text-label text-faint">{card.waiting}</p> : null}
         {options.length ? (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {options.map((option, index) => {

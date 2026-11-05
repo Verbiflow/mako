@@ -1,11 +1,11 @@
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
-import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, type ChildStateReading, type FinAsk, type NativeAgent } from "./native-agents.js"
+import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type ChildStateReading, type FinAnswered, type FinAsk, type FinDecision, type NativeAgent, type WaitingOn } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 import { FinTuningSourceSchema, type FinTuningWords } from "./fin-tuning.js"
 
-export { CHILDREN_BINDING }
+export { CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type WaitingOn }
 
 /**
  * What every person-facing string and every agent's instructions call a
@@ -105,6 +105,121 @@ export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: Rep
 }
 
 /**
+ * Who decides what a done report asks, its result going where `reportRoute`
+ * sends it: the person when the Fin said so (`decides`), when its Apex left it
+ * to them (`for`), or when its spawn hears only its result or nothing, as
+ * questions go there; else its Apex.
+ */
+export function decisionOn(asked: Pick<ChildSpec, "mode" | "wake">, report: Pick<Report, "decides" | "for">): "lead" | "person" {
+  if (report.for === "person" || report.decides === "person") return "person"
+  return reportRoute(asked, "needs-input") === "apex" ? "lead" : "person"
+}
+
+/**
+ * A done Fin's open decision in one line, as its Apex's wake, its front-door
+ * note and another Apex's digest all say it: "done; decide: Merge #371?
+ * (Merge · Leave open, recommends Merge)", or "the person decides" for theirs.
+ */
+export function decisionWords(decision: Pick<FinDecision, "question" | "on" | "ask">): string {
+  const options = decision.ask.options ?? []
+  const recommended = decision.ask.recommended === undefined ? undefined : options[decision.ask.recommended]?.label
+  const offered = options.length ? ` (${options.map((option) => option.label).join(" · ")}${recommended ? `, recommends ${recommended}` : ""})` : ""
+  return `done; ${decision.on === "lead" ? "decide" : "the person decides"}: ${decision.question}${offered}`
+}
+
+/**
+ * A pull request as a report or GitHub names it: its repository (`owner/name`) and number from its URL, which is kept,
+ * or from `owner/name#12`; `#12` alone names no repository. Undefined for words that name no pull request.
+ */
+export interface PullRef {
+  repository?: string
+  number: number
+  url?: string
+}
+
+export function pullRef(text: string): PullRef | undefined {
+  const trimmed = text.trim()
+  const url = /^https?:\/\/[^/\s]+\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)(?:[/?#]\S*)?$/.exec(trimmed)
+  const named = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(trimmed)
+  const bare = /^#?(\d+)$/.exec(trimmed)
+  const [repository, digits] = url ? [`${url[1]}/${url[2]}`, url[3]] : named ? [named[1], named[2]] : [undefined, bare?.[1]]
+  const number = Number(digits)
+  if (!Number.isSafeInteger(number) || number <= 0) return undefined
+  return { ...(repository && { repository: repository.toLowerCase() }), number, ...(url && { url: trimmed }) }
+}
+
+/** The key two names of a pull request share only when they're the same one: its repository and number, or the number alone for a bare `#12`. */
+export function pullKey(ref: Pick<PullRef, "repository" | "number">): string {
+  return `${ref.repository ?? ""}#${ref.number}`
+}
+
+/**
+ * What a Fin waits on outside its tree, in a line: "waiting on #412 checks, the person to merge". A pull request is
+ * its number alone, and `owner/name#412` only where the line names pull requests of more than one repository.
+ */
+export function waitingWords(items: readonly WaitingOn[] | undefined): string | undefined {
+  if (!items?.length) return undefined
+  const repositories = new Set(items.flatMap((item) => {
+    const repository = item.kind === "pull-request" ? item.repository ?? pullRef(item.ref)?.repository : undefined
+    return repository ? [repository] : []
+  }))
+  const words = items.map((item) => {
+    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "person") return `the person to ${item.what.trim()}`
+    const pull = pullRef(item.ref)
+    const repository = item.repository ?? pull?.repository
+    const number = item.number ?? pull?.number
+    const ref = number === undefined ? item.ref.trim() : repositories.size > 1 && repository ? `${repository}#${number}` : `#${number}`
+    return item.until ? `${ref} ${item.until}` : ref
+  })
+  return `waiting on ${words.join(", ")}`
+}
+
+/**
+ * One of a Fin's open pull requests, from what its host already holds: its branch's, as the worktree summaries last
+ * read them from GitHub (`open` or `draft`), and any its reports name (`reported`, read nowhere else). Nothing polls.
+ * `repository` is `owner/name`, absent only for a bare `#12` a report named in a Thread of no one known repository.
+ */
+export interface FinPullRequest {
+  repository?: string
+  number: number
+  url?: string
+  state: "open" | "draft" | "reported"
+}
+
+/**
+ * A Fin's open pull requests (`FinPullRequest`): its branches' that GitHub last said are open or drafts, then those its
+ * reports' artifacts name that those don't, newest report first, each pull request once by repository and number
+ * (`pullKey`). A bare `#12` is its one repository's when its branches' pull requests name exactly one, and otherwise
+ * stays unqualified: it never stands for, or hides, a pull request of a repository it doesn't name.
+ */
+export function finPullRequests(held: readonly { number: number; url: string; state: "open" | "draft" | "merged" | "closed" }[], reports: readonly Pick<Report, "artifacts">[]): FinPullRequest[] {
+  const heldRefs = held.map((pull) => ({ pull, ref: pullRef(pull.url) }))
+  const repositories = new Set(heldRefs.flatMap(({ ref }) => (ref?.repository ? [ref.repository] : [])))
+  const only = repositories.size === 1 ? [...repositories][0] : undefined
+  const known = new Set(heldRefs.map(({ pull, ref }) => pullKey({ number: pull.number, ...(ref?.repository && { repository: ref.repository }) })))
+  const open: FinPullRequest[] = heldRefs.flatMap(({ pull, ref }) => (pull.state === "open" || pull.state === "draft" ? [{ ...(ref?.repository && { repository: ref.repository }), number: pull.number, url: pull.url, state: pull.state }] : []))
+  for (const report of [...reports].reverse())
+    for (const artifact of report.artifacts ?? []) {
+      if (artifact.kind !== "pull-request") continue
+      const ref = pullRef(artifact.ref)
+      if (!ref) continue
+      const repository = ref.repository ?? only
+      const key = pullKey({ number: ref.number, ...(repository && { repository }) })
+      if (known.has(key)) continue
+      known.add(key)
+      open.push({ ...(repository && { repository }), number: ref.number, ...(ref.url && { url: ref.url }), state: "reported" })
+    }
+  return open
+}
+
+/** Whole seconds since a Fin's last activity at `at`, while it isn't at work or waiting its turn to start; undefined while it is. */
+export function idleFor(state: ChildState, at: number, now: number): number | undefined {
+  if (state.kind === "working" || state.kind === "starting" || state.kind === "queued") return undefined
+  return Math.max(0, Math.floor((now - at) / 1000))
+}
+
+/**
  * A run Mako didn't start (`discovered`, `linked`): its harness's own process,
  * followed through its Session and its pid. A pid alone is reused, so its
  * start time says it's the same process. `runDir` names where a run #286's
@@ -201,8 +316,12 @@ export const ReportSchema = z.object({
   /** Its first sentence is the digest's line. */
   summary: z.string().max(16_000),
   artifacts: z.array(ArtifactSchema).max(64).optional(),
-  /** What it waits on, for `blocked` and `needs-input`. */
+  /** What it waits on, for `blocked` and `needs-input`; on `done`, the decision its finished work leaves. */
   question: z.string().max(4_000).optional(),
+  /** Who decides a done report's question (`decisionOn`): its Apex when absent, or the person. */
+  decides: z.enum(["apex", "person"]).optional(),
+  /** What it waits on outside its tree, for a question it asks: "#412 checks", the person's merge. Nothing watches it. */
+  waitingOn: z.array(WaitingOnSchema).max(WAITING_ON_LIMIT).optional(),
   /** The answers its question offers, each a tap on the person's phone. */
   options: z.array(AskOptionSchema).max(ASK_OPTIONS).optional(),
   /** The option it recommends, by its place in `options`. */
@@ -270,6 +389,8 @@ export interface ChildThread {
 /** The child's reports, as its owner keeps them: the newest decides what its parent last heard. */
 export interface ChildJournal {
   latest?: Report
+  /** The last answer to a question in its report: who gave it, and when. A report after it is past it. */
+  answered?: FinAnswered & { at: number }
 }
 
 /** Its last report's first sentence: what a strip and the digest show it at. */
@@ -283,7 +404,8 @@ export function reportPhase(report: Report | undefined): string | undefined {
 /**
  * The one way anything learns a child's state. A closed delegation, or a turn
  * that ended with nothing after it, reads as ended with how it went; a child
- * whose last word is a question reads as blocked on it.
+ * whose last word is a question reads as blocked on it, and one that finished
+ * asking one as done with that decision open until it's answered.
  */
 export function childState(edge: ThreadParent, thread: ChildThread, journal: ChildJournal): ChildState {
   if (thread.queued) {
@@ -299,17 +421,27 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (thread.starting) return { kind: "starting", step: thread.starting }
   if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
-  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }) }
+  const answered = journal.answered && (!latest || journal.answered.at >= latest.at) ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
+  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && { answered }) }
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
     return {
       kind: "blocked",
       question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.",
       on: latest.for !== "person" && reportRoute(edge.asked, latest.status) === "apex" ? "lead" : "person",
       ask: reportAsk(latest),
+      ...(latest.waitingOn?.length && { waitingOn: latest.waitingOn }),
     }
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
-  if (latest?.status === "done") return { kind: "ended", outcome: "done" }
+  if (latest?.status === "done") {
+    const open = latest.question !== undefined && latest.question.trim() !== "" && !answered && !edge.closedAt
+    return {
+      kind: "ended",
+      outcome: "done",
+      ...(open && { decision: { question: latest.question!, on: decisionOn(edge.asked, latest), ask: reportAsk(latest) } }),
+      ...(open && latest.waitingOn?.length && { waitingOn: latest.waitingOn }),
+    }
+  }
   if (latest?.status === "failed") return { kind: "ended", outcome: "failed", reason: reportPhase(latest) ?? "It failed." }
   if (ended) return ended.outcome === "done"
     ? { kind: "ended", outcome: "done" }
@@ -384,11 +516,11 @@ function carried(state: ChildState): ChildState {
   const cut = (text: string) => (text.length > NOTE_LIMIT ? `${text.slice(0, NOTE_LIMIT - 1)}…` : text)
   switch (state.kind) {
     case "working":
-      return { kind: "working", ...(state.step && { step: cut(state.step) }), ...(state.phase && { phase: cut(state.phase) }) }
+      return { kind: "working", ...(state.step && { step: cut(state.step) }), ...(state.phase && { phase: cut(state.phase) }), ...(state.answered && { answered: state.answered }) }
     case "blocked":
       return { ...state, question: cut(state.question) }
     case "ended":
-      return state.reason ? { ...state, reason: cut(state.reason) } : state
+      return { ...state, ...(state.reason && { reason: cut(state.reason) }), ...(state.decision && { decision: { ...state.decision, question: cut(state.decision.question) } }) }
     default:
       return state
   }

@@ -21,7 +21,7 @@ import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { asks, requestWaiting, type Waiting } from "@mako/host/contracts/notifications"
 import { bareCommand } from "@mako/sessions/tool-identity"
-import { rosterChildren } from "@mako/host/contracts/children"
+import { askWords, rosterChildren } from "@mako/host/contracts/children"
 import { personAsks } from "@/state/fin-asks"
 
 export function updateLive(
@@ -215,7 +215,7 @@ export function noteFinAsks(conversation: LiveAcpConversation, quiet = false): v
   for (const ask of asks) {
     const id = `${ask.fin}:${ask.ask.id}`
     if (before?.has(id)) continue
-    noteOutcome({ kind: ask.ask.kind === "approval" ? "approval" : "question", subject: liveSubject(conversation), marker: `fin:${id}`, detail: `${ask.title}: ${ask.question}`, quiet })
+    noteOutcome({ kind: ask.ask.kind === "approval" ? "approval" : "question", subject: liveSubject(conversation), marker: `fin:${id}`, detail: `${ask.title}: ${askWords(ask)}`, quiet })
   }
   if (now.size) announcedFinAsks.set(conversation.key, now)
   else announcedFinAsks.delete(conversation.key)

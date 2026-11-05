@@ -33,9 +33,9 @@ const PriorTurn = z.object({
   toolCalls: z.array(z.object({ tool: z.string(), input: z.json(), result: z.json() })).optional(),
 })
 
-export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver", "worktree", "pull-request", "app", "browser", "move"] as const
+export const AREAS = ["route", "stay-native", "dont-spawn", "no-polling", "headless-shell", "place", "native-child", "front-door", "answer", "deliver", "worktree", "pull-request", "app", "browser", "move", "report"] as const
 
-/** The budget each area counts toward, per harness and model: route (moving the Thread itself too) ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%, Mako's own tools for worktrees, pull requests, the app and the browser ≥ 90%. */
+/** The budget each area counts toward, per harness and model: route (moving the Thread itself too) ≥ 90%, front door and answering ≥ 90%, don't spawn ≥ 95%, no polling ≥ 95%, stay native ≥ 85%, Mako's own tools for worktrees, pull requests, the app and the browser ≥ 90%, a Fin's report saying how it went and who must act ≥ 90%. */
 export const BUDGET = {
   route: { areas: ["route", "headless-shell", "place", "move"], floor: 0.9 },
   "front door": { areas: ["front-door", "answer", "deliver"], floor: 0.9 },
@@ -43,6 +43,7 @@ export const BUDGET = {
   "no polling": { areas: ["no-polling"], floor: 0.95 },
   "stay native": { areas: ["stay-native"], floor: 0.85 },
   "mako tools": { areas: ["worktree", "pull-request", "app", "browser"], floor: 0.9 },
+  reports: { areas: ["report"], floor: 0.9 },
 } as const satisfies Record<string, { areas: readonly (typeof AREAS)[number][]; floor: number }>
 
 /** One of an Apex's Fins, in minutes ago rather than clock times, so a case reads the same on any day. */
