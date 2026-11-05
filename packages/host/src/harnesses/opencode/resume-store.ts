@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { realpathSync } from "node:fs"
 import { isAbsolute } from "node:path"
-import type { DatabaseSync } from "node:sqlite"
+import type { DatabaseSync, StatementSync } from "node:sqlite"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { NativeResumeRecord } from "../native-continuation.js"
 
@@ -89,6 +89,48 @@ export function openCodeHistorySealed(stores: NativeStores, path: string, native
   }
 }
 
+export type OpenCodeOpening = { kind: "opens" } | Extract<NativeResumeRecord, { kind: "unavailable" }>
+
+type Admitted =
+  | { kind: "admitted"; sessionTable: string; session: NonNullable<ReturnType<StatementSync["get"]>> }
+  | Extract<NativeResumeRecord, { kind: "unavailable" }>
+
+/** Whether a session can be loaded at all: its layout is one this build reads, its row is there, and no native input waits in it. */
+function admit(db: DatabaseSync, target: { v2: boolean }, database: string, nativeId: string): Admitted {
+  const store = sessionStore(db, target, database)
+  if (store.kind === "unavailable") return store
+  const { sessionTable, tables } = store
+  const session = db.prepare(`SELECT * FROM ${sessionTable} WHERE id=?`).get(nativeId)
+  if (!session)
+    return { kind: "unavailable", reason: "The OpenCode session is missing from its native database." }
+  // Loading can wake already-admitted native inputs. Do not disguise that as
+  // a harmless replay of history or resend them through Mako's queue.
+  for (const table of ["session_pending", "session_inbox"]) {
+    if (tables.has(table) && db.prepare(`SELECT 1 FROM ${table} WHERE session_id=? LIMIT 1`).get(nativeId))
+      return { kind: "unavailable", reason: "OpenCode still has native inputs awaiting execution. Their recovery must be reconciled before reconnecting." }
+  }
+  return { kind: "admitted", sessionTable, session }
+}
+
+/** Worker-only: whether the session can be opened, read without hashing its history, which opening has no use for. */
+export function openCodeSessionOpens(stores: NativeStores, path: string, nativeId: string): OpenCodeOpening {
+  const target = openCodeRecordLocator(path)
+  if (!target || target.nativeId !== nativeId)
+    return { kind: "unavailable", reason: "The saved OpenCode source does not match its native session ID." }
+  let db: DatabaseSync | undefined
+  try {
+    const database = realpathSync(target.database)
+    db = stores.open(database)
+    db.exec("PRAGMA busy_timeout=100; BEGIN")
+    const admitted = admit(db, target, database, nativeId)
+    return admitted.kind === "admitted" ? { kind: "opens" } : admitted
+  } catch {
+    return { kind: "unavailable", reason: "The OpenCode native record could not be read consistently." }
+  } finally {
+    if (db) { if (db.isTransaction) db.exec("ROLLBACK"); db.close() }
+  }
+}
+
 /** Worker-only: fingerprint one native record in a consistent read transaction. */
 export function readOpenCodeResumeRecord(stores: NativeStores, path: string, nativeId: string): OpenCodeResumeRecord {
   const target = openCodeRecordLocator(path)
@@ -99,18 +141,9 @@ export function readOpenCodeResumeRecord(stores: NativeStores, path: string, nat
     const database = realpathSync(target.database)
     db = stores.open(database)
     db.exec("PRAGMA busy_timeout=100; BEGIN")
-    const store = sessionStore(db, target, database)
-    if (store.kind === "unavailable") return store
-    const { sessionTable, tables } = store
-    const session = db.prepare(`SELECT * FROM ${sessionTable} WHERE id=?`).get(nativeId)
-    if (!session)
-      return { kind: "unavailable", reason: "The OpenCode session is missing from its native database." }
-    // Loading can wake already-admitted native inputs. Do not disguise that as
-    // a harmless replay of history or resend them through Mako's queue.
-    for (const table of ["session_pending", "session_inbox"]) {
-      if (tables.has(table) && db.prepare(`SELECT 1 FROM ${table} WHERE session_id=? LIMIT 1`).get(nativeId))
-        return { kind: "unavailable", reason: "OpenCode still has native inputs awaiting execution. Their recovery must be reconciled before reconnecting." }
-    }
+    const admitted = admit(db, target, database, nativeId)
+    if (admitted.kind === "unavailable") return admitted
+    const { sessionTable, session } = admitted
     const hash = createHash("sha256")
     hash.update(JSON.stringify(["opencode-record-v1", sessionTable, session]) + "\n")
     for (const table of CONTENT_TABLES) {

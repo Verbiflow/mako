@@ -64,6 +64,36 @@ export async function withFileLock<T>(path: string, work: () => Promise<T>, opti
   }
 }
 
+/**
+ * Runs the synchronous `work` holding the lock at `path`, waiting for another holder up to `waitMs` with the event
+ * loop running. The lock is taken and dropped with no await between, so this process never holds it while its event
+ * loop is free: a synchronous caller (`withFileLockSync`) can't meet this process as the holder, only another one,
+ * and only for as long as `work` takes.
+ */
+export async function withFileLockBriefly<T>(path: string, work: () => T, options: FileLockOptions = {}): Promise<T> {
+  const db = open(path, 0)
+  try {
+    const deadline = Date.now() + (options.waitMs ?? WAIT_MS)
+    for (let delay = 5; ; delay = Math.min(delay * 2, 50)) {
+      try {
+        db.exec("BEGIN EXCLUSIVE")
+      } catch (cause) {
+        if (!busy(cause)) throw cause
+        if (Date.now() > deadline) throw new FileLockBusyError(path)
+        await sleep(delay)
+        continue
+      }
+      try {
+        return work()
+      } finally {
+        db.exec("ROLLBACK")
+      }
+    }
+  } finally {
+    db.close()
+  }
+}
+
 /** The same for a caller that can't wait asynchronously: SQLite's own busy wait blocks this thread for up to `waitMs`. */
 export function withFileLockSync<T>(path: string, work: () => T, options: FileLockOptions = {}): T {
   const db = open(path, options.waitMs ?? WAIT_MS)
