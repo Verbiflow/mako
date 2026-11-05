@@ -161,6 +161,19 @@ export class LiveTransfers {
     })
   }
 
+  /**
+   * A Stop after a switch's commit (`Resident.transferPhase`): it completes, and the Stop's marks, its own message's
+   * among them, are written onto the committed snapshot the journal holds, which the switch installs with them.
+   */
+  stopCommitted(resident: Resident, phase: NonNullable<Resident["transferPhase"]>): void {
+    const committed = resident.journalSnapshot
+    if (!committed) throw new Error("A committed switch has no journal snapshot")
+    const marked = withStops(committed, resident.snapshot, phase.id)
+    resident.journal.commit(marked, committed)
+    resident.journalSnapshot = marked
+    phase.stopped = true
+  }
+
   pending(resident: Resident): ContextTransfer | undefined {
     return this.host
       .control(resident)
@@ -194,6 +207,8 @@ export class LiveTransfers {
     // This attempt goes on only while its own transfer is still the one waiting: a Stop retires it (`stopHolds`)
     // without moving the resident's generation, so the source binding and its events stay live.
     const owned = () => resident.generation === generation && this.pending(resident)?.input.id === transfer.input.id
+    const phase: NonNullable<Resident["transferPhase"]> = { id: transfer.input.id, phase: "preparing" }
+    resident.transferPhase = phase
     let prepared: ProviderConnection | null = null
     let preparedId: string | null = null
     let held: string | null = null
@@ -335,6 +350,7 @@ export class LiveTransfers {
         preparedId = bindingId
         this.host.bindingOwners.set(bindingId, source.session.id)
         resident.transferOpening = { bindingId, said: [] }
+        phase.phase = "opening"
         // Two Mako hosts share every provider store; the ledger's hold is
         // taken before anything spawns so they never open one session twice.
         if (prior?.nativeId) {
@@ -538,6 +554,8 @@ export class LiveTransfers {
       const heard = resident.journalSnapshot
       resident.journal.commit(nextSnapshot, resident.journalSnapshot)
       resident.journalSnapshot = nextSnapshot
+      // Committed: the switch completes from here, a Stop or not (`Resident.transferPhase`).
+      phase.phase = "committed"
       const retiring = [...resident.connections].filter(
         ([dormantId]) => dormantId !== bindingId
       )
@@ -552,6 +570,7 @@ export class LiveTransfers {
           dormantId,
           (resident.bindingGenerations.get(dormantId) ?? 0) + 1
         )
+      phase.phase = "closing"
       try {
         await Promise.all(
           retiring.map(([dormantId, dormant]) =>
@@ -561,6 +580,8 @@ export class LiveTransfers {
       } catch (error) {
         resident.journal.commit(previous, nextSnapshot)
         resident.journalSnapshot = previous
+        // Back before its commit, so a Stop that came meanwhile retires it (below).
+        phase.phase = "opening"
         for (const [dormantId, retiredGeneration] of retiredGenerations)
           resident.bindingGenerations.set(dormantId, retiredGeneration)
         throw error
@@ -584,7 +605,8 @@ export class LiveTransfers {
       }
       resident.connections.set(bindingId, prepared)
       resident.driver = prepared.driver
-      resident.snapshot = nextSnapshot
+      // A Stop while the source closed paused what it found waiting, and this switch's own message with them.
+      resident.snapshot = withStops(nextSnapshot, resident.snapshot, phase.stopped ? transfer.input.id : undefined)
       // The windows and the rest of the host last heard the snapshot before
       // the switch: the flush below tells them all of it (the new process's
       // session, the questions the old one can no longer answer gone, the
@@ -592,7 +614,7 @@ export class LiveTransfers {
       // it once said nothing, and a window kept the old process's
       // `disconnected` while the new one ran, offering Continue turn on a
       // question the running agent was still waiting on.
-      if (resident.journalSnapshot === nextSnapshot && heard) resident.journalSnapshot = heard
+      if ((resident.journalSnapshot === nextSnapshot || phase.stopped) && heard) resident.journalSnapshot = heard
       if (prepared.session.nativeId)
         this.host.dependencies.memory?.remember(
           transfer.input.provider,
@@ -666,7 +688,8 @@ export class LiveTransfers {
         const cause = transientCause(words, failure, error instanceof SessionBusyError || error instanceof SessionHeldError)
         const retry = cause && nextRetry(transfer.retry, cause, words, Date.now())
         try {
-          if (retry) {
+          if (phase.stopped) this.save(resident, { ...transfer, retry: undefined, state: { kind: "failed", error: "Stopped before it was sent", stopped: true } })
+          else if (retry) {
             this.save(resident, { ...transfer, state: { kind: "queued" }, retry })
             hostLog("transfer", "goes again by itself", { conversation: resident.snapshot.session.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
           } else
@@ -676,8 +699,25 @@ export class LiveTransfers {
         }
       }
     } finally {
+      phase.phase = "done"
+      if (resident.transferPhase === phase) resident.transferPhase = undefined
       resident.transferring = false
       resident.transferOpening = undefined
     }
+  }
+}
+
+/**
+ * The snapshot a committed switch installs, with what a Stop marked while its source closed kept: the waiting
+ * messages it paused, and the switch's own message (`stopped`), which stays unsent, held as the Stop's pause.
+ */
+function withStops(next: LiveSnapshot, current: LiveSnapshot, stopped: string | undefined): LiveSnapshot {
+  const marked = new Map(current.requests.filter((request) => request.pause === "stop").map((request) => [request.id, request]))
+  if (!marked.size && !stopped) return next
+  return {
+    ...next,
+    requests: next.requests.map((request) => request.id === stopped
+      ? { ...request, status: "held" as const, pause: "stop" as const }
+      : marked.get(request.id) ?? request),
   }
 }

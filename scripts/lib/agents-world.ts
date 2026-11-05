@@ -65,6 +65,8 @@ export interface WorldOptions {
   finCeiling?: () => number
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
+  /** A harness closing a session, awaited before it's closed (a switch retiring its source, say). */
+  closing?: (binding: string, harness: string) => Promise<void> | void
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
   launching?: (conversation: string) => Promise<void> | void
   /** Every steer is refused, as a harness whose turn moved on refuses one. */
@@ -142,6 +144,12 @@ export class AgentsWorld {
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
   private heldSteers = new Map<string, (answer: ProviderSteerResult) => void>()
+  /** The conversation a binding of it is, its first one's id being the conversation's own. */
+  private conversationOfBinding(binding: string): string {
+    if (this.live.snapshot(binding)) return binding
+    return this.live.summaries().find((summary) => this.live.snapshot(summary.session.id)?.control?.bindings.some((candidate) => candidate.id === binding))?.session.id ?? binding
+  }
+
   /** Each conversation's driver callback, from its latest start. */
   private emits = new Map<string, (event: LiveDriverEvent) => void>()
 
@@ -359,13 +367,15 @@ export class AgentsWorld {
           throw new Error(refused)
         }
         handOff(dispatch, { kind: "submitted", source: "transport-call" })
-        this.prompts.push({ conversation: id, harness, text, at: Date.now() })
-        this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
+        // A switch's destination is sent to under its own binding: the turn is its conversation's.
+        const conversation = this.conversationOfBinding(id)
+        this.prompts.push({ conversation, harness, text, at: Date.now() })
+        this.options.heard?.({ kind: "prompt", conversation, harness, text })
         const session = this.live.snapshot(id)?.session ?? state(id)
         const emit = this.emits.get(id) ?? ((event: LiveDriverEvent) => this.live.observe(event))
         emit({ type: "live-session", session: { ...session, status: "running", nativeRunId: `run-${this.prompts.length}` } })
         const turn = (async () => {
-          const reply = await this.options.script({ world: this, conversation: id, harness, text, caller: this.caller(id) })
+          const reply = await this.options.script({ world: this, conversation, harness, text, caller: this.caller(conversation) })
           emit({ type: "live-update", id, update: { kind: "text", text: reply } })
           emit({ type: "live-session", session: { ...(this.live.snapshot(id)?.session ?? session), status: "ready" } })
         })()
@@ -395,7 +405,9 @@ export class AgentsWorld {
           asked.answered({ kind: "choice", optionId: null })
         }
       },
-      close: () => {},
+      close: async (id) => {
+        await this.options.closing?.(id, harness)
+      },
       setMode: async (id) => {
         await this.options.launching?.(id)
       },

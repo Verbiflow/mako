@@ -90,6 +90,13 @@ export interface Resident {
   connections: Map<string, ProviderConnection>
   bindingGenerations: Map<string, number>
   transferring: boolean
+  /**
+   * Where the transfer under way stands, by its id. A Stop retires it only while it's `preparing` or `opening`;
+   * once its destination is `committed` (the journal names it the conversation's binding), it completes through
+   * `closing` the source to `done`, and a Stop pauses its message instead (`stopped`), so the conversation always has
+   * a binding it can use.
+   */
+  transferPhase?: { id: string; phase: "preparing" | "opening" | "committed" | "closing" | "done"; stopped?: true }
   transferOperation?: Promise<void>
   /**
    * The binding a transfer is opening, which the conversation doesn't listen

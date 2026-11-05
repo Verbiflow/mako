@@ -283,6 +283,39 @@ try {
       await world.close()
     }
 
+    // A switch whose destination is committed completes, a Stop or not: a Stop while its source closes pauses the
+    // switch's message, unsent, and the destination is the conversation's binding, so the next message goes on it.
+    for (const stopped of [true, false]) {
+      const to = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      let gate: (() => void) | undefined
+      let gating = false
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-switch-retire-${stopped ? "stop" : "control"}`),
+        script,
+        closing: (_binding, closing) => (gating && closing === harness ? new Promise<void>((resolve) => { gate = resolve }) : undefined),
+      })
+      const label = `${harness} switch retiring its source${stopped ? ", stopped" : ""}`
+      const { conversation } = await world.apex(harness, "full")
+      gating = true
+      world.live.transfer(conversation, { id: randomUUID(), provider: to, text: "Switch.", attachments: [] })
+      await until(`${label}: the source closing`, () => gate !== undefined)
+      if (stopped) await world.live.cancel(conversation)
+      gate!()
+      gating = false
+      await until(`${label}: the switch done`, () => world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind === "accepted")
+      const own = requestOf(world, conversation, "Switch.")
+      if (stopped) {
+        await pause(200)
+        assert.deepEqual([own?.status, own?.pause, sentTimes(world, conversation, "Switch.")], ["held", "stop", 0], `${label}: its message is the Stop's, unsent`)
+      } else await until(`${label}: its message to go`, () => requestOf(world, conversation, "Switch.")?.status === "completed")
+      world.say(conversation, "Fresh message.")
+      await until(`${label}: the next message to complete`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), to, `${label}: on the destination, once`)
+      await world.restart()
+      assert.equal(requestOf(world, conversation, "Switch.")?.pause, stopped ? "stop" : undefined, `${label}: the Stop's mark survives a restart`)
+      await world.close()
+    }
+
     // The person's Stop ends a turn that fails partway on capacity as it lands, and a first start waiting to go again or
     // under way that comes back at capacity: nothing continues, starts or sends after it, nor after a restart.
     for (const under of ["mid-turn", "first start waiting", "first start late"] as const) {
