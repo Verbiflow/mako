@@ -9,6 +9,7 @@ import { followHostLog } from "@mako/host/base/host-log"
 import type { z } from "zod"
 import type { InterruptionReason, LiveRequest } from "@mako/host/contracts/live-conversations"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
+import { BRIEF_AGAIN } from "@mako/host/contracts/children"
 import { finResumedText, RESUMED_OPENS } from "@mako/host/contracts/resume-account"
 import { continueTurnPrompt, opensContinuation, RESTART_CHAIN, savedContinuation, strandedTurn } from "@mako/host/contracts/turn-continuation"
 import type { AgentsDeps } from "@mako/host/conversations/agents"
@@ -30,12 +31,17 @@ import { AgentsWorld, type Heard, type Script } from "./lib/agents-world.ts"
  *   the run's process both gone). Its Apex is asked; Continue resumes its
  *   session in Mako, with the account of what landed in its checkout meanwhile.
  *
+ * - raced: a Fin's turn is cut by SIGKILL, and as the next host reads what moved in its checkout, slowly, its Apex
+ *   stops it, the person writes to it, or that host dies too: a stopped Fin hears nothing, no continuation follows the
+ *   person's words, and one cut in its read goes on the host after, once.
+ *
  * Every continuation carries the account a resumed Fin reads (`finResumedText`).
  */
 const SCENARIOS = ["loop", "apex", "quit", "power"] as const
-type Scenario = (typeof SCENARIOS)[number]
+type Scenario = (typeof SCENARIOS)[number] | "raced"
 const RUN_MS = 60_000
 const HARNESS = "claude"
+const SECOND_PART = "Now the second part."
 
 interface State {
   apex: string
@@ -103,7 +109,9 @@ async function host(root: string, scenario: Scenario, first: boolean): Promise<v
       }
       if (turn.text.includes(FROM_AGENTS) && turn.text.includes("cut short")) {
         writeFileSync(finish, "")
-        await turn.world.agents.answer(turn.caller, { to: scenario === "power" ? "cli" : "worker", answer: "Continue", clientKey: "continue" })
+        // Asked twice at once, as two windows of one Apex can: it goes on once.
+        const answer = (clientKey: string) => turn.world.agents.answer(turn.caller, { to: scenario === "power" ? "cli" : "worker", answer: "Continue", clientKey })
+        await Promise.all([answer("continue"), answer("continue-again")])
         return "Continued it."
       }
       return opensContinuation(turn.text) ? "Picked up where I was." : "Noted."
@@ -111,6 +119,7 @@ async function host(root: string, scenario: Scenario, first: boolean): Promise<v
     if (scenario === "loop" && !existsSync(finish)) return new Promise(() => {})
     return scenario === "power" ? "Carried on." : "Worked it out."
   }
+  const store = () => world.store
   world = new AgentsWorld({
     root,
     script,
@@ -119,10 +128,26 @@ async function host(root: string, scenario: Scenario, first: boolean): Promise<v
       write(heard)
       // A Fin's turn of the loop is cut as soon as its harness takes it, until its Apex decides.
       if (scenario === "loop" && heard.kind === "prompt" && heard.conversation !== state()?.apex && !existsSync(finish)) die("mid-turn of the Fin")
+      if (scenario === "raced" && heard.text.includes(SECOND_PART)) die("mid-turn of the Fin")
     },
   })
+  if (scenario === "raced" && !first) {
+    setInterval(() => {
+      if (existsSync(join(root, "git-reached"))) die("in its read of what moved")
+    }, 10)
+    return void (await new Promise(() => {}))
+  }
   if (first) {
     const apex = await world.apex(HARNESS, "full")
+    if (scenario === "raced") {
+      writeFileSync(statePath(root), JSON.stringify({ apex: apex.conversation } satisfies State))
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Work it out." }, harness: HARNESS, name: "worker", clientKey: "worker", cwd: repository(join(root, "checkout")) })
+      assert.ok(!("refused" in started), JSON.stringify(started))
+      await until("its brief's turn to end", () => world.agents.diagnostics().running === 0 && store().edges().all.some((edge) => store().reportsOf(edge.child, 0).length > 0))
+      await world.agents.send(apex.caller, { to: "worker", text: SECOND_PART, clientKey: "second" })
+      await new Promise((resolve) => setTimeout(resolve, RUN_MS))
+      return
+    }
     if (scenario === "power") {
       // A CLI its shell ran, followed by its process; then the Mac goes off, taking both.
       const shell = spawn("/bin/sh", ["-c", "sleep 60"], { detached: true, stdio: "ignore" })
@@ -141,11 +166,10 @@ async function host(root: string, scenario: Scenario, first: boolean): Promise<v
     await new Promise((resolve) => setTimeout(resolve, RUN_MS))
     return
   }
-  const store = world.store
-  const done = () => store.edges().all.length > 0 && store.edges().all.every((edge) => store.reportsOf(edge.child, 0).at(-1)?.status === "done") && store.undeliveredReports().length === 0
+  const done = () => store().edges().all.length > 0 && store().edges().all.every((edge) => store().reportsOf(edge.child, 0).at(-1)?.status === "done") && store().undeliveredReports().length === 0
   await until("the Fins to finish", done, RUN_MS - 10_000)
   await world.settle()
-  writeFileSync(join(root, "settled.json"), JSON.stringify({ reports: store.edges().all.flatMap((edge) => store.reportsOf(edge.child, 0).map((report) => ({ id: report.id, status: report.status, summary: report.summary }))) }))
+  writeFileSync(join(root, "settled.json"), JSON.stringify({ reports: store().edges().all.flatMap((edge) => store().reportsOf(edge.child, 0).map((report) => ({ id: report.id, status: report.status, summary: report.summary }))) }))
   await world.close()
 }
 
@@ -195,8 +219,10 @@ async function scenario(base: string, which: Scenario): Promise<void> {
   switch (which) {
     case "loop": {
       assert.equal(kills, 1 + RESTART_CHAIN, `its turn was continued ${RESTART_CHAIN} times, each cut too, and then not again`)
-      const continued = fin.filter((prompt) => opensContinuation(prompt.text))
+      // Cut at its brief each time, with nothing to say its harness had it: each goes as the brief again, never a bare Continue.
+      const continued = fin.filter((prompt) => prompt.text.includes(BRIEF_AGAIN))
       assert.equal(continued.length, RESTART_CHAIN + 1, "Mako's continuations, then the one its Apex asked for")
+      assert.equal(fin.filter((prompt) => opensContinuation(prompt.text)).length, 0, "and none of them bare")
       const asked = digests.find((prompt) => prompt.text.includes("cut short"))
       assert.ok(asked, "its Apex is asked once Mako stops continuing it")
       assert.match(asked.text, /Mako stopped without closing: a crash, a force quit, or this Mac shutting down or losing power/, "with what cut it")
@@ -220,6 +246,7 @@ async function scenario(base: string, which: Scenario): Promise<void> {
       const resumed = fin.find((prompt) => opensContinuation(prompt.text))
       assert.ok(resumed, "Continue resumed its session in Mako")
       assert.ok(resumed.text.startsWith(continueTurnPrompt("provider-exited", "mako")), "with the words of a process that stopped")
+      assert.equal(fin.filter((prompt) => opensContinuation(prompt.text)).length, 1, "once, though Continue was answered twice at once")
       assert.ok(resumed.text.includes(`${RESUMED_OPENS}a cut`), "beneath them, the account of a resume")
       assert.match(resumed.text, /Fix the header/, "naming what landed in its checkout meanwhile")
       assert.equal(settled.reports.at(-1)?.summary, "Carried on.", "and its turn there reports how it went")
@@ -227,6 +254,69 @@ async function scenario(base: string, which: Scenario): Promise<void> {
     }
   }
   console.log(`${which}: ok (${kills} ${kills === 1 ? "cut" : "cuts"})`)
+}
+
+/** The next host of a cut Fin, its `git` waiting for a word: what's done meanwhile crosses the read of what moved since the cut. */
+async function raced(base: string, how: "stop" | "person" | "crash"): Promise<void> {
+  const root = join(base, `raced-${how}`)
+  mkdirSync(root, { recursive: true })
+  const killed = await run([root, "raced", "first"])
+  assert.equal(killed.signal, "SIGKILL", `the first host is killed (${killed.code}): ${killed.stderr.slice(-800)}`)
+  const gate = join(root, "git-gate")
+  const reached = join(root, "git-reached")
+  const shim = join(root, "bin")
+  mkdirSync(shim)
+  const real = execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim()
+  writeFileSync(join(shim, "git"), `#!/bin/sh\n[ -e "${gate}" ] && touch "${reached}"\nwhile [ -e "${gate}" ]; do sleep 0.02; done\nexec "${real}" "$@"\n`, { mode: 0o755 })
+  writeFileSync(gate, "")
+  const path = process.env.PATH
+  process.env.PATH = `${shim}:${path}`
+  if (how === "crash") {
+    const again = await run([root, "raced", "next"])
+    assert.equal(again.signal, "SIGKILL", `the next host dies in its read (${again.code}): ${again.stderr.slice(-800)}`)
+    rmSync(gate)
+  }
+  const heard: Heard[] = []
+  const world = new AgentsWorld({ root, script: async () => "ok", catalog: fileCatalog(root), heard: (line) => void heard.push(line) })
+  try {
+    const apex = readState(root).apex
+    const told = () => heard.filter((line) => line.conversation !== apex)
+    if (how === "crash") {
+      await until("the third host to send the continuation", () => told().some((line) => opensContinuation(line.text)))
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      assert.equal(told().filter((line) => opensContinuation(line.text)).length, 1, "a continuation cut in its read goes on the next host, once")
+      assert.ok(told()[0]!.text.includes(`${RESUMED_OPENS}a cut`), "with the account of what moved")
+      console.log("raced (crash): ok")
+      return
+    }
+    await until("the next host to read what moved", () => existsSync(reached))
+    if (how === "stop") {
+      const stopped = await world.agents.stop(world.caller(apex), { child: "worker", reason: "enough" })
+      assert.ok("stopped" in stopped, JSON.stringify(stopped))
+    } else world.say(fin(world, apex), "The person's words.")
+    rmSync(gate)
+    if (how === "stop") {
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      assert.deepEqual(told().map((line) => line.text.slice(0, 50)), [], "a Fin stopped during the read hears nothing")
+    } else {
+      await until("the person's words to go", () => told().some((line) => line.text.includes("The person's words.")))
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      const after = told().slice(told().findIndex((line) => line.text.includes("The person's words.")) + 1)
+      assert.deepEqual(after.filter((line) => opensContinuation(line.text)).map((line) => line.text.slice(0, 50)), [], "no continuation follows the person's words")
+    }
+    console.log(`raced (${how}): ok`)
+  } finally {
+    process.env.PATH = path
+    rmSync(gate, { force: true })
+    await world.close()
+  }
+}
+
+/** The Fin's conversation in a world with one Fin. */
+function fin(world: AgentsWorld, apex: string): string {
+  const conversation = world.live.summaries().map((summary) => summary.session.id).find((id) => id !== apex)
+  assert.ok(conversation, "its Fin's conversation")
+  return conversation
 }
 
 /** Which cut turns nothing picks up: a quit's or a crash's, unless a continuation is scheduled, sent, or something waits behind it. */
@@ -281,6 +371,15 @@ async function main(): Promise<void> {
         console.error(`${which}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
       }
     }
+    if (!only.length || process.argv.includes("raced"))
+      for (const how of ["stop", "person", "crash"] as const) {
+        try {
+          await raced(base, how)
+        } catch (error) {
+          failed = true
+          console.error(`raced (${how}): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+        }
+      }
   } finally {
     if (!failed) rmSync(base, { recursive: true, force: true })
     else console.error(`stores kept in ${base}`)
@@ -290,7 +389,7 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[2] === "--host") {
-  const scenarioName = SCENARIOS.find((each) => each === process.argv[4])
+  const scenarioName = [...SCENARIOS, "raced" as const].find((each) => each === process.argv[4])
   if (!scenarioName) throw new Error(`No scenario ${process.argv[4]}`)
   await host(process.argv[3]!, scenarioName, process.argv[5] === "first")
 } else await main()

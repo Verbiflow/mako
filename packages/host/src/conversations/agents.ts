@@ -4,6 +4,7 @@ import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "
 import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { branchSince, checkoutSince } from "../base/checkout-since.js"
+import { cutAccount } from "./cut-account.js"
 import { finResumedText } from "../contracts/resume-account.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
@@ -95,7 +96,7 @@ import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
-import type { InterruptionReason, LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
+import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
@@ -157,6 +158,16 @@ interface ApexAsk {
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
 const READ_ENTRIES = 40
 const READ_CHARS = 8_000
+
+/**
+ * The Fin's brief a cut turn still has to carry: the brief cut short, or the brief sent again and cut short too, unless
+ * its harness said it had it. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's
+ * transcript (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
+ */
+function cutBrief(op: string | undefined, cut: LiveRequest): string | undefined {
+  const root = cut.continues?.brief ?? (op !== undefined && cut.id === namedUuid(`${op}\nbrief`) ? cut.id : undefined)
+  return cut.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
+}
 
 type Live = Pick<
   LiveConversations,
@@ -367,6 +378,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly awaiting = new Map<string, { conversation: string; request: string }>()
   /** Fins' conversations whose cut turn is looked at once Mako's own continuation would have been scheduled (`watchCut`). */
   private readonly cutChecks = new Map<string, NodeJS.Timeout>()
+  /** Followed runs' cut turns an answer is continuing now (`answerCut`). */
+  private readonly cutsAnswering = new Set<string>()
   /** The decision a blocked Fin's Apex was told of, by Fin: told once per question. */
   private readonly asked = new Map<string, string>()
   /** By Fin, the ask its Apex didn't answer in time, now the person's too, and why in the person's words. */
@@ -494,7 +507,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       const last = store.reportsOf(edge.child, 0).at(-1)
       const conversation = this.conversationOf(edge.child)
       // A Fin that finished is read in only when the last host left a message of it waiting, paused or running.
-      if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) void this.resumePaused(edge)
+      if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) this.resumePaused(edge)
       // Whatever the last host left of it, a cut turn nothing picks up reaches its Apex.
       if (conversation) this.watchCut(conversation)
     }
@@ -513,7 +526,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         if (!this.deps.live.leftUnsettled(conversation)) continue
         this.resumeWakes(conversation)
         // An Apex is a Fin of its own Fins' work: a crash's cut turn of one that isn't a Fin itself goes on as a Fin's does.
-        if (!edges.of(apex)) void this.continueCrashed(conversation, { apex })
+        if (!edges.of(apex)) this.continueCrashed(conversation, { apex })
       }
     }
     // The places Fins hold as this host takes over, the turns the last one cut short going on among them: each that lets
@@ -522,35 +535,22 @@ export class Agents implements AgentOperations, ConversationChildren {
     void this.drain()
   }
 
-  /** A turn a host that died cut short, continued as Mako's exit's is, under the loop guard, with the account of what moved since (`cutAccount`). */
-  private async continueCrashed(conversation: string, who: { op?: string; apex?: string }): Promise<void> {
+  /**
+   * A turn a host that died cut short, continued as Mako's exit's is, under the loop guard. It enters the queue here,
+   * before anything is awaited: what moved since the cut and what the transcript shows are read as it's sent
+   * (`LiveDispatch`), so a Stop or a newer message meets it in its place like any message.
+   */
+  private continueCrashed(conversation: string, who: { op?: string; apex?: string }): void {
     const snapshot = this.deps.live.snapshot(conversation)
     const crashed = snapshot && crashedChildTurn(snapshot.requests, this.now())
     if (!crashed) return
-    // A Fin's brief cut short, or the brief sent again and cut short too: unless its harness said it had it, it goes
-    // again, in the brief's own place ahead of what waits; whether as itself or as a Continue is decided as it's sent,
-    // by the harness's transcript (`LiveDispatch`). A bare Continue would leave a Fin that never had it with nothing to do.
-    const root = crashed.continues?.brief ?? (crashed.id === namedUuid(`${who.op}\nbrief`) ? crashed.id : undefined)
-    const brief = root && crashed.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
-    const note = brief ? undefined : await this.cutAccount(this.deps.live.session(conversation)?.cwd, crashed.interruption?.at ?? crashed.createdAt ?? this.now(), "host-crashed")
+    const brief = cutBrief(who.op, crashed)
     try {
-      this.deps.live.continueTurn(conversation, { requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, ...(note && { note }), ...(brief && { brief }), actor: { kind: "service", name: "auto-continue" } })
+      this.deps.live.continueTurn(conversation, { requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, ...(brief ? { brief } : { since: crashed.interruption?.at ?? crashed.createdAt ?? this.now() }), actor: { kind: "service", name: "auto-continue" } })
       hostLog("agents", "resumed", { ...who, request: crashed.id, crashed: true, ...(brief && { brief: "sent again" }) })
     } catch (error) {
       hostWarn("agents", "a turn a crash cut short waits for Continue turn", { ...who, request: crashed.id, error: errorMessage({ error }) })
     }
-  }
-
-  /**
-   * What a Fin or an Apex whose cut turn goes on reads beneath the
-   * continuation's words, as a stopped Fin's resume does (`finResumedText`):
-   * when and what cut it, what moved in its checkout at `cwd` since, and where
-   * its branch stands against the one it goes into.
-   */
-  private async cutAccount(cwd: string | undefined, at: number, reason: InterruptionReason): Promise<string | undefined> {
-    if (!cwd) return undefined
-    const [checkout, branches] = await Promise.all([checkoutSince(cwd, at), branchSince(cwd, at)])
-    return finResumedText({ how: "cut", at, reason: CUT_BY[reason], now: this.now(), checkout, branches })
   }
 
   /**
@@ -559,10 +559,10 @@ export class Agents implements AgentOperations, ConversationChildren {
    * Fin's are its Apex's, and nobody would press either. A quit's cut turn
    * the next host continues already (`LiveRestarts`).
    */
-  private async resumePaused(edge: ThreadParent): Promise<void> {
+  private resumePaused(edge: ThreadParent): void {
     const conversation = this.conversationOf(edge.child)
     if (!conversation || !this.deps.live.snapshot(conversation)) return
-    await this.continueCrashed(conversation, { op: edge.op })
+    this.continueCrashed(conversation, { op: edge.op })
     this.resumeMade(edge, conversation)
   }
 
@@ -573,8 +573,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      // A brief's recovery a crash stopped short of its handoff is Mako's, not the person's: it goes on as the brief would, in its place.
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || (request.actor?.kind !== "agent" && !request.continues?.brief)) continue
+      // A continuation a crash stopped short of its handoff is Mako's, not the person's: it goes on, in its place.
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || (request.actor?.kind !== "agent" && !request.continues?.auto)) continue
       const relaunched = !launched
       try {
         if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
@@ -594,7 +594,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** An exit or a crash pauses the digests waiting for an Apex with the person's messages; they're Mako's, so they go on. */
   private resumeWakes(conversation: string): void {
     for (const request of this.deps.live.snapshot(conversation)?.requests ?? []) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) continue
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || ((request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) && !request.continues?.auto)) continue
       try {
         this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         hostLog("agents", "resumed", { conversation, request: request.id, wake: true })
@@ -2054,7 +2054,6 @@ export class Agents implements AgentOperations, ConversationChildren {
   private watchCut(conversation: string): void {
     if (this.stopped || this.cutChecks.has(conversation)) return
     const last = this.deps.live.snapshot(conversation)?.requests.filter((request) => request.status !== "queued" && request.status !== "held" && request.status !== "canceled").at(-1)
-    hostLog("agents", "DEBUG watch", { conversation, last: last?.status ?? "none", reason: last?.interruption?.reason ?? "none", n: this.deps.live.snapshot(conversation)?.requests.map((r) => r.status).join(",") ?? "nosnap" })
     if ((last?.status !== "interrupted" && last?.status !== "uncertain") || !last.interruption || last.interruption.reason === "stopped" || last.interruption.reason === "steered") return
     const timer = setTimeout(() => {
       this.cutChecks.delete(conversation)
@@ -2070,7 +2069,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     const snapshot = this.deps.live.snapshot(conversation)
     if (!edge || edge.closedAt !== undefined || !snapshot) return
     const cut = strandedTurn(snapshot.requests)
-    hostLog("agents", "DEBUG check", { conversation, cut: cut?.id ?? "none", n: snapshot.requests.map((r) => `${r.status}:${r.interruption?.reason ?? ""}:${r.interruption?.autoContinue ? "auto" : ""}`).join(",") })
     if (cut) this.reportCut(edge, snapshot.requests, cut)
   }
 
@@ -2131,25 +2129,33 @@ export class Agents implements AgentOperations, ConversationChildren {
       return "refused" in sent ? sent : done(sent.delivery)
     }
     if (cut.startsWith("run:")) {
-      const run = edge.run
-      const path = run?.nativeId ? this.deps.catalog.nativePath({ harness: run.harness, nativeId: run.nativeId }) : undefined
-      const ref = path ? this.deps.catalog.ref(path) : undefined
-      // Since its session was last written, when it last worked: its end is only when a host found it gone.
-      const written = Date.parse(ref?.updatedAt ?? "")
-      const note = await this.cutAccount(ref?.cwd, Number.isFinite(written) ? written : run?.startedAt ?? run?.ended?.at ?? this.now(), "provider-exited")
-      // Its session resumes here (`takeOver`), the continuation its first message.
-      const sent = await this.deliver(edge, namedUuid(op), `${continueTurnPrompt("provider-exited", "mako")}${note ? `\n\n${note}` : ""}`, [], actor, "queue")
-      if ("refused" in sent) return sent
-      hostLog("agents", "cut turn continued", { op: edge.op, run: true, by: by.kind })
-      return done(sent.delivery)
+      // Two answers at once read as one: the first takes it, and what a Stop or the engine's end did meanwhile stands.
+      if (this.cutsAnswering.has(cut)) return { refused: "conflict", why: `${edge.name}'s cut turn is being continued.` }
+      this.cutsAnswering.add(cut)
+      try {
+        const run = edge.run
+        const path = run?.nativeId ? this.deps.catalog.nativePath({ harness: run.harness, nativeId: run.nativeId }) : undefined
+        const ref = path ? this.deps.catalog.ref(path) : undefined
+        // Since its session was last written, when it last worked: its end is only when a host found it gone.
+        const written = Date.parse(ref?.updatedAt ?? "")
+        const note = await cutAccount(ref?.cwd, Number.isFinite(written) ? written : run?.startedAt ?? run?.ended?.at ?? this.now(), "provider-exited", this.now())
+        if (this.stopped || this.store()?.edges().of(edge.child)?.closedAt !== undefined) return { refused: "conflict", why: `${edge.name} was stopped while its cut turn was answered.` }
+        // Its session resumes here (`takeOver`), the continuation its first message.
+        const sent = await this.deliver(edge, namedUuid(op), `${continueTurnPrompt("provider-exited", "mako")}${note ? `\n\n${note}` : ""}`, [], actor, "queue")
+        if ("refused" in sent) return sent
+        hostLog("agents", "cut turn continued", { op: edge.op, run: true, by: by.kind })
+        return done(sent.delivery)
+      } finally {
+        this.cutsAnswering.delete(cut)
+      }
     }
     const conversation = this.conversationOf(edge.child)
     const request = conversation ? this.deps.live.snapshot(conversation)?.requests.find((each) => each.id === cut) : undefined
     if (!conversation || !request?.interruption) return { refused: "conflict", why: `${edge.name}'s cut turn isn't in its conversation here anymore: agents_send gives it a message.` }
     if (!strandedTurn(this.deps.live.snapshot(conversation)!.requests)) return { refused: "conflict", why: `${edge.name}'s cut turn was already picked up.` }
-    const note = await this.cutAccount(this.deps.live.session(conversation)?.cwd, request.interruption.at, request.interruption.reason)
+    const brief = cutBrief(edge.op, request)
     try {
-      this.deps.live.continueTurn(conversation, { requestId: namedUuid(op), reason: request.interruption.reason, continues: cut, ...(note && { note }), actor: actor ?? { kind: "service", name: "auto-continue" } })
+      this.deps.live.continueTurn(conversation, { requestId: namedUuid(op), reason: request.interruption.reason, continues: cut, ...(brief ? { brief } : { since: request.interruption.at }), actor: actor ?? { kind: "service", name: "auto-continue" } })
     } catch (error) {
       return { refused: "unavailable", why: `${edge.name}'s turn couldn't be continued: ${errorMessage({ error })}` }
     }
