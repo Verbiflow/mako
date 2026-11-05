@@ -770,6 +770,50 @@ async function queueProjection(): Promise<void> {
 }
 
 /**
+ * An Apex behind a launch hears its place move the moment that launch's edge is written, not when the launch answers:
+ * A's next takes a place with its reply held, and B's waiting Fin, which was behind it, reads 0 ahead at once.
+ */
+async function edgeWriteMovesTheLine(): Promise<void> {
+  let limit = 1
+  let hold: (() => void) | undefined
+  let holdFor = ""
+  const w = new AgentsWorld({
+    root: join(root, "edge-moves-line"),
+    finLimit: () => limit,
+    replying: async (options) => {
+      if (options.conversationId === holdFor) await new Promise<void>((resolve) => (hold = resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  try {
+    const a = await w.apex("claude")
+    const b = await w.apex("codex")
+    const brief = { objective: "Hold" }
+    await w.agents.start(a.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => w.prompts.some((prompt) => prompt.text.includes("You're fin:first,")), "the first at work")
+    holdFor = namedUuid(`start:${w.store.journalPlacement(a.conversation)!.session}:next`)
+    await w.agents.start(a.caller, { brief, name: "next", queue: true, clientKey: "next", cwd: w.root })
+    await w.agents.start(b.caller, { brief, name: "behind", queue: true, clientKey: "behind", cwd: w.root })
+    const shown = () => w.live.snapshot(b.conversation)?.nativeAgents?.agents.find((entry) => entry.child?.name === "behind")?.state
+    await waitFor(() => JSON.stringify(shown()) === JSON.stringify({ kind: "waiting", reason: "Queued: 1 ahead, your limit of Fins at once is in use" }), "B to show its Fin behind A's")
+    limit = 2
+    w.agents.capacityChanged()
+    await waitFor(() => hold !== undefined && w.store.edges().all.some((edge) => edge.name === "next"), "next's edge written, its start not answered")
+    await waitFor(() => JSON.stringify(shown()) === JSON.stringify({ kind: "waiting", reason: "Queued: 0 ahead, your limit of Fins at once is in use" }), `B to hear its place move while next's start still answers: ${JSON.stringify(shown())}`, 2_000)
+    assert.ok(hold !== undefined, "next's reply was still held")
+    hold!()
+    await w.agents.stop(a.caller, { child: "all" })
+    await w.agents.stop(b.caller, { child: "all" })
+  } finally {
+    hold?.()
+    await w.close()
+  }
+}
+
+/**
  * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
  */
@@ -1541,6 +1585,7 @@ try {
   await followedStopStaleIdentity()
   await followedStopStuck()
   await queueProjection()
+  await edgeWriteMovesTheLine()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()

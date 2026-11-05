@@ -741,6 +741,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (edge) void this.end(edge, `its ${APEX_WORD} stopped it`)
   }
 
+  /** Its edge is its entry now, written as its start goes on: the row it was is out of the line, and every Apex behind it hears its place move at once. */
+  edgeWritten(): void {
+    this.queueRefresh()
+  }
+
   /** How many starts are under way, each holding its name, place and stop until it settles: none once all have. */
   startsUnderWay(): number {
     return this.starts.size
@@ -1450,8 +1455,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const edge = store.edges().byOp(op)
     if (!edge) return this.refuse(op, "unavailable", `Its Thread was made without its edge; it was not started as a ${FIN_WORD}.`)
-    // Its edge is its entry now: the row it was is out of the line, and every Apex behind it hears its place move.
-    this.queueRefresh()
     // Stopped while its edge was being written: it ends now, as a stop would have.
     if (start.cancelled) {
       await this.end(edge, `its ${APEX_WORD} stopped it before it started`)
