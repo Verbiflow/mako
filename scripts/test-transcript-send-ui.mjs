@@ -69,6 +69,19 @@ const WATCH = `(() => {
         if (box.height > 0 && box.top < view.bottom) boxes.push({ id: 'after the rows', box })
       }
       boxes.sort((left, right) => left.box.top - right.box.top)
+      // Where the sent words are painted (in a turn, its answer there, or waiting in the queue), and when the turns'
+      // geometry last moved: the send is over once its words are where they go and nothing has moved for a while.
+      const sent = window.__sent
+      if (sent) {
+        const turn = turns.find((each) => each.textContent.includes(sent.words))
+        if (turn) {
+          sent.inTurn += 1
+          // The person's own words carry no answer's mark.
+          if (turn.querySelector('[data-answer]')) sent.answered += 1
+        } else if (document.body.innerText.includes(sent.words)) sent.queued += 1
+        const shape = boxes.map(({ id, box }) => id + ':' + Math.round(box.top) + ':' + Math.round(box.height)).join('|')
+        if (shape !== sent.shape) { sent.shape = shape; sent.still = 0 } else sent.still += 1
+      }
       for (let index = 1; index < boxes.length; index += 1) {
         const above = boxes[index - 1], below = boxes[index]
         const by = above.box.bottom - below.box.top
@@ -105,10 +118,12 @@ async function check() {
   const results = []
   for (const surface of SURFACES)
     for (const idle of [true, false])
-      results.push(await sendOn(BrowserWindow, base, shots, { ...surface, path: `${surface.path}${idle ? "&idle=1" : ""}`, surface: `${surface.surface}${idle ? "" : " mid-turn"}` }))
+      results.push(await sendOn(BrowserWindow, base, shots, { ...surface, idle, path: `${surface.path}${idle ? "&idle=1" : ""}`, surface: `${surface.surface}${idle ? "" : " mid-turn"}` }))
   console.log(`SEND ${JSON.stringify(results)}`)
   const failed = results.filter((result) => result.overlaps.length)
   assert.deepEqual(results.filter((result) => result.room > 1).map((result) => ({ surface: result.surface, room: result.room })), [], "a long Thread opens at its end with no blank room below its last line")
+  // Each send was watched through: frames painted the sent words in a turn, or in the queue mid-turn.
+  assert.deepEqual(results.filter((result) => result.sent.inTurn === 0 && result.sent.queued === 0).map((result) => result.surface), [], "every send's words were painted where they go")
   assert.deepEqual(failed.map((result) => ({ surface: result.surface, first: result.overlaps.slice(0, 3) })), [], "no two rows of the transcript overlap in any frame of a send")
   app.exit(0)
 }
@@ -125,7 +140,9 @@ const SURFACES = [
   },
 ]
 
-async function sendOn(BrowserWindow, base, shots, { surface, path, width, height, mobile = false, composer, open }) {
+const WORDS = "Which of the queued ones goes next?"
+
+async function sendOn(BrowserWindow, base, shots, { surface, path, width, height, mobile = false, composer, open, idle }) {
   const window = new BrowserWindow({ width, height, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
   page.debugger.attach("1.3")
@@ -137,11 +154,12 @@ async function sendOn(BrowserWindow, base, shots, { surface, path, width, height
   const wait = (ms) => new Promise((done) => setTimeout(done, ms))
   const until = async (code, what = code) => {
     // Generous: a cold dev server bundles its dependencies and reloads the page first. Nothing here is timed.
-    const deadline = Date.now() + 120_000
+    const deadline = Date.now() + (process.env.MAKO_SEND_DEADLINE ? Number(process.env.MAKO_SEND_DEADLINE) : 120_000)
     while (!(await evaluate(code))) {
       if (Date.now() > deadline) {
         await writeFile(join(shots, `${surface}-timeout.png`), (await page.capturePage()).toPNG())
-        throw new Error(`${surface}: timed out waiting for ${what}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`)
+        const sent = await evaluate("window.__sent && (({ inTurn, answered, queued, still }) => ({ inTurn, answered, queued, still }))(window.__sent)").catch(() => undefined)
+        throw new Error(`${surface}: timed out waiting for ${what}${sent ? ` (sent ${JSON.stringify(sent)})` : ""}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`)
       }
       await wait(40)
     }
@@ -182,16 +200,18 @@ async function sendOn(BrowserWindow, base, shots, { surface, path, width, height
   const before = await evaluate("window.__overlaps.length")
   const turns = await evaluate("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length")
   await evaluate(`${composer}.focus(), true`)
-  await page.debugger.sendCommand("Input.insertText", { text: "Which of the queued ones goes next?" })
+  await evaluate("window.__sent = { words: 'Which of the queued ones goes next?', inTurn: 0, answered: 0, queued: 0, still: 0, shape: '' }, true")
+  await page.debugger.sendCommand("Input.insertText", { text: WORDS })
   // The phone's return key writes a new line; its send control sends, or steers mid-turn.
   if (!(await evaluate("(() => { const send = document.querySelector('[data-send-action=send],[data-send-action=steer]'); send?.click(); return Boolean(send) })()")))
     for (const type of ["keyDown", "keyUp"]) await page.debugger.sendCommand("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 })
-  // Mid-turn, a message the turn can't take yet waits in its queue above the composer.
-  await until("document.body.innerText.includes('Which of the queued ones goes next?')", "the sent message")
-  await wait(2_500)
+  // Between turns the message starts one and its answer lands below it; mid-turn the running turn takes it as a steer,
+  // or it waits in the queue above the composer. Either way the send is over when the painted turns hold still.
+  await until(`(() => { const sent = window.__sent; return (${idle ? "sent.answered > 0" : "sent.inTurn > 0 || sent.queued > 0"}) && sent.still >= 30 })()`, "the sent message where it goes, and the transcript still")
   await writeFile(join(shots, `${surface}-sent.png`), (await page.capturePage()).toPNG())
   const overlaps = (await evaluate("window.__overlaps")).slice(before)
   const frames = await evaluate("window.__frames")
+  const sent = await evaluate("(({ inTurn, answered, queued }) => ({ inTurn, answered, queued }))(window.__sent)")
   window.destroy()
-  return { surface, turns, frames, room, overlaps }
+  return { surface, turns, frames, room, sent, overlaps }
 }

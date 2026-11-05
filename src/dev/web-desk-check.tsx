@@ -6,7 +6,8 @@ import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { nativeStartedAt, personPromptedAt } from "@mako/host/contracts/worked-at"
 import { Toaster } from "@/components/ui/sonner"
 import { acp, acpStore } from "@/state/acp"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { getMako } from "@/lib/bridge"
+import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
 import { store } from "@/state/session"
 import { threadsStore } from "@/state/thread-store"
 import { accountListStore } from "@/web-client/account-list"
@@ -112,6 +113,10 @@ const busy = BUSY_SESSIONS.map((entry, index) => {
   })
 })
 
+// The Apex's host answering, as its owner's batches reach the browser: a message sent to it gets its turn.
+getMako().onEvent((event) => {
+  if (event.type === "live-batch" && event.batch.id === APEX_CONVERSATION) applyLiveBatch(event.batch)
+})
 const apex = row({ session: APEX_SESSION, thread: APEX_THREAD, threadTitle: APEX_TITLE, conversation: APEX_CONVERSATION, harness: "claude", title: APEX_TITLE, folder: APEX_CWD, createdAt: now, activityAt: now })
 
 threadsStore.set({ composerHarness: "claude", descriptors: fixtureHarnesses })
