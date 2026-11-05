@@ -4039,6 +4039,25 @@ turn or compaction ending. Codex and Claude retry dropped streams inside a
 turn without ending it; only their turn-end signals (`turn/completed`, the
 SDK `result`) settle, so a retry never triggers a continuation.
 
+One delivery queue. Every message into a conversation is an entry in its
+journal's request queue (`LiveRequest`), sent by `LiveDispatch` alone; the
+design and its steps are in the orchestration notes (`delivery-queue.md`).
+Step one: why a held message waits has one reading (`holdOf`, in
+`contracts/request-hold.ts`): `edit` (the person paused it to edit it),
+`sign-in`, `retry`, `until` (a usage limit's timed resume) or `paused` (a
+Stop, Mako's exit or a crash). What goes next has one rule (`nextInLine`,
+behind `nextQueued`): an edit, a sign-out's pause or a message about to go
+again keeps its place and holds what's behind it; anything else held lets
+later messages go, so after a Stop a new message goes while what the Stop
+paused waits for Resume, as its row says. A new message makes a message
+about to go again due now, so it goes first. Every release goes through
+`released`, and every held message's time through one timer, armed for the
+soonest by each commit that gives one a time (`LiveConversations.armWakes`),
+which replaced the 15 s held-wakes poll. The queue's order is the journal's:
+once a request moves from where it came (an interrupt, a Fin's resume), the
+journal keeps the order (`request_order`), so a restart or a crash reads it
+back as it was (`test:request-holds`, with a host killed by SIGKILL).
+
 A message its harness can't take for now waits and goes again by itself,
 never as a failure (`packages/host/src/contracts/delivery-retry.ts`). On
 2026-11-04 an Apex woken for its Fin's report showed "Could not reopen this

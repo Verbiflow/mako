@@ -3,6 +3,7 @@ import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
+import { holdDue, holdOf } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
@@ -798,7 +799,8 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
 export function wakeAt(requests: readonly LiveRequest[]): number | undefined {
   let soonest: number | undefined
   for (const request of requests) {
-    const at = request.status === "held" ? request.wake?.at ?? request.retry?.at : undefined
+    const hold = holdOf(request)
+    const at = hold && holdDue(hold)
     if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
   }
   return soonest

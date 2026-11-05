@@ -8,6 +8,7 @@ import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { nextInLine } from "../contracts/request-hold.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
@@ -26,14 +27,13 @@ import { turnStart, usageMark } from "./live-settlement.js"
 const TURN_IN_PROGRESS_RETRIES = 3
 
 /**
- * The message a conversation sends next once nothing holds it back, or undefined when none would go: a paused one
- * first in line pauses those behind it (a message being edited keeps its place), and after a failure only the newest
- * goes, since failure doesn't drain old queued work by itself.
+ * The message a conversation sends next once nothing holds it back, or undefined when none would go (`nextInLine`):
+ * a message being edited, waiting on a sign-in or about to go again keeps its place and holds those behind it; one a
+ * Stop or an exit paused lets later ones go. After a failure only the newest goes, since failure doesn't drain old
+ * queued work by itself.
  */
 export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">): LiveRequest | undefined {
-  const waiting = snapshot.requests.filter((request) => request.status === "queued" || request.status === "held")
-  const request = snapshot.session.status === "failed" ? waiting.at(-1) : waiting[0]
-  return request?.status === "queued" ? request : undefined
+  return nextInLine(snapshot.requests, snapshot.session.status === "failed")
 }
 
 type DispatchAccess = Pick<LiveAccess,

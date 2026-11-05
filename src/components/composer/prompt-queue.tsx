@@ -422,7 +422,9 @@ function QueueRow({
             ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
             : request.retry
               ? `Sends again by itself at ${clockText(request.retry.at)}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
-              : "Paused until you resume or edit this message"}
+              : request.editing
+                ? "Held while you edit it. Nothing behind it goes until you save or resume it."
+                : "Paused. Messages you send now go ahead of it; Resume sends it."}
         </p>
       ) : null}
       {target.kind === "live" && !editable && !editing && !request.status ? (
