@@ -6,11 +6,15 @@ import { ElementPickButton, ElementPickDialog } from "@/components/composer/elem
 import { installComposerNotices } from "@/desk/notices"
 import { elementPicks, elementPicksStore } from "@/state/element-picks"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
+import { SimulatorPanel } from "@/components/inspector/simulator-panel"
+import { simulatorSetupStore } from "@/state/simulator-setup"
+import { simulators, simulatorsRunnable, simulatorsStore } from "@/state/simulators"
 import {
   GitBranchIcon,
   MonitorIcon,
   FilesIcon,
   GitCompareIcon,
+  SmartphoneIcon,
   TerminalSquareIcon,
 } from "lucide-react"
 import { planFeedbackOf } from "@mako/sessions/harnesses"
@@ -80,6 +84,7 @@ export function installBuiltins(): () => void {
       minWidth: 360,
     }),
     registerSurface({ id: "agents", label: "Agents", icon: GitBranchIcon, render: AgentsPanel, order: 4, minWidth: 360 }),
+    installSimulatorSurface(),
     // Identity, through the same slots a plugin would use. It lives in the
     // rail's footer and only there: the titlebar carried the same avatar six
     // inches away from it, and one account needs one place to be.
@@ -148,6 +153,33 @@ export function installBuiltins(): () => void {
     ),
   ]
   return () => disposers.forEach((dispose) => dispose())
+}
+
+/** The simulator panel, offered only while a host here can run one: until then Settings › Simulators sets one up. */
+function installSimulatorSurface(): () => void {
+  let unregister: (() => void) | undefined
+  const sync = () => {
+    const runnable = simulatorsRunnable(simulatorsStore.get().listed)
+    if (runnable && !unregister) unregister = registerSurface({ id: "simulator", label: "Simulator", icon: SmartphoneIcon, render: SimulatorPanel, order: 5, minWidth: 360 })
+    else if (!runnable && unregister) {
+      unregister()
+      unregister = undefined
+    }
+  }
+  const stopListening = simulatorsStore.subscribe(sync)
+  let setup = simulatorSetupStore.get().setup
+  // The setup line changing (Xcode installed, the tools in) is when a host may have become able to run one.
+  const stopSetup = simulatorSetupStore.subscribe(() => {
+    if (simulatorSetupStore.get().setup === setup) return
+    setup = simulatorSetupStore.get().setup
+    void simulators.load()
+  })
+  void simulators.load()
+  return () => {
+    stopListening()
+    stopSetup()
+    unregister?.()
+  }
 }
 
 function fileSummary(call: ToolCall, note?: string) {

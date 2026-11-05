@@ -1,11 +1,11 @@
-import { execFile } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { createServer } from "node:http"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
-import { parseArgs, promisify } from "node:util"
+import { extname, join, resolve } from "node:path"
+import { parseArgs } from "node:util"
 import { z } from "zod"
-import { CASES, type MobileCase, type MobileForm, type MobileNeed, type PagePoint } from "./cases.ts"
+import { CASES, deviceLabel, type MobileCase, type MobileForm, type MobileNeed, type PagePoint } from "./cases.ts"
 import { caseVerdict, failsRun, gradeFrames, gradeReadings, judge, ReadingSchema, sampling, verdict, type Frame, type Judged, type Reading, type Sampling, type Verdict } from "./grade.ts"
 import { listenForReadings, startSampler, stopSampler, swipeInPage, takeReadings } from "./sampler.ts"
 
@@ -13,6 +13,7 @@ import { listenForReadings, startSampler, stopSampler, swipeInPage, takeReadings
  * Runs the mobile-behavior cases (`cases.ts`) on a target and grades each from the page's own state (`grade.ts`).
  *
  *   node scripts/mobile-behavior/run.ts [--target stand-in|simulator] [--forms phone,tablet] [--cases a,b] [--samples 3] [--out <folder>]
+ *     [--web <url>] [--data <folder>] [--record]
  *   node scripts/mobile-behavior/run.ts --list
  *
  * Node runs it as it is, not tsx: what runs in the page (`sampler.ts`) is sent as its source, and tsx's transform wraps
@@ -24,8 +25,15 @@ import { listenForReadings, startSampler, stopSampler, swipeInPage, takeReadings
  * result says so. Mako doesn't depend on
  * Playwright; give its package with `PLAYWRIGHT_CORE=<folder of playwright-core>`, its WebKit installed.
  *
- * `simulator` is Mobile Safari on an iOS Simulator, driven through Mako's simulator operations; it needs Xcode, and
- * until a host here can drive one it says why and exits 2.
+ * `simulator` is Mobile Safari on Mako's iPhone and iPad simulators, driven by the host the app runs (`simulator.ts`)
+ * over `--data` (its own tools and hub, never the app's): the fixture served to Safari from this Mac, swipes as real
+ * touches, the page read through WebKit's inspector. It installs the tools and makes the simulators if they're missing;
+ * when this Mac can't run one (no Xcode, its setup unfinished) it says why and exits 2. Its iOS keyboard is real, so
+ * the keyboard case runs; dictation and a signed-in Thread don't.
+ *
+ * `--web <url>` then opens a page of the real web app (`https://app.runmako.co`) on each form, a simulator only, and
+ * reports what its probe said there (`mako:reading`), its console's errors and a screenshot, ungraded. `--record`
+ * records each simulator's screen for the whole run into `--out`. `npm run mobile-behavior:simulator` is all of it.
  *
  * Each case runs `--samples` times on each form (3 by default), and its samples are judged together (`caseVerdict`):
  * one that throws is an error, recorded and left out of the grade, not the end of the run. It writes one row per
@@ -35,21 +43,33 @@ import { listenForReadings, startSampler, stopSampler, swipeInPage, takeReadings
 
 interface Target {
   label: string
+  /** What runs `form` here, named as it is, for the summary's lines. */
+  device(form: MobileForm): string
   /** What the target lacks, so cases that need it are listed as not run. */
   lacks: ReadonlySet<MobileNeed>
   open(form: MobileForm, turns: number): Promise<TargetPage>
+  /** `--web`: the page at `url` watched for `ms` on `form`, where the target runs real pages. */
+  visit?(form: MobileForm, url: string, ms: number): Promise<Visit>
   close(): Promise<void>
+}
+
+interface Visit {
+  device: string
+  readings: unknown[]
+  errors: string[]
+  shot?: string
 }
 
 interface TargetPage {
   stream(everyMs: number, perBatch: number): Promise<void>
   stopStream(): Promise<void>
   swipe(from: PagePoint, to: PagePoint, ms: number): Promise<void>
+  keyboard(shown: boolean): Promise<void>
   startSampling(): Promise<void>
   stopSampling(): Promise<Frame[]>
   readings(): Promise<Reading[]>
   /** What the page threw since it opened: a sample whose page threw is an error, not a grade. */
-  errors(): string[]
+  errors(): Promise<string[]>
   close(): Promise<void>
 }
 
@@ -97,8 +117,11 @@ const FORMS = {
 const READING_EVENT = "mako:reading"
 /** Where the stand-in serves the built fixture from: WebKit runs no module scripts from `file:`, and the web client needs a secure context (`crypto.randomUUID`), as on app.runmako.co. */
 const FIXTURE_ORIGIN = "https://fixture.mako.test"
-/** What `execFile` rejects with when the tool ran and failed. */
-const ToolFailure = z.object({ stderr: z.string() })
+/** What `stopSampler` returns, as the inspector hands it back: JSON, so each turn's entry is a pair. */
+const FramesSchema = z.array(z.object({ at: z.number(), fromEnd: z.number(), rows: z.array(z.tuple([z.string(), z.number()])) }))
+/** How long `--web` watches a page: long enough for a sign-in's token exchange to settle or storm. */
+const WEB_WATCH_MS = 15_000
+const CONTENT_TYPES = new Map([[".html", "text/html"], [".js", "text/javascript"], [".css", "text/css"], [".svg", "image/svg+xml"], [".woff2", "font/woff2"], [".json", "application/json"]])
 
 const { values } = parseArgs({
   options: {
@@ -108,6 +131,9 @@ const { values } = parseArgs({
     samples: { type: "string", default: "3" },
     list: { type: "boolean" },
     out: { type: "string" },
+    web: { type: "string" },
+    data: { type: "string" },
+    record: { type: "boolean", default: false },
   },
 })
 if (values.list) {
@@ -123,7 +149,7 @@ await mkdir(out, { recursive: true })
 
 const target = values.target === "simulator" ? await simulatorTarget() : await standInTarget()
 const lines: string[] = [`# Mobile behavior on ${target.label}`, ""]
-const results: Array<{ case: string; kind: MobileCase["kind"]; form: MobileForm; target: string; sample?: number; verdict: string; judged?: Judged[]; sampled?: Sampling; error?: string; notRun?: string; at: string }> = []
+const results: Array<{ case: string; kind: MobileCase["kind"]; form: MobileForm; target: string; device: string; sample?: number; verdict: string; judged?: Judged[]; sampled?: Sampling; error?: string; notRun?: string; at: string }> = []
 let failed = false
 try {
   for (const behavior of chosen)
@@ -131,8 +157,8 @@ try {
       if (!behavior.forms.includes(form)) continue
       const missing = behavior.needs?.filter((need) => target.lacks.has(need)) ?? []
       if (missing.length) {
-        results.push({ case: behavior.id, kind: behavior.kind, form, target: target.label, verdict: "not run", notRun: `needs ${missing.join(", ")}`, at: new Date().toISOString() })
-        lines.push(`- ${behavior.id} on ${FORMS[form].name}: not run, needs ${missing.join(", ")}`)
+        results.push({ case: behavior.id, kind: behavior.kind, form, target: target.label, device: target.device(form), verdict: "not run", notRun: `needs ${missing.join(", ")}`, at: new Date().toISOString() })
+        lines.push(`- ${behavior.id} on ${target.device(form)}: not run, needs ${missing.join(", ")}`)
         continue
       }
       const verdicts: (Verdict | "error")[] = []
@@ -143,20 +169,21 @@ try {
           const { judged, sampled } = await runCase(target, behavior, form)
           const outcome = verdict(behavior, judged, sampled)
           verdicts.push(outcome)
-          results.push({ case: behavior.id, kind: behavior.kind, form, target: target.label, sample, verdict: outcome, judged, sampled, at })
+          results.push({ case: behavior.id, kind: behavior.kind, form, target: target.label, device: target.device(form), sample, verdict: outcome, judged, sampled, at })
           const measured = judged.map((entry) => `${entry.metric} ${entry.value ?? "unmeasured"} of ${entry.budget}`).join(", ")
           said.push(`${outcome} (${measured}; ${sampled.frames} frames over ${(sampled.ms / 1000).toFixed(1)} s, turns moved ${sampled.travelPx} px, the end ${sampled.endGrewPx} px farther)`)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           verdicts.push("error")
-          results.push({ case: behavior.id, kind: behavior.kind, form, target: target.label, sample, verdict: "error", error: message, at })
+          results.push({ case: behavior.id, kind: behavior.kind, form, target: target.label, device: target.device(form), sample, verdict: "error", error: message, at })
           said.push(`error (${message})`)
         }
       }
       const outcome = caseVerdict(behavior, verdicts)
       if (failsRun(behavior, outcome)) failed = true
-      lines.push(`- ${behavior.id} on ${FORMS[form].name}: ${outcome}`, ...said.map((line, index) => `  - sample ${index + 1}: ${line}`))
+      lines.push(`- ${behavior.id} on ${target.device(form)}: ${outcome}`, ...said.map((line, index) => `  - sample ${index + 1}: ${line}`))
     }
+  if (values.web) await visitWeb(target, values.web)
 } finally {
   await target.close()
 }
@@ -182,6 +209,7 @@ async function runCase(on: Target, behavior: MobileCase, form: MobileForm): Prom
         await wait(step.forMs)
       } else if (step.do === "stop-stream") await page.stopStream()
       else if (step.do === "swipe") await page.swipe(step.from, step.to, step.ms)
+      else if (step.do === "keyboard") await page.keyboard(step.shown)
       else if (step.do === "wait") await wait(step.ms)
       else if (step.do === "sample") {
         if (step.on) await page.startSampling()
@@ -189,7 +217,7 @@ async function runCase(on: Target, behavior: MobileCase, form: MobileForm): Prom
       }
     }
     const readings = await page.readings()
-    const threw = page.errors()
+    const threw = await page.errors()
     if (threw.length) throw new Error(`the page threw: ${[...new Set(threw)].join("; ")}`)
     return { judged: judge(behavior, { ...gradeFrames(frames), ...gradeReadings(readings) }), sampled: sampling(frames) }
   } finally {
@@ -209,14 +237,12 @@ async function standInTarget(): Promise<Target> {
     console.error("The stand-in needs Playwright's WebKit: PLAYWRIGHT_CORE=<folder of playwright-core>, with `npx playwright-core install webkit` run once.")
     process.exit(2)
   }
-  const work = await mkdtemp(join(tmpdir(), "mako-mobile-fixture-"))
-  process.env.NODE_ENV = "development"
-  const { build } = await import("vite")
-  await build({ mode: "development", logLevel: "warn", base: "./", build: { outDir: work, emptyOutDir: true, minify: false, rollupOptions: { input: resolve("scripts/phone-scroll.html") } } })
+  const work = await buildFixture()
   const browser = await playwright.webkit.launch()
   return {
     label: `WebKit stand-in (Playwright WebKit ${browser.version()}): not iOS, swipes scrolled by script`,
     lacks: new Set<MobileNeed>(["keyboard", "microphone", "signed-in"]),
+    device: (form) => deviceLabel({ name: `WebKit at ${FORMS[form].name}'s size` }),
     async open(form, turns) {
       const size = FORMS[form]
       const context = await browser.newContext({ viewport: { width: size.width, height: size.height }, deviceScaleFactor: size.scale, isMobile: true, hasTouch: true, userAgent: size.userAgent })
@@ -232,9 +258,10 @@ async function standInTarget(): Promise<Target> {
         stream: (everyMs, perBatch) => page.evaluate(`window.scrollCheck.stream(${everyMs}, ${perBatch})`),
         stopStream: () => page.evaluate("window.scrollCheck.stop()"),
         swipe: (from, to, ms) => page.evaluate(swipeInPage, { live: ".web-live", dy: (to[1] - from[1]) * size.height, ms }),
+        keyboard: () => Promise.reject(new Error("The stand-in has no software keyboard.")),
         startSampling: () => page.evaluate(startSampler, ".web-live"),
         stopSampling: () => page.evaluate(stopSampler),
-        errors: () => errors,
+        errors: async () => errors,
         readings: async () => (await page.evaluate(takeReadings)).flatMap((said) => ReadingSchema.safeParse(JSON.parse(said)).data ?? []),
         close: () => context.close(),
       }
@@ -246,15 +273,137 @@ async function standInTarget(): Promise<Target> {
   }
 }
 
-/** Mobile Safari on a simulator: until a host here drives one, the reason it can't, from Xcode's own tools. */
+/** Mobile Safari on Mako's iPhone and iPad: the fixture served from this Mac, touched for real, read through the inspector. */
 async function simulatorTarget(): Promise<Target> {
-  const run = promisify(execFile)
-  const simctl = await run("/usr/bin/xcrun", ["simctl", "help"]).then(
-    () => undefined,
-    (error) => ToolFailure.safeParse(error).data?.stderr.trim() ?? String(error)
-  )
-  console.error(simctl ? `The simulator target needs Xcode, and this Mac has none: ${simctl}` : "Xcode is here; driving a simulator from this runner is built next, through Mako's simulator operations.")
-  process.exit(2)
+  const { tsImport } = await import("tsx/esm/api")
+  // SAFETY: `simulator.ts`'s module, which tsx loads as it is written.
+  const { localSimulators } = (await tsImport("./simulator.ts", import.meta.url)) as typeof import("./simulator.ts")
+  const local = await localSimulators(resolve(values.data ?? join(tmpdir(), "mako-mobile-behavior-simulators")), (line) => console.error(line))
+  if ("blocked" in local) {
+    console.error(`The simulator target can't run on this Mac: ${local.blocked}`)
+    process.exit(2)
+  }
+  const { host } = local
+  const of = (form: MobileForm) => {
+    const simulator = local.simulators.find((entry) => entry.form === form)
+    if (!simulator) throw new Error(`Mako has no ${form} simulator here.`)
+    return simulator
+  }
+  for (const form of forms) if (of(form).state !== "booted") await host.boot(of(form).id)
+  if (values.record) for (const form of forms) await host.record(of(form).id, "start")
+  const work = await buildFixture()
+  const fixture = createServer((request, response) => {
+    const path = join(work, new URL(request.url ?? "/", "http://fixture").pathname)
+    readFile(path).then(
+      (body) => response.writeHead(200, { "content-type": CONTENT_TYPES.get(extname(path)) ?? "application/octet-stream", "cache-control": "no-store" }).end(body),
+      () => response.writeHead(404).end()
+    )
+  })
+  // Loopback: a simulator shares this Mac's network, so Safari there reaches it and nothing else does.
+  await new Promise<void>((done) => fixture.listen(0, "127.0.0.1", done))
+  const origin = `http://127.0.0.1:${z.object({ port: z.number() }).parse(fixture.address()).port}`
+  const evaluate = (udid: string, expression: string) => host.evaluate(udid, expression)
+  const until = async (udid: string, expression: string, what: string, ms = 30_000) => {
+    const started = Date.now()
+    while (Date.now() - started < ms) {
+      if ((await evaluate(udid, expression).catch(() => false)) === true) return
+      await wait(250)
+    }
+    throw new Error(`Safari on ${udid} didn't ${what} within ${ms / 1000} s.`)
+  }
+  const readings = async (udid: string) => z.array(z.unknown()).parse(await evaluate(udid, "(window.__makoReadings ?? []).map((kept) => kept.reading)"))
+  const ConsoleSchema = z.array(z.object({ level: z.string(), text: z.string() }))
+  /** The console since `after`: what it logged, and the cursor to read on from. */
+  const logged = async (udid: string, after: number) => {
+    const read = await host.read(udid, "console", after)
+    return { entries: ConsoleSchema.parse(read.state), cursor: read.cursor ?? after }
+  }
+  const device = (form: MobileForm) => {
+    const simulator = of(form)
+    const type = local.types.get(simulator.id)
+    return deviceLabel({ name: simulator.name, runtime: simulator.runtime, ...(type && { type }) })
+  }
+  return {
+    label: `Mobile Safari on ${forms.map(device).join(" and ")}`,
+    lacks: new Set<MobileNeed>(["microphone", "signed-in"]),
+    device,
+    async open(form, turns) {
+      const simulator = of(form)
+      const url = `${origin}/scripts/phone-scroll.html?turns=${turns}&run=${Date.now()}`
+      const since = (await logged(simulator.id, 0).catch(() => ({ cursor: 0 }))).cursor
+      await host.act(simulator.id, { kind: "open-url", url })
+      await until(simulator.id, `location.href === ${JSON.stringify(url)} && document.querySelector(".web-live [data-exchange]") !== null`, "open the fixture")
+      await wait(300)
+      const viewport = z.object({ width: z.number(), height: z.number() }).parse(await evaluate(simulator.id, "({ width: innerWidth, height: innerHeight })"))
+      const screen = simulator.screen ?? { width: viewport.width, height: viewport.height }
+      // The page's fractions on the screen: across its width, and its height about the screen's middle, where
+      // Safari's bars leave the page; a case's swipes are vertical, so what they move is the page's own distance.
+      const at = (point: PagePoint) => ({ x: point[0] * screen.width, y: screen.height / 2 + (point[1] - 0.5) * viewport.height })
+      return {
+        stream: async (everyMs, perBatch) => void (await evaluate(simulator.id, `window.scrollCheck.stream(${everyMs}, ${perBatch})`)),
+        stopStream: async () => void (await evaluate(simulator.id, "window.scrollCheck.stop()")),
+        swipe: (from, to, ms) => host.act(simulator.id, { kind: "swipe", from: at(from), to: at(to), ms }),
+        keyboard: (shown) => host.act(simulator.id, { kind: "keyboard", shown }),
+        startSampling: async () => void (await evaluate(simulator.id, `(${startSampler.toString()})(".web-live")`)),
+        stopSampling: async () => FramesSchema.parse(await evaluate(simulator.id, `(${stopSampler.toString()})()`)),
+        readings: async () => (await readings(simulator.id)).flatMap((said) => ReadingSchema.safeParse(said).data ?? []),
+        errors: async () => (await logged(simulator.id, since)).entries.filter((entry) => entry.level === "exception").map((entry) => entry.text),
+        close: async () => undefined,
+      }
+    },
+    async visit(form, url, ms) {
+      const simulator = of(form)
+      const since = (await logged(simulator.id, 0).catch(() => ({ cursor: 0 }))).cursor
+      await host.act(simulator.id, { kind: "open-url", url })
+      await until(simulator.id, `location.href.startsWith(${JSON.stringify(new URL(url).origin)}) && document.readyState === "complete"`, `open ${url}`, 60_000)
+      await wait(ms)
+      const errors = (await logged(simulator.id, since)).entries.filter((entry) => entry.level === "error" || entry.level === "exception").map((entry) => entry.text)
+      const shot = await host.screenshot(simulator.id)
+      const kept = join(out, `web-${form}.png`)
+      await copyFile(shot.path, kept)
+      return { device: device(form), readings: await readings(simulator.id), errors, shot: kept }
+    },
+    async close() {
+      fixture.close()
+      if (values.record)
+        for (const form of forms) {
+          const recorded = await host.record(of(form).id, "stop").catch(() => ({ path: undefined }))
+          if (recorded.path) await copyFile(recorded.path, join(out, `recording-${form}.mp4`))
+        }
+      await local.close()
+      await rm(work, { recursive: true, force: true })
+    },
+  }
+}
+
+/** `--web`: what the real web app's page reports on each form, ungraded, with each kind of reading counted. */
+async function visitWeb(on: Target, url: string): Promise<void> {
+  lines.push("", `## ${url}`, "")
+  if (!on.visit) {
+    lines.push(`- not run: ${on.label} runs only the fixture.`)
+    return
+  }
+  for (const form of forms) {
+    const visit = await on.visit(form, url, WEB_WATCH_MS)
+    const named = new Map<string, number>()
+    for (const said of visit.readings) {
+      const name = z.object({ name: z.string() }).safeParse(said).data?.name ?? "unnamed"
+      named.set(name, (named.get(name) ?? 0) + 1)
+    }
+    const counted = [...named].map(([name, count]) => `${name} ×${count}`).join(", ") || "none"
+    lines.push(`- ${visit.device}, ${WEB_WATCH_MS / 1000} s: readings ${counted}; ${visit.errors.length} console errors${visit.shot ? `; ${visit.shot}` : ""}`)
+    for (const error of visit.errors.slice(0, 5)) lines.push(`  - ${error.split("\n")[0]}`)
+    await writeFile(join(out, `web-${form}.json`), JSON.stringify(visit, null, 2))
+  }
+}
+
+/** The phone's live Session fixture, built once from this checkout into a folder of its own. */
+async function buildFixture(): Promise<string> {
+  const work = await mkdtemp(join(tmpdir(), "mako-mobile-fixture-"))
+  process.env.NODE_ENV = "development"
+  const { build } = await import("vite")
+  await build({ mode: "development", logLevel: "warn", base: "./", build: { outDir: work, emptyOutDir: true, minify: false, rollupOptions: { input: resolve("scripts/phone-scroll.html") } } })
+  return work
 }
 
 function wait(ms: number): Promise<void> {

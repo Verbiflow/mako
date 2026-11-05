@@ -1205,6 +1205,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       invoke: async (channel, args) => ThreadMoveAnswerSchema.parse(decodeRuntimeValue(await methods.invoke(channel, args))),
       caller: () => ({ kind: "agent", session: threads.store?.journalPlacement(conversationId())?.session ?? "" }),
     }),
+    (server, conversationId) => control.simulatorTools.register(server, {
+      invoke: async (channel, args) => decodeRuntimeValue(await methods.invoke(channel, args)),
+      caller: () => {
+        const session = threads.store?.journalPlacement(conversationId())?.session
+        return session ? { kind: "agent", session } : undefined
+      },
+    }),
   ], (conversationId, event, body) => {
     const cwd = live.session(conversationId)?.cwd
     if (!cwd) return {}

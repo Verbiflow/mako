@@ -75,7 +75,7 @@ import type { MakoFootprint } from "./mako-footprint.js"
 import type { FileEventsService } from "./file-events-service.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
-import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult } from "./simulators.js"
+import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult, SimulatorsWatchInput, SimulatorsWatchResult } from "./simulators.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
@@ -521,6 +521,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     simulatorsOpen: (input: SimulatorsOpenInput) => invokeTrustedHost<SimulatorsOpenResult>("mako:simulators-open", { kind: "person" }, input),
     simulatorsAct: (input: SimulatorsActInput) => invokeTrustedHost<SimulatorsActResult>("mako:simulators-act", { kind: "person" }, input),
     simulatorsRelease: (input: SimulatorsReleaseInput) => invokeTrustedHost<SimulatorsReleaseResult>("mako:simulators-release", { kind: "person" }, input),
+    /** A viewer's next packets of a simulator's screen, as a base64 `ControlVideoBatch`; waits up to two seconds for one. */
+    simulatorsWatch: (input: SimulatorsWatchInput) => invokeTrustedHost<SimulatorsWatchResult>("mako:simulators-watch", { kind: "person" }, input),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
