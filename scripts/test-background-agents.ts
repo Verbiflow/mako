@@ -1029,6 +1029,28 @@ async function stopAllUnqueues(): Promise<void> {
   }
 }
 
+/**
+ * A queued start whose record this Mako can't read whole (an older Mako's) never goes quietly: its Apex is told it
+ * didn't start and why, and it's dropped once it heard; one that doesn't say whose it is goes with a warning.
+ */
+async function unreadableQueuedStarts(): Promise<void> {
+  const w = world("unreadable-queue", () => "ok")
+  try {
+    const apex = await w.apex("claude")
+    const placed = w.store.journalPlacement(apex.conversation)!
+    const lead = { session: placed.session, thread: placed.thread, conversation: apex.conversation }
+    w.store.queueSpawn({ op: `start:${placed.session}:old`, tree: placed.thread, at: Date.now(), record: JSON.stringify({ lead, input: { name: "old", brief: "a brief before briefs were objects" }, harness: "claude", slots: 6 }) })
+    w.store.queueSpawn({ op: "start:nobody:lost", tree: placed.thread, at: Date.now(), record: "{\"input\":" })
+    w.agents.resume()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "both unreadable starts to leave the queue")
+    await w.settle()
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.match(wake, /"old" \(Claude\) failed: It didn't start: Mako couldn't read what was queued for it/, `its Apex is told: ${wake}`)
+  } finally {
+    await w.close()
+  }
+}
+
 async function waitFor(check: () => boolean, what: string, ms = 8_000): Promise<void> {
   const deadline = Date.now() + ms
   while (!check()) {
@@ -1589,6 +1611,7 @@ try {
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()
+  await unreadableQueuedStarts()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()
