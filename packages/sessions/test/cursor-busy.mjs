@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite"
 import { Worker } from "node:worker_threads"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { READ_BUSY_TIMEOUT_MS } from "../dist/providers/sqlite-busy.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
 const nativeStores = new NativeStores(false)
@@ -35,23 +36,37 @@ try {
   catalog.onEvent((event) => events.push(event))
   assert.deepEqual((await catalog.scan()).map((ref) => ref.title), ["Before"])
 
-  // A lock released within the busy timeout is waited out.
-  const brief = new Worker(
-    `const { DatabaseSync } = require("node:sqlite")
-    const { parentPort, workerData } = require("node:worker_threads")
-    const db = new DatabaseSync(workerData.path)
-    db.exec("PRAGMA locking_mode=EXCLUSIVE")
-    db.prepare("UPDATE meta SET value = ? WHERE key = '0'").run(workerData.value)
-    parentPort.postMessage("locked")
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30)
-    db.close()`,
-    { eval: true, workerData: { path, value: meta("Brief") } }
-  )
-  const exited = new Promise((resolve) => brief.once("exit", resolve))
-  await new Promise((resolve) => brief.once("message", resolve))
-  const [briefFile] = await provider.discover()
-  assert.equal((await provider.peek(briefFile)).title, "Brief", "a brief lock is waited out")
-  await exited
+  // A lock released within the busy timeout is waited out. The writer holds it 30 ms, as long as the runner gives its
+  // thread the CPU back: one held past the timeout (a thread kept off the CPU) is a held lock, which the next case
+  // covers, so it's staged again; a peek that fails though the lock went within the timeout fails here.
+  const now = () => performance.timeOrigin + performance.now()
+  const briefly = async () => {
+    const brief = new Worker(
+      `const { DatabaseSync } = require("node:sqlite")
+      const { parentPort, workerData } = require("node:worker_threads")
+      const db = new DatabaseSync(workerData.path)
+      db.exec("PRAGMA locking_mode=EXCLUSIVE")
+      db.prepare("UPDATE meta SET value = ? WHERE key = '0'").run(workerData.value)
+      parentPort.postMessage("locked")
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30)
+      db.close()
+      parentPort.postMessage(performance.timeOrigin + performance.now())`,
+      { eval: true, workerData: { path, value: meta("Brief") } }
+    )
+    const released = new Promise((resolve) => brief.on("message", (message) => message !== "locked" && resolve(message)))
+    const exited = new Promise((resolve) => brief.once("exit", resolve))
+    await new Promise((resolve) => brief.once("message", resolve))
+    const [briefFile] = await provider.discover()
+    const asked = now()
+    const peeked = await provider.peek(briefFile).then((ref) => ({ title: ref.title }), (error) => ({ error }))
+    const heldPast = (await released) - asked
+    await exited
+    return { ...peeked, heldPast }
+  }
+  let staged = await briefly()
+  for (let tries = 1; staged.error && staged.heldPast >= READ_BUSY_TIMEOUT_MS && tries < 10; tries++) staged = await briefly()
+  if (staged.error) throw new Error(`a lock released ${Math.round(staged.heldPast)} ms after the peek began wasn't waited out`, { cause: staged.error })
+  assert.equal(staged.title, "Brief", "a brief lock is waited out")
   await catalog.scan({ emitChanges: true })
   events.length = 0
 
