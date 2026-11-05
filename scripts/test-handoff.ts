@@ -21,12 +21,15 @@ import { AgentsWorld, HARNESSES, type Heard, type Script } from "./lib/agents-wo
  *   on (`BRIEF_AGAIN`).
  * - `heard`: the harness took it and its transcript shows it: the next host continues the Fin's turn.
  * - `twice`: as `submitted`, and the next host dies the same way sending the brief again: the third sends it again too.
+ * - `reading`: as `submitted`, and the next host dies reading the transcript, its recovery admitted and proven unsent:
+ *   the third host sends that recovery by itself, framed, in its place.
+ * - `stopped-reading`: as `reading`, with the Fin stopped as the read began: the third host sends nothing.
  * - `stopped`: as `submitted`, and its Apex stops the Fin while the next host reads the transcript: nothing goes.
  * - `overtaken`: as `submitted`, and the person writes to the Fin while the next host reads the transcript: the
  *   brief goes first, in its own place, and then the person's words.
  * In none does a Fin that never had its brief get only "Continue where you left off".
  */
-const POINTS = ["unsaved", "submitted", "heard", "twice", "stopped", "overtaken"] as const
+const POINTS = ["unsaved", "submitted", "heard", "twice", "reading", "stopped-reading", "stopped", "overtaken"] as const
 type Point = (typeof POINTS)[number]
 const BRIEF = "You're fin:worker"
 const CONTINUE = "Continue where you left off"
@@ -64,7 +67,16 @@ async function host(dir: string, harness: string, point: Point, again: boolean):
     writeFileSync(join(dir, "refused"), JSON.stringify(line.fields ?? {}))
     process.kill(process.pid, "SIGKILL")
   })
-  const world = new AgentsWorld({ root: dir, script, heard, transcripts: true })
+  const dying = again && (point === "reading" || point === "stopped-reading")
+  const world: AgentsWorld = new AgentsWorld({
+    root: dir, script, heard, transcripts: true,
+    reading: async () => {
+      if (!dying) return
+      if (point === "stopped-reading") await world.agents.stop(world.caller(readFileSync(join(dir, "apex"), "utf8")), { child: "worker", reason: "enough" })
+      writeFileSync(join(dir, "read"), "")
+      process.kill(process.pid, "SIGKILL")
+    },
+  })
   if (again) return void (await new Promise(() => {}))
   const apex = await world.apex("cursor", "full")
   writeFileSync(join(dir, "apex"), apex.conversation)
@@ -94,11 +106,20 @@ async function check(dir: string, harness: string, point: Point): Promise<void> 
   const had = before.filter((line) => line.conversation === fin && line.text.includes(BRIEF)).length
   assert.equal(had, point === "heard" ? 1 : 0, `${label}: what reached the harness before the kill`)
   if (point === "unsaved") assert.equal(JSON.parse(readFileSync(join(dir, "refused"), "utf8")).why, "unsaved")
+  if (point === "reading" || point === "stopped-reading") assert.ok(existsSync(join(dir, "read")), `${label}: the second host died in its read`)
   let read: (() => void) | undefined
   const gated = point === "stopped" || point === "overtaken"
   const world = new AgentsWorld({ root: dir, script, transcripts: true, reading: () => (gated && !read ? new Promise<void>((resolve) => { read = resolve }) : undefined) })
   try {
     const told = () => world.prompts.filter((prompt) => prompt.conversation === fin)
+    if (point === "stopped-reading") {
+      await pause(500)
+      world.live.wakeDue(Date.now() + 11 * 60_000)
+      await pause(300)
+      assert.deepEqual(told().map((prompt) => prompt.text.slice(0, 40)), [], `${label}: the Stop's mark on the recovery outlives the crash`)
+      assert.equal(world.live.snapshot(fin)?.requests.find((request) => request.continues?.brief)?.pause, "stop", label)
+      return
+    }
     if (gated) {
       await until(`${label}: the transcript read`, () => read !== undefined)
       if (point === "stopped") {
@@ -150,7 +171,7 @@ async function main(): Promise<void> {
         try {
           const killed = await run(dir, harness, point)
           assert.equal(killed.signal, "SIGKILL", `${point} on ${harness}: ${killed.stderr.slice(-800)}`)
-          if (point === "twice") {
+          if (point === "twice" || point === "reading" || point === "stopped-reading") {
             const again = await run(dir, harness, point, true)
             assert.equal(again.signal, "SIGKILL", `${point} on ${harness}, the second host: ${again.stderr.slice(-800)}`)
           }

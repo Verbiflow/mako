@@ -499,14 +499,15 @@ export class Agents implements AgentOperations, ConversationChildren {
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || request.actor?.kind !== "agent") continue
+      // A brief's recovery a crash stopped short of its handoff is Mako's, not the person's: it goes on as the brief would, in its place.
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || (request.actor?.kind !== "agent" && !request.continues?.brief)) continue
       const relaunched = !launched
       try {
         if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         else {
           // Its harness never started: the exit cut its launch. It starts now, the brief its first message, and the rest wait behind it.
           this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "remove" } })
-          this.deps.live.transfer(conversation, { id: namedUuid(`relaunch:${request.id}`), provider: snapshot.session.harness, text: request.text, attachments: request.attachments, ...(request.tuning && { tuning: request.tuning }), ...(binding?.modeId && { modeId: binding.modeId }) }, request.actor)
+          this.deps.live.transfer(conversation, { id: namedUuid(`relaunch:${request.id}`), provider: snapshot.session.harness, text: request.text, attachments: request.attachments, ...(request.tuning && { tuning: request.tuning }), ...(binding?.modeId && { modeId: binding.modeId }) }, request.actor, request.continues)
           launched = true
         }
         hostLog("agents", "resumed", { op: edge.op, request: request.id, relaunched })
