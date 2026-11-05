@@ -7,7 +7,7 @@ import { useState, type ComponentProps, type ReactNode } from "react"
 /* ------------------------------------------------------------------ */
 
 const base =
-  "pressable no-drag inline-flex shrink-0 select-none items-center justify-center gap-1.5" +
+  "pressable no-drag inline-flex shrink-0 select-none items-center justify-center gap-1.5 " +
   "text-ui font-medium whitespace-nowrap " +
   "[transition:transform_var(--duration-press)_var(--ease-out),background-color_120ms_ease,color_120ms_ease,opacity_120ms_ease] " +
   "disabled:pointer-events-none disabled:opacity-40 " +

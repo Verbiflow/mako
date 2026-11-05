@@ -132,8 +132,8 @@ export function HarnessAccounts({
  * rows so a hovered row's fill cannot cover the edge.
  */
 const LIST =
-  "relative overflow-hidden bg-shell/55 divide-y divide-hairline" +
-  "after:pointer-events-none after:absolute after:inset-0" +
+  "relative overflow-hidden bg-shell/55 divide-y divide-hairline " +
+  "after:pointer-events-none after:absolute after:inset-0 " +
   "after:[box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
 
 /**

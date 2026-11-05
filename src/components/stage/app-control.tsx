@@ -67,7 +67,7 @@ type Ready = Extract<ThreadAppView, { kind: "ready" }>
 type Asleep = Extract<ThreadAppView, { kind: "asleep" }>
 
 const trigger =
-  "pressable flex h-6 shrink-0 items-center overflow-hidden px-2 text-label font-medium whitespace-nowrap" +
+  "pressable flex h-6 shrink-0 items-center overflow-hidden px-2 text-label font-medium whitespace-nowrap " +
   "[transition:transform_var(--duration-press)_var(--ease-out),width_220ms_var(--ease-out),background-color_120ms_ease,color_120ms_ease] " +
   "hover:bg-fill-hover data-[state=open]:bg-fill-hover"
 

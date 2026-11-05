@@ -149,6 +149,16 @@ export default defineConfig([
             "Every corner is square (docs/design.md): the radius tokens are 0, so a radius class draws nothing. Leave it out; only what means a dot is rounded-full.",
         },
         {
+          selector: "BinaryExpression[operator='+'][left.type='Literal'][left.value=/\\S$/][right.type='Literal'][right.value=/^\\S/]",
+          message:
+            "Two strings joined with no space between them: a class list split over lines reads as one class there ('gap-1.5text-ui'). End the first with a space.",
+        },
+        {
+          selector: "BinaryExpression[operator='+'][left.type='BinaryExpression'][left.right.type='Literal'][left.right.value=/\\S$/][right.type='Literal'][right.value=/^\\S/]",
+          message:
+            "Two strings joined with no space between them: a class list split over lines reads as one class there ('gap-1.5text-ui'). End the first with a space.",
+        },
+        {
           selector: "Literal[value=/(?:^|[\\s:])(?:bg|text|border|ring|fill|stroke|from|to|via|shadow|outline|decoration|caret|accent)-\\[(?:#|rgb|hsl|oklch|oklab)/]",
           message:
             "Colour comes from the tokens (docs/design.md): no literal colour in a class; use a token, or color-mix of tokens.",
