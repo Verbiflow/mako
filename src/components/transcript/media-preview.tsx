@@ -171,7 +171,7 @@ export function MediaUnavailable({
       {onRetry ? (
         <button
           type="button"
-          className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground"
+          className="pressable grid size-6 shrink-0 place-items-center text-faint hover:bg-fill-hover hover:text-foreground"
           aria-label={`Retry preview of ${name}`}
           title="Retry"
           onClick={onRetry}
@@ -182,7 +182,7 @@ export function MediaUnavailable({
       {onOpen ? (
         <button
           type="button"
-          className="pressable shrink-0 rounded-md px-2 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+          className="pressable shrink-0 px-2 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
           onClick={onOpen}
         >
           Open

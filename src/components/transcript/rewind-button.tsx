@@ -101,7 +101,7 @@ export function RewindButton({
               ? "Why this can't be rewound"
               : "The workspace checkpoint is still being saved"
         }
-        className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground disabled:opacity-40 aria-disabled:opacity-40 aria-disabled:hover:opacity-70"
+        className="pressable flex items-center gap-1 px-1 hover:text-foreground disabled:opacity-40 aria-disabled:opacity-40 aria-disabled:hover:opacity-70"
         onClick={() => {
           setOpen(true)
           if (!refused) void load()
@@ -174,7 +174,7 @@ export function RewindButton({
               </p>
               <OthersWarning preview={state.preview} thread={thread} />
               {!!state.preview.changedFiles.length && (
-                <ul className="text-code max-h-48 overflow-auto rounded border border-border p-3 font-mono">
+                <ul className="text-code max-h-48 overflow-auto border border-border p-3 font-mono">
                   {state.preview.changedFiles.map((path) => (
                     <li key={path} className="flex items-baseline gap-3">
                       <span className="min-w-0 flex-1 break-all">{path}</span>
@@ -211,7 +211,7 @@ export function RewindButton({
             <button
               type="button"
               disabled={busy}
-              className="pressable rounded px-3 py-1.5 hover:bg-foreground/5"
+              className="pressable px-3 py-1.5 hover:bg-foreground/5"
               onClick={() => setOpen(false)}
             >
               {refused ? "Close" : "Cancel"}
@@ -219,7 +219,7 @@ export function RewindButton({
             {!refused && <button
               type="button"
               disabled={state.kind !== "ready" || busy}
-              className="pressable rounded bg-foreground px-3 py-1.5 text-background disabled:opacity-40"
+              className="pressable bg-foreground px-3 py-1.5 text-background disabled:opacity-40"
               onClick={() => void restore()}
             >
               {busy ? "Restoring…" : "Restore files and rewind"}

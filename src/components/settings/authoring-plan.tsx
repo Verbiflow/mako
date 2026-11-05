@@ -17,7 +17,7 @@ const EFFECT = {
 export function PlanPanel({ plan }: { plan: AuthoringPlan }) {
   const busy = useAuthoring((state) => state.busy)
   return (
-    <div className="mt-2 rounded-md bg-background ring-1 ring-hairline" role="group" aria-label="Review the change">
+    <div className="mt-2 bg-background ring-1 ring-hairline" role="group" aria-label="Review the change">
       <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-2.5 py-2">
         <span className="min-w-0 flex-1 text-ui">{plan.summary}</span>
         <Chip>{AUTHORING_SCOPES[plan.scope]}</Chip>

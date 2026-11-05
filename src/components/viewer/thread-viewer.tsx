@@ -128,7 +128,7 @@ function RefreshFailedLine({ opening, error }: { opening: ThreadRef; error: stri
       <button
         type="button"
         onClick={() => void threads.view(opening)}
-        className="pressable rounded-sm text-muted-foreground transition-colors duration-100 hover:text-foreground"
+        className="pressable text-muted-foreground transition-colors duration-100 hover:text-foreground"
       >
         Retry
       </button>
@@ -285,7 +285,7 @@ function ConversationSkeleton() {
     <div aria-hidden className="skeleton-transcript skeleton-rows mx-auto flex h-full w-full max-w-content flex-col justify-end gap-7 overflow-hidden px-6 py-6">
       {TRANSCRIPT_SKETCH.flatMap((turn, index) => [
         <div key={`prompt-${index}`} className="flex justify-end">
-          <div className="flex flex-col items-end gap-3 rounded-xl rounded-br-md bg-raised px-3.5 py-3.5">
+          <div className="flex flex-col items-end gap-3 bg-raised px-3.5 py-3.5">
             {turn.prompt.map((width) => (
               <Skeleton key={width} className={`h-2 ${width}`} />
             ))}

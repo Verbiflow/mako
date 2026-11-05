@@ -88,6 +88,8 @@ jobs:
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
+      # Mako's note goes whole once per process, then only what changed.
+      - run: npm run test:control-cadence
       # A conversation's batches read alike in the whole and the compact live form, each window served the one it reads.
       - run: npm run test:live-form
       # Messages from the Mac, a phone and another Mac at once, with lost replies, cut links and restarts: each lands once.

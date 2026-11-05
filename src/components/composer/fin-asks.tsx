@@ -138,7 +138,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               data-fin-answer="allow"
               disabled={sending}
               onClick={() => send({ allow: true })}
-              className="pressable flex items-center gap-1.5 rounded-md border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
+              className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
             >
               <CheckIcon className="size-3" />
               Allow once
@@ -148,7 +148,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               data-fin-answer="refuse"
               disabled={sending}
               onClick={() => send({ allow: false })}
-              className="pressable flex items-center gap-1.5 rounded-md border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50"
+              className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50"
             >
               <XIcon className="size-3" />
               Refuse
@@ -167,7 +167,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
                 disabled={sending}
                 onClick={() => send({ option: index })}
                 className={cn(
-                  "pressable flex items-center gap-1.5 rounded-md border px-2 py-1 text-label transition-colors disabled:opacity-50",
+                  "pressable flex items-center gap-1.5 border px-2 py-1 text-label transition-colors disabled:opacity-50",
                   recommended
                     ? "border-hairline bg-foreground text-background hover:opacity-90"
                     : "border-hairline text-foreground hover:bg-fill-hover"
@@ -197,7 +197,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               placeholder={
                 options.length ? "Or answer in your own words" : "Your answer"
               }
-              className="h-7 w-full rounded-md border border-hairline bg-transparent px-2 text-label text-foreground placeholder:text-faint focus:border-foreground/30 focus:outline-none"
+              className="h-7 w-full border border-hairline bg-transparent px-2 text-label text-foreground placeholder:text-faint focus:border-foreground/30 focus:outline-none"
             />
           </form>
         )}

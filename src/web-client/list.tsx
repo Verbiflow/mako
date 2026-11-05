@@ -277,10 +277,10 @@ function EmptyList({ answered, onNew }: { answered: boolean; onNew: () => void }
       <div className="skeleton-rows flex flex-col gap-1 px-4 pt-5" aria-hidden>
         {[0.62, 0.48, 0.7, 0.4].map((width) => (
           <div key={width} className="flex items-center gap-3 py-2.5">
-            <span className="skeleton size-[18px] rounded-md" />
+            <span className="skeleton size-[18px]" />
             <span className="flex flex-1 flex-col gap-1.5">
-              <span className="skeleton h-3.5 rounded" style={{ width: `${width * 100}%` }} />
-              <span className="skeleton h-3 w-1/3 rounded" />
+              <span className="skeleton h-3.5" style={{ width: `${width * 100}%` }} />
+              <span className="skeleton h-3 w-1/3" />
             </span>
           </div>
         ))}

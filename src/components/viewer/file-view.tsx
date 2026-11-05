@@ -316,7 +316,7 @@ function MediaPreview({ file }: { file: FileContents }) {
           src={viewerFileUrl(file.previewUrl)}
           alt={file.path}
           draggable={false}
-          className="max-h-full max-w-full rounded-md object-contain shadow-[var(--elevation-card)]"
+          className="max-h-full max-w-full object-contain shadow-[var(--elevation-card)]"
         />
       </div>
     )
@@ -343,7 +343,7 @@ function MediaPreview({ file }: { file: FileContents }) {
           url={viewerFileUrl(file.previewUrl)}
           poster={file.posterUrl && viewerFileUrl(file.posterUrl)}
           name={file.path}
-          className="max-h-full max-w-full rounded-md"
+          className="max-h-full max-w-full"
         />
       </div>
     )
@@ -355,14 +355,14 @@ function MediaPreview({ file }: { file: FileContents }) {
           src={file.thumbnailUrl}
           alt={`Preview of ${file.path}`}
           draggable={false}
-          className="max-w-full rounded-md object-contain shadow-[var(--elevation-card)]"
+          className="max-w-full object-contain shadow-[var(--elevation-card)]"
         />
       </div>
     )
   }
   return (
     <div className="flex min-h-56 flex-col items-center justify-center gap-2 p-6 text-center">
-      <span className="flex size-10 items-center justify-center rounded-lg bg-raised text-faint ring-1 ring-hairline ring-inset">
+      <span className="flex size-10 items-center justify-center bg-raised text-faint ring-1 ring-hairline ring-inset">
         <FileIcon className="size-4" />
       </span>
       <p className="text-ui font-medium text-muted-foreground">

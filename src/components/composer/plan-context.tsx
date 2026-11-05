@@ -23,13 +23,13 @@ export function PlanContextChips({
       {plans.map((plan, index) => (
         <div
           key={`${plan.id}:${index}`}
-          className="flex max-w-full min-w-0 items-center rounded-md border border-hairline text-label text-faint"
+          className="flex max-w-full min-w-0 items-center border border-hairline text-label text-faint"
         >
           <Popover>
             <PopoverTrigger asChild>
               <button
                 type="button"
-                className="pressable flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 hover:bg-fill-hover hover:text-foreground"
+                className="pressable flex min-w-0 items-center gap-1.5 px-2 py-1 hover:bg-fill-hover hover:text-foreground"
               >
                 <FileTextIcon className="size-3 shrink-0" />
                 <span className="truncate">
@@ -55,7 +55,7 @@ export function PlanContextChips({
             <button
               type="button"
               aria-label={`Remove plan: ${proposedPlanTitle(plan.text)}`}
-              className="pressable shrink-0 rounded-md p-1 hover:bg-fill-hover hover:text-foreground"
+              className="pressable shrink-0 p-1 hover:bg-fill-hover hover:text-foreground"
               onClick={() => onRemove(plan)}
             >
               <XIcon className="size-3" />

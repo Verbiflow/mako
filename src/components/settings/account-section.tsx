@@ -59,7 +59,7 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
   const notice = state.status === "signed-out" ? state.notice : undefined
   const error = failure && failure.action !== "devices" ? failure.message : undefined
   return (
-    <div className="flex flex-col items-center rounded-2xl border border-hairline bg-raised/40 px-8 pt-10 pb-8 text-center">
+    <div className="flex flex-col items-center border border-hairline bg-raised/40 px-8 pt-10 pb-8 text-center">
       <ThisMacToMako state={waiting ? "waiting" : notice || error || state.status === "unavailable" ? "broken" : "idle"} />
       <h3 className="mt-7 text-title font-medium">
         {state.status === "unavailable"
@@ -173,7 +173,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
   const invited = account.entitlements.includes("cloud")
   return (
     <>
-      <div className="flex flex-col gap-4 rounded-2xl border border-hairline bg-raised/40 p-5">
+      <div className="flex flex-col gap-4 border border-hairline bg-raised/40 p-5">
         <div className="flex items-center gap-4">
           <Avatar
             src={identity.kind === "mako" ? identity.avatar : (account.image ?? undefined)}
@@ -393,7 +393,7 @@ function CloudSignInRowView({ row }: { row: CloudSignInRow }) {
   const view = row.rotates ? rotatingView(row, name) : keyView(row)
   return (
     <ListCardRow className="flex animate-enter items-center gap-3">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised [&_svg]:size-4">
+      <div className="flex size-8 shrink-0 items-center justify-center bg-raised [&_svg]:size-4">
         <HarnessIcon harness={row.harness} />
       </div>
       <div className="min-w-0 flex-1">
@@ -526,7 +526,7 @@ function DeviceRow({
   const Icon = DEVICE_ICONS[device.kind]
   return (
     <ListCardRow className="flex items-center gap-3">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground [&_svg]:size-4">
+      <div className="flex size-8 shrink-0 items-center justify-center bg-raised text-muted-foreground [&_svg]:size-4">
         <Icon />
       </div>
       <div className="min-w-0 flex-1">
@@ -660,7 +660,7 @@ function BrowserRow({ session, confirming, onConfirm }: { session: CloudBrowserS
   const signedIn = signedInLine(session)
   return (
     <ListCardRow className="flex items-center gap-3">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground [&_svg]:size-4">
+      <div className="flex size-8 shrink-0 items-center justify-center bg-raised text-muted-foreground [&_svg]:size-4">
         <GlobeIcon />
       </div>
       <div className="min-w-0 flex-1">
@@ -732,7 +732,7 @@ function Note({ tone, className, children }: { tone: "caution" | "negative"; cla
     <p
       role={tone === "negative" ? "alert" : "status"}
       className={cn(
-        "rounded-lg px-3 py-2 text-ui leading-relaxed ring-1 ring-inset",
+        "px-3 py-2 text-ui leading-relaxed ring-1 ring-inset",
         tone === "caution" ? "bg-caution/8 text-caution ring-caution/20" : "bg-negative/8 text-negative ring-negative/20",
         className
       )}

@@ -858,7 +858,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const harness = late.conversations?.live.session(conversationId)?.harness
       const media = harness && !harnesses.host.liveDrivers.get(harness)?.makoInstructions ? SHOW_MEDIA_LINE : undefined
       const cloudMachine = config.machineAgentFd !== undefined
-      return [cloudMachine ? CLOUD_MACHINE_INSTRUCTIONS : undefined, session && controlLine(session), launched && threadEnvironmentInstructions(launched, cloudMachine ? "cloud" : "local"), media, ...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
+      return {
+        standing: {
+          machine: cloudMachine ? CLOUD_MACHINE_INSTRUCTIONS : undefined,
+          control: session && controlLine(session),
+          environment: launched && threadEnvironmentInstructions(launched, cloudMachine ? "cloud" : "local"),
+          media,
+        },
+        notices: [...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])],
+      }
     },
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),

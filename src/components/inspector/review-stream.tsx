@@ -1119,7 +1119,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
           <StatusLetter status={file.status} />
         </span>
       </button>
-      <label className={cn("pressable ml-1 flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded px-1.5 transition-colors duration-100 hover:bg-fill-hover", viewed ? "text-muted-foreground" : "text-faint hover:text-foreground")}>
+      <label className={cn("pressable ml-1 flex h-6 shrink-0 cursor-pointer items-center gap-1.5 px-1.5 transition-colors duration-100 hover:bg-fill-hover", viewed ? "text-muted-foreground" : "text-faint hover:text-foreground")}>
         <input
           type="checkbox"
           checked={viewed}

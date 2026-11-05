@@ -41,7 +41,7 @@ export function AgentsSection() {
       </p>
       <ProviderTable harnesses={harnesses} availability={availability} />
       <div className="mt-5 border-t border-hairline pt-4">
-        <p className="mb-3 flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-label text-faint">
+        <p className="mb-3 flex items-center gap-1.5 bg-surface px-2.5 py-1.5 text-label text-faint">
           <span
             className={cn(
               "size-1.5 rounded-full",

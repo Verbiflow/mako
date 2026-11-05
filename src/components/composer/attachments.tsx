@@ -382,7 +382,7 @@ const FileTile = memo(function FileTile({
                       aria-pressed={view === mode}
                       onClick={() => setView(mode)}
                       className={cn(
-                        "pressable rounded px-2 py-1",
+                        "pressable px-2 py-1",
                         view === mode
                           ? "bg-fill-selected text-foreground"
                           : "text-muted-foreground hover:bg-fill-hover"
@@ -394,7 +394,7 @@ const FileTile = memo(function FileTile({
                 </div>
               ) : null}
               <span className="ml-auto shrink-0 text-faint">{detail}</span>
-              <button type="button" aria-label={`Expand ${label}`} onClick={() => collection ? collection.setEnlarged(true) : setEnlarged(true)} className="pressable rounded p-1 text-muted-foreground hover:bg-fill-hover"><ExpandIcon className="size-4" /></button>
+              <button type="button" aria-label={`Expand ${label}`} onClick={() => collection ? collection.setEnlarged(true) : setEnlarged(true)} className="pressable p-1 text-muted-foreground hover:bg-fill-hover"><ExpandIcon className="size-4" /></button>
             </div>
             {open && !enlarged ? conflict ? (
               <ConflictList snapshot={conflict} />

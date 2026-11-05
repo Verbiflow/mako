@@ -21,7 +21,7 @@ import {
 import { routeAccepted } from "@mako/host/contracts/model-routes"
 
 const inputClass =
-  "h-9 w-full rounded-md bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
+  "h-9 w-full bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
 
 const GROUPS: Array<{ kind: ModelConnectionKind; title: string; note: string }> = [
   { kind: "subscription", title: "Subscriptions", note: "Sign in with the plan you already pay for." },
@@ -41,7 +41,7 @@ export function ConnectionMark({ provider, className = "size-3.5" }: { provider:
 
 export function MarkTile({ children }: { children: React.ReactNode }) {
   return (
-    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <span className="flex size-7 shrink-0 items-center justify-center bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
       {children}
     </span>
   )
@@ -111,7 +111,7 @@ export function AddConnection({ onClose }: { onClose: () => void }) {
               </IconAction>
             </header>
             <div className="px-5 pb-3">
-              <label className="flex h-8 items-center gap-2 rounded-md bg-surface px-2.5 ring-1 ring-hairline focus-within:ring-border">
+              <label className="flex h-8 items-center gap-2 bg-surface px-2.5 ring-1 ring-hairline focus-within:ring-border">
                 <SearchIcon className="size-3.5 shrink-0 text-faint" />
                 <input
                   ref={search}
@@ -175,7 +175,7 @@ function ProviderRow({ provider, onPick }: { provider: ModelConnectionProvider; 
       type="button"
       disabled={connected}
       onClick={() => onPick(provider, subscription.addable)}
-      className="pressable group/row flex w-full items-center gap-3 rounded-md px-2 py-2 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
+      className="pressable group/row flex w-full items-center gap-3 px-2 py-2 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
     >
       <MarkTile><ConnectionMark provider={provider} /></MarkTile>
       <span className="min-w-0 flex-1">
@@ -226,7 +226,7 @@ function SubscriptionDetail({ provider, onBack, onClose }: { provider: ModelConn
             : `${harness} keeps this login itself. Run this in a terminal to sign in; Mako picks the account up.`}
         </p>
         {command ? (
-          <div className="flex items-center gap-2 rounded-md bg-raised px-3 py-2 ring-1 ring-hairline">
+          <div className="flex items-center gap-2 bg-raised px-3 py-2 ring-1 ring-hairline">
             <code className="min-w-0 flex-1 truncate font-mono text-code text-foreground">{command}</code>
             <Action size="xs" onClick={() => void copy()}>
               {copied ? <CheckIcon /> : <CopyIcon className="text-faint" />}
@@ -488,7 +488,7 @@ function ModelChecklist({ check, kept, filter, onFilter, onKept, disabled }: {
       </div>
       {check.notice ? <p className="text-label text-caution">{check.notice}</p> : null}
       {check.models.length > 8 ? (
-        <label className="flex h-7 items-center gap-2 rounded-md bg-surface px-2 ring-1 ring-hairline focus-within:ring-border">
+        <label className="flex h-7 items-center gap-2 bg-surface px-2 ring-1 ring-hairline focus-within:ring-border">
           <SearchIcon className="size-3.5 shrink-0 text-faint" />
           <input
             value={filter}
@@ -500,7 +500,7 @@ function ModelChecklist({ check, kept, filter, onFilter, onKept, disabled }: {
         </label>
       ) : null}
       {check.models.length ? (
-        <ul className="max-h-56 overflow-y-auto rounded-lg bg-shell/55 py-1 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+        <ul className="max-h-56 overflow-y-auto bg-shell/55 py-1 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
           {shown.map((model) => (
             <li key={model.id}>
               <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 hover:bg-fill-hover">

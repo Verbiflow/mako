@@ -31,7 +31,7 @@ const AskingFin = memo(function AskingFin({ apex, apexTitle, agent, indent }: { 
       data-tip={[agent.title, childLine(state)].filter(Boolean).join("\n")}
       onClick={() => openFinInApex(apex, apexTitle, agent)}
       className={cn(
-        "group relative flex h-7 w-full items-center gap-2 rounded-md pr-1.5 text-left transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised",
+        "group relative flex h-7 w-full items-center gap-2 pr-1.5 text-left transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised",
         indent ? "pl-9" : "pl-[34px]",
       )}
     >

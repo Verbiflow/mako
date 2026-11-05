@@ -10,6 +10,7 @@ import { classifyProviderFailure } from "../contracts/provider-failure.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
 import { checkoutSince } from "../base/checkout-since.js"
+import { standingLines } from "./control-cadence.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { contextPrompt } from "./live-context.js"
@@ -278,9 +279,13 @@ export class LiveDispatch {
         const active = this.access.control(resident).activeBindingId
         if (review) return review.run(active, review.target, request.tuning, dispatch)
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
+        const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id)
+        const standing = instructions && standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, instructions.standing)
+        if (standing) resident.controlSaid = standing.said
         const text = asWritten ? request.text : [
           controlNote([
-            ...(dependencies.controlInstructions?.(active, resident.snapshot.session.id) ?? []),
+            ...(standing?.lines ?? []),
+            ...(instructions?.notices ?? []),
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
             ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
           ]),
@@ -289,6 +294,8 @@ export class LiveDispatch {
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })
       .catch(async (error) => {
+        // The harness may not have heard the note: the next prompt carries it whole.
+        resident.controlSaid = undefined
         report({ kind: "uncertain", reason: errorMessage({ error }) })
         const target = resident.snapshot.requests.find(
           (candidate) =>

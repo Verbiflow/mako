@@ -21,7 +21,7 @@ export function showNotificationToast(item: NotificationItem): void {
           type="button"
           aria-label="Dismiss"
           onClick={() => toast.dismiss(id)}
-          className="pressable absolute top-2.5 right-2.5 flex size-5 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+          className="pressable absolute top-2.5 right-2.5 flex size-5 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
         >
           <XIcon className="size-3.5" />
         </button>

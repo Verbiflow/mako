@@ -107,13 +107,13 @@ function Device({ simulator, screen, frame, touchable }: { simulator: ListedSimu
   return (
     <div
       data-simulator-device
-      className={cn("relative flex bg-shell shadow-lg ring-1 ring-hairline", phone ? "rounded-[44px] p-[9px]" : "rounded-[28px] p-[14px]")}
+      className={cn("relative flex bg-shell shadow-lg ring-1 ring-hairline", phone ? "p-[9px]" : "p-[14px]")}
       // The panel's whole width or its whole height, whichever the screen's shape fits first.
       style={{ width: `min(100cqw, ${ratio} * 100cqh)`, aspectRatio: ratio }}
     >
       <div
         data-simulator-screen
-        className={cn("relative flex-1 overflow-hidden bg-background", phone ? "rounded-[36px]" : "rounded-[16px]", touchable ? "cursor-pointer touch-none" : "cursor-default")}
+        className={cn("relative flex-1 overflow-hidden bg-background", phone ? "" : "", touchable ? "cursor-pointer touch-none" : "cursor-default")}
         onPointerDown={(event) => {
           if (!touchable) return
           const at = point(event)

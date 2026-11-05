@@ -11,7 +11,7 @@ import { connectionStatusText } from "@/lib/provider-connection-text"
 import type { ProviderConnection, ProviderConnectionAction } from "@/lib/types"
 
 const inputClass =
-  "h-8 w-full rounded-md bg-raised px-2.5 font-mono text-code text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-ui placeholder:text-faint focus:outline-none focus-visible:ring-border"
+  "h-8 w-full bg-raised px-2.5 font-mono text-code text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-ui placeholder:text-faint focus:outline-none focus-visible:ring-border"
 
 /** Account status in the provider row; sign-in controls and forms in its expanded area. */
 

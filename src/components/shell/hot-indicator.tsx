@@ -59,7 +59,7 @@ export function HotIndicator() {
           aria-label="Reload UI"
           title="Load the latest interface without stopping agents. Host changes need Restart Mako."
           className={cn(
-            "pressable flex h-6 items-center justify-center gap-1 rounded hover:bg-fill-hover hover:text-foreground",
+            "pressable flex h-6 items-center justify-center gap-1 hover:bg-fill-hover hover:text-foreground",
             update?.kind === "available" ? "px-1.5 text-foreground" : "w-6"
           )}
         >
@@ -71,7 +71,7 @@ export function HotIndicator() {
           onClick={openInterfacePreview}
           aria-label="Open shared-host preview"
           title="Open another client of this host with its own draft and layout."
-          className="pressable flex size-6 items-center justify-center rounded hover:bg-fill-hover hover:text-foreground"
+          className="pressable flex size-6 items-center justify-center hover:bg-fill-hover hover:text-foreground"
         >
           <SquareArrowOutUpRightIcon className="size-3" />
         </button>

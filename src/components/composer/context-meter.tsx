@@ -349,7 +349,7 @@ function Categories({ breakdown }: { breakdown: ContextBreakdown }) {
       ))}
       {groups.map((group) => (
         <details key={group.label} className="group/items mt-1 flex flex-col" data-context-group>
-          <summary className="pressable -mx-1 flex cursor-pointer list-none items-center gap-1.5 rounded-sm px-1 py-0.5 text-label text-faint tabular-nums hover:bg-fill-hover hover:text-muted-foreground [&::-webkit-details-marker]:hidden">
+          <summary className="pressable -mx-1 flex cursor-pointer list-none items-center gap-1.5 px-1 py-0.5 text-label text-faint tabular-nums hover:bg-fill-hover hover:text-muted-foreground [&::-webkit-details-marker]:hidden">
             <ChevronRightIcon aria-hidden className="size-3 shrink-0 transition-transform duration-150 ease-(--ease-out) group-open/items:rotate-90" />
             <span className="min-w-0 flex-1 truncate">
               {group.label} · {group.items.length}

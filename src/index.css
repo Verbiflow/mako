@@ -203,6 +203,8 @@
    * every one of them is 0. (Until November 2026 corners grew with depth, 4
    * to 18 px; the person asked for the sharp look in most places.)
    */
+  --radius: 0px;
+  --radius-xs: 0px;
   --radius-asset: 0px;
   --radius-media: 0px;
   --radius-sm: 0px;
@@ -2692,7 +2694,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .terminal-viewport .xterm .xterm-viewport { overscroll-behavior: contain; background-color: transparent; }
 .terminal-viewport .xterm .xterm-scrollable-element > .scrollbar > .slider {
   background: var(--fill-selected);
-  border-radius: 4px;
+  border-radius: 0;
 }
 
 /*

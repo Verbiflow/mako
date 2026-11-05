@@ -163,7 +163,7 @@ function Screen() {
       <button
         type="button"
         data-open-thread
-        className="m-6 rounded-lg border border-hairline px-4 py-3 text-left"
+        className="m-6 border border-hairline px-4 py-3 text-left"
         onClick={() => {
           screenStore.set({ open: true })
           // As the app does: a Thread opened again lands on its newest message.

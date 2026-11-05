@@ -17,7 +17,7 @@ export function SyncReadout({ readings, sending }: { readings: SyncReadings; sen
   const checks = describeOwnerChecks(readings.list.ownerChecks)
   const checked = readings.list.ownerChecks?.at(-1)
   return (
-    <div data-sync-readout="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-sync-readout="" className="mt-2 bg-surface ring-1 ring-hairline">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-ui">Sync</p>
