@@ -118,8 +118,9 @@ function refusalOf(answer: BorrowAnswer): string {
 }
 
 function granted(given: Grant | number): Grant {
-  assert.ok(typeof given !== "number", `the grant was refused with ${given}`)
-  return GrantSchema.parse(given)
+  const parsed = GrantSchema.safeParse(given)
+  assert.ok(parsed.success, `the grant was refused with ${JSON.stringify(given)}`)
+  return parsed.data
 }
 
 /** The broker's seven rules, as its borrowers and its person meet them. Each case gets a fresh broker and account. */
@@ -147,7 +148,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
 
     const other = await broker.borrower(OTHER_REPOSITORY)
     assert.equal(refusalOf(await other.borrow(need("c-1"))), "out-of-scope")
-    assert.equal(typeof (await other.value(lease.id)), "number", "another Thread can't read the lease's value")
+    assert.ok(!(await other.value(lease.id) instanceof Uint8Array), "another Thread can't read the lease's value")
     assert.equal(refusalOf(await mine.borrow(need("c-2", { kind: "env", ref: "DATABASE_URL" }))), "no-grant")
   })
 
@@ -171,13 +172,13 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const after = await mine.pushes(before.seq)
     assert.deepEqual(after.pushes.map((entry) => BorrowPushSchema.parse(entry.push)), [{ push: "ended", lease: lease.id, why: "revoked" }])
     assert.ok(after.pushes.every((entry) => entry.seq > before.seq))
-    assert.equal(typeof (await mine.value(lease.id)), "number", "a revoked lease's value doesn't open")
+    assert.ok(!(await mine.value(lease.id) instanceof Uint8Array), "a revoked lease's value doesn't open")
     assert.equal(refusalOf(await mine.renew(lease.id)), "revoked")
     assert.equal(refusalOf(await mine.borrow(need("c-1"))), "revoked", "the same need ended stays ended")
     assert.equal(refusalOf(await mine.borrow(need("c-2"))), "revoked")
     assert.deepEqual((await person.leases()).filter((each) => each.grant === "env"), [])
     assert.deepEqual((await person.grants()).filter((each) => each.id === "env"), [])
-    assert.equal(typeof (await person.grant(vaultCopy(person.account, "env", { version: 2 }), canary())), "number", "a revoked grant doesn't come back")
+    assert.equal(GrantSchema.safeParse(await person.grant(vaultCopy(person.account, "env", { version: 2 }), canary())).success, false, "a revoked grant doesn't come back")
     const events = await person.events()
     assert.ok(events.some((event) => event.event === "revoked" && event.lease === lease.id))
   })
@@ -256,6 +257,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const [ask] = await person.asks()
     assert.ok(ask)
     const secret = `cat: ${new TextDecoder().decode(canary()).trim()}: Permission denied`
+    // SAFETY: the answer is malformed on purpose, a field the contract doesn't have, to see the broker refuse it.
     assert.equal(await person.answer(ask.ask, { answer: "unavailable", reason: "unreadable", detail: secret } as never), undefined, "an answer with words of its own isn't taken")
     const answered = await person.answer(ask.ask, { answer: "unavailable", reason: "unreadable" })
     assert.ok(answered)
@@ -299,7 +301,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const before = await mine.pushes()
     await mine.release(lease.id)
     assert.deepEqual((await mine.pushes(before.seq)).pushes, [])
-    assert.equal(typeof (await mine.value(lease.id)), "number")
+    assert.ok(!(await mine.value(lease.id) instanceof Uint8Array))
     assert.ok((await person.events()).some((event) => event.event === "released" && event.lease === lease.id))
   })
 }

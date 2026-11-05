@@ -86,6 +86,8 @@ export interface FinCapacityReading {
   pressure?: string
   /** False while it's still on the measured defaults, before this machine read enough of its own Fins. */
   measured: boolean
+  /** What this device runs now for another place's Threads, each in a Fin's place: "an iOS simulator for a cloud Thread". */
+  lent?: string[]
 }
 
 /**

@@ -62,6 +62,8 @@ export interface WorldOptions {
   preparing?: (options: LiveStartOptions) => Promise<void> | void
   /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
   finCeiling?: () => number
+  /** Operations this device lends another place's Threads (`AgentsDeps.lent`). */
+  lent?: () => number
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
@@ -204,6 +206,7 @@ export class AgentsWorld {
       ...(this.options.capacity && { capacity: this.options.capacity }),
       ...(this.options.finLimit && { finLimit: this.options.finLimit }),
       ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
+      ...(this.options.lent && { lent: this.options.lent }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       archived: (conversation) => this.archived.has(conversation),

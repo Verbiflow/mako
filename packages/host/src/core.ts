@@ -39,6 +39,10 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { busySinceLastAsk } from "./base/machine-load.js"
+import { Advertiser, ADVERTISE_EVERY_MS } from "./base/advertiser.js"
+import { deviceProbe, probeCapabilities, type SimulatorFacts } from "./base/capabilities.js"
+import { LentHere } from "./base/lent.js"
+import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
@@ -167,6 +171,8 @@ const trace = (stage: string) => {
 /** Parts of the core built further down `openCore`; reached before then only through `?.`, by a caller that came early. */
 interface LateParts {
   conversations?: Conversations
+  /** What this Mac can serve another place and its room, said to borrowing's brokers (`Advertiser`). */
+  advertiser?: Advertiser
   movers?: WorkspaceMovers
   agentServers?: ConversationMcp
   controlService?: ControlService
@@ -671,8 +677,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     own: () => finDefaults.reading().limit,
     ...(finSlots() !== undefined && { fixed: finSlots()! }),
   })
-  declareFinDefaultMethods(methods, finDefaults, () => finCapacity.reading(), () => finCapacity.changed())
+  // What this Mac runs for another place's Threads under borrowing's leases: each holds one of its Fins' places.
+  const lent = new LentHere()
+  lent.subscribe(() => {
+    late.conversations?.agents?.capacityChanged()
+    late.advertiser?.roomChanged()
+  })
+  declareFinDefaultMethods(methods, finDefaults, () => {
+    const reading = finCapacity.reading()
+    return lent.count() ? { ...reading, lent: lent.words() } : reading
+  }, () => finCapacity.changed())
   late.cloud = declareCloudAccountMethods(methods, {
+    advertising: { current: () => late.advertiser?.current() },
     accessChoices: {
       heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
       again: () => void accessChoices.sync(),
@@ -837,6 +853,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     streams,
     finDefaults,
     finCapacity,
+    lent: () => lent.count(),
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     // A new conversation is on the account's list before its harness has started.
     opened: () => late.sessions?.showsChanged(),
@@ -918,6 +935,38 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.conversations = opened
   const { live, runs, native } = opened
+  // What this Mac can serve another place (its OS, Xcode, simulators, emulators, GPU, CLIs) and its room, said to the
+  // account's broker on its runtime link and to its own: on a change, as the link enrols, and hourly. A cloud machine
+  // and a fixture desk lend nothing.
+  if (config.machineAgentFd === undefined && !fixtureDesk) {
+    const simulatorFacts = async (): Promise<SimulatorFacts | undefined> => {
+      const [listed, setup] = await Promise.all([control.simulators.list({ kind: "person" }), control.simulatorSetup.read()])
+      if ("refused" in listed) return undefined
+      const here = listed.hosts.find((host) => host.kind === "local")
+      if (!here) return undefined
+      const xcode = setupStep(setup, "xcode")?.xcode?.version
+      return { ios: here.platforms.ios, simulators: listed.simulators.filter((simulator) => simulator.hostId === here.id), ...(xcode && { xcode }) }
+    }
+    const advertiser = new Advertiser({
+      probe: () => probeCapabilities(deviceProbe(simulatorFacts)),
+      room: () => {
+        const capacity = finCapacity.reading()
+        return { slots: { used: opened.agents?.workingHere() ?? 0, of: capacity.atOnce }, load: capacity.why }
+      },
+      sinks: [
+        (advertisement) => late.cloud?.advertise?.(advertisement) ?? false,
+        async ({ capabilities, slots }) => {
+          const brokers = [workspaces.worktrees?.borrowing.borrowing, fixtureDesk ? undefined : await secrets.borrowing()]
+          await Promise.all(brokers.map((broker) => broker?.advertise(capabilities, slots)))
+        },
+      ],
+      log: (message, fields) => hostLog("borrowing", message, fields),
+    })
+    late.advertiser = advertiser
+    jobs.every("advertise what this Mac can serve", ADVERTISE_EVERY_MS / 12, () => advertiser.probe(), { firstAfterMs: 10_000 })
+    jobs.every("advertise this Mac's room", 15_000, () => advertiser.roomChanged())
+    jobs.every("advertise what this Mac can serve, hourly", ADVERTISE_EVERY_MS / 4, () => advertiser.due())
+  }
   // A message held until a time (a usage limit's reset) sends itself within a tick of it, across restarts.
   jobs.every("held-wakes", HELD_WAKE_TICK_MS, () => void live.wakeDue(), { firstAfterMs: 2_000 })
   /** Filled once the handoffs exist: the cloud Thread each Thread at work keeps ready, which its move takes. */

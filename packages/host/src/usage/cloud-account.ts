@@ -29,6 +29,7 @@ import {
   clientSessionOverSockets,
   type RuntimeLink,
   RuntimeRefusedError,
+  type Advertisement,
   type GoingQuietReason,
   type RuntimeOptions,
   type ServedRuntime,
@@ -279,6 +280,8 @@ export type CloudAccountOptions = {
   runtime?: CloudRuntime
   /** What tells the account's list of this Mac's Sessions over that runtime's link, and relays what's watched. */
   sessions?: SessionPublishing | undefined
+  /** What this Mac can serve and its room (`Advertiser`), said as its runtime's link enrols. */
+  advertising?: { current(): Advertisement | undefined }
   /** A connection down this long shows as offline; a shorter blip isn't shown. For tests. */
   offlineAfterMs?: number
   /**
@@ -1531,6 +1534,8 @@ export class CloudAccounts {
           if (closed) return started.close()
           this.#served = { link, served: started }
           this.#options.sessions?.linked(this.#served)
+          const advertisement = this.#options.advertising?.current()
+          if (advertisement) started.advertise(advertisement)
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
           void started.ended.then((problem) => {
             this.#claims = started.claims()
@@ -1548,6 +1553,11 @@ export class CloudAccounts {
         link.close()
       },
     }
+  }
+
+  /** Says what this Mac can serve and its room on the runtime link it serves now; false while there's none, or it's older. */
+  advertise(advertisement: Advertisement): boolean {
+    return this.#served?.served.advertise(advertisement) ?? false
   }
 
   /** Tells the cloud this runtime is going away on purpose, on a link that knows the frame. */

@@ -277,6 +277,32 @@ async function finLimit(): Promise<void> {
     await w.close()
   }
 
+  // A simulator this Mac lends another place's Thread takes a Fin's place: one pool, so the Mac never runs more than it can.
+  let lentHere = 1
+  let lending = 0
+  const lender = new AgentsWorld({
+    root: join(root, "fin-lent"),
+    script: (turn) => turn.text.includes("You're fin:") ? (lending++, turn.world.hold(turn.conversation).then(() => (lending--, "stopped"))) : "ok",
+    finLimit: () => 2,
+    lent: () => lentHere,
+  })
+  try {
+    const apex = await lender.apex("claude")
+    const brief = { objective: "Hold" }
+    const one = await lender.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: lender.root })
+    assert.ok(!("refused" in one) && one.state !== "queued", JSON.stringify(one))
+    await waitFor(() => lending === 1, "the first Fin at work")
+    assert.equal(lender.agents.workingHere(), 1, "what this device advertises as its own work leaves out what it lends")
+    const two = await lender.agents.start(apex.caller, { brief, name: "two", queue: true, clientKey: "2", cwd: lender.root })
+    assert.ok(!("refused" in two) && two.state === "queued", `the lent simulator holds the second place: ${JSON.stringify(two)}`)
+    lentHere = 0
+    lender.agents.capacityChanged()
+    await waitFor(() => lending === 2, "the place the lease held goes to the waiting Fin once the lease ends")
+    await lender.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    await lender.close()
+  }
+
   // The person's ceiling across every place holds over a place with room.
   let held = 0
   const capped = new AgentsWorld({

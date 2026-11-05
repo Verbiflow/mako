@@ -180,6 +180,8 @@ export interface AgentsDeps {
   budget?: TreeBudget
   /** How many of the person's Fins run at once on this device, every tree's: its capacity or their own number (`FinCapacity`); `FIN_LIMIT` without it. */
   finLimit?(): number
+  /** Operations this device runs for another place's Threads under borrowing's leases: each takes a Fin's place here. */
+  lent?(): number
   /** Reads the machine for its capacity, with the Fins at work here and their harnesses, as what waits is looked at. */
   observeCapacity?(working: number, mix: Readonly<Record<string, number>>): Promise<void>
   /** The person's Fins at once across every place (Settings › Fins): a safety net over the places' own. */
@@ -2298,9 +2300,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.mac
   }
 
-  /** The person's Fins at work in one place, every tree's, with the queued starts launching there. */
+  /**
+   * The person's Fins at work in one place, every tree's, with the queued starts launching there; on this device, with
+   * the operations it lends too, so its own Fins and another place's borrowed work share one pool.
+   */
   private working(where: string): number {
+    return this.finsWorking(where) + (where === HERE ? (this.deps.lent?.() ?? 0) : 0)
+  }
+
+  private finsWorking(where: string): number {
     return (this.store()?.edges().all ?? []).filter((edge) => placeOf(edge.asked.place) === where && this.occupies(edge)).length + this.unwritten((launch) => launch.where === where)
+  }
+
+  /** This device's own Fins at work, without what it lends: what its advertisement says its own work holds. */
+  workingHere(): number {
+    return this.finsWorking(HERE)
   }
 
   /** Queued starts launching that have no edge yet, so nothing else counts them. */

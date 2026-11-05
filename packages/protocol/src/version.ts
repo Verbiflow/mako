@@ -32,10 +32,11 @@ export const PROTOCOL_VERSION = 1
  * its owner is off clones (`continues.ts`), and says a runtime that agreed it takes such a continue back as a move when
  * it returns. 17 lets a `sessions` row say the Session it was forked from (`forkOf`). 18 lets a `sessions` row say
  * what one of its Session's Fins asks the person (`asking`), which the row waits on, and where the Session stands
- * under it. 19 takes `borrow` frames, what the runtime's Thread borrows as it changes. Every envelope stays at
- * `PROTOCOL_VERSION` on every link version.
+ * under it. 19 takes `borrow` frames, what the runtime's Thread borrows as it changes. 20 takes a device runtime's
+ * `advertise`: what it can serve and its room, for borrowing by capability. Every envelope stays at `PROTOCOL_VERSION`
+ * on every link version.
  */
-export const LINK_VERSION = 19
+export const LINK_VERSION = 20
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -114,6 +115,12 @@ export const ASKING_VERSION = 18
  * said as it changes. A link that agreed less reads the same pushes by asking for them.
  */
 export const BORROW_LINK_VERSION = 19
+
+/**
+ * The first link version a device's runtime may send `advertise` on: its capabilities and slots as it probed them
+ * (`borrow.ts`), on enrolment, on each change and hourly. A gateway that agreed less hears none, and routes nothing to it.
+ */
+export const ADVERTISE_LINK_VERSION = 20
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake
