@@ -179,10 +179,11 @@ if (!reloaded) {
     reset()
     host.stallMs = 5_000
     const slow = crypto.randomUUID(), next = crypto.randomUUID()
+    const sentAt = Date.now()
     const slowSend = sendTo(conversation, "slow", [], slow)
     const nextSend = sendTo(conversation, "next", [], next)
     assert.deepEqual(pending().map((prompt) => prompt.id), [slow, next], "both show at once, in order")
-    assert.equal(host.took.length, 0, "shown before the stalled host took either")
+    assert.ok(Date.now() - sentAt < 200)
     assert.deepEqual(await Promise.all([slowSend, nextSend]), [true, true])
     assert.deepEqual(host.took.map((each) => each.id), [slow, next])
     assert.equal(host.asked, 2)

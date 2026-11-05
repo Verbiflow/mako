@@ -64,14 +64,9 @@ assert.equal(renamedExchanges(turns("live", prompts), turns("live", prompts).sli
 const count = 10000
 const longBefore = turns("old", Array.from({ length: count }, (_, index) => `Original question number ${index}`))
 const longAfter = turns("new", Array.from({ length: count }, (_, index) => `Completely rewritten native prompt ${index}`))
-const matching = () => {
-  const began = performance.now()
-  assert.equal(renamedExchanges(longBefore, longAfter).size, count, "equal gaps retain visual continuity without quadratic search")
-  return performance.now() - began
-}
-// Matched again when over: a runner's stall falls on one run, a quadratic search is slow in both.
-const first = matching()
-const elapsed = first < 1000 ? first : Math.min(first, matching())
+const began = performance.now()
+assert.equal(renamedExchanges(longBefore, longAfter).size, count, "equal gaps retain visual continuity without quadratic search")
+const elapsed = performance.now() - began
 assert.ok(elapsed < 1000, `10,000 entirely rewritten prompts took ${elapsed.toFixed(1)}ms`)
 let reads = 0
 const known = longBefore.map(item => ({ ...item, prompt: item.prompt && { ...item.prompt,

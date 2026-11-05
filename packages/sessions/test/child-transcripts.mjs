@@ -229,15 +229,10 @@ try {
     // Unreadable: a listing that opened a transcript would fail here.
     await chmod(join(folder, `agent-${agent}.jsonl`), 0o000)
   }
-  const listing = async (reader) => {
-    const started = performance.now()
-    const children = await reader.children(wideParent)
-    return { children, elapsed: performance.now() - started }
-  }
-  const { children: wideChildren, elapsed: once } = await listing(wideReader)
+  const started = performance.now()
+  const wideChildren = await wideReader.children(wideParent)
+  const elapsed = performance.now() - started
   assert.equal(wideChildren.length, 21, "twenty unreadable transcripts list from their links alone")
-  // Listed again by a reader of its own when over: a runner's stall falls on one listing, a slow listing is slow in both.
-  const elapsed = once < 500 ? once : Math.min(once, (await listing(new ClaudeProvider(wide))).elapsed)
   assert.ok(elapsed < 500, `listing twenty children took ${Math.round(elapsed)} ms`)
   for (const name of await readdir(folder)) await chmod(join(folder, name), 0o644)
   console.log(`child transcripts: every harness lists, links and reads its children; a kept copy of a dropped one lists under its parent; a follow reads only the appended line; twenty 2 MB children list in ${Math.round(elapsed)} ms without a read`)

@@ -125,7 +125,6 @@ async function quicker<Times extends Record<string, number>>(limits: Times, meas
   const first = await measure("")
   if (Object.entries(limits).every(([key, limit]) => first[key]! < limit)) return first
   const again = await measure("-again")
-  // SAFETY: the keys are `limits`' own, each the quicker of the two runs' numbers for it.
   return Object.fromEntries(Object.keys(limits).map((key) => [key, Math.min(first[key]!, again[key]!)])) as Times
 }
 

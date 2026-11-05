@@ -489,23 +489,12 @@ function generatedChecks(): void {
   db.exec("COMMIT")
   db.close()
   const before = picture(path)
-  const again = `${path}.again`
-  for (const suffix of ["", "-wal"]) if (existsSync(path + suffix)) copyFileSync(path + suffix, again + suffix)
-  const split = (at: string) => {
-    const started = performance.now()
-    const store = open(at, true)
-    return { store, took: performance.now() - started }
-  }
-  const { store, took: first } = split(path)
+  const started = performance.now()
+  const store = open(path, true)
+  const took = performance.now() - started
   const made = checkSplit(before, picture(path), new Set(), store)
   store.close()
   assert.equal(made.size, multi.reduce((sum, thread) => sum + thread.sessions.length - 1, 0))
-  // Split again from a copy when over: a runner's stall falls on one split, a slow one is slow in both.
-  const took = first < 10_000 ? first : Math.min(first, (() => {
-    const second = split(again)
-    second.store.close()
-    return second.took
-  })())
   assert.ok(took < 10_000, `the split of ${multi.length} Threads took ${Math.round(took)} ms`)
   const once = digest(path)
   open(path, true).close()

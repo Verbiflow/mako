@@ -143,19 +143,11 @@ const large = {
   entries: Array.from({ length: 120 }, (_, i) => ({ type: "text", id: `@${i}`, text: `${i} ` + "tool output café 🦈 ".repeat(6_000) })),
 }
 catalog.open = async () => large
-/** A large open's time, again when it's over `limit`: a runner's stall falls on one open, a rescan per chunk is in both. */
-const crossing = async (opened, limit) => {
-  const once = async () => {
-    const started = performance.now()
-    const back = await opened()
-    assert.equal(back.entries.length, 120)
-    assert.equal(back.entries[119].text, large.entries[119].text)
-    return performance.now() - started
-  }
-  const first = await once()
-  return first < limit ? first : Math.min(first, await once())
-}
-const largeMs = await crossing(() => client.open(thread.ref.path), 1_000)
+const startedLarge = performance.now()
+const roundTrip = await client.open(thread.ref.path)
+const largeMs = performance.now() - startedLarge
+assert.equal(roundTrip.entries.length, 120)
+assert.equal(roundTrip.entries[119].text, large.entries[119].text)
 const largeBytes = Buffer.byteLength(JSON.stringify(large))
 assert.ok(largeMs < 1_000, `${(largeBytes / 1e6).toFixed(1)} MB thread took ${largeMs.toFixed(0)} ms to cross the socket`)
 catalog.open = async () => {
@@ -288,7 +280,11 @@ let portMs
   await assert.rejects(over.open(thread.ref.path), /open reply doesn't match this build's schema/)
   assert.ok(performance.now() - refusedAt < 1_000, "a reply this build can't read fails at once, not at the request's timeout")
   catalog.open = async () => large
-  portMs = await crossing(() => over.open(thread.ref.path), 500)
+  const started = performance.now()
+  const back = await over.open(thread.ref.path)
+  portMs = performance.now() - started
+  assert.equal(back.entries.length, 120)
+  assert.equal(back.entries[119].text, large.entries[119].text)
   assert.ok(portMs < 500, `${(largeBytes / 1e6).toFixed(1)} MB thread took ${portMs.toFixed(0)} ms over the port`)
   const live = new Promise((resolve) => {
     over.onEvent((event) => {

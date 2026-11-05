@@ -94,12 +94,6 @@ import {
   readersForm,
 } from "../dist/index.js"
 
-/** A time a case measured, measured again when it's over `limit`: a runner's stall falls on one run, a slow design is slow in both. */
-async function quicker(limit, measure) {
-  const first = await measure()
-  return first < limit ? first : Math.min(first, await measure())
-}
-
 const operation = {
   v: PROTOCOL_VERSION,
   id: "6f1c2a8e-4b1d-4c3a-9f0e-2d7b5a9c1e34",
@@ -1730,10 +1724,6 @@ describe("client frames", () => {
     assert.deepEqual(heard, [["thread", "urn:mako:problem:forbidden"]])
   })
   test("a connection that goes silent, as after a sleep on a network the wake didn't keep, ends at the next heartbeat", async () => {
-    const ended = await quicker(250, silence)
-    assert.ok(ended < 250, `ended within a heartbeat of the silence (${ended} ms)`)
-  })
-  async function silence() {
     let far
     const session = clientSessionOverSockets(
       () => {
@@ -1761,10 +1751,9 @@ describe("client frames", () => {
     const reply = await replied
     assert.equal(reply.problem.outcome, "unknown", "the call in flight is answered unknown, to be repeated under its id")
     await assert.rejects(subscription.next(), "the subscription ends, for its reader to follow again")
-    const ended = Date.now() - silent
+    assert.ok(Date.now() - silent < 250, `ended within a heartbeat of the silence (${Date.now() - silent} ms)`)
     assert.ok(pinged.length >= 4)
-    return ended
-  }
+  })
   test("waking ends a connection not heard from within a heartbeat at once, and one that doesn't answer a ping soon", async () => {
     let answering = true
     const session = clientSessionOverSockets(
@@ -1899,19 +1888,6 @@ describe("a call to a gateway over HTTP", () => {
   })
 
   test("a busy gateway's Retry-After is waited out before the call goes again, never past the most", async () => {
-    const at = await tries()
-    assert.ok(at[1] - at[0] >= 290, `waited ${Math.round(at[1] - at[0])} ms of the 300 the gateway asked`)
-    // Tried again when over: a runner's stall falls on one gap, a wait it read into the nonsense is in both.
-    const gap = (times) => times[2] - times[1]
-    const own = gap(at) < 250 ? gap(at) : Math.min(gap(at), gap(await tries()))
-    assert.ok(own < 250, "one it can't read is the client's own backoff")
-    assert.equal(retryAfterMs("nonsense"), 0, "and reads as nothing asked")
-    assert.equal(retryAfterMs("2"), 2_000)
-    assert.equal(retryAfterMs(new Date(Date.now() + 5_000).toUTCString()) > 3_000, true)
-    assert.equal(retryAfterMs("3600"), RETRY_AFTER_MOST_MS)
-    assert.equal(retryAfterMs(null), 0)
-  })
-  async function tries() {
     const answers = [
       () => new Response(JSON.stringify({ title: "Busy: try again in a few seconds" }), { status: 429, headers: { "retry-after": "0.3" } }),
       () => new Response("{}", { status: 503, headers: { "retry-after": "nonsense" } }),
@@ -1926,8 +1902,13 @@ describe("a call to a gateway over HTTP", () => {
     const remote = recordsOverHttp({ id: "t", base: "https://gw/v1/devices/d/originals", authorization: () => "Bearer t", fetch, backoff: [1, 1] })
     assert.deepEqual(await remote.missing(["a".repeat(64)], trace), [])
     assert.equal(trace.tries, 3)
-    return at
-  }
+    assert.ok(at[1] - at[0] >= 290, `waited ${Math.round(at[1] - at[0])} ms of the 300 the gateway asked`)
+    assert.ok(at[2] - at[1] < 250, "one it can't read is the client's own backoff")
+    assert.equal(retryAfterMs("2"), 2_000)
+    assert.equal(retryAfterMs(new Date(Date.now() + 5_000).toUTCString()) > 3_000, true)
+    assert.equal(retryAfterMs("3600"), RETRY_AFTER_MOST_MS)
+    assert.equal(retryAfterMs(null), 0)
+  })
 
   test("a refusal names the call's own correlation ID when the gateway's answer names none", async () => {
     let sent

@@ -279,21 +279,11 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   await cloud.gateway.assign("th-1", RUNTIME)
   // Assigned, it says at once that nothing runs.
   await agent.until("idle said", () => cloud.gateway.activity("th-1")?.busy === false, 3_000)
-  // A turn starts and streams nothing: busy all the same, within a tick. Started again when over: a runner's stall
-  // falls on one start, a machine that waits for more than a tick waits in both.
-  const busyIn = async () => {
-    const started = Date.now()
-    work = [item("running", "a long build")]
-    await agent.until("busy said", () => cloud.gateway.activity("th-1")?.busy === true, 10_000)
-    return Date.now() - started
-  }
-  let busy = await busyIn()
-  if (busy >= 1_500) {
-    work = []
-    await agent.until("idle before starting again", () => cloud.gateway.activity("th-1")?.busy === false, 10_000)
-    busy = Math.min(busy, await busyIn())
-  }
-  assert.ok(busy < 1_500, `within a tick of the turn starting (${busy} ms)`)
+  // A turn starts and streams nothing: busy all the same, within a tick.
+  const started = Date.now()
+  work = [item("running", "a long build")]
+  await agent.until("busy said", () => cloud.gateway.activity("th-1")?.busy === true, 3_000)
+  assert.ok(Date.now() - started < 1_500, "within a tick of the turn starting")
   assert.deepEqual(cloud.gateway.activity("th-1")?.work, ["claude running: a long build"])
   // Waiting on a person isn't work: a question survives a pause.
   work = [item("waiting", "an approval")]
@@ -439,25 +429,15 @@ test("a change a list shows on the machine goes out at once, not at its next tic
   await agent.until("everything said, at a tick", () => cloud.gateway.reports(RUNTIME).length === 1, 3_000)
   // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
   sessions.own({ type: "live-batch", batch: { id: "c-1", revision: 2, updates: [] } } as never)
-  // The turn ends just after that tick: the next is a second away. Changed again when over: a runner's stall falls on
-  // one change, a change kept for the tick waits in both.
-  let revision = 2
-  const said = async (state: ReportedSession["state"]) => {
-    const reports = cloud.gateway.reports(RUNTIME).length
-    rows = [row(state)]
-    shown = state
-    const changed = Date.now()
-    // SAFETY: as above, a host event filled only as far as the publisher reads it.
-    sessions.own({ type: "live-batch", batch: { id: "c-1", revision: ++revision, updates: [] } } as never)
-    await agent.until("the change said", () => cloud.gateway.reports(RUNTIME).length === reports + 1, 10_000)
-    assert.equal(cloud.gateway.reports(RUNTIME).at(-1)?.listed[0]?.state, state)
-    return Date.now() - changed
-  }
-  let ms = await said("idle")
-  if (ms >= 400) {
-    await said("working")
-    ms = Math.min(ms, await said("idle"))
-  }
+  // The turn ends just after that tick: the next is a second away.
+  rows = [row("idle")]
+  shown = "idle"
+  const changed = Date.now()
+  // SAFETY: as above, a host event filled only as far as the publisher reads it.
+  sessions.own({ type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } } as never)
+  await agent.until("the change said", () => cloud.gateway.reports(RUNTIME).length === 2, 3_000)
+  const ms = Date.now() - changed
+  assert.equal(cloud.gateway.reports(RUNTIME)[1]?.listed[0]?.state, "idle")
   assert.ok(ms < 400, `said ${ms} ms after it changed`)
 })
 

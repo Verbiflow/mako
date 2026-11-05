@@ -141,14 +141,9 @@ try {
 
   // Linking: each package a link to the main checkout's, the rest this checkout's own.
   const fix = worktree("fix", "fix ui")
-  const carry = async (into: string) => {
-    const started = Date.now()
-    return { carried: await carryOutputs(gitRunner, main, into, [install]), ms: Date.now() - started }
-  }
-  const { carried, ms: carryMs } = await carry(fix)
-  // Linked again into a worktree of its own when over: a runner's stall falls on one carry, copying is slow in both.
-  const linkedMs = carryMs < 2_000 ? carryMs : Math.min(carryMs, (await carry(worktree("fix-again", "fix ui"))).ms)
-  assert.ok(linkedMs < 2_000, `linking took ${linkedMs} ms`)
+  const started = Date.now()
+  const carried = await carryOutputs(gitRunner, main, fix, [install])
+  assert.ok(Date.now() - started < 2_000)
   assert.deepEqual(carried.carried.map((entry) => entry.entries), [["node_modules"]])
   const modules = join(fix, "node_modules")
   assert.ok(lstatSync(modules).isDirectory() && !lstatSync(modules).isSymbolicLink(), "the folder is the checkout's own")
