@@ -969,17 +969,20 @@ export class ThreadStore {
   }
 
   /**
-   * Ends `owner`'s move for its wait: with `visited` added and the wait handled when it moved, or released when it
-   * gave up. False when another host's claim took it meanwhile, which then has the move.
+   * Ends `owner`'s move for its wait: with `visited` added and the wait handled when it moved; `retired`, the wait
+   * handled with nothing visited, when what the move was decided on stopped holding, so no move is made for it again;
+   * released when it found nothing to do. False when another host's claim took it meanwhile, which then has the move.
    */
-  finishFinMove(child: string, owner: number, moved?: { visited: readonly string[] }): boolean {
+  finishFinMove(child: string, owner: number, moved?: { visited: readonly string[] } | "retired"): boolean {
     return this.write(() => {
       const turn = this.finTurn(child)
       if (!turn?.moving || turn.moving.owner !== owner) return false
       const { moving, ...rest } = turn
-      const next: FinTurn = moved
-        ? { visited: [...new Set([...rest.visited, ...moved.visited])].slice(-64), handled: [...rest.handled, moving.wait].slice(-64) }
-        : rest
+      const next: FinTurn = moved === "retired"
+        ? { ...rest, handled: [...rest.handled, moving.wait].slice(-64) }
+        : moved
+          ? { visited: [...new Set([...rest.visited, ...moved.visited])].slice(-64), handled: [...rest.handled, moving.wait].slice(-64) }
+          : rest
       this.sql("UPDATE fin_moves SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
       return true
     })

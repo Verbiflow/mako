@@ -325,6 +325,47 @@ try {
   }
   console.log("a Stop while the move reads the accounts: no move, no continuation, no launch")
 
+  // A Stop while a hand-off prepares the next harness: retired, nothing handed off or sent.
+  {
+    let release!: () => void
+    let preparing = false
+    let limited = false
+    const prepared = new Promise<void>((resolve) => (release = resolve))
+    const held = accounts()
+    held.claude = named("personal")
+    const r = await run("stop-during-hand-off", {
+      accounts: held,
+      selected: { claude: "personal" },
+      readingChoices: async (harness) => {
+        if (!limited || harness !== "codex") return
+        preparing = true
+        await prepared
+      },
+      fin: (turn, end) => {
+        if (turn === 1) {
+          held.claude[0]!.spentUntil = RESET
+          limited = true
+          end({ limit: { resetsAt: RESET }, fail: LIMIT })
+        }
+        return "partial"
+      },
+    })
+    assert.ok(!("refused" in r))
+    await until("the hand-off to prepare Codex", () => preparing)
+    const stopped = await r.world.agents.stop(r.world.caller(r.apex.conversation), { child: "labels" })
+    assert.ok("stopped" in stopped && stopped.stopped.includes("labels"), JSON.stringify(stopped))
+    release()
+    await r.world.settle(400, 20_000, "ignore")
+    assert.deepEqual(r.finTurns().map((turn) => turn.harness), ["claude"], "nothing handed off or sent")
+    assert.equal(r.world.live.session(r.fin())?.harness, "claude")
+    assert.equal(edgeOf(r).tuned?.rerouted, undefined)
+    const turn = r.world.store.finTurn(edgeOf(r).child)
+    assert.equal(turn?.moving, undefined, "the move is retired")
+    assert.equal(turn?.handled.length, 1, "for good: that limit is never moved for again")
+    await r.world.close()
+  }
+  console.log("a Stop while a hand-off prepares the next harness: retired, nothing handed off or sent")
+
   // A restart in the middle of a logical turn: the places it ran on are the store's, so it never goes back to one, and
   // with every step at its limit or run on it stops out of accounts rather than loop.
   {

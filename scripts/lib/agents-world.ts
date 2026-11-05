@@ -144,6 +144,8 @@ export interface WorldOptions {
   connections?: Partial<Record<string, FallbackConnection[]>>
   /** Settings › Fins' switch, as it stands when read; absent, on. */
   moveOnLimit?: () => boolean
+  /** Runs as a harness's catalog is read for a Fin, before it answers: a hand-off's preparation reads it. */
+  readingChoices?: (harness: string) => Promise<void> | void
   /** Runs as a harness's accounts are read, before they answer: `all` is a move's read of every one. */
   readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
   /** The engine's clock (`AgentsDeps.now`). */
@@ -242,6 +244,7 @@ export class AgentsWorld {
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
       modes: (harness) => drivers.get(harness)?.modes,
       finChoices: async (harness) => {
+        await this.options.readingChoices?.(harness)
         const recommended = this.options.defaults?.[harness]
         const chosen = this.options.fins?.chosen?.[harness]
         const used = this.options.fins?.used?.[harness]

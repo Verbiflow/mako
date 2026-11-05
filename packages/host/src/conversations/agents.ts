@@ -1923,6 +1923,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     return true
   }
 
+  /**
+   * Whether the state a move was decided on still holds: the Fin open and Mako's to drive (not stopped, not released
+   * to a process), and this host's claim on the same wait for its limit. Read again right before the move's admission.
+   */
+  private stillDecided(child: string, wait: string): boolean {
+    const store = this.store()!
+    const edge = store.edges().of(child)
+    const claim = store.finTurn(child)?.moving
+    return edge !== undefined && edge.closedAt === undefined && (!edge.run || edge.run.ended !== undefined) && claim?.owner === this.generation && claim.wait === wait
+  }
+
   /** `limitMove`'s move: the step, the edge that says it, and the waiting request taken over to carry the work there. */
   private async moveOn(edge: ThreadParent, conversation: string, wait: LiveRequest, origin: LiveRequest, harness: string, visited: readonly string[], limit: TurnReply["limit"], report: () => void): Promise<void> {
     const moves = this.moves!
@@ -1947,6 +1958,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!step) {
         // Every step the person has is at its limit or was run on: the Fin stops saying so, rather than loop.
         if (!order.spent.length && visited.length === 0) return
+        if (!this.stillDecided(edge.child, wait.id)) return
         const line = outOfAccountsLine({ harness, ...(from && { account: from.label }) }, order.spent, label, until, now)
         store.rerouteEdge(edge.child, { ...(store.edges().of(edge.child)?.tuned?.rerouted ?? { from: harness }), line })
         moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place)] })
@@ -1963,24 +1975,23 @@ export class Agents implements AgentOperations, ConversationChildren {
       // A message the harness never took goes on with its own words beneath the move's.
       const said = wait.continues ? text : `${text}\n\n${wait.text}`
       const actor: Actor = { kind: "service", name: "auto-continue" }
-      // The launch reads its account from the edge, so the pin is there before the request may go.
+      const apex: Apex = { session: edge.parentSession, thread: edge.parent, ...(this.conversationOf(edge.parent) && { conversation: this.conversationOf(edge.parent)! }) }
+      const tuned = step.why === "harness" ? await this.tuningOf(apex, step.harness, { brief: edge.asked.brief, clientKey: edge.op, ...(session?.cwd && { cwd: session.cwd }) }) : undefined
+      const to: Parameters<Live["moveWaiting"]>[2] = step.why === "harness"
+        ? { kind: "hand-off", id: namedUuid(`moved:${wait.id}`), provider: step.harness, text: said, ...(tuned && !("refused" in tuned) && tuned.settings && { tuning: tuned.settings }), ...(childMode(this.deps.modes(step.harness), tier) && { modeId: childMode(this.deps.modes(step.harness), tier)!.id }) }
+        : { kind: "send", text: said, ...(step.why === "connection" && { tuning: { model: step.model } }) }
+      // From here to admission nothing awaits: the state the move was decided on is read again, the pin the launch
+      // reads is written, and the waiting request goes to the send's one admission point (`moveWaiting`, then handOff).
       const previous = store.edges().of(edge.child)?.tuned?.rerouted
-      const rerouted = store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge
-      let taken = false
-      if (store.finTurn(edge.child)?.moving?.owner === this.generation) {
-        if (step.why === "harness") {
-          const apex: Apex = { session: edge.parentSession, thread: edge.parent, ...(this.conversationOf(edge.parent) && { conversation: this.conversationOf(edge.parent)! }) }
-          const tuned = await this.tuningOf(apex, step.harness, { brief: edge.asked.brief, clientKey: edge.op, ...(session?.cwd && { cwd: session.cwd }) })
-          const mode = childMode(this.deps.modes(step.harness), tier)
-          taken = this.deps.live.moveWaiting(conversation, wait.id, { kind: "hand-off", id: namedUuid(`moved:${wait.id}`), provider: step.harness, text: said, ...(!("refused" in tuned) && tuned.settings && { tuning: tuned.settings }), ...(mode && { modeId: mode.id }) }, actor)
-        } else {
-          taken = this.deps.live.moveWaiting(conversation, wait.id, { kind: "send", text: said, ...(step.why === "connection" && { tuning: { model: step.model } }) }, actor)
-        }
-      }
+      const decided = this.stillDecided(edge.child, wait.id)
+      const rerouted = decided ? store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge : edge
+      const taken = decided && this.deps.live.moveWaiting(conversation, wait.id, to, actor)
       if (!taken) {
-        // A Stop latched the wait, or another host has it: the move gives up, and the Fin stays where it was.
-        store.rerouteEdge(edge.child, previous)
-        hostLog("agents", "a Fin's move gave up: its wait was stopped or taken", { op: edge.op, harness })
+        // Stopped, released, another owner, or the wait no longer the same: the move is retired and nothing is sent.
+        if (decided) store.rerouteEdge(edge.child, previous)
+        moved = store.finishFinMove(edge.child, this.generation, "retired")
+        hostLog("agents", "a Fin's move was retired: what it was decided on no longer holds", { op: edge.op, harness })
+        report()
         return
       }
       moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place), stepKey(step)] })

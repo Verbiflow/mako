@@ -361,8 +361,11 @@ request with its `retry`: the continuation of a turn the limit cut, or a
 message the harness refused) moves instead, when the harness's own marker
 (`TurnReply.limit`) or the account's reading says it's a limit: the move takes
 that very request over (`LiveConversations.moveWaiting`), only while it still
-waits for its time on this host, so a Stop's latch (`pause`) or another owner
-makes the move give up, and handOff guards its send as every send's. It goes
+waits for its time on this host, and handOff guards its send as every send's.
+Right before that, with nothing awaited between, it reads again what it was
+decided on (`stillDecided`: the Fin open and not released, this host's claim
+on the same wait); when that or the request's state (a Stop's latch, `pause`)
+no longer holds, the move is retired in the store and nothing is sent. It goes
 on in the same session on another account where its driver declares
 `accountContinuation` `resumes` (Claude; `test-harness-definitions.ts`
 requires every harness to declare it), on a connection's model, or by a
