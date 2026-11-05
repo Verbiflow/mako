@@ -139,6 +139,8 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     error: z.string(),
     /** What `error` means; see `provider-failure.ts`. */
     failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+    /** A Stop retired it before it went (`LiveConversations.stopHolds`): nothing went wrong, and it waits to be sent again. */
+    stopped: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
 ])

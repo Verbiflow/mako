@@ -17,7 +17,7 @@ export function useTransferNotice(): ComposerNotice | null {
   const troubled = state.kind === "failed" || state.kind === "uncertain"
   return {
     id: `transfer:${transfer.input.id}`,
-    tone: state.kind === "failed" ? "danger" : state.kind === "uncertain" ? "caution" : "progress",
+    tone: state.kind === "failed" ? (state.stopped ? "info" : "danger") : state.kind === "uncertain" ? "caution" : "progress",
     title: recovery.title,
     description: recovery.guidance,
     detail: troubled ? (

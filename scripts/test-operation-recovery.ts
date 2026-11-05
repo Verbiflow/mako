@@ -13,6 +13,9 @@ for (const provider of ["Claude Code", "Codex", "Cursor", "Grok", "Devin", "Open
   const gone = describeTransferRecovery({ ...transfer, state: { kind: "failed", failure: "missing-folder", error: "gone" } }, provider)
   assert.deepEqual([gone.title, gone.retryLabel], ["This thread's folder no longer exists", undefined])
   assert.doesNotMatch(gone.guidance, /switch|repeat work/, "nothing started, so nothing to switch again or repeat")
+  const stopped = describeTransferRecovery({ ...transfer, state: { kind: "failed", error: "Stopped before it was sent", stopped: true } }, provider)
+  assert.deepEqual([stopped.title, stopped.retryLabel], ["Stopped before it was sent", "Send again"])
+  assert.doesNotMatch(stopped.guidance, /Could not|repeat work/, "a Stop is no failure, and nothing reached the destination")
   assert.match(describeTransferRecovery(transfer, provider).guidance, /Delivery is unconfirmed/)
   assert.match(describeTransferRecovery(transfer, provider, { ...request, id: "unrelated", status: "completed" }).guidance, /Delivery is unconfirmed/)
   const received: LiveRequest = { ...request, status: "failed", nativeDelivery: { attemptId: id, bindingId: id, ownerEpoch: "epoch", evidence: { kind: "accepted", source: "native-echo" } } }

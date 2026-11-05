@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GIVE_UP_MS, nextRetry, RETRY_STEPS_MS, transientCause, type RetryCause } from "@mako/host/contracts/delivery-retry"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
@@ -257,6 +258,48 @@ try {
       await world.close()
     }
 
+    // The person's Stop ends a turn that fails partway on capacity as it lands, and a first start waiting to go again or
+    // under way that comes back at capacity: nothing continues, starts or sends after it, nor after a restart.
+    for (const under of ["mid-turn", "first start waiting", "first start late"] as const) {
+      let fail: ((words: string) => void) | undefined
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-stop-${under.replaceAll(" ", "-")}`),
+        script,
+        starting: (conversation) => {
+          if (under === "mid-turn" || world.live.snapshot(conversation)?.requests.some((request) => request.pause === "stop")) return
+          if (under === "first start waiting") throw new Error("[unavailable] Server at capacity")
+          return new Promise<void>((_resolve, reject) => { fail = (words) => reject(new Error(words)) })
+        },
+      })
+      const label = `${harness} Stop (${under})`
+      let conversation: string
+      if (under === "mid-turn") {
+        conversation = (await world.apex(harness, "full")).conversation
+        world.say(conversation, "Stall later.")
+        await until(`${label}: the turn`, () => world.live.session(conversation)?.status === "running")
+      } else {
+        conversation = randomUUID()
+        void world.live.start(harness, world.root, { conversationId: conversation, initialRequest: { id: randomUUID(), text: "Stall later.", attachments: [] } })
+        if (under === "first start waiting") await until(`${label}: it to wait`, () => requestOf(world, conversation, "Stall later.")?.retry !== undefined)
+        else await until(`${label}: the start under way`, () => fail !== undefined)
+      }
+      await world.live.cancel(conversation)
+      fail?.("[unavailable] Server at capacity")
+      await pause(200)
+      const made = () => world.live.snapshot(conversation)!.requests
+      assert.ok(!made().some((request) => request.retry !== undefined || (request.continues && request.status !== "canceled")), `${label}: nothing waits to go by itself (${JSON.stringify(made().map((request) => [request.status, request.retry?.cause, request.continues?.reason]))})`)
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      const sentAt = sentTimes(world, conversation, "Stall later.")
+      const continued = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith("Continue where you left off")).length
+      assert.deepEqual([sentAt, continued()], [under === "mid-turn" ? 1 : 0, 0], `${label}: nothing goes after the Stop`)
+      await world.restart()
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(500)
+      assert.deepEqual([sentTimes(world, conversation, "Stall later."), continued()], [sentAt, 0], `${label}: nor after a restart`)
+      await world.close()
+    }
+
     // A message that starts its session through a transfer (no driver, nothing to wake), at capacity: the transfer goes again by itself, once.
     {
       const { world, faults } = worldOf(`${harness}-transfer`)
@@ -272,6 +315,48 @@ try {
       world.live.wakeDue(Date.now() + LATER)
       await until(`${harness} transfer: it to go`, () => requestOf(world, conversation, "Hello.")?.status === "completed")
       assert.equal(sentTimes(world, conversation, "Hello."), 1, `${harness} transfer: once`)
+      await world.close()
+    }
+
+    // The person's Stop retires a transfer waiting to go again, or one under way whatever its open comes back with: it
+    // never goes by itself, nor after a restart, and reads as stopped, not failed. Send again sends it once.
+    for (const under of ["waiting", "late capacity", "late open"] as const) {
+      let opens = 0
+      let open: ((fails: boolean) => void) | undefined
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-transfer-stop-${under}`),
+        script,
+        starting: (_conversation) => {
+          opens += 1
+          if (opens === 1 || (opens === 2 && under === "waiting")) throw new Error("[unavailable] Server at capacity")
+          if (opens > 2) return
+          return new Promise<void>((resolve, reject) => { open = (fails) => (fails ? reject(new Error("[unavailable] Server at capacity")) : resolve()) })
+        },
+      })
+      const label = `${harness} transfer Stop (${under})`
+      const conversation = randomUUID()
+      await world.live.start(harness, world.root, { conversationId: conversation })
+      await until("its start to fail", () => world.live.session(conversation)?.status === "failed")
+      world.say(conversation, "Hello.")
+      const transfer = () => world.live.snapshot(conversation)?.control?.transfers.at(-1)
+      if (under === "waiting") await until(`${label}: it to wait`, () => transfer()?.retry !== undefined)
+      else await until(`${label}: it under way`, () => transfer()?.state.kind === "preparing" && open !== undefined)
+      await world.live.cancel(conversation)
+      open?.(under === "late capacity")
+      await pause(200)
+      const stopped = transfer()
+      assert.deepEqual([stopped?.state.kind, stopped?.state.kind === "failed" && stopped.state.stopped, stopped?.retry], ["failed", true, undefined], `${label}: retired as stopped`)
+      assert.equal(describeTransferRecovery(stopped!, harness).retryLabel, "Send again", label)
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      assert.equal(sentTimes(world, conversation, "Hello."), 0, `${label}: nothing sends after the Stop`)
+      await world.restart()
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(500)
+      assert.equal(sentTimes(world, conversation, "Hello."), 0, `${label}: nor after a restart`)
+      // Send again, as its notice does (`retryTransfer`): a new transfer of the same words.
+      world.live.transfer(conversation, { ...stopped!.input, id: randomUUID() })
+      await until(`${label}: Send again to go`, () => sentTimes(world, conversation, "Hello.") === 1)
       await world.close()
     }
 

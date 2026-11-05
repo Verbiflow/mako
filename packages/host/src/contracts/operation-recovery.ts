@@ -82,6 +82,8 @@ export function describeTransferRecovery(
       }
     case "failed":
     case "uncertain": {
+      if (state.kind === "failed" && state.stopped)
+        return { title: "Stopped before it was sent", guidance: "Your request and attachments are saved. Nothing reached the destination.", retryLabel: "Send again" }
       const failure = state.kind === "failed" && state.failure
         ? describeProviderFailure(state.failure, provider) : undefined
       // Nothing started, so there is no switch to retry and no work to repeat.

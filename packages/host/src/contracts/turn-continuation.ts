@@ -209,7 +209,8 @@ export function crashedChildTurn(requests: readonly LiveRequest[], now = Date.no
     const request = requests[index]!
     if (request.status !== "canceled" && request.status !== "queued" && request.status !== "held") ran = request
   }
-  if (ran?.interruption?.reason !== "host-crashed") return undefined
+  // A turn a Stop had reached before the crash, its end unwritten, stays stopped (`LiveRequest.pause`).
+  if (ran?.interruption?.reason !== "host-crashed" || ran.pause === "stop") return undefined
   if (ran.continues?.auto && chainedContinuations(requests, ran, now) >= RESTART_CHAIN) return undefined
   if (requests.some((request) => request.continues?.requestId === ran.id)) return undefined
   return ran
