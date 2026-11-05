@@ -266,7 +266,12 @@ What waits goes the moment a place frees, by event, never a timer: a Fin
 that stops holding one (its turn ended, it stopped, failed, was archived or
 waits on its own Fins) or a place whose number rose (`capacityChanged`)
 starts the first waiter that fits, first come first started, one whose
-`after` isn't done passed over. Each queued start launches on its own, so
+`after` isn't done passed over. Every start is one record per Apex and
+client key (`StartRecord`), made before its call awaits anything: the same
+key again joins it, and the record alone holds its name, its place and its
+stop until it settles; a stop marks it, and `mako:live-start` writes no
+edge for a stopped one (`test:start-interleavings` generates schedules of
+starts, stops, preparations and crashes against it). Each queued start launches on its own, so
 a harness slow to come up holds its place, never the queue; a freed place
 is taken within a few milliseconds (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and

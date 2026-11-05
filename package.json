@@ -263,6 +263,7 @@
     "test:appshot-live": "node --import tsx scripts/test-appshot-live.mjs",
     "test:background-work": "tsx scripts/test-background-work.ts",
     "test:background-agents": "tsx scripts/test-background-agents.ts",
+    "test:start-interleavings": "tsx scripts/test-start-interleavings.ts",
     "test:fin-tuning": "tsx scripts/test-fin-tuning.ts && tsx scripts/test-fin-capacity.ts",
     "test:fin-capacity": "tsx scripts/test-fin-capacity.ts",
     "test:agents-doors": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-doors.ts",
