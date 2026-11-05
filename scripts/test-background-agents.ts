@@ -379,6 +379,84 @@ async function slotsGoAtOnce(): Promise<void> {
 }
 
 /**
+ * Queued starts launching side by side, before their edges are written: two of one name under one Apex take two
+ * names, a stop during a start's preparation cancels it, and one that can't start stays, saying why, until its Apex
+ * has heard, never dropped unseen.
+ */
+async function launchesBeforeTheirEdge(): Promise<void> {
+  const gates = new Map<string, () => void>()
+  const preparing: string[] = []
+  let limit = 0
+  const w = new AgentsWorld({
+    root: join(root, "pre-edge"),
+    finLimit: () => limit,
+    preparing: async (options) => {
+      const name = options.parent!.name
+      preparing.push(name)
+      if (name === "bad") throw new Error("its worktree couldn't be made")
+      await new Promise<void>((resolve) => gates.set(name, resolve))
+    },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      return "ok"
+    },
+  })
+  const open = () => {
+    for (const [name, gate] of gates) {
+      gates.delete(name)
+      gate()
+    }
+  }
+  try {
+    const apex = await w.apex("claude")
+    const thread = () => w.store.journalPlacement(apex.conversation)!.thread
+    const briefs = (name: string) => w.prompts.filter((prompt) => prompt.text.includes(`You're fin:${name},`)).length
+    for (const clientKey of ["first", "second"]) {
+      const queued = await w.agents.start(apex.caller, { brief: { objective: "Check" }, name: "check", queue: true, clientKey, cwd: w.root })
+      assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    }
+    limit = 2
+    w.agents.capacityChanged()
+    await waitFor(() => preparing.length === 2, "both starts preparing at once")
+    assert.deepEqual(preparing, ["check", "check-2"], "two of one name, launching side by side, take two names")
+    open()
+    await waitFor(() => w.store.queuedSpawns().length === 0 && w.store.edges().children(thread()).length === 2, "both to start")
+    assert.deepEqual(w.store.edges().children(thread()).map((edge) => edge.name).sort(), ["check", "check-2"])
+    await waitFor(() => briefs("check") + briefs("check-2") === 2, "a brief each")
+
+    // A stop while it prepares: it never starts, whatever its preparation does after.
+    limit = 3
+    preparing.length = 0
+    const late = w.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "late", queue: true, clientKey: "late", cwd: w.root })
+    await waitFor(() => preparing.includes("late"), "late preparing")
+    const stopped = await w.agents.stop(apex.caller, { child: "late" })
+    assert.deepEqual("stopped" in stopped && stopped.stopped, ["late"])
+    open()
+    const answer = await late
+    assert.ok("refused" in answer && /stopped it before it started/.test(answer.why), `its start says it was stopped: ${JSON.stringify(answer)}`)
+    assert.equal(w.store.edges().children(thread()).some((edge) => edge.name === "late" && !edge.closedAt), false, "a Fin stopped as it prepared has no open Thread")
+    assert.equal(briefs("late"), 0, "and was never sent its brief")
+    assert.equal(w.store.queuedSpawns().length, 0)
+
+    // One that can't start: it stays in line saying why, wakes its Apex, and goes once its Apex has heard.
+    limit = 2
+    const bad = await w.agents.start(apex.caller, { brief: { objective: "Bad" }, name: "bad", queue: true, clientKey: "bad", cwd: w.root })
+    assert.ok(!("refused" in bad) && bad.state === "queued", JSON.stringify(bad))
+    limit = 3
+    w.agents.capacityChanged()
+    await waitFor(() => w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && /^Not started: its worktree couldn't be made/.test(entry.state.reason ?? "")), "the refusal to show on its row")
+    await waitFor(() => w.store.queuedSpawns().length === 0, "it to go once its Apex heard", 15_000)
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.match(wake, /"bad" \(Claude\) failed: It didn't start: its worktree couldn't be made/, "its Apex hears why it didn't start")
+    assert.equal(w.store.queuedSpawns().length, 0, "and it goes once its Apex heard")
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    open()
+    await w.close()
+  }
+}
+
+/**
  * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
  */
@@ -1162,6 +1240,7 @@ try {
   await finLimit()
   await afterOrder()
   await slotsGoAtOnce()
+  await launchesBeforeTheirEdge()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()

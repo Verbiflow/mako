@@ -428,7 +428,7 @@ function stateWords(state: ChildState, report: FrontDoorChild["report"], now: nu
     case "starting":
       return "starting"
     case "queued":
-      return state.held ? `not started: ${state.held} didn't finish` : state.after?.length ? `starts after ${state.after.join(", ")}` : `queued, ${state.ahead} ahead`
+      return state.refused ? `not started: ${state.refused.replace(/^It didn't start: /, "")}` : state.held ? `not started: ${state.held} didn't finish` : state.after?.length ? `starts after ${state.after.join(", ")}` : `queued, ${state.ahead} ahead`
     case "idle":
       return "idle"
     case "blocked":

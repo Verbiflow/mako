@@ -517,6 +517,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     // A resume goes on in the mode its session ran in; a new session starts in the person's, unless its start said one.
     const modeId = options.modeId ?? (options.resume ? undefined : deps.accessMode?.(harness))
     try {
+      // A Fin its Apex stopped while its worktree and profile were prepared writes no edge: its worktree goes back below.
+      if (options.parent && !options.resume && conversations.agents && !conversations.agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
       await live.start(
         harness,
         startCwd,

@@ -61,6 +61,8 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
     after: z.array(note).max(AFTER_LIMIT).optional(),
     /** The one of them that failed or was stopped: it won't start, and its Apex is told to decide. */
     held: note.optional(),
+    /** Why it couldn't start once released: it stays, saying so, until its Apex has heard. */
+    refused: note.optional(),
   }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
   z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional() }),

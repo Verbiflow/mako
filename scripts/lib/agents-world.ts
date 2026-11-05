@@ -5,6 +5,7 @@ import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { HarnessLimit } from "@mako/host/contracts/account-usage"
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
+import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
@@ -52,6 +53,8 @@ export interface WorldOptions {
   capacity?: AgentsDeps["capacity"]
   /** The person's limit of Fins at once (`AgentsDeps.finLimit`); `FIN_LIMIT` without it. */
   finLimit?: () => number
+  /** Runs as a Fin's start prepares its worktree and profile, before its edge is written (`mako:live-start`). */
+  preparing?: (options: LiveStartOptions) => Promise<void> | void
   /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
   finCeiling?: () => number
   /** Test override for the wait before Mako continues a turn its exit cut short. */
@@ -166,6 +169,9 @@ export class AgentsWorld {
       jobs: this.jobs,
       live: this.live,
       startLive: async (harness, cwd, options) => {
+        // As `mako:live-start` does: a Fin's worktree and profile are prepared, then a stopped one writes no edge.
+        await this.options.preparing?.(options)
+        if (options.parent && !options.resume && !this.agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
         await this.live.start(harness, cwd, options)
       },
       harnesses: () => HARNESSES,

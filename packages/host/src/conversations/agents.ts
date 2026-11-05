@@ -244,6 +244,8 @@ interface QueuedStart {
   why?: Extract<QueueReason, "tree-running" | "place-full">
   /** The Apex's Fins it starts after, each once it has finished: a Fin by its Thread, or a spawn queued too by its op. */
   after?: AfterRef[]
+  /** Why it couldn't start once released: it stays, saying so, until its Apex has heard (`tellHeld`). */
+  refused?: string
 }
 
 interface AfterRef {
@@ -272,6 +274,7 @@ const QueuedStartSchema = z.object({
   }).optional(),
   why: z.enum(["tree-running", "place-full"]).optional(),
   after: z.array(z.object({ name: z.string(), child: z.string().optional(), op: z.string().optional() })).optional(),
+  refused: z.string().optional(),
 }) satisfies z.ZodType<QueuedStart>
 
 /** Where a Fin runs, as its limit counts it: `here` (this device), `device:<name>` or `cloud`. */
@@ -354,6 +357,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly launching = new Map<string, { where: string; tree: string }>()
   /** Fins holding a place now (`occupies`): one that lets go frees it for what waits, at once. */
   private readonly occupying = new Set<string>()
+  /** Names of starts launching, by their Apex's Thread, until their edges are written: two never take one. */
+  private readonly reservedNames = new Map<string, Set<string>>()
+  /** Starts their Apex stopped while they launched: `mako:live-start` writes no edge for one, and one written already ends. */
+  private readonly cancelled = new Set<string>()
+  /** Starts launching, by op, with their Apex's Thread and the name they hold, until their edges are written. */
+  private readonly inFlight = new Map<string, { thread: string; name: string }>()
   private stopped = false
   private readonly stopRoomWatch: () => void
   /** This Mac's load as a start last read it, which every answer carries while it's busy. */
@@ -823,7 +832,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * A spawn a Fin it was to start after didn't finish for: its Apex is told, to decide, and the spawn is dropped once
    * it heard (`AgentWakes`'s `delivered`). Told again by each host until then, under one id.
    */
-  private tellHeld(op: string, queued: QueuedStart, held: NonNullable<AfterStand["held"]>): void {
+  private tellHeld(op: string, queued: QueuedStart, held: NonNullable<AfterStand["held"]> | { refused: string }): void {
     const conversation = this.frontOf(queued.lead.thread, queued.lead.session)
     if (!conversation) return
     const name = queued.input.name ?? queued.input.title ?? "queued"
@@ -831,12 +840,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       id: `${HELD_PREFIX}${op}`,
       child: ThreadIdSchema.parse(namedUuid(op)),
       status: "failed",
-      summary: `It didn't start: it was to start after ${held.name}, which ${held.outcome === "stopped" ? "was stopped" : "failed"}${held.reason ? ` (${held.reason})` : ""}. Start it again with agents_start, without after or after another ${FIN_WORD}, if it should still run.`,
+      summary: "refused" in held
+        ? `It didn't start: ${held.refused.replace(/^It didn't start: /, "")} Start it again with agents_start if it should still run.`
+        : `It didn't start: it was to start after ${held.name}, which ${held.outcome === "stopped" ? "was stopped" : "failed"}${held.reason ? ` (${held.reason})` : ""}. Start it again with agents_start, without after or after another ${FIN_WORD}, if it should still run.`,
       implicit: true,
       ownerGeneration: this.generation,
       at: this.now(),
     }
-    this.wakes.notice(conversation, this.rootOf(queued.lead.thread), { id: `notice:${report.id}`, report, label: `"${name}" (${this.deps.harnessLabel(queued.harness)})`, from: held.session ?? queued.lead.session })
+    this.wakes.notice(conversation, this.rootOf(queued.lead.thread), { id: `notice:${report.id}`, report, label: `"${name}" (${this.deps.harnessLabel(queued.harness)})`, from: ("session" in held && held.session) || queued.lead.session })
   }
 
   async link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult> {
@@ -1169,25 +1180,32 @@ export class Agents implements AgentOperations, ConversationChildren {
     const one = input.child === "all" ? undefined : this.resolve(apex, input.child, false)
     if (input.child !== "all" && !one) {
       const name = finName(input.child)
-      const waiting = this.queuedOfApex(apex).find(({ spawn, queued }) => namedUuid(spawn.op) === input.child || (queued.input.name ?? queued.input.title) === name)
-      if (!waiting) return unknownFin(input.child)
-      this.unqueued(waiting.spawn.op, apex.thread)
-      hostLog("agents", "end", { op: waiting.spawn.op, outcome: "stopped", queued: true })
+      const launching = [...this.inFlight].find(([op, held]) => held.thread === apex.thread && (held.name === name || namedUuid(op) === input.child))
+      const waiting = this.queuedOfApex(apex).find(({ spawn, queued }) => namedUuid(spawn.op) === input.child || (queued.input.name ?? queued.input.title) === name || spawn.op === launching?.[0])
+      if (!waiting && !launching) return unknownFin(input.child)
+      // One launching now writes no edge, or ends at once if it wrote one: a stop is never undone by its start.
+      if (launching) this.cancelLaunch(launching[0])
+      if (waiting) this.unqueued(waiting.spawn.op, apex.thread)
+      hostLog("agents", "end", { op: waiting?.spawn.op ?? launching![0], outcome: "stopped", queued: true, ...(launching && { launching: true }) })
       // What was to start after it is its Apex's to decide now.
       void this.drain()
-      return { stopped: [waiting.queued.input.name ?? waiting.queued.input.title ?? name] }
+      return { stopped: [launching?.[1].name ?? waiting!.queued.input.name ?? waiting!.queued.input.title ?? name] }
     }
     const targets = one ? [one] : store.edges().children(apex.thread)
     const stopped: string[] = []
     // What waits goes first, so an end below doesn't start it.
-    if (input.child === "all")
+    if (input.child === "all") {
+      const launching = [...this.inFlight].filter(([, held]) => held.thread === apex.thread)
+      for (const [op] of launching) this.cancelLaunch(op)
       for (const spawn of store.queuedSpawns()) {
         const queued = parseQueued(spawn.record)
         if (queued?.lead.thread !== apex.thread) continue
         store.unqueueSpawn(spawn.op)
-        stopped.push(queued.input.name ?? queued.input.title ?? spawn.op)
+        if (!this.inFlight.has(spawn.op)) stopped.push(queued.input.name ?? queued.input.title ?? spawn.op)
         hostLog("agents", "end", { op: spawn.op, outcome: "stopped", queued: true })
       }
+      stopped.push(...launching.map(([, held]) => held.name))
+    }
     for (const edge of targets) if (await this.end(edge, why)) stopped.push(edge.name)
     this.forget(apex.thread)
     return { stopped }
@@ -1264,9 +1282,39 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   private async launch(op: string, queued: QueuedStart): Promise<AgentsStartResult> {
     const store = this.store()!
-    const { lead: apex, input, tier, harness } = queued
+    const { lead: apex, input } = queued
     const began = performance.now()
-    const name = uniqueName(input.name ?? input.title ?? input.brief.objective, new Set(store.edges().children(apex.thread).map((edge) => edge.name)))
+    // Its name is held from here until its edge is written: a start launching beside it, under the same Apex, takes the next one.
+    const reserved = this.reservedNames.get(apex.thread) ?? new Set<string>()
+    const name = uniqueName(input.name ?? input.title ?? input.brief.objective, new Set([...store.edges().children(apex.thread).map((edge) => edge.name), ...reserved]))
+    reserved.add(name)
+    this.reservedNames.set(apex.thread, reserved)
+    this.inFlight.set(op, { thread: apex.thread, name })
+    try {
+      return await this.launchAs(op, queued, name, began)
+    } finally {
+      reserved.delete(name)
+      if (!reserved.size) this.reservedNames.delete(apex.thread)
+      this.inFlight.delete(op)
+      this.cancelled.delete(op)
+    }
+  }
+
+  /** A start launching that its Apex stopped: no edge is written for it, and one written already ends as it comes up. */
+  private cancelLaunch(op: string): void {
+    this.cancelled.add(op)
+    const edge = this.store()?.edges().byOp(op)
+    if (edge) void this.end(edge, `its ${APEX_WORD} stopped it`)
+  }
+
+  /** Whether a start launching is still wanted: one its Apex stopped before its edge was written isn't (`mako:live-start` asks). */
+  startWanted(op: string): boolean {
+    return !this.cancelled.has(op)
+  }
+
+  private async launchAs(op: string, queued: QueuedStart, name: string, began: number): Promise<AgentsStartResult> {
+    const store = this.store()!
+    const { lead: apex, input, tier, harness } = queued
     const cwd = input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined)
     if (!cwd) return this.refuse(op, "unavailable", "There's no folder to start it in: name one, or start it from a Thread that has one.")
     const conversationId = namedUuid(op)
@@ -1318,6 +1366,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!store.edges().byOp(op)) {
         this.starting.delete(op)
         this.forget(apex.thread)
+        if (this.cancelled.delete(op)) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
         return this.refuse(op, "unavailable", `It didn't start: ${errorMessage({ error })}`)
       }
       hostWarn("agents", "a Fin's start failed after its edge was written; it shows as failed", { op, error: errorMessage({ error }) })
@@ -1326,6 +1375,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const edge = store.edges().byOp(op)
     if (!edge) return this.refuse(op, "unavailable", `Its Thread was made without its edge; it was not started as a ${FIN_WORD}.`)
+    // Stopped while its edge was being written: it ends now, as a stop would have.
+    if (this.cancelled.delete(op)) {
+      await this.end(edge, `its ${APEX_WORD} stopped it before it started`)
+      return this.started(edge, apex, false)
+    }
     this.conversations.set(edge.child, conversationId)
     this.childOf.set(conversationId, edge.child)
     hostLog("agents", "start admitted", { op, child: edge.child, harness, access: tier, ms: Math.round(performance.now() - began) })
@@ -1475,6 +1529,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       for (const spawn of store.queuedSpawns()) {
         if (this.launching.has(spawn.op)) continue
         const queued = parseQueued(spawn.record)
+        if (queued?.refused) {
+          this.tellHeld(spawn.op, queued, { refused: queued.refused })
+          continue
+        }
         if (queued?.after?.length) {
           const stand = this.afterStand(queued)
           if (stand.held) this.tellHeld(spawn.op, queued, stand.held)
@@ -1498,11 +1556,15 @@ export class Agents implements AgentOperations, ConversationChildren {
         // Each starts on its own: one whose harness is slow to come up holds its place, never the queue behind it.
         this.launching.set(spawn.op, { where, tree: spawn.tree })
         void this.launch(spawn.op, queued)
-          .catch((error: Error) => hostWarn("agents", "a queued start failed", { op: spawn.op, error: errorMessage({ error }) }))
-          .finally(() => {
+          .then((answer) => ("refused" in answer ? answer.why : undefined), (error: Error) => `It didn't start: ${errorMessage({ error })}`)
+          .then((refused) => {
             this.launching.delete(spawn.op)
-            store.unqueueSpawn(spawn.op)
-            this.forget(queued.lead.thread)
+            // One its Apex stopped is gone; one that couldn't start stays, saying why, until its Apex has heard (`tellHeld`).
+            if (refused && store.queuedSpawns().some((each) => each.op === spawn.op)) {
+              hostWarn("agents", "a queued start couldn't start; its Apex is told", { op: spawn.op, why: refused })
+              store.keepQueuedSpawn(spawn.op, JSON.stringify({ ...queued, refused: refused.slice(0, 2000) } satisfies QueuedStart))
+            } else store.unqueueSpawn(spawn.op)
+            this.queueChanged(queued.lead.thread)
             void this.drain()
           })
       }
@@ -1835,7 +1897,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const store = this.store()!
     const closed = store.keepEdge({ ...edge, closedAt: this.now(), closedReason: why.slice(0, 2000) })
-    // Closed, it holds no place: the next waiting Fin starts now, not once its turn has been cancelled.
+    // What waits looks again now; a Fin whose turn is still being cancelled holds its place until that's done.
     this.occupying.delete(edge.child)
     void this.drain()
     this.runs.stop(edge.child, why.slice(0, 2000))
@@ -2303,7 +2365,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         startedBy: { kind: "agent", session: SessionIdSchema.parse(queued.lead.session) },
         createdAt: spawn.at,
       }
-      return [childEntry(placeholder, { source: "live", queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }) } }, {})]
+      return [childEntry(placeholder, { source: "live", queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }), ...(queued.refused && { refused: queued.refused }) } }, {})]
     })
   }
 
@@ -2736,6 +2798,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** A spawn left the queue without starting: its Apex's roster drops it. */
   private unqueued(op: string, thread: string): void {
     this.store()?.unqueueSpawn(op)
+    this.queueChanged(thread)
+  }
+
+  /** A spawn of this Apex's queue changed: its roster is read again, and its conversations hear it. */
+  private queueChanged(thread: string): void {
     this.forget(thread)
     for (const conversation of this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, false)
   }
@@ -2745,7 +2812,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const spawn = this.store()?.queuedSpawns().find((queued) => queued.op === op)
     const queued = spawn && parseQueued(spawn.record)
     if (!queued) return
-    hostLog("agents", "end", { op, outcome: "stopped", queued: true, why: "a Fin it was to start after didn't finish" })
+    hostLog("agents", "end", { op, outcome: "stopped", queued: true, why: queued.refused ? "it couldn't start" : "a Fin it was to start after didn't finish" })
     this.unqueued(op, queued.lead.thread)
   }
 
