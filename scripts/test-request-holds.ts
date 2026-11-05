@@ -87,6 +87,8 @@ try {
     assert.equal(holdOf(row("a", "held", { wake: { at: 9, after: "x" } }))?.kind, "until")
     assert.deepEqual(holdOf(row("a", "held", { pause: "stop" })), { kind: "paused", by: "stop" })
     assert.deepEqual(holdOf(row("a", "held")), { kind: "paused", by: "mako" })
+    assert.deepEqual(holdOf(row("a", "held", { pause: "stop", retry })), { kind: "paused", by: "stop" }, "a Stop overrides a retry")
+    assert.deepEqual(holdOf(row("a", "held", { pause: "stop", wake: { at: 9, after: "x" } })), { kind: "paused", by: "stop" }, "and a timed send")
     const next = (rows: Row[], newestOnly = false) => nextInLine(rows, newestOnly)?.id
     assert.equal(next([row("p", "held", { pause: "stop" }), row("q", "queued")]), "q", "what a Stop paused lets a later message go")
     assert.equal(next([row("p", "held"), row("q", "queued")]), undefined, "what Mako's exit or a crash paused keeps its place")
@@ -117,6 +119,31 @@ try {
       world.live.editQueued(conversation, { requestId: one.id, expectedText: one.text, change: { kind: "resume" } })
       await until("Resume to send it", () => requestOf(world, conversation, "One.")?.status === "completed")
       assert.deepEqual(sent(world, conversation), ["Hold", "Two", "One"])
+      await world.close()
+    }
+
+    // The person's Stop overrides every hold: a message about to go again and one timed both pause, and nothing sends by itself, across a restart too.
+    {
+      let fails = true
+      const world = new AgentsWorld({ root: join(root, `${harness}-stop-overrides`), script, refusePrompt: () => (fails ? ((fails = false), "429 Too Many Requests") : undefined) })
+      const { conversation } = await world.apex(harness, "full")
+      world.live.submit(conversation, randomUUID(), "Two.", [], undefined, undefined, undefined, undefined, { wake: { at: Date.now() + 60_000, after: "earlier" } })
+      world.say(conversation, "One.")
+      await until("One to wait to go again", () => holdOf(requestOf(world, conversation, "One.") ?? row("x", "queued"))?.kind === "retry")
+      await world.live.cancel(conversation)
+      for (const words of ["One.", "Two."]) assert.deepEqual(holdOf(requestOf(world, conversation, words)!), { kind: "paused", by: "stop" }, `${harness}: ${words} paused by the Stop`)
+      world.live.wakeDue(Date.now() + 11 * 60_000)
+      await pause(300)
+      await world.restart()
+      world.live.wakeDue(Date.now() + 11 * 60_000)
+      await pause(500)
+      assert.deepEqual(sent(world, conversation), [], `${harness}: nothing after the Stop, nor after a restart`)
+      for (const words of ["One.", "Two."]) {
+        const request = requestOf(world, conversation, words)!
+        world.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
+      }
+      await until(`${harness}: Resume to send them`, () => requestOf(world, conversation, "Two.")?.status === "completed")
+      assert.deepEqual([...sent(world, conversation)].sort(), ["One", "Two"])
       await world.close()
     }
 

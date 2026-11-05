@@ -33,9 +33,11 @@ export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing
   if (request.status !== "held") return undefined
   if (request.signIn) return { kind: "sign-in", hold: request.signIn }
   if (request.editing) return { kind: "edit" }
+  // A Stop overrides every hold that would go by itself: nothing it paused goes until a deliberate resume.
+  if (request.pause === "stop") return { kind: "paused", by: "stop" }
   if (request.retry) return { kind: "retry", retry: request.retry }
   if (request.wake) return { kind: "until", wake: request.wake }
-  return { kind: "paused", by: request.pause === "stop" ? "stop" : "mako" }
+  return { kind: "paused", by: "mako" }
 }
 
 /** Whether a message held so keeps its place in line: nothing behind it goes first. */
