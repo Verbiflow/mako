@@ -1180,7 +1180,8 @@ effect's, else the text its shell declares as `exitText`), a read's range
 row that draws them: `identifyTool` runs for every call a decoder reads, and
 counting a patch's lines there slowed every harness's decoding. A turn's folded summary counts a
 failure only while no later call of the same kind with the same normalized
-arguments went through (`unfixedFailures`); the failed row still says failed.
+arguments (a command's in the same folder) succeeded, by the exit facts its
+row shows (`unfixedFailures`); the failed row still says failed.
 
 What a call did to the machine is read once too, in
 `@mako/sessions/tool-effect-reading`: its `ToolEffect`s
