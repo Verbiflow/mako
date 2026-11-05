@@ -14,30 +14,17 @@ import { appendFileSync, readdirSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { writeHeapSnapshot } from "node:v8"
 import { fileURLToPath } from "node:url"
 import { topic } from "@mako/host/base/topic"
-import { memorySecrets } from "@mako/host/base/secrets"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { STARTUP_SILENCE_MS, withStartupClock, type StartupClock } from "@mako/host/harnesses/provider-startup"
-import { createClaudeSdkDriver } from "@mako/host/harnesses/claude/sdk-driver"
-import { createCursorSdkDriver } from "@mako/host/harnesses/cursor/sdk/driver"
-import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
-import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
-import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
 import { FinCostSampler } from "@mako/host/conversations/fin-cost-sampler"
 import type { ProcessRow } from "@mako/host/usage/mako-footprint"
 import { readProcessTable } from "@mako/host/usage/mako-footprint"
 import { readRetainedApprovalDecisions, RetainedApprovalDecisions } from "@mako/host/harnesses/retained-approval-decisions"
-import { installClaude } from "@mako/host/harnesses/claude/index"
-import { installCodex } from "@mako/host/harnesses/codex/index"
-import { installDevin } from "@mako/host/harnesses/devin/index"
-import { installGrok } from "@mako/host/harnesses/grok/index"
-import { installOpenCode } from "@mako/host/harnesses/opencode/index"
-import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { admitted } from "./fixtures/admitted-start.ts"
@@ -47,6 +34,7 @@ import { pointAt, SCRIPTED_GETS } from "./scripted-harness-env.ts"
 import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
 import { scriptedWindsurf } from "./scripted-windsurf.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
+import { controlText, heapMarkers, plantControls, REPRESENTATIONS } from "./heap-markers.ts"
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/native-failure-agent.mjs", import.meta.url))
 const HARNESS_SRC = fileURLToPath(new URL("../packages/host/src/harnesses", import.meta.url))
@@ -54,8 +42,13 @@ const HANG = 90_000
 const TURNS = 12
 /** Prompts a snapshot may still hold. OpenCode keeps a window of the last 11; everyone else keeps the one in hand. */
 const OPENCODE_WINDOW = 11
+/** What every piece of text the heap check plants starts with. */
+const HEAP_MARK = "mako-heap-"
+const CURSOR_KEY = "key_fixture_0123456789abcdef"
 const nativeStores = new NativeStores(false)
 const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+/** Every registered harness's live driver, from the one list the host installs: a harness is here because it registered. */
+const drivers = sealedDrivers()
 
 interface Spawned { pid: number; owner: string; executable: string }
 const spawned: Spawned[] = []
@@ -152,9 +145,95 @@ async function withProcessEnv(overrides: NodeJS.ProcessEnv, work: () => Promise<
 }
 
 function registered(provider: string): ProviderLiveDriver {
-  const driver = providerHost.liveDrivers.get(provider)
-  if (!driver) throw new Error(`${provider} is registered and has no driver`)
+  const driver = drivers.get(provider)
+  if (!driver) throw new Error(`${provider} is registered and has no live driver of its own`)
   return driver
+}
+
+/**
+ * What the suite needs of each harness beyond its driver: how to put a stand-in that speaks its wire where its
+ * registered driver looks for the CLI, and, when the live sections can't run here, why. A registered harness
+ * without an entry fails the run; it is never tested through another harness's driver.
+ */
+interface Conformance {
+  /** The process environment that points the registered driver at the stand-in, written into `dir`, that `env` drives. */
+  standIn(dir: string, env: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv>
+  /** Why cancel, steer and the heap stay off this suite, when they do. */
+  liveElsewhere?: string
+}
+
+const onPath = (dir: string) => `${dir}${process.env.PATH ? `:${process.env.PATH}` : ""}`
+const CONFORMANCE = new Map<string, Conformance>([
+  ["claude", {
+    standIn: async (dir, env) => {
+      await shell(join(dir, "claude"), env)
+      return { CLAUDE_CODE_EXECUTABLE: join(dir, "claude"), CLAUDE_CONFIG_DIR: join(dir, "claude-config") }
+    },
+  }],
+  ["codex", {
+    standIn: async (dir, env) => {
+      await shell(join(dir, "codex"), env)
+      return { CODEX_EXECUTABLE: join(dir, "codex") }
+    },
+  }],
+  ["cursor", {
+    standIn: async (_dir, env) => ({ ...env, CURSOR_SDK_CHILD: FIXTURE, CURSOR_API_KEY: CURSOR_KEY }),
+    liveElsewhere: "sections 5 and 6 stay on the opt-in probe that uses the person's sign-in",
+  }],
+  ["opencode", {
+    standIn: async (dir, env) => {
+      await shell(join(dir, "opencode"), env)
+      return { OPENCODE_BIN_PATH: join(dir, "opencode") }
+    },
+  }],
+  ["grok", {
+    standIn: async (dir, env) => {
+      await shell(join(dir, "grok"), env)
+      return { PATH: onPath(dir) }
+    },
+  }],
+  ["devin", {
+    standIn: async (dir, env) => {
+      await shell(join(dir, "devin"), { ...env, MAKO_STANDIN_HANDSHAKE_VERSION: "0.0.0-dev" })
+      return { DEVIN_CLI_PATH: join(dir, "devin") }
+    },
+  }],
+])
+
+function conformance(provider: string): Conformance {
+  const entry = CONFORMANCE.get(provider)
+  if (!entry) throw new Error(`${provider} is registered and has no stand-in for its wire in CONFORMANCE`)
+  return entry
+}
+
+/** Why `ids` can't be tested as registered, if they can't: a harness without its own driver or entry, or an entry for none. */
+function unmatched(ids: readonly string[], live: readonly string[], table: readonly string[]): string[] {
+  return [
+    ...ids.filter((id) => !live.includes(id)).map((id) => `${id} is registered and has no live driver of its own`),
+    ...ids.filter((id) => !table.includes(id)).map((id) => `${id} is registered and has no stand-in for its wire in CONFORMANCE`),
+    ...live.filter((id) => !ids.includes(id)).map((id) => `${id} has a live driver and isn't registered`),
+    ...table.filter((id) => !ids.includes(id)).map((id) => `CONFORMANCE has ${id}, which isn't registered`),
+  ]
+}
+
+/** Every registered harness, each with its own driver and its own conformance entry, and no entry for anything else. */
+function harnesses(): string[] {
+  const ids = registeredHarnessIds()
+  // A harness registered with no driver of its own fails here, never tested through another's.
+  assert.deepEqual(unmatched([...ids, "future"], [...drivers.keys()], [...CONFORMANCE.keys()]), [
+    "future is registered and has no live driver of its own",
+    "future is registered and has no stand-in for its wire in CONFORMANCE",
+  ])
+  assert.deepEqual(unmatched(ids, [...drivers.keys()], [...CONFORMANCE.keys()]), [], "a registered harness can't be tested through its own driver")
+  return ids
+}
+
+/** Runs `work` with `provider`'s registered driver pointed at a stand-in that behaves as `behavior`. */
+async function withStandIn(provider: string, behavior: string, work: (made: { dir: string; pids: string; env: NodeJS.ProcessEnv }) => Promise<void>): Promise<void> {
+  const made = await peer(provider, behavior)
+  const overrides = await conformance(provider).standIn(made.dir, made.env)
+  const env = { ...process.env, ...overrides }
+  await withProcessEnv(overrides, () => work({ dir: made.dir, pids: made.pids, env }))
 }
 
 async function silence(provider: string, driver: ProviderLiveDriver, launchEnv: NodeJS.ProcessEnv, dir: string, pidFile: string): Promise<void> {
@@ -200,56 +279,8 @@ async function silence(provider: string, driver: ProviderLiveDriver, launchEnv: 
 }
 
 async function startup(): Promise<void> {
-  const ids = registeredHarnessIds()
-  const covered = ["codex", "grok", "devin", "claude", "opencode", "cursor"]
-  assert.deepEqual([...ids].sort(), [...covered].sort(), "a registered harness has no silent peer")
-  for (const provider of ids) {
-    const made = await peer(provider, "hang")
-    if (provider === "codex") {
-      const executable = join(made.dir, "codex")
-      await shell(executable, made.env)
-      await withProcessEnv({ CODEX_EXECUTABLE: executable }, () => silence(provider, registered(provider), { ...process.env, CODEX_EXECUTABLE: executable }, made.dir, made.pids))
-    } else if (provider === "opencode") {
-      const executable = join(made.dir, "opencode")
-      await shell(executable, made.env)
-      await withProcessEnv({ OPENCODE_BIN_PATH: executable }, () => silence(provider, registered(provider), { ...process.env, OPENCODE_BIN_PATH: executable }, made.dir, made.pids))
-    } else if (provider === "grok") {
-      const executable = join(made.dir, "grok")
-      await shell(executable, made.env)
-      const path = `${made.dir}${process.env.PATH ? `:${process.env.PATH}` : ""}`
-      await withProcessEnv({ PATH: path }, () => silence(provider, registered(provider), { ...process.env, PATH: path }, made.dir, made.pids))
-    } else if (provider === "devin") {
-      const executable = join(made.dir, "devin")
-      await shell(executable, { ...made.env, MAKO_STANDIN_HANDSHAKE_VERSION: "0.0.0-dev" })
-      await withProcessEnv({ DEVIN_CLI_PATH: executable }, () => silence(provider, registered(provider), { ...process.env, DEVIN_CLI_PATH: executable }, made.dir, made.pids))
-    } else if (provider === "claude") {
-      const executable = join(made.dir, "claude")
-      await shell(executable, made.env)
-      const driver = createClaudeSdkDriver({
-        available: () => true,
-        configDir: () => join(made.dir, "claude-config"),
-        configure: async (cwd) => ({ options: { cwd, pathToClaudeCodeExecutable: executable, env: { ...process.env, ...made.env } }, account: { name: "default" } }),
-        query: async (input) => query(input),
-      })
-      await silence(provider, driver, { ...process.env, ...made.env }, made.dir, made.pids)
-    } else {
-      let extra: NodeJS.ProcessEnv = {}
-      const driver = createCursorSdkDriver({
-        stores: nativeStores,
-        auth: new CursorSdkAuth({
-          env: async () => ({ CURSOR_API_KEY: "key_fixture_0123456789abcdef" }),
-          openUrl: async () => { throw new Error("The stand-in does not sign in") },
-          credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
-          cliKey: async () => null,
-        }),
-        stateRoot: () => join(made.dir, "cursor-state"),
-        home: made.dir,
-        client: (options) => new CursorSdkClient({ ...options, entry: FIXTURE, env: { ...options.env, ...extra, ELECTRON_RUN_AS_NODE: "1" } }),
-      })
-      extra = made.env
-      await silence(provider, driver, { ...process.env, CURSOR_API_KEY: "key_fixture_0123456789abcdef" }, made.dir, made.pids)
-    }
-  }
+  for (const provider of harnesses())
+    await withStandIn(provider, "hang", (made) => silence(provider, registered(provider), made.env, made.dir, made.pids))
 }
 
 function sourceFiles(dir: string): string[] {
@@ -260,13 +291,55 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
-async function crash(): Promise<void> {
-  const allowed = new Set(["accounts-common.ts", "retained-approval-decisions.ts"])
-  const writers = sourceFiles(HARNESS_SRC).filter((path) => readFileSync(path, "utf8").includes("writeFile("))
-  for (const path of writers) {
-    const name = path.split("/").pop() ?? path
-    assert.ok(allowed.has(name), `${path} writes a file beside the publisher`)
+/** Node's calls that write a whole file in place, by any spelling: imported, aliased, a method, or named in a string. */
+const WHOLE_FILE_WRITER = /\b(writeFile|writeFileSync|createWriteStream|copyFile|copyFileSync|cp|cpSync)\b/g
+
+/**
+ * Each harness file that may name a whole-file writer without the publisher, how many times, and why. A new
+ * writer, here or anywhere else, fails: it has to go through `publishFile`, or earn a line here.
+ */
+/** How many times a file may name a whole-file writer, and why it may. */
+interface Allowance {
+  count: number
+  why: string
+}
+
+const WRITERS_BESIDE_THE_PUBLISHER = new Map<string, Allowance>([
+  ["accounts-common.ts", { count: 2, why: "an empty login marker, created exclusively (`wx`): it is never rewritten" }],
+  ["retained-approval-decisions.ts", { count: 1, why: "appends a line through a handle opened to append: a torn line is dropped on read" }],
+  ["cursor/sdk/fork.ts", { count: 3, why: "clones a store into a new path, `cp -c -n` or `COPYFILE_EXCL`: never over a file that exists" }],
+])
+
+/** How often each file under `root` names a whole-file writer, outside comments. */
+function writers(files: { path: string; text: string }[]): Map<string, number> {
+  const named = new Map<string, number>()
+  for (const { path, text } of files) {
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
+    const count = code.match(WHOLE_FILE_WRITER)?.length ?? 0
+    if (count) named.set(path, count)
   }
+  return named
+}
+
+function unlisted(named: Map<string, number>): string[] {
+  return [...named].filter(([path, count]) => WRITERS_BESIDE_THE_PUBLISHER.get(path)?.count !== count).map(([path, count]) => `${path} (${count})`)
+}
+
+async function crash(): Promise<void> {
+  const sources = sourceFiles(HARNESS_SRC).map((path) => ({ path: path.slice(HARNESS_SRC.length + 1), text: readFileSync(path, "utf8") }))
+  assert.deepEqual(unlisted(writers(sources)), [], "a harness writes a whole file beside the publisher")
+  for (const [path, { count }] of WRITERS_BESIDE_THE_PUBLISHER)
+    assert.equal(writers(sources).get(path), count, `${path} no longer writes as WRITERS_BESIDE_THE_PUBLISHER says; trim its entry`)
+  // The scan's own control: each spelling a new harness could use is caught.
+  const spellings = [
+    "import { writeFileSync } from \"node:fs\"",
+    "import { writeFile as save } from \"node:fs/promises\"",
+    "await fs.promises.writeFile (path, text)",
+    "fs[\"writeFileSync\"](path, text)",
+    "const out = createWriteStream(path)",
+  ]
+  for (const text of spellings)
+    assert.deepEqual(unlisted(writers([{ path: "future/index.ts", text }])), ["future/index.ts (1)"], `the scan misses ${text}`)
   const dir = await mkdtemp(join(tmpdir(), "mako-conform-append-"))
   try {
     const store = new RetainedApprovalDecisions(dir)
@@ -360,42 +433,29 @@ async function cost(): Promise<void> {
 }
 
 async function cursorCancel(): Promise<void> {
-  const made = await peer("cursor", "hang-on-prompt")
-  let extra: NodeJS.ProcessEnv = {}
-  const driver = createCursorSdkDriver({
-    stores: nativeStores,
-    auth: new CursorSdkAuth({
-      env: async () => ({ CURSOR_API_KEY: "key_fixture_0123456789abcdef" }),
-      openUrl: async () => { throw new Error("The stand-in does not sign in") },
-      credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
-      cliKey: async () => null,
-    }),
-    stateRoot: () => join(made.dir, "cursor-state"),
-    home: made.dir,
-    client: (options) => new CursorSdkClient({ ...options, entry: FIXTURE, env: { ...options.env, ...extra, ELECTRON_RUN_AS_NODE: "1" } }),
+  const driver = registered("cursor")
+  await withStandIn("cursor", "hang-on-prompt", async (made) => {
+    const id = randomUUID()
+    let session: LiveSessionState | undefined
+    try {
+      await driver.start(made.dir, admitted("cursor", {
+        conversationId: id,
+        emit: (event) => { if (event.type === "live-session") session = event.session },
+        mcpSnapshot: async () => ({ cwd: made.dir, generatedAt: Date.now(), servers: [], providers: [] }),
+      }, { env: made.env }))
+      const prompting = driver.prompt(id, "hang here", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+      prompting.catch(() => {})
+      await until("cursor's turn is running", () => session?.status === "running")
+      await driver.cancel(id)
+      await until("cursor leaves the running turn", () => session?.status !== "running")
+      console.log(`cursor: cancel left the session ${session?.status}`)
+    } finally {
+      await Promise.resolve(driver.close(id)).catch(() => {})
+      const recorded = await readFile(made.pids, "utf8").then((text) => z.object({ pid: z.number() }).safeParse(JSON.parse(text)).data, () => undefined)
+      if (recorded?.pid) await until("cursor's stand-in ends", () => reaped(recorded.pid!)).catch(() => { process.kill(recorded.pid!, "SIGKILL") })
+      await rm(made.dir, { recursive: true, force: true })
+    }
   })
-  extra = made.env
-  const id = randomUUID()
-  let session: LiveSessionState | undefined
-  const started = driver.start(made.dir, admitted("cursor", {
-    conversationId: id,
-    emit: (event) => { if (event.type === "live-session") session = event.session },
-    mcpSnapshot: async () => ({ cwd: made.dir, generatedAt: Date.now(), servers: [], providers: [] }),
-  }, { env: { ...process.env, CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
-  try {
-    await started
-    const prompting = driver.prompt(id, "hang here", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
-    prompting.catch(() => {})
-    await until("cursor's turn is running", () => session?.status === "running")
-    await driver.cancel(id)
-    await until("cursor leaves the running turn", () => session?.status !== "running")
-    console.log(`cursor: cancel left the session ${session?.status}`)
-  } finally {
-    await Promise.resolve(driver.close(id)).catch(() => {})
-    const recorded = await readFile(made.pids, "utf8").then((text) => z.object({ pid: z.number() }).safeParse(JSON.parse(text)).data, () => undefined)
-    if (recorded?.pid) await until("cursor's stand-in ends", () => reaped(recorded.pid!)).catch(() => { process.kill(recorded.pid!, "SIGKILL") })
-    await rm(made.dir, { recursive: true, force: true })
-  }
 }
 
 interface Model {
@@ -534,12 +594,9 @@ async function memory(harness: string, driver: ProviderLiveDriver, sandbox: Sand
   const listed = join(sandbox.home, "turn-tokens.txt")
   const rss: number[] = []
   const heap: number[] = []
-  // One string, not a pair of pieces. A heap snapshot lists the pieces separately, so a search for the whole would miss it.
-  const sentinel = Buffer.from(`mako-sentinel-${randomUUID()}`, "utf8").toString("utf8")
-  const pinned = { sentinel }
   try {
     for (let n = 1; n <= TURNS; n += 1) {
-      const token = Buffer.from(`mako-turn-${harness}-${n}-${randomUUID()}`, "utf8").toString("utf8")
+      const token = Buffer.from(`${HEAP_MARK}turn-${harness}-${n}-${randomUUID()}`, "utf8").toString("utf8")
       appendFileSync(listed, `${token}\n`)
       const before = model.heard.length
       const prompting = driver.prompt(opened.id, `${token} Reply with ok.`, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
@@ -556,34 +613,64 @@ async function memory(harness: string, driver: ProviderLiveDriver, sandbox: Sand
     }
     model.release()
     collect()
-    const snap = join(sandbox.home, "heap.heapsnapshot")
-    writeHeapSnapshot(snap)
-    const body = readFileSync(snap)
-    assert.ok(body.includes(pinned.sentinel), "the snapshot cannot see a live string, so it cannot prove what the heap dropped")
+    // What a harness that leaked would hold, in every form the search reads: each must be found, or the search
+    // can't tell a heap that dropped the earlier turns from one it can't see into.
+    const control = randomUUID()
+    const controls = plantControls(`${HEAP_MARK}control-`, control)
+    const found = await heapMarkers(HEAP_MARK, join(sandbox.home, "heap.heapsnapshot"))
+    controls.release()
+    for (const kind of REPRESENTATIONS)
+      assert.ok(found.some((hit) => hit.in === kind && hit.text === controlText(`${HEAP_MARK}control-`, kind, control)), `the heap search can't see text kept as a ${kind}, so it can't prove what the heap dropped`)
     const tokens = readFileSync(listed, "utf8").trim().split("\n")
     const kept = harness === "opencode" ? OPENCODE_WINDOW : 1
     const gone = tokens.slice(0, Math.max(0, tokens.length - kept))
-    for (const token of gone) assert.ok(!body.includes(token), `${harness} retains ${token} after ${TURNS} turns and a collection`)
-    console.log(`${harness}: rss MB ${rss.join(" ")}; heap MB ${heap.join(" ")}; ${gone.length} earlier turns absent from the heap`)
+    for (const token of gone) {
+      const held = found.filter((hit) => hit.text.startsWith(token)).map((hit) => hit.in)
+      assert.deepEqual(held, [], `${harness} retains ${token} after ${TURNS} turns and a collection, as a ${held.join(", ")}`)
+    }
+    console.log(`${harness}: rss MB ${rss.join(" ")}; heap MB ${heap.join(" ")}; ${gone.length} earlier turns absent from its strings and bytes`)
   } finally {
     await Promise.resolve(driver.close(opened.id)).catch(() => {})
   }
 }
 
-const drivers = sealedDrivers([installClaude, installCodex, installOpenCode, installGrok, installDevin])
-
-await startup()
-await crash()
-await cost()
-await cursorCancel()
-for (const harness of ["claude", "codex", "opencode", "grok", "devin"]) {
-  const driver = drivers.get(harness)
-  if (!driver) throw new Error(`${harness} has no sealed driver`)
-  if (!driver.available(process.cwd())) {
-    console.log(`${harness}: sections 2, 5 and 6 skipped, the CLI is not installed`)
-    continue
-  }
-  await live(harness, driver)
+/** Stops every driver this run touched, and the host's, so nothing they own outlives the run. */
+async function stopAll(): Promise<void> {
+  for (const driver of [...drivers.values(), ...providerHost.liveDrivers.list()]) await Promise.resolve(driver.stop?.()).catch(() => {})
 }
-console.log("cursor: sections 5 and 6 stay on the opt-in probe that uses the person's sign-in")
+
+/**
+ * Fails the run when anything still keeps Node running once every driver is stopped: a worker, a port, a server, a
+ * process or a timer a driver left behind would hold a real host's event loop the same way. Closing is
+ * asynchronous, so it waits for what is closing, up to the hang guard; anything still there is named.
+ */
+async function nothingLeftOpen(): Promise<void> {
+  const open = () => process.getActiveResourcesInfo().filter((kind) => kind !== "TTYWrap" && kind !== "Timeout")
+  await until("every handle the drivers opened closes", () => open().length === 0, 20_000).catch(() => {
+    throw new Error(`still open after every driver stopped: ${open().join(", ")}`)
+  })
+}
+
+try {
+  await startup()
+  await crash()
+  await cost()
+  await cursorCancel()
+  for (const harness of harnesses()) {
+    const driver = registered(harness)
+    const elsewhere = conformance(harness).liveElsewhere
+    if (elsewhere) {
+      console.log(`${harness}: ${elsewhere}`)
+      continue
+    }
+    if (!driver.available(process.cwd())) {
+      console.log(`${harness}: sections 2, 5 and 6 skipped, the CLI is not installed`)
+      continue
+    }
+    await live(harness, driver)
+  }
+} finally {
+  await stopAll()
+}
+await nothingLeftOpen()
 console.log("harness conformance passed")
