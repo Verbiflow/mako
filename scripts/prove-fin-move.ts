@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import { execFile, spawn, type ChildProcess } from "node:child_process"
 import { DatabaseSync } from "node:sqlite"
 import { randomUUID } from "node:crypto"
