@@ -1957,8 +1957,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const store = this.store()!
     const closed = store.keepEdge({ ...edge, closedAt: this.now(), closedReason: why.slice(0, 2000) })
-    // What waits looks again now; a Fin whose turn is still being cancelled holds its place until that's done.
-    this.occupying.delete(edge.child)
+    // What waits looks again now; a Fin whose turn is still being cancelled holds its place until that's done (`occupies`).
     void this.drain()
     this.runs.stop(edge.child, why.slice(0, 2000))
     if (conversation) await this.halt(edge, conversation)
@@ -2347,9 +2346,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** A Fin at work holds a place against the budgets; one only waiting for its own Fins or its move holds none, or they'd wait for it. */
+  /**
+   * Whether a Fin holds a place: by its run's own life, never by how it reads. From its launch until its harness has
+   * finished, or finished cancelling, it holds one; a Fin shown stopped whose turn is still being cancelled still does.
+   * One only waiting for its own Fins or its move, or on a question, holds none, or its Fins would wait for it.
+   */
   private occupies(edge: ThreadParent): boolean {
-    const kind = this.stateOf(edge).kind
-    return (kind === "working" || kind === "starting") && this.childReading(edge).awaiting === undefined
+    if (this.starting.has(edge.op)) return true
+    const reading = this.childReading(edge)
+    if (reading.starting) return true
+    return reading.working === true && reading.awaiting === undefined && reading.waiting === undefined
   }
 
   /** Spawns waiting for room in a place, every tree's; with none named, in every place. */

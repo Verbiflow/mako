@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsStartResult } from "@mako/host/contracts/agent-tools"
+import type { AgentCaller } from "@mako/host/contracts/agents"
 import { z } from "zod"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
@@ -40,6 +41,7 @@ type Step =
   | { kind: "stop-all" }
   | { kind: "resolve" }
   | { kind: "fail" }
+  | { kind: "halt" }
   | { kind: "crash" }
 
 function schedule(next: () => number): Step[] {
@@ -50,8 +52,9 @@ function schedule(next: () => number): Step[] {
     if (roll < 0.4) steps.push({ kind: "start", key: pick(KEYS), queue: next() < 0.5 })
     else if (roll < 0.52) steps.push({ kind: "stop", key: pick(KEYS) })
     else if (roll < 0.6) steps.push({ kind: "stop-all" })
-    else if (roll < 0.8) steps.push({ kind: "resolve" })
-    else if (roll < 0.92) steps.push({ kind: "fail" })
+    else if (roll < 0.74) steps.push({ kind: "resolve" })
+    else if (roll < 0.84) steps.push({ kind: "fail" })
+    else if (roll < 0.93) steps.push({ kind: "halt" })
     else steps.push({ kind: "crash" })
   }
   return steps
@@ -73,13 +76,29 @@ async function run(seed: number, root: string): Promise<void> {
   // Tight tree budgets in some schedules, so the tree's running and started bounds bind as often as the device's.
   const budget = seed % 4 === 0 ? { running: 1, started: 3 } : seed % 4 === 1 ? { running: 2, started: 100 } : { running: 32, started: 100 }
   const gates: Gate[] = []
+  const running = new Set<string>()
+  const halts: (() => void)[] = []
+  const stopping: { done: boolean }[] = []
+  const stop = (caller: AgentCaller, child: string) => {
+    const held = { done: false }
+    stopping.push(held)
+    void w.agents.stop(caller, { child }).finally(() => (held.done = true))
+  }
+  const overlaps: number[] = []
   const w = new AgentsWorld({
     root: join(root, `seed-${seed}`),
     budget,
     finLimit: () => limit,
     preparing: () => new Promise<void>((resolve, reject) => gates.push({ resolve, reject })),
+    // A harness stops only when a step lets it: its turn runs on, shown stopped, until then.
+    cancelling: () => new Promise<void>((resolve) => halts.push(resolve)),
     script: async (turn) => {
-      if (turn.text.includes("You're fin:")) await turn.world.hold(turn.conversation)
+      if (!turn.text.includes("You're fin:")) return "ok"
+      // What the harnesses run, not what the engine counts: never more turns at once than the device runs.
+      running.add(turn.conversation)
+      overlaps.push(running.size)
+      await turn.world.hold(turn.conversation)
+      running.delete(turn.conversation)
       return "ok"
     },
   })
@@ -95,6 +114,7 @@ async function run(seed: number, root: string): Promise<void> {
   const holds = async (when: string) => {
     await new Promise((resolve) => setImmediate(resolve))
     await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(Math.max(0, ...overlaps) <= limit, `${when}: ${Math.max(...overlaps)} turns ran at once on a device that runs ${limit}`)
     const seen = w.agents.diagnostics()
     const rows = w.store.queuedSpawns()
     assert.ok(seen.running <= limit, `${when}: ${seen.running} running on a device that runs ${limit}`)
@@ -127,18 +147,21 @@ async function run(seed: number, root: string): Promise<void> {
         calls.push(call)
       } else if (step.kind === "stop") {
         stops.push({ key: step.key, at })
-        await w.agents.stop(apex.caller, { child: step.key })
+        stop(apex.caller, step.key)
       } else if (step.kind === "stop-all") {
         stops.push({ at })
-        await w.agents.stop(apex.caller, { child: "all" })
+        stop(apex.caller, "all")
       } else if (step.kind === "resolve") take("any")?.resolve()
       else if (step.kind === "fail") take("any")?.reject(new Error("its worktree couldn't be made"))
+      else if (step.kind === "halt") halts.splice(Math.floor(next() * halts.length), 1)[0]?.()
       else {
-        // A crash takes every preparation under way with it; the next host starts from the store.
+        // A crash takes every preparation under way, and every turn, with it; the next host starts from the store.
+        running.clear()
         const before = w.agents
         await until(() => {
           for (const gate of gates.splice(0)) gate.reject(new Error("the host stopped"))
-          return before.startsUnderWay() === 0 && calls.every((call) => call.settled !== undefined)
+          for (const halt of halts.splice(0)) halt()
+          return before.startsUnderWay() === 0 && calls.every((call) => call.settled !== undefined) && stopping.every((held) => held.done)
         }, "the old host's starts to end")
         await w.restart()
       }
@@ -146,8 +169,9 @@ async function run(seed: number, root: string): Promise<void> {
       await holds(`after step ${at}`)
     }
     // Every preparation left comes back, one after another.
-    for (let left = 0; gates.length || calls.some((call) => call.settled === undefined); left += 1) {
+    for (let left = 0; gates.length || halts.length || calls.some((call) => call.settled === undefined) || stopping.some((held) => !held.done); left += 1) {
       take("first")?.resolve()
+      halts.shift()?.()
       await sleep(5)
       await holds(`resolving what's left (${left})`)
       if (left > 2_000) throw new Error("every start to be answered: still waiting")
@@ -169,6 +193,7 @@ async function run(seed: number, root: string): Promise<void> {
     throw new Error(`seed ${seed} (limit ${limit}): ${error instanceof Error ? error.message : String(error)}\n  ${trace.join("\n  ")}`, { cause: error })
   } finally {
     for (const gate of gates.splice(0)) gate.resolve()
+    for (const halt of halts.splice(0)) halt()
     await w.close()
   }
 }

@@ -53,6 +53,8 @@ export interface WorldOptions {
   capacity?: AgentsDeps["capacity"]
   /** The person's limit of Fins at once (`AgentsDeps.finLimit`); `FIN_LIMIT` without it. */
   finLimit?: () => number
+  /** Runs as a harness is asked to cancel a turn, before the turn stops: a harness slow to stop. */
+  cancelling?: (conversation: string) => Promise<void> | void
   /** Runs as a Fin's start prepares its worktree and profile, before its edge is written (`mako:live-start`). */
   preparing?: (options: LiveStartOptions) => Promise<void> | void
   /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
@@ -362,6 +364,8 @@ export class AgentsWorld {
         }, 0)
       },
       cancel: async (id) => {
+        // A harness slow to stop: its turn goes on until this resolves.
+        await this.options.cancelling?.(id)
         this.holds.get(id)?.()
         // A cancelled turn takes its open asks with it, unanswered.
         for (const [key, asked] of this.asking) {

@@ -457,6 +457,54 @@ async function launchesBeforeTheirEdge(): Promise<void> {
 }
 
 /**
+ * A Fin shown stopped holds its place until its harness has stopped: with one place, a Fin waiting behind one whose
+ * cancel is slow never starts while that turn still runs, so two turns never write in one worktree at once, and it
+ * starts the moment the cancel finishes.
+ */
+async function stopHoldsUntilCancelled(): Promise<void> {
+  let release: () => void = () => {}
+  const active = new Set<string>()
+  let overlapped = false
+  let cancelled = 0
+  const w = new AgentsWorld({
+    root: join(root, "slow-cancel"),
+    finLimit: () => 1,
+    // Only the first stop is slow; the ones after go at once.
+    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = performance.now(); resolve() }))),
+    script: async (turn) => {
+      if (!turn.text.includes("You're fin:")) return "ok"
+      if (active.size) overlapped = true
+      active.add(turn.conversation)
+      await turn.world.hold(turn.conversation)
+      active.delete(turn.conversation)
+      return "stopped"
+    },
+  })
+  try {
+    const apex = await w.apex("claude")
+    const brief = { objective: "Edit the shared file" }
+    await w.agents.start(apex.caller, { brief, name: "first", clientKey: "first", cwd: w.root })
+    await waitFor(() => active.size === 1, "the first at work")
+    const second = await w.agents.start(apex.caller, { brief, name: "second", queue: true, clientKey: "second", cwd: w.root })
+    assert.ok(!("refused" in second) && second.state === "queued")
+    const stopping = w.agents.stop(apex.caller, { child: "first" })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(w.store.queuedSpawns().length, 1, "the second waits while the first's harness is still stopping")
+    assert.equal(overlapped, false, "no two turns in one worktree at once")
+    release()
+    await stopping
+    await waitFor(() => active.size === 1 && w.store.queuedSpawns().length === 0, "the second to start once the first stopped")
+    assert.equal(overlapped, false, "the second started only after the first's turn ended")
+    const started = w.prompts.find((prompt) => prompt.text.includes("You're fin:second,"))!.at
+    assert.ok(started - (Date.now() - (performance.now() - cancelled)) < 100, "and at once once it did")
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    release()
+    await w.close()
+  }
+}
+
+/**
  * `after`: a Fin starts once the Fins it names finish, queued ones too, whatever the limit; one that fails or is
  * stopped holds it and wakes its Apex to decide, and it's dropped once the Apex heard.
  */
@@ -1241,6 +1289,7 @@ try {
   await afterOrder()
   await slotsGoAtOnce()
   await launchesBeforeTheirEdge()
+  await stopHoldsUntilCancelled()
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()
