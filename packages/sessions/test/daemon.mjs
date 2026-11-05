@@ -144,19 +144,25 @@ const large = {
   entries: Array.from({ length: 120 }, (_, i) => ({ type: "text", id: `@${i}`, text: `${i} ` + "tool output café 🦈 ".repeat(6_000) })),
 }
 const largeBytes = Buffer.byteLength(JSON.stringify(large))
-/** How many times longer the large thread takes to cross than a tenth of it: the fastest of three each, taken in turns, so a busy stretch slows both. */
+/**
+ * How many times more CPU the large thread takes to cross than a tenth of it: the least of five turns each, the
+ * tenth crossing ten times a turn. CPU time, so a runner busy with other processes counts against neither.
+ */
 const growth = async (open) => {
-  const fastest = [Infinity, Infinity]
-  for (let round = 0; round < 3; round++)
-    for (const [index, count] of [12, 120].entries()) {
+  const least = [Infinity, Infinity]
+  for (let round = 0; round < 5; round++)
+    for (const [index, count, times] of [[0, 12, 10], [1, 120, 1]]) {
       catalog.open = async () => ({ ref: thread.ref, entries: large.entries.slice(0, count) })
-      const started = performance.now()
-      const back = await open(thread.ref.path)
-      fastest[index] = Math.min(fastest[index], performance.now() - started)
-      assert.equal(back.entries.length, count)
-      assert.equal(back.entries.at(-1).text, large.entries[count - 1].text)
+      const started = process.cpuUsage()
+      for (let time = 0; time < times; time++) {
+        const back = await open(thread.ref.path)
+        assert.equal(back.entries.length, count)
+        assert.equal(back.entries.at(-1).text, large.entries[count - 1].text)
+      }
+      const { user, system } = process.cpuUsage(started)
+      least[index] = Math.min(least[index], (user + system) / 1_000 / times)
     }
-  return { ratio: fastest[1] / fastest[0], ms: fastest[1] }
+  return { ratio: least[1] / least[0], ms: least[1] }
 }
 const socketGrowth = await growth((path) => client.open(path))
 assert.ok(socketGrowth.ratio < 10 ** 1.5, `${(largeBytes / 1e6).toFixed(1)} MB took ${socketGrowth.ratio.toFixed(1)} times a tenth of it to cross the socket`)
@@ -331,4 +337,4 @@ let portMs
   assert.equal(await exited, 0)
 }
 
-console.log(`Daemon checks clean: locking, frame bounds, restart, long reads, live broadcasts and the worker port verified; a ${(largeBytes / 1e6).toFixed(1)} MB thread crossed the socket in ${socketGrowth.ms.toFixed(0)} ms (${socketGrowth.ratio.toFixed(1)} times a tenth of it) and the port in ${portMs.toFixed(0)} ms.`)
+console.log(`Daemon checks clean: locking, frame bounds, restart, long reads, live broadcasts and the worker port verified; a ${(largeBytes / 1e6).toFixed(1)} MB thread crossed the socket in ${socketGrowth.ms.toFixed(0)} ms of CPU (${socketGrowth.ratio.toFixed(1)} times a tenth of it) and the port in ${portMs.toFixed(0)} ms.`)
