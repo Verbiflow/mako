@@ -144,13 +144,13 @@ export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
 }
 
-/** The SDK's child as its client spawns it. */
+/** The SDK's child as its client spawns it; `CURSOR_SDK_CHILD` names another entry, as `CODEX_EXECUTABLE` does Codex's binary. */
 function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "entry" | "execPath" | "heapSnapshots">) {
   const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
   delete env.NODE_OPTIONS
   return {
     command: headlessNodeExecutable(options.execPath),
-    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()],
+    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? (options.env.CURSOR_SDK_CHILD || cursorSdkChildEntry())],
     env,
   }
 }

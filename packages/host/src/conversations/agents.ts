@@ -1755,6 +1755,8 @@ export class Agents implements AgentOperations, ConversationChildren {
           this.tellHeld(spawn.op, queued, { refused: queued.refused })
           continue
         }
+        // A stopped Fin's own Fins wait for it to resume (`reopen`): a stop doesn't go on starting work under it.
+        if (queued && this.apexStopped(queued.lead.thread)) continue
         if (queued?.after?.length) {
           const stand = this.afterStand(queued)
           if (stand.held) this.tellHeld(spawn.op, queued, stand.held)
@@ -2136,6 +2138,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (conversation) await this.halt(edge, conversation)
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why })
     this.childMoved(closed, false)
+    // Its own queued Fins now wait for it to resume.
+    this.queueRefresh()
     void this.drain()
     return true
   }
@@ -2689,7 +2693,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * placeholder's `child` is the waiting entry's own ID, for agents_read and agents_stop; the Fin's Thread gets its own
    * ID once it starts.
    */
-  private heldFor(thread: string): Array<{ op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } }> {
+  private heldFor(thread: string): Array<{ op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string; apexStopped?: true } }> {
     const store = this.store()
     if (!store) return []
     const spawns = store.queuedSpawns().filter((spawn) => !store.edges().byOp(spawn.op))
@@ -2711,12 +2715,13 @@ export class Agents implements AgentOperations, ConversationChildren {
         startedBy: { kind: "agent", session: SessionIdSchema.parse(queued.lead.session) },
         createdAt: spawn.at,
       }
-      return [{ op: spawn.op, placeholder, queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }), ...(queued.refused && { refused: queued.refused }) } }]
+      const apexStopped = this.apexStopped(thread)
+      return [{ op: spawn.op, placeholder, queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }), ...(queued.refused && { refused: queued.refused }), ...(apexStopped && { apexStopped }) } }]
     })
   }
 
   /** A held spawn of the Apex's, by name or by its waiting entry's ID (`heldFor`). */
-  private heldNamed(apex: Apex, ref: string): { op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } } | undefined {
+  private heldNamed(apex: Apex, ref: string): { op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string; apexStopped?: true } } | undefined {
     const name = finName(ref)
     return this.heldFor(apex.thread).find(({ placeholder }) => placeholder.child === ref || placeholder.name === name)
   }
@@ -2757,6 +2762,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** Every parent with a spawn held now. */
   private holdingThreads(): string[] {
     return (this.store()?.queuedSpawns() ?? []).flatMap((spawn) => parseQueued(spawn.record)?.lead.thread ?? [])
+  }
+
+  /** Whether this Apex is a Fin that was stopped, and not resumed since. */
+  private apexStopped(thread: string): boolean {
+    return this.store()?.edges().of(thread)?.closedAt !== undefined
   }
 
   private ready(conversation: string): ParentReady {
@@ -2866,6 +2876,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "resumed after stop", { op: edge.op, child: edge.child, by: why, stoppedFor: this.now() - edge.closedAt })
     this.forget(edge.parent)
     this.childMoved(open, false)
+    // Its own queued Fins waited for it.
+    this.queueRefresh()
+    void this.drain()
     return open
   }
 
