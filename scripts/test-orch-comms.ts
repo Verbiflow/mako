@@ -298,6 +298,8 @@ async function manyReports(): Promise<void> {
 
   const wakes: string[] = []
   const wakesOf = new AgentWakes({
+    heldWake: () => undefined,
+    holdWake: () => false,
     ready: () => "idle",
     wake: (_conversation, _request, text) => void wakes.push(text),
     steer: () => false,

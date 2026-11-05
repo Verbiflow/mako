@@ -357,6 +357,8 @@ export interface LiveRequest {
    * second failure counts on from this one; gone once it's sent.
    */
   retry?: RequestRetry
+  /** The wake whose Fins' reports this request carries when that isn't its own ID: a continuation retelling a wake no model heard. */
+  carries?: string
   /**
    * A Stop's latch on a request it found waiting or being sent: the person's Stop, or an Apex's of its Fin. Whatever
    * comes back for it later (a refusal, a retry, a time), it's held as the Stop's pause and goes by itself never,

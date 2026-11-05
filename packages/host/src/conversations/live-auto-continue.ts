@@ -5,6 +5,8 @@ import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { BRIEF_AGAIN } from "../contracts/children.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { FROM_AGENTS } from "../contracts/children.js"
+import { turnReply } from "./live-goals.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -181,11 +183,14 @@ export class LiveAutoContinue {
     const retry = nextRetry(failed.retry, cause, failed.error ?? "", now)
     if (!retry) return
     const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
+    // A wake the limit refused before anything ran goes again in its own words: only a digest has reports to lose.
+    const reached = !failed.text.startsWith(FROM_AGENTS) || turnReply(resident, failed.id).worked
     const request = LiveRequestSchema.parse({
       actor: { kind: "service", name: "auto-continue" },
       id: randomUUID(),
       createdAt: now,
-      text: continueTurnPrompt("connection-lost", "mako"),
+      text: reached ? continueTurnPrompt("connection-lost", "mako") : failed.text,
+      ...(!reached && { displayText: "", carries: failed.carries ?? failed.id }),
       attachments: [],
       tuning: failed.tuning,
       status: "held",
@@ -210,7 +215,8 @@ export class LiveAutoContinue {
   /** Drop a pending continuation and its stamp; a later prompt, close or host exit made it moot. */
   decline(resident: Resident): void {
     // A failed turn's continuation that waits for its time gives way the same way.
-    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry)
+    // One carrying a digest doesn't: its reports were marked heard, and nothing else would tell them.
+    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry && !request.carries)
     if (waiting.length) {
       const failed = new Set(waiting.map((request) => request.continues!.requestId))
       const ids = new Set(waiting.map((request) => request.id))

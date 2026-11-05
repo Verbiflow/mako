@@ -33,7 +33,7 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { childGroup, childStateOf, rollup } from "../contracts/children.js"
+import { childGroup, childStateOf, FROM_AGENTS, rollup } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -796,6 +796,7 @@ export class LiveConversations {
     if (rested > ASLEEP_AFTER_MS) hostLog("residency", "a message reaches a session asleep a day or more", { conversation: id, request: requestId, restedMs: rested })
     // The user's own message supersedes any continuation Mako was about to send.
     this.autoContinue.decline(resident)
+    if (!actor || actor.kind === "person") this.digestGoes(resident)
     if (marks.goal?.step !== "continue") this.goals.decline(resident)
     this.hibernation.clearHibernationTimer(resident)
     const pause = signInPause(resident.snapshot.requests)
@@ -1477,6 +1478,49 @@ export class LiveConversations {
     return true
   }
 
+  /**
+   * Whether `id` can't run for now: a request of it waits out a limit, an outage or a sign-out, by itself until that
+   * clears. A Stop's latch isn't such a wait: what's stopped is the person's to resume.
+   */
+  waitsOut(id: string): boolean {
+    return this.records.get(id)?.snapshot.requests.some(waitsOutRow) ?? false
+  }
+
+  /** The digest of Fins' reports waiting with `id` while it can't run, and the wake that named its reports. */
+  heldWake(id: string): { id: string; wake?: string } | undefined {
+    const row = this.records.get(id)?.snapshot.requests.find((request) => waitsOutRow(request) && !request.editing && request.text.startsWith(FROM_AGENTS))
+    return row && { id: row.id, ...(row.carries && { wake: row.carries }) }
+  }
+
+  /**
+   * Writes the one digest that waits with `id` while it can't run: `request` itself again with more in it, or a new
+   * row at the head of what waits, holding as that wait does, so it goes first whatever the wait's end turns out to be.
+   * False when nothing waits any more: the digest is an ordinary wake then.
+   */
+  holdWake(id: string, request: string, text: string, actor: Actor): boolean {
+    const resident = this.records.get(id)
+    const wait = resident?.snapshot.requests.find(waitsOutRow)
+    if (!resident || !wait) return false
+    const digest = promptFingerprint(text, [], undefined)
+    const known = resident.snapshot.requests.find((candidate) => candidate.id === request)
+    if (known) {
+      if (!waitsOutRow(known)) return false
+      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((candidate) => candidate === known ? { ...known, text, inputDigest: digest } : candidate) }
+    } else {
+      const row = LiveRequestSchema.parse({ actor, id: request, createdAt: Date.now(), text, attachments: [], status: "held", inputDigest: digest, ...(wait.retry && { retry: wait.retry }), ...(wait.signIn && { signIn: wait.signIn }) })
+      const at = resident.snapshot.requests.indexOf(wait)
+      resident.snapshot = { ...resident.snapshot, requests: [...resident.snapshot.requests.slice(0, at), row, ...resident.snapshot.requests.slice(at)] }
+    }
+    this.flush(resident)
+    return true
+  }
+
+  /** The person sends: that's the try the wait was for, so a digest held at the head of the queue goes now, ahead of their message. */
+  private digestGoes(resident: Resident): void {
+    const held = resident.snapshot.requests.find((request) => waitsOutRow(request) && !request.signIn && !request.editing && request.text.startsWith(FROM_AGENTS))
+    if (held) resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => request === held ? { ...request, status: "queued" as const } : request) }
+  }
+
   /** Whether the roster took a change of its children. */
   private takeChildren(resident: Resident): boolean {
     const agents = this.dependencies.agents?.()?.roster(resident.snapshot.session.id)
@@ -1806,6 +1850,11 @@ const BATCH_MS = LIVE_FRAME_MS
  * token, and what reads it waits a minute for quiet (`QUIET_AFTER_MS`), so a second late costs nothing; said each
  * time, it was in nearly every batch to every device.
  */
+/** A request that waits by itself for what stops its conversation running: a limit, an outage, a sign-out. */
+function waitsOutRow(request: LiveRequest): boolean {
+  return request.status === "held" && (request.retry !== undefined || request.signIn !== undefined) && request.pause !== "stop"
+}
+
 function activityMoved(before: number | undefined, after: number | undefined): boolean {
   return after !== undefined && (before === undefined || Math.floor(after / 1_000) !== Math.floor(before / 1_000))
 }

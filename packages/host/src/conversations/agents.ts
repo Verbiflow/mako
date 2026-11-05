@@ -158,7 +158,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "waitsOut" | "heldWake" | "holdWake"
 >
 
 export interface AgentsDeps {
@@ -425,7 +425,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: deps.now,
     })
     this.wakes = new AgentWakes({
-      ready: (conversation) => this.ready(conversation),
+      ready: (conversation) => deps.live.waitsOut(conversation) ? "held" : this.ready(conversation),
+      heldWake: (conversation) => this.heldWake(conversation),
+      holdWake: (conversation, request, text, actor) => deps.live.holdWake(conversation, request, text, actor),
       wake: (conversation, request, text, actor) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
         if (deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) return
@@ -443,6 +445,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
     this.stopRoomWatch = deps.jobs.every("read this device's capacity", ROOM_EVERY_MS, () => this.observe(true))
+  }
+
+  /** The digest waiting out this Apex's limit, with the reports it carries so far, for the one rewritten with more. */
+  private heldWake(conversation: string): { request: string; wake: string; notices: Notice[] } | undefined {
+    const store = this.store()
+    const row = this.deps.live.heldWake(conversation)
+    if (!store || !row) return undefined
+    const notices = store.reportsOfWake(row.wake ?? row.id).flatMap((report) => {
+      const edge = store.edges().of(report.child)
+      const notice = edge && this.noticeFor(edge, report)
+      return notice ? [notice] : []
+    })
+    return { request: row.id, wake: row.wake ?? row.id, notices }
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
@@ -734,6 +749,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   moved(conversation: string): void {
     const child = this.childOf.get(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
+    // It can run again: what waited on that goes, in the turn after the digest that was held.
+    if (!this.deps.live.waitsOut(conversation) && this.wakes.waits(conversation)) this.wakes.settled(conversation)
     if (!edge) return
     // The person writing in a stopped Fin's own Thread resumes it, as a message from its Apex does.
     const closedAt = edge.closedAt

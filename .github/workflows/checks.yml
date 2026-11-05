@@ -182,6 +182,7 @@ jobs:
       # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
       # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
       - run: npm run test:delivery-retry
+      - run: npm run test:held-digest
       # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
       - run: npm run test:handoff
       - run: npm run test:orch-comms

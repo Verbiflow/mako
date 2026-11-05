@@ -1067,6 +1067,15 @@ export class ThreadStore {
     })
   }
 
+  /** The reports request `wake` carries, oldest first, heard or not. */
+  reportsOfWake(wake: string): Report[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM thread_reports WHERE wake_request = ? ORDER BY at, id").all(wake).flatMap((row) => {
+      const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      return parsed.success ? [parsed.data] : []
+    })
+  }
+
   /** Names the request that will carry these reports, before it's sent; one already named keeps its own. */
   assignWake(ids: readonly string[], request: string): void {
     if (!ids.length) return

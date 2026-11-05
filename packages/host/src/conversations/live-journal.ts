@@ -162,6 +162,7 @@ export const LiveRequestSchema = z.object({
     cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
     reason: z.string(),
   }).optional(),
+  carries: z.string().optional(),
   interruption: z
     .object({
       ...StoredReason,

@@ -38,12 +38,16 @@ export interface Notice {
   decision?: "lead" | "person"
 }
 
-/** What an Apex's conversation can take now. */
-export type ParentReady = "steer" | "queue" | "idle" | "gone"
+/** What an Apex's conversation can take now; `held`: nothing runs until the limit or outage it waits out clears. */
+export type ParentReady = "steer" | "queue" | "idle" | "held" | "gone"
 
 export interface AgentWakesDeps {
   /** What the Apex's conversation is doing: busy at a step a message joins, busy until its turn's end, idle, or not here. */
   ready(conversation: string): ParentReady
+  /** The digest waiting with an Apex that can't run: its request, what names its reports, and those reports. */
+  heldWake(conversation: string): { request: string; wake: string; notices: Notice[] } | undefined
+  /** Writes `text` as that digest, new or again: false when the Apex can run after all. */
+  holdWake(conversation: string, request: string, text: string, actor: Extract<Actor, { kind: "agent" }>): boolean
   /** Starts a turn with the digest, under `request`: a request taken once already is taken again as the same one. */
   wake(conversation: string, request: string, text: string, actor: Extract<Actor, { kind: "agent" }>): void
   /** Joins the digest to the running turn at its next step, resolving whether the harness took it; false when no turn could take one. */
@@ -78,8 +82,10 @@ interface Waiting {
  * interrupt (Cursor) gets them as a message queued for its turn's end. A
  * result the Apex waited for (`settledOnly`) is never steered: it goes
  * once the Apex is idle, after `RESULT_COALESCE_MS`, first and in full.
- * Wakes past `WAKES_PER_MINUTE` for an Apex wait, decisions first. Nothing
- * polls: a timer runs only while notices wait.
+ * Wakes past `WAKES_PER_MINUTE` for an Apex wait, decisions first. An Apex
+ * that can't run (`held`) is never knocked at: what arrives joins the one
+ * digest waiting with it, which goes first once it can, wherever it runs.
+ * Nothing polls: a timer runs only while notices wait.
  */
 export class AgentWakes {
   private readonly deps: AgentWakesDeps
@@ -185,6 +191,7 @@ export class AgentWakes {
       this.waiting.delete(conversation)
       return
     }
+    if (ready === "held") return this.held(conversation, waiting)
     if (ready === "queue" || (ready === "steer" && waiting.unsteerable)) {
       waiting.forTurnEnd = true
       return
@@ -228,6 +235,32 @@ export class AgentWakes {
     this.sent(conversation, waiting, batch, request, "turn")
   }
 
+  /**
+   * The Apex can't run: what arrived joins the digest waiting with it, as one digest, written again in the journal so
+   * it survives a restart and a Stop latches it like any message. No turn starts for it (`LiveConversations.holdWake`).
+   */
+  private held(conversation: string, waiting: Waiting): void {
+    const held = this.deps.heldWake(conversation)
+    const carried = new Set(held?.notices.map((notice) => notice.report.id))
+    const fresh = waiting.notices.filter((notice) => !carried.has(notice.report.id)).slice(0, Math.max(0, FIN_REPORTS_MAX - carried.size))
+    waiting.forTurnEnd = true
+    if (!fresh.length) return
+    const ids = fresh.map((notice) => notice.report.id)
+    const request = held?.request ?? fresh[0]!.wake ?? namedUuid(`wake:${conversation}:${ids.join("\n")}`)
+    try {
+      const text = digest([...(held?.notices ?? []), ...fresh], this.deps.counts(conversation))
+      this.deps.assign(ids, held?.wake ?? request)
+      if (!this.deps.holdWake(conversation, request, text, { kind: "agent", session: SessionIdSchema.parse(fresh[0]!.from) })) {
+        waiting.forTurnEnd = undefined
+        return this.after(conversation, waiting, WAKE_COALESCE_MS)
+      }
+    } catch (error) {
+      hostWarn("agents", "a digest could not be held; its notices wait for the next", { conversation, error: errorMessage({ error }) })
+      return
+    }
+    this.sent(conversation, waiting, fresh, request, "held")
+  }
+
   /** The harness answered a steer: what it took is heard; what it didn't goes as the Apex's next turn, never dropped. */
   private steered(conversation: string, apex: string, batch: readonly Notice[], request: string, took: boolean): void {
     for (const notice of batch) this.steering.delete(notice.id)
@@ -241,7 +274,7 @@ export class AgentWakes {
     if (!waiting.timer && !waiting.forTurnEnd) this.after(conversation, waiting, WAKE_COALESCE_MS)
   }
 
-  private sent(conversation: string, waiting: Waiting, batch: readonly Notice[], request: string, how: "turn" | "steer"): void {
+  private sent(conversation: string, waiting: Waiting, batch: readonly Notice[], request: string, how: "turn" | "steer" | "held"): void {
     const ids = batch.map((notice) => notice.report.id)
     this.deps.delivered(ids, this.now())
     for (const notice of batch) this.heard.add(notice.id)
