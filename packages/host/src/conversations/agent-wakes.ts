@@ -1,6 +1,6 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { APEX_WORD, reportPhase, type Report } from "../contracts/agents.js"
+import { APEX_WORD, decisionWords, reportAsk, reportPhase, waitingWords, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
@@ -34,6 +34,8 @@ export interface Notice {
   settledOnly?: true
   /** Another of the person's Apexes' reply to this one's message, in full: the turn the message started, as it ended. */
   reply?: true
+  /** A done report's question: who decides it (`decisionOn`). */
+  decision?: "lead" | "person"
 }
 
 /** What an Apex's conversation can take now. */
@@ -274,21 +276,23 @@ export function digest(notices: readonly Notice[], counts: string): string {
   const replies = notices.filter((notice) => notice.reply)
   const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply)
   const asks = fins.filter((notice) => DECIDES.has(notice.report.status))
-  const decisions = asks.filter((notice) => notice.report.for !== "person")
-  const persons = asks.filter((notice) => notice.report.for === "person")
-  const finished = fins.filter((notice) => notice.report.status === "done" || notice.report.status === "failed")
+  const decided = fins.filter((notice) => notice.decision)
+  const decisions = [...asks.filter((notice) => notice.report.for !== "person"), ...decided.filter((notice) => notice.decision === "lead")]
+  const persons = [...asks.filter((notice) => notice.report.for === "person"), ...decided.filter((notice) => notice.decision === "person")]
+  const finished = fins.filter((notice) => !notice.decision && (notice.report.status === "done" || notice.report.status === "failed"))
   const lines = [FROM_AGENTS]
   // Every entry the digest writes has its twin here, from the same record, in the same order.
   const cards: FinReportCard[] = []
   if (results.length) {
     lines.push(results.length === 1 ? "The result you waited for:" : `The ${results.length} results you waited for:`)
     for (const notice of results) {
-      const { label, report } = notice
+      const { label, report, decision } = notice
       const summary = report.summary.trim() || (report.status === "done" ? "It finished." : "It failed.")
       const text = summary.length > RESULT_CHARS ? `${summary.slice(0, RESULT_CHARS)}… (agents_read gives the rest)` : summary
       lines.push(`  • ${label} ${report.status}:`, ...text.split("\n").map((line) => `    ${line}`))
       cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
       for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
+      if (decision && report.question) lines.push(`    ${decisionWords({ question: report.question, on: decision, ask: reportAsk(report) })}`)
     }
   }
   if (replies.length) {
@@ -306,8 +310,15 @@ export function digest(notices: readonly Notice[], counts: string): string {
     lines.push(`${decisions.length} ${decisions.length === 1 ? "needs" : "need"} a decision:`)
     for (const notice of decisions) {
       const { label, report } = notice
+      if (notice.decision) {
+        lines.push(`  • ${label} ${decidedLine(report, "lead")}`)
+        cards.push(card(notice, report.question ?? reportPhase(report) ?? "it leaves a decision."))
+        artifactLines(lines, report)
+        continue
+      }
       const asked = report.question ?? reportPhase(report) ?? "it asks for a decision."
-      lines.push(`  • ${label} is ${report.status === "blocked" ? "blocked" : "asking"}: ${asked}`)
+      const waiting = waitingWords(report.waitingOn)
+      lines.push(`  • ${label} is ${report.status === "blocked" ? "blocked" : "asking"}: ${asked}${waiting ? ` · ${waiting}` : ""}`)
       cards.push(card(notice, asked))
       if (report.options?.length)
         lines.push(`    options: ${report.options.map((option, index) => `${option.label}${index === report.recommended ? " (recommended)" : ""}`).join(" · ")}`)
@@ -317,9 +328,20 @@ export function digest(notices: readonly Notice[], counts: string): string {
   if (persons.length) {
     lines.push(`${persons.length} ${persons.length === 1 ? "waits" : "wait"} on the person:`)
     for (const notice of persons) {
-      const asked = notice.report.question ?? reportPhase(notice.report) ?? "it waits on the person."
-      lines.push(`  • ${notice.label}: ${asked}`)
-      cards.push(card(notice, asked))
+      const { label, report } = notice
+      if (!notice.decision) {
+        const asked = report.question ?? reportPhase(report) ?? "it waits on the person."
+        lines.push(`  • ${label}: ${asked}`)
+        cards.push(card(notice, asked))
+        continue
+      }
+      // An escalated decision is still the Apex's to answer; one the Fin left to the person, or its spawn hears only as a result, is theirs.
+      const why = report.told
+        ? "Mako asked the person too, since you didn't answer it in time: they can answer it from their Inbox. You may still answer it with agents_answer; the first answer is the one it hears."
+        : "It's the person's: they answer it from their Inbox. Don't answer it."
+      lines.push(`  • ${label} ${decidedLine(report, "person")}. ${why}`)
+      cards.push(card(notice, report.question ?? reportPhase(report) ?? "it leaves a decision."))
+      artifactLines(lines, report)
     }
   }
   if (finished.length) {
@@ -328,7 +350,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
       const { label, report } = notice
       lines.push(`  • ${label} ${report.status}: ${finishedLine(report)}`)
       cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
-      for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
+      artifactLines(lines, report)
     }
   }
   lines.push(counts)
@@ -353,6 +375,8 @@ function card(notice: Notice, line: string): FinReportCard {
     ...(report.recommended !== undefined && { recommended: report.recommended }),
     ...(report.artifacts?.length && { artifacts: report.artifacts }),
     ...(report.for === "person" && { forPerson: true as const }),
+    ...(notice.decision && { decides: notice.decision }),
+    ...(waitingWords(report.waitingOn) && { waiting: waitingWords(report.waitingOn) }),
   }
 }
 
@@ -364,6 +388,22 @@ function paragraphsOf(summary: string): string[] {
 /** A summary's first paragraph past any heading, on one line, whole. */
 function opening(summary: string): string {
   return (paragraphsOf(summary)[0] ?? summary.trim()).replace(/\s+/g, " ")
+}
+
+function artifactLines(lines: string[], report: Report): void {
+  for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
+}
+
+/**
+ * A done report's decision as its digest line says it (`decisionWords`), with how much of its report
+ * `agents_read` gives: "done; decide: Merge #371? (Merge · Leave open, recommends Merge) (+412 chars: agents_read)".
+ */
+export function decidedLine(report: Report, on: "lead" | "person"): string {
+  const decided = decisionWords({ question: report.question ?? reportPhase(report) ?? "it leaves a decision.", on, ask: reportAsk(report) })
+  const waiting = waitingWords(report.waitingOn)
+  const words = waiting ? `${decided} · ${waiting}` : decided
+  const more = report.summary.trim().length
+  return more ? `${words} (+${more.toLocaleString("en-US")} chars: agents_read)` : words
 }
 
 /**

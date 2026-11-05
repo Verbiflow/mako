@@ -23,6 +23,10 @@ export const FinReportCardSchema = z.object({
   artifacts: z.array(ArtifactSchema).max(64).optional(),
   /** Its Apex left the question to the person, or it was the person's from the start. */
   forPerson: z.literal(true).optional(),
+  /** A done report's question: who decides it (`decisionOn`), so the card reads "finished · needs you" for the person's. */
+  decides: z.enum(["lead", "person"]).optional(),
+  /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
+  waiting: z.string().max(1_000).optional(),
 }).strict()
 export type FinReportCard = z.infer<typeof FinReportCardSchema>
 

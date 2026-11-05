@@ -40,7 +40,7 @@ import type { ProviderResidencySnapshot } from "../contracts/provider-residency.
 import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
 import { ActorSchema, type Actor } from "../contracts/thread-identity.js"
-import type { ConversationSettings } from "../contracts/turn-continuation.js"
+import { admittedInPlace, type ConversationSettings } from "../contracts/turn-continuation.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
@@ -909,7 +909,7 @@ export class LiveConversations {
     resident.snapshot = {
       ...resident.snapshot,
       control: request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id),
-      requests: [...resident.snapshot.requests, request],
+      requests: admittedInPlace(resident.snapshot.requests, request),
     }
     // Rejected acceptance must never become a later executable request.
     try {
@@ -1185,8 +1185,8 @@ export class LiveConversations {
     return this.records.leftUnsettled(id)
   }
 
-  /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. */
-  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor }): LiveSnapshot {
+  /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. `brief`: the Fin's brief it carries again. */
+  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string }): LiveSnapshot {
     this.autoContinue.continueNow(id, input)
     return this.records.require(id).snapshot
   }
