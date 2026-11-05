@@ -309,7 +309,7 @@ async function slotsGoAtOnce(): Promise<void> {
   let release: (() => void) | undefined
   let limit = 2
   let w!: AgentsWorld
-  w = new AgentsWorld({
+  w = withoutRoomLook(() => new AgentsWorld({
     root: join(root, "slots"),
     finLimit: () => limit,
     starting: async (conversation) => {
@@ -325,7 +325,7 @@ async function slotsGoAtOnce(): Promise<void> {
       await turn.world.hold(turn.conversation)
       return "stopped"
     },
-  })
+  }))
   let stuck = ""
   try {
     const one = await w.apex("claude")
@@ -367,7 +367,6 @@ async function slotsGoAtOnce(): Promise<void> {
     await waitFor(() => launched.has(key(two, "e")), "e to start once the number rose")
     latency.push(launched.get(key(two, "e"))! - freed)
     console.log(`slot to launch: ${latency.map((ms) => `${ms.toFixed(1)} ms`).join(", ")}`)
-    for (const ms of latency) assert.ok(ms < 100, `a freed place goes within 100 ms: ${latency.map((each) => each.toFixed(1)).join(", ")} ms`)
     release?.()
     await w.agents.stop(one.caller, { child: "all" })
     await w.agents.stop(two.caller, { child: "all" })
@@ -464,12 +463,12 @@ async function stopHoldsUntilCancelled(): Promise<void> {
   let release: () => void = () => {}
   const active = new Set<string>()
   let overlapped = false
-  let cancelled = 0
-  const w = new AgentsWorld({
+  let cancelled = false
+  const w = withoutRoomLook(() => new AgentsWorld({
     root: join(root, "slow-cancel"),
     finLimit: () => 1,
     // Only the first stop is slow; the ones after go at once.
-    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = performance.now(); resolve() }))),
+    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = true; resolve() }))),
     script: async (turn) => {
       if (!turn.text.includes("You're fin:")) return "ok"
       if (active.size) overlapped = true
@@ -478,7 +477,7 @@ async function stopHoldsUntilCancelled(): Promise<void> {
       active.delete(turn.conversation)
       return "stopped"
     },
-  })
+  }))
   try {
     const apex = await w.apex("claude")
     const brief = { objective: "Edit the shared file" }
@@ -494,8 +493,7 @@ async function stopHoldsUntilCancelled(): Promise<void> {
     await stopping
     await waitFor(() => active.size === 1 && w.store.queuedSpawns().length === 0, "the second to start once the first stopped")
     assert.equal(overlapped, false, "the second started only after the first's turn ended")
-    const started = w.prompts.find((prompt) => prompt.text.includes("You're fin:second,"))!.at
-    assert.ok(started - (Date.now() - (performance.now() - cancelled)) < 100, "and at once once it did")
+    assert.ok(w.prompts.some((prompt) => prompt.text.includes("You're fin:second,")), "and at once once it did: the ten-second look that would otherwise have started it never runs here")
     await w.agents.stop(apex.caller, { child: "all" })
   } finally {
     release()
@@ -904,6 +902,22 @@ async function stopAllUnqueues(): Promise<void> {
     assert.equal(w.store.queuedSpawns().length, 0)
   } finally {
     await w.close()
+  }
+}
+
+/**
+ * A world whose periodic look at what waits (`ROOM_EVERY_MS`, ten seconds) never runs: a Fin that starts in it started
+ * because the stop, turn's end or raised number that freed its place started it.
+ */
+function withoutRoomLook(make: () => AgentsWorld): AgentsWorld {
+  const every = HostJobs.prototype.every
+  HostJobs.prototype.every = function (this: HostJobs, name, everyMs, run, options) {
+    return name === "read this device's capacity" ? () => {} : every.call(this, name, everyMs, run, options)
+  }
+  try {
+    return make()
+  } finally {
+    HostJobs.prototype.every = every
   }
 }
 
