@@ -365,14 +365,14 @@ const RowView = memo(function RowView({ row, query, cursor, active, onPress, onP
       {row.kind === "dir" ? (
         <>
           <ChevronRightIcon aria-hidden className={cn("files-chevron size-3 shrink-0 text-faint", row.open && "rotate-90")} />
-          <FileIcon path={row.path} folder open={row.open} className="size-4 text-faint" />
+          <FileIcon path={row.path} folder open={row.open} className="size-3.5 text-faint" />
           <span className="min-w-0 flex-1 truncate text-ui text-foreground/90">{row.name}</span>
           {row.changed ? <Changed /> : null}
         </>
       ) : row.kind === "file" ? (
         <>
           <span className="w-3 shrink-0" />
-          <FileIcon path={row.path} className="files-icon size-4" />
+          <FileIcon path={row.path} className="files-icon size-3.5" />
           <span className="files-name min-w-0 flex-1 truncate text-ui">{row.name}</span>
           {row.changed ? <Changed /> : null}
         </>
@@ -385,7 +385,7 @@ const RowView = memo(function RowView({ row, query, cursor, active, onPress, onP
         <NameHit hit={row} />
       ) : row.kind === "match-file" ? (
         <>
-          <FileIcon path={row.path} className="files-icon size-4" />
+          <FileIcon path={row.path} className="files-icon size-3.5" />
           <PathLabel path={row.path} />
           <span className="tabular shrink-0 text-label text-faint">{row.lines}</span>
         </>
@@ -431,7 +431,7 @@ function NameHit({ hit }: { hit: Pick<FileFindHit, "path" | "at"> }) {
   const at = new Set(hit.at)
   return (
     <>
-      <FileIcon path={hit.path} className="files-icon size-4" />
+      <FileIcon path={hit.path} className="files-icon size-3.5" />
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span className="files-name shrink-0 truncate text-ui">
           <Letters text={hit.path} from={slash + 1} to={hit.path.length} at={at} />

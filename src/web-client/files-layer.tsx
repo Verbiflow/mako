@@ -83,7 +83,7 @@ function FilesScreen({ open, touch }: { open: FilesOpen; touch: boolean }) {
           </button>
         ) : null}
         <span className="flex min-w-0 flex-1 items-center gap-2 px-2">
-          {open.path ? <FileIcon path={open.path} className="text-faint" /> : null}
+          {open.path ? <FileIcon path={open.path} className="size-3.5 text-faint" /> : null}
           <span className="truncate text-title font-semibold">{open.path ? open.path.slice(open.path.lastIndexOf("/") + 1) : "Files"}</span>
         </span>
         <button type="button" aria-label="Close Files" className="web-icon-button" onClick={closeFiles}>

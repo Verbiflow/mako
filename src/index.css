@@ -2856,7 +2856,6 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   from { opacity: 0; }
   to { opacity: 0.6; }
 }
-.files-touch .files-row svg { width: 16px; height: 16px; }
 .files-touch .files-field { height: 40px; }
 @media (prefers-reduced-motion: reduce) {
   .files-chevron, .files-row { transition: none; }
