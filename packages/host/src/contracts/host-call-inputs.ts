@@ -334,7 +334,10 @@ const inputs = {
     z.tuple([z.union([z.null(), z.string()])]),
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
-  "mako:build-update": () => z.tuple([z.enum(["upstream", "checkout"]).optional()]),
+  "mako:build-update": () =>
+    z.tuple([
+      z.union([z.literal("upstream"), z.literal("checkout")]).optional(),
+    ]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -1826,6 +1829,36 @@ const inputs = {
         z.literal("max"),
       ]),
     ]),
+  "mako:setup": () => z.tuple([z.string()]),
+  "mako:setup-act": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({
+          act: z.literal("answer"),
+          ask: z.string(),
+          answer: z.union([
+            z.literal("allow-thread"),
+            z.literal("allow-project"),
+            z.literal("decline"),
+            z.literal("add-to-setup"),
+          ]),
+        }),
+        z.object({
+          act: z.literal("row"),
+          place: z.string(),
+          row: z.string(),
+          action: z.union([
+            z.literal("stop"),
+            z.literal("send"),
+            z.literal("add"),
+            z.literal("retry"),
+            z.literal("keep"),
+          ]),
+        }),
+        z.object({ act: z.literal("rebuild") }),
+      ]),
+    ]),
   "mako:shutdown-ack": () => z.tuple([z.string()]),
   "mako:simulator-setup": () => z.tuple([z.boolean().optional()]),
   "mako:simulator-setup-press": () =>
@@ -2759,6 +2792,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-model", "workspaces"],
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
+  ["mako:setup", "workspaces"],
+  ["mako:setup-act", "workspaces"],
   ["mako:shutdown-ack", "application"],
   ["mako:simulator-setup", "control"],
   ["mako:simulator-setup-press", "control"],

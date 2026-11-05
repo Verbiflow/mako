@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode, type RefObject } from "react"
 import {
   CircleCheckIcon,
+  CircleDotIcon,
   InfoIcon,
   OctagonXIcon,
   TriangleAlertIcon,
@@ -18,6 +19,7 @@ const GLYPHS = {
   info: { icon: InfoIcon, className: "text-muted-foreground" },
   success: { icon: CircleCheckIcon, className: "text-positive" },
   caution: { icon: TriangleAlertIcon, className: "text-caution" },
+  attention: { icon: CircleDotIcon, className: "text-attention" },
   danger: { icon: OctagonXIcon, className: "text-negative" },
 } satisfies Record<ComposerNoticeTone, { icon: ComponentType<LucideProps>; className: string }>
 
@@ -25,6 +27,7 @@ const GLYPHS = {
 const LIPS = {
   danger: "bg-negative/30",
   caution: "bg-caution/30",
+  attention: "bg-attention/30",
   progress: "bg-foreground/15",
   info: "bg-foreground/15",
   success: "bg-positive/25",

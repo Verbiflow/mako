@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
-import { copyFile, cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { copyFile, cp, link, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path"
 import { promisify } from "node:util"
 import { belowAgents } from "../base/background-priority.js"
@@ -11,6 +11,7 @@ import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./
 import { discoverRepositories } from "../git/index.js"
 import type { Git } from "@mako/git"
 import { onLinux, onMac } from "../base/platform.js"
+import type { CheckoutBorrowing } from "./checkout-borrowing.js"
 
 const execute = promisify(execFile)
 
@@ -50,6 +51,8 @@ export interface CheckoutSetup {
   forgetPrepared?(checkout: string): Promise<void>
   /** Runs a spare checkout's install steps in the background; without it, spares get cloned outputs only. */
   spareInstall?: SpareInstall
+  /** This device's broker for what a worktree takes from its main checkout; without it, one kept in memory. */
+  borrowing?: CheckoutBorrowing
 }
 
 /** One install step's outputs, cloned from the main checkout for the inputs they were made from. */
@@ -311,7 +314,7 @@ export async function ownPackages(git: Git, checkout: string, steps: readonly Pr
  * in it here: each link to the main checkout's replaced by a clone of what
  * it reaches. Returns whether it was linked.
  */
-export async function ownLinked(checkout: string, entry: string): Promise<boolean> {
+export async function ownLinked(checkout: string, entry: string, told?: Staged): Promise<boolean> {
   const from = await linkedTo(checkout, entry)
   if (!from) return false
   const to = join(checkout, entry)
@@ -338,6 +341,7 @@ export async function ownLinked(checkout: string, entry: string): Promise<boolea
   const cloned = staged.length ? await cloneTrees(staged.map(({ source, clone }) => [source, clone]), false) : []
   for (const [index, { source, link, clone }] of staged.entries()) {
     if (!cloned[index]) await cp(source, clone, { recursive: true, verbatimSymlinks: true })
+    await told?.(relative(checkout, link), clone)
     await rename(clone, link)
   }
   if (folder) await rm(join(to, LINKED_MARK), { force: true })
@@ -349,19 +353,62 @@ function inside(path: string, root: string): boolean {
   return inner === "" || (!inner.startsWith("..") && !isAbsolute(inner))
 }
 
-/** `entry` of the main checkout linked into `checkout`, built beside it and renamed in, so a reader sees all of it or none. */
-async function placeLink(repoRoot: string, checkout: string, entry: string): Promise<void> {
+/**
+ * Told of each thing Mako is about to place, while it's still in Mako's staging folder beside the checkouts, where
+ * nothing else writes: `relative` is where in the checkout it will land, `staged` where it is now. What's recorded
+ * here is exactly what Mako made, before anything else can add to it.
+ */
+export type Staged = (relative: string, staged: string) => Promise<void>
+
+/**
+ * Builds a placement in the staging folder, tells `staged` of it, then lands it at `relative` without replacing
+ * anything: a file by a hard link, which fails if the path exists; a folder or a link by a rename, only while the
+ * path is free. Returns whether it landed.
+ */
+async function placeStaged(checkout: string, relative: string, build: (temporary: string) => Promise<void>, staged?: Staged): Promise<boolean> {
   const staging = join(dirname(checkout), CARRYING)
   await mkdir(staging, { recursive: true, mode: 0o700 })
   const temporary = join(staging, randomUUID())
+  const to = join(checkout, relative)
   try {
-    await linkEntry(repoRoot, checkout, entry, temporary)
-    await mkdir(dirname(join(checkout, entry)), { recursive: true })
-    await rename(temporary, join(checkout, entry))
-  } catch (error) {
+    await build(temporary)
+    await staged?.(relative, temporary)
+    await mkdir(dirname(to), { recursive: true })
+    const info = await lstat(temporary)
+    if (info.isFile()) {
+      try {
+        await link(temporary, to)
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "EEXIST") return false
+        throw error
+      }
+      return true
+    }
+    if (await lstat(to).catch(() => undefined)) return false
+    await rename(temporary, to)
+    return true
+  } finally {
     await rm(temporary, { recursive: true, force: true })
-    throw error
   }
+}
+
+/** `entry` of the main checkout linked into `checkout`, built beside it and renamed in, so a reader sees all of it or none. */
+async function placeLink(repoRoot: string, checkout: string, entry: string, staged?: Staged): Promise<boolean> {
+  return placeStaged(checkout, entry, (temporary) => linkEntry(repoRoot, checkout, entry, temporary).then(() => undefined), staged)
+}
+
+/** A copy of `from` made at `to`, which doesn't exist yet: cloned where the volume can. */
+async function copyInto(from: string, info: Awaited<ReturnType<typeof lstat>>, to: string, keepLink: boolean): Promise<void> {
+  if (info.isSymbolicLink() && keepLink) await symlink(await readlink(from), to)
+  else if (info.isSymbolicLink()) await copyFile(from, to, constants.COPYFILE_EXCL)
+  else if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(from, to, constants.COPYFILE_EXCL)
+  // Node's FICLONE never clones on macOS (libuv copies the bytes there); `cp -c` does.
+  else if (info.isFile() && onMac()) await execute("/bin/cp", ["-c", "-n", from, to])
+  else if (info.isFile()) await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
+  else if (info.isDirectory()) {
+    const [cloned] = await cloneTrees([[from, to]], false)
+    if (!cloned) await cp(from, to, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true })
+  } else throw new Error(`${from} isn't a file or folder.`)
 }
 
 /** Entries `entries` match in the main checkout, each copied or linked; one a linking entry matches links. */
@@ -378,38 +425,24 @@ async function carriedEntries(git: Git, repoRoot: string, entries: readonly Carr
  * The files the recipe's `carry` names, from the main checkout, before the
  * agent starts: copied, or linked to the main checkout's. Entries the
  * checkout already has are left alone, so a retry never overwrites what the
- * Thread's agent wrote. Returns how many came.
+ * Thread's agent wrote. Returns the entries it placed, each one it made itself.
  */
-export async function carryFiles(git: Git, repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<number> {
-  let copied = 0
+export async function carryFiles(git: Git, repoRoot: string, checkout: string, entries: readonly CarryEntry[], staged?: Staged): Promise<string[]> {
+  const placed: string[] = []
   for (const [entry, link] of await carriedEntries(git, repoRoot, entries)) {
     const from = join(repoRoot, entry)
     const to = join(checkout, entry)
     if (await lstat(to).catch(() => undefined)) continue
     const info = await lstat(from).catch(() => undefined)
     if (!info || (info.isDirectory() && virtualEnvironment(from))) continue
-    if (link) {
-      await placeLink(repoRoot, checkout, entry)
-      copied += 1
-      continue
-    }
-    await mkdir(dirname(to), { recursive: true })
-    if (info.isSymbolicLink() && holdsCredentials(entry)) await copyFile(from, to, constants.COPYFILE_EXCL)
-    else if (info.isSymbolicLink()) await symlink(await readlink(from), to)
-    else if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(from, to, constants.COPYFILE_EXCL)
-    // Node's FICLONE never clones on macOS (libuv copies the bytes there); `cp -c` does.
-    else if (info.isFile() && onMac()) await execute("/bin/cp", ["-c", "-n", from, to])
-    else if (info.isFile()) await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
-    else if (info.isDirectory()) {
-      const [cloned] = await cloneTrees([[from, to]], false)
-      if (!cloned) {
-        // Another caller may have placed it while clonefile ran; never remove or replace that copy.
-        await cp(from, to, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true })
-      }
-    } else continue
-    copied += 1
+    if (!info.isFile() && !info.isDirectory() && !info.isSymbolicLink()) continue
+    const landed = link
+      ? await placeLink(repoRoot, checkout, entry, staged)
+      // Another caller may place it meanwhile; landing never replaces what's there.
+      : await placeStaged(checkout, entry, (temporary) => copyInto(from, info, temporary, !holdsCredentials(entry)), staged)
+    if (landed) placed.push(entry)
   }
-  return copied
+  return placed
 }
 
 export interface BringEntry {
@@ -431,7 +464,7 @@ export interface BringReport {
  * replacement of the worktree's own files. Copying an entry that's linked
  * makes it the worktree's own, keeping what was made in it here.
  */
-export async function bringFiles(git: Git, repoRoot: string, checkout: string, entries: readonly BringEntry[]) {
+export async function bringFiles(git: Git, repoRoot: string, checkout: string, entries: readonly BringEntry[], staged?: Staged) {
   const report: BringReport = { copied: [], linked: [], owned: [], existing: [], missing: [] }
   const selected = new Map<string, boolean>()
   for (const request of entries) {
@@ -454,26 +487,20 @@ export async function bringFiles(git: Git, repoRoot: string, checkout: string, e
   for (const [path, link] of selected) {
     const to = join(checkout, path)
     if (await lstat(to).catch(() => undefined)) {
-      if (!link && (await ownLinked(checkout, path))) report.owned.push(path)
+      if (!link && (await ownLinked(checkout, path, staged))) report.owned.push(path)
       else report.existing.push(path)
       continue
     }
-    await mkdir(dirname(to), { recursive: true })
     if (link) {
-      await placeLink(repoRoot, checkout, path)
-      report.linked.push(path)
+      if (await placeLink(repoRoot, checkout, path, staged)) report.linked.push(path)
+      else report.existing.push(path)
     } else {
       // Env files that happen to be symlinks still become independent copies.
       const source = await realpath(join(repoRoot, path))
       const info = await lstat(source)
-      if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(source, to, constants.COPYFILE_EXCL)
-      else if (info.isFile() && onMac()) await execute("/bin/cp", ["-c", "-n", source, to])
-      else if (info.isFile()) await copyFile(source, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
-      else if (info.isDirectory()) {
-        const [cloned] = await cloneTrees([[source, to]], false)
-        if (!cloned) await cp(source, to, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true })
-      } else throw new Error(`${path} isn't a file or folder.`)
-      report.copied.push(path)
+      if (!info.isFile() && !info.isDirectory()) throw new Error(`${path} isn't a file or folder.`)
+      if (await placeStaged(checkout, path, (temporary) => copyInto(source, info, temporary, false), staged)) report.copied.push(path)
+      else report.existing.push(path)
     }
   }
   return report
