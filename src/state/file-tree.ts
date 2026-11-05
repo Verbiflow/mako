@@ -131,7 +131,8 @@ export class FileTreeModel {
     walk("", 0)
     if (missing.length) {
       for (const path of missing) this.#wanted.add(path)
-      queueMicrotask(() => this.refresh())
+      // Drawing a failed tree reads nothing: it says it failed until it's retried or told something changed.
+      if (this.#state.status !== "failed") queueMicrotask(() => this.refresh())
     } else {
       for (const path of open) this.#wanted.add(path)
     }
@@ -144,6 +145,12 @@ export class FileTreeModel {
     this.#listings.delete(path)
     this.#wanted.add(path)
     this.#publish()
+    this.refresh()
+  }
+
+  /** The person asked to read the folder again after a failure: the mixed-answer count starts over. */
+  retry(): void {
+    this.#mixed = 0
     this.refresh()
   }
 

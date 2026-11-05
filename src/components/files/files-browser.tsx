@@ -234,7 +234,7 @@ export function FilesBrowser({ source, open, onOpenChange, active, onOpenFile, o
       </div>
 
       {!searching && tree.status === "failed" ? (
-        <Quiet title="Couldn't read this folder's files" body={tree.error} action={<button type="button" className="pressable text-ui text-foreground underline decoration-hairline underline-offset-3" onClick={() => model.refresh()}>Try again</button>} />
+        <Quiet title="Couldn't read this folder's files" body={tree.error} action={<button type="button" className="pressable text-ui text-foreground underline decoration-hairline underline-offset-3" onClick={() => model.retry()}>Try again</button>} />
       ) : !searching && tree.status === "ready" && tree.total === 0 ? (
         <Quiet title="No files here yet" body="Files Git ignores, and build and dependency folders, aren't listed." />
       ) : (

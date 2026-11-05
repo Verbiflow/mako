@@ -224,6 +224,58 @@ try {
     assert.deepEqual(files(), ["src/after.ts", "top.ts"], "and stays, through a refresh it answers unchanged")
   }
 
+  // Answers that keep mixing two indexes: the model gives up after a few reads and says so, drawing the failed tree
+  // reads nothing more however often it's drawn, a change notification reads once, and only a retry recovers.
+  {
+    const old = new FileIndexCore(["src/before.ts", "top.ts"])
+    const replacement = new FileIndexCore(["src/after.ts", "top.ts"])
+    let route: "old" | "split" | "new" = "old"
+    let calls = 0
+    const model = new FileTreeModel({
+      key: "mixed",
+      folders: async (paths, options) => {
+        calls += 1
+        const core = route === "old" ? old : route === "new" ? replacement : paths.includes("") ? replacement : old
+        return core.folders(paths, options)
+      },
+      find: async (query, limit) => replacement.find(query, limit),
+      grep: async () => ({ query: "", files: [], total: 0, more: false, ms: 0 }),
+    })
+    const quiet = () => new Promise<void>((done) => setTimeout(done, 30))
+    const open = new Set(["src"])
+    model.rows(open)
+    await quiet()
+    model.rows(open)
+    await quiet()
+    route = "split"
+    model.showAll("src")
+    await quiet()
+    assert.equal(model.state.status, "failed", "answers that keep mixing end as a failure the tree shows")
+    const atFailure = calls
+    for (let render = 0; render < 8; render += 1) {
+      model.rows(open)
+      await quiet()
+    }
+    assert.equal(calls, atFailure, `drawing a failed tree eight times reads nothing (${calls - atFailure} reads)`)
+    model.refresh()
+    await quiet()
+    assert.ok(calls - atFailure <= 2, `a change notification reads once, both of its parts (${calls - atFailure} reads)`)
+    assert.equal(model.state.status, "failed", "and, still mixed, fails again without reading on")
+    const afterChange = calls
+    for (let render = 0; render < 4; render += 1) {
+      model.rows(open)
+      await quiet()
+    }
+    assert.equal(calls, afterChange, "drawing it after that reads nothing either")
+    route = "new"
+    model.retry()
+    await quiet()
+    model.rows(open)
+    await quiet()
+    assert.equal(model.state.status, "ready", "a retry recovers once one index answers")
+    assert.deepEqual(model.rows(open).flatMap((row) => (row.kind === "file" ? [row.path] : [])), ["src/after.ts", "top.ts"], "and draws its tree")
+  }
+
   // An untracked symlink to a file outside the folder is never read by a text search, nor one to a folder.
   const outside = realpathSync(mkdtempSync(join(tmpdir(), "mako-file-index-outside-")))
   try {
