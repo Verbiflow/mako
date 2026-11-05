@@ -233,6 +233,22 @@ console.log("tool words: every harness's edit size")
   }
   assert.equal(unfixedFailures([mako("1", "app_start", true), mako("2", "app_status", false)]), 1, "another tool of the same server fixes nothing")
   assert.equal(unfixedFailures([mako("1", "app_start", true), mako("2", "app_start", false)]), 0)
+  // A pass of the same command in another folder fixes nothing: by the folder its arguments name, or the one its harness reported.
+  const shell = (id: string, args: ToolArguments, isError: boolean, extra: Partial<ToolCall> = {}): ToolCall => {
+    const input = JSON.stringify(args)
+    return { id, name: "shell", pending: false, isError, arguments: input, tool: identifyTool({ harness: "cursor", name: "shell", input }), ...extra }
+  }
+  assert.equal(unfixedFailures([shell("1", { command: "npm test", workingDirectory: "/work/api" }, true), shell("2", { command: "npm test", workingDirectory: "/work/web" }, false)], "cursor"), 1, "another repository's pass fixes nothing")
+  assert.equal(unfixedFailures([shell("1", { command: "npm test", workingDirectory: "/work/api" }, true), shell("2", { command: "npm test", workingDirectory: "/work/api" }, false)], "cursor"), 0, "the same folder's pass fixes it")
+  assert.equal(unfixedFailures([shell("1", { command: "npm test", workingDirectory: "/work/api" }, true), shell("2", { command: "npm test" }, false)], "cursor"), 1, "a pass with no folder known fixes no failure with one")
+  assert.equal(unfixedFailures([shell("1", { command: "npm test" }, true, { cwd: "/work/api" }), shell("2", { command: "npm test" }, false, { cwd: "/work/web" })], "cursor"), 1, "the folders the harness reported differ")
+  assert.equal(unfixedFailures([call("1", "npm test", true, { cwd: "/work/api" }), call("2", "npm test", false, { cwd: "/work/api" })]), 0)
+  assert.equal(unfixedFailures([shell("1", { command: "npm test", cwd: "/work/api" }, true), shell("2", { command: "npm test", cwd: "/work/web" }, false)]), 1, "a common folder key, with no harness named")
+  // A retry its harness kept as completed but that exited other than 0 didn't succeed: by its command effect, or its answer's text.
+  assert.equal(unfixedFailures([shell("1", { command: "npm test" }, true), shell("2", { command: "npm test" }, false, { exitCode: 1, result: "FAIL\nexit 1" })], "cursor"), 1, "a completed call that exited 1 fixes nothing")
+  assert.equal(unfixedFailures([shell("1", { command: "npm test" }, true), shell("2", { command: "npm test" }, false, { result: "FAIL\nexit 1" })], "cursor"), 1, "nor by its text alone")
+  assert.equal(unfixedFailures([shell("1", { command: "npm test" }, true), shell("2", { command: "npm test" }, false, { exitCode: 0, result: "ok" })], "cursor"), 0, "one that exited 0 fixes it")
+  assert.equal(summarizeToolWork([shell("1", { command: "npm test" }, true), shell("2", { command: "npm test" }, false, { exitCode: 1 })], "cursor").failed, 1)
   const summary = summarizeToolWork([call("1", "npm run lint", true), call("2", "npm run lint", false), call("3", "npm test", true)])
   assert.equal(summary.failed, 1, "the folded summary counts what's still wrong")
   assert.equal(summary.commands, 3)

@@ -736,7 +736,7 @@ function summarizeWork(
   const paired = messages.flatMap((message) => pairTools(message.blocks))
   const running = new Set(settled?.map((call) => call.id))
   const calls = settled ? paired.filter((call) => !call.pending && !running.has(call.id)) : paired
-  const summary = summarizeToolWork(calls)
+  const summary = summarizeToolWork(calls, messages.find((message) => message.provider)?.provider)
   const agents = Math.max(summary.agents, ...calls.map(reportedSubagentCount))
   const completed = messages.at(-1)?.timestamp
   return {

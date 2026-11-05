@@ -289,8 +289,9 @@ function toolBlocks(entry: EntryOf<"tool">, turn: number, provider: string | und
   if (failed) result.isError = true
   if (canceled) result.isCanceled = true
   if (entry.unfinished) result.isCutOff = true
-  const exitCode = entry.effects?.find((effect) => effect.kind === "command")?.exitCode
-  if (exitCode !== undefined) result.exitCode = exitCode
+  const command = entry.effects?.find((effect) => effect.kind === "command")
+  if (command?.exitCode !== undefined) result.exitCode = command.exitCode
+  if (command?.cwd !== undefined) result.cwd = command.cwd
   if (live && !finished) result.streaming = true
   if (entry.endedAt !== undefined && !result.streaming) result.endedAt = entry.endedAt
   if (rest) result.rest = rest

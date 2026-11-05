@@ -852,6 +852,25 @@ export function commandExitCode(harness: string | undefined, name: string | unde
   return code === undefined ? undefined : Number(code)
 }
 
+/** Where a shell's arguments name the folder it runs in, besides what its harness declares (`EffectReading.cwd`). */
+const FOLDER_KEYS = ["cwd", "workdir", "workingDirectory", "working_directory", "directory"]
+
+/**
+ * The folder a command's arguments say it runs in: under the key its
+ * harness's shell declares, else a common one. Undefined where they name
+ * none; a key read from the harness's result isn't in the arguments.
+ */
+export function commandFolder(harness: string | undefined, name: string | undefined, args: ToolArguments | undefined): string | undefined {
+  if (!args) return undefined
+  const declared = name ? specFor(harness, name)?.effects?.cwd : undefined
+  for (const key of [...[declared ?? []].flat(), ...FOLDER_KEYS]) {
+    if (key.startsWith("result.")) continue
+    const folder = z.string().trim().min(1).safeParse(args[key])
+    if (folder.success) return folder.data
+  }
+  return undefined
+}
+
 /** How a harness's results say it refused a call before it ran (`HarnessVocabulary.refusals`). */
 export function toolRefusals(harness: string | undefined): readonly RegExp[] {
   return (harness ? VOCABULARIES.find((declared) => declared.harness === harness)?.refusals : undefined) ?? []

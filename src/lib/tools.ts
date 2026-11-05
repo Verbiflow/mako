@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { normalizeToolOutput } from "@mako/sessions/tool-output"
-import { commandExitCode, identifyTool, makoToolWords, toolArguments, toolFacts, type ToolFacts, toolKindWork, type HarnessName, type MakoToolWords, type ToolArguments as CallArguments, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
+import { commandExitCode, commandFolder, identifyTool, makoToolWords, toolArguments, toolFacts, type ToolFacts, toolKindWork, type HarnessName, type MakoToolWords, type ToolArguments as CallArguments, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
 import type { Block, ChatMessage } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
 import type { Entry } from "@mako/sessions/entries"
@@ -261,6 +261,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
       existing.isCanceled = block.isCanceled
       existing.isCutOff = block.isCutOff
       if (block.exitCode !== undefined) existing.exitCode = block.exitCode
+      if (block.cwd !== undefined) existing.cwd = block.cwd
       existing.pending = block.streaming === true
       if (block.endedAt !== undefined) existing.endedAt = block.endedAt
       existing.rest = block.rest
@@ -365,35 +366,49 @@ function ordered(value: ToolContent | undefined): ToolContent | undefined {
 /**
  * What makes two calls the same call: their kind (and the server's tool, for
  * an MCP call, whose kind says nothing of it), and their arguments as one
- * normalized text, a command bare of its shell wrapper.
+ * normalized text, a command bare of its shell wrapper together with the
+ * folder it ran in. A command's folder is the one its harness reported, else
+ * the one its arguments name; one with no folder known is the same only as
+ * another with none known.
  */
-function callKey(call: ToolCall): string {
+function callKey(call: ToolCall, harness: string | undefined): string {
   const { kind, server, tool, command } = call.tool
-  const args = kind === "shell" && command ? command.trim() : JSON.stringify(ordered(parseToolArguments(call.arguments)) ?? toolInputText(call.arguments) ?? "")
+  if (kind === "shell" && command) {
+    const folder = call.cwd ?? commandFolder(harness, tool ?? call.name, toolArguments(toolInputText(call.arguments)))
+    return `${kind}\0\0${command.trim()}\0${folder ?? ""}`
+  }
+  const args = JSON.stringify(ordered(parseToolArguments(call.arguments)) ?? toolInputText(call.arguments) ?? "")
   return `${kind}\0${server ? `${server}:${tool ?? ""}` : ""}\0${args}`
+}
+
+/** A call that went through: it returned, not failed, and exited 0 by the exit facts its row shows (`failedExitCode`). */
+function succeeded(call: ToolCall, harness: string | undefined): boolean {
+  return !call.isError && !call.pending && !call.isCutOff && !call.isCanceled && failedExitCode(call, harness) === undefined
 }
 
 /**
  * How many of `calls` failed and stay failed: a failure counts unless a
- * later call of the same kind, with the same normalized arguments, went
- * through. Read newest first, so each failure asks only what came after it.
+ * later call of the same kind, with the same normalized arguments (and, for
+ * a command, the same folder), succeeded. Read newest first, so each failure
+ * asks only what came after it.
  */
-export function unfixedFailures(calls: readonly ToolCall[]): number {
+export function unfixedFailures(calls: readonly ToolCall[], harness?: string): number {
   const fixed = new Set<string>()
   let failed = 0
   for (let index = calls.length - 1; index >= 0; index -= 1) {
     const call = calls[index]!
     if (call.isError) {
-      if (!fixed.has(callKey(call))) failed += 1
-    } else if (!call.pending && !call.isCutOff && !call.isCanceled) fixed.add(callKey(call))
+      if (!fixed.has(callKey(call, harness))) failed += 1
+    } else if (succeeded(call, harness)) fixed.add(callKey(call, harness))
   }
   return failed
 }
 
-export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
+/** `harness`, the one that made the calls, reads their exit codes and folders as their rows do. */
+export function summarizeToolWork(calls: ToolCall[], harness?: string): ToolWorkSummary {
   let edits = 0
   const counts = { command: 0, read: 0, search: 0, skill: 0, agent: 0, plan: 0, other: 0 }
-  const failed = unfixedFailures(calls)
+  const failed = unfixedFailures(calls, harness)
   let stopped = 0
   let cutOff = 0
   for (const call of calls) {
