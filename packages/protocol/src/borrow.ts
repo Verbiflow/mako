@@ -515,7 +515,7 @@ function clone(state: BrokerState): BrokerState {
     answers: { ...state.answers },
     asks: { ...state.asks },
     devices: { ...state.devices },
-    endedThreads: { ...(state.endedThreads ?? {}) },
+    endedThreads: { ...state.endedThreads },
   }
 }
 
