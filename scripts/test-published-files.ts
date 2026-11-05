@@ -7,16 +7,20 @@
 // - a file that must not exist yet is created once, and the second writer gets
 //   EEXIST with the first's bytes kept;
 // - a folder that's another program's gets no lock file, and nothing staged;
-// - a synchronous writer waits for the folder's holder, gives up with
-//   FileLockBusyError once its wait runs out, and writes once it's free.
+// - a synchronous writer waits for another process placing the same file, gives
+//   up with FileLockBusyError once its wait runs out, and writes once it's free;
+// - nothing is locked while bytes are staged: an asynchronous write stalled
+//   mid-stream never makes a synchronous save of the same folder, or of the same
+//   file, wait, fail, or lose its write (the real Fin settings store).
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path, { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { FileLockBusyError, withFileLock } from "@mako/host/base/file-lock"
+import { FileLockBusyError, withFileLock, withFileLockSync } from "@mako/host/base/file-lock"
 import { publishFile, publishFileSync, publisherFile } from "@mako/host/base/published-files"
+import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 const worker = join(repo, "scripts/lib/published-files-worker.ts")
@@ -119,11 +123,13 @@ try {
     const held = new Promise<void>((resolve) => { release = resolve })
     let holding: () => void = () => undefined
     const locked = new Promise<void>((resolve) => { holding = resolve })
-    const holder = withFileLock(join(folder, ".mako-lock"), async () => { holding(); await held })
+    const holder = withFileLock(`${file}.mako-place-lock`, async () => { holding(); await held })
     await locked
-    assert.throws(() => publishFileSync(file, "two", { waitMs: 100 }), FileLockBusyError, "the folder's holder keeps a synchronous writer out")
+    assert.throws(() => publishFileSync(file, "two", { waitMs: 100 }), FileLockBusyError, "the file's holder keeps a synchronous writer out")
     await assert.rejects(publishFile(file, "two", { waitMs: 100 }), FileLockBusyError)
     assert.equal(readFileSync(file, "utf8"), "one")
+    publishFileSync(join(folder, "other.json"), "unrelated", { waitMs: 100 })
+    assert.equal(readFileSync(join(folder, "other.json"), "utf8"), "unrelated", "a lock on one file doesn't hold up another in its folder")
     release()
     await holder
     publishFileSync(file, "two")
@@ -131,14 +137,63 @@ try {
   }
 
   {
+    // A write stalled mid-stream holds nothing: not its file's lock, and not its folder's.
+    const folder = join(root, "stalled")
+    const profiles = join(folder, "provider-profiles.json")
+    const defaults = join(folder, "fin-defaults.json")
+    const store = new FinDefaultsStore(defaults)
+    store.setLimit(2)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered: () => void = () => undefined
+    const streaming = new Promise<void>((resolve) => { entered = resolve })
+    const writer = publishFile(profiles, (async function* () {
+      yield Buffer.from("{")
+      entered()
+      await gate
+      yield Buffer.from("}")
+    })())
+    try {
+      await streaming
+      // The same host's synchronous save, in the same folder, while the other is stalled: no wait, no refusal.
+      const began = performance.now()
+      store.setLimit(3)
+      const took = performance.now() - began
+      assert.equal(store.reading().limit, 3)
+      assert.equal(JSON.parse(readFileSync(defaults, "utf8")).limit, 3, "the save reached the disk, not only the cache")
+      assert.ok(took < 1_000, `the save took ${Math.round(took)} ms behind a stalled write, which holds no lock`)
+      // And the stalled write's own file is free to a synchronous writer too: nothing is locked until its rename.
+      assert.doesNotThrow(() => withFileLockSync(`${profiles}.mako-place-lock`, () => undefined, { waitMs: 50 }), "a write still staging holds its file's lock")
+      publishFileSync(profiles, "{\"sync\":true}", { waitMs: 100 })
+      assert.equal(readFileSync(profiles, "utf8"), "{\"sync\":true}")
+    } finally {
+      release()
+    }
+    await writer
+    assert.equal(readFileSync(profiles, "utf8"), "{}", "the stalled write placed whole once it finished")
+    assert.deepEqual(readdirSync(folder).filter((name) => !publisherFile(name)).sort(), ["fin-defaults.json", "provider-profiles.json"])
+    assert.deepEqual(staged(folder), [])
+  }
+
+  {
     const folder = join(root, "leftover")
     const file = join(folder, "state.json")
     await publishFile(file, "kept")
-    writeFileSync(join(folder, "other.json.mako-999999.tmp"), "half")
+    // A pid that ran and ended is a writer that is gone; this process and its parent are writers that aren't.
+    const gone = spawnSync(process.execPath, ["-e", ""]).pid
+    writeFileSync(join(folder, `other.json.mako-${gone}-0badf00d.tmp`), "half")
+    writeFileSync(join(folder, `live.json.mako-${process.pid}-0badf00d.tmp`), "being written here")
+    writeFileSync(join(folder, `live.json.mako-${process.ppid}-0badf00d.tmp`), "being written elsewhere")
     writeFileSync(join(folder, "notes.tmp"), "someone else's")
     publishFileSync(file, "new")
-    assert.deepEqual(staged(folder), [], "a dead writer's staged file goes at the next write, whatever file it was for")
+    assert.ok(!existsSync(join(folder, `other.json.mako-${gone}-0badf00d.tmp`)), "a dead writer's staged file goes at the next write, whatever file it was for")
+    assert.ok(existsSync(join(folder, `live.json.mako-${process.pid}-0badf00d.tmp`)), "this process's staged file stays")
+    assert.ok(existsSync(join(folder, `live.json.mako-${process.ppid}-0badf00d.tmp`)), "a live writer's staged file stays")
     assert.ok(existsSync(join(folder, "notes.tmp")), "files the publisher didn't stage stay")
+    assert.equal(publisherFile(`live.json.mako-${process.ppid}-0badf00d.tmp`), true, "a staged file is the publisher's, whoever's folder it is in")
+    assert.equal(publisherFile("state.json.mako-place-lock"), true)
+    assert.equal(publisherFile("state.json.mako-place-lock-journal"), true)
+    assert.equal(publisherFile("state.json"), false)
   }
 
   console.log("published files: ok")
