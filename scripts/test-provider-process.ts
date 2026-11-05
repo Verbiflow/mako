@@ -80,8 +80,7 @@ try {
   try {
     assert.equal(await endProviderProcess(stays, "input", 20), "outlived", "a bounded wait that gave up doesn't read as an exit")
     assert.equal(providerProcessGone(stays), false)
-    await assert.rejects(closeProviderProcess(stays, "SIGTERM", 20), (error: unknown) =>
-      error instanceof ProviderProcessOutlivedError && error.pid === stays.pid, "a close that gave up rejects, naming the process")
+    await assert.rejects(closeProviderProcess(stays, "SIGTERM", 20), { name: ProviderProcessOutlivedError.name, pid: stays.pid }, "a close that gave up rejects, naming the process")
   } finally {
     ChildProcess.prototype.kill = signal
   }

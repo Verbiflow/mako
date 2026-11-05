@@ -143,7 +143,8 @@ export async function startOpenCodeApi(input: {
     watch.dispose()
     lifetime.abort(new Error("OpenCode native API connection closed"))
     // Its pipes close once it exits (`spawnProviderProcess`). One that outlives this rejects, and the next close tries again.
-    await closeProviderProcess(child, now ? "SIGTERM" : "input", 3000).catch((error: unknown) => { closing = undefined; throw error })
+    try { await closeProviderProcess(child, now ? "SIGTERM" : "input", 3000) }
+    catch (error) { closing = undefined; throw error }
     await closed
   })()
   const abort = () => { void close(true).catch(() => {}) }
