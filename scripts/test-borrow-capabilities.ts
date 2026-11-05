@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, realpathSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { serveRuntime, type Advertisement } from "@mako/protocol"
@@ -9,6 +9,11 @@ import { ADVERTISE_EVERY_MS, Advertiser } from "@mako/host/base/advertiser"
 import { ADVERTISED_CLIS, MAX_CAPABILITIES, probeCapabilities, simulatorCapabilities, type CapabilityProbeDeps, type SimulatorFacts } from "@mako/host/base/capabilities"
 import { LentHere } from "@mako/host/base/lent"
 import { LocalBorrowing } from "@mako/host/base/local-borrowing"
+import { readSetupFacts, type Run } from "@mako/host/control/simulators/setup"
+import { setupFromFacts } from "@mako/host/control/simulators/setup-facts"
+import { LocalSimulatorHost, localDriving } from "@mako/host/control/simulators/local-host"
+import { PINNED_TOOLS, toolEntry, toolsRoot } from "@mako/host/control/simulators/tools"
+import { setupStep } from "@mako/host/contracts/simulator-setup"
 
 /**
  * What a device advertises to borrowing's brokers: what it can serve, probed from the device and never a value, and its
@@ -73,6 +78,55 @@ function mac(overrides: Partial<CapabilityProbeDeps> = {}): CapabilityProbeDeps 
   assert.equal(simulators.filter((capability) => capability.version === "26.1").length, 40, "every simulator of the newest runtime stays")
   assert.ok(simulators.length < 80 && simulators.slice(40).every((capability) => capability.version === "18.4"), "what's left out is the oldest runtime's")
   assert.equal(bounded.filter((capability) => capability.capability === "cli").length, ADVERTISED_CLIS.length)
+}
+
+{
+  // A Mac whose xcode-select names the Command Line Tools, with Xcode kept where only Spotlight finds it: its simulators
+  // still run through that Xcode's own developer folder, so it still advertises Xcode and each simulator by its runtime.
+  const dataRoot = join(root, "setup")
+  const xcodeApp = join(root, "Developer", "Xcode-27.app")
+  const developer = join(xcodeApp, "Contents", "Developer")
+  mkdirSync(join(developer, "usr", "bin"), { recursive: true })
+  writeFileSync(join(developer, "usr", "bin", "xcodebuild"), "")
+  for (const spec of PINNED_TOOLS) {
+    const entry = toolEntry(toolsRoot(dataRoot), spec)
+    mkdirSync(join(entry, ".."), { recursive: true })
+    writeFileSync(entry, "")
+    writeFileSync(join(toolsRoot(dataRoot), spec.name, spec.version, ".install-complete"), spec.version)
+  }
+  const runtime = "com.apple.CoreSimulator.SimRuntime.iOS-27-2"
+  const phone = "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro"
+  const tablet = "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5"
+  const listing = {
+    runtimes: [{ identifier: runtime, platform: "iOS", name: "iOS 27.2", version: "27.2", isAvailable: true, supportedDeviceTypes: [{ identifier: phone }, { identifier: tablet }] }],
+    devicetypes: [{ identifier: phone, name: "iPhone 18 Pro", productFamily: "iPhone" }, { identifier: tablet, name: "iPad Pro 13-inch (M5)", productFamily: "iPad" }],
+    devices: { [runtime]: [{ udid: "PHONE-UDID", name: "Mako iPhone 18 Pro", deviceTypeIdentifier: phone, state: "Shutdown", isAvailable: true }, { udid: "TABLET-UDID", name: "Mako iPad Pro 13-inch (M5)", deviceTypeIdentifier: tablet, state: "Shutdown", isAvailable: true }] },
+  }
+  const developerDirs: string[] = []
+  const run: Run = async (file, args, options) => {
+    const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" })
+    if (file === "/usr/bin/xcode-select") return ok("/Library/Developer/CommandLineTools\n")
+    if (file === "/usr/bin/mdfind") return ok(`${xcodeApp}\n`)
+    if (file === "/usr/bin/plutil") return ok(args.at(-1)!.endsWith("Info.plist") ? JSON.stringify({ CFBundleShortVersionString: "27.0" }) : JSON.stringify({ ProductBuildVersion: "27A100" }))
+    if (options?.env?.DEVELOPER_DIR) developerDirs.push(options.env.DEVELOPER_DIR)
+    if (file === "/usr/bin/xcrun" && args[0] === "simctl") return ok(JSON.stringify(listing))
+    if (args.includes("-showsdks")) return ok(JSON.stringify([{ platform: "iphonesimulator", sdkVersion: "27.2" }]))
+    return ok("")
+  }
+  const setup = setupFromFacts(await readSetupFacts({ dataRoot, run, platform: "darwin", state: { wasReady: false }, consent: [], canTry: true, applications: [join(root, "no-applications")], now: Date.now() }))
+  assert.equal(setupStep(setup, "xcode")?.xcode?.path, xcodeApp, "Spotlight's Xcode is the one used")
+  assert.ok(developerDirs.length && developerDirs.every((dir) => dir === developer), "every Xcode tool runs through its own developer folder, never xcode-select's")
+  // The real driving, over the same fake commands: a listing reads screens and drives nothing.
+  const driving = localDriving({ dataRoot, hub: { entry: join(root, "no-hub.js") }, run })
+  const host = new LocalSimulatorHost({ setup: async () => setup, folder: join(root, "sims"), driving })
+  const facts: SimulatorFacts = { ios: (await host.summary()).platforms.ios, simulators: await host.list(), xcode: setupStep(setup, "xcode")!.xcode!.version }
+  assert.deepEqual(facts.ios, { ready: true })
+  const advertised = await probeCapabilities(mac({ simulators: async () => facts }))
+  assert.deepEqual(advertised.filter((capability) => capability.capability === "xcode" || capability.capability === "ios-simulator"), [
+    { capability: "xcode", version: "27.0" },
+    { capability: "ios-simulator", version: "27.2", attributes: { runtime: "iOS 27.2", device: "iPad Pro 13-inch (M5)", form: "tablet" } },
+    { capability: "ios-simulator", version: "27.2", attributes: { runtime: "iOS 27.2", device: "iPhone 18 Pro", form: "phone" } },
+  ])
 }
 
 {
