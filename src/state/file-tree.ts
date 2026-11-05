@@ -47,6 +47,9 @@ export function conversationFiles(conversation: string): FilesSource {
   }
 }
 
+/** Reads in a row a model makes again when their answers mix two indexes, before it says so. */
+const MIXED_READS = 3
+
 /** One row of the tree as it's drawn. */
 export type FileTreeRow =
   | { kind: "dir"; key: string; path: string; name: string; depth: number; files: number; changed: boolean; open: boolean }
@@ -72,12 +75,15 @@ export interface FileTreeState {
  */
 export class FileTreeModel {
   readonly source: FilesSource
-  #listings = new Map<string, FileFolder>()
+  /** Each folder's listing with the epoch of the index that listed it: one of another epoch is never drawn. */
+  #listings = new Map<string, { folder: FileFolder; epoch?: string }>()
   #limits = new Map<string, number>()
   #state: FileTreeState = { version: 0, total: 0, status: "loading" }
   #listeners = new Set<() => void>()
   #reading: Promise<void> | undefined
   #again = false
+  /** Reads in a row whose answers came from two indexes. */
+  #mixed = 0
   #wanted = new Set<string>([""])
   /** Bumped by every change to what's held, for React's snapshot. */
   #revision = 0
@@ -104,7 +110,8 @@ export class FileTreeModel {
     const rows: FileTreeRow[] = []
     const missing: string[] = []
     const walk = (path: string, depth: number) => {
-      const listing = this.#listings.get(path)
+      const held = this.#listings.get(path)
+      const listing = held && held.epoch === this.#state.epoch ? held.folder : undefined
       if (!listing) {
         missing.push(path)
         rows.push({ kind: "pending", key: `${path}\0pending`, path, depth })
@@ -157,31 +164,41 @@ export class FileTreeModel {
 
   async #read(): Promise<void> {
     const wanted = [...this.#wanted]
-    const unheld = wanted.some((path) => !this.#listings.has(path))
+    const epoch = this.#state.epoch
+    const unheld = wanted.some((path) => this.#listings.get(path)?.epoch !== epoch || !this.#listings.has(path))
     // A folder past its limit is asked with its own; the rest share the default.
     const big = wanted.filter((path) => this.#limits.has(path))
     const usual = wanted.filter((path) => !this.#limits.has(path))
     try {
       const since = unheld ? undefined : this.#state.version || undefined
-      const epoch = this.#state.epoch
-      const answers = await Promise.all([
+      const answers = (await Promise.all([
         usual.length ? this.source.folders(usual, { limit: FOLDER_LISTING_LIMIT, since, epoch }) : undefined,
         ...big.map((path) => this.source.folders([path], { limit: this.#limits.get(path), since, epoch })),
-      ])
+      ])).filter((answer) => answer !== undefined)
+      // The answers of one read can come from two indexes while an owner is replaced (its host started again, or the
+      // folder's index made anew): none of them is installed, everything held is let go, and the read is made again.
+      const epochs = new Set(answers.map((answer) => answer.epoch))
+      if (epochs.size > 1) {
+        this.#listings.clear()
+        this.#mixed += 1
+        const giveUp = this.#mixed > MIXED_READS
+        this.#state = { version: 0, total: this.#state.total, status: giveUp ? "failed" : "loading", ...(giveUp && { error: "This folder's files are answered by two hosts at once. Try again in a moment." }) }
+        this.#again = !giveUp
+        this.#publish()
+        return
+      }
+      this.#mixed = 0
+      const answeredBy = answers[0]?.epoch
+      if (answeredBy !== epoch) this.#listings.clear()
       let changed = false
-      let version = this.#state.version
+      // Answers of one epoch at different versions: the oldest is what's held, so the next read asks again for all.
+      let version = answers.length ? Math.min(...answers.map((answer) => answer.version)) : this.#state.version
       let total = this.#state.total
-      // Another index answered (its host started again, or the folder's index was made anew): nothing held is its.
-      const answeredBy = answers.find((answer) => answer !== undefined)?.epoch
-      const replaced = answeredBy !== epoch
-      if (replaced) this.#listings.clear()
       for (const answer of answers) {
-        if (!answer) continue
-        version = answer.version
         total = answer.total
         if (answer.unchanged) continue
         changed = true
-        for (const folder of answer.folders) this.#listings.set(folder.path, folder)
+        for (const folder of answer.folders) this.#listings.set(folder.path, { folder, epoch: answeredBy })
         for (const path of answer.missing) {
           this.#listings.delete(path)
           if (path) this.#wanted.delete(path)
@@ -189,6 +206,7 @@ export class FileTreeModel {
       }
       // Folders read at an older version than the newest answer are stale: read them again with it.
       if (changed && !unheld) for (const path of this.#listings.keys()) if (!wanted.includes(path)) this.#listings.delete(path)
+      if (!answers.length) version = this.#state.version
       this.#state = { epoch: answeredBy, version, total, status: "ready" }
       this.#publish()
     } catch (error) {

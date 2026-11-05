@@ -181,6 +181,49 @@ try {
     rmSync(restartRoot, { recursive: true, force: true })
   }
 
+  // An owner replaced while a split read is in flight: the root's answer comes from the new index, a folder listed
+  // past its limit from the old one, both at version 1. Nothing of the old one may be drawn, then or after a later
+  // refresh the new index answers `unchanged`.
+  {
+    const old = new FileIndexCore(["src/before.ts", "top.ts"])
+    const replacement = new FileIndexCore(["src/after.ts", "top.ts"])
+    assert.equal(old.version, replacement.version, "both indexes are at the same version")
+    let route: "old" | "split" | "new" = "old"
+    const coreFor = (paths: readonly string[]) => (route === "old" ? old : route === "new" ? replacement : paths.includes("") ? replacement : old)
+    const model = new FileTreeModel({
+      key: "split",
+      folders: async (paths, options) => coreFor(paths).folders(paths, options),
+      find: async (query, limit) => replacement.find(query, limit),
+      grep: async () => ({ query: "", files: [], total: 0, more: false, ms: 0 }),
+    })
+    const read = () => new Promise<void>((done) => {
+      const stop = model.subscribe(() => {
+        if (model.state.status === "loading") return
+        stop()
+        done()
+      })
+      model.refresh()
+    })
+    const open = new Set(["src"])
+    const files = () => model.rows(open).flatMap((row) => (row.kind === "file" ? [row.path] : []))
+    await read()
+    model.rows(open)
+    await read()
+    assert.deepEqual(files(), ["src/before.ts", "top.ts"], "the old index's tree")
+    // "Show all" on src as the owner is replaced: src is read on its own, from the old index, the root from the new.
+    route = "split"
+    model.showAll("src")
+    await read()
+    assert.equal(files().includes("src/before.ts"), false, `a split read never draws the old index's rows (${files().join(", ")})`)
+    route = "new"
+    await read()
+    model.rows(open)
+    await read()
+    assert.deepEqual(files(), ["src/after.ts", "top.ts"], "and once the new index answers alone, its tree is drawn")
+    await read()
+    assert.deepEqual(files(), ["src/after.ts", "top.ts"], "and stays, through a refresh it answers unchanged")
+  }
+
   // An untracked symlink to a file outside the folder is never read by a text search, nor one to a folder.
   const outside = realpathSync(mkdtempSync(join(tmpdir(), "mako-file-index-outside-")))
   try {
