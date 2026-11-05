@@ -36,6 +36,7 @@ import {
   PORTS_VERSION,
   QUIET_VERSION,
   ADVERTISE_LINK_VERSION,
+  LEND_LINK_VERSION,
   decodePortHead,
   encodePortHead,
   MediaTooLargeError,
@@ -112,7 +113,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 20)
+    assert.equal(SUPPORTED_VERSIONS.max, 21)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -606,6 +607,33 @@ describe("a runtime served through serveRuntime", () => {
     assert.equal(lines.filter((line) => line.event === "going-quiet").length, 1)
     assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "going-quiet", reason: "sign-out" })), { type: "going-quiet", reason: "sign-out" })
     assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "going-quiet", reason: "bored" })), WireError)
+    older.close()
+    await gateway.close()
+  })
+
+  test("a device hears what it lends and beats for the sessions it serves on a link that knows the frames; an older link hears none and beats nothing", async () => {
+    const gateway = createFakeGateway()
+    const heard = []
+    const lending = { asked: (ask) => heard.push(["asked", ask.ask]), lent: (lease) => heard.push(["lent", lease.id]), ended: (lease, why) => heard.push(["ended", lease, why]) }
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", lending, handle: async (operation) => answer(operation, null) })
+    const borrower = { account: "a", repository: "acme/shop", thread: "t1", place: { kind: "machine", machine: "m-1" } }
+    const ask = { ask: "a1", grant: "g1", resource: { kind: "operation", ref: "ios-simulator" }, ref: "ios-simulator", mode: "relay", borrower, why: "check the page", askPerson: true }
+    const lease = { id: "l1", grant: "g1", grantVersion: 1, borrower, resource: { kind: "operation", ref: "ios-simulator" }, source: { kind: "capable", requires: [{ capability: "ios-simulator" }] }, mode: "relay", access: "run", version: "g1", issuedAt: 1, expiresAt: 2, delivery: { transfer: "none", secret: false }, device: "mac", session: { state: "starting", heartbeatMs: 60_000, lastBeat: 1 } }
+    assert.equal(gateway.lend("d-mac", { type: "source-ask", ask }), true)
+    assert.equal(gateway.lend("d-mac", { type: "lent", lease }), true)
+    assert.equal(gateway.lend("d-mac", { type: "lent-ended", lease: "l1", why: "revoked" }), true)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.deepEqual(heard, [["asked", "a1"], ["lent", "l1"], ["ended", "l1", "revoked"]])
+    assert.equal(runtime.beat("l1"), true)
+    assert.equal(runtime.beat("l1", { phase: "booting", percent: 40 }), true)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.deepEqual(gateway.beats("d-mac"), [{ lease: "l1" }, { lease: "l1", progress: { phase: "booting", percent: 40 } }])
+    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: LEND_LINK_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    assert.equal(older.beat("l1"), false, "a gateway before version 21 keeps no session alive through it")
+    for (const frame of [{ type: "source-ask", ask }, { type: "lent", lease }, { type: "lent-ended", lease: "l1", why: "lost" }]) assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame(frame)), frame)
+    assert.throws(() => decodeGatewayFrame(encodeGatewayFrame({ type: "lent-ended", lease: "l1", why: "bored" })), "a lease ends one of the contract's ways")
+    assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "lease-beat", lease: "l1", progress: { phase: "running", output: "secret" } })), WireError, "progress is a phase, never the output's words")
+    runtime.close()
     older.close()
     await gateway.close()
   })

@@ -147,10 +147,10 @@ function delta(sequence: number): ControlVideoPacket {
 
 test("macHostId names another Mac, and a simulator's claim stays on the Mac that runs it", async () => {
   const other = fakeHost()
-  const offered = { value: true }
+  const leased = { value: true }
   const consent = [{ folder: "/Users/ada/shop", allowed: true, at: 1 }]
   const lookup = sessions({ a: "/Users/ada/shop", b: "/Users/ada/shop" })
-  const theirs = new Simulators({ hosts: [other], consent: async () => consent, agent: lookup, offered: async () => offered.value })
+  const theirs = new Simulators({ hosts: [other], consent: async () => consent, agent: lookup, leases: { leaseOf: () => (leased.value ? "lease-1" : undefined) } })
   const device = "11111111-1111-4111-8111-111111111111"
   const hostId = macHostId(device)
   const shots = join(scratch, "shots")
@@ -220,7 +220,8 @@ test("macHostId names another Mac, and a simulator's claim stays on the Mac that
   const reopened = await here.open(agent("s-b"), { host: hostId, simulator: "MAKO-PHONE" })
   assert.ok("claim" in reopened)
 
-  offered.value = false
+  // The lease ended: no call of that Thread is answered under it any more.
+  leased.value = false
   const refused = await theirs.open(stampedCaller({ kind: "agent", session: "s-a", agent: lookup("s-a") }, "gateway:desktop:other"), { host: LOCAL_HOST, simulator: "MAKO-PHONE" })
   assert.equal("refused" in refused && refused.refused, "not-offered")
 })
@@ -286,7 +287,7 @@ test("Simulators.watch hands a ControlVideoBatch, and stamps a gateway caller so
     hosts: [host],
     consent: async () => [{ folder: "/Users/ada/shop", allowed: true, at: 1 }],
     agent: sessions({ a: "/Users/ada/shop" }),
-    offered: async () => true,
+    leases: { leaseOf: () => "lease-1" },
   })
   // Drain the key frame the host sends a first viewer.
   await simulators.watch({ kind: "person" }, { host: LOCAL_HOST, simulator: "MAKO-PHONE", viewer: "panel", waitMs: 50 })
@@ -320,10 +321,10 @@ test("Simulators.watch hands a ControlVideoBatch, and stamps a gateway caller so
 
 test("a Thread on this Mac drives a simulator on another through the gateway, as the cloud will", async () => {
   const otherHost = fakeHost()
-  const offered = { value: true }
+  const leased = { value: true }
   const consent = [{ folder: "/Users/ada/shop", allowed: true, at: 1 }]
   const lookup = sessions({ a: "/Users/ada/shop" })
-  const otherSimulators = new Simulators({ hosts: [otherHost], consent: async () => consent, agent: lookup, offered: async () => offered.value })
+  const otherSimulators = new Simulators({ hosts: [otherHost], consent: async () => consent, agent: lookup, leases: { leaseOf: () => (leased.value ? "lease-1" : undefined) } })
   const gateway = createFakeGateway()
   const otherRuntime = "d-11111111-1111-4111-8111-111111111111"
   const methods = new HostMethods({
@@ -376,7 +377,8 @@ test("a Thread on this Mac drives a simulator on another through the gateway, as
   assert.ok("ms" in acted)
   assert.ok(otherHost.done.includes("tap MAKO-PHONE"))
 
-  offered.value = false
+  // The lease ended: no call of that Thread is answered under it any more.
+  leased.value = false
   const blocked = await here.open(agent("s-a"), { host: hostId, simulator: "MAKO-PHONE" })
   assert.equal("refused" in blocked && blocked.refused, "not-offered")
 
