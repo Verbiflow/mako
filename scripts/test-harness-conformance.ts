@@ -8,12 +8,13 @@ import "./lib/scratch-git.mjs"
 // a step that never finishes hits the hang guard.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
+import { once } from "node:events"
 import { randomUUID } from "node:crypto"
 import { chmod, mkdtemp, readFile, rm, writeFile, appendFile } from "node:fs/promises"
 import { appendFileSync, readdirSync, readFileSync } from "node:fs"
-import { Socket } from "node:net"
+import { createServer, type Server } from "node:net"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { topic } from "@mako/host/base/topic"
@@ -35,9 +36,11 @@ import { pointAt, SCRIPTED_GETS } from "./scripted-harness-env.ts"
 import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
 import { scriptedWindsurf } from "./scripted-windsurf.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
+import { leftOpen } from "./open-resources.ts"
 import { BEHIND_A_VIEW, behindAViewText, controlText, heapMarkers, plantControls, REPRESENTATIONS } from "./heap-markers.ts"
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/native-failure-agent.mjs", import.meta.url))
+const STDIO_CHILD = fileURLToPath(new URL("./fixtures/open-stdio-child.ts", import.meta.url))
 const HARNESS_SRC = fileURLToPath(new URL("../packages/host/src/harnesses", import.meta.url))
 const HANG = 90_000
 const TURNS = 12
@@ -643,22 +646,6 @@ async function stopAll(): Promise<void> {
 }
 
 /**
- * What holds this process's event loop open, by kind: every referenced handle and timer but its own stdin, stdout
- * and stderr, which never end and are terminals in a shell and pipes on CI (to a file they have no handle at all).
- * Read from `until`'s check, whose own timer has fired by then, so a timer here is someone else's.
- */
-function leftOpen(): string[] {
-  // Read first: `process.stdin` opens its handle the first time it's asked for.
-  const stdio = [process.stdin, process.stdout, process.stderr].filter((stream) => stream instanceof Socket)
-  const open = process.getActiveResourcesInfo()
-  for (const stream of stdio) {
-    const at = open.indexOf("isTTY" in stream && stream.isTTY ? "TTYWrap" : "PipeWrap")
-    if (at >= 0) open.splice(at, 1)
-  }
-  return open
-}
-
-/**
  * Fails the run when anything still keeps Node running once every driver is stopped: a worker, a port, a server, a
  * process or a timer a driver left behind would hold a real host's event loop the same way. Closing is
  * asynchronous, so it waits for what is closing, up to the hang guard; anything still there is named.
@@ -679,6 +666,33 @@ async function leftOpenControls(): Promise<void> {
   child.kill("SIGKILL")
   setTimeout(() => {}, 60_000).unref()
   await nothingLeftOpen()
+  await stdioControls()
+}
+
+/** What the guard reads in a process with pipes for stdio, ended or not: only the run's own may be left out, and only while they're there. */
+async function stdioControls(): Promise<void> {
+  const reads = async (stdin: "ended" | "open", path: string): Promise<string[]> => {
+    const child = spawn(process.execPath, [STDIO_CHILD, stdin, path], { stdio: "pipe" })
+    if (stdin === "ended") child.stdin.end()
+    let printed = ""
+    child.stdout.on("data", (chunk: Buffer) => { printed += chunk.toString() })
+    const [code] = await once(child, "close")
+    assert.equal(code, 0, "the stdio control ran")
+    return z.array(z.string()).parse(JSON.parse(printed))
+  }
+  const path = join(await mkdtemp(join(tmpdir(), "mako-open-stdio-")), "peer")
+  const peer: Server = createServer()
+  await new Promise<void>((resolve) => peer.listen(path, resolve))
+  peer.on("connection", (socket) => { socket.on("error", () => {}) })
+  try {
+    assert.deepEqual(await reads("ended", ""), [], "a run's own stdio is never a leak, its stdin ended")
+    assert.deepEqual(await reads("open", ""), [], "nor with its stdin open")
+    assert.deepEqual(await reads("open", path), ["PipeWrap"], "a pipe of someone else's is found beside an open stdin")
+    assert.deepEqual(await reads("ended", path), ["PipeWrap"], "and an ended stdin doesn't stand in for it")
+  } finally {
+    await new Promise((resolve) => peer.close(resolve))
+    await rm(dirname(path), { recursive: true, force: true })
+  }
 }
 
 try {
