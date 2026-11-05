@@ -488,6 +488,7 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:fin-ceiling-set": () => z.tuple([z.number()]),
   "mako:fin-default-choose": () =>
     z.tuple([
       z.string(),
@@ -502,7 +503,7 @@ const inputs = {
       ]),
     ]),
   "mako:fin-defaults": () => z.tuple([]),
-  "mako:fin-limit-set": () => z.tuple([z.number()]),
+  "mako:fin-limit-set": () => z.tuple([z.union([z.null(), z.number()])]),
   "mako:fin-policy-save": () =>
     z.tuple([
       z.object({
@@ -2645,6 +2646,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:files-find", "workspaces"],
   ["mako:files-folders", "workspaces"],
   ["mako:files-grep", "workspaces"],
+  ["mako:fin-ceiling-set", "harnesses"],
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-limit-set", "harnesses"],

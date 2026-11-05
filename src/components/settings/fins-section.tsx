@@ -1,18 +1,18 @@
-import { useEffect } from "react"
+import { useEffect, type ReactNode } from "react"
 import { FinRules } from "./fin-rules"
 import { toast } from "sonner"
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, MinusIcon, PlusIcon, ZapIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
-import { cloudWords, FIN_LIMIT, FIN_LIMIT_MAX, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
+import { cloudWords, FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT, FIN_LIMIT_MAX, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
 import { ModelList, ModelOptionRows, ModelSummary, type ModelChoice } from "@/components/composer/agent-model-picker"
-import { IconAction, SettingRow } from "@/components/ui/kit"
+import { IconAction, Segmented } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import type { HarnessProfile } from "@/lib/types"
 import { harnessDefaults } from "@/state/composer-settings"
-import { chooseFinDefault, loadFinDefaults, setFinLimit, useFinDefaults } from "@/state/fin-defaults"
+import { chooseFinDefault, loadFinDefaults, setFinCeiling, setFinLimit, useFinDefaults } from "@/state/fin-defaults"
 import { useHarnessOrder } from "@/state/harness-order"
 import { providers, useProviders } from "@/state/providers"
 
@@ -57,37 +57,79 @@ export function FinsSection() {
 }
 
 /**
- * How many Fins run at once on this Mac, every Apex's: the count protects this machine, so each device keeps its own.
- * Cloud Fins each get a machine, so the person's plan bounds them instead, once a host serves them.
+ * How many Fins run at once, one line per place: this Mac's capacity, from its hardware and what a Fin costs here,
+ * or the person's own number; the cloud's, by their plan; and their ceiling across every place.
  */
 function FinLimit() {
   const reading = useFinDefaults((state) => state.reading)
   if (!reading) return null
-  const limit = reading.limit ?? FIN_LIMIT
-  const cloud = reading.cloud
-  const save = (next: number) => void setFinLimit(next).catch((error: Error) => toast.error(error.message || "That limit couldn't be saved. Try again."))
+  const capacity = reading.capacity
+  const own = reading.limit
+  const atOnce = own ?? capacity?.atOnce ?? FIN_LIMIT
+  const ceiling = reading.ceiling ?? FIN_CEILING
+  const fail = (error: Error) => toast.error(error.message || "That number couldn't be saved. Try again.")
+  const saveLimit = (next: number | null) => void setFinLimit(next).catch(fail)
+  const saveCeiling = (next: number) => void setFinCeiling(next).catch(fail)
+  const based = capacity ? [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["measured defaults until it learns this Mac"]].join(" · ") : undefined
   return (
-    <>
-    <SettingRow
-      title="Fins at once on this Mac"
-      description={`How many of your Fins this Mac runs at the same time, across every Apex, so it stays responsive. Past it, an Apex waits for one to end only when it asks to. 1 to ${FIN_LIMIT_MAX}; ${FIN_LIMIT} unless you change it.`}
-    >
-      <div role="group" aria-label="Fins at once" className="flex shrink-0 items-center gap-1">
-        <IconAction label="One fewer" disabled={limit <= 1} onClick={() => save(limit - 1)}>
-          <MinusIcon />
-        </IconAction>
-        <output aria-live="polite" className="tabular w-7 text-center text-ui font-medium">{limit}</output>
-        <IconAction label="One more" disabled={limit >= FIN_LIMIT_MAX} onClick={() => save(limit + 1)}>
-          <PlusIcon />
-        </IconAction>
+    <section className="flex flex-col gap-3" aria-label="Fins at once">
+      <div>
+        <h3 className="text-ui font-medium">Fins at once</h3>
+        <p className="mt-0.5 text-label text-muted-foreground">
+          How many of your Fins run at the same time in each place, across every Apex. Past it, an Apex waits for one to
+          end only when it asks to.
+        </p>
       </div>
-    </SettingRow>
-    {cloud ? (
-      <SettingRow title="Fins at once in the cloud" description="Each cloud Fin runs on a machine of its own, so your plan sets how many run at once, and your daily spend ceiling caps them.">
-        <span className="shrink-0 text-ui text-muted-foreground">{cloudWords(cloud)}</span>
-      </SettingRow>
-    ) : null}
-    </>
+      <div role="list" className="flex flex-col gap-px">
+        <PlaceRow
+          place="This Mac"
+          detail={own !== undefined ? `Your number${capacity ? ` · Auto would be ${capacity.auto}` : ""}` : based ?? "Its capacity"}
+          caution={Boolean(capacity?.pressure) && own === undefined}
+        >
+          <Segmented
+            label="How this Mac's number is set"
+            value={own === undefined ? "auto" : "fixed"}
+            options={[{ value: "auto", label: "Auto" }, { value: "fixed", label: "Fixed" }]}
+            onChange={(next) => saveLimit(next === "auto" ? null : atOnce)}
+          />
+          {own === undefined ? <span className="tabular w-[5.5rem] text-right text-ui font-medium">{atOnce}</span> : <Stepper label="This Mac's Fins at once" value={own} most={FIN_LIMIT_MAX} onChange={saveLimit} />}
+        </PlaceRow>
+        {reading.cloud ? (
+          <PlaceRow place="Cloud" detail="A machine per Fin, so your plan and daily spend ceiling set it">
+            <span className="text-ui font-medium">{cloudWords(reading.cloud)}</span>
+          </PlaceRow>
+        ) : null}
+        <PlaceRow place="Across every place" detail="A safety net over each place's own number">
+          <Stepper label="Fins at once across every place" value={ceiling} most={FIN_CEILING_MAX} onChange={saveCeiling} />
+        </PlaceRow>
+      </div>
+    </section>
+  )
+}
+
+function PlaceRow({ place, detail, caution, children }: { place: string; detail: string; caution?: boolean; children: ReactNode }) {
+  return (
+    <div role="listitem" className="flex items-center gap-3 bg-shell/55 px-3 py-2.5">
+      <div className="min-w-0 flex-1">
+        <p className="text-ui font-medium">{place}</p>
+        <p className={cn("truncate text-label", caution ? "text-caution" : "text-faint")}>{detail}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-3">{children}</div>
+    </div>
+  )
+}
+
+function Stepper({ label, value, most, onChange }: { label: string; value: number; most: number; onChange: (next: number) => void }) {
+  return (
+    <div role="group" aria-label={label} className="flex shrink-0 items-center gap-1">
+      <IconAction label="One fewer" disabled={value <= 1} onClick={() => onChange(value - 1)}>
+        <MinusIcon />
+      </IconAction>
+      <output aria-live="polite" className="tabular w-7 text-center text-ui font-medium">{value}</output>
+      <IconAction label="One more" disabled={value >= most} onClick={() => onChange(value + 1)}>
+        <PlusIcon />
+      </IconAction>
+    </div>
   )
 }
 

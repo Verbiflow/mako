@@ -178,8 +178,14 @@ export interface AgentsDeps {
   /** The person's rules for which work goes to which harness and model (Settings › Fins). */
   finPolicy?(): FinPolicy | undefined
   budget?: TreeBudget
-  /** How many of the person's Fins run at once on this device, every tree's (Settings › Fins); `FIN_LIMIT` without it. */
+  /** How many of the person's Fins run at once on this device, every tree's: its capacity or their own number (`FinCapacity`); `FIN_LIMIT` without it. */
   finLimit?(): number
+  /** Reads the machine for its capacity, with the Fins at work here and their harnesses, as what waits is looked at. */
+  observeCapacity?(working: number, mix: Readonly<Record<string, number>>): Promise<void>
+  /** The person's Fins at once across every place (Settings › Fins): a safety net over the places' own. */
+  finCeiling?(): number
+  /** The places a start may name (`here`, `device:<name>`, `cloud`); only `here` until placement lands. */
+  places?(): readonly string[]
   /** What bounds the cloud's Fins (the person's plan and spend ceiling), once Fins start there; nothing without it. */
   cloudLimits?(): CloudFinLimits
   /** This Mac's cores, memory and load (`MacCapacity`): a start's answer says when it's busy, and it starts anyway. */
@@ -381,7 +387,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       current: (notice) => this.current(notice),
       now: deps.now,
     })
-    this.stopRoomWatch = deps.jobs.every("start the Fins there's room for", ROOM_EVERY_MS, () => {
+    this.stopRoomWatch = deps.jobs.every("start the Fins there's room for", ROOM_EVERY_MS, async () => {
+      await this.observe()
       if (this.store()?.queuedSpawns().length) void this.drain()
     })
   }
@@ -732,7 +739,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       return this.refuse(op, "conflict", `A start waits on at most ${AFTER_LIMIT} ${FIN_WORD}s; it names ${input.after!.length}. Name the last of a chain instead of each one.`)
     const after = this.afterOf(apex, input.after ?? [])
     if ("refused" in after) return this.refuse(op, after.refused, after.why)
-    await this.readMac()
+    await Promise.all([this.readMac(), this.observe()])
     // It waits only as its Apex asked: for the Fins it starts after, or with `queue` for a place, behind every spawn that waits for one already.
     const where = placeOf(input.place)
     const working = this.working(where)
@@ -742,7 +749,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (why && !input.queue)
       return this.refuse(op, "budget", why === "tree-running"
         ? `This tree runs ${counts.running} of its ${this.budget.running} Threads at once. Pass queue: true to start it when one ends.`
-        : `${upper(full ?? `${working} ${FIN_WORD}s are at work here`)}${waiting ? ` and ${waiting} wait for one to end` : ""}. Pass queue: true to start it when one ends, or after: to start it after one of yours.`)
+        : `${upper(full ?? `${working} ${FIN_WORD}s are at work here`)}${waiting ? ` and ${waiting} wait for one to end` : ""}.${this.elsewhere(where)} Pass queue: true to start it when one ends, or after: to start it after one of yours.`)
     if (why || after.length) {
       const record: QueuedStart = { lead: apex, input, tier, harness, tuned, ...(why && { why }), ...(after.length && { after }) }
       store.queueSpawn({ op, tree, record: JSON.stringify(record), at: this.now() })
@@ -1461,6 +1468,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       // Counted once as the drain begins, plus what it starts: a Fin it launched isn't counted again as it comes up.
       const filled = new Map<string, number>()
       const working = new Map<string, number>()
+      let totalStarted = 0
+      const everywhere = this.workingEverywhere()
       for (const spawn of store.queuedSpawns()) {
         const queued = parseQueued(spawn.record)
         if (queued?.after?.length) {
@@ -1474,7 +1483,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         const where = placeOf(queued?.input.place)
         const started = filled.get(where) ?? 0
         if (!working.has(where)) working.set(where, this.working(where))
-        if (placeFull(this.placeLimit(where), working.get(where)! + started)) continue
+        if (this.overCeiling(everywhere + totalStarted) ?? placeFull(this.placeLimit(where), working.get(where)! + started)) continue
+        totalStarted += 1
         filled.set(where, started + 1)
         // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
         if (queued && !store.edges().byOp(spawn.op)) {
@@ -2149,7 +2159,35 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** Why a place takes no more now, with `more` already starting there; undefined while it has room. */
   private full(where: string, more = 0): string | undefined {
-    return placeFull(this.placeLimit(where), this.working(where) + more)
+    return this.overCeiling(this.workingEverywhere() + more) ?? placeFull(this.placeLimit(where), this.working(where) + more)
+  }
+
+  /** The places a start may name that have room now, as a refused start offers them: " The cloud has room: pass place: cloud." */
+  private elsewhere(where: string): string {
+    const open = (this.deps.places?.() ?? [HERE]).filter((place) => place !== where && !this.full(place))
+    if (!open.length) return ""
+    const named = open.map((place) => (place === HERE ? "this device" : place === "cloud" ? "the cloud" : place.slice("device:".length)))
+    return ` ${upper(named.join(" and "))} ${open.length === 1 ? "has" : "have"} room: pass place: ${open.join(" or ")}.`
+  }
+
+  /** The person's ceiling across every place, when `working` Fins fill it. */
+  private overCeiling(working: number): string | undefined {
+    const ceiling = this.deps.finCeiling?.()
+    return ceiling !== undefined && working >= ceiling ? `${working} of the person's ${ceiling} ${FIN_WORD}s at once across every place are at work` : undefined
+  }
+
+  private workingEverywhere(): number {
+    return (this.store()?.edges().all ?? []).filter((edge) => this.occupies(edge)).length
+  }
+
+  /** This device's Fins at work and their harnesses, for its capacity. */
+  private async observe(): Promise<void> {
+    if (!this.deps.observeCapacity) return
+    const mix: Record<string, number> = {}
+    for (const edge of this.store()?.edges().all ?? [])
+      if (placeOf(edge.asked.place) === HERE && this.occupies(edge)) mix[this.harnessOf(edge)] = (mix[this.harnessOf(edge)] ?? 0) + 1
+    await this.deps.observeCapacity(Object.values(mix).reduce((sum, count) => sum + count, 0), mix).catch((error: Error) =>
+      hostWarn("agents", "this device's capacity couldn't be read; it keeps its last", { error: errorMessage({ error }) }))
   }
 
   /** A Fin at work holds a place against the budgets; one only waiting for its own Fins or its move holds none, or they'd wait for it. */

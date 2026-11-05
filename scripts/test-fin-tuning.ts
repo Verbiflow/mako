@@ -7,7 +7,7 @@ import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuning, type FinTuningInput } from "@mako/host/contracts/fin-tuning"
 import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
 import { resetWords, spentUntil } from "@mako/host/contracts/account-usage"
-import { FIN_LIMIT, FIN_LIMIT_MAX, finPolicyNote } from "@mako/host/contracts/fin-tuning"
+import { FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT_MAX, finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
@@ -172,7 +172,7 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
   try {
     const file = join(folder, "fin-defaults.json")
     const store = new FinDefaultsStore(file)
-    assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] }, limit: FIN_LIMIT }, "nothing chosen: every harness's Fins run as the person does, 16 at once")
+    assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] }, ceiling: FIN_CEILING }, "nothing chosen: every harness's Fins run as the person does, this device on its capacity")
     store.use("cursor", { model: "composer-2.5", options: { fast: "true" } })
     store.use("cursor", { options: { effort: "high" } })
     store.choose("codex", { model: "gpt-6.1-sol", options: { effort: "high" } })
@@ -180,7 +180,7 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
       chosen: { codex: { model: "gpt-6.1-sol", options: { effort: "high" } } },
       used: { cursor: { model: "composer-2.5", options: { fast: "true" } } },
       policy: { rules: [] },
-      limit: FIN_LIMIT,
+      ceiling: FIN_CEILING,
     }, "another host reads the same, and a send that names no model changes nothing")
     store.choose("codex", null)
     assert.deepEqual(store.reading().chosen, {}, "Same as you again")
@@ -202,10 +202,16 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
     assert.throws(() => store.setLimit(0))
     assert.throws(() => store.setLimit(FIN_LIMIT_MAX + 1))
     assert.throws(() => store.setLimit(2.5))
-    assert.equal(store.setLimit(FIN_LIMIT).limit, FIN_LIMIT)
-    assert.equal("limit" in JSON.parse(readFileSync(file, "utf8")), false, "the default is kept as none chosen")
+    assert.equal("limit" in store.setLimit(null), false, "back to Auto: this device's capacity")
+    assert.equal("limit" in JSON.parse(readFileSync(file, "utf8")), false, "Auto is kept as none chosen")
     writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), limit: 99 }))
-    assert.equal(new FinDefaultsStore(file).reading().limit, FIN_LIMIT, "a limit this build can't take is the default, never the rest unread")
+    assert.equal(new FinDefaultsStore(file).reading().limit, undefined, "a number this build can't take is Auto, never the rest unread")
+    assert.equal(store.setCeiling(100).ceiling, 100)
+    assert.equal(new FinDefaultsStore(file).reading().ceiling, 100, "the ceiling across places is kept too")
+    assert.throws(() => store.setCeiling(0))
+    assert.throws(() => store.setCeiling(FIN_CEILING_MAX + 1))
+    assert.equal(store.setCeiling(FIN_CEILING).ceiling, FIN_CEILING)
+    assert.equal("ceiling" in JSON.parse(readFileSync(file, "utf8")), false, "the default ceiling is kept as none chosen")
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

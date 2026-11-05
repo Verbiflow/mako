@@ -276,6 +276,26 @@ async function finLimit(): Promise<void> {
   } finally {
     await w.close()
   }
+
+  // The person's ceiling across every place holds over a place with room.
+  let held = 0
+  const capped = new AgentsWorld({
+    root: join(root, "fin-ceiling"),
+    script: (turn) => turn.text.includes("You're fin:") ? (held++, turn.world.hold(turn.conversation).then(() => (held--, "stopped"))) : "ok",
+    finLimit: () => 10,
+    finCeiling: () => 1,
+  })
+  try {
+    const apex = await capped.apex("claude")
+    const first = await capped.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "first", clientKey: "1", cwd: capped.root })
+    assert.ok(!("refused" in first) && first.state !== "queued")
+    await waitFor(() => held === 1, "the first Fin at work")
+    const second = await capped.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "second", clientKey: "2", cwd: capped.root })
+    assert.ok("refused" in second && second.why.startsWith("1 of the person's 1 Fins at once across every place are at work."), JSON.stringify(second))
+    await capped.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    await capped.close()
+  }
 }
 
 /**

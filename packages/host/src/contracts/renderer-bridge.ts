@@ -233,8 +233,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseFinDefault: (harness: string, settings: SessionSettings | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-default-choose", harness, settings),
     /** The person's rules for which work goes to which harness and model, saved whole. */
     saveFinPolicy: (policy: FinPolicy) => invokeTrustedHost<FinChoicesReading>("mako:fin-policy-save", policy),
-    /** How many Fins run at once, every tree's, 1 to `FIN_LIMIT_MAX`. */
-    setFinLimit: (limit: number) => invokeTrustedHost<FinChoicesReading>("mako:fin-limit-set", limit),
+    /** This device's own number of Fins at once, 1 to `FIN_LIMIT_MAX`, or with null its capacity (Auto). */
+    setFinLimit: (limit: number | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-limit-set", limit),
+    /** The person's Fins at once across every place, 1 to `FIN_CEILING_MAX`. */
+    setFinCeiling: (ceiling: number) => invokeTrustedHost<FinChoicesReading>("mako:fin-ceiling-set", ceiling),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>

@@ -469,7 +469,7 @@ export interface TreeBudget {
   /** Threads started in total. */
   started: number
 }
-export const TREE_BUDGET: TreeBudget = { running: 20, started: 100 }
+export const TREE_BUDGET: TreeBudget = { running: 32, started: 100 }
 
 /** The host's Fins for Diagnostics: how many, how many run (and of those, how many a process Mako didn't start runs), and each tree against its budgets. */
 export interface AgentsDiagnostics {

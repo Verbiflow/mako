@@ -28,12 +28,13 @@ import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
-import { MacCapacity, finSlots } from "./mac-capacity.js"
+import { MacCapacity } from "./mac-capacity.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
-import { FIN_LIMIT } from "../contracts/fin-tuning.js"
+import { FIN_CEILING } from "../contracts/fin-tuning.js"
+import type { FinCapacity } from "./fin-capacity-host.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { HostTelemetry } from "../usage/index.js"
@@ -61,6 +62,9 @@ import { z } from "zod"
 import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { FinCapacity } from "./fin-capacity-host.js"
+export { FinCostModel } from "./fin-cost.js"
+export { MacCapacity, finSlots } from "./mac-capacity.js"
 export { callThreadOf } from "./live-runtime.js"
 export { makoNote } from "./mako-note.js"
 export { OwnerFiles } from "./owner-files.js"
@@ -165,6 +169,8 @@ export interface ConversationsDeps {
   invoke: HostMethods["invoke"]
   /** The person's model choices for Fins (Settings › Fins) and what they use on each harness. */
   finDefaults?: Pick<FinDefaultsStore, "reading">
+  /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
+  finCapacity?: Pick<FinCapacity, "atOnce" | "observe">
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -315,7 +321,11 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
       },
-      finLimit: () => finSlots() ?? deps.finDefaults?.reading().limit ?? FIN_LIMIT,
+      ...(deps.finCapacity && {
+        finLimit: () => deps.finCapacity!.atOnce(),
+        observeCapacity: (working: number, mix: Readonly<Record<string, number>>) => deps.finCapacity!.observe(working, mix),
+      }),
+      finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
     })
     agents.resume()

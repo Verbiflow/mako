@@ -61,13 +61,32 @@ export const FinPolicySchema = z.object({
 export type FinPolicy = z.infer<typeof FinPolicySchema>
 
 /**
- * How many of the person's Fins run at once on one device, every tree's, unless they set another for it (Settings ›
- * Fins), at most `FIN_LIMIT_MAX`: the count protects that machine, so each device keeps its own. A start past it is
- * refused unless its Apex asks it to wait (`agents_start` `queue`).
+ * How many of the person's Fins run at once on one device, every tree's: its capacity, from its hardware and what a
+ * Fin costs there (`fin-capacity.ts`), unless they fix a number for it (Settings › Fins), at most `FIN_LIMIT_MAX`.
+ * The count protects that machine, so each device keeps its own. `FIN_LIMIT` is a host's without a capacity reading.
+ * A start past it is refused unless its Apex asks it to wait (`agents_start` `queue`).
  */
 export const FIN_LIMIT = 16
-export const FIN_LIMIT_MAX = 20
+export const FIN_LIMIT_MAX = 64
 export const FinLimitSchema = z.number().int().min(1).max(FIN_LIMIT_MAX)
+/** The person's Fins at work across every place at once: a safety net over the places' own bounds, generous by default. */
+export const FIN_CEILING = 64
+export const FIN_CEILING_MAX = 500
+export const FinCeilingSchema = z.number().int().min(1).max(FIN_CEILING_MAX)
+
+/** A device's capacity as Settings › Fins shows it: the number in force, the one it computed, and what it's based on. */
+export interface FinCapacityReading {
+  /** In force now: the person's own number, else the computed one as pressure allows. */
+  atOnce: number
+  /** What the hardware and the cost of a Fin here give. */
+  auto: number
+  /** "14 cores, 36 GB · a Fin ≈ 0.35 core, 0.8 GB · room for 1 build". */
+  why: string
+  /** Why it's lower than `auto` now: "14 now, not 17: memory pressure for 6 min". */
+  pressure?: string
+  /** False while it's still on the measured defaults, before this machine read enough of its own Fins. */
+  measured: boolean
+}
 
 /**
  * What bounds the cloud's Fins: each runs on a machine of its own, so no device's count does, only the person's plan
@@ -105,8 +124,12 @@ export interface FinChoicesReading {
   used: Readonly<Record<string, SessionSettings>>
   /** The person's rules for which work goes where. */
   policy: FinPolicy
-  /** Fins at once on this device (`FIN_LIMIT` unless they set another); absent from a host before it. */
+  /** The person's own number of Fins at once for this device; absent: its capacity (Auto). */
   limit?: number
+  /** This device's capacity; absent from a host before it. */
+  capacity?: FinCapacityReading
+  /** The person's Fins at once across every place (`FIN_CEILING` unless they set another); absent from a host before it. */
+  ceiling?: number
   /** The cloud's, once Fins start there: by the person's plan and spend ceiling, never this device's count. */
   cloud?: CloudFinLimits
 }

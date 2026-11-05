@@ -241,23 +241,28 @@ here only (`place` other than `here` is refused). It never waits unasked:
 past its place's bound or a tree's running budget, a start is refused with
 the count unless it passes `queue: true`, when it waits behind every spawn
 that waits for that place ("Queued: 3 ahead, your limit of Fins at once is
-in use"). Each place has its own bound (`placeFull`): a device the person's
-count of Fins at once on it, every tree's (`FIN_LIMIT`, 16, 1 to
-`FIN_LIMIT_MAX` in Settings › Fins, kept by that device's host since it
-protects that machine), and the cloud, where each Fin has a machine of its
-own, only the person's plan and daily spend ceiling (`AgentsDeps.cloudLimits`,
-`FinChoicesReading.cloud`, for when cloud placement lands). The tree's
-running budget is the fan-out cap across places. Past the started budget it is refused
-(`TREE_BUDGET`); a cycle is refused and there's no depth limit. `after:
-[names]` starts it once each of the Apex's Fins named (queued ones too) has
-finished; one that failed or was stopped holds it, its Apex is woken with
-why (`tellHeld`, `after:<op>`) and the spawn is dropped once it heard, and
-one already ended that way refuses the start. This Mac's load is a warning
-only: `macLoad` says it's busy when the working Fins, `FIN_LOAD` (2) cores
-and `FIN_MEMORY` each, take what the person's own work leaves, or it's out
-of swap or disk, and the start's answer says so (`mac`) beside the limit
-(`atOnce`). `MAKO_FIN_SLOTS` sets the limit instead, as a test's host does.
-What waits goes as Fins end, and every 10 s for a limit raised
+in use"). Each place has its own bound (`placeFull`). A device runs its
+capacity (`fin-capacity.ts`): its cores and memory, less a reserve for the
+person (a seventh of the cores and a fifth of memory where they work at it,
+less on a headless box), less room for a few builds, divided by what a Fin
+costs there, its light cores and memory outside builds, learned per harness
+on that machine (`FinCostModel`, 75th percentiles moving over days, priors
+from 2026-11-03: 0.35 core, 0.8 GB, builds 6 cores and 3 GB). That is 17 on
+a 14-core, 36 GB Mac, 2 on a 2 vCPU 8 GB box, and at most `DEVICE_CEILING`
+(64). `CapacityGovernor` lowers it only under pressure that holds (memory
+pressure or swap, heat, the person's own load, disk; a 5-minute average,
+held 3 minutes, then a Fin a minute, never below half) and brings it back
+after relief holds 5 minutes; running Fins are never touched. The person
+can fix a number per device instead of Auto (Settings › Fins), and
+`FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
+machine per Fin, is bounded by the plan and the daily spend ceiling only
+(`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
+every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
+tree's running budget (32) caps one Apex's fan-out. A refused start names
+the places a start may name that have room. This Mac's load also shows in
+the start's answer when it's busy (`macLoad`, `mac`) beside the device's
+number (`atOnce`). `MAKO_FIN_SLOTS` fixes the number, as a test's host does.
+What waits goes as Fins end, and every 10 s
 (`test:background-agents`). One a
 Thread's shell ran is followed through its own Session in the catalog and
 its process (`agent-runs.ts`, at most `TAIL_READS_PER_SECOND` tail reads

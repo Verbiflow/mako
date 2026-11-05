@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "no
 import { dirname } from "node:path"
 import { z } from "zod"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
-import { FIN_LIMIT, FinLimitSchema, FinPolicySchema, FinRuleSchema, FinTargetSchema, type FinChoicesReading, type FinDefaults, type FinPolicy } from "../contracts/fin-tuning.js"
+import { FIN_CEILING, FinCeilingSchema, FinLimitSchema, FinPolicySchema, FinRuleSchema, FinTargetSchema, type FinCapacityReading, type FinChoicesReading, type FinDefaults, type FinPolicy } from "../contracts/fin-tuning.js"
 import type { MethodTable } from "../base/methods.js"
 
 const HarnessSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
@@ -17,8 +17,9 @@ const StoredSchema = z.object({
     .object({ rules: z.array(FinRuleSchema.optional().catch(undefined)).catch([]), otherwise: FinTargetSchema.optional().catch(undefined) })
     .default({ rules: [] }),
   limit: FinLimitSchema.optional().catch(undefined),
+  ceiling: FinCeilingSchema.optional().catch(undefined),
 })
-type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number }
+type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number; ceiling?: number }
 
 function kept(entries: Readonly<Record<string, SessionSettings | undefined>>): Record<string, SessionSettings> {
   return Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, SessionSettings] => entry[1] !== undefined))
@@ -43,16 +44,24 @@ export class FinDefaultsStore {
   }
 
   reading(): FinChoicesReading {
-    const { chosen, used, policy, limit } = this.#read()
-    return { chosen: { ...chosen }, used: { ...used }, policy, limit: limit ?? FIN_LIMIT }
+    const { chosen, used, policy, limit, ceiling } = this.#read()
+    return { chosen: { ...chosen }, used: { ...used }, policy, ...(limit !== undefined && { limit }), ceiling: ceiling ?? FIN_CEILING }
   }
 
-  /** How many Fins run at once (`FIN_LIMIT`, the default, is kept as none chosen). */
-  setLimit(limit: number): FinChoicesReading {
-    const parsed = FinLimitSchema.parse(limit)
+  /** The person's own number of Fins at once on this device, or with null, its capacity (Auto). */
+  setLimit(limit: number | null): FinChoicesReading {
+    const next = limit === null ? undefined : FinLimitSchema.parse(limit)
     const stored = this.#read()
-    const next = parsed === FIN_LIMIT ? undefined : parsed
-    if (stored.limit !== next) this.#write({ chosen: stored.chosen, used: stored.used, policy: stored.policy, ...(next !== undefined && { limit: next }) })
+    if (stored.limit !== next) this.#write(withOwn(stored, "limit", next))
+    return this.reading()
+  }
+
+  /** Fins at once across every place (`FIN_CEILING`, the default, is kept as none chosen). */
+  setCeiling(ceiling: number): FinChoicesReading {
+    const parsed = FinCeilingSchema.parse(ceiling)
+    const next = parsed === FIN_CEILING ? undefined : parsed
+    const stored = this.#read()
+    if (stored.ceiling !== next) this.#write(withOwn(stored, "ceiling", next))
     return this.reading()
   }
 
@@ -104,7 +113,7 @@ export class FinDefaultsStore {
     try {
       const parsed = StoredSchema.parse(JSON.parse(readFileSync(this.#file, "utf8")))
       const rules = parsed.policy.rules.filter((rule) => rule !== undefined)
-      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used), policy: { rules, ...(parsed.policy.otherwise && { otherwise: parsed.policy.otherwise }) }, ...(parsed.limit !== undefined && { limit: parsed.limit }) }
+      this.#stored = { chosen: kept(parsed.chosen), used: kept(parsed.used), policy: { rules, ...(parsed.policy.otherwise && { otherwise: parsed.policy.otherwise }) }, ...(parsed.limit !== undefined && { limit: parsed.limit }), ...(parsed.ceiling !== undefined && { ceiling: parsed.ceiling }) }
     } catch {
       // A file this build can't read is replaced at the next choice; until then Fins run on what the person uses.
     }
@@ -122,10 +131,23 @@ export class FinDefaultsStore {
   }
 }
 
-/** Settings › Fins on every window and the web app's Macs: read, and chosen. */
-export function declareFinDefaultMethods(methods: MethodTable, store: FinDefaultsStore): void {
-  methods.handle("mako:fin-defaults", () => store.reading())
-  methods.handle("mako:fin-default-choose", (harness: string, settings: SessionSettings | null) => store.choose(harness, settings))
-  methods.handle("mako:fin-policy-save", (policy: FinPolicy) => store.savePolicy(policy))
-  methods.handle("mako:fin-limit-set", (limit: number) => store.setLimit(limit))
+/** `stored` with one of the person's numbers set, or left out for the default. */
+function withOwn(stored: Stored, key: "limit" | "ceiling", value: number | undefined): Stored {
+  const next: Stored = { ...stored }
+  delete next[key]
+  if (value !== undefined) next[key] = value
+  return next
+}
+
+/** Settings › Fins on every window and the web app's Macs: read, with this device's capacity, and chosen. */
+export function declareFinDefaultMethods(methods: MethodTable, store: FinDefaultsStore, capacity?: () => FinCapacityReading | undefined): void {
+  const read = (reading: FinChoicesReading): FinChoicesReading => {
+    const held = capacity?.()
+    return held ? { ...reading, capacity: held } : reading
+  }
+  methods.handle("mako:fin-defaults", () => read(store.reading()))
+  methods.handle("mako:fin-default-choose", (harness: string, settings: SessionSettings | null) => read(store.choose(harness, settings)))
+  methods.handle("mako:fin-policy-save", (policy: FinPolicy) => read(store.savePolicy(policy)))
+  methods.handle("mako:fin-limit-set", (limit: number | null) => read(store.setLimit(limit)))
+  methods.handle("mako:fin-ceiling-set", (ceiling: number) => read(store.setCeiling(ceiling)))
 }

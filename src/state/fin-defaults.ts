@@ -48,12 +48,29 @@ export async function saveFinPolicy(policy: FinPolicy): Promise<void> {
   }
 }
 
-/** How many Fins run at once, every Apex's: shown at once, put back if the host refuses it. */
-export async function setFinLimit(limit: number): Promise<void> {
+/** This Mac's own number of Fins at once, or with null its capacity (Auto): shown at once, put back if the host refuses it. */
+export async function setFinLimit(limit: number | null): Promise<void> {
   const before = store.get().reading
-  if (before) store.set({ reading: { ...before, limit } })
+  if (before) {
+    const next = { ...before }
+    if (limit === null) delete next.limit
+    else next.limit = limit
+    store.set({ reading: next })
+  }
   try {
     store.set({ reading: await getMako().setFinLimit(limit) })
+  } catch (error) {
+    store.set({ reading: before })
+    throw error
+  }
+}
+
+/** The person's Fins at once across every place: shown at once, put back if the host refuses it. */
+export async function setFinCeiling(ceiling: number): Promise<void> {
+  const before = store.get().reading
+  if (before) store.set({ reading: { ...before, ceiling } })
+  try {
+    store.set({ reading: await getMako().setFinCeiling(ceiling) })
   } catch (error) {
     store.set({ reading: before })
     throw error

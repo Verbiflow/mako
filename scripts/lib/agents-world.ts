@@ -52,6 +52,8 @@ export interface WorldOptions {
   capacity?: AgentsDeps["capacity"]
   /** The person's limit of Fins at once (`AgentsDeps.finLimit`); `FIN_LIMIT` without it. */
   finLimit?: () => number
+  /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
+  finCeiling?: () => number
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** Runs as a launch applies its mode: after its harness started, before its first message is sent. */
@@ -184,6 +186,7 @@ export class AgentsWorld {
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.capacity && { capacity: this.options.capacity }),
       ...(this.options.finLimit && { finLimit: this.options.finLimit }),
+      ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       archived: (conversation) => this.archived.has(conversation),
