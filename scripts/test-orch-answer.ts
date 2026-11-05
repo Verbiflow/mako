@@ -10,7 +10,10 @@ import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS, fromAgent } from "@mako/host/conversations/agent-wakes"
 import { finAsking } from "@mako/host/conversations/session-report"
-import { AgentsWorld, HARNESSES, type Script, type ScriptedTurn } from "./lib/agents-world.ts"
+import { HostJobs } from "@mako/host/base/host-jobs"
+import { Agents } from "@mako/host/conversations/agents"
+import { ThreadStore } from "@mako/host/threads/store"
+import { AgentsWorld, HARNESSES, noConversations, type Script, type ScriptedTurn } from "./lib/agents-world.ts"
 
 /**
  * What a Fin asks, answered (`npm run test:orch-answer`). The person's access
@@ -120,6 +123,23 @@ class FakeClock {
   get waiting(): number {
     return this.pending.length
   }
+}
+
+/** An engine on `store` alone, with no conversation loaded: how a host that just started reads its Fins. */
+function coldView(store: ThreadStore): Agents {
+  return new Agents({
+    store: () => store,
+    catalog: { nativePath: () => undefined, ref: () => undefined, page: async () => null, activity: () => ({}), subscribe: () => () => {}, announce: () => {} },
+    jobs: new HostJobs(),
+    live: noConversations(() => {}),
+    startLive: async () => {
+      throw new Error("a cold view starts nothing")
+    },
+    harnesses: () => HARNESSES,
+    runs: () => false,
+    harnessLabel: (harness) => harness,
+    modes: () => undefined,
+  })
 }
 
 /** A Fin that finished with a merge to decide, as `agents_report` takes it. */
@@ -638,6 +658,91 @@ try {
     await world.close()
   }
   console.log("decision, repeat: the same answer twice at once was the one answer, heard once")
+
+  // The review's probe: a new question in the very millisecond of the last answer is open, read from the store alone
+  // (no conversation loaded, as a host that just started reads it), before and after a restart on the same store.
+  // The engine's clock is held still at that millisecond, so nothing here races the wall.
+  {
+    let frozen: number | undefined
+    const world = new AgentsWorld({
+      root: join(root, "decision-same-ms"), now: () => frozen ?? Date.now(), later: new FakeClock().later,
+      script: async (turn) => {
+        if (turn.text.includes("Answer: ")) await turn.world.hold(turn.conversation)
+        return "ok"
+      },
+    })
+    const apex = await world.apex("claude", "full")
+    const started = await world.agents.start(apex.caller, { brief: { objective: "Review" }, harness: "codex", name: "worker", clientKey: "worker", cwd: world.root })
+    assert.ok(!("refused" in started) && started.conversation && started.child)
+    const fin = started.conversation!
+    const child = started.child!
+    await until("the Fin's first turn", () => world.agents.roster(apex.conversation).some((each) => each.child?.state?.kind === "ended"))
+    await world.agents.report(world.caller(fin), { ...MERGE, question: "Merge first?", clientKey: "first" })
+    assert.ok(!("refused" in await world.agents.answer(apex.caller, { to: "worker", answer: "Merge", clientKey: "merge" })))
+    await until("the answer to reach the Fin", () => world.prompts.some((prompt) => prompt.conversation === fin && prompt.text.includes("Answer: Merge")))
+    const kept = world.store.latestAnswers().get(child)
+    assert.ok(kept?.delivered)
+    frozen = kept.at
+    assert.ok(!("refused" in await world.agents.report(world.caller(fin), { ...MERGE, question: "Merge second?", clientKey: "second" })))
+    assert.equal(world.store.latestReports().get(child)?.at, kept.at, "the new question and the last answer share their millisecond")
+    const read = async (store: ThreadStore) => {
+      const cold = coldView(store)
+      try {
+        const listed = await cold.list(apex.caller, {})
+        assert.ok("children" in listed)
+        return listed.children.find((strip) => strip.name === "worker")?.state
+      } finally {
+        cold.dispose()
+      }
+    }
+    const before = await read(world.store)
+    assert.equal(before?.kind === "ended" && before.decision?.question, "Merge second?", `the new question is open: ${JSON.stringify(before)}`)
+    await world.close()
+    const reopened = new ThreadStore(join(world.root, "threads.sqlite"), { now: () => Date.now() })
+    try {
+      const after = await read(reopened)
+      assert.equal(after?.kind === "ended" && after.decision?.question, "Merge second?", `and on the store a host starts on: ${JSON.stringify(after)}`)
+      assert.equal(reopened.latestAnswers().get(child)?.ask, kept.ask, "while the first answer stays the first ask's")
+    } finally {
+      reopened.close()
+    }
+  }
+  console.log("decision, same millisecond: a new question as old as the last answer was open on its host and on the store a restart reads")
+
+  // Keeping an answer's delivery fails (a store gone read-only): the answer still reached the Fin, nothing rejects
+  // unhandled, the claim stays pending, and the next start finds the delivery under its request and keeps it, sending nothing.
+  {
+    const unhandled: Error[] = []
+    const onUnhandled = (error: Error) => void unhandled.push(error)
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      let answers: AgentsAnswerResult[] = []
+      const { world, fin, state } = await fixture("decision-stamp", {
+        access: "full", finHarness: "codex", later: new FakeClock().later,
+        asks: async (world, conversation) => void await world.agents.report(world.caller(conversation), MERGE),
+        onDecision: async (world, caller) => {
+          world.store.markAnswerDelivered = () => {
+            throw new Error("attempt to write a readonly database")
+          }
+          answers = [await world.agents.answer(caller, { to: "tests", answer: "Merge", clientKey: "merge" })]
+        },
+      })
+      await until("the answer", () => answers.length === 1)
+      assert.ok(!("refused" in answers[0]!), `it reached the Fin, so it's answered: ${JSON.stringify(answers[0])}`)
+      await until("the Fin to go on", () => { const now = state(); return now?.kind === "ended" && !now.decision })
+      await world.settle(600)
+      assert.deepEqual(unhandled.map((error) => error.message), [], "nothing rejects unhandled")
+      assert.equal(world.store.undeliveredAnswers().length, 1, "the claim stays pending, for the next start")
+      await world.restart()
+      await until("the next start to keep its delivery", () => world.store.undeliveredAnswers().length === 0)
+      await world.settle(600)
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === fin && /Answer: /.test(prompt.text)).length, 1, "and the Fin heard it once")
+      await world.close()
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
+  }
+  console.log("decision, stamp fails: the answer still reached the Fin, nothing rejected unhandled, and the next start kept its delivery without sending it again")
 
   // What it waits on, how long it's idle and its open pull requests: on its strip, its crew mates' view and the front door.
   {

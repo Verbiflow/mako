@@ -389,8 +389,8 @@ export interface ChildThread {
 /** The child's reports, as its owner keeps them: the newest decides what its parent last heard. */
 export interface ChildJournal {
   latest?: Report
-  /** The last answer to a question in its report: who gave it, and when. A report after it is past it. */
-  answered?: FinAnswered & { at: number }
+  /** The last answer to a question in its report: who gave it, when, and the ask it answers, which it settles alone. */
+  answered?: FinAnswered & { ask: string; at: number }
 }
 
 /** Its last report's first sentence: what a strip and the digest show it at. */
@@ -421,7 +421,8 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (thread.starting) return { kind: "starting", step: thread.starting }
   if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
-  const answered = journal.answered && (!latest || journal.answered.at >= latest.at) ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
+  // By identity, never by time: an answer settles the ask it names, and a newer ask is open whatever the clocks say.
+  const answered = journal.answered && latest && journal.answered.ask === reportAsk(latest).id ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
   if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && { answered }) }
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
     return {

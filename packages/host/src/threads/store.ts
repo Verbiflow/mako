@@ -1114,11 +1114,11 @@ export class ThreadStore {
     return row ? keptAnswer(row) : undefined
   }
 
-  /** Each Fin's newest answer, by its Thread. */
+  /** Each Fin's newest answer, by its Thread: the last one kept, whatever the clocks said. */
   latestAnswers(): Map<string, KeptAnswer> {
     this.syncVersion()
     const latest = new Map<string, KeptAnswer>()
-    for (const row of this.sql("SELECT record, delivered_at FROM agent_answers a WHERE at = (SELECT max(at) FROM agent_answers WHERE child_thread = a.child_thread) ORDER BY at, ask").all()) {
+    for (const row of this.sql("SELECT record, delivered_at FROM agent_answers a WHERE rowid = (SELECT max(rowid) FROM agent_answers WHERE child_thread = a.child_thread) ORDER BY at, ask").all()) {
       const answer = keptAnswer(row)
       latest.set(answer.child, answer)
     }

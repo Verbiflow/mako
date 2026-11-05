@@ -336,7 +336,11 @@ delivery that fails lets go of it. The claim is the store's
 message goes as before any delivery, so a restarted host still holds the
 decision answered and sends an answer it never delivered once, under that
 request (`undeliveredAnswers`), and a repeat of the same answer, in flight
-or after, gets that answer's result. The answer is the Fin's next message, and
+or after, gets that answer's result. An answer settles exactly the ask it
+names (`ChildJournal.answered.ask`), never another by the clock: a newer
+question is open even in the same millisecond. A delivery that reached the
+Fin but couldn't be stamped stays pending, and the next start finds it under
+its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
 `test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`). A
 report with a question may name what it waits on outside its tree

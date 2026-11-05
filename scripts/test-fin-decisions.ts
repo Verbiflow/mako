@@ -59,7 +59,7 @@ for (const status of ["done", "needs-input", "blocked", "failed", "progress"] as
     for (const wake of WAKES)
       for (const answered of [false, true]) {
         const latest = report(status, decides ? { decides } : {})
-        const journal = { latest, ...(answered && { answered: { by: "lead" as const, answer: "Merge", at: AT + 1 } }) }
+        const journal = { latest, ...(answered && { answered: { by: "lead" as const, answer: "Merge", ask: latest.id, at: AT + 1 } }) }
         const state = childState(edge(wake ? { wake } : {}), { source: "live" }, journal)
         assert.ok(ChildStateSchema.safeParse(state).success, "the state crosses the wire as its schema says")
         const label = `${status} decides ${decides} wake ${wake} answered ${answered}`
@@ -89,11 +89,11 @@ console.log("childState: a done report's question is its open decision, on the A
   const decided = report("done")
   const later = childState(edge(), { source: "live" }, { latest: { ...report("done", { question: undefined }), at: AT + 5 } })
   assert.deepEqual(later, { kind: "ended", outcome: "done" }, "a report after it replaces it")
-  const working = childState(edge(), { source: "live", working: true, step: "Shell gh pr merge 371" }, { latest: decided, answered: { by: "person", answer: "Merge", at: AT + 1 } })
+  const working = childState(edge(), { source: "live", working: true, step: "Shell gh pr merge 371" }, { latest: decided, answered: { by: "person", answer: "Merge", ask: decided.id, at: AT + 1 } })
   assert.deepEqual(working, { kind: "working", step: "Shell gh pr merge 371", answered: { by: "person", answer: "Merge" } })
   assert.equal(childLine(working), "You answered: Merge", "the person's answer, until its next state")
   assert.equal(childLine({ kind: "working", answered: { by: "lead", answer: "Merge" } }), "Apex answered: Merge")
-  const progressed = childState(edge(), { source: "live", working: true }, { latest: { ...report("progress", { question: undefined }), summary: "Merging.", at: AT + 2 }, answered: { by: "person", answer: "Merge", at: AT + 1 } })
+  const progressed = childState(edge(), { source: "live", working: true }, { latest: { ...report("progress", { question: undefined }), summary: "Merging.", at: AT + 2 }, answered: { by: "person", answer: "Merge", ask: decided.id, at: AT + 1 } })
   assert.deepEqual(progressed, { kind: "working", phase: "Merging." }, "a report after the answer is past it")
   const stopped = childState(edge({}, AT + 3), { source: "live" }, { latest: decided })
   assert.equal(stopped.kind === "ended" && stopped.outcome, "stopped", "a stop after it ends it as stopped")
@@ -103,7 +103,19 @@ console.log("childState: a done report's question is its open decision, on the A
   assert.equal(entry.state.kind, "completed", "its roster entry is completed: it isn't work anyone waits on")
   assert.equal(entry.child?.state?.kind === "ended" && entry.child.state.decision?.question, "Merge #371?", "and carries the decision")
 }
+// An answer settles the ask it names, never another by the clock: a newer question in the same millisecond stays open.
+{
+  const first = report("done", { id: `report:${CHILD}:first` })
+  const second = report("done", { id: `report:${CHILD}:second`, question: "Merge #372?", at: AT })
+  const tied = childState(edge(), { source: "live" }, { latest: second, answered: { by: "lead", answer: "Merge", ask: first.id, at: AT } })
+  assert.equal(tied.kind === "ended" && tied.decision?.question, "Merge #372?", "the newer ask is open though the answer to the first has its very time")
+  const earlier = childState(edge(), { source: "live" }, { latest: second, answered: { by: "lead", answer: "Merge", ask: first.id, at: AT + 10 } })
+  assert.equal(earlier.kind === "ended" && earlier.decision?.question, "Merge #372?", "and so it is with the answer's clock ahead of it")
+  const own = childState(edge(), { source: "live" }, { latest: second, answered: { by: "lead", answer: "Merge", ask: second.id, at: AT - 10 } })
+  assert.deepEqual(own, { kind: "ended", outcome: "done" }, "its own answer settles it, whatever its clock says")
+}
 console.log("cleared: by a later report, a turn, a stop or an answer, whose words the working row says")
+console.log("identity: an answer settles the ask it names, a newer one in the same millisecond stays open")
 
 // rollup: the person's decisions count under needs you, the Apex's under done.
 {
@@ -169,7 +181,7 @@ console.log("digest, front door: \"done; decide: Merge #371? (Merge · Leave ope
   assert.ok(ChildStateSchema.safeParse(decided).success)
   const blocked = childState(edge(), { source: "live" }, { latest: report("needs-input", { waitingOn }) })
   assert.deepEqual(blocked.kind === "blocked" && blocked.waitingOn, waitingOn, "so does a question it waits on")
-  const answered = childState(edge(), { source: "live" }, { latest: report("done", { waitingOn }), answered: { by: "lead", answer: "Merge", at: AT + 1 } })
+  const answered = childState(edge(), { source: "live" }, { latest: report("done", { waitingOn }), answered: { by: "lead", answer: "Merge", ask: report("done").id, at: AT + 1 } })
   assert.deepEqual(answered, { kind: "ended", outcome: "done" }, "an answered decision waits on nothing")
   const plain = childState(edge(), { source: "live" }, { latest: report("done", { question: undefined, waitingOn }) })
   assert.deepEqual(plain, { kind: "ended", outcome: "done" }, "a result without a question waits on nothing")

@@ -485,7 +485,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!edge || edge.closedAt !== undefined || this.inflight.has(kept.op)) continue
       const settled = this.sendAnswer(edge, kept, false)
       this.inflight.set(kept.op, settled)
-      void settled.finally(() => this.inflight.delete(kept.op))
+      this.untilSettled(kept.op, settled)
     }
     for (const apex of new Set(edges.all.map((edge) => edge.parent))) {
       // A stopped Fin's wait for it to resume (`resumeFin`).
@@ -1282,7 +1282,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!claim.claimed) return claim.answer.op === op ? this.keptAnswered(edge, claim.answer) : { refused: "conflict", why: `${edge.name} no longer waits on that: it was answered.` }
       const settled = this.sendAnswer(edge, claim.answer, true)
       this.inflight.set(op, settled)
-      void settled.finally(() => this.inflight.delete(op))
+      this.untilSettled(op, settled)
       return settled
     }
     const tier = by.kind === "apex" ? this.tierOf(by.apex) : "full"
@@ -1311,6 +1311,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (flight) return flight.then((answered) => ("refused" in answered ? answered : { ...answered, deduped: true }))
     const kept = this.store()?.answerByOp(op)
     return kept && kept.child === edge.child ? this.keptAnswered(edge, kept) : undefined
+  }
+
+  /** Forgets an answer in flight once it settles, however it settles: its caller hears a failure, nothing else does. */
+  private untilSettled(op: string, settled: Promise<AgentsAnswered | AgentRefused>): void {
+    const forget = () => {
+      if (this.inflight.get(op) === settled) this.inflight.delete(op)
+    }
+    settled.then(forget, (error: Error) => {
+      forget()
+      hostWarn("agents", "an answer didn't settle", { op, error: errorMessage({ error }) })
+    })
   }
 
   private keptAnswered(edge: ThreadParent, kept: KeptAnswer): Promise<AgentsAnswered | AgentRefused> | AgentsAnswered {
@@ -1347,7 +1358,13 @@ export class Agents implements AgentOperations, ConversationChildren {
       return sent
     }
     const delivered = { at: this.now(), delivery: sent.delivery }
-    store.markAnswerDelivered(kept.ask, delivered)
+    try {
+      store.markAnswerDelivered(kept.ask, delivered)
+    } catch (error) {
+      // It reached the Fin: the claim stays pending, and the next start finds that delivery under its request and stamps it.
+      hostWarn("agents", "an answer's delivery couldn't be kept; the next start finds it and keeps it", { op: edge.op, ask: kept.ask, error: errorMessage({ error }) })
+      return { child: edge.child, name: edge.name, answered: "report", delivery: sent.delivery }
+    }
     if (this.answersHeld.get(edge.child)?.ask === kept.ask) this.answersHeld.set(edge.child, { ...kept, delivered })
     hostLog("agents", "answer delivered", { op: edge.op, ask: kept.ask, by: kept.by, delivery: sent.delivery, ...(!release && { resent: true }), ...(sent.deduped && { deduped: true }) })
     return { child: edge.child, name: edge.name, answered: "report", delivery: sent.delivery }
@@ -2208,7 +2225,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private journalOf(child: string): ChildJournal {
     const latest = this.latest.get(child)
     const kept = this.answersHeld.get(child)
-    return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, at: kept.at } }) }
+    return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, at: kept.at } }) }
   }
 
   private entryOf(edge: ThreadParent): NativeAgent {

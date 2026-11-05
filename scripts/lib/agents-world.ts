@@ -111,6 +111,8 @@ export interface WorldOptions {
   later?: AgentsDeps["later"]
   /** The pull requests the host last read for a worktree's branch (`AgentsDeps.heldPulls`). */
   heldPulls?: AgentsDeps["heldPulls"]
+  /** The engine's clock (`AgentsDeps.now`), for a case that needs two moments to read the same. */
+  now?: () => number
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
@@ -224,6 +226,7 @@ export class AgentsWorld {
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
+      ...(this.options.now && { now: this.options.now }),
       archived: (conversation) => this.archived.has(conversation),
     }
     const agents = new Agents(deps)
