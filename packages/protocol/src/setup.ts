@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { AskOffer, Grant, Kind, Lease, LeaseEvent, Scope, SourceAsk, UnavailableReason } from "./borrow.js"
+import { AskOfferSchema, type Grant, type Kind, type Lease, type LeaseEvent, type Scope, type SourceAsk, type UnavailableReason } from "./borrow.js"
 
 /**
  * Setup: what each place a project's Threads run in has for the project, and where each thing stands against its
@@ -15,7 +15,7 @@ import type { AskOffer, Grant, Kind, Lease, LeaseEvent, Scope, SourceAsk, Unavai
 export const SETUP_PARTS = ["needs", "code", "files", "access", "tools", "services"] as const
 export type SetupPart = (typeof SETUP_PARTS)[number]
 export type SetupListPart = Exclude<SetupPart, "needs">
-export const SETUP_LIST_PARTS = SETUP_PARTS.filter((part): part is SetupListPart => part !== "needs")
+export const SETUP_LIST_PARTS = ["code", "files", "access", "tools", "services"] as const satisfies readonly SetupListPart[]
 
 export const SETUP_PART_TITLES = {
   needs: "Needs you",
@@ -79,32 +79,38 @@ export function placePossessive(place: SetupPlace): string {
 
 // ---- Sync state ----
 
+const At = z.number().int().nonnegative()
+const Words = z.string().min(1).max(200)
+
 /** Where one row stands against its source, said in a few words and one dot, never by colour alone. */
-export type SyncState =
+export const SyncStateSchema = z.discriminatedUnion("state", [
   /** The place has the source's current version. */
-  | { state: "synced"; at: number }
+  z.object({ state: z.literal("synced"), at: At }).strict(),
   /** The source has a newer version than the place holds; Send takes it there. `source` is whose ("Mac's"). */
-  | { state: "newer"; source: string }
+  z.object({ state: z.literal("newer"), source: Words }).strict(),
   /** A copy served while its source is offline, and how old it is. */
-  | { state: "stale"; since: number }
+  z.object({ state: z.literal("stale"), since: At }).strict(),
   /** An agent asked for it and the person hasn't answered. */
-  | { state: "asked" }
+  z.object({ state: z.literal("asked") }).strict(),
   /** The place hasn't got it, though another place has or a Thread needed it; Add gives it. */
-  | { state: "missing" }
+  z.object({ state: z.literal("missing") }).strict(),
   /** It didn't reach the place, and its fixed reason in words ("couldn't be read"); Retry tries again. */
-  | { state: "failed"; why: string }
+  z.object({ state: z.literal("failed"), why: Words }).strict(),
   /** It's this place's own and goes nowhere else. */
-  | { state: "here" }
+  z.object({ state: z.literal("here") }).strict(),
   /** An agent added it for its own Thread only; Keep puts it in the setup. */
-  | { state: "thread" }
+  z.object({ state: z.literal("thread") }).strict(),
   /** A service the place runs, and the port it's up on. */
-  | { state: "up"; port?: number }
+  z.object({ state: z.literal("up"), port: z.number().int().positive().max(65535).optional() }).strict(),
   /** A service reached through a device that's offline now. */
-  | { state: "offline"; through: string }
+  z.object({ state: z.literal("offline"), through: Words }).strict(),
+])
+export type SyncState = z.infer<typeof SyncStateSchema>
 
 export type SyncTone = "positive" | "caution" | "negative" | "attention" | "neutral"
 /** What the row's one button does. */
-export type RowAction = "send" | "add" | "retry" | "keep" | "stop"
+export const RowActionSchema = z.enum(["send", "add", "retry", "keep", "stop"])
+export type RowAction = z.infer<typeof RowActionSchema>
 
 /** "just now", "12 min", "3 h", "2 d". */
 export function age(ms: number): string {
@@ -154,46 +160,56 @@ const TONE_RANK = { attention: 0, negative: 1, caution: 2, neutral: 3, positive:
 
 // ---- Rows ----
 
-export type RowIcon = "repository" | "file" | "folder" | "key" | "tool" | "service" | "command"
+export const RowIconSchema = z.enum(["repository", "file", "folder", "key", "tool", "service", "command"])
+export type RowIcon = z.infer<typeof RowIconSchema>
 
 /** What a place reads of itself, as a row's origin names it. */
-export type SetupReading =
-  | "repository"
-  | "recipe-carry"
-  | "carried-cloud"
-  | "recipe-prepare"
-  | "recipe-process"
-  | "image"
-  | "thread-tool"
-  | "command-not-found"
-  | "sign-in"
-  | "saved-key"
-  | "device-tools"
+export const SetupReadingSchema = z.enum([
+  "repository",
+  "recipe-carry",
+  "carried-cloud",
+  "recipe-prepare",
+  "recipe-process",
+  "image",
+  "thread-tool",
+  "command-not-found",
+  "sign-in",
+  "saved-key",
+  "device-tools",
+])
+export type SetupReading = z.infer<typeof SetupReadingSchema>
+
+const Id = z.string().min(1).max(400)
 
 /** Where a row comes from: a grant, a lease under one, an agent's ask, or the place's own reading. */
-export type RowOrigin =
-  | { from: "grant"; grant: string }
-  | { from: "lease"; lease: string; grant: string }
-  | { from: "ask"; ask: string }
-  | { from: "reading"; reading: SetupReading }
+export const RowOriginSchema = z.discriminatedUnion("from", [
+  z.object({ from: z.literal("grant"), grant: Id }).strict(),
+  z.object({ from: z.literal("lease"), lease: Id, grant: Id }).strict(),
+  z.object({ from: z.literal("ask"), ask: Id }).strict(),
+  z.object({ from: z.literal("reading"), reading: SetupReadingSchema }).strict(),
+])
+export type RowOrigin = z.infer<typeof RowOriginSchema>
 
-export type SetupRow = {
-  id: string
-  part: SetupListPart
-  icon: RowIcon
-  name: string
-  /** A path, a command or a repository, drawn in the code face. */
-  mono: boolean
-  /** Where it comes from and how it's held, in one line. Names only, never a value. */
-  detail: string
-  scope?: Scope["level"]
-  sync: SyncState
-  origin: RowOrigin
-  /** The row's button when it isn't its state's own (Stop on what this device lends). */
-  action?: RowAction
-  /** What an action acts on: a carried file's path, a tool's name. */
-  target?: string
-}
+export const SetupRowSchema = z
+  .object({
+    id: Id,
+    part: z.enum(SETUP_LIST_PARTS),
+    icon: RowIconSchema,
+    name: z.string().min(1).max(1024),
+    /** A path, a command or a repository, drawn in the code face. */
+    mono: z.boolean(),
+    /** Where it comes from and how it's held, in one line. Names only, never a value. */
+    detail: z.string().max(1000),
+    scope: z.enum(["thread", "project", "account"]).optional(),
+    sync: SyncStateSchema,
+    origin: RowOriginSchema,
+    /** The row's button when it isn't its state's own (Stop on what this device lends). */
+    action: RowActionSchema.optional(),
+    /** What an action acts on: a carried file's path, a tool's name. */
+    target: z.string().max(1024).optional(),
+  })
+  .strict()
+export type SetupRow = z.infer<typeof SetupRowSchema>
 
 /** The row's one button: its own, or its state's. */
 export function rowAction(row: SetupRow, now: number): RowAction | undefined {
@@ -218,14 +234,12 @@ export type Asker = z.infer<typeof AskerSchema>
  * the place lacks. An answer becomes a grant, the source's yes or no, or the tool goes into the recipe's prepare;
  * agents never add to Setup themselves.
  */
-export type SetupAsk = {
-  id: string
-  by: Asker
-  at: number
-  why: string
-  /** The place the asking Thread runs in. */
-  place: string
-} & ({ kind: "borrow"; offer: AskOffer; answer: "grant" | "source" } | { kind: "tool"; tool: string; version?: string })
+const AskBase = { id: Id, by: AskerSchema, at: At, why: z.string().max(500), /** The place the asking Thread runs in. */ place: Id }
+export const SetupAskSchema = z.discriminatedUnion("kind", [
+  z.object({ ...AskBase, kind: z.literal("borrow"), offer: AskOfferSchema, answer: z.enum(["grant", "source"]) }).strict(),
+  z.object({ ...AskBase, kind: z.literal("tool"), tool: z.string().min(1).max(200), version: z.string().max(80).optional() }).strict(),
+])
+export type SetupAsk = z.infer<typeof SetupAskSchema>
 
 export const ASK_ANSWERS = ["allow-thread", "allow-project", "decline", "add-to-setup"] as const
 export const AskAnswerSchema = z.enum(ASK_ANSWERS)
@@ -377,26 +391,34 @@ export type SetupInput = {
 
 // ---- Output ----
 
-export type SetupPartView = { part: SetupListPart; rows: SetupRow[] }
+export const SetupPartViewSchema = z.object({ part: z.enum(SETUP_LIST_PARTS), rows: z.array(SetupRowSchema) }).strict()
+export type SetupPartView = z.infer<typeof SetupPartViewSchema>
 
-export type SetupPlaceView = {
-  id: string
-  place: SetupPlace
-  title: string
-  /** What the place is, in one line. */
-  line: string
-  asks: SetupAsk[]
-  parts: SetupPartView[]
-}
+export const SetupPlaceViewSchema = z
+  .object({
+    id: Id,
+    place: SetupPlaceSchema,
+    title: z.string().max(100),
+    /** What the place is, in one line. */
+    line: z.string().max(1000),
+    asks: z.array(SetupAskSchema),
+    parts: z.array(SetupPartViewSchema),
+  })
+  .strict()
+export type SetupPlaceView = z.infer<typeof SetupPlaceViewSchema>
 
-export type SetupView = {
-  project: string
-  root: string
-  repository: string | null
-  places: SetupPlaceView[]
-  /** When it was read. */
-  at: number
-}
+/** A project's page: every place, its asks and its five parts. What a host, the account's broker and a fixture answer. */
+export const SetupViewSchema = z
+  .object({
+    project: z.string().max(200),
+    root: z.string().max(1024),
+    repository: z.string().max(200).nullable(),
+    places: z.array(SetupPlaceViewSchema),
+    /** When it was read. */
+    at: At,
+  })
+  .strict()
+export type SetupView = z.infer<typeof SetupViewSchema>
 
 // ---- Derivation ----
 
@@ -764,7 +786,8 @@ export const SetupActSchema = z.discriminatedUnion("act", [
 export type SetupAct = z.infer<typeof SetupActSchema>
 
 /** Whether an act went through, and why not in the person's words. The page reads itself again either way. */
-export type SetupActOutcome = { done: true } | { done: false; why: string }
+export const SetupActOutcomeSchema = z.union([z.object({ done: z.literal(true) }).strict(), z.object({ done: z.literal(false), why: Words }).strict()])
+export type SetupActOutcome = z.infer<typeof SetupActOutcomeSchema>
 
 /** What an add in the Add menu is, by part: the menu's rows, in its order. */
 export const SETUP_ADDITIONS = [

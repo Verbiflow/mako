@@ -2565,14 +2565,16 @@ Services), and every row ends in one dot and a few words against its source
 "Stays here"), never colour alone. Every row is a borrowing grant or lease
 (`@mako/protocol/borrow`), an agent's ask, or a place's own reading (the
 recipe's carry, prepare and processes, sign-ins and saved keys by name), and
-`setupView` in `packages/host/src/contracts/setup.ts` derives them all, so the
-host (`workspaces/setup-view.ts`), the mock bridge and the broker answer one
-page. The host reads this device's own brokers (the worktrees' checkouts, the
+`setupView` in `@mako/protocol/setup` (re-exported by
+`@mako/host/contracts/setup`) derives them all, with `SetupViewSchema` for the
+page, so the host (`workspaces/setup-view.ts`), the mock bridge and the
+account's broker answer one page by one function. The host reads this device's own brokers (the worktrees' checkouts, the
 saved secrets) and the account's (`/v1/borrow/*`), and sends each answer and
 Stop back to the broker that holds the ask or the grant. Agents propose; only the person's tap adds: an ask is in Needs you, in
 the Inbox and above its Thread's composer, and Keep, Add to setup and the Add
 menu draft the recipe change in a new Thread for the person to send. No value
-is ever shown. `npm run test:setup` covers the rows and words.
+is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
+rows and words; `npm run test:setup` the host's readings and brokers.
 
 ## Notifications
 

@@ -1,6 +1,6 @@
 // Explicit isolated fixture for Setup's pages; never imported by the application entry point.
 import { createRoot } from "react-dom/client"
-import type { SetupView } from "@mako/host/contracts/setup"
+import { SetupViewSchema } from "@mako/host/contracts/setup"
 import { ThreadSetup, SetupPage } from "@/components/setup/setup-page"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -22,9 +22,7 @@ applyTheme(search.get("theme") === "light" ? "light" : "dark")
 installMockBridge()
 threadsStore.set({ descriptors: fixtureHarnesses })
 const read = search.get("page")
-const answer: unknown = read ? await (await fetch(read)).json() : undefined
-// SAFETY: the file is the `SetupView` a host's `SetupViews.view` returned, written whole by the host test.
-const page = answer === undefined ? undefined : (answer as SetupView)
+const page = read ? SetupViewSchema.parse(await (await fetch(read)).json()) : undefined
 if (page) setSetupSource({ read: async () => page, act: async () => ({ done: false, why: "This page is a host's reading, drawn as it was." }) })
 const project = page?.root ?? search.get("project") ?? "/Users/you/api"
 const place = search.get("place") ?? page?.places[0]?.id ?? "cloud"
