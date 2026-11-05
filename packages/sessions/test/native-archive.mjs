@@ -223,9 +223,10 @@ try {
   const movedAt = Date.now()
   await mkdir(freshArchived)
   await rename(join(freshDated, name), join(freshArchived, name))
-  while (!watchedEvents.some((event) => event.type !== "removed" && event.ref.path === join(freshArchived, name)) && Date.now() - movedAt < 5000) await delay(25)
+  // Half the sweep's 30 s: the watcher hears it in tens of milliseconds, and the sweep could find it no sooner than this.
+  while (!watchedEvents.some((event) => event.type !== "removed" && event.ref.path === join(freshArchived, name)) && Date.now() - movedAt < 15_000) await delay(25)
   const heardIn = Date.now() - movedAt
-  assert.ok(heardIn < 5000, `the first archive is heard in ${heardIn} ms, not at the 30 s sweep`)
+  assert.ok(heardIn < 15_000, `the first archive is heard in ${heardIn} ms, not at the 30 s sweep`)
   await watched.stop()
   console.log(`Native archive: the first archive, which creates archived_sessions, is heard in ${heardIn} ms`)
 

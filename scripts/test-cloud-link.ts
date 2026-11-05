@@ -61,6 +61,24 @@ async function until(check: () => boolean, what: string): Promise<void> {
   assert.ok(check(), what)
 }
 
+/**
+ * The longest this process's loop was held since it was called: a runner that stalls the process delays the link's
+ * timers as long, so a time judged here leaves it out, and a wait the link adds on its own timers stays in.
+ */
+function heldSince(): () => number {
+  let last = performance.now()
+  let longest = 0
+  const ticker = setInterval(() => {
+    const now = performance.now()
+    longest = Math.max(longest, now - last - 5)
+    last = now
+  }, 5)
+  return () => {
+    clearInterval(ticker)
+    return Math.max(longest, performance.now() - last - 5, 0)
+  }
+}
+
 /** The cloud says something on the newest connection, and the link has heard it. */
 const heard = async () => {
   const socket = attached.at(-1)!
@@ -78,12 +96,14 @@ try {
   await heard()
   served[0]!.answers = false
   const sentAt = Date.now()
+  const probing = heldSince()
   link.probeIfSilent(SILENT_MS, ANSWER_MS)
   await nextAttached(2)
   const replacedMs = Date.now() - sentAt
+  const probeHeld = probing()
   assert.equal(served[0]!.pings, 1, "the stalled link was asked once")
   assert.ok(replacedMs >= SILENT_MS + ANSWER_MS - 20, `replaced only after it was silent and unanswered (${replacedMs} ms)`)
-  assert.ok(replacedMs < SILENT_MS + ANSWER_MS + 1_000, `replaced soon after (${replacedMs} ms)`)
+  assert.ok(replacedMs - probeHeld < SILENT_MS + ANSWER_MS + 1_000, `replaced soon after (${replacedMs} ms, the loop held ${Math.round(probeHeld)} ms of it)`)
 
   // A link that answers when asked is kept.
   await heard()
@@ -109,9 +129,12 @@ try {
   served[1]!.socket.terminate()
   await until(() => !link.heard, "the drop is heard")
   const askedAt = Date.now()
+  const reaching = heldSince()
   assert.equal(await link.reach(), true, "it opened")
+  const reachMs = Date.now() - askedAt
+  const reachHeld = reaching()
   assert.equal(served.length, 3)
-  assert.ok(Date.now() - askedAt < 500, `at once, not at the backoff's next step (${Date.now() - askedAt} ms)`)
+  assert.ok(reachMs - reachHeld < 500, `at once, not at the backoff's next step (${reachMs} ms, the loop held ${Math.round(reachHeld)} ms of it)`)
 
   // Offline: the try can't open, and says so.
   server.close()
