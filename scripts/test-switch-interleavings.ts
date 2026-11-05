@@ -5,14 +5,15 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import type { LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { ContextTransfer } from "@mako/host/contracts/conversation-control"
+import { ActorSchema } from "@mako/host/contracts/thread-identity"
 import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
 
 /**
  * Switches against the queue, generated (`npm run test:switch-interleavings`): seeded schedules over a switch opening,
  * committing, its source closing or refusing to, a second switch, Stop, Resume, an edit, a removal, a new message, a
- * crash and a restart, with the rules of `docs/delivery-queue.md` checked after every step: nothing sends after a Stop
- * until it's resumed, no acknowledged edit or accepted message is lost, at most one switch is in flight, and the
- * conversation always has a binding it can use. `SEED=n` runs one schedule, `PINNED=n` one pinned one; a schedule a
+ * crash, a restart and an agent's quiet move, with the rules of `docs/delivery-queue.md` checked after every step: nothing
+ * sends after a Stop until it's resumed, no binding comes after a Stop that nobody asked for since, no acknowledged edit
+ * or accepted message is lost, at most one switch is in flight, and the conversation always has a binding it can use. `SEED=n` runs one schedule, `PINNED=n` one pinned one; a schedule a
  * review or a failure found is pinned in `PINNED`, with what it found, and runs first.
  */
 const HOUR = 3_600_000
@@ -22,6 +23,7 @@ const ONLY_PINNED = process.env.PINNED === undefined ? undefined : Number(proces
 
 type Step =
   | { kind: "switch"; to: string }
+  | { kind: "move"; to: string }
   | { kind: "open" }
   | { kind: "open-fail" }
   | { kind: "close-ok" }
@@ -63,6 +65,30 @@ const PINNED: { name: string; steps: Step[] }[] = [
     steps: steps({ kind: "switch", to: "cursor" }, { kind: "open" }, { kind: "delete" }, { kind: "close-fail", forNow: true }, { kind: "later" }),
   },
   {
+    name: "a Stop while a move opens retires it: no binding comes after the Stop",
+    steps: steps({ kind: "move", to: "cursor" }, { kind: "stop" }, { kind: "open" }, { kind: "close-ok" }),
+  },
+  {
+    name: "a Stop while a move closes its source: committed, it completes",
+    steps: steps({ kind: "move", to: "cursor" }, { kind: "open" }, { kind: "stop" }, { kind: "close-ok" }),
+  },
+  {
+    name: "a Stop, then a move's close fails: it's put back and doesn't go again",
+    steps: steps({ kind: "message" }, { kind: "move", to: "cursor" }, { kind: "open" }, { kind: "stop" }, { kind: "close-fail" }, { kind: "later" }),
+  },
+  {
+    name: "a move ahead of a queued message, which goes on its destination once",
+    steps: steps({ kind: "message" }, { kind: "move", to: "grok" }, { kind: "open" }, { kind: "close-ok" }),
+  },
+  {
+    name: "a move behind a switch that's closing its source",
+    steps: steps({ kind: "switch", to: "cursor" }, { kind: "open" }, { kind: "move", to: "grok" }, { kind: "close-ok" }, { kind: "open" }, { kind: "close-ok" }),
+  },
+  {
+    name: "a crash under a move",
+    steps: steps({ kind: "move", to: "cursor" }, { kind: "crash" }, { kind: "message" }),
+  },
+  {
     name: "a crash while a stopped switch's message waits in the queue",
     steps: steps({ kind: "switch", to: "cursor" }, { kind: "stop" }, { kind: "open" }, { kind: "edit" }, { kind: "crash" }, { kind: "resume" }),
   },
@@ -81,10 +107,11 @@ function random(seed: number): () => number {
 
 function schedule(next: () => number): Step[] {
   const pick = <T,>(items: readonly T[]) => items[Math.floor(next() * items.length)]!
-  const made: Step[] = [{ kind: "switch", to: pick(["cursor", "grok", "codex"]) }]
+  const made: Step[] = [next() < 0.3 ? { kind: "move", to: pick(["cursor", "grok", "codex"]) } : { kind: "switch", to: pick(["cursor", "grok", "codex"]) }]
   for (let at = 1; at < 14; at += 1) {
     const roll = next()
-    if (roll < 0.14) made.push({ kind: "switch", to: pick(["cursor", "grok", "codex", "claude"]) })
+    if (roll < 0.09) made.push({ kind: "switch", to: pick(["cursor", "grok", "codex", "claude"]) })
+    else if (roll < 0.14) made.push({ kind: "move", to: pick(["cursor", "grok", "codex", "claude"]) })
     else if (roll < 0.3) made.push({ kind: "open" })
     else if (roll < 0.33) made.push({ kind: "open-fail" })
     else if (roll < 0.43) made.push({ kind: "close-ok" })
@@ -177,6 +204,8 @@ class Schedule {
   }
 
   private exiting = false
+  /** The bindings there were at the last Stop, until someone asks for something since: no other may come. */
+  private stopped: Set<string> | undefined
 
   get snapshot(): LiveSnapshot {
     return this.world.live.snapshot(this.conversation)!
@@ -215,7 +244,13 @@ class Schedule {
     const pick = <T,>(items: readonly T[]) => items[Math.floor(this.next() * items.length)]
     const rows = () => this.unsent().filter((work) => { const row = this.row(work); return row?.status === "queued" || row?.status === "held" })
     switch (step.kind) {
+      case "move":
+        this.stopped = undefined
+        // Refused to its asker's face (another switch is pending): nothing was accepted.
+        await this.world.continueOn(id, { kind: "move", move: { id: randomUUID(), to: { harness: step.to } } }, ActorSchema.parse(this.world.caller(id))).catch(() => undefined)
+        break
       case "switch":
+        this.stopped = undefined
         this.accept(`switch-${(this.serial += 1)} to ${step.to}.`, (request) => live.transfer(id, { id: request, provider: step.to, text: `switch-${this.serial} to ${step.to}.`, attachments: [] }))
         break
       case "open":
@@ -236,6 +271,7 @@ class Schedule {
         live.wakeDue(Date.now() + HOUR)
         break
       case "stop":
+        this.stopped ??= new Set(this.snapshot.control!.bindings.map((binding) => binding.id))
         await live.cancel(id)
         for (const work of this.unsent()) work.stopped = true
         break
@@ -246,6 +282,7 @@ class Schedule {
         // Under an open edit, the row's Resume is the person's own word for it too.
         live.editQueued(id, { requestId: work.id, expectedText: row.text, change: { kind: "resume" } })
         work.stopped = false
+        this.stopped = undefined
         break
       }
       case "edit": {
@@ -276,6 +313,7 @@ class Schedule {
         break
       }
       case "message":
+        this.stopped = undefined
         this.accept(`message-${(this.serial += 1)}.`, (request) => void live.submit(id, request, `message-${this.serial}.`, []))
         break
       case "restart":
@@ -358,6 +396,8 @@ class Schedule {
     assert.ok(this.worstInFlight <= 1, label(`${this.worstInFlight} destinations opening at once`))
     // Always a binding the conversation can use.
     assert.ok(control.bindings.some((binding) => binding.id === control.activeBindingId), label(`the active binding ${control.activeBindingId} isn't one of its bindings`))
+    // No binding comes after a Stop that nobody asked for since: what wasn't committed stays uncommitted.
+    if (this.stopped) assert.ok(this.stopped.has(control.activeBindingId), label(`a binding came after a Stop: ${control.activeBindingId}, of ${[...this.stopped].join(", ")}`))
     // Nothing accepted is lost: its words are in the queue, on the switch that carries them, or were sent.
     for (const work of this.unsent()) {
       const queued = snapshot.requests.some((request) => request.text === work.words && request.status !== "canceled")
@@ -374,6 +414,7 @@ class Schedule {
 
   /** Every gate opens and every held message resumes: what's left goes, once, and the conversation still takes a message. */
   async finish(): Promise<void> {
+    this.stopped = undefined
     const live = this.world.live
     const id = this.conversation
     for (let round = 0; round < 120; round += 1) {

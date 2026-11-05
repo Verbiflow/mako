@@ -5,7 +5,7 @@ import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { admittedInPlace } from "../contracts/turn-continuation.js"
-import { TransferInputSchema, carryingWords, resumable, type ConversationControl } from "../contracts/conversation-control.js"
+import { STOP_RETIRED_MOVE, TransferInputSchema, carryingWords, quietSwitch, resumable, retiredMove, type ConversationControl } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
   ContextTransfer,
@@ -16,6 +16,7 @@ import type { Actor } from "../contracts/thread-identity.js"
 import type { TurnContinuation, LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { arriving, departing } from "../contracts/request-hold.js"
 import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
@@ -41,9 +42,29 @@ export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {
   return `The saved native session cannot be resumed. ${reason} No replacement session was started.`
 }
 
+/** What a Stop did to the switches not yet committed: those it holds as messages, and the quiet ones it retired. */
+export interface HeldSwitches {
+  snapshot: LiveSnapshot
+  held: number
+  retired: ContextTransfer[]
+}
+
+/** A quiet switch: a Thread moved with its queue as it stands (`LiveConversations.moveOn`). */
+export interface SwitchMove {
+  /** What it was decided on still holds: read last, with nothing awaited before its commit. */
+  wanted: () => boolean
+  first?: string
+}
+
+const CLOSE_RETIRED_MOVE = "Its harness wouldn't let go of it. Nothing changed; ask again to move it."
+
 /** Durable switch acceptance and provider preparation, separate from token ingestion. */
 export class LiveTransfers {
   private readonly host: LiveAccess
+  /** Who waits for a switch to settle, by its ID (`settled`). */
+  private readonly settling = new Map<string, Set<(transfer: ContextTransfer) => void>>()
+  /** Each quiet switch's `wanted`, by its ID: what it was decided on is in memory, and a restart retires it. */
+  private readonly moves = new Map<string, () => boolean>()
   constructor(host: LiveAccess) {
     this.host = host
   }
@@ -61,7 +82,8 @@ export class LiveTransfers {
       })
     }
   }
-  accept(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot {
+  /** `move`: a quiet switch. It has no message of its own, so it goes ahead of what's queued, which is for its destination. */
+  accept(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation, move?: SwitchMove): LiveSnapshot {
     const command = TransferInputSchema.parse(input)
     const inputDigest = createHash("sha256")
       .update(JSON.stringify(command))
@@ -82,7 +104,7 @@ export class LiveTransfers {
         )
       return resident.snapshot
     }
-    if (!command.text.trim() && !command.attachments.length)
+    if (!move && !command.text.trim() && !command.attachments.length)
       throw new Error("A transfer needs a request or an attachment")
     if (this.pending(resident))
       throw new Error("A provider switch is already pending")
@@ -90,7 +112,7 @@ export class LiveTransfers {
     // and so does that one's own message, which goes first.
     const inFlight = resident.transferPhase && (resident.transferPhase.phase === "committed" || resident.transferPhase.phase === "closing") ? resident.transferPhase.id : undefined
     if (
-      resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== inFlight)
+      !move && resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== inFlight)
     )
       throw new Error(
         "Send or remove queued messages before switching providers"
@@ -118,6 +140,7 @@ export class LiveTransfers {
             createdAt: Date.now(),
             state: { kind: "queued" },
             ...inFlight && { behind: inFlight },
+            ...move?.first !== undefined && { first: move.first },
           },
         ],
       },
@@ -128,6 +151,7 @@ export class LiveTransfers {
       resident.snapshot = previous
       throw error
     }
+    if (move) this.moves.set(command.id, move.wanted)
     this.start(resident)
     return resident.snapshot
   }
@@ -188,6 +212,7 @@ export class LiveTransfers {
   withdraw(snapshot: LiveSnapshot, id: string): LiveSnapshot {
     const control = snapshot.control
     if (!control?.transfers.some((transfer) => transfer.input.id === id && unsettled(transfer))) return snapshot
+    for (const transfer of control.transfers) if (transfer.input.id === id && unsettled(transfer)) this.tell(removed(transfer))
     return { ...snapshot, control: { ...control, transfers: control.transfers.map((transfer) => (transfer.input.id === id && unsettled(transfer) ? removed(transfer) : transfer)) } }
   }
 
@@ -199,6 +224,28 @@ export class LiveTransfers {
     const own = resident.snapshot.requests.find((request) => request.id === transfer.input.id)
     if (own) resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.filter((request) => request !== own) }
     this.save(resident, { ...transfer, input: own ? carryingWords(transfer.input, own) : transfer.input, retry: undefined, state })
+  }
+
+  /** A quiet switch that won't go: it has no message to wait with, so it's over, and whoever asked hears why. */
+  private retire(resident: Resident, transfer: ContextTransfer, error: string): void {
+    this.save(resident, retiredMove(transfer, error))
+  }
+
+  /** Once the switch `id` has gone or can't go; a retry or a Stop's hold is still waiting. */
+  settled(id: string): Promise<ContextTransfer> {
+    return new Promise((done) => {
+      const waiting = this.settling.get(id) ?? new Set()
+      waiting.add(done)
+      this.settling.set(id, waiting)
+    })
+  }
+
+  tell(transfer: ContextTransfer): void {
+    if (unsettled(transfer)) return
+    this.moves.delete(transfer.input.id)
+    const waiting = this.settling.get(transfer.input.id)
+    this.settling.delete(transfer.input.id)
+    for (const done of waiting ?? []) done(transfer)
   }
 
   save(resident: Resident, transfer: ContextTransfer): void {
@@ -213,6 +260,7 @@ export class LiveTransfers {
       },
     }
     this.host.flush(resident)
+    this.tell(transfer)
   }
 
   private async perform(
@@ -242,7 +290,9 @@ export class LiveTransfers {
       if (target && !control.bindings.some((binding) => binding.id === target && binding.provider === transfer.input.provider))
         throw new Error("The selected native session is unavailable")
       const currentBinding = control.bindings.find((binding) => binding.id === control.activeBindingId)
-      reconnect = (!target || target === control.activeBindingId) && !resident.driver && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding.nativeId)
+      // Another account of its harness, where the session can't go on: a session of its own, handed the conversation.
+      const anew = quietSwitch(transfer) && currentBinding?.provider === transfer.input.provider
+      reconnect = (!target || target === control.activeBindingId) && !resident.driver && !anew && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding?.nativeId)
       const bindings = control.bindings.map((binding) =>
         binding.id === control.activeBindingId && resident.driver
           ? {
@@ -260,7 +310,7 @@ export class LiveTransfers {
       // of its settings, a transfer the picker's encoding of them. A dormant
       // native file may have changed outside Mako; a fresh full handoff is the
       // fallback then.
-      let prior = bindings.find(
+      let prior = anew ? undefined : bindings.find(
         (binding) =>
           (!target || binding.id === target) &&
           binding.provider === transfer.input.provider &&
@@ -273,7 +323,7 @@ export class LiveTransfers {
       // sends context from that checkpoint, so it still wants the record unmoved.
       let verdict: ResumeVerdict | undefined
       if (
-        !prior &&
+        !prior && !anew &&
         resumes(this.host.dependencies.driver(transfer.input.provider))
       ) {
         for (const binding of [...bindings].reverse()) {
@@ -438,7 +488,10 @@ export class LiveTransfers {
           prepared.session = { ...session, currentMode: mode }
         }
       }
-      if (!owned()) {
+      // Nothing is awaited from here to the commit: what a move was decided on is read for the last time.
+      const declined = owned() && this.moves.get(transfer.input.id)?.() === false
+      if (!owned() || declined) {
+        if (declined) this.retire(resident, transfer, "What it was decided on changed before it moved. Nothing changed.")
         if (preparedId) {
           await prepared.driver.close(preparedId)
           void this.revokeTools(preparedId, source.session.id)
@@ -484,6 +537,7 @@ export class LiveTransfers {
           coveredBlocks: 0,
           includesBase: false,
           path: bindingPath(this.host.dependencies, prepared.session, prepared.session.nativePath),
+          ...transfer.input.account && { account: transfer.input.account },
         }),
         nativeId: prepared.session.nativeId,
         tuning: appliedTuning,
@@ -519,6 +573,11 @@ export class LiveTransfers {
       const previousControl = this.host.control(resident)
       // Its message is already in the queue when this switch was held or taken back: it stays as the person left it.
       const own = previous.requests.find((request) => request.id === transfer.input.id)
+      const quiet = quietSwitch(transfer)
+      // A move's queue lands with it: every row stays a row, and a hold about the account it left goes (`arriving`).
+      const staying = quiet
+        ? arriving(previous.requests, { harness: transfer.input.provider, account: transfer.input.account, tuning: transfer.input.tuning }, previous.session.harness !== transfer.input.provider, transfer.first)
+        : previous.requests
       const carries = {
         targetBindingId: transfer.input.bindingId ? bindingId : undefined,
         tuning: prior ? transfer.input.tuning : undefined,
@@ -536,10 +595,12 @@ export class LiveTransfers {
         threadPath: binding.path,
         permissions: [],
         requests: own
-          ? previous.requests.map((request) => (request === own ? { ...own, ...carries } : request))
-          : admittedInPlace(previous.requests, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
+          ? staying.map((request) => (request === own ? { ...own, ...carries } : request))
+          : quiet ? staying : admittedInPlace(staying, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
         control: {
           ...this.host.control(resident),
+          // With no message of its own, its history goes with whichever goes next.
+          ...quiet && carries.context.length > 0 && { merges: [...previousControl.merges, { id: transfer.input.id, sourceId: transfer.input.id, sourceRevision: 0, manifest, status: "pending" as const }] },
           activeBindingId: bindingId,
           bindings: (prior ? latestBindings : [...latestBindings, binding]).map(
             (candidate) =>
@@ -609,6 +670,8 @@ export class LiveTransfers {
         }
         for (const [dormantId, retiredGeneration] of retiredGenerations)
           resident.bindingGenerations.set(dormantId, retiredGeneration)
+        const left = this.host.control(resident).transfers.find((candidate) => candidate.input.id === transfer.input.id)
+        if (left) this.tell(left)
         throw error
       }
       for (const [dormantId] of retiring) {
@@ -646,7 +709,9 @@ export class LiveTransfers {
       const said = resident.transferOpening?.said ?? []
       resident.transferOpening = undefined
       if (said.length) this.host.takeUpdates(resident, said)
+      resident.snapshot = supersedeMoves(resident.snapshot, transfer.input.id)
       this.host.flush(resident)
+      this.tell(accepted)
       if (moved) {
         hostLog("transfer", "reconnected past checkpoint", {
           conversation: source.session.id,
@@ -758,19 +823,31 @@ function messageOf(transfer: ContextTransfer, createdAt: number, fields: Pick<Li
  * the queue, held by the Stop, and from here on is edited, removed and resumed as any message is. An attempt under way
  * sees its transfer no longer next and drops what it comes back with (`LiveTransfers.perform`).
  */
-export function holdSwitches(snapshot: LiveSnapshot) {
+export function holdSwitches(snapshot: LiveSnapshot): HeldSwitches {
   const control = snapshot.control
   const waiting = control?.transfers.filter(unsettled) ?? []
-  if (!control || !waiting.length) return { snapshot, held: 0 }
-  const fresh = waiting.filter((transfer) => !snapshot.requests.some((request) => request.id === transfer.input.id))
+  if (!control || !waiting.length) return { snapshot, held: 0, retired: [] }
+  // One with no message has nothing to wait with: it goes no further, so no binding changes after the Stop.
+  const held = waiting.filter((transfer) => !quietSwitch(transfer))
+  const retired = waiting.filter(quietSwitch).map((transfer) => retiredMove(transfer, STOP_RETIRED_MOVE))
+  const fresh = held.filter((transfer) => !snapshot.requests.some((request) => request.id === transfer.input.id))
   return {
-    held: waiting.length,
+    held: held.length,
+    retired,
     snapshot: {
       ...snapshot,
       requests: fresh.reduce((requests, transfer) => admittedInPlace(requests, messageOf(transfer, transfer.createdAt, { status: "held", pause: "stop" })), snapshot.requests),
-      control: { ...control, transfers: control.transfers.map((transfer) => (unsettled(transfer) ? { ...transfer, retry: undefined, state: { kind: "queued" as const } } : transfer)) },
+      control: { ...control, transfers: control.transfers.map((transfer) => retired.find((over) => over.input.id === transfer.input.id) ?? (unsettled(transfer) ? { ...transfer, retry: undefined, state: { kind: "queued" as const } } : transfer)) },
     },
   }
+}
+
+/** A move's history no message took yet is the latest switch's to carry: that one's manifest, from its own binding, says it. */
+function supersedeMoves(snapshot: LiveSnapshot, id: string): LiveSnapshot {
+  const control = snapshot.control
+  const moved = (merge: ConversationControl["merges"][number]) => merge.status === "pending" && merge.id === merge.sourceId && merge.id !== id
+  if (!control?.merges.some(moved)) return snapshot
+  return { ...snapshot, control: { ...control, merges: control.merges.filter((merge) => !moved(merge)) } }
 }
 
 /**
@@ -788,13 +865,15 @@ function undoSwitch(current: LiveSnapshot, control: ConversationControl, before:
     session: before.session,
     threadPath: before.threadPath,
     permissions: before.permissions,
-    requests: current.requests.map((request) => (request.id === id ? { ...request, context: undefined, targetBindingId: undefined } : request)),
+    requests: was && quietSwitch(was) ? departing(current.requests, before.requests) : current.requests.map((request) => (request.id === id ? { ...request, context: undefined, targetBindingId: undefined } : request)),
     control: {
       ...control,
       activeBindingId: beforeControl.activeBindingId,
       bindings: beforeControl.bindings,
+      merges: control.merges.filter((merge) => merge.id !== id),
       transfers: control.transfers.map((transfer) => {
         if (transfer.input.id !== id || !was) return transfer
+        if (quietSwitch(was)) return retiredMove(was, CLOSE_RETIRED_MOVE)
         return gone ? removed(was) : { ...was, behind: undefined, state: { kind: "queued" } }
       }),
     },

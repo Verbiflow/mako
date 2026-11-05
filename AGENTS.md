@@ -225,7 +225,7 @@ sync right after its parent's (`uploadScope`). How a Fin stands is computed,
 never stored (`childState(edge, thread, journal)`). `Agents`
 (`conversations/agents.ts`) starts, follows, delivers and ends them; each
 verb is defined once in `contracts/agent-tools.ts` as `mako:agents-<verb>`
-(start, link, list, read, report, stop, wait), its schema generated from the
+(start, move, link, list, read, report, stop, wait), its schema generated from the
 handler, and reaches the agent three ways from the one projection
 (`conversations/agent-tools.ts`): the in-Thread `mako` server, `mako agents
 <verb>` and `mako mcp`, the caller named by `MAKO_SESSION_ID`. A start
@@ -1129,6 +1129,28 @@ the live, transcript and conversation-control suites with it after changing
 paging or anything that reads history (test-live-conversations' crash fixture
 runs two hosts on one journal at once, which breaks that one-writer rule).
 `scripts/test-paged-entries.ts` (in `test:performance`) covers paging.
+
+A Thread goes on on another harness through one operation, `continueOn`
+(`conversations/continue-on.ts`), whoever asks, with `actor` saying who: the
+person's switch (`mako:live-transfer`) and a reply to a dormant binding, a
+Fin's relaunch, `agents_move` and Mako's automatic moves.
+`test:fin-move` fails on a caller that goes around it. A move (`ThreadMove`)
+is a quiet switch: no message of its own and no row, so every waiting message
+stays a row, goes on the target at commit in its order and carries the
+transcript with the first (a pending merge), and a target of the same harness
+that keeps the session only pins its binding (`ProviderBinding.account`,
+`LiveConversations.pinnedAccount`, a Fin's and an Apex's alike). It asks nothing
+of the harness it leaves, so it works on a Fin stopped, ended, failed or out of
+usage, keeping its Thread, name, edge, worktree, branch and reports. Its rules
+beside a Stop and a hold are in `docs/delivery-queue.md`, rules 9 to 11.
+`agents_start` and `agents_send` attach another Thread as a person's `@` chip
+does (`context: [{ thread }]`, a ref, a Thread ID or a Fin's name; `agents_list`
+`scope: threads` finds a ref): `@mako/sessions/thread-references` resolves and
+writes both, and `thread_history` reads the caller's referenced threads and
+its own tree (`thread-tree.ts`): its Fins, its Apex and the Fins beside it, each
+by Thread ID or a Fin's name. `thread: "tree"` searches all of them, and `export`
+writes a Thread out through the bundle a switch and a chip hand over.
+`agents_read`'s transcript is a quick tail, and says where the whole is.
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn

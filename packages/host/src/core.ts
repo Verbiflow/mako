@@ -1191,6 +1191,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     snapshot: (id) => live.historySnapshot(id),
     store: () => threads.store,
     catalog: threads.catalog,
+    bundle: { live: (conversation) => live.transcriptBundle(conversation), native: (path) => threads.catalog.transcriptArtifact(path) },
   })
   const mediaRoot = join(environment.dataRoot, "media")
   const turnMedia = new TurnMedia(mediaRoot)

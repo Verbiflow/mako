@@ -22,6 +22,7 @@ export const MAKO_CALLS: readonly { tool: string; args: ToolArguments; output: s
   { tool: "agents_answer", args: { to: "fin:own-words", answer: "Squash it", clientKey: "k5" }, output: answer({ name: "own-words", answered: "question" }) },
   { tool: "agents_answer", args: { to: "fin:rail-search", person: true, clientKey: "k6" }, output: answer({ name: "rail-search", answered: "person" }) },
   { tool: "agents_wait", args: { children: ["own-words", "rail-search"] }, output: answer({ reports: [], cursor: 3, timedOut: true }) },
+  { tool: "agents_move", args: { child: "own-words", harness: "claude", clientKey: "k5" }, output: answer({ moved: [{ name: "own-words", state: "moved" }] }) },
   { tool: "agents_stop", args: { child: "rail-search", reason: "Covered by own-words" }, output: answer({ stopped: ["rail-search"] }) },
   { tool: "agents_link", args: { session: "6b1e", harness: "claude", name: "review" }, output: answer({ child: "t3", name: "review", origin: "linked" }) },
   { tool: "agents_report", args: { status: "done", summary: "Rows say what happened.", artifacts: [{ kind: "pull-request", ref: PULL }], clientKey: "k7" }, output: answer({ id: "r1", delivered: "notice" }) },

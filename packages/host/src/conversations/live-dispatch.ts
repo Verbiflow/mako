@@ -4,6 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
+import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
@@ -190,8 +191,9 @@ export class LiveDispatch {
     // Nor while a transfer is under way: once committed, its source may still be closing, and nothing goes on it.
     if (resident.transferring) return
     // A switch waits for what was queued before it, as a switch asked for behind another waits for that one's message.
+    // A quiet one goes first: what's queued is for its destination.
     const transfer = transfers.pending(resident)
-    if (transfer && !(transfer.state.kind === "queued" && resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== transfer.input.id && (request.createdAt ?? 0) <= transfer.createdAt))) {
+    if (transfer && !(transfer.state.kind === "queued" && !quietSwitch(transfer) && resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== transfer.input.id && (request.createdAt ?? 0) <= transfer.createdAt))) {
       transfers.start(resident)
       return
     }

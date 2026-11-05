@@ -4,7 +4,9 @@ Every message into a conversation is an entry in its journal's request queue
 (`LiveRequest`), and `LiveDispatch` alone sends them. `contracts/request-hold.ts`
 says why a held message waits (`holdOf`) and what goes next (`nextInLine`). This
 note holds the rules a change to the queue must keep. A provider switch
-(`ContextTransfer`) is queued work too, so the same rules cover it.
+(`ContextTransfer`) is queued work too, so the same rules cover it. A Thread moved
+by an agent or by Mako (`continueOn`, `agents_move`) goes through the same switch,
+with no message of its own: rules 9 to 11 are what's different about it.
 `npm run test:switch-interleavings` checks them after every step of generated
 schedules, and a failing schedule is pinned there.
 
@@ -22,7 +24,7 @@ schedules, and a failing schedule is pinned there.
    as any message is. Resume sends the row's words through the switch. Removing
    the row takes the switch with it (`LiveTransfers.withdraw`). While a switch's
    row is held, the switch holds nothing else up: a new message, or a new switch,
-   goes ahead of it.
+   goes ahead of it. A move has no message to wait with: rule 11.
 
 3. **A committed switch completes, a Stop or not.** Once the journal names the
    destination as the binding, the conversation is on it. The Stop pauses the
@@ -33,7 +35,10 @@ schedules, and a failing schedule is pinned there.
    (`undoSwitch`), and nothing else moves. A request's text, its holds and its
    place are untouched, whoever set them. It loses only the context that named the
    destination. The switch goes back to waiting behind its row, and its next
-   attempt adopts that row instead of writing a new one.
+   attempt adopts that row instead of writing a new one. A move takes back what it
+   did at commit as well: the pending context it left is dropped, so the source's
+   next message doesn't carry the destination's transcript, and the rows it freed
+   wait where they did. It doesn't go again: whoever asked is told.
 
 5. **The person's edits always win.** An edit Mako acknowledged stands whatever
    happens to the switch that carries the message: an undo, a retry, a failure, a
@@ -56,6 +61,34 @@ schedules, and a failing schedule is pinned there.
    always one of its bindings. A failed destination leaves the source as it was,
    and a failed close puts it back.
 
+9. **A move goes ahead of what's queued.** A move is a quiet switch: it has no
+   message and no row, and nothing is taken over. What's queued is meant for its
+   destination, so the switch doesn't wait for it (rule 7's order is for a switch
+   with a message of its own), and no row goes on the source meanwhile. Every row
+   goes on the target once it commits, in its order, the transcript with the first
+   to go (a pending merge). `ThreadMove.first` names a row that goes ahead of what
+   waited longer, as a held digest does. A move that fails leaves every row where
+   it was, on the source.
+
+10. **A hold about the source's account goes with the move; a hold about the
+    person doesn't.** A retry on its limit and a sign-out's hold belong to the
+    account the Thread is leaving, and mean nothing on the target, so at commit
+    those rows go, and the sign-in notice with them. That's so moving to another
+    account of the same harness too. Landing on the very account that signed out
+    changes nothing, and its hold stays. A Stop and a person's edit stay whatever
+    the move: a row a Stop paused while it waited on a sign-in stops waiting on
+    the sign-in and goes on waiting for its Resume (`arriving`).
+
+11. **A Stop retires a move not yet committed.** With no row to wait in, it goes
+    no further, so no binding comes after the Stop, and whoever asked is told, and
+    can ask again. A move asked for after a Stop can go, since it sends nothing: the
+    Stop's holds stay, the Thread stays stopped, and what it paused goes on the
+    target at its Resume. An automatic move yields instead (`unlessStopped`), and
+    what it was decided on is read at its admission and again right before its
+    commit, with nothing awaited between (`stillDecided`). A restart retires one
+    too, since what it was decided on went with the last host, and whoever asked
+    hears.
+
 ## What each failure leaves
 
 | What happened | The switch | Its message |
@@ -70,3 +103,8 @@ schedules, and a failing schedule is pinned there.
 | Restart or crash, switch not committed, row in queue | `queued` | its row, paused until Resume |
 | Crash after commit, message unsent, not held | `failed` | the row reads failed, and the card's retry has its current words |
 | Crash after commit, held by the Stop | `accepted` | its row, still held, and Resume wakes the destination |
+| Move: destination won't open | `failed` | every row where it was, on the source |
+| Move: Stop before commit | `failed`, `removed` | every row where it was, held by the Stop |
+| Move: Stop after commit | `accepted` | every row on the target, held by the Stop |
+| Move: close fails | `failed`, `removed` | every row back where it was, no pending context |
+| Move: restart or crash before commit | `failed`, `removed` | every row where it was |

@@ -17,6 +17,7 @@ import type { LivePermissionRequest, LivePermissionResponse, LiveSessionMode, Li
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
+import { continueOn, type ContinueOn } from "@mako/host/conversations/continue-on"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { handOff } from "@mako/host/harnesses/prompt-dispatch"
@@ -122,6 +123,10 @@ export interface WorldOptions {
   now?: () => number
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
+  /** The harnesses whose session goes on under another account (`ProviderLiveDriver.accountContinuation`). */
+  resumesUnderAccount?: readonly string[]
+  /** The conversations an `@` picker offers and their transcripts (`AgentsDeps.references`). */
+  references?: AgentsDeps["references"]
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
   refusePrompt?: (conversation: string, harness: string) => string | undefined | Promise<string | undefined>
 }
@@ -158,6 +163,10 @@ export class AgentsWorld {
   store!: ThreadStore
   live!: LiveConversations
   agents!: Agents
+  /** The one way a Thread goes on on another harness, as the host composes it. */
+  continueOn!: ContinueOn
+  /** Each move through `continueOn`, in order: who asked and what it went to. */
+  readonly continued: { conversation: string; to: string; kind: string; by: string }[] = []
   jobs!: HostJobs
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
@@ -209,11 +218,19 @@ export class AgentsWorld {
       resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     this.live = live
+    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) === true })
+    this.continueOn = (id, continuation, actor, stillDecided) => {
+      const to = continuation.kind === "words" ? continuation.input.provider : continuation.kind === "move" ? continuation.move.to.harness : continuation.reply.provider
+      this.continued.push({ conversation: id, to, kind: continuation.kind, by: actor?.kind ?? "person" })
+      return continuing(id, continuation, actor, stillDecided)
+    }
     const deps: AgentsDeps = {
       store: () => this.store,
       catalog: this.options.catalog ?? emptyCatalog(),
       jobs: this.jobs,
       live: this.live,
+      continueOn: this.continueOn,
+      ...(this.options.references && { references: this.options.references }),
       startLive: async (harness, cwd, options) => {
         // As `mako:live-start` does: a Fin's worktree and profile are prepared, then a stopped one writes no edge. Each
         // host starts on its own conversations: a start the last one left preparing never reaches the next host's.
@@ -457,7 +474,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
     throw new Error("There's no conversation here")
   }
   return {
-    session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, snapshot: () => null, editQueued: none, transfer: none, submit: none,
+    session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, snapshot: () => null, editQueued: none, switchSettled: none, submit: none,
     act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
   }
