@@ -79,6 +79,7 @@ import {
   frontDoorNote,
 } from "../contracts/agent-tools.js"
 import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
+import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
@@ -2376,16 +2377,27 @@ export class Agents implements AgentOperations, ConversationChildren {
   private async observe(sample = false): Promise<void> {
     if (!this.deps.observeCapacity) return
     const mix: Record<string, number> = {}
-    const fins: { conversation: string; harness: string }[] = []
+    const fins: FinAtWork[] = []
     for (const edge of this.store()?.edges().all ?? []) {
       if (placeOf(edge.asked.place) !== HERE || !this.occupies(edge)) continue
-      const harness = this.harnessOf(edge)
-      mix[harness] = (mix[harness] ?? 0) + 1
       const conversation = this.conversationOf(edge.child)
-      if (conversation) fins.push({ conversation, harness })
+      const at = conversation ? this.bindingAtWork(conversation, this.harnessOf(edge)) : undefined
+      const harness = at?.harness ?? this.harnessOf(edge)
+      mix[harness] = (mix[harness] ?? 0) + 1
+      if (at) fins.push(at)
     }
     await this.deps.observeCapacity(Object.values(mix).reduce((sum, count) => sum + count, 0), mix, sample ? fins : undefined).catch((error: Error) =>
       hostWarn("agents", "this device's capacity couldn't be read; it keeps its last", { error: errorMessage({ error }) }))
+  }
+
+  /**
+   * Whose processes a Fin's conversation runs on now: its active binding, by the ID its harness's processes are owned
+   * by, on that binding's harness. A switch of harness moves both, so a Fin is measured as the harness it runs on now.
+   */
+  private bindingAtWork(conversation: string, harness: string): FinAtWork {
+    const control = this.deps.live.snapshot(conversation)?.control
+    const binding = control?.bindings.find((each) => each.id === control.activeBindingId)
+    return { conversation: binding?.id ?? conversation, harness: binding?.provider ?? harness }
   }
 
   /** A Fin at work holds a place against the budgets; one only waiting for its own Fins or its move holds none, or they'd wait for it. */
