@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import * as childProcess from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -46,10 +46,13 @@ function run(command: string, args: string[], cwd: string) {
 
 try {
   const wrapper = 'builtin eval "$1"; code=$?; builtin printf "pwd=%s\\n" "$(builtin pwd)"; builtin exit $code'
-  for (const [shell, args] of [
+  // The shapes the SDK starts, each where its shell is installed: Linux runners have bash and not always zsh.
+  const shells = ([
     ["/bin/zsh", ["-c", wrapper, "--"]],
     ["/bin/bash", ["-O", "extglob", "-c", wrapper, "--"]],
-  ] as const) {
+  ] as const).filter(([shell]) => existsSync(shell))
+  const anyShell = shells[0]![0]
+  for (const [shell, args] of shells) {
     const moved = await run(shell, [...args, "echo SHOULD-NOT-RUN"], gone)
     assert.equal(moved.error, undefined, `${shell}: a deleted folder no longer fails the spawn`)
     assert.ok(!moved.stdout.includes("SHOULD-NOT-RUN"), `${shell}: the command does not run somewhere the agent did not choose`)
@@ -61,16 +64,13 @@ try {
     const kept = await run(shell, [...args, "echo ran-here"], workspace)
     assert.ok(kept.stdout.includes("ran-here"), `${shell}: a shell in an existing folder is untouched`)
   }
-  assert.equal(warnings.length, 2)
+  assert.equal(warnings.length, shells.length)
   const other = await run(process.execPath, ["-e", "0"], gone)
   assert.equal(other.error?.code, "ENOENT", "other processes fail as they would")
-  assert.equal(warnings.length, 2)
+  assert.equal(warnings.length, shells.length)
 
   // Routing: a deny runs its notice instead of the command and fails; a warn prints its note and runs the command.
-  for (const [shell, args] of [
-    ["/bin/zsh", ["-c", wrapper, "--"]],
-    ["/bin/bash", ["-O", "extglob", "-c", wrapper, "--"]],
-  ] as const) {
+  for (const [shell, args] of shells) {
     const denied = await run(shell, [...args, "echo SHOULD-NOT-RUN && gh pr merge --squash"], workspace)
     assert.ok(!denied.stdout.includes("SHOULD-NOT-RUN"), `${shell}: nothing on a denied line runs`)
     assert.match(denied.stderr, /Call pull_request_merge instead/, `${shell}: the agent reads the redirect`)
@@ -86,7 +86,7 @@ try {
   // SDK 1.2.0's shape: the command arrives on descriptor 5, ended by a NUL, in one `end` after the shell starts.
   const piped = async (text: string) => {
     const script = `IFS= builtin read -r -d '' __cursor_command <&5 2>/dev/null || builtin exit 126; exec 5<&-; builtin eval "$__cursor_command"`
-    const child = childProcess.spawn("/bin/zsh", ["-c", script, "--"], { cwd: workspace, stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "pipe"] })
+    const child = childProcess.spawn(anyShell, ["-c", script, "--"], { cwd: workspace, stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "pipe"] })
     let stdout = ""
     let stderr = ""
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString() })
@@ -106,7 +106,7 @@ try {
   const pipedPlain = await piped("echo plain-piped")
   assert.ok(pipedPlain.stdout.includes("plain-piped") && !pipedPlain.stderr.trim(), "an ordinary piped command is untouched")
 
-  const quoted = await run("/bin/zsh", ["-c", movedShellCommand("/tmp/it's gone", "/tmp/now")], root)
+  const quoted = await run(anyShell, ["-c", movedShellCommand("/tmp/it's gone", "/tmp/now")], root)
   assert.match(quoted.stderr, /\/tmp\/it's gone was deleted/, "a quote in a folder name cannot break the notice")
 } finally {
   rmSync(root, { recursive: true, force: true })
