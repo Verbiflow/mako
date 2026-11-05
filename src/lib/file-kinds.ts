@@ -41,6 +41,7 @@ export type GlyphName =
   | "log"
   | "binary"
   | "container"
+  | "profile"
 
 export interface FileKind {
   glyph: FileGlyph

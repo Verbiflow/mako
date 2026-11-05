@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react"
-import { fileKind, type GlyphName } from "@/lib/file-kinds"
+import { diagnosticFormat, filePreviewFormat, type FilePreviewFormat } from "@mako/host/contracts/file-preview"
+import { fileKind, type FileGlyph, type GlyphName } from "@/lib/file-kinds"
 import { cn } from "@/lib/utils"
 
 /**
@@ -10,12 +11,42 @@ import { cn } from "@/lib/utils"
  * apart by its shape, or by its language's letters where a language has no shape of its own. It takes the colour of
  * the text around it.
  */
-export const FileIcon = memo(function FileIcon({ path, folder, open, className }: { path: string; folder?: boolean; open?: boolean; className?: string }) {
+export const FileIcon = memo(function FileIcon({ path, mimeType, folder, open, className }: { path: string; mimeType?: string; folder?: boolean; open?: boolean; className?: string }) {
   if (folder) return <Svg className={className}>{open ? FOLDER_OPEN : FOLDER}</Svg>
-  const kind = fileKind(path)
-  if (kind.glyph.kind === "letters") return <Svg className={className}>{lettered(kind.glyph.text)}</Svg>
-  return <Svg className={className}>{GLYPHS[kind.glyph.name]}</Svg>
+  const glyph = glyphOf(path, mimeType)
+  if (glyph.kind === "letters") return <Svg className={className}>{lettered(glyph.text)}</Svg>
+  return <Svg className={className}>{GLYPHS[glyph.name]}</Svg>
 })
+
+/** What a preview format looks like, for a file its name doesn't place (an attachment named by its type alone). */
+const BY_FORMAT = {
+  image: "image",
+  video: "video",
+  audio: "audio",
+  pdf: "document",
+  word: "document",
+  workbook: "table",
+  presentation: "document",
+  markdown: "markdown",
+  html: "markup",
+  table: "table",
+  text: "text",
+  har: "profile",
+  "cpu-profile": "profile",
+  "heap-profile": "profile",
+  "heap-snapshot": "profile",
+  trace: "profile",
+} satisfies Record<FilePreviewFormat, GlyphName>
+
+/** The file's mark: a diagnostic recording's by its format, else its kind's, else what its type says it holds. */
+function glyphOf(path: string, mimeType: string | undefined): FileGlyph {
+  const diagnostic = diagnosticFormat(path)
+  if (diagnostic) return { kind: "glyph", name: BY_FORMAT[diagnostic] }
+  const kind = fileKind(path)
+  if (kind.glyph.kind === "letters" || kind.glyph.name !== "file") return kind.glyph
+  const format = filePreviewFormat(path, mimeType)
+  return format ? { kind: "glyph", name: BY_FORMAT[format] } : kind.glyph
+}
 
 function Svg({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -135,5 +166,6 @@ const GLYPHS = {
   diff: <path d="M8 2.25v6 M5 5.25h6 M5 12h6" />,
   log: <path d="M1.75 3.75h12.5 M1.75 6.75h12.5 M1.75 9.75h9 M1.75 12.75h6" />,
   binary: <path d="M4.25 4.25h7.5v7.5h-7.5z M6.25 1.75v2.5 M9.75 1.75v2.5 M6.25 11.75v2.5 M9.75 11.75v2.5 M1.75 6.25h2.5 M1.75 9.75h2.5 M11.75 6.25h2.5 M11.75 9.75h2.5" />,
+  profile: <path d="M1.75 8.5h3l1.75-5 3 9.5 1.75-4.5h3" />,
   container: <path d="M1.75 7.25h12.5v6.5H1.75z M3.25 3.75h2.75v3.5H3.25z M6.6 3.75h2.75v3.5H6.6z M9.95 3.75h2.75v3.5H9.95z" />,
 } satisfies Record<GlyphName, ReactNode>

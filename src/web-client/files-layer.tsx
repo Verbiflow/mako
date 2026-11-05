@@ -151,7 +151,7 @@ function FileReader({ conversation, path, line }: { conversation: string; path: 
       </div>
       <div className="rv-scroll overflow-x-auto">
         {error ? (
-          <p className="p-4 text-ui text-removed">{error}</p>
+          <p className="p-4 text-ui text-negative">{error}</p>
         ) : !file ? (
           <p className="p-4 text-ui text-faint">Reading {path.slice(slash + 1)}…</p>
         ) : (

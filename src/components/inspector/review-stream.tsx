@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon as PageIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
 import { countedChanges, type TurnChangeLines } from "@mako/host/contracts/turn-changes"
 import type { TurnFileWriters, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
@@ -13,7 +13,7 @@ import { PickedDiffLines } from "@/components/inspector/diff-line-pick"
 import { useCommentTarget } from "@/components/inspector/comment-target"
 import { isPickEnd, pickEnd, workspacePath } from "@/lib/line-comments"
 import { LineCounts, StatusLetter, UnsureCount } from "@/components/inspector/change-marks"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { Action, IconAction, Toggle } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger } from "@/components/ui/menu"
 import { SearchSelect } from "@/components/ui/search-select"
@@ -1106,7 +1106,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
         className="pressable flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
         <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)] motion-reduce:transition-none", open && "rotate-90")} />
-        <FileTypeIcon path={file.path} className="ml-0.5 size-3.5 shrink-0 text-faint/80" />
+        <FileIcon path={file.path} className="ml-0.5 size-3.5 shrink-0 text-faint/80" />
         <span className="min-w-0 truncate text-ui">
           <span className="text-faint">{folder}</span>
           <span className={file.status === "deleted" ? "text-faint line-through decoration-faint/60" : viewed ? "text-muted-foreground" : "text-foreground"}>{name}</span>
@@ -1143,7 +1143,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
         <MenuContent align="end" className="min-w-48">
           {file.status !== "deleted" && !away ? (
             <MenuItem onSelect={() => void viewer.open(`${root}/${file.path}`)}>
-              <FileIcon className="size-3.5 text-faint" />
+              <PageIcon className="size-3.5 text-faint" />
               Open file
             </MenuItem>
           ) : null}

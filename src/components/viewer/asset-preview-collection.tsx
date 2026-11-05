@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react"
 import { XIcon } from "lucide-react"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import type { FileContents } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { AssetPreviewContext, type AssetView } from "./asset-preview-context"
@@ -46,7 +46,7 @@ export function AssetPreviewCollection<T extends PreviewAsset>({ items, render, 
     <div className="flex flex-wrap gap-2" aria-label="Attachments">
       {items.map(item => <div key={item.id} className="group relative min-w-0 max-w-full">
         <button type="button" aria-label={`Show ${item.name}`} aria-pressed={id === item.id} data-copy-file={item.path} data-asset-selected={id === item.id} onClick={() => setSelected(id === item.id ? null : item.id)} className={`asset-surface pressable flex h-11 max-w-full items-center gap-2.5 border px-3 text-left ${id === item.id ? "border-border bg-fill-selected text-foreground" : "border-hairline bg-surface text-muted-foreground hover:bg-fill-hover hover:text-foreground"}`}>
-          <FileTypeIcon path={item.name} mimeType={item.mimeType} className="size-4 shrink-0" />
+          <FileIcon path={item.name} mimeType={item.mimeType} className="size-4 shrink-0" />
           <span className="max-w-52 truncate text-label font-medium">{item.caption ?? item.name}</span>
         </button>
         {onRemove ? <button type="button" aria-label={`Remove ${item.name}`} onClick={() => onRemove(item.id)} className="asset-surface pressable absolute -right-1 -top-1 grid size-5 place-items-center border border-hairline bg-popover text-faint opacity-0 group-hover:opacity-100 focus-visible:opacity-100"><XIcon className="size-3" /></button> : null}

@@ -28,7 +28,7 @@ export function FileTree() {
   const onMention = useCallback((path: string) => window.dispatchEvent(new CustomEvent("mako:insert", { detail: `@${path} ` })), [])
 
   if (!focus.ready || !source) {
-    return <Blank icon={<FolderIcon />} title="Loading project" body={focus.cwd ?? "Resolving the focused conversation workspace."} />
+    return <Blank icon={<FolderIcon />} title="Opening the project's files" body={focus.cwd} />
   }
   return (
     <FilesBrowser

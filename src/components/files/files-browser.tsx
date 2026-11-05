@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { ChevronRightIcon, SearchIcon, XIcon } from "lucide-react"
+import { ChevronRightIcon, FolderIcon, SearchIcon, XIcon } from "lucide-react"
+import { Blank } from "@/components/ui/kit"
 import type { FileFindHit } from "@mako/host/contracts/file-index"
 import { FileIcon } from "@/components/ui/file-icon"
 import { fileTreeModels, type FileTreeRow, type FilesSource } from "@/state/file-tree"
@@ -234,9 +235,9 @@ export function FilesBrowser({ source, open, onOpenChange, active, onOpenFile, o
       </div>
 
       {!searching && tree.status === "failed" ? (
-        <Quiet title="Couldn't read this folder's files" body={tree.error} action={<button type="button" className="pressable text-ui text-foreground underline decoration-hairline underline-offset-3" onClick={() => model.retry()}>Try again</button>} />
+        <Blank icon={<FolderIcon />} title="Couldn't read this folder's files" body={tree.error} action={<button type="button" className="pressable text-ui text-foreground underline decoration-hairline underline-offset-3" onClick={() => model.retry()}>Try again</button>} />
       ) : !searching && tree.status === "ready" && tree.total === 0 ? (
-        <Quiet title="No files here yet" body="Files Git ignores, and build and dependency folders, aren't listed." />
+        <Blank icon={<FolderIcon />} title="No files here yet" body="Files Git ignores, and build and dependency folders, aren't listed." />
       ) : (
         <div
           ref={scroller}
@@ -274,16 +275,6 @@ export function FilesBrowser({ source, open, onOpenChange, active, onOpenFile, o
 }
 
 const rowId = (key: string) => `files-row-${encodeURIComponent(key)}`
-
-function Quiet({ title, body, action }: { title: string; body?: string; action?: ReactNode }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 pb-10 text-center">
-      <p className="text-ui font-medium text-foreground">{title}</p>
-      {body ? <p className="max-w-[32ch] text-ui leading-relaxed text-faint">{body}</p> : null}
-      {action}
-    </div>
-  )
-}
 
 /** The rows a search shows: names first, then the lines inside files. */
 function resultsOf(search: FileSearchState, query: string): ResultRow[] {
@@ -366,15 +357,19 @@ const RowView = memo(function RowView({ row, query, cursor, active, onPress, onP
         <>
           <ChevronRightIcon aria-hidden className={cn("files-chevron size-3 shrink-0 text-faint", row.open && "rotate-90")} />
           <FileIcon path={row.path} folder open={row.open} className="size-3.5 text-faint" />
-          <span className="min-w-0 flex-1 truncate text-ui text-foreground/90">{row.name}</span>
-          {row.changed ? <Changed /> : null}
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="min-w-0 truncate text-ui text-foreground/90">{row.name}</span>
+            {row.changed ? <Changed /> : null}
+          </span>
         </>
       ) : row.kind === "file" ? (
         <>
           <span className="w-3 shrink-0" />
           <FileIcon path={row.path} className="files-icon size-3.5" />
-          <span className="files-name min-w-0 flex-1 truncate text-ui">{row.name}</span>
-          {row.changed ? <Changed /> : null}
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="files-name min-w-0 truncate text-ui">{row.name}</span>
+            {row.changed ? <Changed /> : null}
+          </span>
         </>
       ) : row.kind === "more" ? (
         <>
@@ -403,8 +398,9 @@ const RowView = memo(function RowView({ row, query, cursor, active, onPress, onP
   )
 })
 
+/** Changed in Git: a dot beside the name in the text's own ink, as the Changes panel and the rail mark a change. */
 function Changed() {
-  return <span aria-label="Changed" className="ml-1 size-1.5 shrink-0 rounded-full bg-caution" />
+  return <span aria-label="Changed" className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
 }
 
 /** Depth is indentation, capped so a deep tree can't squeeze the name to nothing. */
