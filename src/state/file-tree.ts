@@ -57,6 +57,8 @@ export type FileTreeRow =
   | { kind: "more"; key: string; path: string; depth: number; count: number }
 
 export interface FileTreeState {
+  /** The index the held listings came from (`FileFolders.epoch`): its versions mean nothing to another. */
+  epoch?: string
   version: number
   /** Files the whole index holds. */
   total: number
@@ -161,13 +163,18 @@ export class FileTreeModel {
     const usual = wanted.filter((path) => !this.#limits.has(path))
     try {
       const since = unheld ? undefined : this.#state.version || undefined
+      const epoch = this.#state.epoch
       const answers = await Promise.all([
-        usual.length ? this.source.folders(usual, { limit: FOLDER_LISTING_LIMIT, since }) : undefined,
-        ...big.map((path) => this.source.folders([path], { limit: this.#limits.get(path), since })),
+        usual.length ? this.source.folders(usual, { limit: FOLDER_LISTING_LIMIT, since, epoch }) : undefined,
+        ...big.map((path) => this.source.folders([path], { limit: this.#limits.get(path), since, epoch })),
       ])
       let changed = false
       let version = this.#state.version
       let total = this.#state.total
+      // Another index answered (its host started again, or the folder's index was made anew): nothing held is its.
+      const answeredBy = answers.find((answer) => answer !== undefined)?.epoch
+      const replaced = answeredBy !== epoch
+      if (replaced) this.#listings.clear()
       for (const answer of answers) {
         if (!answer) continue
         version = answer.version
@@ -182,7 +189,7 @@ export class FileTreeModel {
       }
       // Folders read at an older version than the newest answer are stale: read them again with it.
       if (changed && !unheld) for (const path of this.#listings.keys()) if (!wanted.includes(path)) this.#listings.delete(path)
-      this.#state = { version, total, status: "ready" }
+      this.#state = { epoch: answeredBy, version, total, status: "ready" }
       this.#publish()
     } catch (error) {
       this.#state = { ...this.#state, status: this.#listings.size ? "ready" : "failed", error: error instanceof Error ? error.message : String(error) }

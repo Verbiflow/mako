@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { Git } from "@mako/git"
 import { FileIndexCore } from "@mako/host/contracts/file-index"
 import { FolderIndex } from "@mako/host/workspaces/file-index"
+import { FileTreeModel } from "@/state/file-tree"
 
 /*
  * The Files view's index: the tree a folder at a time (folded chains, counts, Git's marks, a folder's limit), names
@@ -40,7 +41,7 @@ assert.equal(core.folder("")!.folders.find((folder) => folder.name === "src")!.c
 assert.equal(core.folder("src/components/rail")!.files.find((file) => file.name === "file-tree.tsx")!.changed, true, "and its own row")
 
 const before = core.version
-assert.equal(core.folders([""], { since: before }).unchanged, true, "a window holding the current version is told only that")
+assert.equal(core.folders([""], { since: before, epoch: core.epoch }).unchanged, true, "a window holding the current version is told only that")
 core.add("src/components/rail/new.tsx")
 assert.notEqual(core.version, before, "a change moves the version")
 assert.equal(core.folder("src/components/rail")!.files.length, 3)
@@ -126,10 +127,59 @@ try {
   index.noteChanges(undefined)
   // The untracked files join a rebuilt index after the tracked ones; the `@` list waits for them.
   await index.list()
-  const rebuilt = await index.folders([""], { since: held.version })
+  const rebuilt = await index.folders([""], { since: held.version, epoch: held.epoch })
   assert.notEqual(rebuilt.unchanged, true, "a rebuilt index never says a window's older version is current")
   assert.ok(rebuilt.version > held.version, "the version keeps climbing across a rebuild")
   assert.equal(rebuilt.folders[0]?.files.some((file) => file.name === "rebuilt.ts"), true, "and the rebuilt listing comes back")
+
+  // A host started again: its index over the same folder starts at the version a window may still hold. The window's
+  // model must drop what it held and take the new index's tree, never be told its old one is current.
+  const fresh = new FileIndexCore(["a.ts"])
+  assert.notEqual(fresh.folders([""], { since: fresh.version }).unchanged, true, "a version without its epoch is never current")
+  assert.notEqual(fresh.folders([""], { since: fresh.version, epoch: "another index" }).unchanged, true, "nor one of another index's epoch")
+  assert.equal(fresh.folders([""], { since: fresh.version, epoch: fresh.epoch }).unchanged, true, "while its own version and epoch are")
+  const restartRoot = realpathSync(mkdtempSync(join(tmpdir(), "mako-file-index-restart-")))
+  try {
+    const run = (...args: string[]) => execFileSync("git", args, { cwd: restartRoot, stdio: "ignore" })
+    run("init", "-q")
+    writeFileSync(join(restartRoot, "before.ts"), "before\n")
+    run("add", "-A")
+    let host = new FolderIndex({ folder: restartRoot, git })
+    host.feed(true)
+    const model = new FileTreeModel({
+      key: "restart",
+      folders: (paths, options) => host.folders(paths, options),
+      find: (query, limit) => host.find(query, limit),
+      grep: (query, options) => host.grep(query, options),
+    })
+    const settled = () => new Promise<void>((done) => {
+      const stop = model.subscribe(() => {
+        stop()
+        done()
+      })
+    })
+    const names = () => model.rows(new Set()).flatMap((row) => (row.kind === "file" ? [row.name] : []))
+    model.rows(new Set())
+    await settled()
+    assert.deepEqual(names(), ["before.ts"])
+    const heldVersion = model.state.version
+    // The host goes away and a new one starts; meanwhile the file was replaced.
+    host.close()
+    rmSync(join(restartRoot, "before.ts"))
+    run("rm", "-q", "--cached", "before.ts")
+    writeFileSync(join(restartRoot, "after.ts"), "after\n")
+    run("add", "-A")
+    host = new FolderIndex({ folder: restartRoot, git })
+    host.feed(true)
+    assert.equal((await host.folders([""])).version, heldVersion, "the new host's index starts at the version the window holds")
+    const reread = settled()
+    model.refresh()
+    await reread
+    assert.deepEqual(names(), ["after.ts"], "the window takes the new host's tree rather than keeping its own")
+    host.close()
+  } finally {
+    rmSync(restartRoot, { recursive: true, force: true })
+  }
 
   // An untracked symlink to a file outside the folder is never read by a text search, nor one to a folder.
   const outside = realpathSync(mkdtempSync(join(tmpdir(), "mako-file-index-outside-")))

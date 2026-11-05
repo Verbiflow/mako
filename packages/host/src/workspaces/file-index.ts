@@ -95,6 +95,8 @@ export class FolderIndex {
   #applying: Promise<void> = Promise.resolve()
   #changedAt = 0
   #changedList = new Set<string>()
+  /** This index's identity for its whole life, across rebuilds; a new index of the folder, or a new host, has another. */
+  readonly #epoch = crypto.randomUUID()
   #marking: Promise<void> | undefined
   #grep: AbortController | undefined
   #closed = false
@@ -316,7 +318,7 @@ export class FolderIndex {
     }
     this.#untracked = untracked
     // Versions climb across rebuilds: a window holding the last index's version is never told it's current.
-    const core = new FileIndexCore(paths, this.#core?.version ?? 0)
+    const core = new FileIndexCore(paths, this.#core?.version ?? 0, this.#epoch)
     this.#core = core
     this.#builtAt = startedAt
     this.#changedAt = 0

@@ -39,7 +39,12 @@ export interface FileFolder {
 
 /** The folders a window asked for, as the index holds them now. */
 export interface FileFolders {
-  /** Changes with every change to the index: a window holding this version holds what the index does. */
+  /**
+   * Which index answered: one per index a host builds for a folder, new with every host and every new index. A
+   * version means something only within its epoch, so a window holding another epoch's listings drops them all.
+   */
+  epoch: string
+  /** Changes with every change to the index: a window holding this version of this epoch holds what the index does. */
   version: number
   /** Files in the whole index. */
   total: number
@@ -70,8 +75,10 @@ export interface FileFindResults {
 export interface FileFoldersOptions {
   /** Entries listed per folder at most; `FOLDER_LISTING_LIMIT` unless asked for more. */
   limit?: number
-  /** The version the window holds: when it's still the index's, only `unchanged` comes back. */
+  /** The version the window holds: when it's still the index's, in the same epoch, only `unchanged` comes back. */
   since?: number
+  /** The epoch the window's `since` is of; a version without one is never taken as current. */
+  epoch?: string
 }
 
 /** How a search for text inside files reads its query. */
@@ -330,10 +337,17 @@ export class FileIndexCore {
   /** The last query's matches, which the next query that only extends it searches instead of everything. */
   #narrowed: { query: string; version: number; ids: Int32Array } | undefined
 
-  /** `after`: the version of the index this one replaces, so a window holding that one never reads as current. */
-  constructor(paths: Iterable<string> = [], after = 0) {
+  /**
+   * `after`: the version of the index this one replaces, so versions climb across a rebuild. `epoch`: which index this
+   * is, kept by its owner across rebuilds of one folder's index and new with every owner, so a window holding a
+   * version of another index (another host, one started again) never reads as current.
+   */
+  readonly epoch: string
+
+  constructor(paths: Iterable<string> = [], after = 0, epoch: string = globalThis.crypto.randomUUID()) {
     for (const path of paths) this.#insert(path)
     this.#version = after + 1
+    this.epoch = epoch
   }
 
   get version(): number {
@@ -444,7 +458,7 @@ export class FileIndexCore {
 
   /** Several folders at once, as a window asks for what it has open. */
   folders(paths: readonly string[], options: FileFoldersOptions = {}): FileFolders {
-    if (options.since === this.#version) return { version: this.#version, total: this.size, folders: [], missing: [], unchanged: true }
+    if (options.since === this.#version && options.epoch === this.epoch) return { epoch: this.epoch, version: this.#version, total: this.size, folders: [], missing: [], unchanged: true }
     const folders: FileFolder[] = []
     const missing: string[] = []
     for (const path of paths) {
@@ -452,7 +466,7 @@ export class FileIndexCore {
       if (listed) folders.push(listed)
       else missing.push(path)
     }
-    return { version: this.#version, total: this.size, folders, missing }
+    return { epoch: this.epoch, version: this.#version, total: this.size, folders, missing }
   }
 
   /**

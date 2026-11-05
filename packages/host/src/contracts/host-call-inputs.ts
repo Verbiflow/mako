@@ -467,7 +467,11 @@ const inputs = {
     z.tuple([
       z.array(z.string()),
       z
-        .object({ limit: z.number().optional(), since: z.number().optional() })
+        .object({
+          limit: z.number().optional(),
+          since: z.number().optional(),
+          epoch: z.string().optional(),
+        })
         .optional(),
     ]),
   "mako:files-grep": () =>
@@ -766,7 +770,11 @@ const inputs = {
       z.string(),
       z.array(z.string()),
       z
-        .object({ limit: z.number().optional(), since: z.number().optional() })
+        .object({
+          limit: z.number().optional(),
+          since: z.number().optional(),
+          epoch: z.string().optional(),
+        })
         .optional(),
     ]),
   "mako:live-files-grep": () =>
