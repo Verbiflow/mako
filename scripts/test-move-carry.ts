@@ -31,7 +31,7 @@ try {
   assert.equal(carriable("/Users/ada/.mako/x", "/Users/ada/work/app"), "elsewhere")
   assert.equal(carriable("/Users/ada/other/.git/config", "/Users/ada/work/app"), "elsewhere")
   assert.equal(carriable("/Users/bob/x", "/Users/ada/work/app"), "elsewhere")
-  assert.equal(carriable("/var/folders/x/T/y", "/Users/ada/work/app"), "elsewhere")
+  assert.equal(carriable("/private/var/tmp/x/y", "/Users/ada/work/app"), "elsewhere")
 
   // The carry itself, on files under /tmp: the one place the rule takes that a test may write.
   const tmp = await mkdtemp("/tmp/mako-move-carry-")
