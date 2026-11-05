@@ -1082,6 +1082,49 @@ async function startedFinsOldQueueRow(): Promise<void> {
   }
 }
 
+/**
+ * What a Fin costs is read from the processes its harness runs, owned by its conversation's active binding: one that
+ * switched harness is sampled by its new binding, and counted as the harness it runs on now.
+ */
+async function finsAtWorkByBinding(): Promise<void> {
+  const looks: { mix: Readonly<Record<string, number>>; fins?: readonly { conversation: string; harness: string }[] }[] = []
+  const every = HostJobs.prototype.every
+  let look: (() => void | Promise<void>) | undefined
+  HostJobs.prototype.every = function (this: HostJobs, name, everyMs, run, options) {
+    if (name === "read this device's capacity") look = run
+    return every.call(this, name, everyMs, run, options)
+  }
+  const w = new AgentsWorld({
+    root: join(root, "fins-by-binding"),
+    script: (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok"),
+    observeCapacity: async (_working, mix, fins) => void looks.push({ mix, ...(fins && { fins }) }),
+  })
+  HostJobs.prototype.every = every
+  try {
+    const apex = await w.apex("claude")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, harness: "cursor", name: "switched", clientKey: "s", cwd: w.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    await waitFor(() => w.live.session(started.conversation!)?.status === "running", "the Fin at work")
+    await look!()
+    assert.deepEqual(looks.at(-1), { mix: { cursor: 1 }, fins: [{ conversation: started.conversation, harness: "cursor" }] }, "its first binding is its conversation's own")
+    // Its harness switched: a new binding, on Codex, is the active one.
+    const snapshot = w.live.snapshot.bind(w.live)
+    const moved = "7a0d6c3e-9a51-4c2e-8f6b-1d2e3f4a5b6c"
+    w.live.snapshot = (id) => {
+      const real = snapshot(id)
+      if (id !== started.conversation || !real?.control) return real
+      return { ...real, control: { ...real.control, activeBindingId: moved, bindings: [...real.control.bindings, { ...real.control.bindings[0]!, id: moved, provider: "codex" }] } }
+    }
+    await look!()
+    assert.deepEqual(looks.at(-1), { mix: { codex: 1 }, fins: [{ conversation: moved, harness: "codex" }] }, "it's sampled by the binding its processes run under, as the harness it runs on now")
+    w.live.snapshot = snapshot
+    await w.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    HostJobs.prototype.every = every
+    await w.close()
+  }
+}
+
 async function waitFor(check: () => boolean, what: string, ms = 8_000): Promise<void> {
   const deadline = Date.now() + ms
   while (!check()) {
@@ -1644,6 +1687,7 @@ try {
   await stopAllUnqueues()
   await unreadableQueuedStarts()
   await startedFinsOldQueueRow()
+  await finsAtWorkByBinding()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()
