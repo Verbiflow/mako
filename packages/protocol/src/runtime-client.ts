@@ -10,7 +10,7 @@ import { type LiveForm, WHOLE_LIVE_FORM } from "./live-form.js"
 import { type MediaHandler, type MediaSender, type MediaStreamId, decodeMediaMessage, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { PortHandler, PortRequest } from "./ports.js"
-import type { Lease, LeaseEnd, Progress, SourceAsk } from "./borrow.js"
+import type { Lease, LeaseEnd, Progress, SourceAsk, Stream } from "./borrow.js"
 import type { Advertisement, GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import { type SshHandler, type SshSender, SshIncoming } from "./ssh.js"
@@ -116,7 +116,7 @@ export type ServedRuntime = {
    * Says a session this device serves is alive, with its progress when that changed (`lease-beat`, version 21 on).
    * False on an older gateway, which lends nothing through this device, or on a closed link.
    */
-  beat(lease: string, progress?: Progress): boolean
+  beat(lease: string, progress?: Progress, streams?: Stream[]): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -385,9 +385,9 @@ export async function serveRuntime(
       link.send({ type: "advertise", ...advertisement })
       return true
     },
-    beat: (lease, progress) => {
+    beat: (lease, progress, streams) => {
       if (first.version < LEND_LINK_VERSION || link.closed) return false
-      link.send(progress ? { type: "lease-beat", lease, progress } : { type: "lease-beat", lease })
+      link.send({ type: "lease-beat", lease, ...(progress && { progress }), ...(streams && { streams }) })
       return true
     },
     done,

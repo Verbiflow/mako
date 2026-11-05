@@ -1,4 +1,4 @@
-import { SESSION_HEARTBEAT_MS, type BorrowAnswer, type Lease, type LeaseEnd, type Progress, type SourceAnswer, type SourceAsk } from "@mako/protocol/borrow"
+import { SESSION_HEARTBEAT_MS, type BorrowAnswer, type Lease, type LeaseEnd, type Progress, type SourceAnswer, type SourceAsk, type Stream } from "@mako/protocol/borrow"
 import type { LentHere } from "../base/lent.js"
 import type { SimulatorVia } from "../contracts/simulators.js"
 
@@ -16,8 +16,10 @@ export interface LendingDeps {
   leases(): Promise<Lease[] | null>
   /** Whether this device can serve what an ask names now: yes with a version, or why not. */
   serve(ask: SourceAsk): Promise<SourceAnswer>
-  /** Says a served session is alive on the runtime link; false while the link is down or older. */
-  beat(lease: string, progress?: Progress): boolean
+  /** Says a served session is alive on the runtime link, with its streams when they're first said; false while the link is down or older. */
+  beat(lease: string, progress?: Progress, streams?: Stream[]): boolean
+  /** What a served lease's session streams its borrower: a simulator's screen. */
+  streams?(lease: Lease): Stream[]
   lent: LentHere
   /** A served lease in Settings' words: what it is, and for whom. */
   words(lease: Lease): { what: string; for: string }
@@ -69,7 +71,8 @@ export class Lending {
     const words = this.#deps.words(lease)
     this.#deps.lent.add({ lease: lease.id, what: words.what, for: words.for, since: this.#now() })
     this.#deps.log?.("serving a lease", { lease: lease.id, ref: lease.resource.ref, thread: lease.borrower.thread })
-    this.#deps.beat(lease.id)
+    const streams = this.#deps.streams?.(lease)
+    this.#deps.beat(lease.id, undefined, streams?.length ? streams : undefined)
   }
 
   /** A served lease ended, however it ended: its slot is free, and what it held here lets go. */

@@ -702,7 +702,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           const here = "refused" in listed ? undefined : listed.hosts.find((host) => host.kind === "local")
           return here?.platforms.ios.ready ? { answer: "yes", version: "ready" } : { answer: "unavailable", reason: "not-found" }
         },
-        beat: (lease, progress) => late.cloud?.beat?.(lease, progress) ?? false,
+        beat: (lease, progress, streams) => late.cloud?.beat?.(lease, progress, streams) ?? false,
+        streams: (lease) => (lease.resource.ref === "ios-simulator" ? [{ name: "screen", kind: "video" }] : []),
         lent,
         words: (lease) => ({ what: operationWords(lease.resource.ref), for: lease.borrower.place.kind === "machine" ? "a cloud Thread" : "a Thread on another device" }),
         ended: (lease) => control.simulators.releaseThread({ thread: lease.borrower.thread }),

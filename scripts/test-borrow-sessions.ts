@@ -160,4 +160,22 @@ function world(options: { serve?: SourceAnswer; live?: Lease[] } = {}) {
   await gateway.close()
 }
 
+{
+  // A served lease's first beat names what it streams its borrower, as the contract's session lists it.
+  const said: unknown[] = []
+  const lending = new Lending({
+    device: async () => DEVICE,
+    answer: async () => undefined,
+    leases: async () => [],
+    serve: async () => ({ answer: "yes", version: "ready" }),
+    beat: (id, progress, streams) => (said.push({ id, ...(progress && { progress }), ...(streams && { streams }) }), true),
+    streams: () => [{ name: "screen", kind: "video" }],
+    lent: new LentHere(),
+    words: () => ({ what: "an iOS simulator", for: "a cloud Thread" }),
+  })
+  await lending.lent(lease("l1"))
+  lending.beat()
+  assert.deepEqual(said, [{ id: "l1", streams: [{ name: "screen", kind: "video" }] }, { id: "l1" }])
+}
+
 console.log("borrow sessions: ok")

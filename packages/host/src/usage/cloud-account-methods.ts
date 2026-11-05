@@ -28,7 +28,7 @@ import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac } from "../base/platform.js"
 import { describeThisDevice } from "./device-description.js"
-import type { BorrowAnswer, Lease, Progress, SourceAnswer } from "@mako/protocol/borrow"
+import type { BorrowAnswer, Lease, Progress, SourceAnswer, Stream } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
@@ -59,7 +59,7 @@ export interface CloudAccount {
   /** Says what this Mac can serve and its room on its runtime's link; false while that link isn't up. */
   advertise?(advertisement: Advertisement): boolean
   /** Says a session this Mac serves is alive on its runtime's link; false while that link isn't up, or is older. */
-  beat?(lease: string, progress?: Progress): boolean
+  beat?(lease: string, progress?: Progress, streams?: Stream[]): boolean
   /**
    * A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again
    * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
@@ -403,7 +403,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     claimWaiting: (session, id) => cloud.claimWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
     advertise: (advertisement) => cloud.advertise(advertisement),
-    beat: (lease, progress) => cloud.beat(lease, progress),
+    beat: (lease, progress, streams) => cloud.beat(lease, progress, streams),
     liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
     cloudHarnesses: () => cloud.cloudHarnesses(),

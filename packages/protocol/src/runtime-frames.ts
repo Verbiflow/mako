@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { BorrowPushSchema, CapabilitySchema, LEASE_ENDS, LeaseSchema, ProgressSchema, SlotsSchema, SourceAskSchema } from "./borrow.js"
+import { BorrowPushSchema, CapabilitySchema, LEASE_ENDS, LeaseSchema, ProgressSchema, SESSION_STREAMS_MAX, SlotsSchema, SourceAskSchema, StreamSchema } from "./borrow.js"
 import {
   type Operation,
   OperationEnvelopeSchema,
@@ -157,9 +157,10 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
     .strict(),
   /**
    * A session this device serves under a lease is alive (version 21 on, `borrow.ts`'s `heartbeat`), with how far it
-   * is when that changed (`progress`). The gateway takes it only from the lease's own device. Missed beats end the lease.
+   * is when that changed (`progress`), and the streams it serves when they changed (`streams`). The gateway takes it only
+   * from the lease's own device. Missed beats end the lease.
    */
-  z.object({ type: z.literal("lease-beat"), lease: z.string().min(1).max(128), progress: ProgressSchema.optional() }).strict(),
+  z.object({ type: z.literal("lease-beat"), lease: z.string().min(1).max(128), progress: ProgressSchema.optional(), streams: z.array(StreamSchema).max(SESSION_STREAMS_MAX).optional() }).strict(),
 ])
 
 /** What a device's runtime says it can serve, and its room (`advertise`). */

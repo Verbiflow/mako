@@ -17,8 +17,7 @@ import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveH
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
-import { ChunkHashSchema } from "@mako/protocol/records"
-import { BORROW_PATHS, BorrowAnswerSchema, GrantSchema, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Lease, type Progress, type SourceAnswer } from "@mako/protocol/borrow"
+import { ArtifactSchema, BORROW_PATHS, BorrowAnswerSchema, GrantSchema, type Artifact, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Lease, type Progress, type SourceAnswer, type Stream } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 import {
   LIVE_FORM,
@@ -247,9 +246,9 @@ export function cloudLegacyFiles(dataRoot: string): LegacyFiles {
 /** A Thread this Mac's runtime runs, and under which generation: claimed again when its link comes back. */
 export type RuntimeClaim = { threadId: string; generation: number }
 
-/** A file a lent session made, as its lease lists it: by name, the SHA-256 of its bytes, and size, never its contents. */
-export const BorrowArtifactSchema = z.object({ name: z.string().min(1).max(200), hash: ChunkHashSchema, size: z.number().int().nonnegative() }).strict()
-export type BorrowArtifact = z.infer<typeof BorrowArtifactSchema>
+/** A file a lent session made, as its lease lists it (the contract's `Artifact`): by name, hash and size, never contents. */
+export const BorrowArtifactSchema = ArtifactSchema
+export type BorrowArtifact = Artifact
 
 /** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
 export type CloudRuntime = {
@@ -1591,8 +1590,8 @@ export class CloudAccounts {
   }
 
   /** Says a session this Mac serves is alive on its runtime link; false while there's none, or it's older. */
-  beat(lease: string, progress?: Progress): boolean {
-    return this.#served?.served.beat(lease, progress) ?? false
+  beat(lease: string, progress?: Progress, streams?: Stream[]): boolean {
+    return this.#served?.served.beat(lease, progress, streams) ?? false
   }
 
   /** Tells the cloud this runtime is going away on purpose, on a link that knows the frame. */
