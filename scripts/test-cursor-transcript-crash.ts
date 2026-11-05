@@ -162,6 +162,7 @@ try {
   const repairIn = async (env: NodeJS.ProcessEnv, waitMs: number) => {
     const opener = start({ build: "esm", mode: "repair", file: folder, from: 0, count: 0, tag: "", stall: -1, waitMs }, env)
     assert.deepEqual(await opener.done(), { code: 0, signal: null })
+    // SAFETY: a `repair` worker prints exactly this record.
     return JSON.parse(opener.out()) as { cut?: string[]; left?: string }
   }
   // An opener with no `ps` to run waits for a live writer like any other.
@@ -219,7 +220,7 @@ try {
         close: () => { sequence.push(`close ${kind}`); return handle.close() },
       }
     },
-    async writeFile(name: string, data: string, options?: object) { sequence.push(`writeFile ${path.basename(name).replace(/\.mako-\d+\.tmp$/, ".tmp")}`); return promises.writeFile(name, data, options) },
+    async writeFile(name: string, data: string, options?: Parameters<typeof promises.writeFile>[2]) { sequence.push(`writeFile ${path.basename(name).replace(/\.mako-\d+\.tmp$/, ".tmp")}`); return promises.writeFile(name, data, options) },
     async rename(from: string, to: string) { sequence.push("rename"); return promises.rename(from, to) },
   })
   const code = (value: string) => Object.assign(new Error(value), { code: value })

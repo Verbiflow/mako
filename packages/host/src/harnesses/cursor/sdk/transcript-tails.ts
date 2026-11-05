@@ -88,11 +88,13 @@ export async function repairCursorTranscripts(folder: string, options: LockOptio
   return cut
 }
 
+const code = (cause: unknown) => (cause instanceof Error && "code" in cause ? cause.code : undefined)
+
 function removeIfThere(path: string): void {
   try {
     unlinkSync(path)
   } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause
+    if (code(cause) !== "ENOENT") throw cause
   }
 }
 
@@ -101,7 +103,7 @@ function cutTornTail(path: string): boolean {
   try {
     fd = openSync(path, "r+")
   } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false
+    if (code(cause) === "ENOENT") return false
     throw cause
   }
   try {

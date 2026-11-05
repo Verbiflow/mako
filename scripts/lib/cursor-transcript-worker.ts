@@ -25,6 +25,7 @@ interface Case {
   /** For `repair`: how long it waits for a writer. */
   waitMs?: number
 }
+// SAFETY: the test that spawns this worker serialises a `Case` into CASE.
 const job = JSON.parse(process.env.CASE ?? "null") as Case
 if (!job.unlocked) Object.assign(globalThis, { [CURSOR_TRANSCRIPT_LOCK]: transcriptLock })
 
@@ -60,6 +61,7 @@ const fs = {
     const handle = await promises.open(name, flags)
     if (flags !== "w") return handle
     return {
+      fd: handle.fd,
       writeFile: async (data: string, encoding: BufferEncoding) => (writes++ === job.stall ? halfThenStop(handle.fd, data) : handle.writeFile(data, encoding)),
       sync: () => handle.sync(),
       close: () => handle.close(),

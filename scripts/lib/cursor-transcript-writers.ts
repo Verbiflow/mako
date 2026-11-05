@@ -2,6 +2,7 @@
 // as they are on the fs binding a test hands them, for either build.
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
+import type * as promises from "node:fs/promises"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { runInNewContext } from "node:vm"
@@ -27,6 +28,24 @@ export interface Writers {
   rewrite(file: string, rows: Row[]): Promise<void>
 }
 
+/** The handle the writers use: a test's recorder hands back one of its own. */
+export type BundleHandle = Pick<promises.FileHandle, "fd" | "writeFile" | "sync" | "close">
+/** What the bundle's `fs` binding is to the writers: `fs/promises`, or a recorder in front of it. */
+export interface BundleFs extends Omit<typeof promises, "open" | "writeFile" | "rename"> {
+  open(name: string, flags: string): Promise<BundleHandle>
+  writeFile(name: string, data: string, options?: Parameters<typeof promises.writeFile>[2]): Promise<void>
+  rename(from: string, to: string): Promise<void>
+}
+
+interface StreamSpan { ctx: Record<string, never>; span: { setAttribute(): void } }
+interface StreamOptions { state: { summaryArchives: never[]; rootPromptMessagesJson: Row[] }; filePath: string; appendFile: Writers["appendFile"]; terminalLines: never[] }
+interface Loaded {
+  write: Writers["writeFile"]
+  appendFile: Writers["appendFile"]
+  Store: new () => { writeJsonlStreamed(span: StreamSpan, options: StreamOptions): Promise<void> }
+}
+const LOCK_HOOK = Symbol.for("mako:cursor-transcript-lock")
+
 const sdk = path.join(path.dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "..")
 
 /** The source of the function or method starting at `head`, through its closing brace. */
@@ -43,7 +62,7 @@ function extract(bundle: string, head: string): string {
 }
 
 /** `platform` stands in for `process.platform`, which the folder sync reads. */
-export function loadWriters(build: Build, fs: object, platform: NodeJS.Platform = process.platform): Writers {
+export function loadWriters(build: Build, fs: BundleFs, platform: NodeJS.Platform = process.platform): Writers {
   const names = TRANSCRIPT_BUILDS[build]
   const bundle = readFileSync(path.join(sdk, build, "336.js"), "utf8")
   const write = extract(bundle, `async function ${names.write}(e,t){`)
@@ -54,27 +73,28 @@ export function loadWriters(build: Build, fs: object, platform: NodeJS.Platform 
   const options = /appendFile:(\(p,d\)=>makoLock\(p,.*?\)\)\)),streamFullJsonlWrites/.exec(bundle)
   assert.ok(options?.[1], "the writer is constructed with a locked appendFile")
   const names2 = HELPERS[build]
-  const context: Record<string, unknown> = {
+  // The bundle reads the child's lock hook from its own global, which a test's context doesn't share.
+  const hook: unknown = Object.getOwnPropertyDescriptor(globalThis, LOCK_HOOK)?.value
+  const context = {
     [names.fs]: fs,
     s: path,
     process: platform === process.platform ? process : { pid: process.pid, platform },
-    [names2.ctx]: { OA: (value: unknown) => value },
+    [names2.ctx]: { OA: <T>(value: T) => value },
     [names2.archive]: async () => [],
-    [names2.visit]: async (_ctx: unknown, _store: unknown, rows: Row[], _stats: unknown, visit: { visit(row: Row): Promise<void> }) => {
+    [names2.visit]: async (_ctx: never, _store: never, rows: Row[], _stats: never, visit: { visit(row: Row): Promise<void> }) => {
       for (const row of rows) await visit.visit(row)
     },
     [names2.line]: (row: Row) => JSON.stringify(row),
     [names2.merge]: () => false,
     [names2.keep]: () => true,
+    ...hook !== undefined && { [LOCK_HOOK]: hook },
   }
-  // The bundle reads the child's lock hook from its own global, which a test's context doesn't share.
-  const hook = (globalThis as Record<symbol, unknown>)[Symbol.for("mako:cursor-transcript-lock")]
-  if (hook) context[Symbol.for("mako:cursor-transcript-lock") as unknown as string] = hook
+  // SAFETY: the script's value is the object literal it ends with, built from the bundle's own functions.
   const parts = runInNewContext(
     `(()=>{${write};${lock};${syncDir};const ${"appendFile"}=${options[1]};` +
       `return {write:${names.write},appendFile,Store:class{constructor(){this.writeFile=${names.write}}${streamed}${made}}}})()`,
     context,
-  ) as { write(file: string, text: string): Promise<void>; appendFile(file: string, text: string): Promise<void>; Store: new () => { writeJsonlStreamed(span: object, options: object): Promise<void> } }
+  ) as Loaded
   return {
     writeFile: parts.write,
     appendFile: parts.appendFile,
