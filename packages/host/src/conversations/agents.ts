@@ -717,9 +717,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     return record
   }
 
-  /** Its own settle gives back what it held: its name, its place and its stop. */
+  /**
+   * Its own settle gives back what it held: its name, its place and its stop. A place given back goes to what waits in
+   * the same tick, whichever way the start ended; a record its replacement already took over gives back nothing.
+   */
   private retire(record: StartRecord): void {
-    if (this.starts.get(record.op) === record) this.starts.delete(record.op)
+    if (this.starts.get(record.op) !== record) return
+    this.starts.delete(record.op)
+    if (record.launching) void this.drain()
   }
 
   /** Its Apex stopped it: no edge is written for it from now (`startWanted`), and one written already ends. */
@@ -732,6 +737,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** How many starts are under way, each holding its name, place and stop until it settles: none once all have. */
   startsUnderWay(): number {
     return this.starts.size
+  }
+
+  /** Whether the start `op` is under way: deciding, launching, or taken from its queue row and coming up. */
+  startUnderWay(op: string): boolean {
+    return this.starts.has(op)
   }
 
   /** Whether a start under way is still wanted: one its Apex stopped isn't (`mako:live-start` asks before writing its edge). */
@@ -796,17 +806,21 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(ruled && { rule: ruled.rule }),
     }
     const tree = this.rootOf(apex.thread)
-    const counts = this.treeCounts(tree)
-    // A queued spawn is one the tree has started: once the budget would refuse it, it never waits.
-    const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree).length
-    if (counts.started + queued >= this.budget.started)
-      return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
     if ((input.after?.length ?? 0) > AFTER_LIMIT)
       return this.refuse(op, "conflict", `A start waits on at most ${AFTER_LIMIT} ${FIN_WORD}s; it names ${input.after!.length}. Name the last of a chain instead of each one.`)
+    // What it starts after is read as the call made it; one of those that ends meanwhile is the queue's to tell (`tellHeld`).
     const after = this.afterOf(apex, input.after ?? [])
     if ("refused" in after) return this.refuse(op, after.refused, after.why)
     await Promise.all([this.readMac(), this.observe()])
+    // From here to its place or its queue row nothing is awaited: every budget is checked and taken in one step, so two
+    // starts deciding together never both take the last of one.
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
+    // A queued spawn is one the tree has started (`treeCounts`): once the budget would refuse it, it never waits.
+    const counts = this.treeCounts(tree)
+    if (counts.started >= this.budget.started) {
+      const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree && !store.edges().byOp(spawn.op)).length
+      return this.refuse(op, "budget", `This tree started ${counts.started - queued} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
+    }
     // It waits only as its Apex asked: for the Fins it starts after, or with `queue` for a place, behind every spawn that waits for one already.
     const where = placeOf(input.place)
     const working = this.working(where)
@@ -828,7 +842,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       void this.drain()
       return answer
     }
-    // Its place is its record's from the moment it was found free, in the same step: a start beside it sees it taken.
+    // Its place, and its share of the tree's budgets, are its record's from the step that found them free.
     start.launching = { where, tree }
     return this.launch(op, { lead: apex, input, tier, harness, tuned }, start)
   }
@@ -1314,7 +1328,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()
     if (!store) return { fins: 0, running: 0, followed: 0, queued: 0, notices: 0, budget: this.budget, trees: [], routes: { ...this.routes }, answers: { ...this.answerCounts } }
     const edges = store.edges()
-    const roots = new Set(edges.all.map((edge) => this.rootOf(edge.parent)))
+    const roots = new Set([...edges.all.map((edge) => this.rootOf(edge.parent)), ...store.queuedSpawns().map((spawn) => spawn.tree), ...[...this.starts.values()].flatMap((start) => (start.launching ? [start.launching.tree] : []))])
     const trees = [...roots].map((apex) => ({ apex, ...this.treeCounts(apex) }))
     return {
       fins: edges.all.length,
@@ -1599,16 +1613,16 @@ export class Agents implements AgentOperations, ConversationChildren {
         void start.answer
           .then((answer) => ("refused" in answer ? answer.why : undefined), (error: Error) => `It didn't start: ${errorMessage({ error })}`)
           .then((refused) => {
-            this.retire(start)
             // A host shutting down leaves the row as it stands: the next host takes it from the store.
-            if (this.stopped) return
+            if (this.stopped) return void this.retire(start)
             // One its Apex stopped is gone; one that couldn't start stays, saying why, until its Apex has heard (`tellHeld`).
             if (refused && !start.cancelled && store.queuedSpawns().some((each) => each.op === spawn.op)) {
               hostWarn("agents", "a queued start couldn't start; its Apex is told", { op: spawn.op, why: refused })
               store.keepQueuedSpawn(spawn.op, JSON.stringify({ ...queued, refused: refused.slice(0, 2000) } satisfies QueuedStart))
             } else store.unqueueSpawn(spawn.op)
             this.queueChanged(queued.lead.thread)
-            void this.drain()
+            // Its row is settled first, so the drain its place wakes sees it as it now stands.
+            this.retire(start)
           })
       }
     } catch (error) {
@@ -2343,23 +2357,29 @@ export class Agents implements AgentOperations, ConversationChildren {
     }).length ?? 0
   }
 
+  /**
+   * How a tree stands against its budgets: Threads at work now, and Threads it started, each start counted once
+   * whether it's a written edge, a queue row, or a record under way between them (`StartRecord`).
+   */
   private treeCounts(root: string): TreeCounts {
     const store = this.store()
     if (!store) return { running: 0, started: 0 }
     let running = 0
-    let started = 0
+    const started = new Set<string>()
     const visit = (parent: string, depth: number) => {
       if (depth > 10_000) return
       for (const edge of store.edges().children(parent)) {
-        started += 1
+        started.add(edge.op)
         if (this.occupies(edge)) running += 1
         visit(edge.child, depth + 1)
       }
     }
     visit(root, 0)
-    // A queued start launching holds a running place; it's counted as started while it's still queued.
-    return { running: running + this.unwritten((launch) => launch.tree === root), started }
+    for (const spawn of store.queuedSpawns()) if (spawn.tree === root) started.add(spawn.op)
+    for (const start of this.starts.values()) if (start.launching?.tree === root) started.add(start.op)
+    return { running: running + this.unwritten((launch) => launch.tree === root), started: started.size }
   }
+
 
   /** The digest's last line, for the parent `conversation`. */
   private counts(conversation: string): string {
