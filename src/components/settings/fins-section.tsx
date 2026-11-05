@@ -70,7 +70,7 @@ function FinLimit() {
   const fail = (error: Error) => toast.error(error.message || "That number couldn't be saved. Try again.")
   const saveLimit = (next: number | null) => void setFinLimit(next).catch(fail)
   const saveCeiling = (next: number) => void setFinCeiling(next).catch(fail)
-  const based = capacity ? [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["measured defaults until it learns this Mac"]].join(" · ") : undefined
+  const based = capacity ? [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["defaults so far"]].join(" · ") : undefined
   return (
     <section className="flex flex-col gap-3" aria-label="Fins at once">
       <div>

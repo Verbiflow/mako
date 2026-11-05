@@ -116,7 +116,7 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
         <Group title="Fins at once" footer="How many of your Fins run at the same time in each place, across every Apex. Past it, an Apex waits for one to end only when it asks to.">
           <Row
             label={mac}
-            detail={own !== undefined ? `Your number · Auto would be ${capacity.auto}` : [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["measured defaults for now"]].join(" · ")}
+            detail={own !== undefined ? `Your number · Auto would be ${capacity.auto}` : [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["defaults so far"]].join(" · ")}
             end={
               <span className="flex shrink-0 items-center gap-2">
                 <Switch label="Auto" on={own === undefined} onChange={(auto) => setLimit(auto ? null : capacity.atOnce)} />
