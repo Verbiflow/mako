@@ -356,7 +356,7 @@ try {
     keyboard.chord.ms < 200,
     `refused before dispatch (${keyboard.chord.ms} ms)`
   )
-  assert.match(keyboard.chord.reason, /menu key equivalent/)
+  assert.match(keyboard.chord.reason, /Use the menu item: invoke_menu/)
   const afterKeys = await fixtureState()
   const keyboardLanded = afterKeys.input !== proof
   // The driver's verdict on posted keys is a hint, never "not delivered";

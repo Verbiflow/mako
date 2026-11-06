@@ -7,6 +7,7 @@ import { resolveExecutable } from "../base/executable.js"
 import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
 import type { PullRequestListing } from "../contracts/pull-request-search.js"
+import type { PullReading } from "../contracts/pull-waits.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import type { Git } from "@mako/git"
@@ -158,11 +159,14 @@ interface RawCheck {
   status?: string
   detailsUrl?: string
   targetUrl?: string
+  completedAt?: string
+  startedAt?: string
 }
 
 interface RawReview {
   state?: string
   author?: GitHubUser
+  submittedAt?: string
 }
 
 interface RawPull {
@@ -217,6 +221,8 @@ function parseRawCheck(value: JsonValue): RawCheck | null {
     status: stringValue(value.status),
     detailsUrl: stringValue(value.detailsUrl),
     targetUrl: stringValue(value.targetUrl),
+    completedAt: stringValue(value.completedAt),
+    startedAt: stringValue(value.startedAt),
   }
 }
 
@@ -227,6 +233,7 @@ function parseRawReview(value: JsonValue): RawReview | null {
   return {
     state: stringValue(value.state),
     author: author ?? undefined,
+    submittedAt: stringValue(value.submittedAt),
   }
 }
 
@@ -414,6 +421,55 @@ export async function listPulls(
 
 /** Runs `gh` with arguments in a folder and returns what it printed; a test hands in its own. */
 export type GitHubRunner = (cwd: string, args: string[]) => Promise<string>
+
+/** A pull request a Fin waits on, as the watch asks for it: by repository and number, or by number in the Fin's folder. */
+export interface PullTarget {
+  repository?: string
+  number: number
+  cwd: string
+}
+
+const READING_FIELDS = "state,url,author,statusCheckRollup,latestReviews"
+
+function timeOf(text: string | undefined): number | undefined {
+  const at = text ? Date.parse(text) : Number.NaN
+  return Number.isFinite(at) ? at : undefined
+}
+
+/**
+ * One pull request's state, checks and reviews for the watch (`PullReading`), with the same `gh pr view` and the same
+ * normalising of checks and reviews `pull_request_status` reads with. Null when `gh` can't say.
+ */
+export async function readPull(target: PullTarget, runner: GitHubRunner = gh): Promise<PullReading | null> {
+  const args = ["pr", "view", String(target.number), ...(target.repository ? ["--repo", target.repository] : []), "--json", READING_FIELDS]
+  let value: JsonValue
+  try {
+    value = JSON.parse(await runner(target.cwd, args))
+  } catch {
+    return null
+  }
+  if (!isJsonObject(value)) return null
+  const state = stringValue(value.state)
+  const url = stringValue(value.url)
+  if (!state || !url) return null
+  const checks = parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? []
+  const reviews = parseJsonArray(value.latestReviews, parseRawReview) ?? []
+  const author = parseOptionalUser(value.author)?.login
+  return {
+    state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : "open",
+    url,
+    ...(author && { author }),
+    checks: checks.map((raw) => {
+      const check = toCheck(raw)
+      const at = timeOf(raw.completedAt ?? raw.startedAt)
+      return { name: check.name, state: check.state, ...(at !== undefined && { at }) }
+    }),
+    reviews: reviews.map((raw) => {
+      const at = timeOf(raw.submittedAt)
+      return { ...toReviews([raw])[0]!, ...(at !== undefined && { at }) }
+    }),
+  }
+}
 
 /** What `PullRequestSearch` asks GitHub: the folder's repository, a search of its pull requests, and one by number. */
 export interface PullRequestSource {

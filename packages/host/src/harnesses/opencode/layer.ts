@@ -11,7 +11,7 @@ export interface OpenCodeLayerFragment {
 export const opencodeLayer: LayerAdapter<OpenCodeLayerFragment> = {
   harness: "opencode",
   capabilities: {
-    instructions: { kind: "fallback", via: "prompt-note", loses: "a turn reads them with each message rather than once; an agent's `prompt` in `OPENCODE_CONFIG_CONTENT` would carry them once" },
+    instructions: { kind: "native", via: "instructions-file", how: "a file named in `OPENCODE_CONFIG_CONTENT`'s `instructions`, which OpenCode appends. Never an agent's `prompt`, which replaces the provider's own", inUse: true },
     toolServing: { kind: "native", via: "http-mcp", how: "`mcp.add` with a remote config, the grant as a bearer header; a plugin could serve them in-process", inUse: true },
     removal: { kind: "native", via: "config-switch", how: "a deny on a permission, last in the agents Mako runs, in `OPENCODE_CONFIG_CONTENT`; today the `subagent` permission, which drops the tool; an agent's `tools` map would take out any other", inUse: true },
     interception: { kind: "native", via: "plugin", how: "a plugin of Mako's named in `OPENCODE_CONFIG_CONTENT`, posting each call to Mako", inUse: true },

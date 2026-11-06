@@ -141,7 +141,7 @@ async function check() {
   }
   const settle = () =>
     evaluate(
-      "document.fonts.ready.then(() => Promise.all(document.getAnimations().filter((each) => each.effect?.getTiming().iterations !== Infinity).map((each) => each.finished.catch(() => undefined)))).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
+      "document.fonts.ready.then(() => new Promise((done) => { const look = () => document.getAnimations().some((each) => each.playState === \"running\" && each.effect?.getTiming().iterations !== Infinity && each.effect.target?.checkVisibility({ contentVisibilityAuto: true }) !== false) ? requestAnimationFrame(look) : done(); requestAnimationFrame(look) })).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
     )
   const capture = async (name) => {
     await settle()

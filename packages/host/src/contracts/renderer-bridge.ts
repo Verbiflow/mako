@@ -1,3 +1,4 @@
+import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
 import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
@@ -24,7 +25,7 @@ import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { AccessChoices } from "./access-choices.js"
-import type { FinChoicesReading, FinPolicy } from "./fin-tuning.js"
+import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -75,7 +76,7 @@ import type { MakoFootprint } from "./mako-footprint.js"
 import type { FileEventsService } from "./file-events-service.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
-import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult } from "./simulators.js"
+import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult, SimulatorsWatchInput, SimulatorsWatchResult } from "./simulators.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
@@ -233,6 +234,14 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseFinDefault: (harness: string, settings: SessionSettings | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-default-choose", harness, settings),
     /** The person's rules for which work goes to which harness and model, saved whole. */
     saveFinPolicy: (policy: FinPolicy) => invokeTrustedHost<FinChoicesReading>("mako:fin-policy-save", policy),
+    /** The person's standing rules for every agent of one role, saved alone: everything else in the policy stays. */
+    saveRoleRules: (role: RoleRules, text: string) => invokeTrustedHost<FinChoicesReading>("mako:fin-role-rules-save", role, text),
+    /** This device's own number of Fins at once, 1 to `FIN_LIMIT_MAX`, or with null its capacity (Auto). */
+    setFinLimit: (limit: number | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-limit-set", limit),
+    /** The person's Fins at once across every place, 1 to `FIN_CEILING_MAX`. */
+    setFinCeiling: (ceiling: number) => invokeTrustedHost<FinChoicesReading>("mako:fin-ceiling-set", ceiling),
+    /** Settings › Fins: whether a Fin whose account runs out goes on to the next one. */
+    chooseFinMoveOnLimit: (on: boolean) => invokeTrustedHost<FinChoicesReading>("mako:fin-move-on-limit", on),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
@@ -398,6 +407,10 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-bind", id, path),
     readLiveFile: (id: string, path: string, purpose?: FileReadPurpose) =>
       invokeTrustedHost<FileContents>("mako:read-live-file", id, path, purpose),
+    /** The same, of a conversation's folder, answered by the host it runs on. */
+    liveFilesFolders: (id: string, paths: string[], options?: FileFoldersOptions) => invokeTrustedHost<FileFolders>("mako:live-files-folders", id, paths, options),
+    liveFilesFind: (id: string, query: string, limit?: number) => invokeTrustedHost<FileFindResults>("mako:live-files-find", id, query, limit),
+    liveFilesGrep: (id: string, query: string, options?: FileGrepOptions) => invokeTrustedHost<FileGrepResults>("mako:live-files-grep", id, query, options),
     liveAttach: (path: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
@@ -517,6 +530,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     simulatorsOpen: (input: SimulatorsOpenInput) => invokeTrustedHost<SimulatorsOpenResult>("mako:simulators-open", { kind: "person" }, input),
     simulatorsAct: (input: SimulatorsActInput) => invokeTrustedHost<SimulatorsActResult>("mako:simulators-act", { kind: "person" }, input),
     simulatorsRelease: (input: SimulatorsReleaseInput) => invokeTrustedHost<SimulatorsReleaseResult>("mako:simulators-release", { kind: "person" }, input),
+    /** A viewer's next packets of a simulator's screen, as a base64 `ControlVideoBatch`; waits up to two seconds for one. */
+    simulatorsWatch: (input: SimulatorsWatchInput) => invokeTrustedHost<SimulatorsWatchResult>("mako:simulators-watch", { kind: "person" }, input),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
@@ -801,6 +816,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     createWorkspaceText: (cwd: string, path: string, text: string) =>
       invokeTrustedHost<string>("mako:create-workspace-text", cwd, path, text),
     listFiles: () => invokeTrustedHost<WorkspaceFile[]>("mako:list-files"),
+    /** The Files view's folders of this window's workspace, from the host's index of it. */
+    filesFolders: (paths: string[], options?: FileFoldersOptions) => invokeTrustedHost<FileFolders>("mako:files-folders", paths, options),
+    filesFind: (query: string, limit?: number) => invokeTrustedHost<FileFindResults>("mako:files-find", query, limit),
+    filesGrep: (query: string, options?: FileGrepOptions) => invokeTrustedHost<FileGrepResults>("mako:files-grep", query, options),
     readFile: (path: string) =>
       invokeTrustedHost<FileContents>("mako:read-file", path),
     watchFile: (path: string) =>

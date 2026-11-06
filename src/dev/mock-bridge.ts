@@ -1,4 +1,5 @@
 import { fixtureHarnesses } from "./harness-fixtures"
+import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
@@ -89,6 +90,7 @@ import {
   mockThreads,
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
+import { openAsk } from "@mako/host/contracts/children"
 import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
@@ -865,6 +867,9 @@ export function installMockBridge() {
       ],
       otherwise: { harness: "claude" },
     },
+    capacity: { atOnce: 17, auto: 17, why: "14 cores, 36 GB · a Fin ≈ 0.35 core, 0.8 GB · room for 1 build", measured: false },
+    ceiling: 64,
+    moveOnLimit: true,
   }
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
@@ -967,7 +972,7 @@ export function installMockBridge() {
       const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
       return [
         { number: 812, title: "Fix the login redirect after SSO", branch: "fix/login-redirect", draft: false, author: "ann", updatedAt: ago(2), cross: false },
-        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "kashyab", updatedAt: ago(26), cross: false },
+        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "ana", updatedAt: ago(26), cross: false },
         { number: 801, title: "Typo in the README", branch: "patch-1", draft: false, author: "outside-contributor", updatedAt: ago(120), cross: true },
       ]
     },
@@ -1051,8 +1056,28 @@ export function installMockBridge() {
       finChoices = { ...finChoices, chosen }
       return finChoices
     },
-    saveFinPolicy: async (policy) => {
-      finChoices = { ...finChoices, policy }
+    saveFinPolicy: async ({ rules, otherwise }) => {
+      const { forFins, forApexes } = finChoices.policy
+      finChoices = { ...finChoices, policy: { rules, ...(otherwise && { otherwise }), ...(forFins && { forFins }), ...(forApexes && { forApexes }) } }
+      return finChoices
+    },
+    saveRoleRules: async (role, text) => {
+      finChoices = { ...finChoices, policy: { ...finChoices.policy, [role]: text.trim() || undefined } }
+      return finChoices
+    },
+    setFinLimit: async (limit) => {
+      const next = { ...finChoices }
+      if (limit === null) delete next.limit
+      else next.limit = limit
+      finChoices = next
+      return finChoices
+    },
+    setFinCeiling: async (ceiling) => {
+      finChoices = { ...finChoices, ceiling }
+      return finChoices
+    },
+    chooseFinMoveOnLimit: async (on) => {
+      finChoices = { ...finChoices, moveOnLimit: on }
       return finChoices
     },
     planBuilds: async () => planBuilds,
@@ -1200,6 +1225,9 @@ export function installMockBridge() {
       binary: false,
       truncated: false,
     }),
+    filesFolders: async (paths: string[], options?: FileFoldersOptions) => mockFileIndex().folders(paths, options),
+    filesFind: async (query: string, limit?: number) => mockFileIndex().find(query, limit),
+    filesGrep: async (query: string) => mockGrep(query),
     listFiles: async () =>
       [
         "src/components/composer/composer.tsx",
@@ -2632,6 +2660,9 @@ export function installMockBridge() {
       if (!snapshot) throw new Error("Missing mock session")
       return { ...snapshot, threadPath: path }
     },
+    liveFilesFolders: async (_id: string, paths: string[], options?: FileFoldersOptions) => mockFileIndex().folders(paths, options),
+    liveFilesFind: async (_id: string, query: string, limit?: number) => mockFileIndex().find(query, limit),
+    liveFilesGrep: async (_id: string, query: string) => mockGrep(query),
     readLiveFile: async (_id: string, path: string) => ({
       path,
       contents: "Mock file",
@@ -3432,16 +3463,27 @@ export function installMockBridge() {
       respondCalls.push({ conversation, ...input })
       const snapshot = liveSnapshots.get(conversation)
       const agent = snapshot?.nativeAgents?.agents.find((each) => each.child?.thread === input.fin)
-      const state = agent?.child?.state
+      const open = agent?.child?.state && openAsk(agent.child.state)
       if (!snapshot?.nativeAgents || !agent?.child) return { refused: "unknown-child", why: "That isn't one of this Thread's Fins." }
-      if (state?.kind !== "blocked" || state.ask?.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
-      const going: ChildState = { kind: "working", step: "Read your answer" }
+      // A limit's notice goes no further than the person having seen it (`Agents.respond`).
+      if (input.ask.startsWith("limit:")) {
+        const child = { ...agent.child }
+        delete child.limitNotice
+        const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((each) => (each === agent ? { ...agent, child } : each)) }
+        const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
+        liveSnapshots.set(conversation, next)
+        emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
+        return { answered: "person", child: agent.child.thread, name: agent.child.name ?? agent.title }
+      }
+      if (!open?.ask || open.ask.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
+      const picked = input.option === undefined ? input.answer : open.ask.options?.[input.option]?.label
+      const going: ChildState = { kind: "working", step: "Read your answer", ...(open.ask.kind === "report" && picked && { answered: { by: "person" as const, answer: picked } }) }
       const moved: NativeAgent = { ...agent, state: { kind: "working" }, child: { ...agent.child, state: going } }
       const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((each) => (each === agent ? moved : each)) }
       const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
       liveSnapshots.set(conversation, next)
       emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
-      return { child: agent.child.thread, name: agent.child.name ?? agent.title, answered: state.ask.kind, ...(state.ask.kind === "report" && { delivery: "turn" as const }) }
+      return { child: agent.child.thread, name: agent.child.name ?? agent.title, answered: open.ask.kind, ...(open.ask.kind === "report" && { delivery: "turn" as const }) }
     },
     nativeRouting: async () => [
       { harness: "claude", state: "control", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`.", verified: { version: "2.1.314", how: "test:native-routing-live" }, installed: "2.1.314" },
@@ -3994,4 +4036,15 @@ function mockFileEventsService(scene: string | null): FileEventsService {
       context: { ...context, turnsRunning: index % 4 },
     })),
   }
+}
+
+/** The browser mock's project: the paths its `listFiles` names, browsable and searchable as a host's index is. */
+const MOCK_PATHS = ["src/components/composer/composer.tsx", "src/components/rail/session-rail.tsx", "src/components/transcript/turn.tsx", "src/state/store.ts", "src/state/session.ts", "src/index.css", "electron/host.ts", "electron/shared.ts", "package.json", "README.md"]
+let mockIndex: FileIndexCore | undefined
+function mockFileIndex(): FileIndexCore {
+  mockIndex ??= new FileIndexCore(MOCK_PATHS)
+  return mockIndex
+}
+function mockGrep(query: string): FileGrepResults {
+  return { query, files: [{ path: "src/state/session.ts", lines: [{ line: 1, text: `// ${query}` }], more: 0 }], total: 1, more: false, ms: 1 }
 }

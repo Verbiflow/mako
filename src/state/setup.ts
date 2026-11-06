@@ -203,7 +203,7 @@ export function addTo(folder: string, part: SetupListPart, place: SetupPlaceView
 }
 
 /** An ask as one plain line, for a notice or an Inbox row. */
-export function askWords(ask: SetupAsk): string {
+export function setupAskWords(ask: SetupAsk): string {
   const line = askLine(ask)
   return `${line.verb} ${line.thing}${line.after ? `, ${line.after}` : ""}`
 }

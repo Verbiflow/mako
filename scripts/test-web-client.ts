@@ -38,6 +38,8 @@ import { acpStore } from "../src/state/acp-state"
 import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
 import type { ToolCall } from "../src/extend/slots"
 import { diagnose, diagnosisText, lastSeen, type ReachInput } from "../src/web-client/diagnosis"
+import { longestWaitingFirst, type WebFinAsk } from "../src/web-client/inbox"
+import { said } from "../src/components/transcript/fin-report-words"
 import { quietLine } from "../src/lib/quiet-device"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
 import { endMove, followedWays, listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
@@ -1579,4 +1581,24 @@ test("a terminal's session its own app has open on a Mac wears that Mac's hollow
   assert.equal(quiet.rail?.openElsewhere, undefined, "a Mac that can't be heard says nothing of what it has open")
   const working = listedSummaries({ rows: [{ ...ringed, state: "working" }], devices, quiet: new Map(), waiting: new Map() })[0]!
   assert.equal(working.rail?.openElsewhere, undefined, "a turn at work there is the working mark, not the ring")
+})
+
+test("a Fin's finished report says who decides: the person's in the attention hue, its Apex's quietly", () => {
+  const card = { report: "report:fin:merge", fin: "fin", name: "swipe", status: "done" as const, line: "Merge #371 into main?" }
+  assert.deepEqual(said({ ...card, decides: "person" }), { word: "finished · needs you", tone: "text-attention" })
+  assert.deepEqual(said({ ...card, decides: "lead" }), { word: "finished · asks its Apex", tone: "text-muted-foreground" }, "its Apex's decision waits on no one the person sees")
+  assert.deepEqual(said(card), { word: "finished", tone: "text-positive" })
+})
+
+test("the phone's asking Fins keep one order when they asked in the same moment", () => {
+  const ask = (key: string, observedAt: number): WebFinAsk => ({
+    key,
+    ask: { fin: key, title: key, harness: "codex", question: "Merge?", ask: { kind: "report", id: key } },
+    agent: { nativeId: `mako-child:${key}`, title: key, bindingId: "mako:children", provider: "codex", state: { kind: "completed" }, observedAt },
+    apex: { thread: "apex", title: "Mobile polish", conversation: "apex-conversation" },
+  })
+  const asks = [ask("fin:c:3", 5), ask("fin:a:1", 5), ask("fin:b:2", 1), ask("fin:d:4", 5)]
+  const keys = (list: WebFinAsk[]) => list.map((each) => each.key)
+  assert.deepEqual(keys([...asks].sort(longestWaitingFirst)), ["fin:b:2", "fin:a:1", "fin:c:3", "fin:d:4"], "the longest waiting first, then by key")
+  assert.deepEqual(keys([...asks].reverse().sort(longestWaitingFirst)), keys([...asks].sort(longestWaitingFirst)), "whatever order they came in")
 })

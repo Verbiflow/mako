@@ -102,13 +102,13 @@ import {
   FileTextIcon,
   GitBranchIcon,
   GitForkIcon,
+  GitPullRequestIcon,
   HistoryIcon,
   LayersIcon,
-  PencilIcon,
+  PencilLineIcon,
   MoonIcon,
   PlayIcon,
   RefreshCwIcon,
-  RotateCcwIcon,
   TargetIcon,
   TriangleAlertIcon,
 } from "lucide-react"
@@ -300,6 +300,8 @@ function TurnExchange({
             <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
+          ) : mako?.kind === "pull" ? (
+            <PullWakeNote line={mako.line} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : fromAgent && promptText ? (
             <AgentWordsCard words={fromAgent} raw={promptText} timestamp={exchange.prompt.timestamp} />
           ) : (
@@ -519,6 +521,11 @@ function MovedNote({ timestamp, origin }: { timestamp?: number; origin?: Message
   )
 }
 
+/** Mako woke this Fin with an outcome of the pull request its report said it waits on: the note's own words. */
+function PullWakeNote({ line, timestamp, origin }: { line: string; timestamp?: number; origin?: MessageOrigin }) {
+  return <EventLine align="end" icon={GitPullRequestIcon} time={timestamp} data-pull-wake words={{ title: line }} action={<ShowOriginal origins={[origin]} />} />
+}
+
 const GOAL_NOTES = {
   continue: "Mako continued toward the goal",
   clear: "Mako cleared the unfinished goal to set the new one",
@@ -648,7 +655,7 @@ function Prompt({ message }: { message: ChatMessage }) {
       {/* The user's words are a bubble, not a slab: right-aligned and capped
           at a reading measure, unmistakably theirs without a ring. The
           assistant's reply below stays full-width and chrome-free. */}
-      <div className="flex w-full items-start justify-end gap-2.5">
+      <div className="flex w-full items-end justify-end gap-2.5">
       <div onCopy={event => copyPromptSelection(event, reused.records)} className="max-w-[min(82%,64ch)] bg-raised px-3.5 py-2.5">
         <Prose text={sent.body} sent={prose} className="prompt-prose whitespace-normal" />
         <PlanContextChips plans={reused.plans} />
@@ -666,53 +673,44 @@ function Prompt({ message }: { message: ChatMessage }) {
           </div>
         ) : null}
       </div>
-      <PersonAvatar className="mt-0.5" />
+      <PersonAvatar />
       </div>
 
-      <div className="mt-1 mr-[34px] flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-muted-foreground">
+      {/*
+        * At rest only the time; on hover (always, where nothing hovers) the
+        * three things a sent message offers, each its own glyph, its name in
+        * its tooltip: Copy; Edit, its words back in the composer (in a native
+        * session from this point, the later turns kept on a branch); Rewind,
+        * the files back to before it.
+        */}
+      <div className="mt-1 mr-[34px] flex min-h-7 items-center justify-end gap-0.5 px-0.5 text-label text-muted-foreground">
         {note?.(message.requestId)}
-        <button type="button" aria-label="Copy question" onClick={() => void copy()} className="pressable flex h-6 items-center gap-1 px-1 hover:bg-fill-hover hover:text-foreground">
-          {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-          {copied ? "Copied question" : "Copy question"}
-        </button>
         {message.timestamp ? (
-          <span className="tabular">{formatTime(message.timestamp)}</span>
+          <span className="tabular px-1 text-faint">{formatTime(message.timestamp)}</span>
         ) : null}
-        <button
-          type="button"
-          data-transcript-action="reuse"
-          title="Put this prompt back in the composer"
-          onClick={compose}
-          className="pressable flex items-center gap-1 px-1 hover:text-foreground"
-        >
-          <RotateCcwIcon className="size-3" />
-          Reuse
-        </button>
-        <PromptRewindButton requestId={message.requestId} />
-        {node ? (
-          <>
-            <button
-              type="button"
-              data-transcript-action="edit"
-              title="Rewind to here and re-ask — later turns stay on their own branch"
-              onClick={() => void editHere()}
-              className="pressable flex items-center gap-1 px-1 hover:text-foreground"
-            >
-              <PencilIcon className="size-3" />
-              Edit
-            </button>
-            <button
-              type="button"
-              data-transcript-action="fork"
-              title="Branch from this point into a new tab — both lines stay open"
-              onClick={() => void actions.fork(message.id)}
-              className="pressable flex items-center gap-1 px-1 hover:text-foreground"
-            >
-              <GitForkIcon className="size-3" />
-              Fork
-            </button>
-          </>
-        ) : null}
+        <span data-prompt-actions className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/prompt:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+          <button
+            type="button"
+            data-transcript-action="copy"
+            aria-label={copied ? "Copied question" : "Copy question"}
+            title={copied ? "Copied" : "Copy"}
+            onClick={() => void copy()}
+            className="pressable flex size-7 items-center justify-center hover:bg-fill-hover hover:text-foreground"
+          >
+            {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+          </button>
+          <button
+            type="button"
+            data-transcript-action="edit"
+            aria-label="Edit"
+            title={node ? "Edit: rewind to here and re-ask; the later turns stay on their own branch" : "Edit: put these words back in the composer"}
+            onClick={() => void (node ? editHere() : compose())}
+            className="pressable flex size-7 items-center justify-center hover:bg-fill-hover hover:text-foreground"
+          >
+            <PencilLineIcon className="size-3.5" />
+          </button>
+          <PromptRewindButton requestId={message.requestId} />
+        </span>
         <ShowOriginal origins={[message.origin]} />
       </div>
     </div>

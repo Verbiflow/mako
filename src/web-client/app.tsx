@@ -17,6 +17,7 @@ import { tapOnLift } from "./taps"
 import { useSeenWhileOpen } from "./read-state"
 import { useThread } from "./use-thread"
 import { ReviewLayer } from "./review-layer"
+import { FilesLayer } from "./files-layer"
 import { arrivedUpdated, takeUpdates } from "./update"
 import { chunk, transcriptChunk } from "./chunks"
 
@@ -232,12 +233,14 @@ export function WebApp() {
           <main className="relative flex min-w-0 flex-1 flex-col">
             {detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}
             <ReviewLayer form={form} place={reviewPlace} />
+            <FilesLayer form={form} place={reviewPlace} />
           </main>
         </>
       ) : (
         <main className="relative flex min-w-0 flex-1 flex-col">
           <ScreenStack under={list} top={detail} topKey={detail ? routeHref(under, client.options.base).split("?")[0] : undefined} onBack={back} />
           <ReviewLayer form={form} place={reviewPlace} />
+          <FilesLayer form={form} place={reviewPlace} />
         </main>
       )}
       {sheet}

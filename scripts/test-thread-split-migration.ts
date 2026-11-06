@@ -13,6 +13,7 @@ import { carryDrafts, type ThreadSplit } from "@mako/host/contracts/thread-split
 import { ThreadStore, type JournalFacts } from "@mako/host/threads/store"
 import { preSplitCopyPath, splitThreadId, undoThreadSplits } from "@mako/host/threads/thread-split"
 import { ThreadArchives } from "@mako/host/threads/archives"
+import { growth, subquadratic } from "./lib/growth.ts"
 
 /**
  * A Thread is one conversation (`docs/one-conversation.md`): the split of every Thread that held several Sessions
@@ -443,9 +444,8 @@ function undoChecks(): void {
   console.log("ok: the way back rejoins every Session, edge and report, and a second split matches the first")
 }
 
-/** A store of the person's shape: about 5,000 Threads, 100 of them with 2 to 14 Sessions of every origin, and Fins under them. */
-function generatedChecks(): void {
-  const path = join(root, "generated.sqlite")
+/** A store of the person's shape at `threads` Threads: one in 50 with 2 to 14 Sessions of every origin, and Fins under 16 of those. */
+function generate(path: string, threads: number): { thread: string; sessions: string[] }[] {
   open(path, false).close()
   const db = new DatabaseSync(path)
   const principal = String(db.prepare("SELECT value FROM store_meta WHERE key = 'principal'").get()!.value)
@@ -456,7 +456,7 @@ function generatedChecks(): void {
   const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
   const multi: { thread: string; sessions: string[] }[] = []
   db.exec("BEGIN")
-  for (let index = 0; index < 5000; index += 1) {
+  for (let index = 0; index < threads; index += 1) {
     const thread = randomUUID()
     const size = index % 50 === 7 ? 2 + Math.floor(random() * 13) : 1
     db.prepare("INSERT INTO threads (id, owner_id, title, title_source, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)")
@@ -488,18 +488,29 @@ function generatedChecks(): void {
   }
   db.exec("COMMIT")
   db.close()
+  return multi
+}
+
+/** The person's store, about 5,000 Threads, 100 of them split; its split's work grows with the store, not its square. */
+function generatedChecks(): void {
+  const path = join(root, "generated.sqlite")
+  const multi = generate(path, 5000)
   const before = picture(path)
-  const started = performance.now()
   const store = open(path, true)
-  const took = performance.now() - started
   const made = checkSplit(before, picture(path), new Set(), store)
   store.close()
   assert.equal(made.size, multi.reduce((sum, thread) => sum + thread.sessions.length - 1, 0))
-  assert.ok(took < 10_000, `the split of ${multi.length} Threads took ${Math.round(took)} ms`)
   const once = digest(path)
   open(path, true).close()
   assert.equal(digest(path), once, "a second open changes nothing")
-  console.log(`ok: a generated store of the person's shape (${multi.length} Threads into ${multi.length + made.size}, ${Math.round(took)} ms to open)`)
+  let stores = 0
+  const grew = growth((threads) => {
+    const each = join(root, `generated-${stores++}.sqlite`)
+    generate(each, threads)
+    return () => open(each, true).close()
+  }, 1_000, 10_000, 3)
+  assert.ok(grew.ratio < subquadratic(1_000, 10_000), `splitting 10,000 Threads took ${grew.ratio.toFixed(1)} times 1,000`)
+  console.log(`ok: a generated store of the person's shape (${multi.length} Threads into ${multi.length + made.size}, twice its size split in ${Math.round(grew.largeMs)} ms of CPU, ${grew.ratio.toFixed(1)} times a tenth of that)`)
 }
 
 /** A copy of a real store, copied again so the one named is never written. */

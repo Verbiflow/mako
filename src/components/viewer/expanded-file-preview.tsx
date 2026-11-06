@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState, useRef, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import type { FileContents } from "@/lib/types"
 
 const RichFilePreview = lazy(() => import("./rich-file-preview"))
@@ -42,7 +42,7 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
       if (target?.isConnected) target.focus({ preventScroll: true })
     }}>
       <div className="flex min-w-0 shrink-0 items-center gap-3 border-b border-hairline px-4 py-3">
-        <FileTypeIcon path={name} mimeType={file?.mimeType} className="size-4 shrink-0 text-muted-foreground" />
+        <FileIcon path={name} mimeType={file?.mimeType} className="size-4 shrink-0 text-muted-foreground" />
         <DialogTitle className="min-w-0 flex-1 truncate">{name}</DialogTitle>
         {file && !file.binary ? <div className="flex gap-1 text-label" aria-label="Document view">
           {(["preview", "source"] as const).map((value) => <button key={value} type="button" aria-pressed={selectedMode === value} onClick={() => setView({ open, identity, mode: value })} className={`pressable px-2 py-1 ${selectedMode === value ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover"}`}>{value === "preview" ? "Preview" : "Source"}</button>)}

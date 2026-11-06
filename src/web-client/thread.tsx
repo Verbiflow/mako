@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -39,6 +39,7 @@ import { DiagnosisCard } from "./trouble"
 import { useNow, useTryAgain } from "./trouble-state"
 import { QuietStrip } from "./quiet-strip"
 import { activeLiveAcp, useAcp } from "@/state/acp"
+import { openFiles } from "./files-open"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
 import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
@@ -361,6 +362,12 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
             <MenuItem onSelect={() => openReview({ conversation: session.row.conversation, scope: { kind: "thread" } })} className={item}>
               <FileDiffIcon className={glyph} />
               Changes
+            </MenuItem>
+          ) : null}
+          {!session.quietSince ? (
+            <MenuItem onSelect={() => openFiles({ conversation: session.row.conversation })} className={item}>
+              <FolderTreeIcon className={glyph} />
+              Files
             </MenuItem>
           ) : null}
           {session.row.folder && !session.quietSince && !moving ? (

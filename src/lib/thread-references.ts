@@ -1,30 +1,20 @@
 import { getMako } from "@/lib/bridge"
 import {
   parseThreadToken,
-  threadReferenceId,
-  threadToken,
   tokenize,
-  type Segment,
 } from "@/lib/mentions"
 import type { ThreadRef } from "@/lib/types"
 import { threadLabel } from "@/lib/draft-view"
+import {
+  findThreadReference,
+  locateTokens,
+  prepareThreadTokens,
+  type ConversationContext,
+  type PreparedThreadReference,
+  type ThreadTokenUse,
+} from "@mako/sessions/thread-references"
 
-/** A referenced conversation's transcript, and the note that hands it to the agent. */
-interface ThreadContext {
-  kind: "file"
-  file: string
-  note: string
-  title?: string
-  harness: string
-}
-
-interface LocatedReference {
-  key: string
-  number: number
-  thread?: ThreadRef
-  /** The token as typed, for a heading whose conversation did not resolve. */
-  raw: string
-}
+export { findThreadReference, type PreparedThreadReference }
 
 /**
  * One heading of a sent prompt's appendix, read back. `token` is the
@@ -52,69 +42,15 @@ const TOKEN_TRAILER = / — (@thread:\S+)$/
 const HARNESS_TRAILER = / \(([^()\s]+)\)$/
 
 
-interface LocatedSegment {
-  segment: Segment
-  reference?: LocatedReference
-}
-
-interface LocatedReferences {
-  segments: LocatedSegment[]
-  references: LocatedReference[]
-}
-
-const pending = new Map<string, Promise<ThreadContext | null>>()
+const pending = new Map<string, Promise<ConversationContext | null>>()
 const remembered = new Map<string, ThreadRef>()
 
 function tokenKey(harness: string, id: string): string {
   return `${harness}\0${id}`
 }
 
-/**
- * One row out of several that a token could mean. A provider may present one
- * native session as more than one store (Cursor's `chats/` continuation of an
- * ACP session carries `identity: "chats:<id>"`, and one resumed from another
- * folder `chats:<workspace>:<id>`); the store without a derived identity is
- * the original, or failing that the first chats store, and a token that
- * names only the shared native id — every token minted before identities
- * existed — means that one. Rows with different native ids are genuinely
- * different conversations and stay ambiguous.
- */
-function primary(candidates: ThreadRef[]): ThreadRef | undefined {
-  if (candidates.length === 1) return candidates[0]
-  if (candidates.length === 0) return undefined
-  const nativeId = candidates[0]!.nativeId
-  if (!candidates.every((entry) => entry.nativeId === nativeId)) return undefined
-  const originals = candidates.filter((entry) => entry.identity === undefined)
-  if (originals.length > 0) return originals.length === 1 ? originals[0] : undefined
-  const first = candidates.filter((entry) => entry.identity === `chats:${nativeId}`)
-  return first.length === 1 ? first[0] : undefined
-}
-
-/**
- * The catalog row a thread token names, or `undefined` when none does. The
- * token's id is the provider's identity (`threadReferenceId`), so an exact
- * identity match wins; an exact native id is next, for tokens older than the
- * identity field. A legacy shortened id resolves only when its prefix
- * identifies one conversation. Ambiguity is deliberately left unresolved
- * rather than attaching the wrong conversation. The same rule decides what a
- * chip shows and what a send attaches, so the two cannot disagree.
- */
-export function findThreadReference(
-  threads: ThreadRef[],
-  harness: string,
-  id: string
-): ThreadRef | undefined {
-  const own = threads.filter((entry) => entry.harness === harness)
-  const byIdentity = own.filter((entry) => threadReferenceId(entry) === id)
-  if (byIdentity.length > 0) return primary(byIdentity)
-  const byNativeId = own.filter((entry) => entry.nativeId === id)
-  if (byNativeId.length > 0) return primary(byNativeId)
-  return primary(
-    own.filter(
-      (entry) =>
-        threadReferenceId(entry).startsWith(id) || entry.nativeId.startsWith(id)
-    )
-  )
+function threadTokens(text: string): ThreadTokenUse[] {
+  return tokenize(text).flatMap((segment) => (segment.kind === "thread" ? [segment] : []))
 }
 
 /** Neither a token nor a label holds it: tokens are URI-encoded and labels flatten whitespace. */
@@ -164,38 +100,6 @@ function resolveThread(
   return remembered.get(key)
 }
 
-function locate(text: string, threads: ThreadRef[]): LocatedReferences {
-  const references: LocatedReference[] = []
-  const byKey = new Map<string, LocatedReference>()
-  const segments = tokenize(text).map((segment): LocatedSegment => {
-    if (segment.kind !== "thread") return { segment }
-    const thread = resolveThread(segment.harness, segment.id, threads)
-    const key = thread
-      ? `path\0${thread.path}`
-      : `token\0${tokenKey(segment.harness, segment.id)}`
-    let reference = byKey.get(key)
-    if (!reference) {
-      reference = { key, number: references.length + 1, thread, raw: segment.raw }
-      byKey.set(key, reference)
-      references.push(reference)
-    }
-    return { segment, reference }
-  })
-  return { segments, references }
-}
-
-
-/**
- * The token a heading names: the catalog's own for a conversation that
- * resolved (a shortened id from an old draft comes back whole), else the one
- * typed, so even an unavailable reference reads back as the chip it was.
- */
-function headingToken(reference: LocatedReference): string {
-  return reference.thread
-    ? threadToken(reference.thread.harness, threadReferenceId(reference.thread))
-    : reference.raw
-}
-
 /**
  * Read a sent prompt's appendix back into what each placeholder meant. The
  * body keeps its placeholders; `restoreThreadReferences` puts the tokens
@@ -239,7 +143,7 @@ function contextKey(thread: ThreadRef): string {
   return `${thread.path}\0${contextVersion(thread)}`
 }
 
-function context(thread: ThreadRef): Promise<ThreadContext | null> {
+function context(thread: ThreadRef): Promise<ConversationContext | null> {
   const key = contextKey(thread)
   const prefix = `${thread.path}\0`
   for (const cached of pending.keys()) {
@@ -252,14 +156,14 @@ function context(thread: ThreadRef): Promise<ThreadContext | null> {
   return request
 }
 
-function contextBatch(threads: ThreadRef[]): Promise<Array<ThreadContext | null>> {
+function contextBatch(threads: ThreadRef[]): Promise<Array<ConversationContext | null>> {
   const unique = [...new Map(threads.map((thread) => [thread.path, thread])).values()]
   const missing = unique.filter(
     (thread) => !pending.has(contextKey(thread))
   )
   if (missing.length > 0) {
     const paths = missing.map((thread) => thread.path)
-    const request: Promise<Array<ThreadContext | null>> = getMako().threadContexts(paths)
+    const request: Promise<Array<ConversationContext | null>> = getMako().threadContexts(paths)
     for (let index = 0; index < missing.length; index += 1) {
       const thread = missing[index]!
       const key = contextKey(thread)
@@ -281,15 +185,6 @@ function contextBatch(threads: ThreadRef[]): Promise<Array<ThreadContext | null>
   return Promise.all(threads.map((thread) => context(thread)))
 }
 
-export interface PreparedThreadReference {
-  /** The catalog row the token resolved to, when it did. */
-  thread?: ThreadRef
-  /** The token's body to write, `thread:<harness>:<id>`: the catalog's own for one that resolved. */
-  ref: string
-  /** The transcript bundle prepared for it, or null when it is unavailable. */
-  context: ThreadContext | null
-}
-
 /**
  * What each conversation token in `text` stands for at send, keyed by the
  * token as typed: the row it resolves to (remembered across a catalog
@@ -300,25 +195,14 @@ export async function prepareThreadReferences(
   text: string,
   threads: ThreadRef[]
 ): Promise<Map<string, PreparedThreadReference>> {
-  const located = locate(text, threads)
-  const available = located.references.filter((reference) => reference.thread)
-  const prepared = await contextBatch(available.map((reference) => reference.thread!))
-  const contexts = new Map(available.map((reference, index) => [reference.key, prepared[index] ?? null]))
-  const result = new Map<string, PreparedThreadReference>()
-  for (const { segment, reference } of located.segments) {
-    if (segment.kind !== "thread" || !reference || result.has(segment.raw)) continue
-    const entry: PreparedThreadReference = { ref: headingToken(reference).slice(1), context: contexts.get(reference.key) ?? null }
-    if (reference.thread) entry.thread = reference.thread
-    result.set(segment.raw, entry)
-  }
-  return result
+  return prepareThreadTokens(threadTokens(text), (harness, id) => resolveThread(harness, id, threads), contextBatch)
 }
 
 export function prefetchThreadReferences(
   text: string,
   threads: ThreadRef[]
 ): void {
-  const referenced = locate(text, threads).references.flatMap((reference) =>
+  const referenced = locateTokens(threadTokens(text), (harness, id) => resolveThread(harness, id, threads)).references.flatMap((reference) =>
     reference.thread ? [reference.thread] : []
   )
   if (referenced.length > 0) void contextBatch(referenced)

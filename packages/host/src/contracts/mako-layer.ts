@@ -46,8 +46,11 @@ export const INSTRUCTION_BLOCKS = {
   "show-media": { cadence: "session" },
   orchestration: { cadence: "session" },
   routes: { cadence: "session" },
+  policy: { cadence: "session" },
   "front-door": { cadence: "per-message" },
   rules: { cadence: "per-message" },
+  /** The person's standing rules for every Fin and every Apex (`roleRuleLines`): standing lines of Mako's note, read once and again when they change. */
+  "person-rules": { cadence: "session" },
 } as const satisfies Record<string, { cadence: "session" | "per-message" }>
 export type InstructionBlockId = keyof typeof INSTRUCTION_BLOCKS
 
@@ -122,7 +125,7 @@ export type LayerSupport<Via extends string> =
 
 export interface LayerCapabilities {
   /** Where Mako's instructions go. Never a slot that replaces the vendor's own prompt. */
-  instructions: LayerSupport<"system-append" | "developer-context" | "agent-prompt">
+  instructions: LayerSupport<"system-append" | "developer-context" | "instructions-file" | "agent-prompt">
   toolServing: LayerSupport<"in-process" | "http-mcp" | "stdio-mcp">
   /** Taking a native tool out of what the model is offered, at launch. */
   removal: LayerSupport<"tool-list" | "config-switch" | "environment-switch">

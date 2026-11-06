@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import type { WorkspaceGit } from "../git/index.js"
-import { readText, walkWorkspace } from "./files.js"
+import { readText } from "./files.js"
+import { walkWorkspace } from "./file-index.js"
 import type { FileMatches, SearchOptions, SearchResults } from "../contracts/git-workspace-search.js"
 import type { SessionSummary } from "../contracts/conversation-session.js"
 

@@ -7,10 +7,10 @@ import {
   readdir,
   realpath,
   rm,
-  writeFile,
 } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
+import { publishFile } from "../../base/published-files.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { runDiscovery } from "../profile-transport.js"
@@ -78,17 +78,11 @@ export async function withDevinProbeWorkspace<T>(
     await removeProbe(stores, processes, executable, env, database, workspace)
   }
   const workspace = await realpath(await mkdtemp(join(root, "probe-")))
-  await writeFile(
-    join(workspace, "owner.json"),
-    JSON.stringify({ version: 1, state: "active", pid: process.pid })
-  )
+  await publishFile(join(workspace, "owner.json"), JSON.stringify({ version: 1, state: "active", pid: process.pid }), { foreignFolder: true })
   try {
     return await run(workspace)
   } finally {
-    await writeFile(
-      join(workspace, "owner.json"),
-      JSON.stringify({ version: 1, state: "cleanup" })
-    )
+    await publishFile(join(workspace, "owner.json"), JSON.stringify({ version: 1, state: "cleanup" }), { foreignFolder: true })
     await removeProbe(stores, processes, executable, env, database, workspace)
   }
 }

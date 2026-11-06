@@ -212,6 +212,18 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
       return { verb: verb("Message", "Messaging", "Messaged"), what: apex ?? fin(to, answer) }
     },
   }],
+  ["agents_move", {
+    group: "agents",
+    say: ({ args, answer, harness }) => {
+      const to = text(args["harness"])
+      const where = to ? ` to ${harness(to)}` : ""
+      if (args["all"] === true) {
+        const moved = Array.isArray(answer?.["moved"]) ? answer["moved"].length : 0
+        return { verb: MOVE, what: `all Fins${where}`, ...moved > 0 && { done: `${count(moved, "Fin", "Fins")}${where}` } }
+      }
+      return { verb: MOVE, what: `${fin(text(args["child"]), undefined)}${where}` }
+    },
+  }],
   ["agents_stop", {
     group: "agents",
     say: ({ args, answer }) => {
@@ -262,9 +274,10 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["thread_history", {
     group: "history",
     say: ({ args }) => {
-      const other = text(args["thread"]) ? "a referenced thread" : undefined
+      const other = text(args["thread"]) === "tree" ? "the whole tree" : text(args["thread"]) ? "a referenced thread" : undefined
       const turns = text(args["turns"])
       const query = text(args["query"])
+      if (text(args["action"]) === "export") return { verb: verb("Export", "Exporting", "Exported"), what: other ?? "this Thread" }
       if (text(args["action"]) === "search") return { verb: verb("Search", "Searching", "Searched"), what: `${other ?? "earlier turns"}${query ? ` for ${query}` : ""}` }
       return { verb: READ, what: other ?? (turns ? `turns ${turns}` : "earlier turns") }
     },

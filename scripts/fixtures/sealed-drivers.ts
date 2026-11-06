@@ -1,4 +1,4 @@
-import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { detachedHarnessContext, harnessModules } from "@mako/host/harnesses/harness-host"
 import { createProviderHost, type ProviderModule } from "@mako/host/harnesses/host"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { LiveDrivers } from "@mako/host/harnesses/live-drivers"
@@ -18,8 +18,8 @@ class SealedDrivers extends LiveDrivers {
   }
 }
 
-/** The live drivers `installs` register, each sealed, by harness. */
-export function sealedDrivers(installs: readonly ProviderModule[]): ReadonlyMap<string, ProviderLiveDriver> {
+/** The live drivers `installs` register, every harness Mako ships unless named, each sealed, by harness. */
+export function sealedDrivers(installs: readonly ProviderModule[] = harnessModules): ReadonlyMap<string, ProviderLiveDriver> {
   const context = detachedHarnessContext(new NativeStores(false))
   const sealed = new SealedDrivers({
     resolve: () => Promise.reject(new Error("A sealed driver starts only on the launch it is given")),

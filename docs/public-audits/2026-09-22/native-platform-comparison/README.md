@@ -253,7 +253,7 @@ Keep full evidence accessible when output is compacted.
 Run `npm run build:electron` then
 `node docs/public-audits/2026-09-22/native-platform-comparison/probe.mjs`.
 `MAKO_AUDIT_BUILD_ROOT` may name an already-built equivalent checkout. This audit
-used `/Users/kashyab/mako-control-rollout`, whose tested implementation is integrated
+used `~/mako-control-rollout`, whose tested implementation is integrated
 in main. The probe deliberately supplies Linux-shaped fixtures; it does not
 pretend that a Docker engine or a Mac-hosted unit test is a Linux GUI result.
 

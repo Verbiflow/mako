@@ -11,6 +11,8 @@ import { actions, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { modelKey, noteModelUse, usePrefs } from "@/state/prefs"
 import { useWorkspaceFiles } from "@/state/files"
+import { workspaceFiles } from "@/state/file-tree"
+import type { FileFindResults } from "@mako/host/contracts/file-index"
 import { viewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
 import { SearchIcon } from "lucide-react"
@@ -48,6 +50,21 @@ export function CommandPalette() {
 
   const fileIndex = useWorkspaceFiles(open && mode === "files")
   const { files } = fileIndex
+  // Typed, a file is found by the host's index of the workspace, as the Files panel finds it.
+  const cwd = useSession((state) => state.meta?.cwd)
+  const finder = useMemo(() => (cwd ? workspaceFiles(cwd) : undefined), [cwd])
+  const [found, setFound] = useState<FileFindResults>()
+  const term = query.trim()
+  useEffect(() => {
+    if (!open || mode !== "files" || !term || !finder) return
+    let current = true
+    void finder.find(term, 60).then((next) => {
+      if (current) setFound(next)
+    }, () => undefined)
+    return () => {
+      current = false
+    }
+  }, [open, mode, term, finder])
   const deskCommands = useCommands()
   const keybindings = usePrefs((prefs) => prefs.keybindings)
   const favoriteModels = usePrefs((prefs) => prefs.favoriteModels)
@@ -88,9 +105,10 @@ export function CommandPalette() {
    * useful rather than arbitrary.
    */
   const fileEntries = useMemo<Entry[]>(() => {
-    const term = query.trim()
     const ordered = term
-      ? rank(files, term, (file) => file.path).slice(0, 60)
+      ? found && (found.query === term || term.startsWith(found.query))
+        ? found.hits.map((hit) => ({ path: hit.path }))
+        : rank(files, term, (file) => file.path).slice(0, 60)
       : [...files].sort((a, b) => Number(Boolean(b.changed)) - Number(Boolean(a.changed))).slice(0, 60)
     return ordered.map((file) => ({
       id: `file:${file.path}`,
@@ -99,9 +117,11 @@ export function CommandPalette() {
       hint: file.path,
       run: () => void viewer.open(file.path),
     }))
-  }, [files, query])
+  }, [files, found, term])
 
+  // Read as it opens: closed, the palette lists nothing, and asks no command whether it applies.
   const entries = useMemo<Entry[]>(() => {
+    if (!open) return []
     const list: Entry[] = deskCommands
       .filter((command) => command.when?.() !== false)
       .map((command) => toEntry(command, keybindings))
@@ -147,6 +167,7 @@ export function CommandPalette() {
 
     return list
   }, [
+    open,
     activeModel,
     deskCommands,
     favoriteModels,

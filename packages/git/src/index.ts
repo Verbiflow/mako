@@ -8,7 +8,7 @@ export { numstatEntries, parseNumstat, untrackedLines, type LineCount, type Nums
 export { TreeComparison, type TreeChange } from "./trees.js"
 export { DIFF_FLAGS, type BinarySide, type Comparison, type Preview } from "./preview.js"
 export { fastForward, push, remote, type ExpectedHead, type RemoteAction } from "./remote.js"
-export { changedSince, commitFiles, defaultBranch, grep, listFiles, log, type CommitEntry, type CommitFile, type GrepOptions } from "./history.js"
+export { changedSince, commitFiles, defaultBranch, grep, grepMatches, listFiles, listFileStates, log, type CommitEntry, type CommitFile, type GrepMatch, type GrepMatchOptions, type GrepOptions } from "./history.js"
 export { ContextOverflow, MAX_CALLS, type DraftingModel, type DraftMode, type DraftOptions } from "./drafting/model.js"
 export { DraftSummaries } from "./drafting/analysis.js"
 export { COMMIT_STYLE } from "./drafting/prompts.js"

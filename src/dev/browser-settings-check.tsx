@@ -26,7 +26,7 @@ const profiles: BrowserControlStatus[] = [
   },
   {
     id: "chrome",
-    name: "Chrome · Kashyab",
+    name: "Chrome · Ana",
     product: "Chrome",
     kind: "chromium",
     transport: "extension",

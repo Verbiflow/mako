@@ -36,6 +36,9 @@ for a picker that chooses it.
   carries its noun.
 - **Icons**: lucide, at 14px (`size-3.5`) beside UI text and 12px (`size-3`) beside a label, the default stroke.
   One icon one meaning: Copy, Edit (`PencilLine`), Rewind (`Undo2`), never two circular arrows side by side.
+  A file's or folder's mark is the one exception: its kind's own (`components/ui/file-icon.tsx`, by name and
+  extension in `lib/file-kinds.ts`), at the same sizes, one stroke on one grid, square joins, told apart by shape or a
+  language's letters and never by hue.
 
 ## Who and how: the fin
 
