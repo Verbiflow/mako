@@ -187,7 +187,9 @@ Several Threads now work in one place: a split Thread's siblings, a fork, a `+` 
   place, crumb "Forked from …", opened in a new tab beside its parent. Option-click is gone.
 - **A harness switch** changes the Thread's mark at the hand-off; no new row, no new tab.
 - **Moves** are per Thread, as now. The place chip offers them; no control moves a Session.
-- **Fins** are Threads with a parent edge. Opening one gives it a tab of its own; none appears by itself.
+- **Fins** are Threads with a parent edge, listed under their Apex rather than as Threads, so the strip's list holds none. A
+  Fin opened in place has the strip's one Fin tab (`OpenFinTab`) beside what's open; none appears by itself, and closing
+  it goes back to its Apex.
 - **A Thread that runs elsewhere stays whole.** A cloud machine's store keeps its Threads as they are, because its Mac
   names them and hands it Sessions to file in them, so `+` in a cloud Thread stays in that Thread (`createSession`). Each
   of its conversations is a rail row and they share one tab, which shows the one last opened. The phone's Session
@@ -210,7 +212,7 @@ type OpenEntry =
   stay the viewer's own tabs (`viewerStore`), drawn after these.
 - **What it shows.** A tab wears the Thread's live mark (the same mark as its rail row) and title.
 - **Opening.** A Thread with a tab is focused. Otherwise it takes the tab on screen if that tab was only looked at,
-  else opens beside it. Typing keeps a tab (`keepActiveTab`). Cmd-click, middle-click, a fork and a Fin open a tab of
+  else opens beside it. Typing keeps a tab (`keepActiveTab`). Cmd-click, middle-click and a fork open a tab of
   their own and it stays (`openNextInOwnTab`).
 - **Closing.** × and Cmd+W close the tab: the Thread stays in the rail and keeps running, and the tab beside it takes the
   screen. Archiving is in the tab's menu.

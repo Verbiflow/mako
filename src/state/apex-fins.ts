@@ -12,7 +12,7 @@ import { createHook, createStore } from "@/state/store"
 import { currentOnScreen } from "@/state/thread-sessions"
 import { threads } from "@/state/threads"
 import { threadsStore, useThreads } from "@/state/thread-store"
-import { openNextInOwnTab } from "@/state/open-tabs"
+import { showFinInPlace } from "@/state/open-tabs"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
 const byThread = new WeakMap<AcpState["conversations"], Map<string, readonly NativeAgent[]>>()
@@ -149,8 +149,8 @@ export function openFinInApex(apex: string, apexTitle: string, child: NativeAgen
   if (!thread) return
   const state = acpStore.get()
   const conversation = (child.child?.conversation ? state.conversations[child.child.conversation] : undefined) ?? childConversation(state, thread)
+  showFinInPlace(thread)
   apexViewStore.set({ open: { apex, apexTitle, child: thread, shown: false } })
-  openNextInOwnTab()
   if (conversation) {
     acp.activate(conversation.key)
     return
@@ -174,6 +174,7 @@ export function backToApex(): void {
 export function watchApexView(): () => void {
   const sync = () => {
     const open = apexViewStore.get().open
+    showFinInPlace(open?.child)
     if (!open) return
     const here = currentOnScreen().thread
     if (here === open.child) {

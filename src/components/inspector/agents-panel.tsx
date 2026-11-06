@@ -240,7 +240,7 @@ function AgentRoster({
   const finished = agents.filter((agent) => !agent.child && !isActiveNativeAgent(agent)).length
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label text-faint">
+      {waiting || running > 0 || finished > 0 ? <div className="flex h-7 shrink-0 items-center gap-2 px-3.5 text-label text-faint">
         {waiting ? (
           <span data-background-summary className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             <HourglassIcon aria-hidden className="size-3 shrink-0" />
@@ -260,13 +260,13 @@ function AgentRoster({
             {stopping ? "Stopping" : "Stop all"}
           </button>
         ) : null}
-      </div>
-      <div ref={scroller} data-sheet-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
+      </div> : null}
+      <div ref={scroller} data-sheet-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
         {children.length ? (
           <ApexFinsSection children={children} conversation={conversation} apexTitle={apexTitle} scroller={scroller} open={litChild} onOpen={onOpenChild} />
         ) : null}
         {children.length && (agents.length || unnamed) ? (
-          <div className="flex h-7 items-end px-2.5 pb-1 text-label text-faint">In this turn</div>
+          <div className="flex h-7 items-end px-1.5 pb-1 text-label text-faint">In this turn</div>
         ) : null}
         {unnamed > 0 ? (
           <p className="px-2.5 py-2 text-label text-faint">
@@ -326,7 +326,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
       <button
         type="button"
         aria-expanded={more ? expanded : undefined}
-        className={cn("pressable flex w-full items-start gap-2.5 px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", agent.ambient && "opacity-70")}
+        className={cn("pressable flex w-full items-start gap-2.5 px-1.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", agent.ambient && "opacity-70")}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="flex h-5 shrink-0 items-center text-muted-foreground">

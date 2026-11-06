@@ -2,7 +2,7 @@ import { IconAction } from "@/components/ui/kit"
 import { StillMark } from "@/components/transcript/message-avatar"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { ThreadTabList } from "@/components/stage/thread-tabs"
-import { ApexFinTabs } from "@/components/stage/child-tabs"
+import { OpenFinTab } from "@/components/stage/child-tabs"
 import { useApexView } from "@/state/apex-fins"
 import { Fragment, useMemo, type ReactNode } from "react"
 import { CheckoutChip } from "@/components/stage/checkout-chip"
@@ -44,10 +44,13 @@ export function StageStrip({
   })
   const active = useOnScreen()
   const bound = pane?.session
-  // A Fin opened from its Apex still counts under that Apex.
+  // A Fin opened from its Apex keeps that strip: what's open, none of it selected, and the Fin's own tab.
   const inApex = useApexView((state) => (!bound && state.open && state.open.child === active.thread ? state.open : null))
   // A chat without focus shows its own conversation, and only that; what's open is the focused chat's.
-  const here = useMemo<OnScreen>(() => (bound ? { thread: bound.thread, session: bound.tab } : active), [active, bound])
+  const here = useMemo<OnScreen>(
+    () => (bound ? { thread: bound.thread, session: bound.tab } : inApex ? { thread: inApex.apex, cwd: active.cwd } : active),
+    [active, bound, inApex]
+  )
   const paneTabs = useThreadTabs(bound ? here : NOTHING_ON_SCREEN)
   const openTabs = useOpenTabs(here)
   const sessionTabs = bound ? paneTabs : openTabs
@@ -121,7 +124,7 @@ export function StageStrip({
         if (!agent && !document) return null
         const active = id === pane.activeId
         // A conversation not placed in a Thread yet, or nothing at all, stands as the plain tab after what's open.
-        if (agent && sessionTabs.length > 0 && (bound || here.thread || here.draft))
+        if (agent && (inApex || (sessionTabs.length > 0 && (bound || here.thread || here.draft))))
           return (
             <Fragment key={`${id}:${here.thread ?? ""}`}>
               <ThreadTabList
@@ -131,7 +134,7 @@ export function StageStrip({
                 agentActive={active}
                 add={!bound}
               />
-              {here.thread && !bound ? <ApexFinTabs thread={inApex?.apex ?? here.thread} apexTitle={inApex?.apexTitle ?? here.title ?? "this Thread"} /> : null}
+              {here.thread && !bound ? <OpenFinTab thread={here.thread} /> : null}
             </Fragment>
           )
         const title = agent ? agentTitle : document.title

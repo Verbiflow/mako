@@ -1636,12 +1636,12 @@ registered through them, so nothing built-in is privileged:
 registerCommand({ id, title, section, keys: "mod+j", run }) // palette + keyboard
 registerSlot("my-badge", "composer.controls", Component) // UI seams
 registerToolView("bash", { summary, body, icon }) // transcript rows
-registerSurface({ id, label, icon, render, minWidth }) // stage companions
+registerSurface({ id, label, icon, render, minWidth, reading, useOffered }) // stage companions
 ```
 
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
-anything a plugin would add. One reading surface opens as the right sidebar at
+anything a plugin would add. One reading surface opens in the right rail at
 a fixed, draggable width; the independent Terminal dock can remain open below it
 at a fixed, draggable height. Neither uses percentage splits. The central workbench
 stays mounted under a covering sidebar so transcripts and file tabs keep their state.
@@ -2597,6 +2597,19 @@ deliberate action and never rides along with a commit.
   at square corners. Only what means a dot (status dots, the unread sphere,
   a switch's knob, a sheet's grab handle) is round, through `rounded-full`;
   a device frame drawn to its hardware keeps the hardware's corners.
+- **Two rails and the conversation between them; a tab is opened on purpose.**
+  The right rail is the left's twin, on the shell with its row (`RailRow`):
+  `SideRail` draws a row a surface in a fixed order, each with its `reading`
+  at the end (lines changed, who needs the person in the attention hue), and
+  `useOffered` keeps a row away while nothing stands behind it. A reading
+  selects its own fact, so a token repaints no row. Changes is a list and a
+  diff opens as a tab (`changesView` keeps Review, every diff in one scroll,
+  in Settings). No Fin has a tab for starting: the crew card and the rail hold
+  them, and `OpenFinTab` is the one tab of the Fin opened in place, whose close
+  is the Apex again. The phone has a count in the bar (`PhoneFinCount`) and the
+  crew card, whose rows open a Fin through `RoutedOpenContext` on the web, as
+  `openFinInApex` does on the desk; a laptop's browser draws the same rail
+  (`WebSideRail`) and one Fin tab. `npm run test:side-rail-ui` holds all of it.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
   composer's chip, the crew card, the rail's pips, the Agents panel, the stop
   card, the phone's row) counts from the Thread's one roster
@@ -2707,7 +2720,7 @@ host, out of the UI. Horizontal tabs inside the central workbench hold what's
 open across Threads (`src/state/open-tabs.ts`), then its files and diffs. The
 list follows the screen, so whatever opens a Thread opens it there: one only
 looked at takes the tab of the one before it, a tab typed into or opened on
-purpose (Cmd-click, a fork, a Fin) stays, and a tab's × closes the tab, never the
+purpose (Cmd-click, a fork) stays, and a tab's × closes the tab, never the
 Thread. `+` and Cmd+T start a new Thread beside the one on screen; nothing is
 created until its first send, which turns its tab into that Thread, an empty one
 goes when you leave it, and one holding unsent text stays as a tab, its text

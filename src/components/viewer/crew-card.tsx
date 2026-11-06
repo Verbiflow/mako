@@ -1,5 +1,6 @@
 import {
   memo,
+  use,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -35,6 +36,7 @@ import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contr
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { LiveMark } from "@/components/ui/live-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { useTickingText } from "@/components/ui/second-clock"
@@ -563,10 +565,14 @@ export function CrewCard({
           : index
     },
   })
+  // A Fin opens in place on the desk; the web's Thread screen opens it by its own address.
+  const routed = use(RoutedOpenContext)
   const onOpen = useCallback(
-    (agent: NativeAgent) =>
-      thread ? openFinInApex(thread, apexTitle, agent) : undefined,
-    [thread, apexTitle]
+    (agent: NativeAgent) => {
+      if (routed) routed(agent)
+      else if (thread) openFinInApex(thread, apexTitle, agent)
+    },
+    [routed, thread, apexTitle]
   )
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = useCallback(() => {

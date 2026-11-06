@@ -18,7 +18,7 @@ const storage = {
 Object.assign(globalThis, { localStorage: storage })
 
 const { renderToStaticMarkup } = await import("react-dom/server")
-const { closeEntries, draftBecameThread, entryKey, keepActiveTab, openNextInOwnTab, openTabsStore, showInTabs } = await import("../src/state/open-tabs")
+const { closeEntries, draftBecameThread, entryKey, keepActiveTab, openNextInOwnTab, openTabsStore, showFinInPlace, showInTabs } = await import("../src/state/open-tabs")
 const { openTabsOf, sessionTabTitle, tabThread, threadSessionTabs } = await import("../src/state/thread-sessions")
 const { discardSessionDraft, leaveSessionDraft, putSessionDraft, sessionDraftKey, threadDraftsStore } = await import("../src/state/thread-drafts")
 const { threadArchiveKey } = await import("@mako/host/contracts/thread-lifecycle")
@@ -86,6 +86,14 @@ assert.equal(openTabsStore.get().active, b.thread, "only a Thread's conversation
 closeEntries(new Set([b.thread]))
 assert.deepEqual(keys(), [c.thread, d.thread, a.thread])
 assert.equal(openTabsStore.get().active, undefined)
+
+// A Fin shown in place of its Apex has the strip's one Fin tab, not a place in the list.
+reset()
+showInTabs(a)
+showFinInPlace(b.thread)
+showInTabs(b)
+assert.deepEqual(keys(), [a.thread], "a Fin in place takes no tab of the list")
+showFinInPlace(undefined)
 
 // Closing the tab on screen: what replaces it opens a beat later, and the screen showing the closed one until then
 // doesn't open it again. Once it's gone, opening it is opening it.

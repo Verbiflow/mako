@@ -7,7 +7,8 @@ import { createHook, createStore } from "@/state/store"
  *
  * The list follows the screen (`showInTabs`), so whatever opens a Thread, a rail row, the Inbox, the crew card or an
  * address, opens it here. A Thread opened by looking at it replaces the tab on screen, unless that one was typed into
- * or kept, so reading down the rail leaves one tab. A Thread already open is focused, whichever opens it.
+ * or kept, so reading down the rail leaves one tab. A Thread already open is focused, whichever opens it. A Fin isn't
+ * listed: one opened in place has the strip's one Fin tab (`OpenFinTab`), and closing it goes back to its Apex.
  *
  * A tab holds identities only. Its title, mark and whether it runs are read at draw time (`useOpenTabs`).
  */
@@ -63,8 +64,15 @@ export function entryKey(entry: OpenEntry): string {
  */
 let leavingScreen: string | undefined
 
-/** The next Thread to reach the screen gets a tab of its own: a fork, a Fin, a Cmd-click. */
+/** The next Thread to reach the screen gets a tab of its own: a fork, a Cmd-click. */
 let ownTabNext = false
+
+/** The Fin shown in place of its Apex. */
+let finInPlace: string | undefined
+
+export function showFinInPlace(thread: string | undefined): void {
+  finInPlace = thread
+}
 
 export function openNextInOwnTab(): void {
   ownTabNext = true
@@ -84,7 +92,7 @@ function replaceable(entry: OpenEntry | undefined): boolean {
 export function showInTabs(here: { thread?: string; session?: string; draft?: { thread: string } | null }): void {
   const shown = shownEntry(here)
   if (leavingScreen !== undefined && (!shown || entryKey(shown) !== leavingScreen)) leavingScreen = undefined
-  if (!shown || leavingScreen !== undefined) return
+  if (!shown || leavingScreen !== undefined || (finInPlace !== undefined && here.thread === finInPlace)) return
   const own = ownTabNext
   ownTabNext = false
   openTabsStore.set(({ entries, active }) => {

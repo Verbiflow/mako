@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
@@ -9,7 +10,9 @@ import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
 import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
+import { FinTab } from "@/components/stage/child-tabs"
 import { ThreadTabList } from "@/components/stage/thread-tabs"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { Welcome } from "@/components/transcript/transcript"
 import { OceanScene } from "@/components/ui/ocean-scene"
 import { WorkbenchStrip } from "@/components/stage/stage-strip"
@@ -31,6 +34,7 @@ import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
+import { FinOfApexContext, childSession } from "./fin-of-apex"
 import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
@@ -47,7 +51,7 @@ import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { ReviewLayer } from "./review-layer"
 import { FilesLayer } from "./files-layer"
-import { closeFiles, filesOpenStore, openFiles } from "./files-open"
+import { closeFiles, filesOpenStore, openFiles, useFilesOpen } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
@@ -174,6 +178,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
   const running = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
   const live = useAcp((state) => activeLiveAcp(state)?.key)
   const changes = useReviewOpen((state) => state.open !== null)
+  const files = useFilesOpen((state) => state.open !== null)
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   return (
     <TitleStrip
@@ -198,13 +203,19 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
           <IconAction label="Search threads and commands" keys={formatChord("mod+k")} onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))}>
             <SearchIcon />
           </IconAction>
-          <IconAction label={changes ? "Hide changed files" : "Show changed files"} data-on={changes} disabled={!changes && !live} onClick={toggleChanges}>
+          <IconAction label={changes || files ? "Hide the right sidebar" : "Show the right sidebar"} data-on={changes || files} disabled={!changes && !files && !live} onClick={toggleSide}>
             <PanelRightIcon />
           </IconAction>
         </>
       }
     />
   )
+}
+
+/** The right rail, for the Session on screen, on Changes as the desktop's starts, or away again, whichever row is open. */
+function toggleSide(): void {
+  if (filesOpenStore.get().open) return closeFiles()
+  toggleChanges()
 }
 
 /** Changes beside the transcript, for the Session on screen, or away again: the desktop's right sidebar, here. */
@@ -439,6 +450,11 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession,
   const here: OnScreen = { thread: threadId, session: shown }
   useEffect(() => showInTabs({ thread: threadId, session: shown }), [threadId, shown])
   const tabs = useOpenTabs(here)
+  // The Fin opened from the crew card, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
+  const [child, setChild] = useState<NativeAgent | null>(null)
+  const openChild = useCallback((agent: NativeAgent) => {
+    if (agent.child?.conversation) setChild(agent)
+  }, [])
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {
     if (sessionId === undefined && shown) noteOpenedByScreen(shown)
@@ -458,8 +474,9 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession,
     )
   }
   const Place = session.row.runsOn.kind === "cloud" ? CloudIcon : session.quietSince ? MoonIcon : LaptopIcon
+  const opened = child ? childSession(session, child) : undefined
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id} data-child-of={opened ? thread.id : undefined}>
       <WorkbenchStrip
         end={
           <>
@@ -471,9 +488,14 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession,
           </>
         }
       >
-        {tabs.length ? <ThreadTabList tabs={tabs} here={here} paneId="main" agentActive /> : null}
+        {tabs.length ? <ThreadTabList tabs={tabs} here={here} paneId="main" agentActive={!opened} /> : null}
+        {child && opened ? <FinTab agent={child} onClose={() => setChild(null)} /> : null}
       </WorkbenchStrip>
-      <ThreadBody thread={thread} session={session} desk />
+      <RoutedOpenContext value={openChild}>
+        <FinOfApexContext value={opened ? thread.title : undefined}>
+          <ThreadBody key={opened?.row.conversation} thread={thread} session={opened ?? session} desk />
+        </FinOfApexContext>
+      </RoutedOpenContext>
       {addingTo ? (
         <StartSheet
           open={adding}
