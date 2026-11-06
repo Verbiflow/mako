@@ -466,8 +466,8 @@ function publishBackground() {
  * object new). `reconciled` applies batches the way the window does;
  * otherwise each batch replaces the roster outright, the baseline.
  */
-const agentsProfile = { commits: 0, ms: 0, each: [] as number[] }
-const chatProfile = { commits: 0, ms: 0, each: [] as number[] }
+const agentsProfile = { commits: 0, ms: 0, each: new Array<number>() }
+const chatProfile = { commits: 0, ms: 0, each: new Array<number>() }
 const medianOf = (values: readonly number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0
 const BENCH_HARNESSES = ["claude", "cursor", "codex", "grok", "opencode", "devin"]
 /** `detached`: every entry a child Thread (`childEntry`'s shape) on one of six harnesses, as `agents_start`'s are. */
