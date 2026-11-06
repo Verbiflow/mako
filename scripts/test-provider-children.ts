@@ -26,8 +26,9 @@ const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 300))
 
 const owned: ChildProcess[] = []
 try {
-  // An earlier host (pid 4242) records two children and dies without cleanup.
-  const earlier = new ProviderChildren(dir, 4242)
+  // An earlier host records two children and dies without cleanup. Its pid is past any system's, so no process has it.
+  const goneHost = 9_999_999
+  const earlier = new ProviderChildren(dir, goneHost)
   const orphan = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
   owned.push(orphan)
   orphan.unref()
@@ -129,7 +130,7 @@ try {
     executable: "sleep",
     kind: "acp:test",
     owner: "gone",
-    host: 4242,
+    host: goneHost,
   })
   await rm(join(dir, "runtime", "provider-children.json"))
   await writeFile(
