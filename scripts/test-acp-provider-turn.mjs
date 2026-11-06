@@ -341,20 +341,30 @@ async function check() {
   assert.equal(devin.opened().length, 2, "the ended announcement does not open a later turn")
   console.log("PASS: Stopping Devin's background subagent opens no turn, and leaves no announcement behind")
 
-  const beforeDevinNative = devin.events.length
-  await devin.prompt("native-devin")
-  const devinSince = devin.events.slice(beforeDevinNative)
-  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
-    [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
-  // How long the retry took is the clock's, so it isn't part of what's compared.
+  // How long a retry took is the clock's, so it isn't part of what's compared.
   const clockless = (update) => (update.retries ? { ...update, retries: { ...update.retries, durationMs: 0 } } : update)
-  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [clockless(event.update)] : []), [
-    { kind: "event", label: "Retried once", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "gave-up" } },
-    // Devin's quota is a usage limit, as every harness's is, with nothing more it says of the window.
-    { kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} },
-  ])
+  /** A turn's retry and quota stop, with what its retry came to. */
+  const retriedTurn = async (prompt, retried) => {
+    const before = devin.events.length
+    await devin.prompt(prompt)
+    const since = devin.events.slice(before)
+    assert.deepEqual(since.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
+      [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
+    assert.deepEqual(since.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [clockless(event.update)] : []), [
+      retried,
+      // Devin's quota is a usage limit, as every harness's is, with nothing more it says of the window.
+      { kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} },
+    ])
+    return since
+  }
+  // On the wire: the retry, a reply, then the stop. The reply ended the retry, so it recovered; events in wire order say so.
+  const recovered = await retriedTurn("native-devin", { kind: "event", label: "Recovered after 1 retry", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "recovered" } })
+  const shown = recovered.flatMap((event) => event.type === "live-activity" ? ["retry"] : event.type === "live-update" && event.update.kind === "text" && event.update.text === "Reconnected." ? ["reply"] : [])
+  assert.deepEqual(shown, ["retry", "reply"], "an extension notification and the update after it reach the engine in wire order")
+  // The retry, then the stop, with no reply between: it gave up.
+  await retriedTurn("native-devin-gave-up", { kind: "event", label: "Retried once", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "gave-up" } })
   assert.equal(devin.opened().length, 2, "a failed prompted turn opens no provider turn")
-  console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker")
+  console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker, recovered by a reply and given up without one")
   await devin.close()
 
   // The agent's first output is the prompt's receipt, and a process that dies

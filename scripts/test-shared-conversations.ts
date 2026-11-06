@@ -20,11 +20,14 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { LIVE_FORM } from "@mako/protocol/live-form"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync("/tmp/mako-peers-")
+// A hold is repaired by scanning the temporary folder's hosts, the first 128 of them: on a Mac whose other hosts fill it, this one's may be past them.
+process.env.TMPDIR = root
 const ownerSocket = join(root, "owner.sock")
 const desktopSocket = join(root, "desktop.sock")
 const db = join(root, "memory.sqlite")
@@ -132,7 +135,7 @@ try {
   const received: z.infer<ReturnType<typeof z.json>>[] = []
   closeClient = subscribeRuntime(desktopSocket, client, (packet) => {
     if (packet.channel === "event") received.push(JSON.parse(packet.payload))
-  }, () => {})
+  }, () => {}, { live: LIVE_FORM })
   for (const provider of providers) {
     const id = randomUUID()
     await owner.start(provider, root, { conversationId: id })

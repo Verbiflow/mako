@@ -42,7 +42,7 @@ import { closeProviderProcess, endProviderProcess, providerProcessGone, spawnPro
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { acpPromptBlocks } from "./acp-prompt.js"
-import { acpReadable, acpWritable, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
+import { acpReadable, acpWritable, inWireOrder, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
 import type {
   Client,
   ClientSideConnection as Connection,
@@ -719,7 +719,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
 
     const connection = new ClientSideConnection(
       () => client,
-      await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate)
+      inWireOrder(await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate))
     )
     live.connection = connection
 

@@ -559,8 +559,12 @@ const inputs = {
               .optional(),
           })
           .optional(),
+        forFins: z.string().optional(),
+        forApexes: z.string().optional(),
       }),
     ]),
+  "mako:fin-role-rules-save": () =>
+    z.tuple([z.union([z.literal("forFins"), z.literal("forApexes")]), z.string()]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
@@ -2684,6 +2688,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-limit-set", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
+  ["mako:fin-role-rules-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
   ["mako:git-changed-since", "git"],

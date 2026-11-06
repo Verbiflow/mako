@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { openCodeNativeRunner } from '@mako/host/harnesses/opencode/native-runner'
+import { OPENCODE_VERSIONS } from '@mako/host/harnesses/opencode/versions'
 import { NativeStores } from '@mako/sessions/read-only-sqlite'
 
 const runner = openCodeNativeRunner(new NativeStores(false))
+const tooOld = new RegExp(`Mako runs OpenCode ${OPENCODE_VERSIONS.oldest.replaceAll('.', '\\.')} or newer`)
 
 // Exercises the built adapter, including its real database worker and version subprocess.
 const root = await mkdtemp(join(tmpdir(), 'mako-native-runtime-'))
@@ -34,8 +36,8 @@ try {
   await assert.rejects(runner.resume('ses_fixture', 'next', { nativePath: `${legacy}#ses_fixture` }, env), /different native store/)
   await assert.rejects(runner.resume('ses_fixture', 'next', { nativePath: `${legacy}#ses_fixture` }, { ...env, OPENCODE_DB: legacy }), /v1 sessions are no longer supported/)
   await writeFile(binary, '#!/bin/sh\nprintf "1.4.11\\n"\n')
-  await assert.rejects(runner.fresh('hello', settings, env), /Mako runs OpenCode 2\.0\.6 or newer/)
-  await assert.rejects(runner.resume('ses_fixture', 'next', { nativePath: `${current}#ses_fixture` }, env), /Mako runs OpenCode 2\.0\.6 or newer/)
+  await assert.rejects(runner.fresh('hello', settings, env), tooOld)
+  await assert.rejects(runner.resume('ses_fixture', 'next', { nativePath: `${current}#ses_fixture` }, env), tooOld)
   await assert.rejects(runner.resume('ses_missing', 'next', { nativePath: `${current}#ses_missing` }, env), /missing from its native database/)
   console.log('Built OpenCode headless adapter: v2-only native store resolution, account environment, renamed binary, v2 arguments and v1 refusal, missing/mismatched source refusal')
 } finally { await rm(root, { recursive: true, force: true }) }
