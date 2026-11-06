@@ -13,6 +13,7 @@ import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
 import { checkoutSince } from "../base/checkout-since.js"
+import { cutAccount } from "./cut-account.js"
 import { standingLines } from "./control-cadence.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
@@ -331,6 +332,9 @@ export class LiveDispatch {
         const words = request.continues?.brief && await briefInTranscript(resident.snapshot, this.access.control(resident), request.continues.brief, dependencies.history)
           ? continueTurnPrompt("host-crashed", "mako")
           : request.text
+        // A continuation says what moved since the cut, read here too, so nothing crosses the read (`TurnContinuation.since`).
+        const since = request.continues?.since
+        const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
         const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: dependencies.agents?.()?.isApex(resident.snapshot.session.id) ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
@@ -356,7 +360,7 @@ export class LiveDispatch {
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
             ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
           ]),
-          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), words),
+          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })

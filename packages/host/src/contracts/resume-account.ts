@@ -164,15 +164,18 @@ export interface BranchChanges {
   }
 }
 
-/** A Fin a message resumes after it was stopped or its turn failed, and what moved since (`finResumedText`). */
+/** A Fin a message resumes after it was stopped or its turn failed, or one whose cut turn Mako continues, and what moved since (`finResumedText`). */
 export interface FinResume {
-  how: "stopped" | "failed"
+  how: "stopped" | "failed" | "cut"
   at: number
   reason?: string
   now: number
   checkout: readonly RepositoryChanges[]
   branches: readonly BranchChanges[]
 }
+
+/** How every account of a resume opens (`finResumedText`): a continuation is read back by the words before it. */
+export const RESUMED_OPENS = "[mako · resumed after "
 
 /** How long ago, in words: "just now", "5 minutes ago", "3 hours ago", "2 days ago". */
 export function agoWords(ms: number): string {
@@ -205,11 +208,13 @@ function branchLine(branch: BranchChanges): string | undefined {
  */
 export function finResumedText(resume: FinResume): string {
   const ago = agoWords(resume.now - resume.at)
-  const head = `[mako · resumed after ${resume.how === "stopped" ? "a stop" : "a failure"} ${ago}]`
+  const head = `${RESUMED_OPENS}${resume.how === "stopped" ? "a stop" : resume.how === "failed" ? "a failure" : "a cut"} ${ago}]`
   const why = resume.reason ? ` (${clip(resume.reason, 400)})` : ""
   const opening = resume.how === "stopped"
     ? `You were stopped ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
-    : `Your last turn failed ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
+    : resume.how === "failed"
+      ? `Your last turn failed ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
+      : `Your turn was cut short ${ago}${why}, and this continues it in the same session: everything above is yours.`
   const moved = checkoutLines(resume.checkout)
   const since = moved.length ? `In your checkout since then:\n${moved.join("\n")}` : "Nothing moved in your checkout since then: no commit, push or file change."
   const branches = resume.branches.map(branchLine).filter((line): line is string => line !== undefined)

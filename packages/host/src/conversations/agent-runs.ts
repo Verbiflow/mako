@@ -111,6 +111,8 @@ interface Followed {
   checked: boolean
   /** When its process was first seen gone and when its Session was last written then, while its end waits to be confirmed by a quiet Session. */
   gone?: { at: number; written: number }
+  /** This host saw its process run: one gone before that ended while no host watched. */
+  seenAlive?: true
 }
 
 /** What a link or a discovery takes in. */
@@ -256,6 +258,7 @@ export class AgentRuns {
     this.deps.catalog.announce(ref.path)
     if (input.process) {
       followed.checked = true
+      followed.seenAlive = true
       followed.reading = { ...followed.reading, alive: true }
       void this.read(followed)
     } else await this.settle(followed)
@@ -545,7 +548,10 @@ export class AgentRuns {
       const run = followed.edge.run
       if (!run || run.ended || !run.process || run.device !== device) continue
       const alive = await this.alive(followed, run.process).catch(() => true)
-      if (alive) followed.gone = undefined
+      if (alive) {
+        followed.gone = undefined
+        followed.seenAlive = true
+      }
       else if (!(await this.endConfirmed(followed))) continue
       if (alive !== followed.reading.alive) {
         followed.reading = { ...followed.reading, alive }
@@ -620,7 +626,8 @@ export class AgentRuns {
       return this.end(followed, { at, kind: "failed", detail: `It exited with code ${status}${error ? `: ${error}` : "."}`, ...counted })
     }
     if (summary && last.at(-1)?.type === "text") return this.end(followed, { at, kind: "done", detail: summary, ...counted })
-    this.end(followed, { at, kind: "unknown", detail: "Its process ended without saying how it went.", ...counted })
+    const detail = followed.seenAlive ? "Its process ended without saying how it went." : "Its process ended while Mako wasn't running: a quit, a crash, or this Mac shutting down or restarting."
+    this.end(followed, { at, kind: "unknown", detail, ...counted })
   }
 
   private async lastEntries(followed: Followed): Promise<readonly Entry[]> {
