@@ -2268,10 +2268,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The model a conversation runs on now: the person's last choice in it, else what its harness reported, else what it started with. */
   private settingsOf(conversation: string): SessionSettings | undefined {
     const snapshot = this.deps.live.snapshot(conversation)
-    if (!snapshot) return undefined
-    const chosen = snapshot.requests.filter((request) => request.tuning?.model).at(-1)?.tuning
-    const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
-    return chosen ?? snapshot.session.settings ?? binding?.tuning
+    return snapshot ? settingsIn(snapshot) : undefined
   }
 
   /**
@@ -3208,7 +3205,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const working = busy || waits !== undefined
     const thread = this.store()?.thread(edge.child)
     const title = thread?.title ?? session.title
-    const settings = this.settingsOf(conversation)
+    // A reading is taken of every Fin there is, on every look: it holds to what memory has, and never reads a journal in.
+    const settings = held ? settingsIn(held) : session.settings
     const model = settings?.model
     const catalog = this.deps.catalogOf?.(session.harness)
     const runsOn = catalog && finTuningWords(catalog, settings)
@@ -4606,6 +4604,13 @@ function parseQueued(record: string): QueuedStart | undefined {
   } catch {
     return undefined
   }
+}
+
+/** What a conversation last ran with. */
+function settingsIn(snapshot: LiveSnapshot): SessionSettings | undefined {
+  const chosen = snapshot.requests.filter((request) => request.tuning?.model).at(-1)?.tuning
+  const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
+  return chosen ?? snapshot.session.settings ?? binding?.tuning
 }
 
 function queuedLead(record: string): z.infer<typeof QueuedLeadSchema> | undefined {
