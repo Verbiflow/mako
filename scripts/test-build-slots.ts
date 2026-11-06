@@ -488,6 +488,8 @@ const stubborn = (file: string) => `process.on("SIGTERM",()=>fs.writeFileSync("t
 
 /** A process of a check that detaches, ignores SIGTERM and says its pid: reparented, it's out of the check's tree. */
 const detached = (saidIn: string) => `const child=require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(`process.on("SIGTERM",()=>{});require("node:fs").writeFileSync("${saidIn}",String(process.pid));setInterval(()=>{},1000)`)}],{detached:true,stdio:"ignore"});child.unref();`
+/** The same with none of the run's marks: a process it's seen to own, and no mark can find. */
+const unmarked = (saidIn: string) => detached(saidIn).replace(`{detached:true,stdio:"ignore"}`, `{detached:true,stdio:"ignore",env:{PATH:process.env.PATH}}`)
 const alive = (pid: number) => {
   try {
     return process.kill(pid, 0)
@@ -576,6 +578,73 @@ const pidIn = (folder: string, file: string) => Number(readFileSync(join(folder,
     b.wait.ms = 10_000
     assert.match(await tools.check(b.two.conversation, "quick"), /passed/)
     assert.deepEqual(b.processes.unending(), [])
+  } finally {
+    process.kill = kill
+    if (child && alive(child)) process.kill(child, "SIGKILL")
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── One that clears its marks and can't be ended: the stop saw it, so its slot stays held though no mark finds it.
+{
+  const slots = new BuildSlots(() => 1)
+  const b = bench("unmarked", () => slots, 100)
+  const kill = process.kill.bind(process)
+  let child = 0
+  try {
+    const tools = b.host()
+    writeFileSync(join(b.one.folder, "parent.cjs"), `${unmarked("child-pid")}setInterval(()=>{},1000)`)
+    for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? `"${process.execPath}" parent.cjs` : "echo second finished" } }), "A check")
+    await tools.check(b.one.conversation, "quick")
+    await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
+    child = pidIn(b.one.folder, "child-pid")
+    process.kill = (pid, signal) => (pid === child && signal !== 0 ? true : kill(pid, signal))
+    await assert.rejects(b.processes.stop(b.one.environment.app), /after SIGKILL/)
+    await until(() => b.processes.unending().length === 1, "it to be said")
+    assert.equal(slots.reading().holders.length, 1, "its slot stays held")
+    b.wait.ms = 1_000
+    assert.match(await tools.check(b.two.conversation, "quick"), new RegExp(`process ${child} .* won't end`))
+    process.kill = kill
+    await until(() => !alive(child), "it to go once it can be ended")
+    b.wait.ms = 10_000
+    assert.match(await tools.check(b.two.conversation, "quick"), /passed/)
+  } finally {
+    process.kill = kill
+    if (child && alive(child)) process.kill(child, "SIGKILL")
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── A stop that didn't finish, and a host gone: the next host counts what it saw, goes on with it, and frees the slot after.
+{
+  const stoppedOn = new BuildSlots(() => 1)
+  const b = bench("unfinished-stop", () => stoppedOn, 100)
+  const kill = process.kill.bind(process)
+  let child = 0
+  try {
+    const tools = b.host()
+    writeFileSync(join(b.one.folder, "parent.cjs"), `${unmarked("child-pid")}setInterval(()=>{},1000)`)
+    for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? `"${process.execPath}" parent.cjs` : "echo second finished" } }), "A check")
+    await tools.check(b.one.conversation, "quick")
+    await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
+    child = pidIn(b.one.folder, "child-pid")
+    process.kill = (pid, signal) => (pid === child && signal !== 0 ? true : kill(pid, signal))
+    await assert.rejects(b.processes.stop(b.one.environment.app), /after SIGKILL/)
+    const processes = new ThreadProcesses({ root: b.records, listening: portListening, stopGraceMs: 100 })
+    const slots = new BuildSlots(() => 1)
+    const next = b.hostOver(processes, slots)
+    await until(() => slots.reading().holders.length === 1, "what the stop saw to be counted")
+    await until(() => processes.unending().length === 1, "the next host to say it won't end")
+    b.wait.ms = 1_000
+    assert.match(await next.check(b.two.conversation, "quick"), new RegExp(`process ${child} .* won't end`))
+    assert.notEqual((await processes.status(b.two.environment.app)).find((run) => run.name === "quick")?.state.kind, "running", "nothing starts over it")
+    process.kill = kill
+    await until(() => !alive(child), "it to go once it can be ended")
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+    await until(() => !slots.reading().holders.length && !slots.reading().waiting, "the slot to be free")
   } finally {
     process.kill = kill
     if (child && alive(child)) process.kill(child, "SIGKILL")

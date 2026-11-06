@@ -321,8 +321,8 @@ export class ThreadProcesses {
   private readonly exitListeners = new Set<(app: AppKey, key: string) => void>()
   /** By `runTag`: a run's process that SIGKILL didn't end (`unending`). */
   private readonly unended = new Map<string, string>()
-  /** By `runTag`: runs being stopped, whose detached children end with them (`untilGone`). */
-  private readonly stopping = new Set<string>()
+  /** By `runTag`: runs being stopped, whose detached children end with them, with every process seen to be theirs (`stopTree`). */
+  private readonly stopping = new Map<string, Set<string>>()
 
   constructor(dependencies: ThreadProcessDependencies) {
     this.dependencies = dependencies
@@ -380,11 +380,15 @@ export class ThreadProcesses {
     return this.locked(app, async () => {
       const runs = await this.runs(app)
       const chosen = Object.entries(runs).filter(([key]) => !keys || keys.includes(key))
-      for (const [key] of chosen) this.stopping.add(runTag(app, key))
-      const stopping = chosen.map(([key, record]) => stopTree(record, this.graceMs, record.kind === "check" ? (rows) => this.strays(app, key, record, rows) : undefined))
+      const stopping = chosen.map(([key, record]) => {
+        const owned = new Set<string>()
+        this.stopping.set(runTag(app, key), owned)
+        return this.endRun(app, key, record, owned)
+      })
       await Promise.all(stopping).finally(() => this.tableChanged())
       for (const [key] of chosen) {
         this.stopping.delete(runTag(app, key))
+        await rm(this.file(app, key, "stopping"), { force: true })
         delete runs[key]
         await rm(this.file(app, key, "exit"), { force: true })
         await rm(this.file(app, key, "ready"), { force: true })
@@ -616,10 +620,10 @@ export class ThreadProcesses {
    * throws, so an empty answer means nothing runs.
    */
   activeRead(): Promise<ActiveApp[]> {
-    return this.appsRunning(() => readdir(this.dependencies.root).catch(ifMissing([])), (app) => this.runs(app))
+    return this.appsRunning(() => readdir(this.dependencies.root).catch(ifMissing([])), (app) => this.runs(app), (app, key, rows) => this.stillStopping(app, key, rows))
   }
 
-  private async appsRunning(listed: () => Promise<string[]>, runsOf: (app: AppKey) => Promise<Record<string, Run>>): Promise<ActiveApp[]> {
+  private async appsRunning(listed: () => Promise<string[]>, runsOf: (app: AppKey) => Promise<Record<string, Run>>, stopping?: (app: AppKey, key: string, rows: Row[]) => Promise<Row[]>): Promise<ActiveApp[]> {
     const folders = await listed()
     if (!folders.length) return []
     const rows = await this.sharedProcessTable()
@@ -631,8 +635,9 @@ export class ThreadProcesses {
       let memoryBytes = 0
       const alive: ActiveApp["runs"] = []
       const pids: number[] = []
-      for (const record of Object.values(runs)) {
-        const held = this.membersOf(rows, record)
+      for (const [key, record] of Object.entries(runs)) {
+        const tree = this.membersOf(rows, record)
+        const held = tree.length ? tree : await stopping?.(app.data, key, rows) ?? []
         if (!held.length) continue
         alive.push({ kind: record.kind, name: record.name })
         pids.push(...held.map((row) => row.pid))
@@ -1036,27 +1041,55 @@ export class ThreadProcesses {
   /** Until a run the last host left, or one this host started, has nothing left of it (`untilGone`). */
   async whenGone(app: AppKey, key: string): Promise<void> {
     const run = (await this.runs(app))[key]
-    if (run) await this.untilGone(app, key, run)
+    if (!run) return
+    const owned = await this.stoppedBefore(app, key)
+    if (owned) this.stopping.set(runTag(app, key), owned)
+    await this.untilGone(app, key, run)
+  }
+
+  /** What a stop that a host didn't live to finish had seen of a run. */
+  private async stoppedBefore(app: AppKey, key: string): Promise<Set<string> | undefined> {
+    const text = await readFile(this.file(app, key, "stopping"), "utf8").catch(ifMissing(undefined))
+    return text === undefined ? undefined : new Set(z.array(z.string()).parse(JSON.parse(text)))
+  }
+
+  /** The processes such a stop saw that are still alive. */
+  private async stillStopping(app: AppKey, key: string, rows: Row[]): Promise<Row[]> {
+    const owned = await this.stoppedBefore(app, key)
+    return owned ? rows.filter((row) => owned.has(rowIdentity(row))) : []
+  }
+
+  /** Stops a run with all it's seen to own in `owned`, kept beside its record as it grows: for a check, a next host goes on from there. */
+  private endRun(app: AppKey, key: string, run: Run, owned: Set<string>): Promise<void> {
+    if (run.kind !== "check") return stopTree(run, this.graceMs, owned)
+    return stopTree(run, this.graceMs, owned, (rows) => this.strays(app, key, run, rows), async () => {
+      const path = this.file(app, key, "stopping")
+      const temporary = `${path}.${process.pid}.tmp`
+      await writeFile(temporary, JSON.stringify([...owned]), { mode: 0o600 })
+      await rename(temporary, path)
+    })
   }
 
   /**
    * Until a run is over: its tree gone, as a run reads as running while its tree does (`state`), and a look that fails
    * says nothing, so it looks again. A finished check's detached children are left alone: it didn't ask for its daemon
    * to die, and nobody else did. Being stopped is being asked: then nothing of the run is over until its mark finds none
-   * left. One that outlives SIGKILL is said (`unending`) and the wait goes on, since what can't be proved gone keeps its slot.
+   * left, nor any process the stop saw of it, whatever it's become since. One that outlives SIGKILL is said (`unending`)
+   * and the wait goes on, since what can't be proved gone keeps its slot.
    */
   private async untilGone(app: AppKey, key: string, run: Run): Promise<void> {
     const tag = runTag(app, key)
     for (let wait = POLL_MS; ; wait = Math.min(wait * 2, GONE_POLL_MOST_MS)) {
       const rows = await processTable().catch(() => undefined)
       if (rows && !members(rows, run).length) {
-        const left = run.kind === "check" && this.stopping.has(tag) ? await this.strays(app, key, run, rows).catch(() => undefined) : []
+        const owned = run.kind === "check" ? this.stopping.get(tag) : undefined
+        const left = owned ? await this.strays(app, key, run, rows).then((strays) => [...strays, ...rows.filter((row) => owned.has(rowIdentity(row)))], () => undefined) : []
         if (left && !left.length) {
           this.stopping.delete(tag)
           this.unended.delete(tag)
-          return
+          return rm(this.file(app, key, "stopping"), { force: true })
         }
-        if (left) await stopTree(run, this.graceMs, (now) => this.strays(app, key, run, now)).then(
+        if (left && owned) await this.endRun(app, key, run, owned).then(
           () => this.unended.delete(tag),
           () => this.unended.set(tag, `${run.name} check's process ${left[0]!.pid} (${left[0]!.command.slice(0, 80)}) won't end`),
         )
@@ -1097,6 +1130,7 @@ export class ThreadProcesses {
     this.tableChanged()
     const key = runKey(spec.kind, spec.name)
     this.stopping.delete(runTag(app, key))
+    await rm(this.file(app, key, "stopping"), { force: true })
     const log = this.file(app, key, "log")
     const exit = this.file(app, key, "exit")
     await rm(exit, { force: true })
@@ -1209,7 +1243,7 @@ export class ThreadProcesses {
   }
 
   /** `steps` is the folder a check run of steps keeps each step's records in. */
-  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready" | "unready" | "steps"): string {
+  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready" | "unready" | "steps" | "stopping"): string {
     if (!/^(process|check|prepare)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
     return join(this.folder(app), `${key}.${extension}`)
   }
@@ -1331,6 +1365,9 @@ export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: num
 }
 
 /** Every process on the machine, with when it started; `ps` is on macOS and Linux alike. */
+/** A process and no later one with its pid. */
+const rowIdentity = (row: Row) => `${row.pid}:${row.startedMs}`
+
 /** What a run's processes carry in `RUN_KEY_MARK`. */
 const runTag = (app: AppKey, key: string) => `${app}/${key}`
 
@@ -1406,14 +1443,15 @@ class TableIndex {
 }
 
 /**
- * SIGTERM, then after `graceMs` SIGKILL, to a run's tree and `more`, each process held by its identity from the moment
- * it's seen: a child that leaves the tree by being reparented is still the run's. Throws if any outlives SIGKILL.
+ * SIGTERM, then after `graceMs` SIGKILL, to a run's tree and `more`, each process held in `owned` by its identity from
+ * the moment it's seen, and `kept` before it's signalled: one that leaves the tree or loses its mark is still the run's.
+ * Throws if any outlives SIGKILL.
  */
-async function stopTree(record: Run, graceMs: number, more?: (rows: Row[]) => Promise<Row[]>): Promise<void> {
+async function stopTree(record: Run, graceMs: number, owned: Set<string>, more?: (rows: Row[]) => Promise<Row[]>, kept?: () => Promise<void>): Promise<void> {
   const signaled = new Set<string>()
   const send = (rows: Row[], signal: NodeJS.Signals) => {
     for (const row of rows) {
-      const identity = `${row.pid}:${row.startedMs}`
+      const identity = rowIdentity(row)
       if (signal === "SIGTERM" && signaled.has(identity)) continue
       signaled.add(identity)
       try {
@@ -1423,12 +1461,12 @@ async function stopTree(record: Run, graceMs: number, more?: (rows: Row[]) => Pr
       }
     }
   }
-  const known = new Map<string, Row>()
   const look = async () => {
     const rows = await processTable()
-    for (const row of [...members(rows, record), ...await more?.(rows) ?? []]) known.set(`${row.pid}:${row.startedMs}`, row)
-    const alive = new Set(rows.map((row) => `${row.pid}:${row.startedMs}`))
-    return [...known].filter(([identity]) => alive.has(identity)).map(([, row]) => row)
+    const known = owned.size
+    for (const row of [...members(rows, record), ...await more?.(rows) ?? []]) owned.add(rowIdentity(row))
+    if (owned.size > known) await kept?.()
+    return rows.filter((row) => owned.has(rowIdentity(row)))
   }
   let rows = await look()
   send(rows, "SIGTERM")
