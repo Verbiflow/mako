@@ -11,7 +11,7 @@ export interface AutomationToolDeps {
   conversationOf(session: string): string | undefined
   tier(conversationId: string): AccessTier | undefined
   /** A host call through the table every client calls, decoded: each as Settings › Automations makes it. */
-  invoke(channel: "mako:automations" | "mako:run-automation" | "mako:automation-enabled", args: unknown[]): Promise<JsonValue>
+  invoke(channel: "mako:automations" | "mako:run-automation" | "mako:automation-enabled", args: unknown[]): Promise<JsonValue | undefined>
   gate: AgentAskGate
 }
 
@@ -28,7 +28,7 @@ export class AutomationTool {
   }
 
   async act(caller: AgentCaller, input: AutomationActInput): Promise<AutomationActResult> {
-    if (input.action === "list") return this.#deps.invoke("mako:automations", []).then((automations): AutomationActResult => ({ outcome: "listed", automations }), (error: Error) => ({ refused: "failed", why: error.message }))
+    if (input.action === "list") return this.#deps.invoke("mako:automations", []).then((automations): AutomationActResult => ({ outcome: "listed", automations: automations ?? [] }), (error: Error) => ({ refused: "failed", why: error.message }))
     const own = caller.kind === "agent" ? this.#deps.conversationOf(caller.session) : undefined
     if (caller.kind === "agent" && !own) return { refused: "no-thread", why: "No conversation here has that Session. Call it from a Thread's mako tools, or its shell, where MAKO_SESSION_ID names it." }
     if (!input.id) return { refused: "no-automation", why: "Name the automation: list gives each one's id." }
