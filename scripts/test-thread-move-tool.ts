@@ -178,7 +178,13 @@ function world(conversations: Record<string, Conversation>, options: { refusal?:
   const signedOut = world({ g: { session: "s-g", place: "here", tier: "full" } }, { signedOut: true })
   assert.equal(refusalOf(await signedOut.tool.move(agent("s-g"), { to: "cloud", clientKey: "k" })), "unavailable")
   const machine = world({ h: { session: "s-h", place: "here", tier: "full" } }, { machine: true })
-  assert.equal(refusalOf(await machine.tool.move(agent("s-h"), { to: "back", clientKey: "k" })), "from-the-mac", "a cloud Thread is brought back from its Mac")
+  const back = await machine.tool.move(agent("s-h"), { to: "back", clientKey: "k" })
+  assert.equal("outcome" in back && back.outcome, "asked", "a cloud Thread's agent asks, on any access: its machine can't reach its Mac")
+  assert.deepEqual(machine.kept.get("h")?.map((ask) => ask.want), [{ kind: "back" }])
+  assert.deepEqual(machine.calls, [], "nothing moves on the agent's word alone")
+  await machine.tool.move(agent("s-h"), { to: "back", clientKey: "k2" })
+  assert.equal(machine.kept.get("h")?.length, 1, "asked once")
+  assert.equal(refusalOf(await machine.tool.move(agent("nobody"), { to: "back", clientKey: "k" })), "from-the-mac")
   assert.equal(refusalOf(await machine.tool.move(agent("s-h"), { to: "cloud", clientKey: "k" })), "already-there")
 }
 

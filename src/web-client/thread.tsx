@@ -21,7 +21,7 @@ import { ContinueOffer, ContinueSheet } from "./continue-cloud"
 import { startContinue, useContinueChoice } from "./continue-actions"
 import { startMove, type MoveMac } from "./move-actions"
 import type { MoveWay } from "./move-progress"
-import { listedMove, useMoves } from "./moves"
+import { askBringBack, listedMove, useBringBackAsked, useMoves } from "./moves"
 import { StartSheet, type AddingTo } from "./new-thread"
 import { PreviewSheet, ServerCard } from "./preview"
 import { appKey, appShownAs, askPreview, loopbackTarget, useApps, useThreadApp } from "./previews"
@@ -313,6 +313,9 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [asking, setAsking] = useState<MoveWay | undefined>(undefined)
   const [continuing, setContinuing] = useState(false)
+  // The person allowed its agent's ask to come back: the sheet that picks the Mac, as the menu's Bring it back opens.
+  const backAsked = useBringBackAsked((state) => state.conversation === session.row.conversation)
+  const way = backAsked ? "device" : asking
   const choice = useContinueChoice(session.quietSince ? session : undefined)
   const offered = choice?.offer && cloudOn(client.account.entitlements) && !moving ? choice : undefined
   const onMac = session.owner.kind === "device" && !session.quietSince ? session.owner : undefined
@@ -326,8 +329,8 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   })
   const working = liveWorking || session.row.state === "working"
   const move = (mac: MoveMac) => {
-    const way = asking
     setAsking(undefined)
+    askBringBack(undefined)
     if (way) void startMove(client, { thread, conversation: session.row.conversation, way, mac, handOff: working })
   }
   if (busy)
@@ -400,7 +403,17 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
           </MenuItem>
         </MenuContent>
       </Menu>
-      <MoveSheet open={asking !== undefined} way={asking ?? "cloud"} working={working} from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined} onDismiss={() => setAsking(undefined)} onMove={move} />
+      <MoveSheet
+        open={way !== undefined}
+        way={way ?? "cloud"}
+        working={working}
+        from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined}
+        onDismiss={() => {
+          setAsking(undefined)
+          askBringBack(undefined)
+        }}
+        onMove={move}
+      />
       {offered ? (
         <ContinueSheet
           open={continuing}

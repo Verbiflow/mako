@@ -4,6 +4,7 @@ import { useHarnessLabels } from "@/lib/harness-label"
 import type { ComposerNotice } from "@/extend/notices"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { agentAskOf, answerAgentAsk } from "@/state/agent-asks"
+import { bringBack } from "@/state/cloud-moves"
 
 /**
  * What the agent on screen asked below full access through Mako's tools, read from its conversation, so every window
@@ -24,7 +25,14 @@ export function useAgentAskNotice(): ComposerNotice | null {
     description: words.description,
     detail: <p>{words.detail}</p>,
     actions: [
-      { label: words.allow, primary: true, onClick: () => void answerAgentAsk(live.key, ask, true) },
+      {
+        label: words.allow,
+        primary: true,
+        onClick: () =>
+          void answerAgentAsk(live.key, ask, true).then((answered) => {
+            if (answered && ask.want.kind === "back") return bringBack(live.key)
+          }),
+      },
       { label: words.keep, onClick: () => void answerAgentAsk(live.key, ask, false) },
     ],
     data: { "data-agent-ask": ask.want.kind },
