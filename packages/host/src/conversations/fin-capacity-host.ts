@@ -6,6 +6,9 @@ import type { FinCostModel } from "./fin-cost.js"
 import type { FinAtWork, FinCostReading } from "./fin-cost-sampler.js"
 import { DISK_FREE_LEAST, SWAP_FREE_LEAST, type MacReading } from "./mac-capacity.js"
 
+/** How long a reading of what Fins took stands when none comes after it: a few of the engine's looks. It says nothing of now past that. */
+const FIN_CORES_FRESH_MS = 30_000
+
 export interface FinCapacityDeps {
   /** This machine's load and pressure (`MacCapacity`). */
   read(): Promise<MacReading>
@@ -15,7 +18,7 @@ export interface FinCapacityDeps {
   /** `MAKO_FIN_SLOTS`: a test's host sets the number whatever the machine. */
   fixed?: number
   /** What each Fin at work here costs, read from its processes (`FinCostSampler`); the cost model learns from it. */
-  sampler?: { sample(fins: readonly FinAtWork[]): Promise<FinCostReading[]> }
+  sampler?: { sample(fins: readonly FinAtWork[]): Promise<FinCostReading[] | undefined> }
   hardware?(): FinHardware
   now?(): number
 }
@@ -29,8 +32,8 @@ export class FinCapacity {
   readonly #deps: FinCapacityDeps
   readonly #governor = new CapacityGovernor()
   #mix: Record<string, number> = {}
-  /** The cores the Fins at work took at the last reading of their processes (`sampler`). */
-  #finCores = 0
+  /** The cores the Fins at work took at the last reading of their processes (`sampler`), and when it was read. */
+  #finCores = { cores: 0, at: 0 }
   #pressure: string | undefined
   #allowed: number | undefined
   readonly #listeners = new Set<() => void>()
@@ -44,12 +47,13 @@ export class FinCapacity {
     const before = this.atOnce()
     this.#mix = { ...mix }
     if (fins && this.#deps.sampler) {
-      const readings = await this.#deps.sampler.sample(fins).catch(() => [])
-      for (const reading of readings) this.#deps.costs.add(reading)
-      if (readings.length) this.#finCores = readings.reduce((sum, reading) => sum + reading.cores, 0)
+      const readings = await this.#deps.sampler.sample(fins).catch(() => undefined)
+      for (const reading of readings ?? []) this.#deps.costs.add(reading)
+      if (readings) this.#finCores = { cores: readings.reduce((sum, reading) => sum + reading.cores, 0), at: this.#now() }
     }
     const reading = await this.#deps.read().catch(() => undefined)
-    if (reading) this.#governor.read(this.#now(), pressureOf(reading, working ? this.#finCores : 0, this.#hardware()))
+    const finCores = working && this.#now() - this.#finCores.at < FIN_CORES_FRESH_MS ? this.#finCores.cores : 0
+    if (reading) this.#governor.read(this.#now(), pressureOf(reading, finCores, this.#hardware()))
     this.#deps.costs.save()
     this.#allow()
     if (this.atOnce() > before) this.changed()

@@ -103,6 +103,55 @@ const GB = 1024 ** 3
     for (; at < 30 * 60_000; at += 10_000) await capacity.observe(8, { claude: 8 }, fins)
     assert.equal(/your own work is busy/.test(capacity.reading().pressure ?? ""), pressed, `8 Fins taking ${each} core each on a full Mac`)
   }
+  // A Fin measured filling the Mac has gone, a shell-linked one holds its place, and other work fills the Mac: what the
+  // gone one took doesn't excuse it, whether the next look read no Fins at work or could read nothing.
+  for (const after of ["gone", "unreadable"] as const) {
+    let at = 0
+    let gone = false
+    const fin = [{ conversation: "fin", harness: "claude" }]
+    const capacity = new FinCapacity({
+      read: async () => reading({ busyCores: 14 }),
+      costs: new FinCostModel(),
+      sampler: new FinCostSampler({
+        table: async () => {
+          if (gone && after === "unreadable") throw new Error("ps failed")
+          return [{ pid: 10, ppid: 1, rssKb: 1024, cpuPercent: 0, cpuSeconds: (14 * at) / 1000, command: "/opt/claude/claude" }]
+        },
+        owned: () => gone ? [] : [{ pid: 10, owner: "fin" }],
+        now: () => at,
+      }),
+      own: () => undefined,
+      hardware: () => hardware,
+      now: () => at,
+    })
+    for (; at < 60_000; at += 10_000) await capacity.observe(1, { claude: 1 }, fin)
+    assert.equal(capacity.reading().pressure, undefined, "while it fills the Mac, nothing presses")
+    gone = true
+    for (; at < 31 * 60_000; at += 10_000) await capacity.observe(1, { claude: 1 }, fin)
+    assert.match(capacity.reading().pressure ?? "", /your own work is busy/, `the Fin's cores don't outlast it: ${after}`)
+  }
+  // A look that measures nothing keeps the last reading while it's fresh: a window too short says nothing of the Fins.
+  {
+    let at = 0
+    const fin = [{ conversation: "fin", harness: "claude" }]
+    const capacity = new FinCapacity({
+      read: async () => reading({ busyCores: 14 }),
+      costs: new FinCostModel(),
+      sampler: new FinCostSampler({
+        table: async () => [{ pid: 10, ppid: 1, rssKb: 1024, cpuPercent: 0, cpuSeconds: (14 * at) / 1000, command: "/opt/claude/claude" }],
+        owned: () => [{ pid: 10, owner: "fin" }],
+        now: () => at,
+      }),
+      own: () => undefined,
+      hardware: () => hardware,
+      now: () => at,
+    })
+    for (; at < 15 * 60_000; at += 10_000) {
+      await capacity.observe(1, { claude: 1 }, fin)
+      await capacity.observe(1, { claude: 1 }, fin)
+    }
+    assert.equal(capacity.reading().pressure, undefined, "a second look at once doesn't forget what the Fin took")
+  }
   // What capacity reads over minutes of that Mac: nothing presses, so the number stays the machine's own.
   {
     let at = 0
