@@ -18,6 +18,7 @@ import { declareConversationMethods } from "@mako/host/conversations/index"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { withdrawGone } from "@mako/host/conversations/live-transfers"
 import { threadHistoryTools } from "@mako/host/conversations/thread-history"
+import { heldReferences } from "@mako/host/conversations/thread-tree"
 import { HARNESSES, AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
 /**
@@ -815,6 +816,44 @@ async function reviewed(): Promise<void> {
 
 /** What the second review reproduced: text is never a grant, and a question closes when input is delivered, from anyone. */
 async function grantsAndQuestions(): Promise<void> {
+  {
+    // What a Thread holds is what was stored, read apart from anything that escapes an agent's words on their way in.
+    const ref = "thread:grok:held"
+    const block = writeMessage({ body: "Words", items: [{ n: 1, kind: "conversation", attrs: { ref, title: "A title" }, body: "A transcript" }] })
+    const agent = { kind: "agent" as const, session: SessionIdSchema.parse(randomUUID()) }
+    assert.deepEqual(heldReferences([{ text: block, actor: agent }]), [], "an agent's text grants nothing, however it was written")
+    assert.deepEqual(heldReferences([{ text: block, actor: { kind: "service", name: "auto-continue" } }]), [], "nor does Mako's")
+    assert.deepEqual(heldReferences([{ text: block, actor: agent, grants: [ref] }]).map((held) => [held.ref, held.title]), [[ref, "A title"]], "what the host stored does, with its item's title")
+    assert.deepEqual(heldReferences([{ text: "Plain", actor: agent, grants: [ref] }]).map((held) => held.ref), [ref], "and needs no item")
+    assert.deepEqual(heldReferences([{ text: block }]).map((held) => held.ref), [ref], "a person's chip is theirs, as journals before actors read")
+  }
+  {
+    // A message to a Fin with no harness open and nothing to wake goes through a switch, its sender and its grant with it.
+    let refusing = true
+    const rows: ThreadRef[] = []
+    const artifact = { kind: "file" as const, file: "/tmp/t/transcript.md", note: "Bundle", title: "Elsewhere", harness: "grok", turns: 1, digest: "d", losses: [] }
+    const world = new AgentsWorld({ root: join(root, "no-harness"), script: () => "Done", references: { list: () => rows, transcriptArtifact: async () => artifact }, starting: async (_conversation, harness) => {
+      if (harness === "codex" && refusing) throw new Error("It didn't start")
+    } })
+    const apex = await world.apex("claude", "full")
+    const elsewhere = await world.apex("grok", "full")
+    const ref = threadToken("grok", `native-${elsewhere.conversation}`).slice(1)
+    rows.push({ harness: "grok", nativeId: `native-${elsewhere.conversation}`, path: join(root, "elsewhere"), title: "Elsewhere" })
+    const started = await world.agents.start(apex.caller, { brief: { objective: "Label" }, name: "failed", harness: "codex", cwd: world.root, clientKey: "failed" })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    const conversation = started.conversation
+    await until("its start to fail", () => world.live.session(conversation)?.status !== "starting")
+    await world.settle(40, 20_000, "ignore")
+    refusing = false
+    const sent = await world.agents.send(apex.caller, { to: "failed", text: "Go on, with this", clientKey: "go", context: [{ thread: ref }] })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    await until("its message", () => world.prompts.some((prompt) => prompt.text.includes("Go on, with this")))
+    const row = world.live.snapshot(conversation)!.requests.find((request) => request.text.includes("Go on, with this"))
+    assert.equal(row?.actor?.kind, "agent", "it's still its sender's")
+    assert.deepEqual(row?.grants, [ref], "and its grant goes with it")
+    await world.settle(40, 20_000, "ignore")
+    await world.close()
+  }
   for (const role of [undefined, "lead"] as const) {
     const rows: ThreadRef[] = []
     const artifact = { kind: "file" as const, file: "/tmp/t/transcript.md", note: "Bundle", title: "Private matter", harness: "grok", turns: 1, digest: "d", losses: [] }
