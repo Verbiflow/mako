@@ -3,7 +3,10 @@ import { Slot } from "@/extend/slot"
 import { useSession } from "@/state/session"
 import { HotIndicator } from "@/components/shell/hot-indicator"
 import { updates, useUpdates } from "@/state/updates"
-import { ArrowUpCircleIcon, PlugZapIcon } from "lucide-react"
+import { keepAwake, useKeepAwake } from "@/state/keep-awake"
+import { cn } from "@/lib/utils"
+import { useEffect } from "react"
+import { ArrowUpCircleIcon, BatteryLowIcon, CoffeeIcon, PlugZapIcon } from "lucide-react"
 
 /**
  * What is wrong, in the titlebar's right cluster — and nothing else.
@@ -21,6 +24,7 @@ export function TitleBarStatus() {
     <div className="mr-1 flex min-w-0 items-center gap-2 text-label text-faint">
       <ConnectionPill />
       <HotIndicator />
+      <KeepAwakePill />
       <UpdatePill />
       <Slot name="titlebar.status" meta={undefined} />
     </div>
@@ -67,6 +71,41 @@ function UpdatePill() {
     >
       <ArrowUpCircleIcon className="size-3" />
       <span>Update ready</span>
+    </button>
+  )
+}
+
+/**
+ * This Mac kept awake while its agents work, said quietly: a glyph and a word while it holds, the count and what a
+ * closed lid does in its tooltip, since the rail already shows who works. A battery too low to hold on is news, so it
+ * says so in words. Nothing while nothing works. Opens the setting.
+ */
+function KeepAwakePill() {
+  const hold = useKeepAwake((store) => store.state?.hold)
+  useEffect(() => {
+    void keepAwake.load()
+  }, [])
+  if (!hold || hold.kind === "rest") return null
+  const agents = `${hold.agents} ${hold.agents === 1 ? "agent" : "agents"} working`
+  const low = hold.kind === "low-battery"
+  const title = low
+    ? `Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep, which pauses the ${agents}.`
+    : `Keeping this Mac awake: ${agents}. ${hold.kind === "lid" ? "It stays awake with the lid closed while on power." : "Closing the lid still puts it to sleep."}`
+  const Icon = low ? BatteryLowIcon : CoffeeIcon
+  return (
+    <button
+      type="button"
+      onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "transcript" }))}
+      title={title}
+      aria-label={title}
+      data-keep-awake={hold.kind}
+      className={cn(
+        "no-drag flex items-center gap-1 rounded px-1.5 transition-colors duration-100",
+        low ? "text-caution hover:bg-caution/10" : "hover:bg-fill-hover hover:text-foreground"
+      )}
+    >
+      <Icon className="size-3" />
+      <span>{low ? `Battery ${hold.percent}%: may sleep` : "Kept awake"}</span>
     </button>
   )
 }

@@ -133,6 +133,8 @@ export type WorkingSources = {
   threads: { journalPlacement(conversationId: string): ThreadPlacement | undefined; execution(session: SessionId): Pick<SessionExecution, "state"> | undefined } | undefined
   /** Whether a conversation runs on a cloud machine already (`CloudConversations.has`). */
   cloud(conversationId: string): boolean
+  /** Whether an approval or a question waiting on the person counts as at work: it does by default (a handoff takes it). */
+  asking?: boolean
 }
 
 /**
@@ -153,7 +155,7 @@ export function workingThreads(sources: WorkingSources): WorkingThread[] {
     const snapshot = sources.live.snapshot(id)
     if (!snapshot) continue
     const running = snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")
-    const working = running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
+    const working = running || (sources.asking !== false && snapshot.permissions.length > 0) || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
     if (!working) continue
     const known = byThread.get(placed.thread)
     if (known && (known.running || !running)) continue

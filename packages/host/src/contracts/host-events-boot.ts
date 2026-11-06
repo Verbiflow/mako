@@ -159,6 +159,8 @@ export type HostEventBody =
   | { type: "cloud-turn-on"; turnOn: import("./cloud-turn-on.js").CloudTurnOn }
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
+  /** Keeping this Mac awake while agents work: the person's choice, or what's held, changed (`KeepAwake`). */
+  | { type: "keep-awake"; state: import("./keep-awake.js").KeepAwakeState }
   /** The person's conversation settings changed (`ConversationSettings`). */
   | { type: "conversation-settings"; settings: import("./turn-continuation.js").ConversationSettings }
   /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */

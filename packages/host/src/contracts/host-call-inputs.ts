@@ -319,7 +319,6 @@ const inputs = {
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
   "mako:build-update": () => z.tuple([]),
-  "mako:measure-update-again": () => z.tuple([]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -533,6 +532,14 @@ const inputs = {
   "mako:install-update": () => z.tuple([]),
   "mako:installation-state": () => z.tuple([]),
   "mako:integrations": () => z.tuple([]),
+  "mako:keep-awake": () => z.tuple([]),
+  "mako:keep-awake-set": () =>
+    z.tuple([
+      z.object({
+        on: z.boolean().optional(),
+        lidClosed: z.boolean().optional(),
+      }),
+    ]),
   "mako:launch-prewarm": () => z.tuple([z.string()]),
   "mako:lifecycle-command": () =>
     z.tuple([
@@ -1132,6 +1139,7 @@ const inputs = {
         scope: z.union([z.literal("workspace"), z.literal("user")]),
       }),
     ]),
+  "mako:measure-update-again": () => z.tuple([]),
   "mako:merge-pull": () =>
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
@@ -2095,7 +2103,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:browser-control-status", "control"],
   ["mako:browser-extension-setup", "control"],
   ["mako:build-update", "application"],
-  ["mako:measure-update-again", "application"],
   ["mako:capabilities", "workspaces"],
   ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
@@ -2198,6 +2205,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:install-update", "application"],
   ["mako:installation-state", "application"],
   ["mako:integrations", "tools"],
+  ["mako:keep-awake", "conversations"],
+  ["mako:keep-awake-set", "conversations"],
   ["mako:launch-prewarm", "tools"],
   ["mako:lifecycle-command", "application"],
   ["mako:lifecycle-state", "application"],
@@ -2254,6 +2263,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-discover", "tools"],
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
+  ["mako:measure-update-again", "application"],
   ["mako:merge-pull", "git"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],

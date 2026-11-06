@@ -2,6 +2,8 @@ import { useEffect } from "react"
 import { ListCard, SettingRow, Toggle } from "@/components/ui/kit"
 import { conversationSettings, useConversationSettings } from "@/state/conversation-settings"
 import { togglePref, usePrefs } from "@/state/prefs"
+import { keepAwake, useKeepAwake } from "@/state/keep-awake"
+import { KEEP_AWAKE_BATTERY_FLOOR } from "@mako/host/contracts/keep-awake"
 
 export function ConversationSection() {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
@@ -12,6 +14,13 @@ export function ConversationSection() {
     void conversationSettings.load()
   }, [])
   const continueAfterRestart = settings?.continueAfterRestart ?? false
+  const awake = useKeepAwake((store) => store.state)
+  useEffect(() => {
+    void keepAwake.load()
+  }, [])
+  const awakeOn = awake?.settings.on ?? false
+  const awakeLid = awake?.settings.lidClosed ?? false
+  const awakeOff = !awake || awake.unavailable !== undefined
 
   return (
     <ListCard>
@@ -34,6 +43,28 @@ export function ConversationSection() {
           on={continueAfterRestart}
           disabled={!settings}
           onChange={() => void conversationSettings.set({ continueAfterRestart: !continueAfterRestart })}
+        />
+      </SettingRow>
+      <SettingRow
+        title="Keep this Mac awake while agents work"
+        description={awake?.unavailable ?? `Idle sleep waits while any agent here works or runs a command, and resumes the moment none does. Below ${KEEP_AWAKE_BATTERY_FLOOR}% battery, Mako lets the Mac sleep and says so`}
+      >
+        <Toggle
+          label="Keep this Mac awake while agents work"
+          on={awakeOn && !awakeOff}
+          disabled={awakeOff}
+          onChange={() => void keepAwake.set({ on: !awakeOn })}
+        />
+      </SettingRow>
+      <SettingRow
+        title="Even with the lid closed"
+        description="On power only. Off, closing the lid sleeps the Mac as usual"
+      >
+        <Toggle
+          label="Keep this Mac awake with the lid closed"
+          on={awakeOn && awakeLid && !awakeOff}
+          disabled={awakeOff || !awakeOn}
+          onChange={() => void keepAwake.set({ lidClosed: !awakeLid })}
         />
       </SettingRow>
       <SettingRow
