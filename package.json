@@ -282,6 +282,7 @@
     "test:agents-migrate": "tsx scripts/test-agents-migrate.ts",
     "test:agents-cli": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-cli.ts",
     "test:thread-move-tool": "npm run -s build --workspace @mako/client && tsx scripts/test-thread-move-tool.ts",
+    "test:thread-act-tool": "tsx scripts/test-thread-act-tool.ts",
     "test:orch-update": "tsx scripts/test-orch-update.ts",
     "test:orch-crash": "tsx scripts/test-orch-crash.ts",
     "test:orch-recovery": "tsx scripts/test-orch-recovery.ts",

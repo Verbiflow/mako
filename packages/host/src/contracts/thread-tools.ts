@@ -43,14 +43,36 @@ export type ThreadsMoveResult =
   | { outcome: "kept-here" | "stayed" | "failed" | "unsettled"; reason: string }
   | ThreadMoveRefused
 
-/** What the MCP door shows the model of the operation; its input schema is the host call's. */
+/** What the app does to a Thread from its menu, for `thread`. */
+export type ThreadAction = "rename" | "archive" | "restore"
+
+export interface ThreadActInput {
+  action: ThreadAction
+  /** Rename: the new title. */
+  title?: string
+  /** The person's own call only (a shell outside any Thread): the conversation whose Thread it is. An agent acts on its own. */
+  conversation?: string
+  /** The caller's own key for this: a repeat with it is the same action. */
+  clientKey: string
+}
+
+export type ThreadActRefusal = "unavailable" | "no-thread" | "not-yours" | "no-title" | "failed"
+
+export type ThreadActResult =
+  | { outcome: "renamed"; title: string }
+  | { outcome: "archived"; next: string }
+  | { outcome: "restored" }
+  | { outcome: "asked"; ask: string; next: string }
+  | { refused: ThreadActRefusal; why: string }
+
+/** What the MCP door shows the model of an operation; its input schema is the host call's. */
 export interface ThreadToolDefinition {
-  channel: "mako:threads-move"
+  channel: "mako:threads-move" | "mako:threads-act"
   replay: HostCallReplay
   /** Inputs the MCP door leaves out: an agent moves its own Thread. */
   filled: readonly "conversation"[]
   mcp: {
-    name: "thread_move"
+    name: string
     description: string
     fields: Readonly<Record<string, string>>
     annotations: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }
@@ -76,6 +98,31 @@ export const THREAD_MOVE_TOOL: ThreadToolDefinition = {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
 }
+
+export const THREAD_ACT_TOOL: ThreadToolDefinition = {
+  channel: "mako:threads-act",
+  replay: "replay",
+  filled: ["conversation"],
+  mcp: {
+    name: "thread",
+    description: "Rename, Archive or Restore this Thread, as its menu does in the app. Call it when the person asks, or to give this Thread the title its work earned. On full access it happens now; on other access Mako asks the person first. Archive once the work is finished: it leaves the list, and a turn still running stops.",
+    fields: {
+      action: "rename, archive or restore.",
+      title: "rename: the new title.",
+      clientKey: "Your own key for this: a repeat with it is the same action.",
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+}
+
+/** Every tool on a `mako` server that acts for the person through one host call. */
+export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL]
+
+/** What an answer tells an agent to do next. */
+export const AFTER_ACT = {
+  asked: "Asked the person: their answer is in a card above the composer. Keep working; it happens once they allow it.",
+  archived: "Archived. If your work is done, end your turn: the Thread stays archived until the person restores it.",
+} as const
 
 /** What a move's answer tells an agent to do next. */
 export const AFTER_MOVE = {

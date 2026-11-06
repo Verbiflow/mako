@@ -8,6 +8,10 @@ import { z } from "zod"
 export const AgentAskWantSchema = z.discriminatedUnion("kind", [
   /** Move to the cloud. `handsOff`: its Thread works in its own worktree; otherwise it goes onto its own branch first, once its turns end. */
   z.object({ kind: z.literal("move"), move: z.string(), handsOff: z.boolean() }),
+  /** Rename, Archive and Restore on the Thread's menu. `op`: the operation the answer runs under. */
+  z.object({ kind: z.literal("rename"), op: z.string(), title: z.string() }),
+  z.object({ kind: z.literal("archive"), op: z.string() }),
+  z.object({ kind: z.literal("restore"), op: z.string() }),
 ])
 export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 
@@ -19,6 +23,12 @@ export function agentAskLine(want: AgentAskWant): string {
   switch (want.kind) {
     case "move":
       return "Wants to move this thread to the cloud"
+    case "rename":
+      return `Wants to rename this thread to ${want.title}`
+    case "archive":
+      return "Wants to archive this thread"
+    case "restore":
+      return "Wants to restore this thread"
   }
 }
 
@@ -32,13 +42,23 @@ export interface AgentAskWords {
 }
 
 export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
-  return {
-    title: `${name} ${agentAskLine(want).toLowerCase()}`,
-    description: want.handsOff ? "with its worktree, branch and sessions" : "onto its own branch first, then the cloud",
-    detail: want.handsOff
-      ? "Its worktree, branch and every session go to a cloud machine. A turn still running pauses here and goes on there."
-      : "Only its own changes leave the project folder for a new branch, once this turn ends; then it moves to a cloud machine.",
-    allow: "Move to the cloud",
-    keep: "Keep here",
+  const title = `${name} ${agentAskLine(want).replace(/^W/, "w")}`
+  switch (want.kind) {
+    case "move":
+      return {
+        title,
+        description: want.handsOff ? "with its worktree, branch and sessions" : "onto its own branch first, then the cloud",
+        detail: want.handsOff
+          ? "Its worktree, branch and every session go to a cloud machine. A turn still running pauses here and goes on there."
+          : "Only its own changes leave the project folder for a new branch, once this turn ends; then it moves to a cloud machine.",
+        allow: "Move to the cloud",
+        keep: "Keep here",
+      }
+    case "rename":
+      return { title, description: "its title in the list", detail: "The title it shows everywhere; the agent's work goes on as it is.", allow: "Rename", keep: "Keep this title" }
+    case "archive":
+      return { title, description: "out of the list", detail: "It leaves the list, and a turn still running stops. Restore brings it back.", allow: "Archive", keep: "Keep it" }
+    case "restore":
+      return { title, description: "back in the list", detail: "It comes back to the list as it was.", allow: "Restore", keep: "Leave it archived" }
   }
 }

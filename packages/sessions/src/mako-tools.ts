@@ -68,6 +68,14 @@ const verb = (base: string, running: string, done: string): Verb => [base, runni
 const START = verb("Start", "Starting", "Started")
 const READ = verb("Read", "Reading", "Read")
 const MOVE = verb("Move", "Moving", "Moved")
+
+/** `thread`, by its action, in the words of the Thread's menu. */
+function threadWords(args: Fields): Said {
+  if (args.action === "archive") return { verb: verb("Archive", "Archiving", "Archived"), what: "this Thread" }
+  if (args.action === "restore") return { verb: verb("Restore", "Restoring", "Restored"), what: "this Thread" }
+  const title = typeof args.title === "string" ? firstWords(args.title) : undefined
+  return { verb: verb("Rename", "Renaming", "Renamed"), what: title ? `this Thread to ${title}` : "this Thread" }
+}
 const MERGE = verb("Merge", "Merging", "Merged")
 const OPEN = verb("Open", "Opening", "Opened")
 const STOP = verb("Stop", "Stopping", "Stopped")
@@ -326,6 +334,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["app_own_packages", { group: "app", say: () => ({ verb: verb("Unlink", "Unlinking", "Unlinked"), what: "packages" }) }],
   ["port_holder", { group: "port", say: ({ args }) => ({ verb: CHECK, what: text(args["port"]) ? `port ${text(args["port"])}` : "a port" }) }],
   ["thread_move", { group: "cloud", say: () => ({ verb: MOVE, what: "this Thread to the cloud" }) }],
+  ["thread", { group: "cloud", say: ({ args }) => threadWords(args) }],
 ])
 
 /** The worktree tools' earlier names, in saved history. */
