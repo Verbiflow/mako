@@ -190,8 +190,8 @@ try {
       const answered = performance.now() - sent
       assert.equal(receipt.state.kind, "accepted")
       assert.deepEqual(w.steers, [words], "Cursor's own steer is tried first")
-      assert.ok(answered >= STEER_LANDS_MS - 5, `Cursor had its second to confirm (answered in ${Math.round(answered)} ms)`)
-      assert.deepEqual(waits.filter((ms) => ms >= STEER_LANDS_MS), [STEER_LANDS_MS], "the wait for Cursor's confirmation is the landing's second, and the receipt comes when it runs out")
+      assert.ok(answered >= 995, `Cursor had its second to confirm (answered in ${Math.round(answered)} ms)`)
+      assert.deepEqual(waits.filter((ms) => ms >= 1_000), [1_000], "the wait for Cursor's confirmation is the landing's second, and the receipt comes when it runs out")
       await until("the message reaching the agent", () => w.prompts.length === 2)
       assert.equal(w.cancels, 1, "it reached the agent through Mako's stop, not at the turn's end")
       assert.ok(w.prompts[1]!.text.endsWith(words))

@@ -167,22 +167,32 @@ try {
   const heldScript = join(fake, "held")
   await write(heldScript, `#!/bin/sh\nsh -c 'echo $$ > "${held}"; while :; do sleep 1; done' > /dev/null 2>&1 &\nsleep 2\n`)
   await chmod(heldScript, 0o755)
-  let member
-  process.kill = (target, signal) => {
-    if (target >= 0) return realKill.call(process, target, signal)
-    throw Object.assign(new Error("kill EPERM"), { code: "EPERM" })
-  }
-  try {
-    const stop = new AbortController()
-    const running = runProcessGroup(heldScript, [], { cwd: root, env: process.env, stdio: "pipe", signal: stop.signal, graceMs: 100 })
-    await until(() => readFile(held, "utf8").then(Boolean, () => false), "the held member to start")
-    member = Number(await readFile(held, "utf8"))
-    stop.abort()
-    await assert.rejects(running, { code: "EPERM" }, "a live member it can't signal is no end of the step")
-    assert.equal(gone(member), false, "and it was still alive")
-  } finally {
-    process.kill = realKill
-    if (member) realKill.call(process, member, "SIGKILL")
+  // Every way of that: refused every signal, refused its stops with looks allowed, and killed to no effect.
+  const denies = [
+    { what: "every signal refused", refuse: () => true, code: "EPERM" },
+    { what: "stops refused, looks allowed", refuse: (signal) => signal !== 0, code: "EPERM" },
+    { what: "a kill that took nothing", swallow: true, message: /outlived its kill/ },
+  ]
+  for (const { what, refuse, swallow, code, message } of denies) {
+    await rm(held, { force: true })
+    let member
+    process.kill = (target, signal) => {
+      if (target >= 0) return realKill.call(process, target, signal)
+      if (refuse?.(signal)) throw Object.assign(new Error("kill EPERM"), { code: "EPERM" })
+      return swallow && signal !== 0 ? true : realKill.call(process, target, signal)
+    }
+    try {
+      const stop = new AbortController()
+      const running = runProcessGroup(heldScript, [], { cwd: root, env: process.env, stdio: "pipe", signal: stop.signal, graceMs: 100 })
+      await until(() => readFile(held, "utf8").then(Boolean, () => false), "the held member to start")
+      member = Number(await readFile(held, "utf8"))
+      stop.abort()
+      await assert.rejects(running, code ? { code } : message, `${what}: a live member is no end of the step`)
+      assert.equal(gone(member), false, `${what}: and it was still alive`)
+    } finally {
+      process.kill = realKill
+      if (member) realKill.call(process, member, "SIGKILL")
+    }
   }
   // A step that ends by itself is waited for as before: its code, nothing stopped.
   assert.deepEqual(await runProcessGroup("sh", ["-c", "exit 4"], { cwd: root, env: process.env, stdio: "pipe" }), { code: 4, stopped: null })

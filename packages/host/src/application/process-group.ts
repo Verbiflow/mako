@@ -73,30 +73,33 @@ export async function runProcessGroup(command: string, args: string[], options: 
     child.stderr?.setEncoding("utf8").on("data", (text: string) => output("stderr", text))
   }
   let failure: Error | null = null
-  /** The EPERM the group last answered: of a live member Mako may not signal, or of only zombies (`groupHoldsNothingAlive`). */
-  let refused: Error | null = null
+  /** A stop this group refused: nothing but its being gone settles that, a look at it being allowed included. */
+  let denied: Error | null = null
+  /** Whether the last look at the group was answered EPERM: of a live member, or of only zombies (`groupHoldsNothingAlive`). */
+  let unclear = false
   /** Signals the group; false once nothing in it is left. */
   const signalGroup = (name: NodeJS.Signals | 0): boolean => {
     if (!child.pid) return false
     try {
       process.kill(-child.pid, name)
-      refused = null
       return true
     } catch (error) {
       const code = errnoSchema.safeParse(error).data?.code
       const raised = error instanceof Error ? error : new Error(String(error))
       if (code === "EPERM") {
-        refused = raised
+        if (name === 0) unclear = true
+        else denied ??= raised
         return true
       }
       if (code !== "ESRCH") failure ??= raised
       return false
     }
   }
-  /** Whether the group has anything left, a refusal settled by the process table. */
+  /** Whether the group has anything left, an unclear answer settled by the process table. */
   const present = async (): Promise<boolean> => {
+    unclear = false
     if (!signalGroup(0)) return false
-    return !refused || !(await groupHoldsNothingAlive(child.pid!))
+    return !unclear || !(await groupHoldsNothingAlive(child.pid!))
   }
   let stopped: GroupRunResult["stopped"] = null
   let killAt = 0
@@ -128,8 +131,8 @@ export async function runProcessGroup(command: string, args: string[], options: 
         signalGroup("SIGKILL")
         await gone(Date.now() + GROUP_REAP_MS)
       }
-      // Something alive that Mako may not signal outlived the stop, so the step's end is no end of its work.
-      if (refused && (await present())) failure ??= refused
+      // Something outlived the stop, so the step's end is no end of its work.
+      if (await present()) failure ??= denied ?? new Error("The step's process group outlived its kill")
     }
     if (failure) throw failure
     return { code, stopped }

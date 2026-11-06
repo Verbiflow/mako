@@ -14,8 +14,6 @@ import {
   PING,
   PONG,
   PROTOCOL_VERSION,
-  PROBE_ANSWER_MS,
-  SILENT_WHILE_WORKING_MS,
   Payload,
   RuntimeThreads,
   problem,
@@ -374,8 +372,9 @@ test("another device's conversation followed here picks up where it was: a dropp
     send(701)
     await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), BEFORE_HEARTBEAT_MS)
   })
-  // Found by the probe, each wait as long as it's set to, not by the heartbeat.
-  assert.ok(stallWaits.includes(SILENT_WHILE_WORKING_MS) && stallWaits.includes(PROBE_ANSWER_MS), `the stream's silence, then the probe's answer, ran out: ${stallWaits.filter((ms) => ms >= 1_000).join(", ")} ms`)
+  // Found by the probe, not by the heartbeat. These are the design's numbers, written out: read from the product, a longer
+  // wait there would lengthen what's allowed here.
+  assert.ok(stallWaits.includes(3_000) && stallWaits.includes(1_500), `the stream's 3 s of silence, then the probe's 1.5 s, ran out: ${stallWaits.filter((ms) => ms >= 1_000).join(", ")} ms`)
   assert.equal(rereads(), 1, "picked up from what the gateway kept")
   // Diagnostics' readings of it: what went by, what was read again, and why it was followed again each time.
   const reading = readings.readings().follows.find((follow) => follow.stream.endsWith(conversation))
@@ -806,8 +805,8 @@ test("a Mac woken on a network the sleep didn't keep follows on at once: every e
   const ms = performance.now() - woke
   assert.deepEqual(revisions(), Array.from({ length: 1 + MISSED }, (_, index) => index + 2), "each event once, in order")
   console.log(`  woke to ${MISSED} missed events relayed: ${ms.toFixed(0)} ms`)
-  // Without the wake's 100 ms probe, the stream's own silence (`SILENT_WHILE_WORKING_MS`) would find the dead socket.
-  assert.ok(ms < SILENT_WHILE_WORKING_MS, `caught up by the wake's probe, before the working stream's silence could: ${ms.toFixed(0)} ms`)
+  // Without the wake's 100 ms probe, the stream's own silence would find the dead socket.
+  assert.ok(ms < 3_000, `caught up by the wake's probe, before the working stream's 3 s of silence could: ${ms.toFixed(0)} ms`)
   // Following on: the next event comes on the new connection.
   machine.batch(threadId, conversationId, 3 + MISSED, "ready")
   await until("the next event", () => events.length === 2 + MISSED)

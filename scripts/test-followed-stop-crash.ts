@@ -6,7 +6,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { processIdentityMatches } from "@mako/host/base/process-liveness"
-import { STOP_GRACE_MS } from "@mako/host/conversations/agent-runs"
 import { AgentsWorld, fakeCatalog } from "./lib/agents-world.ts"
 
 /**
@@ -30,6 +29,8 @@ const script = (root: string) => async (turn: { text: string; conversation: stri
   }
   return "ok"
 }
+/** A stopped run's grace, written out: read from the product, a longer one there would move this test's clock with it. */
+const GRACE_MS = 5_000
 /** The linked run's process as the first host wrote it down, by pid and start. */
 const Identity = z.object({ pid: z.number().int().positive(), startedAt: z.number().optional() })
 const live = (identity: { pid: number; startedAt?: number }) => processIdentityMatches({ ...identity, exact: true, signal: new AbortController().signal }).catch(() => false)
@@ -68,7 +69,7 @@ if (process.argv[2] === "host") {
     assert.ok(await live(identity), "the linked run outlived the host that stopped it")
     // The next host's clock, held a moment short of the run's grace and then moved to it: the kill comes at the grace,
     // whatever the runner's own clock did. The run never ends by itself: left running, it outlives the hang guard.
-    const graceEnds = z.number().parse(JSON.parse(readFileSync(join(root, "stopped-at.json"), "utf8"))) + STOP_GRACE_MS
+    const graceEnds = z.number().parse(JSON.parse(readFileSync(join(root, "stopped-at.json"), "utf8"))) + GRACE_MS
     let clock: number | undefined = graceEnds - 1
     w = new AgentsWorld({ root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: script(root), now: () => clock ?? Date.now() })
     const started = () => w!.prompts.some((prompt) => prompt.text.includes("You're fin:next,"))
@@ -77,7 +78,7 @@ if (process.argv[2] === "host") {
     assert.equal(readFileSync(join(root, "shared.txt"), "utf8"), "linked")
     assert.ok(await live(identity), "and its grace isn't up")
     clock = graceEnds
-    await until(async () => !(await live(identity)), "the next host to kill the run the moment its grace is up", 30 * STOP_GRACE_MS)
+    await until(async () => !(await live(identity)), "the next host to kill the run the moment its grace is up", 30 * GRACE_MS)
     clock = undefined
     await until(started, "next to start once the run was gone")
     await pause(100)
