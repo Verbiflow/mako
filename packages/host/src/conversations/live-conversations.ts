@@ -403,6 +403,11 @@ export class LiveConversations {
     return this.closing.closeForExit(ids)
   }
 
+  /** The listing's line for every conversation, without its Fins: what a job that looks often reads. */
+  listed(): LiveSummary[] {
+    return this.records.listing()
+  }
+
   summaries(): LiveSummary[] {
     const agents = this.dependencies.agents?.()
     const listing = this.records.listing()

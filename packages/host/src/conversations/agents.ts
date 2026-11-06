@@ -3013,10 +3013,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The model a conversation runs on now: the person's last choice in it, else what its harness reported, else what it started with. */
   private settingsOf(conversation: string): SessionSettings | undefined {
     const snapshot = this.deps.live.snapshot(conversation)
-    if (!snapshot) return undefined
-    const chosen = snapshot.requests.filter((request) => request.tuning?.model).at(-1)?.tuning
-    const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
-    return chosen ?? snapshot.session.settings ?? binding?.tuning
+    return snapshot ? settingsIn(snapshot) : undefined
   }
 
   /**
@@ -4013,7 +4010,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const working = busy || waits !== undefined
     const thread = this.store()?.thread(edge.child)
     const title = thread?.title ?? session.title
-    const settings = this.settingsOf(conversation)
+    // A reading is taken of every Fin there is, on every look: it holds to what memory has, and never reads a journal in.
+    const settings = held ? settingsIn(held) : session.settings
     const model = settings?.model
     const catalog = this.deps.catalogOf?.(session.harness)
     const runsOn = catalog && finTuningWords(catalog, settings)
@@ -4222,7 +4220,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private watchDecision(edge: ThreadParent): void {
     const state = this.stateOf(edge)
-    const report = state.kind === "ended" && state.decision?.on === "lead" ? state.decision.ask.id : undefined
+    const report = state.kind === "ended" && state.decision?.on === "lead" ? state.decision.ask?.id : undefined
     const held = this.undecided.get(edge.child)
     if (held?.report === report) return
     held?.cancel()
@@ -4239,7 +4237,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.stopped || !store || !edge || edge.closedAt !== undefined) return
     const state = this.stateOf(edge)
     const from = this.latest.get(child)
-    if (state.kind !== "ended" || state.decision?.on !== "lead" || state.decision.ask.id !== id || from?.id !== id) return
+    if (state.kind !== "ended" || state.decision?.on !== "lead" || state.decision.ask?.id !== id || from?.id !== id) return
     const front = this.frontOf(edge.parent, edge.parentSession)
     const busy = front !== undefined && this.ready(front) === "queue"
     hostLog("agents", "decision escalated", { op: edge.op, child, after: this.deps.apexAnswerMs ?? APEX_ANSWER_MS, busy })
@@ -5568,6 +5566,18 @@ function parseQueued(record: string): QueuedStart | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * What a conversation runs with now: the last model asked of its active binding, else what that binding's session says.
+ * A request that ran on another binding says nothing of it: after a move it's the source's model, not this one.
+ */
+export function settingsIn(snapshot: Pick<LiveSnapshot, "requests"> & { session: Pick<LiveSnapshot["session"], "settings">; control?: Pick<NonNullable<LiveSnapshot["control"]>, "activeBindingId" | "bindings"> }): SessionSettings | undefined {
+  const active = snapshot.control?.activeBindingId
+  const here = (request: LiveRequest) => !active || (request.nativeRun?.bindingId ?? request.targetBindingId ?? active) === active
+  const chosen = snapshot.requests.filter((request) => request.tuning?.model && here(request)).at(-1)?.tuning
+  const binding = snapshot.control?.bindings.find((candidate) => candidate.id === active)
+  return chosen ?? snapshot.session.settings ?? binding?.tuning
 }
 
 function queuedLead(record: string): z.infer<typeof QueuedLeadSchema> | undefined {
