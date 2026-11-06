@@ -1098,7 +1098,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.settingsTool = new SettingsTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     tier: (id) => sessionAccessTier(live.session(id)),
-    invoke: async (channel, args) => z.json().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
+    // Most of Settings' changes answer nothing.
+    invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
     gate: late.agentAsks,
   })
   late.harnessTool = new HarnessTool({
