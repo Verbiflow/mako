@@ -318,7 +318,49 @@ One the Apex may answer that it leaves for `APEX_ANSWER_MS` (a minute) goes
 to the person too (`escalate`), as an Apex mid-turn on a harness that hears
 a digest only at its turn's end would leave it; the Apex hears they were
 asked, and the first answer is the one the Fin hears. A digest drops an ask
-its Fin no longer waits on (`test:orch-answer`). A Fin
+its Fin no longer waits on (`test:orch-answer`). A report says how the work
+went and, separately, who must act: a `done` report may ask the question a
+`needs-input` one does (its options, the one it recommends, `action`), with
+`decides` (`apex`, the default, or `person`). Its Fin reads as done with that
+decision open (`ChildState`'s `ended.decision`: its question, `on` and the
+same `FinAsk`), never as blocked; `decisionOn` says whose it is: the person's
+when the Fin said so, when its Apex left it to them, or when its spawn's
+`wake` isn't `decisions`. Its result wakes the Apex as any done report does,
+its line in the digest, the front door and the `apexes` digest one
+(`decisionWords`: "done; decide: Merge #371? (Merge · Leave open, recommends
+Merge)"). One its Apex leaves for `APEX_ANSWER_MS` goes to the person too, as
+a done report of the same decision (`escalateDecision`, on `AgentsDeps.later`,
+which a test fakes). The person's counts under needs you (`childGroup`) and
+reads "Done · needs you: <question>" (`askWords`) wherever asks are answered
+(`openAsk`, `personAsks`); the Apex's counts as done. An answer claims the
+question before it's delivered, so of two at once (its Apex's and the
+person's) one reaches the Fin and the other is refused as answered; a
+delivery that fails lets go of it. The claim is the store's
+(`agent_answers`, `ThreadStore.claimAnswer`), kept with the request its
+message goes as before any delivery, so a restarted host still holds the
+decision answered and sends an answer it never delivered once, under that
+request (`undeliveredAnswers`), and a repeat of the same answer, in flight
+or after, gets that answer's result. An answer settles exactly the ask it
+names (`ChildJournal.answered.ask`), never another by the clock: a newer
+question is open even in the same millisecond. A delivery that reached the
+Fin but couldn't be stamped stays pending, and the next start finds it under
+its request and stamps it. The answer is the Fin's next message, and
+until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
+`test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`). A
+report with a question may name what it waits on outside its tree
+(`waitingOn`: a pull request until its checks, review or merge, the person,
+or `other` in a few words), carried on the blocked state and the open
+decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,
+the front door and the strip; nothing watches it yet. A Fin's strip, its crew
+mates' view and the `apexes` digest say how long it has been idle
+(`idleFor`, seconds, only while it isn't working) and its open pull requests
+(`openPRs`, `finPullRequests`): its worktree branch's as the worktree
+summaries last read them (`ThreadWorktreeService.heldPulls`) and those its
+reports name, with no read of GitHub of their own. A pull request is its
+repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
+never its number alone, since a Thread can hold several repositories; a bare
+`#12` is the Fin's one repository's, or stays unqualified when it has several,
+and a line names the repository only when two could be confused. A Fin
 that ends a turn without `agents_report` while its own Fins work, or while a
 `worktree_move` it asked for is pending (`movePending`), hasn't finished.
 Its turn's end writes no report, and it reads as working with "Waiting for
@@ -354,7 +396,22 @@ an Apex of its own with its brief. `agents_start`'s `rule` names the one a
 Fin follows: its harness and model apply unless the spawn names them (a
 model only on the rule's own harness), a spawn with no rule, harness or
 model goes to `otherwise`, a missing rule is refused (`unknown-rule`), and
-the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). A worktree in a project folder of several
+the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). Beside
+them the person keeps standing rules in their own words for every Fin and
+every Apex (`forFins`, `forApexes`, at most `ROLE_RULES_CHARS`; empty is
+none, and then briefs and notes are byte for byte as before). Each is saved
+alone (`mako:fin-role-rules-save`), and every save of the Fin-defaults file
+keeps what it doesn't name, a newer build's fields included. They're standing
+lines of Mako's note (`roleRuleLines`, merged with the host's own in
+`LiveDispatch`): a Fin reads the Fin rules, and a top-level Thread, an Apex
+or a Fin started as one the Apex rules, each whole on a process's first
+prompt, a Fin's being its brief's, then only when they change, whoever's
+message starts the turn (`standingLines`). A request keeps which rule lines
+its prompt carried (`LiveRequest.ruleLines`), so a conversation that read
+rules the person cleared is told they no longer apply, in every later process
+too. Settings › Fins on the desk and the phone (`web-client/fins.tsx`)
+edits both through the same calls and previews only what each adds to the
+note, from the same functions (`roleRulesPreview`); `npm run test:person-rules` covers it. A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
@@ -2067,7 +2124,7 @@ dependencies because Cursor canvas previews bundle a canvas in the host.
 
 ## Hosted service boundary
 
-Mako's hosted service is developed in a separate private repository, checked out beside this one as `../mako-backend`. The dependency runs one way: that repository consumes this one's packages as pinned artifacts, and nothing here imports from it, even behind a flag. Clients and the runtime reach hosted features only over the network, through open protocol packages and their tests. Everything committed here is public, so hosted design, pricing and planning notes don't belong in this repository's files, commit messages or pull requests.
+Mako's hosted service is developed in a separate private repository, checked out beside this one as `../mako-backend`. The dependency runs one way: that repository consumes this one's packages as pinned artifacts, and nothing here imports from it, even behind a flag. Clients and the runtime reach hosted features only over the network, through open protocol packages and their tests. Everything committed here is public, so hosted design, pricing and planning notes don't belong in this repository's files, commit messages or pull requests. Neither does a machine's identity: a test, fixture or audit names a placeholder home (`/Users/someone`), a path from its own temporary folder or the repository root, and an `example.com` address. The Public text workflow fails a pull request whose added lines, new file names, commit messages, title or body hold a home folder, macOS's per-user temporary folder, a personal address or a name in `scripts/public-text-denylist.txt`; `npm run check:public-text` runs it locally.
 
 Planning and audit docs under `docs/` that are gitignored (`docs/audits/`, `docs/meta-harness/`, `docs/meta-harness*.md` and the other ignored pages) are symlinks into the private checkout. Read and write them at their usual paths; a new audit in `docs/audits/<date>/<topic>/` lands in the private checkout directly. Never `git add -f` them. Audits meant to be public go in `docs/public-audits/<date>/<topic>/`, which is committed here. On a fresh checkout, run `npm run wayfinder:link` in `../mako-backend` to create the symlinks.
 

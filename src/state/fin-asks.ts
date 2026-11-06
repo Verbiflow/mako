@@ -1,6 +1,6 @@
 import { toast } from "sonner"
 import type { AgentsRespondInput } from "@mako/host/contracts/agents"
-import { rosterChildren } from "@mako/host/contracts/children"
+import { askWords, openAsk, rosterChildren } from "@mako/host/contracts/children"
 import type { FinAsk, NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { getMako, hasBridge } from "@/lib/bridge"
 
@@ -11,15 +11,17 @@ export interface PersonAsk {
   harness: string
   question: string
   ask: FinAsk
+  /** It finished, and this is the decision its work leaves: its words read "Done · needs you: …" (`askWords`). */
+  done?: true
 }
 
-/** Every ask of these Fins that's the person's, in the roster's order. */
+/** Every ask of these Fins that's the person's, a done Fin's decision too, in the roster's order. */
 export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
   const asks: PersonAsk[] = []
   for (const agent of children) {
-    const state = agent.child?.state
-    if (!agent.child || state?.kind !== "blocked" || state.on === "lead" || !state.ask) continue
-    asks.push({ fin: agent.child.thread, title: agent.title, harness: agent.provider, question: state.question, ask: state.ask })
+    const open = agent.child?.state && openAsk(agent.child.state)
+    if (!agent.child || !open || open.on === "lead" || !open.ask) continue
+    asks.push({ fin: agent.child.thread, title: agent.title, harness: agent.provider, question: open.question, ask: open.ask, ...(open.done && { done: true as const }) })
   }
   return asks
 }
@@ -27,7 +29,7 @@ export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
 /** The first of a conversation's Fins' asks that's the person's, as its Thread's mark says it: "Sheet motion: Approve: npm ci". */
 export function finAskLine(conversation: { nativeAgents?: NativeAgentRoster }): string | undefined {
   const ask = personAsks(rosterChildren(conversation.nativeAgents))[0]
-  return ask && `${ask.title}: ${ask.question}`
+  return ask && `${ask.title}: ${askWords(ask)}`
 }
 
 /** How the person answers: one of its options by its place, their own words, or for an approval, allow or refuse. */

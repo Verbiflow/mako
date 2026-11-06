@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { CheckIcon, XIcon } from "lucide-react"
 import { FIN_WORD } from "@mako/host/contracts/agents"
+import { askWords } from "@mako/host/contracts/children"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { WebHarnessIcon } from "./harness-icon"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -44,7 +45,7 @@ export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: strin
           {more ? <span className="shrink-0 text-faint">· {more === 1 ? `1 more ${FIN_WORD} asks` : `${more} more ${FIN_WORD}s ask`}</span> : null}
         </p>
         <p className="web-ask-title">
-          <span className="min-w-0 break-words">{ask.question}</span>
+          <span className="min-w-0 break-words">{askWords(ask)}</span>
         </p>
         {ask.ask.action ? (
           <div className="web-ask-scroll">

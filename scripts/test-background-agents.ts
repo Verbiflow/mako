@@ -309,7 +309,8 @@ async function finLimit(): Promise<void> {
 
 /**
  * A freed place goes to the next waiting Fin at once, event-driven: a stop, a turn's end, or a raised number starts
- * the first waiter that fits within milliseconds, first come first started across Apexes. One whose `after` isn't
+ * the first waiter that fits, first come first started across Apexes. With no room watch each start can come only
+ * from the event that freed its place, so one that comes at all came before the next look. One whose `after` isn't
  * finished is passed over, and one whose harness hangs as it starts holds its place without holding up the rest.
  */
 async function slotsGoAtOnce(): Promise<void> {
@@ -320,6 +321,7 @@ async function slotsGoAtOnce(): Promise<void> {
   let w!: AgentsWorld
   w = new AgentsWorld({
     root: join(root, "slots"),
+    noRoomWatch: true,
     finLimit: () => limit,
     starting: async (conversation) => {
       launched.set(conversation, performance.now())
@@ -376,7 +378,6 @@ async function slotsGoAtOnce(): Promise<void> {
     await waitFor(() => launched.has(key(two, "e")), "e to start once the number rose")
     latency.push(launched.get(key(two, "e"))! - freed)
     console.log(`slot to launch: ${latency.map((ms) => `${ms.toFixed(1)} ms`).join(", ")}`)
-    for (const ms of latency) assert.ok(ms < 100, `a freed place goes within 100 ms: ${latency.map((each) => each.toFixed(1)).join(", ")} ms`)
     release?.()
     await w.agents.stop(one.caller, { child: "all" })
     await w.agents.stop(two.caller, { child: "all" })
@@ -467,7 +468,7 @@ async function launchesBeforeTheirEdge(): Promise<void> {
 /**
  * A Fin shown stopped holds its place until its harness has stopped: with one place, a Fin waiting behind one whose
  * cancel is slow never starts while that turn still runs, so two turns never write in one worktree at once, and it
- * starts the moment the cancel finishes.
+ * starts from the cancel finishing: after it, with no room watch to start it otherwise.
  */
 async function stopHoldsUntilCancelled(): Promise<void> {
   let release: () => void = () => {}
@@ -476,9 +477,10 @@ async function stopHoldsUntilCancelled(): Promise<void> {
   let cancelled = 0
   const w = new AgentsWorld({
     root: join(root, "slow-cancel"),
+    noRoomWatch: true,
     finLimit: () => 1,
     // Only the first stop is slow; the ones after go at once.
-    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = performance.now(); resolve() }))),
+    cancelling: () => (cancelled ? undefined : new Promise<void>((resolve) => (release = () => { cancelled = Date.now(); resolve() }))),
     script: async (turn) => {
       if (!turn.text.includes("You're fin:")) return "ok"
       if (active.size) overlapped = true
@@ -504,7 +506,7 @@ async function stopHoldsUntilCancelled(): Promise<void> {
     await waitFor(() => active.size === 1 && w.store.queuedSpawns().length === 0, "the second to start once the first stopped")
     assert.equal(overlapped, false, "the second started only after the first's turn ended")
     const started = w.prompts.find((prompt) => prompt.text.includes("You're fin:second,"))!.at
-    assert.ok(started - (Date.now() - (performance.now() - cancelled)) < 100, "and at once once it did")
+    assert.ok(started >= cancelled, "and from the cancel finishing")
     await w.agents.stop(apex.caller, { child: "all" })
   } finally {
     release()
@@ -530,8 +532,9 @@ async function followedStopHoldsUntilExit(): Promise<void> {
       return "ok"
     },
   })
-  // A run its Apex's shell started, deaf to SIGTERM, writing the shared file every 10 ms until it's killed.
-  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+  // A run its Apex's shell started, deaf to SIGTERM, writing the shared file every 10 ms until it's killed. Each write
+  // replaces the file whole: one that truncated it first was read empty between the two, 170 reads in 20,000.
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');const put=()=>{fs.writeFileSync('shared.tmp','linked');fs.renameSync('shared.tmp','shared.txt')};put();console.log('ready');setInterval(put,10)"], { cwd: w.root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
   await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
   let exited = 0
   shell.once("exit", () => (exited = performance.now()))
@@ -584,7 +587,7 @@ async function linkedWriter(name: string, detached: boolean) {
       return "ok"
     },
   })
-  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: w.root, detached, stdio: ["ignore", "pipe", "ignore"] })
+  const shell = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});const fs=require('node:fs');const put=()=>{fs.writeFileSync('shared.tmp','linked');fs.renameSync('shared.tmp','shared.txt')};put();console.log('ready');setInterval(put,10)"], { cwd: w.root, detached, stdio: ["ignore", "pipe", "ignore"] })
   await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
   const apex = await w.apex("claude", "full")
   const nativeId = randomUUID()
@@ -1069,6 +1072,45 @@ async function finsAtWorkByBinding(): Promise<void> {
     await w.agents.stop(apex.caller, { child: "all" })
   } finally {
     HostJobs.prototype.every = every
+    await w.close()
+  }
+}
+
+/** A stopped Fin's own queued Fins wait for it, whatever room there is, and start once it resumes. */
+async function stoppedApexHolds(): Promise<void> {
+  let working = 0
+  const w = new AgentsWorld({
+    root: join(root, "stopped-apex"),
+    script: (turn) => turn.text.includes("You're fin:") || turn.text.includes("Carry on") ? (working++, turn.world.hold(turn.conversation).then(() => (working--, "stopped"))) : "ok",
+    finLimit: () => 2,
+  })
+  try {
+    const person = await w.apex("claude")
+    const brief = { objective: "Hold" }
+    const lead = await w.agents.start(person.caller, { brief, name: "lead", clientKey: "lead", cwd: w.root })
+    assert.ok(!("refused" in lead) && lead.conversation, JSON.stringify(lead))
+    await waitFor(() => working === 1, "the lead at work")
+    const leadCaller = w.caller(lead.conversation)
+    await w.agents.start(leadCaller, { brief, name: "helper", clientKey: "helper", cwd: w.root })
+    await waitFor(() => working === 2, "its helper at work")
+    const later = await w.agents.start(leadCaller, { brief, name: "later", queue: true, clientKey: "later", cwd: w.root })
+    assert.ok(!("refused" in later) && later.state === "queued", JSON.stringify(later))
+    const waiting = () => w.agents.roster(lead.conversation!).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
+
+    await w.agents.stop(person.caller, { child: "lead" })
+    await w.agents.stop(leadCaller, { child: "helper" })
+    await waitFor(() => working === 0 || w.store.queuedSpawns().length === 0, "both places free")
+    await w.settle()
+    assert.equal(w.store.queuedSpawns().length, 1, "a stopped Apex's queued Fin doesn't start in the room its stop left")
+    assert.deepEqual(waiting(), ["Waiting: its Apex was stopped"])
+
+    const sent = await w.agents.send(person.caller, { to: "lead", text: "Carry on.", clientKey: "resume" })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    await waitFor(() => w.store.queuedSpawns().length === 0 && working === 2, "the queued Fin to start once its Apex resumed")
+    assert.ok(w.store.edges().all.some((edge) => edge.name === "later"))
+    await w.agents.stop(leadCaller, { child: "all" })
+    await w.agents.stop(person.caller, { child: "all" })
+  } finally {
     await w.close()
   }
 }
@@ -1634,6 +1676,7 @@ try {
   await accessFits()
   await stopAllUnqueues()
   await finsAtWorkByBinding()
+  await stoppedApexHolds()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()

@@ -16,12 +16,19 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LivePermissionRequest, LivePermissionResponse, LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
-import { Agents, type AgentsDeps } from "@mako/host/conversations/agents"
+import { Agents, ROOM_WATCH_JOB, type AgentsDeps } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { handOff } from "@mako/host/harnesses/prompt-dispatch"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
+
+/** The host's jobs without the engine's room watch. */
+class WithoutRoomWatch extends HostJobs {
+  override every(...[name, ...rest]: Parameters<HostJobs["every"]>): () => void {
+    return name === ROOM_WATCH_JOB ? () => {} : super.every(name, ...rest)
+  }
+}
 
 /** The six harnesses, as an Apex or a child runs on them here: each a scripted driver, two of them steering at the next step as Claude's and OpenCode's do. */
 export const HARNESSES = ["claude", "codex", "cursor", "grok", "opencode", "devin"] as const
@@ -80,6 +87,11 @@ export interface WorldOptions {
   launching?: (conversation: string) => Promise<void> | void
   /** Every steer is refused, as a harness whose turn moved on refuses one. */
   refuseSteers?: true
+  /**
+   * No room watch (`ROOM_WATCH_JOB`): what waits for a place starts only from the event that freed it, so a start that
+   * comes at all came before the next look, however slow the runner.
+   */
+  noRoomWatch?: true
   /** A harness's own modes, as its real driver declares them, in place of Mako's tier ids. */
   ladders?: Partial<Record<string, readonly LiveSessionMode[]>>
   /** The Sessions the catalog lists, each one a run a shell may have started: none are followed without it. */
@@ -111,6 +123,12 @@ export interface WorldOptions {
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
   /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
   apexAnswerMs?: number
+  /** The engine's timers for those waits (`AgentsDeps.later`): a fake clock a test advances itself. */
+  later?: AgentsDeps["later"]
+  /** The pull requests the host last read for a worktree's branch (`AgentsDeps.heldPulls`). */
+  heldPulls?: AgentsDeps["heldPulls"]
+  /** The engine's clock (`AgentsDeps.now`), for a case that needs two moments to read the same. */
+  now?: () => number
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
@@ -164,7 +182,7 @@ export class AgentsWorld {
   /** Opens the host: the store, the conversations and the engine, and what the last host left. */
   open(): void {
     this.store = new ThreadStore(join(this.root, "threads.sqlite"), { now: () => Date.now() })
-    this.jobs = new HostJobs()
+    this.jobs = this.options.noRoomWatch ? new WithoutRoomWatch() : new HostJobs()
     const drivers = new Map<string, ProviderLiveDriver>(HARNESSES.map((harness) => [harness, this.driver(harness)]))
     const live = new LiveConversations({
       appPath: this.root,
@@ -227,6 +245,9 @@ export class AgentsWorld {
       ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
+      ...(this.options.later && { later: this.options.later }),
+      ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
+      ...(this.options.now && { now: this.options.now }),
       archived: (conversation) => this.archived.has(conversation),
     }
     const agents = new Agents(deps)

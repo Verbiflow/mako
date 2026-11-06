@@ -4,6 +4,7 @@ import {
   childGroup,
   childStateOf,
   childWord,
+  DONE_NEEDS_YOU,
 } from "@mako/host/contracts/children"
 import { FinMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -117,11 +118,13 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
           {ask.title}
         </span>
         <span className="shrink-0 text-attention">
-          {childWord({
-            kind: "blocked",
-            question: ask.question,
-            on: approval ? "approval" : "person",
-          })}
+          {ask.done
+            ? DONE_NEEDS_YOU
+            : childWord({
+                kind: "blocked",
+                question: ask.question,
+                on: approval ? "approval" : "person",
+              })}
         </span>
       </p>
       <p className="max-w-prose text-ui text-foreground/90">{ask.question}</p>

@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
@@ -39,6 +40,7 @@ import { deliverDecoded, type DecodedSink } from "../../contracts/native-decodin
 import type { SelectedAccount } from "../../contracts/accounts.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
+import { closeProviderProcess } from "../provider-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
@@ -150,6 +152,8 @@ interface Live {
   /** The running goal's condition, as Mako set it or last read it; its Stop hook's feedback names it. */
   goalCondition?: string
   exited(): Promise<void>
+  /** Ends its process, SIGKILL if it must: resolves once it's gone, rejects if it outlives that (`closeProviderProcess`). */
+  end(): Promise<void>
 }
 export interface ClaudeSdkConfiguration {
   options: Options
@@ -686,6 +690,7 @@ export function createClaudeSdkDriver(
       )
       if (options.modeId === "plan") permissions.planReturn = ClaudeModeSchema.safeParse(options.launchModeId).data
       let exited = Promise.resolve()
+      let claudeChild: ChildProcess | undefined
       let disposedApprovals: Promise<void> | undefined
       const disposeApprovals = () => disposedApprovals ??= exited.then(() => toolApprovals?.dispose()).then(() => {}, () => {
         hostWarn("claude-sdk", "Approval observation cleanup failed", { conversation: conversationId })
@@ -734,6 +739,7 @@ export function createClaudeSdkDriver(
           },
           spawnClaudeCodeProcess: (options) => {
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
+            claudeChild = child
             if (!startupFinished) {
               startupWatch = new ProviderStartupWatch(child, { harness: "Claude", stderr })
               startupStderr = stderr
@@ -769,6 +775,7 @@ export function createClaudeSdkDriver(
         observeUsage: options.observeUsage,
         query,
         exited: () => exited,
+        end: () => (claudeChild ? closeProviderProcess(claudeChild) : exited),
         input,
         permissions,
         approvals,
@@ -826,7 +833,7 @@ export function createClaudeSdkDriver(
           throw new Error("Claude disconnected during initialization")
         // A resumed session's hooks have not reported its transcript yet, and
         // recovery refuses a reopened session that names no source.
-        if (options.resume) await transcript.locate(live.state.nativeId)
+        if (options.resume) await trace.step("session-resume", () => transcript.locate(live.state.nativeId))
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
         transcriptTail(live)
@@ -1036,7 +1043,7 @@ export function createClaudeSdkDriver(
         // Query.interrupt can leave SDK-queued input behind. Closing its process
         // makes Stop definitive; the next prompt resumes the same native session.
         stop(live)
-        await live.exited()
+        await live.end()
         // A first turn stopped early has no hook-reported transcript; the next prompt resumes from this one.
         const nativePath = await live.transcript.locate(live.state.nativeId)
         // The interrupt's own `error_during_execution` result may have settled
@@ -1056,8 +1063,9 @@ export function createClaudeSdkDriver(
       const live = sessions.get(id)
       if (!live) return
       stop(live)
-      sessions.delete(id)
-      await live.exited()
+      // Kept until its process is gone: a close that can't say so rejects, and the next one tries again.
+      await live.end()
+      if (sessions.get(id) === live) sessions.delete(id)
       await live.disposeApprovals()
     },
   }

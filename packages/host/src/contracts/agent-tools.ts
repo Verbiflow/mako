@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { APEX_WORD, decisionWords, FIN_WORD, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -59,6 +59,8 @@ export interface WaitedReport {
   summary: string
   artifacts?: Artifact[]
   question?: string
+  /** Who decides a done report's question. */
+  decides?: "apex" | "person"
 }
 
 /**
@@ -138,6 +140,12 @@ export interface AgentStrip {
   toolUses?: number
   /** Its last report, as one line. */
   report?: { status: ReportStatus; line: string; at: number }
+  /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
+  waiting?: string
+  /** Seconds since its last activity, while it isn't working (`idleFor`). */
+  idleFor?: number
+  /** Its open pull requests, from what the host holds (`finPullRequests`). */
+  openPRs?: FinPullRequest[]
   startedAt: number
 }
 /**
@@ -188,7 +196,7 @@ export interface OtherApex {
    * Its open Fins' last reports (or, before one, their state), what needs the person first, at most
    * `APEX_DIGEST_FINS` and how many more; and `said`, the first paragraph of its own last reply.
    */
-  digest: { fins: { name: string; line: string }[]; more?: number; said?: string }
+  digest: { fins: { name: string; line: string; idleFor?: number; openPRs?: FinPullRequest[] }[]; more?: number; said?: string }
 }
 /** The open Fins one Apex's digest names; the rest are counted. */
 export const APEX_DIGEST_FINS = 8
@@ -214,6 +222,10 @@ export interface AgentsReportInput {
   recommended?: number
   /** What whoever answers does, in one sentence. */
   action?: string
+  /** Who decides a done report's question: `apex` (absent) or `person`. */
+  decides?: "apex" | "person"
+  /** What it waits on outside its tree, with a question it asks. */
+  waitingOn?: WaitingOn[]
   /** A repeat with the same key is the same report. */
   clientKey: string
 }
@@ -343,6 +355,10 @@ export const AFTER_START = "Its report wakes you. End your turn or keep working;
 
 /** What a start's answer tells its caller to do next: by how it asked to hear back, and how a wait's window ended. */
 export function afterStart(wake: WakeOn, waited?: StartWaited): string {
+  if (waited?.outcome === "result" && waited.report.status === "done" && waited.report.question)
+    return waited.report.decides === "person"
+      ? "It finished, and leaves a decision that is the person's: they answer it from their Inbox. Go on with its result."
+      : "It finished, and leaves the decision its report asks: answer it with agents_answer, or leave it to the person with agents_answer person: true."
   if (waited?.outcome === "result") return "It finished: its report is above. Go on with it."
   if (waited?.outcome === "pending") return "It's still working. End your turn now: its result starts your next turn. Don't wait or poll."
   if (waited?.outcome === "question")
@@ -371,7 +387,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
   `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
-  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended.`,
+  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended. Finished but leaving a decision (a merge, a choice between results)? Report done with the question and options, and \`decides\` saying who decides: \`apex\` or \`person\`.`,
   `Other ${APEX_WORD}es of the person: read them with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them.`,
   `Message another ${APEX_WORD} (\`agents_send\` \`to: apex:<title>\`) only when the person asked you to, or when you need something only it can give or decide (it owns the files or branch you'd change, or its work blocks yours).`,
   "Never message for status, thanks or acknowledgement: their digest already says how they stand. One message with everything it needs; its reply wakes you; don't reply to a reply unless it asks you something.",
@@ -389,6 +405,10 @@ export interface FrontDoorChild {
   report?: { status: ReportStatus; line: string; at: number }
   /** The person's newest words to it directly: in its own Thread, or from its Apex's composer. */
   direct?: { line: string; at: number }
+  /** Seconds since its last activity, while it isn't working (`idleFor`): the crew view carries it, the note doesn't. */
+  idleFor?: number
+  /** Its open pull requests (`finPullRequests`): the crew view carries them, the note doesn't. */
+  openPRs?: FinPullRequest[]
 }
 
 /** Fins the note lists by name; the rest are counted, and `agents_list` has them. */
@@ -422,6 +442,12 @@ function frontDoorLine(fin: FrontDoorChild, now: number): string {
 }
 
 function stateWords(state: ChildState, report: FrontDoorChild["report"], now: number): string {
+  const words = askedWords(state, report, now)
+  const waiting = (state.kind === "blocked" || state.kind === "ended") && waitingWords(state.waitingOn)
+  return waiting ? `${words} · ${waiting}` : words
+}
+
+function askedWords(state: ChildState, report: FrontDoorChild["report"], now: number): string {
   switch (state.kind) {
     case "working":
       return `working${state.phase ?? state.step ? `: ${state.phase ?? state.step}` : ""}`
@@ -434,13 +460,14 @@ function stateWords(state: ChildState, report: FrontDoorChild["report"], now: nu
     case "blocked":
       return `waits on ${state.on === "lead" ? "you (agents_answer)" : "the person"}: ${state.question}`
     case "ended":
+      if (state.decision) return decisionWords(state.decision)
       return `${state.outcome}${report ? ` ${ago(report.at, now)}: ${report.line}` : state.reason ? `: ${state.reason}` : ""}`
   }
 }
 
-/** Live work first, then what waits, then what's finished: what a message is most likely for comes first. */
+/** What waits first, a finished Fin's open decision too, then live work, then what's finished: what a message is most likely for comes first. */
 function routeOrder(state: ChildState): number {
-  return state.kind === "blocked" ? 0 : state.kind === "working" || state.kind === "starting" ? 1 : state.kind === "queued" || state.kind === "idle" ? 2 : 3
+  return state.kind === "blocked" || (state.kind === "ended" && state.decision) ? 0 : state.kind === "working" || state.kind === "starting" ? 1 : state.kind === "queued" || state.kind === "idle" ? 2 : 3
 }
 
 function ago(at: number, now: number): string {
@@ -541,7 +568,9 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         status: "done, failed, blocked, needs-input or progress.",
         summary: "What happened, first sentence first; where to read more.",
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
-        question: "For blocked or needs-input: the decision you need.",
+        question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
+        decides: "With a done question: apex (default) or person, who decides it.",
+        waitingOn: "With a question: what it waits on outside your tree, each {kind: \"pull-request\", ref: \"#412\", until: \"checks\" | \"review\" | \"merge\"}, {kind: \"person\", what: \"merge\"}, or {kind: \"other\", text} in a few words.",
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",
         action: "What whoever answers does, in one sentence: \"Pick the branch the release goes from.\"",

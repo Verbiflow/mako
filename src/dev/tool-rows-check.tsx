@@ -45,7 +45,7 @@ installBuiltins()
 const conversation = "eeeeeeee-5555-4555-8555-555555555555"
 const cwd = "/fixture/mako"
 // Notes outside the conversation's folder read with their folder, as a sibling checkout's do.
-const NOTES = "/srv/agents/thread-data/folder-f6c41fc1/workers"
+const NOTES = "/srv/agents/thread-data/folder-0a1b2c3d/workers"
 const FILES = [
   `${NOTES}/orch-design.md`,
   `${NOTES}/inline-preview.md`,

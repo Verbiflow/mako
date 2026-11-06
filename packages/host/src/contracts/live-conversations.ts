@@ -296,6 +296,12 @@ export interface LiveRequest {
    * dispatch, for a session without modes, and in older journals.
    */
   mode?: string
+  /**
+   * The person's standing rules its prompt carried, by their line's name (`ROLE_RULE_LINES`), kept from dispatch on:
+   * a conversation that ever read one is told when the person clears them, in every later process. Absent when it
+   * carried none.
+   */
+  ruleLines?: string[]
   inputDigest?: string
   nativeRun?: { bindingId: string; runId: string; forkId?: string }
   id: string

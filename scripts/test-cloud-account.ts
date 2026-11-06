@@ -9,6 +9,7 @@ import type { AccountEvent } from "@mako/protocol/account-events"
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
+import { existsSync } from "node:fs"
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { connect, createServer as createTcpServer, Socket } from "node:net"
@@ -866,7 +867,8 @@ test("a sign-out the cloud didn't hear is kept sealed and finished, here or afte
   await again.accounts.ready()
   await waitFor(() => device.removed, "the device removed once the cloud answers")
   assert.deepEqual(again.accounts.account().state, { status: "signed-out" }, "not said to be finishing")
-  await assert.rejects(stat(recordPath(`${secretName}.signing-out`)), "and the credential it kept is gone")
+  // It goes once the cloud has answered, after the cloud has removed the device.
+  await waitFor(() => !existsSync(recordPath(`${secretName}.signing-out`)), "the credential it kept gone")
   again.accounts.close()
 })
 

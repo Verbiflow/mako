@@ -4,7 +4,7 @@ import { FinPips } from "@/components/rail/fin-pips"
 import { apexPips, pipsCounts } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
-import { childLine, childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
+import { askWords, childLine, childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { shallowEqual } from "@/state/store"
@@ -469,7 +469,7 @@ export function FinAskRow({ fin, onOpen }: { fin: WebFinAsk; onOpen?: () => void
       type="button"
       onClick={onOpen}
       data-fin-row={fin.ask.fin}
-      aria-label={`${fin.ask.title}, in ${fin.apex.title}. Needs you: ${fin.ask.question}`}
+      aria-label={`${fin.ask.title}, in ${fin.apex.title}. ${fin.ask.done ? askWords(fin.ask) : `Needs you: ${fin.ask.question}`}`}
       className="web-row group relative flex w-full items-center text-left"
     >
       <span className="web-row-mark">
@@ -485,7 +485,7 @@ export function FinAskRow({ fin, onOpen }: { fin: WebFinAsk; onOpen?: () => void
         <span className="flex min-w-0 items-center gap-1.5 text-label text-faint">
           <ApexMark aria-hidden className="size-3 shrink-0" />
           <span className="min-w-0 truncate">
-            <span data-fin-row-apex>{fin.apex.title}</span> · {fin.ask.question}
+            <span data-fin-row-apex>{fin.apex.title}</span> · {askWords(fin.ask)}
           </span>
         </span>
       </span>
