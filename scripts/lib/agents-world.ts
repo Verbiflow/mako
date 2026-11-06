@@ -508,6 +508,7 @@ export class AgentsWorld {
           },
         },
       }),
+      ...(this.options.resumesUnderAccount?.includes(harness) && { accountContinuation: { kind: "resumes" as const, via: "Scripted model" } }),
       provider: harness,
       available: () => true,
       start: async (_cwd, options) => {

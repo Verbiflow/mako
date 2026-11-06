@@ -77,7 +77,11 @@ schedules, and a failing schedule is pinned there.
    goes on the target once it commits, in its order, the transcript with the first
    to go (a pending merge). `ThreadMove.first` names a row that goes ahead of what
    waited longer, as a held digest does. A move that fails leaves every row where
-   it was, on the source.
+   it was, on the source. A move naming an account pins its binding there, a session
+   it goes back to as much as a new one, and every later launch reads that pin. It
+   goes back to a session another account made only where its harness goes on under
+   another account (`accountContinuation`); elsewhere it takes a session of its own.
+   A move naming none goes back to that session on the account it has.
 
 11. **A hold about the source's account goes with the switch; a hold about the
     person doesn't.** A retry on its limit and a sign-out's hold belong to the

@@ -1001,6 +1001,91 @@ async function grantsAndQuestions(): Promise<void> {
   }
 }
 
+/** What the fifth review reproduced, and what reading it turned up beside it. */
+async function pinsAndStops(): Promise<void> {
+  const moveTo = async (world: AgentsWorld, conversation: string, to: { harness: string; account?: string }) => {
+    const id = randomUUID()
+    const settled = world.live.switchSettled(id)
+    await world.continueOn(conversation, { kind: "move", move: { id, to } }, { kind: "service", name: "auto-continue" })
+    assert.equal((await settled).state.kind, "accepted")
+    await world.settle(40, 20_000, "ignore")
+  }
+  {
+    // Back to a binding it left, the move's account is the one it runs on: now, and on every launch after a restart.
+    const launches: { harness: string; account: string | undefined }[] = []
+    const world = new AgentsWorld({ root: join(root, "reused-pin"), script: () => "Done", resumesUnderAccount: ["claude"], launchedOn: (harness, account) => void launches.push({ harness, account }) })
+    const { conversation } = await world.apex("codex", "full")
+    await moveTo(world, conversation, { harness: "claude", account: "spare" })
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "claude", account: "other" })
+    assert.equal(world.live.pinnedAccount(conversation, "claude"), "other", "the account asked for last")
+    assert.equal(world.live.snapshot(conversation)!.control!.bindings.filter((binding) => binding.provider === "claude").length, 1, "a harness that goes on under another account keeps its session")
+    await world.restart()
+    world.say(conversation, "After restart")
+    await until("its next launch", () => world.prompts.some((prompt) => prompt.text.includes("After restart")))
+    assert.equal(launches.at(-1)?.account, "other", "a restart launches where it was moved, not where it had been")
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "claude" })
+    assert.equal(world.live.pinnedAccount(conversation, "claude"), "other", "a move naming no account goes back to the session on the account it runs on")
+    await world.close()
+  }
+  {
+    // A harness that can't go on under another account hands over, whichever way it got back there.
+    const world = new AgentsWorld({ root: join(root, "reused-handover"), script: () => "Done" })
+    const { conversation } = await world.apex("codex", "full")
+    await moveTo(world, conversation, { harness: "grok", account: "spare" })
+    const first = world.live.snapshot(conversation)!.control!.activeBindingId
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "grok", account: "other" })
+    const control = world.live.snapshot(conversation)!.control!
+    assert.notEqual(control.activeBindingId, first, "a session of its own, not the one the other account made")
+    assert.equal(world.live.pinnedAccount(conversation, "grok"), "other")
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "grok", account: "other" })
+    assert.equal(world.live.snapshot(conversation)!.control!.activeBindingId, control.activeBindingId, "its own account's session is the one it goes back to")
+    // A message that names another account, on the session running under this one, is a hand-over too.
+    const words = randomUUID()
+    const settled = world.live.switchSettled(words)
+    await world.continueOn(conversation, { kind: "words", input: { id: words, provider: "grok", text: "Carry on", attachments: [], account: "third" } }, { kind: "service", name: "auto-continue" })
+    assert.equal((await settled).state.kind, "accepted")
+    await world.settle(40, 20_000, "ignore")
+    assert.notEqual(world.live.snapshot(conversation)!.control!.activeBindingId, control.activeBindingId, "not the session a running process has under another account")
+    assert.equal(world.live.pinnedAccount(conversation, "grok"), "third")
+    await world.close()
+  }
+  for (const harness of HARNESSES) {
+    // A Stop while a message reads what it attaches holds the message, and its grant stays with it.
+    const rows: ThreadRef[] = []
+    let reading = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    const artifact = { kind: "file" as const, file: "/tmp/t/transcript.md", note: "Bundle", title: "Elsewhere", harness: "grok", turns: 1, digest: "d", losses: [] }
+    const f = await fixture(harness, { references: { list: () => rows, transcriptArtifact: async () => {
+      reading = true
+      await gate
+      return artifact
+    } } })
+    await f.world.settle(40, 20_000, "ignore")
+    rows.push({ harness: "grok", nativeId: "elsewhere", path: join(root, "elsewhere"), title: "Elsewhere" })
+    const ref = threadToken("grok", "elsewhere").slice(1)
+    const sent = f.world.agents.send(f.apex.caller, { to: "labels", text: "Read this", clientKey: "attach", context: [{ thread: ref }] })
+    await until("it to read the attachment", () => reading)
+    await f.world.agents.stop(f.apex.caller, { child: "labels", reason: "not now" })
+    release()
+    assert.ok(!("refused" in await sent))
+    const { conversation } = f.fin()
+    const row = f.world.live.snapshot(conversation)!.requests.find((request) => request.text.includes("Read this"))
+    assert.equal(row?.pause, "stop", "the Stop holds it")
+    assert.deepEqual(row?.grants, [ref], `${harness}: and its grant is still its own`)
+    f.world.live.editQueued(conversation, { requestId: row!.id, expectedText: row!.text, change: { kind: "resume" } })
+    await f.world.settle(40, 20_000, "ignore")
+    assert.ok(f.prompts().some((prompt) => prompt.text.includes("Read this")), "Resume sends it")
+    const found = await f.world.agents.list(f.world.caller(conversation), { scope: "threads", query: "Elsewhere" })
+    assert.ok("threads" in found && found.threads.length === 1, `${harness}: its receiver finds what it was given`)
+    await f.world.close()
+  }
+}
+
 /** Only `continueOn` reaches a switch to another harness: a new caller of `transfer` fails here. */
 function onePath(): void {
   const host = join(repo, "packages/host/src")
@@ -1150,6 +1235,7 @@ try {
   await landing()
   await reviewed()
   await grantsAndQuestions()
+  await pinsAndStops()
   await callersShareIt()
   await attaching()
   await reading()

@@ -293,6 +293,8 @@ export class LiveTransfers {
       const currentBinding = control.bindings.find((binding) => binding.id === control.activeBindingId)
       // Another account of its harness, where the session can't go on: a session of its own, handed the conversation.
       const anew = quietSwitch(transfer) && currentBinding?.provider === transfer.input.provider
+      // The same, going back: a session another account made goes on under this one only where its harness can.
+      const goesOn = (binding: { account?: string | undefined }) => !transfer.input.account || binding.account === transfer.input.account || this.host.dependencies.driver(transfer.input.provider)?.accountContinuation?.kind === "resumes"
       reconnect = (!target || target === control.activeBindingId) && !resident.driver && !anew && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding?.nativeId)
       const bindings = control.bindings.map((binding) =>
         binding.id === control.activeBindingId && resident.driver
@@ -315,6 +317,7 @@ export class LiveTransfers {
         (binding) =>
           (!target || binding.id === target) &&
           binding.provider === transfer.input.provider &&
+          goesOn(binding) &&
           resident.connections.get(binding.id)?.session.status === "ready"
       )
       // A reconnect goes on from the session as it is: a record that moved past
@@ -331,6 +334,7 @@ export class LiveTransfers {
           if (
             (target && binding.id !== target) ||
             binding.provider !== transfer.input.provider ||
+            !goesOn(binding) ||
             (!target && reconnect && binding.id !== control.activeBindingId)
           )
             continue
@@ -540,7 +544,6 @@ export class LiveTransfers {
           coveredBlocks: 0,
           includesBase: false,
           path: bindingPath(this.host.dependencies, prepared.session, prepared.session.nativePath),
-          ...transfer.input.account && { account: transfer.input.account },
         }),
         nativeId: prepared.session.nativeId,
         tuning: appliedTuning,
@@ -617,6 +620,7 @@ export class LiveTransfers {
               candidate.id === bindingId
                 ? {
                     ...candidate,
+                    ...transfer.input.account && { account: transfer.input.account },
                     includesBase: true,
                     tuning: appliedTuning,
                     modeId: binding.modeId,

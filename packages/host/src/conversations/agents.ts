@@ -3858,7 +3858,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     // A Stop that came while this was on its way, before there was a queue to reach, holds it as it holds any message.
     if (crossing.stopped) {
-      this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor, { pause: "stop" })
+      this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor, { ...marks, pause: "stop" })
       return { delivery: "queued", hears: `${name} was stopped as this reached it: it waits, held, and goes when ${name} is resumed.` }
     }
     if (taken) {
