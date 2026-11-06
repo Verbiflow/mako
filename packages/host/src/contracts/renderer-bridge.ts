@@ -11,6 +11,7 @@ import type {
   StopTarget,
 } from "./thread-lifecycle.js"
 import type { ThreadGroup } from "./thread-groups.js"
+import type { ThreadSplit } from "./thread-splits.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
@@ -165,6 +166,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<ThreadArchiveSnapshot>("mako:thread-archives"),
     threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
     threadPurposes: () => invokeTrustedHost<ThreadPurpose[]>("mako:thread-purposes"),
+    threadSplits: () => invokeTrustedHost<ThreadSplit[]>("mako:thread-splits"),
     threadTitles: () => invokeTrustedHost<ThreadTitleEntry[]>("mako:thread-titles"),
     /** `title: null` gives the Thread's name back to automatic titles. */
     renameThread: (operationId: string, thread: string, title: string | null, original?: string) =>

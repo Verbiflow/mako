@@ -198,6 +198,7 @@ export class LiveForks {
           parentId: id,
           sourceRevision: source.revision,
           point,
+          ...command.move && { move: true as const },
           placement,
           ...named && { session: named },
         },

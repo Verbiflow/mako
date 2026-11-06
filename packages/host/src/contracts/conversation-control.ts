@@ -249,6 +249,8 @@ export const ConversationControlSchema = z.object({
       point: z.string(),
       /** A fork made with this set joins its parent's Thread as a tab. Older forks have their own Thread. */
       placement: z.literal("parent-thread").optional(),
+      /** The conversation goes on here rather than branching off (`ForkInput.move`): its Thread moves, it isn't a new one. */
+      move: z.literal(true).optional(),
       /** The Session it was asked to go into (`ForkInput.session`). */
       session: z.string().uuid().optional(),
     })
@@ -282,7 +284,7 @@ export const ForkInputSchema = z.object({
   id: z.string().uuid(),
   provider: z.string().min(1),
   point: ForkPointSchema,
-  /** Where the fork's Session goes. Absent means its parent's Thread, the default since track A3. */
+  /** Ignored by a store where a Thread is one conversation, which puts every fork beside its parent. */
   thread: z.enum(["parent", "new"]).optional(),
   /** The fork runs in a new worktree of its parent's checkout, and the checkout's uncommitted changes move there. */
   worktree: z.boolean().optional(),

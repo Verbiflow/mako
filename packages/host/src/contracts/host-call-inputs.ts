@@ -2464,6 +2464,7 @@ const inputs = {
       z.object({ project: z.string().optional() }).optional(),
     ]),
   "mako:thread-run": () => z.tuple([z.string()]),
+  "mako:thread-splits": () => z.tuple([]),
   "mako:thread-stop": () =>
     z.tuple([
       z.union([
@@ -2997,6 +2998,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-restore-plan", "conversations"],
   ["mako:thread-return", "conversations"],
   ["mako:thread-run", "conversations"],
+  ["mako:thread-splits", "threads"],
   ["mako:thread-stop", "threads"],
   ["mako:thread-titles", "threads"],
   ["mako:thread-titles-import", "threads"],

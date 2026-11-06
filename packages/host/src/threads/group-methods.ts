@@ -2,6 +2,7 @@ import type { MethodTable } from "../base/methods.js"
 import type { ThreadStore } from "./store.js"
 import type { ThreadGroup } from "../contracts/thread-groups.js"
 import type { ThreadPurpose } from "../contracts/thread-purposes.js"
+import type { ThreadSplit } from "../contracts/thread-splits.js"
 import { SessionIdSchema, ThreadIdSchema, type ThreadPlacement } from "../contracts/thread-identity.js"
 
 /**
@@ -26,6 +27,7 @@ export function declareThreadGroupMethods(methods: MethodTable, store: ThreadSto
     return store.groups()
   })
   methods.handle("mako:thread-purposes", (): ThreadPurpose[] => store?.purposes() ?? [])
+  methods.handle("mako:thread-splits", (): ThreadSplit[] => store?.threadSplits() ?? [])
   // `session`: the ID a device gave a `+` tab in a Thread that moved to this cloud machine, so both name it alike.
   methods.handle("mako:thread-create-session", (operationId: string, thread: string, session?: string): ThreadPlacement => {
     if (!store) throw new Error("This Mako couldn't open its Thread store, so it can't add a session to a Thread.")

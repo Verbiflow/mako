@@ -11,7 +11,7 @@ import { ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "@mako
 import { MoveIdSchema, RuntimeIdSchema, type ExecutionOwner } from "@mako/host/contracts/thread-execution"
 import { carryDrafts, type ThreadSplit } from "@mako/host/contracts/thread-splits"
 import { ThreadStore, type JournalFacts } from "@mako/host/threads/store"
-import { preSplitCopyPath, splitThreadId, undoThreadSplits } from "@mako/host/threads/thread-split"
+import { preSplitCopyPath, splitThreadId, undoThreadSplits, wantsOneConversation } from "@mako/host/threads/thread-split"
 import { ThreadArchives } from "@mako/host/threads/archives"
 import { growth, subquadratic } from "./lib/growth.ts"
 
@@ -400,6 +400,57 @@ function fixtureChecks(): void {
   console.log("ok: the 14-Session Thread, its Fins, forks, hand-off, worktree, title, purpose, archive and draft")
 }
 
+/** What stays one Thread with the split on, and what leaves a shared place. */
+function staysWholeChecks(): void {
+  const fixture = buildFixture("whole")
+  const store = open(fixture.path, true)
+  const person = store.person()
+
+  // `+` in a Thread on a cloud machine: the machine's store is told this Thread, so it has to stay this Thread.
+  const away = store.createSession({ operationId: randomUUID(), thread: ThreadIdSchema.parse(fixture.elsewhere), actor: person })
+  assert.equal(away.thread, fixture.elsewhere, "a Thread that runs elsewhere keeps its new conversation until cloud Threads split")
+
+  // A move forks to go on elsewhere and archives its source: the Thread moves, it doesn't become another.
+  const source = journal({ harness: "claude", bindings: [binding("claude", "moved")] })
+  const placed = store.registerJournal(source, person)
+  store.renameThread({ operationId: randomUUID(), thread: placed.thread, title: "Named by the person", actor: person })
+  const moved = store.registerJournal(journal({ harness: "codex", ancestry: { parentId: source.conversationId, placement: "parent-thread", move: true }, bindings: [binding("codex", "moved")] }), person)
+  assert.equal(moved.thread, placed.thread, "the fork of a move stays in its Thread")
+  assert.deepEqual(store.thread(placed.thread)?.sessions, [moved.session, placed.session], "and goes first, so it keeps the Thread at the next split")
+  const branched = store.registerJournal(journal({ harness: "codex", ancestry: { parentId: source.conversationId, placement: "parent-thread" }, bindings: [binding("codex", "branched")] }), person)
+  assert.notEqual(branched.thread, placed.thread, "any other fork is a Thread of its own")
+  store.close()
+  const reopened = open(fixture.path, true)
+  assert.equal(reopened.sessionPlacement(moved.session)?.thread, placed.thread, "the conversation that went on keeps the Thread")
+  assert.equal(reopened.thread(placed.thread)?.title, "Named by the person")
+  assert.deepEqual(reopened.thread(placed.thread)?.sessions, [moved.session], "and its archived source has split off")
+  assert.equal(reopened.placeOf(reopened.sessionPlacement(placed.session)!.thread), placed.thread, "beside it, in its place")
+
+  // A worktree of its own: the Thread leaves the place it shared, and nobody follows it there.
+  const owner = reopened.registerJournal(journal({ harness: "claude", bindings: [binding("claude", "owner")] }), person)
+  const sibling = reopened.createSession({ operationId: randomUUID(), thread: owner.thread, actor: person })
+  const other = reopened.createSession({ operationId: randomUUID(), thread: owner.thread, actor: person })
+  assert.equal(reopened.placeOf(sibling.thread), owner.thread)
+  const worktree = (path: string, thread: ThreadId) => ({ path, thread, repoRoot: "/repo", project: "/repo", branch: "mako/own", base: "main" })
+  reopened.attachWorktree(worktree("/worktrees/sibling", sibling.thread))
+  assert.equal(reopened.placeOf(sibling.thread), sibling.thread, "a sibling with its own worktree finds it, not the owner's")
+  assert.equal(reopened.placeOf(other.thread), owner.thread, "the rest still share the place")
+  reopened.attachWorktree(worktree("/worktrees/owner", owner.thread))
+  assert.equal(reopened.placeOf(other.thread), other.thread, "an owner that moves to a worktree takes nobody with it")
+  reopened.close()
+
+  const packaged = { packaged: true, isolated: false }
+  const checkout = { packaged: false, isolated: false }
+  const proof = { packaged: false, isolated: true }
+  assert.equal(wantsOneConversation(packaged, false, undefined), true, "an installed Mako is one conversation")
+  assert.equal(wantsOneConversation(packaged, false, "0"), false, "and 0 is the way back")
+  assert.equal(wantsOneConversation(packaged, true, undefined), false, "a cloud machine's Threads stay whole")
+  assert.equal(wantsOneConversation(checkout, false, undefined), false, "a checkout never splits the store it shares with the person")
+  assert.equal(wantsOneConversation(checkout, false, "1"), false, "not even when asked")
+  assert.equal(wantsOneConversation(proof, false, "1"), true, "an isolated host may ask")
+  console.log("ok: a cloud Thread's + and a move stay in their Thread, a worktree of its own leaves the place, and only an installed host splits")
+}
+
 function crashChecks(): void {
   // Thrown inside the split: the transaction rolls back and the store is as it was.
   const thrown = buildFixture("thrown")
@@ -541,6 +592,7 @@ function realCopyChecks(source: string): void {
 
 try {
   fixtureChecks()
+  staysWholeChecks()
   crashChecks()
   undoChecks()
   generatedChecks()

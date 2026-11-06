@@ -332,6 +332,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const threads = openThreads({
     environment,
+    cloudMachine: config.machineAgentFd !== undefined,
     readOnly: fixtureDesk,
     ledger: {
       pid: process.pid,
