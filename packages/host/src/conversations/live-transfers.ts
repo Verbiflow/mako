@@ -811,6 +811,7 @@ function messageOf(transfer: ContextTransfer, createdAt: number, fields: Pick<Li
     text: transfer.input.text,
     displayText: transfer.input.displayText ?? transfer.input.text,
     attachments: transfer.input.attachments,
+    ...transfer.input.grants && { grants: transfer.input.grants },
     ...fields,
   })
 }

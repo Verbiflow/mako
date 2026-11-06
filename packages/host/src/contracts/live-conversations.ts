@@ -36,7 +36,7 @@ import type { Entry } from "@mako/sessions/entries"
 import type { Rollup } from "./children.js"
 
 export interface LiveStartOptions {
-  initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
+  initialRequest?: { id: string; text: string; attachments: PromptAttachment[]; grants?: string[] }
   conversationId: string
   resume?: string
   title?: string
@@ -275,6 +275,11 @@ export interface LiveRequest {
    * and the journal cannot say which.
    */
   actor?: Actor
+  /**
+   * The threads the host checked and let this message attach (`Agents.reachOf`), as their refs. An agent's text is never
+   * read as a grant, whatever it spells out: this is what its message gives its receiver. A person's chips are theirs.
+   */
+  grants?: string[]
   /** Native send evidence, independent of execution outcome; absent in older journals. */
   nativeDelivery?: PromptDelivery
   /** Exact request/native-message correspondence from a declared native receipt. */

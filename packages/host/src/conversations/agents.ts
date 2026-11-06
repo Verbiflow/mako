@@ -136,6 +136,15 @@ export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
 export const APEX_ANSWER_MS = 60_000
 
+/** What a message into a Fin's Thread attaches: what `reachOf` passed, or with `passedOn` what the person's own message granted. */
+interface Attaching {
+  refs?: readonly string[]
+  passedOn?: string[]
+}
+
+/** A steer the harness took, as `inputDelivered` reads it. */
+type SteerDelivered = Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>
+
 /** What a message into a child's Thread became, and when the child hears it. */
 interface Delivered {
   delivery: FinDelivery
@@ -1179,11 +1188,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     const own = input.text?.trim()
     let text: string
     let attachments: PromptAttachment[] = []
+    let passedOnGrants: string[] | undefined
     if (input.forward) {
       const asked = this.personsMessage(apex)
       if (!asked) return this.refuse(op, "unavailable", "No message from the person is in this Thread to pass on: send your own words as text instead.")
       text = `${passedOn(YOUR_APEX)}\n${asked.text}${own ? `\n\n${PASSED_ON_NOTE}\n${own}` : ""}`
       attachments = asked.attachments
+      passedOnGrants = heldReferences([asked]).map((reference) => reference.ref)
     } else {
       if (!own) return this.refuse(op, "conflict", "A message needs text, or forward: true to pass on the person's.")
       text = `${fromAgent(YOUR_APEX)}\n${own}`
@@ -1191,7 +1202,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const deliver = input.deliver ?? "queue"
     const attached = this.threadRefs(apex, input.context)
     if ("refused" in attached) return this.refuse(op, attached.refused, attached.why)
-    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver, attached)
+    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver, passedOnGrants ? { passedOn: passedOnGrants } : { refs: attached })
     if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
     const answer: AgentsSent = { child: edge.child, name: edge.name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
     this.sent.set(op, answer)
@@ -1370,12 +1381,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * A message reached it after it asked, in whoever's words: what it asked is answered, and nobody hears it as open
-   * again. An answer still on its way that later fails doesn't open it: this message closed it (`sendAnswer`).
+   * Input reached a Fin, from anyone, its harness having taken it: what it last asked is answered, and nobody hears it
+   * as open again (`docs/delivery-queue.md`, rule 12). Not before: a message removed unheard leaves the question open.
+   * What Mako sends by itself answers nothing. An answer still on its way that later fails doesn't open it again.
    */
-  private questionAnswered(edge: ThreadParent, request: string, text: string, actor: Actor | undefined, delivery: FinDelivery): void {
-    const latest = this.latest.get(edge.child)
-    if (!latest || (latest.status !== "blocked" && latest.status !== "needs-input") || edge.closedAt !== undefined) return
+  inputDelivered(conversation: string, { id: request, text, actor, digest, continues, goal }: LiveRequest | SteerDelivered, delivery: FinDelivery): void {
+    if (digest || continues || goal || actor?.kind === "service" || text.startsWith(FROM_AGENTS)) return
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    const latest = edge && this.latest.get(edge.child)
+    if (!edge || !latest || (latest.status !== "blocked" && latest.status !== "needs-input") || edge.closedAt !== undefined) return
     const store = this.store()!
     const ask = reportAsk(latest).id
     const delivered = { at: this.now(), delivery }
@@ -1694,7 +1709,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const options: LiveStartOptions = {
       conversationId,
       // An Apex of its own starts Fins too: it reads the person's rules with its brief.
-      initialRequest: { id: namedUuid(`${op}\nbrief`), text: await this.withContext([briefText(input.brief, name), ...(input.role === APEX_ROLE ? [this.policyLines().join("\n")] : [])].filter(Boolean).join("\n\n"), attached), attachments: [] },
+      initialRequest: { id: namedUuid(`${op}\nbrief`), ...await this.withContext([briefText(input.brief, name), ...(input.role === APEX_ROLE ? [this.policyLines().join("\n")] : [])].filter(Boolean).join("\n\n"), attached), attachments: [] },
       title: input.title ?? name,
       modeId: childMode(this.deps.modes(harness), tier)?.id ?? accessModeId(tier),
       ...(tuning && { tuning }),
@@ -2724,12 +2739,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     }))
   }
 
-  /** Words with the Threads `refs` names attached, in the one format a person's chip writes. */
-  private async withContext(words: string, refs: readonly string[]): Promise<string> {
+  /**
+   * An agent's words as a message, with the Threads `refs` names attached in the one format a person's chip writes and
+   * stored as its grants. Its words go through the format too, so a block it spelled out is text, and draws as text.
+   */
+  private async withContext(words: string, refs: readonly string[]): Promise<{ text: string; grants?: string[] }> {
     const references = this.deps.references
-    if (!refs.length || !references) return words
-    const items = await referenceItems(refs, (harness, id) => findThreadReference(references.list({ harness }), harness, id), (threads) => Promise.all(threads.map((thread) => references.transcriptArtifact(thread.path))))
-    return writeMessage({ body: words, items })
+    const items = refs.length && references
+      ? await referenceItems(refs, (harness, id) => findThreadReference(references.list({ harness }), harness, id), (threads) => Promise.all(threads.map((thread) => references.transcriptArtifact(thread.path))))
+      : []
+    const grants = items.flatMap((item) => (item.attrs.ref ? [item.attrs.ref] : []))
+    return { text: writeMessage({ body: words, items }), ...(grants.length > 0 && { grants }) }
   }
 
   /** What an `@` picker offers this caller (`reachOf`): by a Thread's ID or a Fin's name, else the conversations whose titles hold the words, newest first. */
@@ -3156,13 +3176,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * takes a follow-up where its work is. `hears` says when the child hears it, as the child's own harness takes a
    * message, whatever harness the sender runs on.
    */
-  private async deliver(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver, refs: readonly string[] = []): Promise<Delivered | AgentRefused> {
-    const sent = await this.reach(stopped, request, text, attachments, actor, want, refs)
-    if (!("refused" in sent)) this.questionAnswered(stopped, request, text, actor, sent.delivery)
-    return sent
-  }
-
-  private async reach(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver, refs: readonly string[]): Promise<Delivered | AgentRefused> {
+  private async deliver(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver, attaching: Attaching = {}): Promise<Delivered | AgentRefused> {
     const before = this.conversationOf(stopped.child)
     const repeat = before ? this.deps.live.held(before)?.requests.find((asked) => asked.id === request) : undefined
     if (repeat) return repeat.status === "queued" || repeat.status === "held"
@@ -3174,7 +3188,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const edge = this.reopen(stopped, "a message")
     const taken = edge.run && (!edge.run.ended || !this.conversationOf(edge.child)) ? await this.takeOver(edge) : undefined
     if (taken && "refused" in taken) return taken
-    const message = await this.withContext([text, resumed, taken?.cut ? HANDED_OVER_NOTE : undefined].filter(Boolean).join("\n\n"), refs)
+    const words = [text, resumed, taken?.cut ? HANDED_OVER_NOTE : undefined].filter(Boolean).join("\n\n")
+    // What an agent writes is its words: only what `reachOf` passed goes as an item. A person's words are the window's.
+    const written = actor?.kind === "agent" && !attaching.passedOn ? await this.withContext(words, attaching.refs ?? []) : { text: words, ...(attaching.passedOn?.length && { grants: attaching.passedOn }) }
+    const message = written.text
+    const marks = { ...(written.grants && { grants: written.grants }) }
     const conversation = this.conversationOf(edge.child)
     const ready = conversation ? this.ready(conversation) : "gone"
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
@@ -3185,7 +3203,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         ? { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message.`, deduped: true }
         : { delivery: "turn", hears: `${name} already has it.`, deduped: true }
     const queue = (why?: string): Delivered => {
-      this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor)
+      this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor, marks)
       this.resumeFin(conversation, request)
       return ready === "idle"
         ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
@@ -3197,14 +3215,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     if (ready === "idle") return queue()
     if (want === "interrupt") {
-      if (!this.deps.live.interrupt(conversation, request, refs.length ? message : text, attachments, actor))
+      if (!this.deps.live.interrupt(conversation, request, message, attachments, actor, written.grants))
         return queue(`it had no turn running to stop, and something was already queued ahead of this.`)
       this.resumeFin(conversation, request)
       return { delivery: "interrupt", hears: `Mako stopped ${name}'s turn; this message starts its next one, ahead of anything queued for it.` }
     }
     if (want === "queue") return queue()
     const queued = queue()
-    const steered = await this.steerInto(conversation, name, request, refs.length ? message : text, attachments)
+    const steered = await this.steerInto(conversation, name, request, message, attachments)
     return "why" in steered ? { ...queued, hears: `${name} hears it when its current turn ends, as its next message: ${steered.why}` } : steered
   }
 

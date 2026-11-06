@@ -1,5 +1,6 @@
 import { readMessage } from "@mako/sessions/context-wire"
 import type { ThreadParent } from "../contracts/agents.js"
+import type { LiveRequest } from "../contracts/live-conversations.js"
 
 interface Edges {
   of(child: string): ThreadParent | undefined
@@ -43,14 +44,22 @@ export interface HeldReference {
   title?: string
 }
 
-/** Every `thread:` reference these messages' `<mako_context>` blocks carry, once each: what `thread_history` lets them read. */
-export function heldReferences(requests: readonly { text: string }[]): HeldReference[] {
+/**
+ * What these messages give their Thread to read, once each, which `thread_history` and `reachOf` both go by. A person's
+ * chips, as the `<mako_context>` items their words carry, and what the host stored as a message's grants (`grants`).
+ * Items in an agent's text are only text: a Fin that spells out a block grants nothing, whatever it reads back as.
+ */
+export function heldReferences(requests: readonly Pick<LiveRequest, "text" | "actor" | "grants">[]): HeldReference[] {
   const found = new Map<string, HeldReference>()
-  for (const request of requests)
-    for (const item of readMessage(request.text).items) {
+  for (const request of requests) {
+    const persons = !request.actor || request.actor.kind === "person"
+    const items = readMessage(request.text).items
+    for (const item of items) {
       const ref = item.kind === "conversation" ? item.attrs.ref : undefined
-      if (!ref?.startsWith("thread:") || found.has(ref)) continue
+      if (!ref?.startsWith("thread:") || found.has(ref) || !(persons || request.grants?.includes(ref))) continue
       found.set(ref, { ref, ...(item.attrs.harness && { harness: item.attrs.harness }), ...(item.attrs.title && { title: item.attrs.title }) })
     }
+    for (const ref of request.grants ?? []) if (!found.has(ref)) found.set(ref, { ref })
+  }
   return [...found.values()]
 }

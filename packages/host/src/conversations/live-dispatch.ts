@@ -356,6 +356,7 @@ export class LiveDispatch {
         unsent()
         throw new HandoffRefused("unsaved")
       }
+      if (handoff) dependencies.agents?.()?.inputDelivered?.(resident.snapshot.session.id, request, "turn")
     }
     const drewIt = !shown && Boolean(text || request.attachments.length)
     const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }

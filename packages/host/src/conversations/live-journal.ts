@@ -116,6 +116,7 @@ function controlRow(control: LiveSnapshot["control"]): LiveSnapshot["control"] {
 
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
+  grants: z.array(z.string().max(1024)).max(100).optional(),
   nativeDelivery: PromptDeliverySchema.optional(),
   nativePrompt: NativePromptReferenceSchema.optional(),
   targetBindingId: z.string().optional(),
