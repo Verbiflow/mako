@@ -39,7 +39,6 @@ import {
   type AgentsRedirected,
   type AgentsRedirectInput,
   type AgentsRespondInput,
-  type Brief,
   type ChildJournal,
   type ChildStart,
   type FinDeliver,
@@ -88,11 +87,11 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
-import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
+import { FIN_LIMIT, finPolicyNote, placeFull, roleRuleLines, type RoleRuleLines, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -115,6 +114,8 @@ const LIMIT_READ_MS = 3_000
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
 /** How often what waits looks again, for a limit the person raised or a Fin that ended unseen. */
 const ROOM_EVERY_MS = 10_000
+/** The job that looks every `ROOM_EVERY_MS`. */
+export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
 export const APEX_ANSWER_MS = 60_000
 
@@ -458,7 +459,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: deps.now,
     })
     // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
-    this.stopRoomWatch = deps.jobs.every("read this device's capacity", ROOM_EVERY_MS, () => this.observe(true))
+    this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true))
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
@@ -605,6 +606,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.roster(conversation).length) return true
     const thread = this.store()?.journalPlacement(conversation)?.thread
     return thread !== undefined && this.store()?.edges().of(thread)?.role === APEX_ROLE
+  }
+
+  /**
+   * The person's standing rules a conversation reads, as standing lines of Mako's note (`roleRuleLines`): a Fin the Fin
+   * rules, and the Apex rules a top-level Thread, an Apex or a Fin started as one. Its process hears them whole once and
+   * then as they change, whoever's message starts its turn (`standingLines`).
+   */
+  ruleLines(conversation: string): RoleRuleLines {
+    const policy = this.deps.finPolicy?.()
+    const requests = this.deps.live.snapshot(conversation)?.requests ?? []
+    const read = new Set(requests.flatMap((request) => request.ruleLines ?? []))
+    if (!policy?.forFins && !policy?.forApexes && !read.size) return {}
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
   }
 
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[] {
@@ -1771,6 +1787,8 @@ export class Agents implements AgentOperations, ConversationChildren {
           this.tellHeld(spawn.op, queued, { refused: queued.refused })
           continue
         }
+        // A stopped Fin's own Fins wait for it to resume (`reopen`): a stop doesn't go on starting work under it.
+        if (queued && this.apexStopped(queued.lead.thread)) continue
         if (queued?.after?.length) {
           const stand = this.afterStand(queued)
           if (stand.held) this.tellHeld(spawn.op, queued, stand.held)
@@ -2152,6 +2170,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (conversation) await this.halt(edge, conversation)
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why })
     this.childMoved(closed, false)
+    // Its own queued Fins now wait for it to resume.
+    this.queueRefresh()
     void this.drain()
     return true
   }
@@ -2708,7 +2728,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * placeholder's `child` is the waiting entry's own ID, for agents_read and agents_stop; the Fin's Thread gets its own
    * ID once it starts.
    */
-  private heldFor(thread: string): Array<{ op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } }> {
+  private heldFor(thread: string): Array<{ op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string; apexStopped?: true } }> {
     const store = this.store()
     if (!store) return []
     const spawns = store.queuedSpawns().filter((spawn) => !store.edges().byOp(spawn.op))
@@ -2730,12 +2750,13 @@ export class Agents implements AgentOperations, ConversationChildren {
         startedBy: { kind: "agent", session: SessionIdSchema.parse(queued.lead.session) },
         createdAt: spawn.at,
       }
-      return [{ op: spawn.op, placeholder, queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }), ...(queued.refused && { refused: queued.refused }) } }]
+      const apexStopped = this.apexStopped(thread)
+      return [{ op: spawn.op, placeholder, queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }), ...(queued.refused && { refused: queued.refused }), ...(apexStopped && { apexStopped }) } }]
     })
   }
 
   /** A held spawn of the Apex's, by name or by its waiting entry's ID (`heldFor`). */
-  private heldNamed(apex: Apex, ref: string): { op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } } | undefined {
+  private heldNamed(apex: Apex, ref: string): { op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string; apexStopped?: true } } | undefined {
     const name = finName(ref)
     return this.heldFor(apex.thread).find(({ placeholder }) => placeholder.child === ref || placeholder.name === name)
   }
@@ -2776,6 +2797,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** Every parent with a spawn held now. */
   private holdingThreads(): string[] {
     return (this.store()?.queuedSpawns() ?? []).flatMap((spawn) => parseQueued(spawn.record)?.lead.thread ?? [])
+  }
+
+  /** Whether this Apex is a Fin that was stopped, and not resumed since. */
+  private apexStopped(thread: string): boolean {
+    return this.store()?.edges().of(thread)?.closedAt !== undefined
   }
 
   private ready(conversation: string): ParentReady {
@@ -2885,6 +2911,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "resumed after stop", { op: edge.op, child: edge.child, by: why, stoppedFor: this.now() - edge.closedAt })
     this.forget(edge.parent)
     this.childMoved(open, false)
+    // Its own queued Fins waited for it.
+    this.queueRefresh()
+    void this.drain()
     return open
   }
 
@@ -3342,21 +3371,6 @@ function permissionAnswer(pending: PendingAsk, input: Pick<AgentsAnswerInput, "a
 
 function unknownFin(ref: string): AgentRefused {
   return { refused: "unknown-child", why: `No ${FIN_WORD} of this Thread is named ${ref}. agents_list shows them.` }
-}
-
-/** What a Fin's first turn reads: who asked, as an agent's words, and everything it knows of the work. */
-export function briefText(brief: Brief, name: string): string {
-  const lines = [
-    fromAgent(YOUR_APEX),
-    briefIntro(name),
-    "",
-    brief.objective,
-  ]
-  if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
-  if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
-  if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
-  lines.push("", BRIEF_CLOSE)
-  return lines.join("\n")
 }
 
 /** A Fin as another Fin of its Apex reads it: the person's words to it directly stay its own. */

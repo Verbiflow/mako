@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type ChildState } from "./agents.js"
+import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
 import { readFinReports, type FinReportCard } from "./fin-reports.js"
@@ -86,6 +86,21 @@ export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, ca
 /** A brief's lines as builds before the names wrote them, still left out of its card. */
 const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation." }
 const LEGACY_BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${LEGACY_APEX_WORD} how it ended.`
+
+/** What a Fin's first turn reads: who asked, as an agent's words, and everything it knows of the work. */
+export function briefText(brief: Brief, name: string): string {
+  const lines = [
+    fromAgent(YOUR_APEX),
+    briefIntro(name),
+    "",
+    brief.objective,
+  ]
+  if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
+  if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
+  if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
+  lines.push("", BRIEF_CLOSE)
+  return lines.join("\n")
+}
 
 /** Whether `text` is a brief: it carries the line every brief ends on, as this build or an earlier one wrote it. */
 export function isBrief(text: string): boolean {

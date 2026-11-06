@@ -369,8 +369,22 @@ export class LiveDispatch {
           : request.text
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
         const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: dependencies.agents?.()?.isApex(resident.snapshot.session.id) ? "apex" : "thread" })
-        const standing = instructions && standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, instructions.standing)
-        if (standing) resident.controlSaid = standing.said
+        const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
+        const standing = instructions || Object.keys(rules).length
+          ? standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, { ...instructions?.standing, ...rules })
+          : undefined
+        if (standing) {
+          resident.controlSaid = standing.said
+          const carried = Object.entries(rules).filter(([, line]) => line !== undefined && standing.lines.includes(line)).map(([name]) => name)
+          if (carried.length) {
+            resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((item) => (item.id === request.id ? { ...item, ruleLines: carried } : item)) }
+            try {
+              this.access.flush(resident)
+            } catch (error) {
+              this.access.storageFailed(resident, { error })
+            }
+          }
+        }
         const text = asWritten ? request.text : [
           controlNote([
             ...(standing?.lines ?? []),
