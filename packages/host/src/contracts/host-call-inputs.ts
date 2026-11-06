@@ -564,7 +564,10 @@ const inputs = {
       }),
     ]),
   "mako:fin-role-rules-save": () =>
-    z.tuple([z.union([z.literal("forFins"), z.literal("forApexes")]), z.string()]),
+    z.tuple([
+      z.union([z.literal("forFins"), z.literal("forApexes")]),
+      z.string(),
+    ]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
@@ -603,8 +606,8 @@ const inputs = {
       z.object({
         head: z.string().optional(),
         action: z.union([
-          z.literal("abort"),
           z.literal("merge"),
+          z.literal("abort"),
           z.literal("fetch"),
           z.literal("pull"),
           z.literal("continue"),
@@ -1168,11 +1171,11 @@ const inputs = {
               .object({
                 source: z.union([
                   z.literal("harness"),
+                  z.literal("apex"),
                   z.literal("rule"),
                   z.literal("asked"),
                   z.literal("mako"),
                   z.literal("fins"),
-                  z.literal("apex"),
                   z.literal("used"),
                 ]),
                 note: z.string().optional(),
