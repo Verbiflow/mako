@@ -3391,7 +3391,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private watchDecision(edge: ThreadParent): void {
     const state = this.stateOf(edge)
-    const report = state.kind === "ended" && state.decision?.on === "lead" ? state.decision.ask.id : undefined
+    const report = state.kind === "ended" && state.decision?.on === "lead" ? state.decision.ask?.id : undefined
     const held = this.undecided.get(edge.child)
     if (held?.report === report) return
     held?.cancel()
@@ -3408,7 +3408,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.stopped || !store || !edge || edge.closedAt !== undefined) return
     const state = this.stateOf(edge)
     const from = this.latest.get(child)
-    if (state.kind !== "ended" || state.decision?.on !== "lead" || state.decision.ask.id !== id || from?.id !== id) return
+    if (state.kind !== "ended" || state.decision?.on !== "lead" || state.decision.ask?.id !== id || from?.id !== id) return
     const front = this.frontOf(edge.parent, edge.parentSession)
     const busy = front !== undefined && this.ready(front) === "queue"
     hostLog("agents", "decision escalated", { op: edge.op, child, after: this.deps.apexAnswerMs ?? APEX_ANSWER_MS, busy })
