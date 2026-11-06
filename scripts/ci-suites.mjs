@@ -10,8 +10,9 @@ import { appendFile } from "node:fs/promises"
  *
  * Left out though they pass: `test:acp-registry`, `test:cursor-fork`, `test:model-connections-live`,
  * `test:native-authoring-live` and `test:native-routing-cursor` skip their real part without a sign-in or a local
- * model, so a pass here would prove less than it reads. `test:control-api-e2e` and `test:cloud-archive-ui` each failed
- * one run in four.
+ * model, so a pass here would prove less than it reads. `test:full-access-never-asks`, `test:full-access-questions`,
+ * `test:grok-modes-live` and `test:native-routing-live` skip theirs here, with no harness CLIs on this runner.
+ * `test:control-api-e2e` and `test:cloud-archive-ui` each failed one run in four.
  *
  * These pass on a person's Mac and fail on this runner, in a window it draws more slowly or not as they expect,
  * and aren't here: `test:account-devices-ui`, `test:account-threads-ui`, `test:animations-ui`, `test:appshot-ui`,
@@ -29,12 +30,11 @@ const SUITES = [
   "test:codex-background-work", "test:codex-protocol", "test:commit-generation", "test:control-cli",
   "test:control-driver-install", "test:control-media-sources", "test:control-packages", "test:control-preview",
   "test:control-recording-continuous", "test:cursor-child", "test:desktop-answers", "test:desktop-crashes",
-  "test:dev-updates", "test:execution-ownership", "test:file-previews", "test:fin-pips-ui",
-  "test:full-access-never-asks", "test:full-access-questions", "test:git", "test:git-remote", "test:grok-modes-live",
-  "test:host", "test:host-shutdown", "test:host-signals", "test:host-single", "test:lazy", "test:listed-repositories",
-  "test:live-actions", "test:live-approvals", "test:live-context-children", "test:local-signing", "test:mcp",
-  "test:message-queue", "test:mobile-behavior", "test:model-connections-ui", "test:moves", "test:native-authoring",
-  "test:native-routing-live", "test:node-host-secrets", "test:opencode-agents", "test:opencode-api",
+  "test:dev-updates", "test:execution-ownership", "test:file-previews", "test:fin-pips-ui", "test:git",
+  "test:git-remote", "test:host", "test:host-shutdown", "test:host-signals", "test:host-single", "test:lazy",
+  "test:listed-repositories", "test:live-actions", "test:live-approvals", "test:live-context-children",
+  "test:local-signing", "test:mcp", "test:message-queue", "test:mobile-behavior", "test:model-connections-ui",
+  "test:moves", "test:native-authoring", "test:node-host-secrets", "test:opencode-agents", "test:opencode-api",
   "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:provider-ui",
   "test:queued-steering", "test:rail-list", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain",
   "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal", "test:terminal-ui",
