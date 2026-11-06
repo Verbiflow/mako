@@ -341,8 +341,10 @@ export async function ownLinked(checkout: string, entry: string, told?: Staged):
   const cloned = staged.length ? await cloneTrees(staged.map(({ source, clone }) => [source, clone]), false) : []
   for (const [index, { source, link, clone }] of staged.entries()) {
     if (!cloned[index]) await cp(source, clone, { recursive: true, verbatimSymlinks: true })
-    await told?.(relative(checkout, link), clone)
-    await rename(clone, link)
+    const land = () => rename(clone, link).then(() => true)
+    if (await (told ? told(relative(checkout, link), clone, land) : land())) continue
+    await Promise.all(staged.map(({ clone: left }) => rm(left, { recursive: true, force: true })))
+    return false
   }
   if (folder) await rm(join(to, LINKED_MARK), { force: true })
   return true
@@ -356,9 +358,10 @@ function inside(path: string, root: string): boolean {
 /**
  * Told of each thing Mako is about to place, while it's still in Mako's staging folder beside the checkouts, where
  * nothing else writes: `relative` is where in the checkout it will land, `staged` where it is now. What's recorded
- * here is exactly what Mako made, before anything else can add to it.
+ * here is exactly what Mako made, before anything else can add to it. `land` puts it in place and says whether it
+ * did; the one told decides whether it's called at all, and answers with whether it landed.
  */
-export type Staged = (relative: string, staged: string) => Promise<void>
+export type Staged = (relative: string, staged: string, land: () => Promise<boolean>) => Promise<boolean>
 
 /**
  * Builds a placement in the staging folder, tells `staged` of it, then lands it at `relative` without replacing
@@ -370,9 +373,7 @@ async function placeStaged(checkout: string, relative: string, build: (temporary
   await mkdir(staging, { recursive: true, mode: 0o700 })
   const temporary = join(staging, randomUUID())
   const to = join(checkout, relative)
-  try {
-    await build(temporary)
-    await staged?.(relative, temporary)
+  const land = async () => {
     await mkdir(dirname(to), { recursive: true })
     const info = await lstat(temporary)
     if (info.isFile()) {
@@ -387,6 +388,10 @@ async function placeStaged(checkout: string, relative: string, build: (temporary
     if (await lstat(to).catch(() => undefined)) return false
     await rename(temporary, to)
     return true
+  }
+  try {
+    await build(temporary)
+    return await (staged ? staged(relative, temporary, land) : land())
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }

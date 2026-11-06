@@ -36,6 +36,7 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:agents-continue-next": () => z.tuple([z.string(), z.string()]),
   "mako:agents-diagnostics": () => z.tuple([]),
   "mako:agents-direct": () =>
     z.tuple([
@@ -114,6 +115,7 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:agents-next-place": () => z.tuple([z.string()]),
   "mako:agents-read": () =>
     z.tuple([
       z.union([
@@ -1077,6 +1079,7 @@ const inputs = {
               .optional(),
           })
           .optional(),
+        account: z.string().optional(),
         session: z.string().optional(),
         worktree: z.boolean().optional(),
         worktreeStart: z
@@ -2680,11 +2683,13 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
   ["mako:agents-answer", "conversations"],
+  ["mako:agents-continue-next", "conversations"],
   ["mako:agents-diagnostics", "conversations"],
   ["mako:agents-direct", "conversations"],
   ["mako:agents-link", "conversations"],
   ["mako:agents-list", "conversations"],
   ["mako:agents-move", "conversations"],
+  ["mako:agents-next-place", "conversations"],
   ["mako:agents-read", "conversations"],
   ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],
