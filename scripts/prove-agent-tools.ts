@@ -97,7 +97,9 @@ await symlink(process.execPath, join(tools, "node"))
 await symlink(join(dirname(process.execPath), "npm"), join(tools, "npm"))
 const npmPrefix = join(home, "npm")
 const opencodePrefix = join(home, "opencode")
-const installEnv: NodeJS.ProcessEnv = { ...scratch.env, NPM_CONFIG_PREFIX: npmPrefix, PATH: [tools, "/usr/bin", "/bin"].join(delimiter) }
+// `NVM_BIN` is a place harnesses are looked for too, and here it would name the person's.
+const { NVM_BIN: _theirs, ...scratchEnv } = scratch.env
+const installEnv: NodeJS.ProcessEnv = { ...scratchEnv, NPM_CONFIG_PREFIX: npmPrefix, PATH: [tools, "/usr/bin", "/bin"].join(delimiter) }
 await scratchInstall("npm", ["install", "-g", "--prefix", opencodePrefix, "--allow-scripts=@opencode/cli", `@opencode/cli@${values.opencode}`], { env: installEnv })
 const hostEnv: NodeJS.ProcessEnv = { ...installEnv, PATH: [join(npmPrefix, "bin"), join(opencodePrefix, "bin"), tools, "/usr/bin", "/bin"].join(delimiter), MAKO_SCREENLESS: "1", OPENCODE_DISABLE_MODELS_FETCH: "1" }
 assertScratchEnvironment(hostEnv, "the tools proof's host")
