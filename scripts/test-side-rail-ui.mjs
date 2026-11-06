@@ -258,6 +258,22 @@ async function check() {
   await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.textContent.includes('Mobile polish')).click(); true")
   await until(apexSelected, "the Apex's rail row leaving the Fin")
 
+  // A Fin opened from Agents on a fresh page: back in Agents, the roster is still the Apex's, not the Fin's own.
+  await load("/scripts/web-desk.html?thread=apex&theme=dark")
+  await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk again")
+  await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+  await press("[data-side-rail] [data-surface-id=agents]")
+  await seen(`.rv-layer [data-child-row="${needing}"]`)
+  await click(`.rv-layer [data-child-row="${needing}"]`)
+  await until(`Boolean(document.querySelector('[data-child-of] [data-child-tab="${needing}"]'))`, "the Fin from Agents")
+  await click("button[aria-label='Hide the right sidebar']")
+  await until("!document.querySelector('[data-side-rail]')", "the rail away with the Fin open")
+  await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+  await press("[data-side-rail] [data-surface-id=agents]")
+  await until("document.querySelector('.rv-layer [data-apex-fins]')?.dataset.apexFins === '12'", "the Apex's twelve Fins with one of them open")
+  await click("button[aria-label='Close Sheet motion on iPad']")
+  await until("!document.querySelector('[data-child-tab]')", "the Apex again")
+
   // The phone: the crew card holds the Fins, the bar counts them, and no chip repeats one.
   await viewport(390, 844)
   await load("/scripts/phone-apex.html?app=apex")
