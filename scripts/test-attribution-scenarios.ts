@@ -1,7 +1,8 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { stampFile } from "./lib/file-stamp.ts"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -65,7 +66,7 @@ const at = (ms: number) => {
 const write = (path: string, text: string) => {
   const absolute = join(root, path)
   writeFileSync(absolute, text)
-  utimesSync(absolute, clock.now() / 1000, clock.now() / 1000)
+  stampFile(absolute, clock.now())
   events.changed(absolute)
 }
 const remove = (path: string) => {
@@ -330,7 +331,7 @@ test("the live conversations' batches become turns, calls, background work and r
     adapter.observe(batch({ updates: [{ kind: "tool", id: "toolu_1", title: "Edit", name: "Edit", status: "in_progress", input: JSON.stringify({ file_path: path, old_string: "'old'", new_string: "'new'" }) }] }))
     liveClock.advance(10)
     writeFileSync(path, "export const title = 'new'\n")
-    utimesSync(path, liveClock.now() / 1000, liveClock.now() / 1000)
+    stampFile(path, liveClock.now())
     liveEvents.changed(path)
     liveClock.advance(10)
     adapter.observe(batch({ updates: [{ kind: "tool-update", id: "toolu_1", status: "completed", output: "ok", effects: [{ kind: "modify", path, edits: [{ old: "'old'", new: "'new'" }] }] }] }))
@@ -388,7 +389,7 @@ test("a Fin its Apex lists runs as its own Thread: nothing changed in the Apex's
     adapter.observe({ id: "apex-conversation", revision: 1, updates: [], sessionChanges: { status: "ready" }, nativeAgents: { agents: [fin], limited: false } })
     finClock.advance(60_000)
     writeFileSync(join(folder, "notes.md"), "# Notes\n\nthe person's line\n")
-    utimesSync(join(folder, "notes.md"), finClock.now() / 1000, finClock.now() / 1000)
+    stampFile(join(folder, "notes.md"), finClock.now())
     finEvents.changed(join(folder, "notes.md"))
     await tracker.settled()
     assert.deepEqual(shares(finView, folder, "APEX").thread.files, [], "worktree_status counts none of it as the Apex's")
@@ -430,7 +431,7 @@ async function liveWorld() {
   const write = (name: string, text: string) => {
     const path = join(folder, name)
     writeFileSync(path, text)
-    utimesSync(path, clock.now() / 1000, clock.now() / 1000)
+    stampFile(path, clock.now())
     events.changed(path)
   }
   const world = {
@@ -641,7 +642,7 @@ async function gitWorld(t: { after(run: () => Promise<void> | void): void }) {
   const touch = (path: string) => {
     const absolute = join(folder, path)
     try {
-      utimesSync(absolute, worldClock.now() / 1000, worldClock.now() / 1000)
+      stampFile(absolute, worldClock.now())
     } catch {
       // Gone: a deletion is heard all the same.
     }
@@ -814,7 +815,7 @@ test("a call a hook bounds: its write proven by content, the person's saves arou
   const when = (ms: number) => hookedClock.advance(began + ms - hookedClock.now())
   const save = (name: string, text: string) => {
     writeFileSync(join(folder, name), text)
-    utimesSync(join(folder, name), hookedClock.now() / 1000, hookedClock.now() / 1000)
+    stampFile(join(folder, name), hookedClock.now())
     hookedEvents.changed(join(folder, name))
   }
   const T5 = { thread: "T5", session: "T5-session", checkout: folder }

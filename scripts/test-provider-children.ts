@@ -214,7 +214,10 @@ try {
   const retry = JSON.parse(await readFile(next.path, "utf8"))
   retry.children.find((entry: { owner: string }) => entry.owner === "uncertain-image").executableIdentity = wrappedExecutable
   await writeFile(next.path, JSON.stringify(retry))
-  assert.deepEqual((await next.reap()).map((entry) => entry.owner), ["uncertain-image"])
+  // A process read that runs past its limit proves nothing, so its record waits for the next look.
+  let reaped: string[] = []
+  for (let look = 0; look < 10 && !reaped.length; look++) reaped = (await next.reap()).map((entry) => entry.owner)
+  assert.deepEqual(reaped, ["uncertain-image"])
   await settle()
   assert.equal(alive(uncertain.pid!), false)
 
