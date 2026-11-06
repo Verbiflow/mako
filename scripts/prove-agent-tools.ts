@@ -223,10 +223,11 @@ async function runProof() {
   check("allowed, the automation ran", await until(async () => automated, 60_000), "its prompt never reached a model")
 
   // harness: every step reads where Codex is first, and stops if it's anywhere but here.
-  const read1 = z.object({ harnesses: z.json() }).loose().parse(await tool(full.conversation, "harness", { action: "read" }))
-  const found = codexFrom(read1.harnesses)
+  check("harness read answers the harnesses' versions", outcomeOf(await tool(full.conversation, "harness", { action: "read" })).outcome === "read")
+  // The guard reads afresh, by the host's own call: this has to be true before anything installs.
+  const found = codexFrom(await call("mako:harness-updates", [true]))
   if (found?.binary && !found.binary.startsWith(home)) throw new Error(`refused: Codex resolves to ${found.binary}, outside this run's root; nothing was installed`)
-  check("harness read answers Codex, not installed here", !found?.binary, found)
+  check("Codex isn't installed here", !found?.binary, found)
   const installing = outcomeOf(await tool(full.conversation, "harness", { action: "install", harness: "codex" }))
   check("harness install starts or finishes", installing.outcome === "started" || installing.outcome === "finished", installing)
   check("Codex landed in this run's npm prefix", await until(async () => codexFrom(await call("mako:harness-updates", [true]))?.binary?.startsWith(home) === true, 5 * 60_000), codexFrom(await call("mako:harness-updates", [true])))
