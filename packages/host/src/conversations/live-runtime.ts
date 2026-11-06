@@ -35,12 +35,16 @@ import type {
   AdmittedLiveDriver,
   ConversationTools,
 } from "../harnesses/index.js"
+import type { ControlInstructions, ControlSaid } from "./control-cadence.js"
+import type { RoleRuleLines } from "../contracts/fin-tuning.js"
 import type { LiveJournal } from "./live-journal.js"
 import type { JournalReclaims } from "./journal-reclaim.js"
 import type { LiveMoves } from "./live-moves.js"
 import type { NativeSourceIdentity, SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { RoutedThread } from "../contracts/native-routing.js"
+import type { CallThread } from "../contracts/native-calls.js"
+import { checkoutOf, worktreeAt } from "../contracts/worktree-paths.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { WorkspaceSnapshots } from "../workspaces/index.js"
@@ -60,9 +64,10 @@ export interface ProviderConnection {
 
 /**
  * Why Mako stops a provider's turn, as the host log says it: the person's Stop, a handoff of the Thread to another
- * machine, a goal at its token budget, or a conversation Mako can't save.
+ * machine, a goal at its token budget, a conversation Mako can't save, or the person's message steered into a turn
+ * whose harness would have held it (`steer`).
  */
-export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved"
+export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved" | "steer"
 
 /** How each Stop Mako sends ends the turn it stops: only the person's own reads as `stopped`. */
 export const STOPPED_FOR = {
@@ -70,6 +75,7 @@ export const STOPPED_FOR = {
   "handed-off": "handed-off",
   "goal-budget": "goal-budget",
   "not-saved": "not-saved",
+  steer: "steered",
 } as const satisfies Record<ProviderStop, InterruptionReason>
 export type StoppedFor = (typeof STOPPED_FOR)[ProviderStop]
 
@@ -85,6 +91,13 @@ export interface Resident {
   connections: Map<string, ProviderConnection>
   bindingGenerations: Map<string, number>
   transferring: boolean
+  /**
+   * Where the transfer under way stands, by its id. A Stop holds it back only while it's `preparing` or `opening`;
+   * once its destination is `committed` (the conversation's state, written, names it the binding), it completes
+   * through `closing` the source to `done`, and a Stop pauses its message with the rest of the queue, so the
+   * conversation always has a binding it can use (`docs/delivery-queue.md`).
+   */
+  transferPhase?: { id: string; phase: "preparing" | "opening" | "committed" | "closing" | "done" }
   transferOperation?: Promise<void>
   /**
    * The binding a transfer is opening, which the conversation doesn't listen
@@ -160,6 +173,11 @@ export interface Resident {
   stoppingWork?: string[]
   /** The running turn's steps and results in the order they arrived; see `TurnSteps`. */
   steps?: TurnSteps
+  /**
+   * The standing lines of Mako's note its process last heard (`standingLines`). Forgotten when the harness compacts
+   * or rewinds its history and when a send fails, so the next prompt carries them all again.
+   */
+  controlSaid?: ControlSaid
 }
 
 
@@ -170,20 +188,68 @@ export function launchRouting(dependencies: Pick<Dependencies, "agents">, sessio
   return () => ({ role: agents()?.isApex(session) ? "apex" : "thread" })
 }
 
+/**
+ * A launch's native calls (`ProviderStartOptions.nativeCalls`): only a Thread
+ * given Mako's tools has them to route to. Read at each call, so a
+ * worktree_move or a recipe published mid-session counts from then on.
+ */
+export function launchCalls(dependencies: Pick<Dependencies, "threads" | "builds">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
+  if (!tools?.makoUrl) return undefined
+  return () => callThreadOf(dependencies.threads, conversation, cwd, environment, dependencies.builds?.())
+}
+
+/** The Thread a conversation's calls run in, as routing reads it now: its folder, its worktree and main checkout, its recipe. */
+export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined, builds?: CallThread["builds"]): CallThread {
+  const recipe = environment?.recipe
+  const thread = store?.journalPlacement(conversation)?.thread
+  const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
+  const checkout = found && checkoutOf(found.worktree)
+  return {
+    folder: cwd,
+    ...found && checkout && { worktree: checkout, main: checkout === found.worktree.path ? found.worktree.repoRoot : found.worktree.project },
+    ...recipe?.kind === "ready" && { recipe: { kind: "ready" as const, processes: recipe.processes.map((process) => process.name) } },
+    ...recipe?.kind === "none" && { recipe: { kind: "none" as const } },
+    computer: true,
+    ...builds && { builds },
+  }
+}
+
 /** What a conversation's Fins are to its turns and its roster (`Agents`). */
 export interface ConversationChildren {
+  /** A Fin's edge was just written, under the op its start named: it leaves the line of those waiting (`queueRefresh`). */
+  edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
   settled(conversation: string, request: string): void
+  /** Its harness took input: a message as its turn, or a steer into the turn it runs. */
+  inputDelivered?(conversation: string, input: Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>, delivery: "turn" | "steer"): void
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
   isApex(conversation: string): boolean
   /** What an Apex hears before a message the person sends it: its Fins as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
+  /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
+  ruleLines(conversation: string): RoleRuleLines
+  /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
+  mayWake?(conversation: string): boolean
+  /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
+  pinnedAccount?(conversation: string, harness: string): string | undefined
+  /**
+   * At a request's handoff: whether a message Mako sent a Fin by itself (a pull request's outcome) still holds. False
+   * refuses it with nothing sent; any other request is always admitted.
+   */
+  admits?(conversation: string, request: Pick<LiveRequest, "id" | "actor">): boolean
+}
+
+/** What a launch of `conversation` on `harness` reads its account from: the Fin's pin, else the selected account. */
+export function launchAccount(dependencies: Pick<Dependencies, "agents">, conversation: string, harness: string): () => string | undefined {
+  return () => dependencies.agents?.()?.pinnedAccount?.(conversation, harness)
 }
 export interface Dependencies {
+  /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */
+  builds?(): CallThread["builds"]
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */
   unattended?: boolean
   /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */
@@ -204,11 +270,12 @@ export interface Dependencies {
   /** The Threads each conversation's Thread leads (`Agents`). */
   agents?(): ConversationChildren | undefined
   /**
-   * The lines of Mako's note sent ahead of each prompt: Local Control and the
-   * values the conversation's process started with. The note wraps them with
-   * anything Mako has to tell about the conversation itself.
+   * The lines of Mako's note ahead of a prompt: Local Control and the values
+   * the conversation's process started with, which its process hears once
+   * and then as they change (`standingLines`), and notices, each said once.
+   * The note wraps them with anything Mako has to tell about the conversation itself.
    */
-  controlInstructions?(bindingId: string, conversationId: string): string[]
+  controlInstructions?(bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): ControlInstructions
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
   suspendTools?(bindingId: string, conversationId: string): void | Promise<void>
@@ -428,6 +495,7 @@ export interface LiveAccess {
   retireFromAccount(resident: Resident): Promise<void>
   switchAccount(resident: Resident, request: LiveRequest): Promise<void>
   accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
+  /** A turn ended: Mako continues it after a dropped connection, or when its next attempt is due after a failure that clears by itself. */
   scheduleAutoContinue(resident: Resident, settled: string): void
   declineAutoContinue(resident: Resident): void
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */

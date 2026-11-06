@@ -52,7 +52,8 @@ export const CURSOR_VOCABULARY = defineVocabulary({
   // `cursorUnfinishedToolNote` for a call the SDK's hooks refused: it reports no result of its own.
   refusals: [/^Cursor did not run this call/],
   tools: {
-    shell: { kind: "shell", effects: { cwd: ["workingDirectory", "working_directory"], exitCode: "result.value.exitCode" } },
+    // Its answer ends `exit 2` after stdout and stderr when the command failed (`cursor-sdk-content.ts`).
+    shell: { kind: "shell", effects: { cwd: ["workingDirectory", "working_directory"], exitCode: "result.value.exitCode", exitText: /(?:^|\n)exit (-?\d+)\s*$/ } },
     read: { kind: "read", aliases: ["ReadFile"] },
     write: { kind: "write", effects: { content: ["fileText", "contents", "content"] } },
     edit: {

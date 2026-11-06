@@ -4,6 +4,7 @@ import { textOf } from "@/lib/format"
 import { causeWords, eventLabel } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
 import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
+import { savedResumeAccount } from "@mako/host/contracts/resume-account"
 import { routedAnswer, routedCall, type Routed, type RoutedAnswer } from "@mako/host/contracts/children"
 
 /**
@@ -82,6 +83,12 @@ export type ResponseSection =
    * of why and who. Not the person's words, so never drawn as theirs.
    */
   | { kind: "continued"; id: string; message: ChatMessage; continued: SavedContinuation }
+  /**
+   * Where the turn went on from a point older than calls it had already run,
+   * and the agent was told of them (`resumeAccountText`): Mako's words, read
+   * by their header live and saved alike, drawn as one quiet line.
+   */
+  | { kind: "resumed"; id: string; message: ChatMessage; resumed: ResumedAccount }
   | { kind: "note"; id: string; message: ChatMessage }
   /**
    * What the agent put in front of the person with `show`, drawn where the
@@ -118,12 +125,26 @@ export function isContinuation(message: ChatMessage): SavedContinuation | undefi
   return first?.type === "text" && opensContinuation(first.text) ? savedContinuation(textOf(message.blocks)) : undefined
 }
 
+export type ResumedAccount = NonNullable<ReturnType<typeof savedResumeAccount>>
+
+/** What a message says when it is Mako's account of calls a resumed turn had already run, known by its header. */
+export function resumedAccount(message: ChatMessage): ResumedAccount | undefined {
+  if (message.role !== "user") return undefined
+  const first = message.blocks.find((block) => block.type === "text" && block.text)
+  return first?.type === "text" ? savedResumeAccount(first.text) : undefined
+}
+
+/** A user message that is part of the turn it joined, never a request of its own: a steer, or a resume account. */
+function joinsTurn(message: ChatMessage): boolean {
+  return Boolean(message.steeringFor) || resumedAccount(message) !== undefined
+}
+
 /** The requests an exchange's turn ran as: its prompt's, then each continuation's, in order. */
 export function exchangeRequests(exchange: Exchange): string[] {
   const ids: string[] = []
   if (exchange.prompt?.requestId) ids.push(exchange.prompt.requestId)
   for (const message of exchange.response)
-    if (message.role === "user" && !message.steeringFor && message.requestId) ids.push(message.requestId)
+    if (message.role === "user" && !joinsTurn(message) && message.requestId) ids.push(message.requestId)
   return ids
 }
 
@@ -135,7 +156,7 @@ export function exchangeRequests(exchange: Exchange): string[] {
 export function turnRequest(exchange: Exchange): string | undefined {
   for (let index = exchange.response.length - 1; index >= 0; index--) {
     const message = exchange.response[index]!
-    if (message.role === "user" && !message.steeringFor) return message.requestId
+    if (message.role === "user" && !joinsTurn(message)) return message.requestId
   }
   return exchange.prompt?.requestId
 }
@@ -144,7 +165,7 @@ export function turnRequest(exchange: Exchange): string | undefined {
 export function continuedFrom(exchange: Pick<Exchange, "response">): number {
   for (let index = exchange.response.length - 1; index >= 0; index--) {
     const message = exchange.response[index]!
-    if (message.role === "user" && !message.steeringFor) return index + 1
+    if (message.role === "user" && !joinsTurn(message)) return index + 1
   }
   return 0
 }
@@ -215,8 +236,13 @@ export function responseSections(
     placeNotes(index)
     if (message.role === "user") {
       flushWork()
-      const continued = isContinuation(message)
-      sections.push(continued ? { kind: "continued", id: message.id, message, continued } : { kind: "steer", id: message.id, message })
+      const resumed = resumedAccount(message)
+      const continued = resumed ? undefined : isContinuation(message)
+      sections.push(
+        resumed ? { kind: "resumed", id: message.id, message, resumed }
+          : continued ? { kind: "continued", id: message.id, message, continued }
+            : { kind: "steer", id: message.id, message }
+      )
       continue
     }
     const generated: ChatMessage[] = []
@@ -320,7 +346,18 @@ export function toExchanges(
       }
       // Mako's words picking up a turn that was cut short are not a new
       // question: the turn on screen goes on, as one turn. One whose turn is
-      // on an earlier page goes on the exchange that stands in for it.
+      // on an earlier page goes on the exchange that stands in for it. A
+      // resume account joins its turn the same way, live (as a steer
+      // nothing matched) and saved.
+      const resumed = resumedAccount(message) !== undefined
+      if (resumed) {
+        if (!current) {
+          current = { id: LEAD_EXCHANGE_ID, response: [], system: [], timestamp: message.timestamp }
+          exchanges.push(current)
+        }
+        current.response.push(message)
+        continue
+      }
       if (isContinuation(message)) {
         if (!current) {
           current = { id: LEAD_EXCHANGE_ID, response: [], system: [], timestamp: message.timestamp }
@@ -542,7 +579,16 @@ export function turnExchange(exchanges: readonly Exchange[]): Exchange | undefin
   return exchanges.findLast((exchange) => !exchange.direct)
 }
 
+/** Each turn's label, by the turn: a stream renders the navigator again every batch, and its turns are kept as they were. */
+const labels = new WeakMap<Exchange, string>()
+
 export function promptLabel(exchange: Exchange): string {
+  let label = labels.get(exchange)
+  if (label === undefined) labels.set(exchange, (label = labelOf(exchange)))
+  return label
+}
+
+function labelOf(exchange: Exchange): string {
   if (exchange.unloaded !== undefined) return exchange.unloaded
   const direct = exchange.direct?.note
   if (direct?.direct) return `To ${direct.direct.to}: ${(direct.body ?? "").replace(/\s+/g, " ").trim()}`

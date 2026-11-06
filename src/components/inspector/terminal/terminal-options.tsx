@@ -7,7 +7,7 @@ import { terminalActions } from "@/state/terminal"
 import { dockTool } from "./dock-tab-style"
 
 const item =
-  "flex cursor-default items-center rounded px-2 py-1.5 text-ui outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
+  "flex cursor-default items-center px-2 py-1.5 text-ui outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
 const keys = "ml-auto pl-4 text-label text-faint"
 export function TerminalOptions({ canSplit, canSearch }: { canSplit: boolean; canSearch: boolean }) {
   const fontSize = usePrefs((prefs) => prefs.terminalFontSize)
@@ -76,7 +76,7 @@ export function TerminalOptions({ canSplit, canSearch }: { canSplit: boolean; ca
                 onClick={() =>
                   setPref("terminalFontSize", Math.max(10, fontSize - 1))
                 }
-                className="pressable size-6 rounded hover:bg-fill-hover disabled:opacity-40"
+                className="pressable size-6 hover:bg-fill-hover disabled:opacity-40"
               >
                 −
               </button>
@@ -90,7 +90,7 @@ export function TerminalOptions({ canSplit, canSearch }: { canSplit: boolean; ca
                 onClick={() =>
                   setPref("terminalFontSize", Math.min(24, fontSize + 1))
                 }
-                className="pressable size-6 rounded hover:bg-fill-hover disabled:opacity-40"
+                className="pressable size-6 hover:bg-fill-hover disabled:opacity-40"
               >
                 +
               </button>
@@ -106,7 +106,7 @@ export function TerminalOptions({ canSplit, canSearch }: { canSplit: boolean; ca
                 setPref("terminalFontFamily", event.target.value.slice(0, 200))
               }
               onKeyDown={(event) => event.stopPropagation()}
-              className="mt-1 h-7 w-full rounded border border-hairline bg-surface px-2 text-label outline-none focus:border-border"
+              className="mt-1 h-7 w-full border border-hairline bg-surface px-2 text-label outline-none focus:border-border"
             />
           </label>
           <DropdownMenu.Item

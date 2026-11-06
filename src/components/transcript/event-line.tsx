@@ -183,7 +183,7 @@ export function EventLine({
         aria-controls={body}
         className={cn(
           row,
-          "pressable group/event -mx-1.5 rounded-md px-1.5 text-left transition-colors duration-100 hover:bg-fill-hover focus-visible:bg-fill-hover",
+          "pressable group/event -mx-1.5 px-1.5 text-left transition-colors duration-100 hover:bg-fill-hover focus-visible:bg-fill-hover",
           end ? "max-w-[calc(100%+12px)]" : "w-[calc(100%+12px)]"
         )}
       >
@@ -289,7 +289,7 @@ function Divider({
             onClick={onToggle}
             aria-expanded={open}
             aria-controls={body}
-            className="pressable -mx-1.5 flex h-7 min-w-0 max-w-[80%] items-center gap-2 rounded-md px-1.5 transition-colors duration-100 hover:bg-fill-hover focus-visible:bg-fill-hover"
+            className="pressable -mx-1.5 flex h-7 min-w-0 max-w-[80%] items-center gap-2 px-1.5 transition-colors duration-100 hover:bg-fill-hover focus-visible:bg-fill-hover"
           >
             {label}
           </button>

@@ -15,8 +15,9 @@ import {
   type LiveAcpConversation,
 } from "@/state/acp-state"
 import { projectAcp } from "@/state/live-projection"
-import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { toast } from "sonner"
+import { hostConnectionStore } from "@/state/host-connection"
+import { quietTimer, waitsFor, withinPatience } from "@/state/delivery-policy"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage } from "@/state/message-outbox"
 
 function updateLive(
@@ -32,27 +33,70 @@ function updateLive(
 const deliveries = new Map<string, Promise<boolean>>()
 const retries = new Map<string, ReturnType<typeof setTimeout>>()
 const retryDelays = new Map<string, number>()
-/** An unconfirmed message is asked again after 1 s, then 2, 4, 8 and every 16 s: under its one id, so never twice. */
+/** A waiting message is asked again after 1 s, then 2, 4, 8 and every 16 s: under its one id, so never twice. */
 const FIRST_RETRY_MS = 1_000
 const LAST_RETRY_MS = 16_000
+/** How long a steer the host is busy with another (a steer on its way, a turn ending) is tried again before it queues. */
+const STEER_BUSY_MS = 2_000
+const STEER_BUSY_STEP_MS = 250
 
 function scheduleRecovery(id: string): void {
   if (retries.has(id)) return
   const delay = retryDelays.get(id) ?? FIRST_RETRY_MS
-  retries.set(id, setTimeout(() => {
+  retries.set(id, quietTimer(() => {
     retries.delete(id)
     void replayUnconfirmedPrompts([id])
   }, delay))
   retryDelays.set(id, Math.min(delay * 2, LAST_RETRY_MS))
 }
 
+/** One conversation's messages reach the host one at a time, in the order the person sent them. */
+const lanes = new Map<string, Promise<void>>()
+function inLane<T>(conversation: string, run: () => Promise<T>): Promise<T> {
+  const next = (lanes.get(conversation) ?? Promise.resolve()).then(run)
+  const tail = next.then(() => undefined, () => undefined)
+  lanes.set(conversation, tail)
+  void tail.then(() => { if (lanes.get(conversation) === tail) lanes.delete(conversation) })
+  return next
+}
+
+/** Marks a staged message as waiting in this device's outbox, `why`, for the next try (`scheduleRecovery`). */
+function markWaiting(id: string, requestId: string, why: string): void {
+  updateAcpConversation(id, (current) => {
+    const next = {
+      ...current,
+      pendingPrompts: current.pendingPrompts?.map((prompt) =>
+        prompt.id === requestId ? { ...prompt, unconfirmed: true, waiting: why } : prompt
+      ),
+    }
+    return { ...next, projection: projectAcp(next) }
+  })
+  updateLive(id, (conversation) => ({ ...conversation, sending: false, updatedAt: Date.now() }))
+  scheduleRecovery(id)
+}
+
+/** Why a message can't go to the host yet before any try: Mako is away, or an earlier message of the conversation still waits. */
+function holdsBack(id: string, requestId: string): string | undefined {
+  if (hostConnectionStore.get().kind === "disconnected") return "Waiting for Mako to reconnect"
+  const pending = acpStore.get().conversations[id]?.pendingPrompts ?? []
+  const at = pending.findIndex((prompt) => prompt.id === requestId)
+  return pending.slice(0, at < 0 ? pending.length : at).some((prompt) => prompt.unconfirmed) ? "Waiting behind an earlier message" : undefined
+}
+
+/**
+ * A message to the conversation, after what it holds: drawn and kept in this device's outbox at once, then sent to the
+ * host in order. Answers false only when the host refused it for good; a host that's away, slow or busy keeps it waiting
+ * (`waitsFor`), and it goes by itself, under its one ID, once the host can take it.
+ */
 export function sendTo(
   id: string, text: string, attachments: PromptAttachment[] = [],
   requestId: string = crypto.randomUUID(), bindingId?: string
 ): Promise<boolean> {
   const existing = deliveries.get(requestId)
   if (existing) return existing
-  const delivery = attemptSend(id, text, attachments, requestId, bindingId)
+  const current = acpStore.get().conversations[id]
+  if (current?.kind === "live") stagePrompt(id, { id: requestId, text, attachments: durableAttachments(attachments), bindingId })
+  const delivery = inLane(id, () => attemptSend(id, text, attachments, requestId, bindingId))
     .finally(() => deliveries.delete(requestId))
   deliveries.set(requestId, delivery)
   return delivery
@@ -70,6 +114,9 @@ async function attemptSend(
   attachments = durableAttachments(attachments)
   revealWorkedProject(current.session.cwd)
   stagePrompt(id, { id: requestId, text, attachments, bindingId })
+  updateAcpConversation(id, (conversation) => ({ ...conversation,
+    pendingPrompts: conversation.pendingPrompts?.map((prompt) => prompt.id === requestId ? { ...prompt, steering: undefined } : prompt),
+  }))
   updateLive(id, (conversation) => ({
     ...conversation,
     sending: true,
@@ -84,15 +131,18 @@ async function attemptSend(
       pendingPrompts: conversation.pendingPrompts?.map((prompt) => prompt.id === requestId ? { ...prompt, delivery: { tuning } } : prompt),
     }))
     saveMessage({ kind: "prompt", conversationId: id, requestId, text, attachments, bindingId, tuning })
-    if (bindingId) await getMako().liveContinue(id, bindingId, requestId, text, attachments, tuning)
-    else await getMako().livePrompt(id, requestId, text, attachments, tuning)
+    const held = holdsBack(id, requestId)
+    if (held) {
+      markWaiting(id, requestId, held)
+      return true
+    }
+    if (bindingId) await withinPatience(getMako().liveContinue(id, bindingId, requestId, text, attachments, tuning))
+    else await withinPatience(getMako().livePrompt(id, requestId, text, attachments, tuning))
     settleMessage(requestId)
-    updateAcpConversation(id, (conversation) => ({ ...conversation, pendingPrompts: conversation.pendingPrompts?.map((prompt) => prompt.id === requestId ? { ...prompt, unconfirmed: false } : prompt) }))
+    updateAcpConversation(id, (conversation) => ({ ...conversation, pendingPrompts: conversation.pendingPrompts?.map((prompt) => prompt.id === requestId ? { ...prompt, unconfirmed: false, waiting: undefined } : prompt) }))
     return true
   } catch (error) {
-    const snapshot = await getMako()
-      .liveSnapshot(id)
-      .catch(() => null)
+    const snapshot = await withinPatience(getMako().liveSnapshot(id)).catch(() => null)
     if (
       snapshot?.requests.some((request) => request.id === requestId) ||
       snapshot?.control?.transfers.some(
@@ -105,24 +155,11 @@ async function attemptSend(
       settleMessage(requestId)
       return true
     }
-    if (alreadyUnconfirmed || (error instanceof Error && isHostReconnectingError(error))) {
+    const waiting = error instanceof Error ? waitsFor(error) : undefined
+    if (alreadyUnconfirmed || waiting) {
       // RPC and event connections fail independently. Recover this command
       // even if no stream disconnect/reconnect event ever arrives.
-      updateAcpConversation(id, (current) => {
-        const next = {
-          ...current,
-          pendingPrompts: current.pendingPrompts?.map((prompt) =>
-            prompt.id === requestId ? { ...prompt, unconfirmed: true } : prompt
-          ),
-        }
-        return { ...next, projection: projectAcp(next) }
-      })
-      updateLive(id, (conversation) => ({
-        ...conversation,
-        sending: false,
-        updatedAt: Date.now(),
-      }))
-      scheduleRecovery(id)
+      markWaiting(id, requestId, waiting ?? (error instanceof Error ? error.message : String(error)))
       return true
     }
     settleMessage(requestId)
@@ -137,20 +174,22 @@ async function attemptSend(
   }
 }
 
-/** What became of a steer: the turn took it (or may have), the host refused it before the harness heard it, or its answer was lost. */
-type Steered = "steered" | "refused" | "unknown"
+/** How a steer went: into the turn, refused (with why, when the person should hear it), or not known yet (with why). */
+type Steered = "steered" | { refused: string | undefined } | { unknown: string }
 
 /**
  * A message into the running turn, kept in the outbox under the composer's request ID like any send, which its action
- * takes: a page that dies mid-steer finds it there again, and never puts its words back once the steer landed. With no
- * turn to steer (it ended between the tap and now) or a steer the host refused before the harness heard it (another
- * steer on its way, the turn just ending), the words go as the next message under the same ID. The host takes one ID
- * once, as a steer or as a message, never both (`LiveConversations.submit`, `LiveActions.submit`).
+ * takes, and drawn at once as steering: a page that dies mid-steer finds it there again, and never puts its words back
+ * once the steer landed. With no turn to steer (it ended between the tap and now) or a steer the host refused before
+ * the harness heard it, the words go as the next message under the same ID. The host takes one ID once, as a steer or
+ * as a message, never both (`LiveConversations.submit`, `LiveActions.submit`).
  */
 export function steerTo(id: string, text: string, attachments: PromptAttachment[] = [], requestId: string = crypto.randomUUID()): Promise<boolean> {
   const existing = deliveries.get(requestId)
   if (existing) return existing
-  const delivery = attemptSteer(id, text, attachments, requestId).finally(() => deliveries.delete(requestId))
+  const current = acpStore.get().conversations[id]
+  if (current?.kind === "live") stagePrompt(id, { id: requestId, text, attachments: durableAttachments(attachments), steering: true })
+  const delivery = inLane(id, () => attemptSteer(id, text, attachments, requestId)).finally(() => deliveries.delete(requestId))
   deliveries.set(requestId, delivery)
   return delivery
 }
@@ -162,31 +201,65 @@ async function attemptSteer(id: string, text: string, attachments: PromptAttachm
   const turn = current.session.status === "running" ? current.requests?.find((request) => request.status === "dispatching") : undefined
   if (!turn) return attemptSend(id, text, attachments, requestId, current.replyBindingId)
   saveMessage({ kind: "steer", conversationId: id, requestId, text, attachments })
-  const steered = await steerOnce(id, { kind: "steer", id: requestId, requestId: turn.id, text, attachments })
-  if (steered === "steered") {
-    settleMessage(requestId)
+  stagePrompt(id, { id: requestId, text, attachments, steering: true })
+  const held = holdsBack(id, requestId)
+  if (held) {
+    markWaiting(id, requestId, held)
     return true
   }
-  // Kept in the outbox: the host is asked again once it's back (`restorePendingMessages`).
-  if (steered === "unknown") return true
+  const input: Extract<LiveActionInput, { kind: "steer" }> = { kind: "steer", id: requestId, requestId: turn.id, text, attachments }
+  let steered = await steerOnce(id, input)
+  for (const by = Date.now() + STEER_BUSY_MS; steered !== "steered" && "busy" in steered && Date.now() < by;) {
+    await new Promise((resolve) => setTimeout(resolve, STEER_BUSY_STEP_MS))
+    steered = await steerOnce(id, input)
+  }
+  if (steered === "steered") {
+    settleMessage(requestId)
+    // The turn shows its words now, as the host wrote them into it.
+    removePendingPrompt(id, requestId)
+    return true
+  }
+  // Kept in the outbox: the host is asked again once it's back, which never sends it twice.
+  if ("unknown" in steered) {
+    markWaiting(id, requestId, steered.unknown)
+    return true
+  }
+  if (steered.refused) toast(steered.refused)
   return attemptSend(id, text, attachments, requestId, current.replyBindingId)
 }
 
-async function steerOnce(id: string, input: Extract<LiveActionInput, { kind: "steer" }>): Promise<Steered> {
+async function steerOnce(id: string, input: Extract<LiveActionInput, { kind: "steer" }>): Promise<Steered | { busy: string; refused: string | undefined }> {
   try {
-    const action = await getMako().liveAction(id, input)
-    if (action.state.kind === "not-accepted") return "refused"
+    const action = await withinPatience(getMako().liveAction(id, input))
+    if (action.state.kind === "not-accepted") return { refused: action.state.reason }
     if (action.state.kind === "uncertain" || action.state.kind === "failed") toast.error(action.state.reason)
     return "steered"
   } catch (error) {
-    const snapshot = await readLiveSnapshot(id).catch(() => null)
+    const snapshot = await withinPatience(readLiveSnapshot(id)).catch(() => null)
     if (snapshot) applyLiveSnapshot(snapshot)
     const receipt = snapshot?.control?.actions?.find((action) => action.input.id === input.id)
-    if (receipt) return receipt.state.kind === "not-accepted" ? "refused" : "steered"
+    if (receipt) return receipt.state.kind === "not-accepted" ? { refused: receipt.state.reason } : "steered"
     // It came first as a message of its own: that is where its words went.
     if (snapshot?.requests.some((request) => request.id === input.id)) return "steered"
-    return error instanceof Error && isHostReconnectingError(error) ? "unknown" : "refused"
+    const reason = error instanceof Error ? error.message : String(error)
+    const waiting = error instanceof Error ? waitsFor(error) : undefined
+    // The host is away or slow: its answer, or the next try under this ID, says where the words went.
+    if (waiting && !BUSY_STEER.test(reason)) return { unknown: waiting }
+    if (waiting) return { busy: waiting, refused: undefined }
+    return { refused: steerRefusal(reason) }
   }
+}
+
+/** A refusal that means the host is busy with another steer or a turn ending: tried again for a moment, then queued. */
+const BUSY_STEER = /Resolve the previous provider action|Wait for this conversation to connect|is still ending the previous turn/i
+
+/**
+ * What the person hears of a steer the host refused before taking it, which then goes as the next message: nothing
+ * when the turn it was for had just ended, as a message sent then would have gone the same way.
+ */
+function steerRefusal(reason: string): string | undefined {
+  if (/no longer running|has not started yet/i.test(reason)) return undefined
+  return `Mako couldn't steer your message into the running turn (${reason.replace(/[.\s]+$/, "")}), so it goes as the next message.`
 }
 
 /**
@@ -247,7 +320,7 @@ export async function replayUnconfirmedPrompts(ids?: string[], hydrated: Readonl
     }
     const unconfirmed = acpStore.get().conversations[conversation.key]?.pendingPrompts?.filter((prompt) => prompt.unconfirmed) ?? []
     for (const prompt of unconfirmed)
-      await sendTo(conversation.key, prompt.text, prompt.attachments, prompt.id, prompt.bindingId)
+      await (prompt.steering ? steerTo(conversation.key, prompt.text, prompt.attachments, prompt.id) : sendTo(conversation.key, prompt.text, prompt.attachments, prompt.id, prompt.bindingId))
     if (acpStore.get().conversations[conversation.key]?.pendingPrompts?.some((prompt) => prompt.unconfirmed)) scheduleRecovery(conversation.key)
     else {
       clearTimeout(retries.get(conversation.key))
@@ -255,6 +328,25 @@ export async function replayUnconfirmedPrompts(ids?: string[], hydrated: Readonl
       retryDelays.delete(conversation.key)
     }
   }
+}
+
+/** Asks the host now for a conversation's waiting messages, in order, instead of at the next backoff. */
+export function sendWaitingNow(conversation: string): Promise<void> {
+  clearTimeout(retries.get(conversation))
+  retries.delete(conversation)
+  retryDelays.delete(conversation)
+  return replayUnconfirmedPrompts([conversation])
+}
+
+/**
+ * Takes a waiting message out of this device's outbox, between tries. A try the host never answered may still have
+ * reached it: then the host's queue shows it, where it can be removed too.
+ */
+export function discardWaiting(conversation: string, requestId: string): boolean {
+  if (deliveries.has(requestId)) return false
+  settleMessage(requestId)
+  removePendingPrompt(conversation, requestId)
+  return true
 }
 
 /** Recover commands before their host receipt was acknowledged, including after reload. */

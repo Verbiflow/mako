@@ -10,6 +10,7 @@ import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
+import { pullWakeWords } from "@mako/host/contracts/pull-waits"
 
 export { continueTurnPrompt }
 
@@ -25,12 +26,13 @@ export interface TurnStop {
 }
 
 /**
- * A turn that ended where the person chose: their own Stop, or their goal's
- * token budget. It's said quietly and nothing offers to continue it; a goal
- * at its budget goes on only when it's set again with more.
+ * A turn that ended where the person chose: their own Stop, their goal's
+ * token budget, or their message steered in by stopping it. It's said quietly
+ * and nothing offers to continue it; a goal at its budget goes on only when
+ * it's set again with more, and a steered turn goes on as the message's.
  */
 export function endedAsChosen(reason: InterruptionReason): boolean {
-  return reason === "stopped" || reason === "goal-budget"
+  return reason === "stopped" || reason === "goal-budget" || reason === "steered"
 }
 
 /**
@@ -75,6 +77,8 @@ export type MakoPrompt =
   | { kind: "moved" }
   | { kind: "goal"; step: NonNullable<LiveRequest["goal"]> }
   | { kind: "review"; target: NonNullable<LiveRequest["review"]> }
+  /** A pull request the Fin waits on came to an outcome (`pullWakeNote`): its line, and the pull request's link. */
+  | { kind: "pull"; line: string; url?: string }
 
 /**
  * The prompts Mako sent itself, keyed by their request id, so the transcript
@@ -86,6 +90,10 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
     if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
     else if (request.actor?.kind === "service" && request.actor.name === "goal" && request.goal) prompts.set(request.id, { kind: "goal", step: request.goal })
     else if (request.review) prompts.set(request.id, { kind: "review", target: request.review })
+    else if (request.actor?.kind === "service" && request.actor.name === "pull-watch") {
+      const pull = pullWakeWords(request.text)
+      if (pull) prompts.set(request.id, { kind: "pull", ...pull })
+    }
   }
   return prompts
 }
@@ -115,12 +123,15 @@ export function carriedHistories(requests: readonly LiveRequest[]): Map<string, 
 }
 
 /**
- * A goal's prompt, known by its words: a store keeps no request to say who
- * sent it. The words are compared whole with what `goalStartPrompt` or
- * `goalContinuePrompt` writes for the objective they carry. Anything else,
- * a fragment or an edit included, is the user's.
+ * A goal's prompt, or a pull request's outcome Mako woke a Fin with, known by
+ * its words: a store keeps no request to say who sent it. A goal's words are
+ * compared whole with what `goalStartPrompt` or `goalContinuePrompt` writes
+ * for the objective they carry, a wake's with `pullWakeNote`'s one line.
+ * Anything else, a fragment or an edit included, is the user's.
  */
 export function savedMakoPrompt(text: string): MakoPrompt | undefined {
+  const pull = pullWakeWords(text)
+  if (pull) return { kind: "pull", ...pull }
   const objective = /\n<objective>\n([\s\S]*?)\n<\/objective>\n/.exec(text)?.[1]
   if (objective === undefined) return undefined
   const words = text.trim()
@@ -172,6 +183,7 @@ const TURN_STOP_LABELS = {
   "not-saved": () => "Stopped when Mako couldn't save",
   "goal-budget": () => "Stopped at the goal's token budget",
   "machine-lost": () => "Interrupted",
+  steered: () => "Stopped for your message",
 } satisfies Record<InterruptionReason, (provider: string) => string>
 
 /**
@@ -225,6 +237,14 @@ export interface PendingPrompt {
   signIn?: LiveRequest["signIn"]
   /** Set on a held message that sends itself at a time: a usage limit's reset. */
   wake?: LiveRequest["wake"]
+  /** Set on a held message that goes again by itself: its harness couldn't take it for now. */
+  retry?: LiveRequest["retry"]
+  /** Set on a digest of Fins' news: one `resting` goes with the next message. */
+  digest?: LiveRequest["digest"]
+  /** Set on a held message the person paused to edit: it keeps its place. */
+  editing?: LiveRequest["editing"]
+  /** Set on a held message the person's Stop paused: what they send next goes ahead of it. */
+  pause?: LiveRequest["pause"]
   /** Set on a queued message waiting for this Mac to hear its account after it was away. */
   ownerCheck?: LiveRequest["ownerCheck"]
   displayText?: string
@@ -235,6 +255,10 @@ export interface PendingPrompt {
    * acceptance, so it is never delivered twice.
    */
   unconfirmed?: boolean
+  /** Why it waits in this device's outbox for the host (`waitsFor`): it goes by itself, in order, once the host can take it. */
+  waiting?: string
+  /** Sent into the running turn: it shows as steering until the turn takes it, or goes as the next message. */
+  steering?: true
 }
 
 interface DeliveryInput {
@@ -326,7 +350,8 @@ export function promptDelivery(input: DeliveryInput): PromptDelivery {
       : input.session.status === "failed"
         ? input.pendingPrompts?.[0]
         : undefined
-  const starting = first?.status === "held" ? undefined : first
+  // A message waiting in this device's outbox stays in the queue, where its row says why, not drawn as sent.
+  const starting = first?.status === "held" || (first && "waiting" in first && first.waiting) ? undefined : first
   const visible = transcribedRequests(input)
   return {
     starting: starting && !visible.has(starting.id) ? starting : null,

@@ -6,12 +6,13 @@ import {
   readFile,
   rm,
   symlink,
-  writeFile,
 } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
+import { publishFile } from "../../base/published-files.js"
 import type { McpServer } from "@agentclientprotocol/sdk"
 import { removeRetiredMakoMcp } from "../../tools/index.js"
+import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
 
 const DevinSettings = z.record(z.string(), z.json())
 
@@ -32,8 +33,11 @@ const nativeFile = (path: string) => readFile(path, "utf8").catch((error: NodeJS
 export async function prepareDevinMcp(
   servers: readonly McpServer[],
   env: NodeJS.ProcessEnv,
-  subagentsOff = false
+  subagentsOff = false,
+  routesCalls = false
 ) {
+  const gate = routesCalls ? devinCallGate(servers) : undefined
+  const ownConfig = subagentsOff || gate !== undefined
   const root = await mkdtemp(join(tmpdir(), "mako-devin-mcp-"))
   const source = env.XDG_CONFIG_HOME || join(homedir(), ".config")
   try {
@@ -50,7 +54,7 @@ export async function prepareDevinMcp(
       if (error.code === "ENOENT") return []
       throw error
     })
-    const written = new Set(["mcp_config.json", ...subagentsOff ? ["config.json"] : []])
+    const written = new Set(["mcp_config.json", ...ownConfig ? ["config.json"] : []])
     for (const entry of nativeEntries) {
       if (!written.has(entry.name))
         await symlink(
@@ -84,14 +88,11 @@ export async function prepareDevinMcp(
         throw new Error("Devin does not support ACP-routed MCP servers")
       }
     }
-    await writeFile(
-      join(directory, "mcp_config.json"),
-      JSON.stringify(config),
-      { mode: 0o600 }
-    )
-    if (subagentsOff) {
+    await publishFile(join(directory, "mcp_config.json"), JSON.stringify(config), { mode: 0o600 })
+    if (ownConfig) {
       const settings = DevinSettings.parse(JSON.parse(await nativeFile(join(source, "devin", "config.json"))))
-      await writeFile(join(directory, "config.json"), JSON.stringify({ ...settings, subagents_enabled: false }), { mode: 0o600 })
+      const config = { ...settings, ...subagentsOff && { subagents_enabled: false }, ...gate && { hooks: withDevinGate(settings.hooks, gate) } }
+      await publishFile(join(directory, "config.json"), JSON.stringify(config), { mode: 0o600 })
     }
     env.XDG_CONFIG_HOME = root
     return () => rm(root, { recursive: true, force: true })
@@ -99,4 +100,43 @@ export async function prepareDevinMcp(
     await rm(root, { recursive: true, force: true })
     throw error
   }
+}
+
+/** Devin's shell tool, the one its hooks are registered for. */
+const DEVIN_SHELL = "exec"
+
+/**
+ * Mako's gate for Devin's tool calls: the `mako` server's own address and
+ * grant, at the path the conversation server answers hooks on (`/calls`).
+ * Absent when the launch has no `mako` server.
+ */
+function devinCallGate(servers: readonly McpServer[]): { url: string; authorization: string } | undefined {
+  for (const server of servers) {
+    if (!("type" in server) || server.type !== "http" || server.name !== MAKO_THREAD_SERVER) continue
+    const authorization = server.headers.find(({ name }) => name.toLowerCase() === "authorization")?.value
+    const url = new URL(server.url)
+    url.pathname = url.pathname.replace(/\/mako$/, "/calls")
+    url.search = ""
+    if (authorization) return { url: url.toString(), authorization }
+  }
+  return undefined
+}
+
+const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
+
+/**
+ * The person's hooks with Mako's appended, as 3000.10.23 reads them (proven
+ * against a scripted model, 2026-11-03): a PreToolUse command hook gets the
+ * call on stdin and its `{decision: "block", reason}` is what the model reads
+ * (`Tool rejected: …`) with the command not run; a pre-tool note is dropped,
+ * so a warn is PostToolUse's `additionalContext`, the model's next message.
+ * A gate that can't be reached prints nothing, and the call goes on.
+ */
+function withDevinGate(hooks: z.infer<typeof DevinSettings>[string] | undefined, gate: { url: string; authorization: string }) {
+  const own = z.record(z.string(), z.array(z.json())).catch({}).parse(hooks ?? {})
+  const hook = (event: "pre" | "post") => ({
+    matcher: `^${DEVIN_SHELL}$`,
+    hooks: [{ type: "command", command: `curl -s -m 8 -X POST --data-binary @- -H ${quote(`Authorization: ${gate.authorization}`)} ${quote(`${gate.url}/${event}`)}`, timeout: 10 }],
+  })
+  return { ...own, PreToolUse: [...own.PreToolUse ?? [], hook("pre")], PostToolUse: [...own.PostToolUse ?? [], hook("post")] }
 }

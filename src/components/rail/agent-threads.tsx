@@ -28,14 +28,6 @@ import {
   type ThreadFolder,
   type ThreadFolderActivity,
 } from "@/lib/thread-folders"
-import {
-  boardBucketOf,
-  groupThreadBoard,
-  liveBoardBucket,
-  type BoardBucket,
-  type BoardItem,
-  type BoardSection as BoardSectionData,
-} from "@/lib/thread-board"
 import { useRowFlip } from "@/components/rail/use-row-flip"
 import { EMPTY_FOLD, foldThreads, foldedThreadState, presenceStatusOf, unreadReview, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
 import { useThreadGroups } from "@/state/thread-groups"
@@ -48,8 +40,6 @@ import {
   useThreads,
   type ThreadStatus,
 } from "@/state/threads"
-import type { ThreadRef } from "@/lib/types"
-import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { actions, useCanChooseFolder } from "@/state/session"
 import { IfCanChooseFolder, IfCanReveal } from "@/components/ui/machine-gate"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
@@ -85,7 +75,8 @@ import { cn } from "@/lib/utils"
 import { Blank } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
 import { DraftThreads } from "@/components/rail/draft-threads"
-import { RoomSection } from "@/components/rail/room-section"
+import { RailTop } from "@/components/rail/rail-top"
+import { useInboxView } from "@/state/inbox"
 import { archivedLive, archivedThread, useThreadArchives } from "@/state/thread-lifecycle"
 import { FolderActivity, RailSkeleton } from "@/components/rail/rail-activity"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -122,8 +113,8 @@ import {
  * folders in the same order; a busy thread keeps its rank until it
  * finishes; while the pointer is inside the rail nothing changes place at
  * all. What a thread needs from you is its mark and its folder's chip, and
- * the Status view is the one place threads regroup by state, on purpose.
- * Rows that do move glide there. Each folder holds the same handful of rows
+ * the Inbox above the list is the one place that gathers it, across every
+ * Thread and Fin. Rows that do move glide there. Each folder holds the same handful of rows
  * and a quiet "More" for the rest; folders gone cold collapse to a single
  * line. No chips, no toggles, no permanent search box — search and the
  * harness filter live behind two small glyphs in the header and take space
@@ -139,8 +130,6 @@ const FOLDER_LEAD_ROWS = 4
 /** Each press of "More" reveals this many further rows. */
 const PAGE_ROWS = 5
 const PINNED_ROWS = 8
-/** Rows the board's Done section shows before "More"; the sections above it show everything. */
-const BOARD_LEAD_ROWS = 8
 const FOLDER_ROWS = 6
 /** Folders quiet longer than this start out collapsed. */
 const COLD_MS = 7 * 24 * 3600_000
@@ -404,31 +393,9 @@ export function AgentThreads() {
     ...shownRefs.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: shownRanks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
     ...shownLive.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.movedAt ?? presence.createdAt).toISOString(), presence })),
   ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [shownRefs, shownRanks, threadActivity, shownLive])
-  const board = useMemo((): BoardSectionData<BoardRow>[] => {
-    if (grouping !== "status") return []
-    const items: BoardItem<BoardRow>[] = [
-      ...shownRefs.map((ref) => {
-        const status = statuses[ref.path] ?? { kind: "idle" as const }
-        const placed = boardBucketOf(status)
-        return {
-          key: ref.path,
-          bucket: placed.bucket,
-          at: placed.at ?? shownRanks[ref.path]?.at ?? ref.updatedAt ?? "",
-          item: { kind: "native" as const, ref },
-        }
-      }),
-      ...shownLive.map((presence, index) => ({
-        key: presence.key,
-        bucket: liveBoardBucket(countedLive[index]?.status ?? presence.status),
-        at: new Date(presence.createdAt).toISOString(),
-        item: { kind: "live" as const, presence },
-      })),
-    ]
-    return groupThreadBoard(items)
-  }, [grouping, shownRefs, statuses, shownRanks, shownLive, countedLive])
-
   const searchActive = Boolean(deferred.trim())
   useRowFlip(scroller, `${grouping}:${searchActive}`)
+  const inboxOpen = useInboxView((state) => state.open)
   const quietPinned = held
   const shownPinned = showAllPinned
     ? quietPinned
@@ -500,6 +467,7 @@ export function AgentThreads() {
     <div
       ref={rail}
       data-jump-hints={jumpHints || undefined}
+      data-inbox-open={inboxOpen || undefined}
       onKeyDown={(event) => {
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
         const current =
@@ -521,6 +489,7 @@ export function AgentThreads() {
       className="thread-jump-scope flex min-h-0 flex-1 flex-col"
     >
       <RailAnnouncer asks={asks} />
+      <RailTop />
       <RailHeader
         searching={searching}
         query={query}
@@ -581,27 +550,6 @@ export function AgentThreads() {
                 ]}
               />
             )
-          ) : grouping === "status" && !searchActive ? (
-            <div className="pt-1">
-              <DraftThreads />
-              {board.every((section) => section.key === "working" || section.key === "done") ? (
-                <p data-flip-key="board:calm" className="flex h-7 items-center px-1.5 text-label text-faint/70">
-                  Nothing needs you right now
-                </p>
-              ) : null}
-              {board.map((section) => (
-                <BoardSection
-                  key={section.key}
-                  section={section}
-                  fold={fold}
-                  pages={pages[`board:${section.key}`] ?? 0}
-                  onPages={(next) =>
-                    setPages((prev) => ({ ...prev, [`board:${section.key}`]: next }))
-                  }
-                />
-              ))}
-              <RoomSection />
-            </div>
           ) : searchActive || grouping !== "project" ? (
             <div className="pt-1">
               {grouping !== "archived" ? <DraftThreads /> : null}
@@ -628,7 +576,7 @@ export function AgentThreads() {
                     <button
                       type="button"
                       onClick={() => setShowAllPinned((current) => !current)}
-                      className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+                      className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
                     >
                       {showAllPinned
                         ? "Fewer pinned"
@@ -642,7 +590,7 @@ export function AgentThreads() {
                 <button
                   type="button"
                   onClick={() => setShowAllFolders((current) => !current)}
-                  className="mb-1 flex h-7 w-full items-center rounded-md px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+                  className="mb-1 flex h-7 w-full items-center px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
                 >
                   {showAllFolders
                     ? "Fewer folders"
@@ -656,7 +604,7 @@ export function AgentThreads() {
                     aria-expanded={showHidden}
                     data-rail-hidden-projects
                     onClick={() => setShowHidden((current) => !current)}
-                    className="group/hidden mb-1 flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+                    className="group/hidden mb-1 flex h-7 w-full items-center gap-1.5 px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
                   >
                     <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-out", showHidden && "rotate-90")} />
                     Hidden
@@ -750,7 +698,7 @@ function RailHeader({
           type="button"
           aria-label="Close search"
           onClick={() => onToggleSearch(false)}
-          className="pressable rounded p-1 text-faint hover:text-foreground"
+          className="pressable p-1 text-faint hover:text-foreground"
         >
           <XIcon className="size-3" />
         </button>
@@ -759,26 +707,17 @@ function RailHeader({
   }
 
   return (
-    <div className="flex h-9 shrink-0 items-center px-2 pt-1.5">
-      <div className="flex items-center gap-0.5" role="group" aria-label="Thread view">
-        {/* Archived is reached from the filter glyph; while it is showing, the
-            one pressed pill names it and returns to Projects. */}
-        {(grouping === "archived"
-          ? ([["archived", "Archived"]] as const)
-          : ([["project", "Projects"], ["recent", "Recent"], ["status", "Status"]] as const)
-        ).map(([value, label]) => (
-          <button key={value} type="button" aria-pressed={grouping === value} onClick={() => setPref("railGrouping", value === "archived" ? "project" : value)} className={cn("pressable h-6 rounded px-1.5 text-label transition-colors hover:bg-fill-hover", grouping === value ? "bg-fill-selected font-medium text-foreground" : "text-faint")}>{label}</button>
-        ))}
-      </div>
+    <div className="flex h-8 shrink-0 items-center pr-2 pl-3.5">
+      {grouping === "project" ? (
+        <h2 data-rail-threads-heading className="text-label font-medium text-faint">Threads</h2>
+      ) : (
+        // Recent and Archived are the filter menu's choices; the heading names the one showing and leads back.
+        <button type="button" data-rail-threads-heading onClick={() => setPref("railGrouping", "project")} title="Back to threads by project" className="pressable -ml-1.5 flex h-6 items-center gap-1 px-1.5 text-label font-medium text-foreground transition-colors hover:bg-fill-hover">
+          {grouping === "archived" ? "Archived" : "Recent"}
+          <XIcon aria-hidden className="size-3 text-faint" />
+        </button>
+      )}
       <span className="flex-1" />
-      <button
-        type="button"
-        aria-label="Search threads"
-        onClick={() => onToggleSearch(true)}
-        className="pressable rounded-md p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-      >
-        <SearchIcon className="size-3.5" />
-      </button>
       <HarnessFilter counts={counts} filter={filter} />
       <IfCanChooseFolder>
         <button
@@ -786,7 +725,7 @@ function RailHeader({
           aria-label="Open a folder"
           title="Open a folder"
           onClick={() => void actions.pickWorkspace()}
-          className="pressable rounded-md p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         >
           <FolderPlusIcon className="size-3.5" />
         </button>
@@ -813,13 +752,12 @@ function HarnessFilter({
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const scope = usePrefs((prefs) => prefs.railScope)
   const grouping = usePrefs((prefs) => prefs.railGrouping)
-  const archived = grouping === "archived"
-  const on = filter.length > 0 || scope === "workspace" || sortBy !== "recent" || archived
+  const on = filter.length > 0 || scope === "workspace" || sortBy !== "recent" || grouping !== "project"
 
   const section = "px-2 pt-2 pb-1 text-label font-medium text-faint/80"
   const row = (active: boolean) =>
     cn(
-      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui transition-colors duration-100",
+      "flex w-full items-center gap-2 px-2 py-1.5 text-left text-ui transition-colors duration-100",
       active
         ? "bg-fill-selected text-foreground"
         : "text-foreground/85 hover:bg-fill-hover"
@@ -832,7 +770,7 @@ function HarnessFilter({
           type="button"
           aria-label="Filter and sort"
           className={cn(
-            "pressable relative rounded-md p-1.5 transition-colors duration-100 hover:bg-fill-hover",
+            "pressable relative p-1.5 transition-colors duration-100 hover:bg-fill-hover",
             on ? "text-foreground" : "text-faint hover:text-foreground"
           )}
         >
@@ -842,7 +780,32 @@ function HarnessFilter({
           ) : null}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={6} className="w-56 p-1">
+      <PopoverContent align="end" sideOffset={6} collisionPadding={8} className="max-h-[var(--radix-popover-content-available-height)] w-56 overflow-y-auto overscroll-contain p-1">
+        <p className={section}>Show</p>
+        {(
+          [
+            ["project", "By project"],
+            ["recent", "Recent, newest first"],
+            ["archived", "Archived"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            data-rail-show={value}
+            onClick={() => {
+              setPref("railGrouping", value)
+              if (value !== "project") setOpen(false)
+            }}
+            className={row(grouping === value)}
+          >
+            <span className="flex-1">{label}</span>
+            {grouping === value ? (
+              <CheckIcon className="size-3 text-foreground" />
+            ) : null}
+          </button>
+        ))}
+
         <p className={section}>Agents</p>
         {[...counts.entries()]
           .filter(([harness]) => harness in harnessLabels())
@@ -866,7 +829,6 @@ function HarnessFilter({
                 <HarnessIcon
                   harness={harness}
                   className="size-3.5"
-                  tinted={active}
                 />
                 <span className="flex-1">{harnessLabel(harness)}</span>
                 {active ? (
@@ -918,30 +880,6 @@ function HarnessFilter({
           </button>
         ))}
 
-        <p className={section}>Show</p>
-        {(
-          [
-            [false, "Current threads"],
-            [true, "Archived threads"],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={label}
-            type="button"
-            data-rail-show={value ? "archived" : "current"}
-            onClick={() => {
-              if (value !== archived) setPref("railGrouping", value ? "archived" : "project")
-              if (value) setOpen(false)
-            }}
-            className={row(archived === value)}
-          >
-            <span className="flex-1">{label}</span>
-            {archived === value ? (
-              <CheckIcon className="size-3 text-foreground" />
-            ) : null}
-          </button>
-        ))}
-
         {on ? (
           <button
             type="button"
@@ -949,10 +887,10 @@ function HarnessFilter({
               setPref("agentHarnessFilter", [])
               setPref("railSortBy", "recent")
               setPref("railScope", "all")
-              if (archived) setPref("railGrouping", "project")
+              setPref("railGrouping", "project")
               setOpen(false)
             }}
-            className="mt-1 flex w-full items-center justify-center rounded-md border-t border-hairline px-2 py-1.5 text-label text-faint hover:text-foreground"
+            className="mt-1 flex w-full items-center justify-center px-2 py-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Reset
           </button>
@@ -969,7 +907,7 @@ function HarnessFilter({
  */
 /** `ROW_ACTIONS` for a folder header, whose group is `group/folder`. */
 const FOLDER_ACTIONS =
-  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-visible/folder:pointer-events-auto group-focus-visible/folder:opacity-100 group-has-[:focus-visible]/folder:pointer-events-auto group-has-[:focus-visible]/folder:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+  "pointer-events-none absolute inset-y-0 right-0 flex items-center pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-visible/folder:pointer-events-auto group-focus-visible/folder:opacity-100 group-has-[:focus-visible]/folder:pointer-events-auto group-has-[:focus-visible]/folder:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
 /** A project's own actions, from right-click on its header or its `…`. */
 function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHide }: {
@@ -1082,7 +1020,7 @@ function FolderSection({
   ) : null
 
   const header = (
-    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="group/folder relative flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
+    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="group/folder relative flex h-7 w-full items-center transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
       <button
         type="button"
         title={[folder.cwd ?? folder.name, head ? `On ${checkoutSentence(head)}` : undefined].filter(Boolean).join("\n")}
@@ -1138,7 +1076,7 @@ function FolderSection({
             aria-label={`New thread in ${folder.name}`}
             title={`New thread in ${folder.name}`}
             onClick={onNew}
-            className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+            className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             <PlusIcon className="size-3.5" />
           </button>
@@ -1149,7 +1087,7 @@ function FolderSection({
             aria-label={`Show ${folder.name}`}
             title="Show this project in the list again"
             onClick={() => hideProject(project, false)}
-            className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+            className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             <EyeIcon className="size-3.5" />
           </button>
@@ -1160,7 +1098,7 @@ function FolderSection({
             title={folder.pinned ? "Unpin folder" : "Pin folder"}
             onClick={onPin}
             className={cn(
-              "pressable flex size-6 shrink-0 items-center justify-center rounded transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
+              "pressable flex size-6 shrink-0 items-center justify-center transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
               folder.pinned ? "text-foreground/70" : "text-faint"
             )}
           >
@@ -1175,7 +1113,7 @@ function FolderSection({
               <button
                 type="button"
                 aria-label={`Actions for ${folder.name}`}
-                className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+                className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
               >
                 <MoreHorizontalIcon className="size-3.5" />
               </button>
@@ -1202,9 +1140,7 @@ function FolderSection({
           closed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
         )}
       >
-        {/* The folder's rows hang from a hairline under its glyph; their
-            fills start past it, so the line never breaks. */}
-        <div className="ml-[13px] min-h-0 overflow-hidden border-l border-hairline pl-1">
+        <div className="min-h-0 overflow-hidden">
           {shownLive.map((presence) => <LiveAgentRow key={presence.key} presence={presence} folded={fold.byLead.get(presence.key)} indent />)}
           {visible.map((ref) => (
             <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />
@@ -1213,7 +1149,7 @@ function FolderSection({
             <button
               type="button"
               onClick={() => onPages(pages + 1)}
-              className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               More
               <span className="tabular ml-1 text-label text-faint/60">
@@ -1224,86 +1160,13 @@ function FolderSection({
             <button
               type="button"
               onClick={() => onPages(0)}
-              className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               Less
             </button>
           ) : null}
         </div>
       </div>
-    </section>
-  )
-}
-
-type BoardRow =
-  | { kind: "native"; ref: ThreadRef }
-  | { kind: "live"; presence: AcpPresence }
-
-const BOARD_MARK = {
-  "needs-input": "waiting",
-  failed: "failed",
-  review: "complete",
-  working: "working",
-  done: null,
-} satisfies Record<BoardBucket, ActivityState | null>
-
-/**
- * One section of the status board: a heading that wears the state's own
- * mark, then the rows in it, newest change first. Every section above Done
- * shows all of its rows — they are bounded by real activity — and Done pages
- * like a folder does.
- */
-function BoardSection({
-  section,
-  fold,
-  pages,
-  onPages,
-}: {
-  section: BoardSectionData<BoardRow>
-  fold: ThreadFold
-  pages: number
-  onPages: (next: number) => void
-}) {
-  const mark = BOARD_MARK[section.key]
-  const limit = section.key === "done" ? BOARD_LEAD_ROWS + pages * PAGE_ROWS : Infinity
-  const visible = section.rows.slice(0, limit)
-  const hidden = section.rows.length - visible.length
-  return (
-    <section className="pb-2">
-      <p
-        data-flip-key={`section:${section.key}`}
-        data-board-section={section.key}
-        className="flex h-7 items-center gap-1.5 px-1.5 text-label font-medium text-faint"
-      >
-        {mark ? <ActivityMark state={mark} size={20} className="text-faint" /> : null}
-        <span className="flex-1 truncate">{section.label}</span>
-        <span className="tabular text-faint/60">{section.rows.length}</span>
-      </p>
-      {visible.map((row) =>
-        row.item.kind === "native" ? (
-          <ThreadRow key={row.key} threadRef={row.item.ref} folded={fold.byLead.get(row.key)} showFolder />
-        ) : (
-          <LiveAgentRow key={row.key} presence={row.item.presence} folded={fold.byLead.get(row.key)} />
-        )
-      )}
-      {hidden > 0 ? (
-        <button
-          type="button"
-          onClick={() => onPages(pages + 1)}
-          className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
-        >
-          More
-          <span className="tabular ml-1 text-label text-faint/60">{hidden}</span>
-        </button>
-      ) : pages > 0 ? (
-        <button
-          type="button"
-          onClick={() => onPages(0)}
-          className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
-        >
-          Less
-        </button>
-      ) : null}
     </section>
   )
 }

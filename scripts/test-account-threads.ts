@@ -381,6 +381,9 @@ test("an Apex's row waits on its Fin's ask that's the person's, saying what it s
   assert.deepEqual({ state: own.state, waitingOn: own.waitingOn, asking: own.asking }, { state: "waiting", waitingOn: "Approve: git push", asking: undefined }, "its own ask first")
   const approval = finAsking({ fin, name: "sheet-motion", line: "Approve: npm ci", ask: { kind: "approval", id: "a-1" }, more: 0 })
   assert.deepEqual(approval, { waiting: { for: "approval", line: "sheet-motion: Approve: npm ci" }, asking: { fin, name: "sheet-motion", ask: "a-1" } })
+  // A limit's notice asks nothing and is no Fin's: no "has a question", and its line isn't cut short by a name.
+  const notice = finAsking({ fin, name: "Usage", line: "Cursor ran out until Sun 12:00 AM PST.", ask: { kind: "report", id: "limit:cursor::1", options: [{ label: "Got it" }] }, more: 0 })
+  assert.deepEqual(notice?.waiting, { for: "needs-you", line: "Cursor ran out until Sun 12:00 AM PST." })
 })
 
 test("a Thread moving to the cloud says so on every row of it from the move's first step, each step once, and not after it ends", () => {
@@ -798,7 +801,7 @@ test("macOS's power reads as pmset says it: the source, the battery, and Low Pow
   assert.deepEqual(parsePower("", ""), { onBattery: false, percent: undefined, lowPower: false }, "nothing said reads as plugged in")
 })
 
-test("a device's Sessions go up at work first, then each Thread whole, the most recently worked in first, by tier; catching up waits on a low battery; the scope always goes before the links", async () => {
+test("a device's Sessions go up at work first, then each Thread whole, the most recently worked in first, by tier; catching up waits on a low battery; the first scope goes before the links", async () => {
   const plugged: PowerReading = { onBattery: false, percent: 100, lowPower: false }
   const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString()
   const at = (base: ReportedSession, activityAt: string, thread: number): ReportedSession => ({ ...base, activityAt, thread: uuid(thread) })
@@ -902,6 +905,42 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   await uploads.tick()
   assert.deepEqual(said.slice(6), ["stop copies", "stop originals"], "signed out: it stops")
   assert.deepEqual(uploads.status(), { state: "off", reason: "signed-out" })
+})
+
+test("a renewed token reaches the catalog while it's too busy to take the scope, and at once when it says a link is due", async () => {
+  const said: string[] = []
+  let scopeAnswers = true
+  let listed: ReportedSession[] = [{ ...row(1, "working"), nativeId: "n-1" }]
+  const link = (index: string, authorization: string): RecordsLink => ({ id: `d-1/${index}`, base: `https://cloud.test/v1/devices/d-1/${index}`, authorization })
+  let links: UploadLinks = { state: "on", copies: link("records", "Bearer a"), originals: link("originals", "Bearer a") }
+  const uploads = new SessionUploads({
+    rows: () => listed,
+    path: (_harness, nativeId) => `/rail/${nativeId}.jsonl`,
+    links: async () => links,
+    power: async () => ({ onBattery: false, percent: 100, lowPower: false }),
+    scope: async (scope) => {
+      if (!scopeAnswers) throw new Error("The sync daemon request timed out")
+      said.push(`scope ${scope.sessions.map((each) => each.nativeId).join(",")}`)
+    },
+    copies: async (given) => void said.push(`copies ${given?.authorization}`),
+    originals: async (given) => void said.push(`originals ${given?.authorization}`),
+    status: async () => null,
+    backfill: async () => undefined,
+    now: () => NOW,
+  })
+  await uploads.renew()
+  assert.deepEqual(said, [], "no links before the first scope, asked or not")
+  await uploads.tick()
+  assert.deepEqual(said, ["scope n-1", "copies Bearer a", "originals Bearer a"])
+  // Every Fin at work moves the scope at each tick, and the catalog's process, held, answers none of them in time.
+  scopeAnswers = false
+  listed = [...listed, { ...row(2, "working"), nativeId: "n-2" }]
+  links = { state: "on", copies: link("records", "Bearer b"), originals: link("originals", "Bearer b") }
+  await assert.rejects(uploads.tick(), /timed out/)
+  assert.deepEqual(said.slice(3), ["copies Bearer b", "originals Bearer b"], "the renewed links went before the scope that timed out")
+  links = { state: "on", copies: link("records", "Bearer c"), originals: link("originals", "Bearer c") }
+  await uploads.renew()
+  assert.deepEqual(said.slice(5), ["copies Bearer c", "originals Bearer c"], "a link the catalog says is due goes at once, not at the next tick")
 })
 
 /** A tier whose `sessions` are all in the account, as one Thread. */

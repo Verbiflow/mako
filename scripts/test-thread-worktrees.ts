@@ -1,11 +1,12 @@
 import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "@mako/host/contracts/thread-identity"
 import type { Prepared } from "@mako/host/workspaces/thread-processes"
@@ -13,6 +14,7 @@ import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, t
 import { projectRepositories } from "@mako/host/git/repository-discovery"
 import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
+import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
@@ -403,6 +405,22 @@ assert.ok(lonePlacement)
 threads.attachWorktree({ path: forked.path, thread: lonePlacement.thread, repoRoot: shop, project: shop, branch: forked.branch, base: git(shop, "rev-parse", "HEAD") })
 assert.equal((await worktrees.prepareFork(loneId, loneFork, shop, "Fork elsewhere")).path, forked.path, "a repeated request finds its first worktree")
 await assert.rejects(worktrees.prepareFork(loneId, randomUUID(), shop, "Another"), /already works in its own worktree/)
+// An agent's move can name its new branch and the commit it starts from; a name that exists, a base that doesn't, or a base under uncommitted changes is refused before anything is made.
+{
+  const namedId = randomUUID()
+  started(namedId)
+  const before = git(shop, "rev-parse", "HEAD~1")
+  await worktrees.wantBranch(namedId, shop, { branch: "alt", base: "HEAD~1" })
+  const named = await worktrees.prepareFork(namedId, randomUUID(), shop, "Named move")
+  assert.equal(named.branch, "alt", "the branch is the name the agent gave, as given")
+  assert.equal(git(named.path, "rev-parse", "HEAD"), before, "and starts where it said")
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { branch: "alt" }), /alt already exists in shop\. worktree_move makes a new branch/)
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { branch: "bad..name" }), /isn't a name Git allows/)
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { base: "no-such-ref" }), /no-such-ref isn't a commit, branch or tag in shop/)
+  writeFileSync(join(shop, "web", "index.ts"), "edited\n")
+  await assert.rejects(worktrees.wantBranch(randomUUID(), shop, { branch: "fresh", base: "HEAD~1" }), /uncommitted changes/)
+  git(shop, "checkout", "--", "web/index.ts")
+}
 // Another of that Thread's Sessions moving in joins its worktree, in the same folder.
 assert.equal(await worktrees.joinFolder(loneId, randomUUID(), join(shop, "web")), join(forked.path, "web"))
 assert.equal(await worktrees.joinFolder(loneId, randomUUID(), shop), forked.path)
@@ -792,6 +810,17 @@ git(app, "worktree", "add", "-q", "-b", "feature", join(suite, "app-feature"))
 assert.deepEqual(await projectRepositories(gitRunner, suite), { roots: [api, app] })
 git(app, "worktree", "remove", join(suite, "app-feature"))
 await assert.rejects(worktrees.prepare(randomUUID(), suite, "x", { kind: "from", ref: "main" }), /holds several repositories/)
+// A branch it names is every repository's: worked on where it exists, made from the newest start where it doesn't.
+git(api, "branch", "fix/shared", "HEAD")
+const apiShared = git(api, "rev-parse", "fix/shared")
+const sharedId = randomUUID()
+const shared = await worktrees.prepare(sharedId, suite, "Shared branch", { kind: "branch", branch: "fix/shared" })
+assert.equal(shared.branch, "fix/shared")
+assert.deepEqual([git(join(shared.path, "app"), "rev-parse", "--abbrev-ref", "HEAD"), git(join(shared.path, "api"), "rev-parse", "--abbrev-ref", "HEAD")], ["fix/shared", "fix/shared"], "each repository's worktree is on the branch it names")
+assert.equal(git(join(shared.path, "api"), "rev-parse", "HEAD"), apiShared, "a repository that had it works on it as it was")
+await worktrees.abandon(sharedId)
+assert.deepEqual([git(app, "branch", "--list", "fix/shared"), git(api, "branch", "--list", "fix/shared").trim()], ["", "fix/shared"], "giving it back deletes only the empty branch it made, never one that was there")
+git(api, "branch", "-D", "fix/shared")
 recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
 
 // Folders that can't have one say what to do instead.
@@ -801,7 +830,137 @@ await assert.rejects(worktrees.prepare(randomUUID(), plain, "x"), /plain isn't i
 const empty = repository("empty", false)
 await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits yet/)
 
+// Summaries read each repository's facts once a pass and keep what commits decide: each answer still follows the commits.
+{
+  const summed = repository("summed")
+  const id = randomUUID()
+  started(id)
+  const made = await worktrees.prepare(id, summed, "Summed work")
+  await worktrees.list()
+  const read = async () => {
+    const found = (await worktrees.summaries()).find((summary) => summary.path === made.path)
+    assert.ok(found, "the worktree is summarized")
+    return found
+  }
+  let summary = await read()
+  assert.deepEqual([summary.ahead, summary.changes, summary.landing.kind, summary.behind?.commits], [0, 0, "empty", 0])
+  writeFileSync(join(made.path, "web", "index.ts"), "export const changed = 1\n")
+  git(made.path, "add", "web/index.ts")
+  summary = await read()
+  assert.equal(summary.changes, 1, "a status is read again once the index changes, without waiting for its freshness to run out")
+  git(made.path, "commit", "-qam", "Work")
+  summary = await read()
+  assert.deepEqual([summary.ahead, summary.changes, summary.landing.kind], [1, 0, "open"], "a commit on the branch is read, not an answer kept from before it")
+  git(summed, "commit", "-q", "--allow-empty", "-m", "Main moved")
+  summary = await read()
+  assert.equal(summary.behind?.commits, 1, "main moving is read")
+  git(summed, "merge", "-q", "--no-edit", made.branch)
+  summary = await read()
+  assert.deepEqual([summary.landing.kind, summary.ahead], ["merged", 0], "a merge into main lands it")
+  await worktrees.abandon(id).catch(() => undefined)
+}
+
+// Windows ask every half minute: a worktree nothing changes in is read less and less, while one with a conversation
+// at work, a new index or a changed status is read as often as they ask, and one asked of alone is read then.
+{
+  const quiet = repository("quiet")
+  const id = randomUUID()
+  started(id)
+  const made = await worktrees.prepare(id, quiet, "Quiet work")
+  let now = Date.now()
+  let at: string[] = []
+  const real = { now: Date.now, readOutput: gitRunner.readOutput }
+  let reads = 0
+  let closing = () => {}
+  Date.now = () => now
+  gitRunner.readOutput = function (this: typeof gitRunner, cwd, args) {
+    if (args[0] === "status" && cwd === made.path) reads++
+    return real.readOutput.call(this, cwd, args)
+  }
+  try {
+    // As the host makes it: what's at work reaches the worktrees only through this.
+    const workspaces = openWorkspaces({
+      git: gitRunner,
+      dataRoot: join(root, "composed"),
+      readOnly: false,
+      store: threads,
+      jobs: new HostJobs(),
+      emit: () => {},
+      inUse: async () => [],
+      working: async () => [],
+      workingFolders: async () => at,
+      conversations: { holding: async () => [], leave: async () => [] },
+      cleanup: () => undefined,
+    })
+    closing = () => workspaces.close()
+    const watched = workspaces.worktrees!
+    const changes = async () => (await watched.summaries()).find((summary) => summary.path === made.path)?.changes
+    const passes = async (count: number) => {
+      const before = reads
+      for (let pass = 0; pass < count; pass++) {
+        now += 30_000
+        await changes()
+      }
+      return reads - before
+    }
+    await passes(1)
+    assert.ok(await passes(40) <= 10, "twenty quiet minutes read it a handful of times, not forty")
+    assert.ok(await passes(40) >= 4, "a quiet worktree is still read, every few minutes")
+    at = [made.path]
+    assert.equal(await passes(4), 4, "a conversation at work there keeps it current")
+    at = [join(made.path, "packages")]
+    assert.equal(await passes(2), 2, "so does one in a folder inside it")
+    at = [dirname(made.path)]
+    assert.equal(await passes(2), 2, "and one in the project folder around it")
+    at = []
+    await passes(20)
+    writeFileSync(join(made.path, "new.txt"), "new\n")
+    git(made.path, "add", "new.txt")
+    now += 1
+    assert.equal(await changes(), 1, "a new index asks again at once")
+    await passes(20)
+    const before = reads
+    now += 16_000
+    assert.equal((await watched.summary(made.path))?.changes, 1, "one worktree asked of alone")
+    assert.equal(reads - before, 1, "reads past the short wait whatever its quiet")
+  } finally {
+    Date.now = real.now
+    gitRunner.readOutput = real.readOutput
+    closing()
+  }
+  await worktrees.abandon(id).catch(() => undefined)
+}
+
+// Windows ask for summaries every half minute and on focus: one pass runs, and everyone who asked while it ran shares
+// the next, which starts after they asked.
+{
+  const shared = service()
+  let lists = 0
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  shared.list = async () => {
+    lists++
+    await gate
+    return { root, worktrees: [] }
+  }
+  const first = shared.summaries()
+  const later = Array.from({ length: 11 }, () => shared.summaries())
+  assert.equal(lists, 1, "one pass at a time")
+  release()
+  await first
+  assert.deepEqual(await Promise.all(later), later.map(() => []))
+  assert.equal(lists, 2, "those who asked during a pass share one pass after it")
+  shared.list = async () => {
+    throw new Error("listing failed")
+  }
+  await assert.rejects(shared.summaries(), /listing failed/)
+  shared.list = async () => ({ root, worktrees: [] })
+  assert.deepEqual(await shared.summaries(), [], "a failed pass keeps none after it from running")
+}
+
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, spares mirroring it taken whole and caught up per repository, spares replaced when its repositories change, a linked worktree beside its repository left out, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole), refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), summaries (each answer following commits, one pass at a time shared by everyone who asked during the last), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, spares mirroring it taken whole and caught up per repository, spares replaced when its repositories change, a linked worktree beside its repository left out, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole, on one branch it names), refusals")

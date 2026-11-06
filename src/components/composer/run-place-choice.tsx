@@ -17,7 +17,7 @@ import { useSession } from "@/state/session"
 import { useOnScreen } from "@/state/thread-sessions"
 import { useWorktrees } from "@/state/worktrees"
 
-const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
+const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
 
 /**
  * The composer's Local/Cloud choice for a new Thread in a Git project, for an
@@ -205,7 +205,7 @@ function OfferRow({ data, icon, title, detail, disabled, onClick }: { data: Reco
   )
   if (!onClick) return <div {...data} aria-disabled={disabled || undefined} className={cn("flex w-full items-start gap-2 px-2 py-1.5", disabled && "opacity-60")}>{body}</div>
   return (
-    <button type="button" {...data} disabled={disabled} onClick={onClick} className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60">
+    <button type="button" {...data} disabled={disabled} onClick={onClick} className="pressable flex w-full items-start gap-2 px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60">
       {body}
     </button>
   )

@@ -30,9 +30,11 @@ try {
   child = spawn(process.execPath, [entry], { cwd: root, env: { PATH: process.env.PATH, HOME: root, CURSOR_API_KEY: "invalid-disposable-test-key", NODE_OPTIONS: "" }, stdio: ["pipe", "pipe", "pipe"] })
   child.stderr.resume()
   const replies = new Map()
+  const logs = []
   const lines = createInterface({ input: child.stdout })
   lines.on("line", line => {
     const value = JSON.parse(line)
+    if (value.event === "log") logs.push(value.message)
     if (value.id !== undefined) replies.get(value.id)?.(value)
   })
   let next = 0
@@ -46,6 +48,8 @@ try {
   assert.equal(hello.ok, true)
   const opened = await request("open", { cwd: root, stateRoot: root, strictStores: false, agentId, create: false, model: { id: "composer-2" } })
   assert.equal(opened.ok, true, JSON.stringify(opened))
+  const phases = ["opening the store", "store opened", "resuming", "resumed"]
+  assert.deepEqual(logs.filter((message) => phases.includes(message)), phases, "an open says which phase it is in, so silence means that phase stopped")
   const refused = await request("send", { turn: "must-not-take-over", text: "This attempt must not replace the existing run." })
   assert.equal(refused.ok, false)
   assert.match(refused.error.message, /already has active run/)

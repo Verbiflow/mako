@@ -270,7 +270,7 @@ assert.equal(relativeTo(undefined, "/work/app/x"), "/work/app/x")
   assert.ok(kept.some((section) => section.kind === "note" && section.message.note?.label === "Context compacted"), "a compaction stays in view")
   assert.ok(!kept.some((section) => section.kind === "note" && section.message.note?.label === "Hook"), "an ambient note folds")
   const html = draw(exchange)
-  assert.match(html, /data-event-divider[^]*Context compacted[^]*182k → 24k tokens/, "a compaction is a divider with its tokens, in view while the turn is folded")
+  assert.match(html, /data-event-divider[^]*Context compacted[^]*182K → 24K tokens/, "a compaction is a divider with its tokens, in view while the turn is folded")
   assert.doesNotMatch(html, /formatted 2 files/)
   assert.match(draw(exchangesOf([go, { kind: "event", ...modelChangedEvent("a", "b") }, text("x", "ok")], false).at(-1)!), /data-event-divider/, "so is a model change")
   // A steer splits the turn: each stretch folds on its own, the second "continued".

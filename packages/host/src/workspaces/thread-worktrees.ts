@@ -41,8 +41,11 @@ function branchPull(pulls: readonly WorktreeBranchPull[], branch: string): Workt
   return mine.find((pull) => pull.state === "open" || pull.state === "draft") ?? mine[0] ?? null
 }
 
+/** Built once: every list checks every receipt's name, and building a schema costs more than using one. */
+const ConversationIdSchema = z.string().uuid()
+
 const ReceiptSchema = z.object({
-  conversation: z.string().uuid(),
+  conversation: ConversationIdSchema,
   /** The folder the Thread was started from, resolved. */
   source: z.string(),
   repoRoot: z.string(),
@@ -80,15 +83,22 @@ const ReceiptSchema = z.object({
    * each repository has its worktree here, at the same place inside, on
    * `branch`. `base` and `from` are each repository's own.
    */
-  members: z.array(z.object({ repoRoot: z.string(), path: z.string(), base: z.string(), from: z.string() })).min(1).optional(),
+  members: z.array(z.object({
+    repoRoot: z.string(),
+    path: z.string(),
+    base: z.string(),
+    from: z.string(),
+    /** The repository had the named branch before the Thread, as `adopted` says of a whole receipt. */
+    adopted: z.literal(true).optional(),
+  })).min(1).optional(),
 })
 type Receipt = z.infer<typeof ReceiptSchema>
 /** One repository's worktree in a Thread's checkout. */
-type Member = { repoRoot: string; path: string; base: string; from?: string }
+type Member = { repoRoot: string; path: string; base: string; from?: string; adopted?: true }
 
 /** The worktrees a receipt made: one, or one per repository of a project folder. */
 const membersOf = (receipt: Receipt): Member[] =>
-  receipt.members ?? [{ repoRoot: receipt.repoRoot, path: receipt.path, base: receipt.base, from: receipt.from }]
+  receipt.members ?? [{ repoRoot: receipt.repoRoot, path: receipt.path, base: receipt.base, from: receipt.from, ...(receipt.adopted && { adopted: true as const }) }]
 
 /** A Thread's checkout on this device: the folder it works in, the project folder it mirrors, and a worktree per repository. */
 export interface ThreadCheckout {
@@ -98,6 +108,12 @@ export interface ThreadCheckout {
   worktrees: ThreadWorktree[]
 }
 type WorktreeFrom = { kind: "newest" } | { kind: "head" } | WorktreeStart
+
+/** The branch an agent's move names, and the commit it starts from. */
+export interface WorktreeWanted {
+  branch?: string
+  base?: string
+}
 /** A repository's recent pull requests, newest first; null when GitHub can't answer. */
 type PullsOf = (repoRoot: string) => Promise<WorktreeBranchPull[] | null>
 
@@ -145,6 +161,54 @@ async function removalBlocker(git: Git, path: string, status?: string): Promise<
 
 const inUseBy = (folder: string, users: readonly string[]) =>
   `${basename(folder)} is in use by ${users.join(", ")}. Stop ${users.length === 1 ? "it" : "them"}, then remove the worktree.`
+
+/** What a summaries pass reads once of a repository, however many of its worktrees it summarizes. */
+interface RepositoryFacts {
+  /** The branch its main checkout has out; empty when it's on none. */
+  into: string
+  /** Every branch's commit, by name. */
+  tips: ReadonlyMap<string, string>
+  /** Where new Threads start, by the rule a worktree is updated by. */
+  point: WorktreeStartPoint | null
+}
+
+/** Answers kept by the commits they depend on: a few per worktree, for far more worktrees than a Mac holds. */
+const COMMIT_ANSWERS = 4096
+
+/**
+ * The commit a linked worktree has checked out, read from its files rather
+ * than a Git process: its `.git` names its folder in the repository, whose
+ * `HEAD` names a branch (found in `tips`) or a commit. Undefined when the
+ * files don't say, and the caller asks Git.
+ */
+async function worktreeHead(path: string, tips: ReadonlyMap<string, string>): Promise<string | undefined> {
+  try {
+    const gitDir = await worktreeGitDir(path)
+    if (!gitDir) return undefined
+    const head = (await readFile(join(gitDir, "HEAD"), "utf8")).trim()
+    if (head.startsWith("ref: refs/heads/")) return tips.get(head.slice("ref: refs/heads/".length))
+    return /^[0-9a-f]{40,64}$/.test(head) ? head : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** A linked worktree's folder in its repository, from the `gitdir:` line of its `.git` file. */
+async function worktreeGitDir(path: string): Promise<string | undefined> {
+  const link = /^gitdir: (.+)$/m.exec(await readFile(join(path, ".git"), "utf8").catch(() => ""))?.[1]
+  return link && resolve(path, link)
+}
+
+/**
+ * How long a worktree's `status` answers for the summaries after it. It starts at `STATUS_FRESH_MS`, and each read that
+ * finds nothing changed doubles it, to `STATUS_QUIET_MS`: a Mac keeps a hundred or more worktrees and few are at work,
+ * and reading them all every half minute took 5 cores on 2026-11-05. A commit, staging, checkout or merge rewrites the
+ * index, which asks again at once, and a conversation at work in the worktree, whose edits the index can't show, keeps
+ * it at `STATUS_FRESH_MS`. The wait is spread by `STATUS_SPREAD`, so worktrees that went quiet together don't come due together.
+ */
+const STATUS_FRESH_MS = 15_000
+const STATUS_QUIET_MS = 5 * 60_000
+const STATUS_SPREAD = 0.25
 
 /** `map` with at most `limit` running at once, results in order. */
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
@@ -206,6 +270,7 @@ export class ThreadWorktreeService {
   private readonly setup: CheckoutSetup | undefined
   private readonly conversations: CheckoutConversations | undefined
   private readonly ledger: () => MoveLedger | undefined
+  private readonly workingFolders: () => Promise<string[]>
   private readonly pending = new Map<string, Promise<Receipt>>()
   private readonly carrying = new Map<string, Promise<OutputsCarry>>()
   private readonly wanting = new Set<Promise<void>>()
@@ -213,8 +278,22 @@ export class ThreadWorktreeService {
   private readonly starts: WorktreeStarts
   private readonly skips = new Map<string, () => void>()
   private readonly branchPulls = new Map<string, { at: number; pulls: Promise<WorktreeBranchPull[] | null> }>()
+  /** Each repository's pull requests as last read, kept past `forgetPulls`, for what a Fin's strip says (`heldPulls`). */
+  private readonly pullsRead = new Map<string, WorktreeBranchPull[]>()
   /** Each receipt's `untold`, read without waiting, as a turn is sent. */
   private readonly untold = new Map<string, string[]>()
+  /** The summaries pass under way, and the one queued behind it for whoever asked meanwhile (`summaries`). */
+  private summariesRunning: Promise<WorktreeSummary[]> | undefined
+  private summariesNext: Promise<WorktreeSummary[]> | undefined
+  /** Each worktree's `status` as a summary last read it, with when, its index's modification time then, and how long it answers (`statusOf`). */
+  private readonly statuses = new Map<string, { at: number; index: number; status: Promise<string>; freshMs: number }>()
+  /** Each receipt as last parsed, by the file's modification time and size then (`receipt`). */
+  private readonly receiptsRead = new Map<string, { stamp: string; receipt: Receipt }>()
+  /** Answers fixed by the commits they were read at, least recently asked first (`byCommits`): landings, and counts of commits. */
+  private readonly landings = new Map<string, Promise<WorktreeLanding>>()
+  private readonly counts = new Map<string, Promise<number>>()
+  /** What each agent's move asked of its branch (`wantBranch`), by its conversation. */
+  private readonly wanted = new Map<string, WorktreeWanted>()
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
@@ -227,6 +306,9 @@ export class ThreadWorktreeService {
    * `ledger`, who changed what, once the journal is open: a move takes only
    * the Thread's own changes. Without it nothing is attributed, so nothing
    * moves unless the person brings it.
+   * `workingFolders`, every folder a conversation is mid-turn in, read once a
+   * summaries pass: `working` for each of a hundred worktrees would read every
+   * conversation a hundred times.
    */
   constructor(
     git: Git,
@@ -238,6 +320,7 @@ export class ThreadWorktreeService {
     setup?: CheckoutSetup,
     conversations?: CheckoutConversations,
     ledger: () => MoveLedger | undefined = () => undefined,
+    workingFolders: () => Promise<string[]> = async () => [],
   ) {
     this.git = git
     this.root = root
@@ -248,6 +331,7 @@ export class ThreadWorktreeService {
     this.setup = setup
     this.conversations = conversations
     this.ledger = ledger
+    this.workingFolders = workingFolders
     this.starts = new WorktreeStarts(git)
     this.spares = new WorktreeSpares(git, root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
@@ -258,11 +342,11 @@ export class ThreadWorktreeService {
    * changes move along and must apply where they were made; a
    * `WorktreeStart`, where the person chose.
    */
-  prepare(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom = { kind: "newest" }, onStep?: (step: WorktreeStep) => void): Promise<PreparedWorktree> {
-    z.string().uuid().parse(conversationId)
+  prepare(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom = { kind: "newest" }, onStep?: (step: WorktreeStep) => void, branch?: string): Promise<PreparedWorktree> {
+    ConversationIdSchema.parse(conversationId)
     let work = this.pending.get(conversationId)
     if (!work) {
-      work = this.create(conversationId, cwd, name, from, onStep)
+      work = this.create(conversationId, cwd, name, from, onStep, branch)
       this.pending.set(conversationId, work)
       void work.finally(() => this.pending.delete(conversationId)).catch(() => {})
     }
@@ -313,7 +397,44 @@ export class ThreadWorktreeService {
       if (busy.length)
         throw new Error(`${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in ${basename(folder)}. Moving its changes would pull files from under ${busy.length === 1 ? "it" : "them"}; continue once ${busy.length === 1 ? "it stops" : "they stop"}.`)
     }
-    return this.prepare(forkId, cwd, name, { kind: "head" })
+    const wanted = this.wanted.get(sourceId)
+    this.wanted.delete(sourceId)
+    return this.prepare(forkId, cwd, name, wanted?.base ? { kind: "from", ref: wanted.base } : { kind: "head" }, undefined, wanted?.branch)
+  }
+
+  /**
+   * The branch an agent's move asked for, and the commit to start it from,
+   * checked now and used when the move makes the worktree (`prepareFork`).
+   * The branch must be new; a base needs a checkout with nothing
+   * uncommitted, since a move carries changes onto the commit they were
+   * made on.
+   */
+  async wantBranch(conversationId: string, cwd: string, wanted: WorktreeWanted): Promise<void> {
+    if (!wanted.branch && !wanted.base) {
+      this.wanted.delete(conversationId)
+      return
+    }
+    const source = await realpath(cwd)
+    const roots = await this.git.output(source, ["rev-parse", "--show-toplevel"]).then((root) => [root], async () => {
+      const found = await projectRepositories(this.git, source)
+      return "refusal" in found ? [] : found.roots
+    })
+    if (!roots.length) throw new Error("This folder holds no repository, so there's no branch to make.")
+    if (wanted.branch !== undefined) {
+      if (!(await this.git.succeeds(source, ["check-ref-format", "--branch", wanted.branch])))
+        throw new Error(`${wanted.branch} isn't a name Git allows for a branch.`)
+      for (const repoRoot of roots)
+        if (await this.hasBranch(repoRoot, wanted.branch))
+          throw new Error(`${wanted.branch} already exists in ${basename(repoRoot)}. worktree_move makes a new branch; name another, or start a Fin with agents_start and workspace.branch to work on that one.`)
+    }
+    if (wanted.base !== undefined) {
+      if (roots.length > 1) throw new Error("This project holds several repositories, so its worktree starts each at its own commit; leave base out.")
+      if (!(await this.git.succeeds(roots[0]!, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${wanted.base}^{commit}`])))
+        throw new Error(`${wanted.base} isn't a commit, branch or tag in ${basename(roots[0]!)}.`)
+      if (await this.git.output(source, ["status", "--porcelain", "--untracked-files=no"]))
+        throw new Error("This checkout has uncommitted changes, which a move carries onto the commit they were made on. Leave base out, or commit them first.")
+    }
+    this.wanted.set(conversationId, wanted)
   }
 
   /**
@@ -378,7 +499,8 @@ export class ThreadWorktreeService {
   /** The checkout of the Thread this conversation's journal joined, on this device. */
   threadCheckout(conversationId: string): ThreadCheckout | undefined {
     const placed = this.threads.journalPlacement(conversationId)
-    const worktrees = placed ? this.threads.worktrees().filter((worktree) => worktree.thread === placed.thread) : []
+    const place = placed && this.threads.placeOf(placed.thread)
+    const worktrees = place ? this.threads.worktrees().filter((worktree) => worktree.thread === place) : []
     const first = worktrees[0]
     if (!first) return undefined
     const path = worktreeCheckout(first)
@@ -516,18 +638,33 @@ export class ThreadWorktreeService {
    * a squash doesn't, so a branch whose merge would leave the target's tree
    * as it is has landed too.
    */
-  private async landing(worktree: Pick<ThreadWorktree, "repoRoot" | "branch" | "base">): Promise<WorktreeLanding> {
-    const into = await this.git.output(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
+  private async landing(worktree: Pick<ThreadWorktree, "repoRoot" | "branch" | "base">, known?: RepositoryFacts): Promise<WorktreeLanding> {
+    const into = known ? known.into : await this.git.readOutput(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
     if (!into) return { kind: "unknown" }
+    const tip = known?.tips.get(worktree.branch)
+    const target = known?.tips.get(into)
+    // Whether a branch landed is fixed by the commits it's asked at: asked again only once one of them moves.
+    if (!tip || !target) return this.readLanding(worktree, into)
+    const key = `landing\0${worktree.repoRoot}\0${worktree.base}\0${tip}\0${into}\0${target}`
+    const landing = this.byCommits(this.landings, key, () => this.readLanding(worktree, into))
+    // A read that failed (a timeout under load) says nothing of the commits: asked again next time.
+    void landing.then((read) => {
+      if (read.kind === "unknown") this.landings.delete(key)
+    })
+    return landing
+  }
+
+  private async readLanding(worktree: Pick<ThreadWorktree, "repoRoot" | "branch" | "base">, into: string): Promise<WorktreeLanding> {
+    const read = (args: string[]) => this.git.readOutput(worktree.repoRoot, args)
     try {
-      const commits = Number(await this.git.output(worktree.repoRoot, ["rev-list", "--count", `${worktree.base}..${worktree.branch}`]))
+      const commits = Number(await read(["rev-list", "--count", `${worktree.base}..${worktree.branch}`]))
       if (commits === 0) return { kind: "empty" }
-      if (await this.git.succeeds(worktree.repoRoot, ["merge-base", "--is-ancestor", worktree.branch, into])) return { kind: "merged", into }
+      if (await read(["merge-base", "--is-ancestor", worktree.branch, into]).then(() => true, () => false)) return { kind: "merged", into }
       // A squash merge shows only through an in-memory merge, which older Git can't do.
       if (!await this.git.mergesWithoutCheckout()) return { kind: "open", into, commits }
       const [merged, target] = await Promise.all([
         this.git.output(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]).catch(() => ""),
-        this.git.output(worktree.repoRoot, ["rev-parse", `${into}^{tree}`]),
+        read(["rev-parse", `${into}^{tree}`]),
       ])
       return merged === target ? { kind: "merged", into } : { kind: "open", into, commits }
     } catch {
@@ -536,20 +673,108 @@ export class ThreadWorktreeService {
   }
 
   /**
+   * An answer that depends only on the commits in `key`, kept while the
+   * host runs: commits never change, so it's read once whoever asks again.
+   * A failed read isn't kept.
+   */
+  private byCommits<T>(answers: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
+    const known = answers.get(key)
+    if (known) {
+      answers.delete(key)
+      answers.set(key, known)
+      return known
+    }
+    const reading = read()
+    answers.set(key, reading)
+    reading.catch(() => answers.delete(key))
+    while (answers.size > COMMIT_ANSWERS) answers.delete(answers.keys().next().value!)
+    return reading
+  }
+
+  /**
    * How every worktree's branch stands: commits main doesn't have, uncommitted
    * files, whether it landed, and its pull request. `pullsOf` lists a
    * repository's pull requests, newest first, and is asked at most once a
    * minute per repository.
+   *
+   * Every window asks every half minute and as it gains focus, so callers
+   * share passes: one asking while a pass runs gets the next one, which
+   * starts once that ends and serves everyone who asked meanwhile. Each
+   * caller's answer was read after it asked, and at most one pass runs.
    */
-  async summaries(pullsOf?: PullsOf): Promise<WorktreeSummary[]> {
+  summaries(pullsOf?: PullsOf): Promise<WorktreeSummary[]> {
+    if (!this.summariesRunning) return this.startSummaries(pullsOf)
+    this.summariesNext ??= this.summariesRunning.catch(() => undefined).then(() => {
+      this.summariesNext = undefined
+      return this.startSummaries(pullsOf)
+    })
+    return this.summariesNext
+  }
+
+  private startSummaries(pullsOf: PullsOf | undefined): Promise<WorktreeSummary[]> {
+    const pass = this.readSummaries(pullsOf).finally(() => {
+      if (this.summariesRunning === pass) this.summariesRunning = undefined
+    })
+    this.summariesRunning = pass
+    return pass
+  }
+
+  /** One pass: each repository's facts read once, then each worktree's status, and what its commits say where they moved. */
+  private async readSummaries(pullsOf: PullsOf | undefined): Promise<WorktreeSummary[]> {
     const { worktrees } = await this.list()
-    return mapLimited(worktrees, 4, (worktree) => this.summarize(worktree, pullsOf))
+    const listed = new Set(worktrees.map((worktree) => worktree.path))
+    for (const path of this.statuses.keys()) if (!listed.has(path)) this.statuses.delete(path)
+    const facts = new Map<string, Promise<RepositoryFacts>>()
+    const factsOf = (repoRoot: string) => {
+      let known = facts.get(repoRoot)
+      if (!known) facts.set(repoRoot, known = this.repositoryFacts(repoRoot))
+      return known
+    }
+    const working = await this.workingFolders().catch(() => [])
+    const atWork = ({ path }: ThreadWorktree) => working.some((folder) => folder === path || folder === dirname(path) || folder.startsWith(`${path}/`))
+    return mapLimited(worktrees, 6, async (worktree) => this.summarize(worktree, pullsOf, await factsOf(worktree.repoRoot), atWork(worktree)))
+  }
+
+  /** What every worktree of a repository shares: the branch its main checkout has out, every branch's commit, where new Threads start. */
+  private async repositoryFacts(repoRoot: string): Promise<RepositoryFacts> {
+    const [into, refs, point] = await Promise.all([
+      this.git.readOutput(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""),
+      this.git.readOutput(repoRoot, ["for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads"]).catch(() => ""),
+      this.starts.point(repoRoot, false).catch(() => null),
+    ])
+    const tips = new Map<string, string>()
+    for (const line of refs.split("\n")) {
+      const space = line.indexOf(" ")
+      if (space > 0) tips.set(line.slice(space + 1), line.slice(0, space))
+    }
+    return { into, tips, point }
+  }
+
+  /**
+   * A worktree's `git status` for its summary, read again once its answer has aged out (`STATUS_QUIET_MS`) or its
+   * index changed, and past `STATUS_FRESH_MS` while `busy`. Each read is a spawn, which holds the host's thread
+   * (hundreds of milliseconds each on a loaded Linux machine), and walks the worktree in the kernel, and a hundred
+   * worktrees were read on every pass.
+   */
+  private async statusOf(path: string, busy: boolean): Promise<string> {
+    const gitDir = await worktreeGitDir(path)
+    const index = gitDir ? await stat(join(gitDir, "index")).then(({ mtimeMs }) => mtimeMs, () => 0) : 0
+    const known = this.statuses.get(path)
+    const unchanged = known !== undefined && gitDir !== undefined && known.index === index
+    if (unchanged && Date.now() - known.at < (busy ? STATUS_FRESH_MS : known.freshMs)) return known.status
+    const status = this.git.readOutput(path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => "")
+    const read = { at: Date.now(), index, status, freshMs: STATUS_FRESH_MS }
+    this.statuses.set(path, read)
+    if (unchanged) void Promise.all([known.status, status]).then(([before, now]) => {
+      if (before === now) read.freshMs = Math.min(STATUS_QUIET_MS, known.freshMs * 2) * (1 - STATUS_SPREAD * Math.random())
+    })
+    return status
   }
 
   /** One worktree's summary, with where its branch started; undefined for a folder that isn't one of Mako's worktrees. */
   async summary(path: string, pullsOf?: PullsOf): Promise<(WorktreeSummary & { startedFrom: string | null }) | undefined> {
     const worktree = (await this.list()).worktrees.find((entry) => entry.path === path)
-    return worktree && { ...await this.summarize(worktree, pullsOf), startedFrom: worktree.start?.from ?? null }
+    return worktree && { ...await this.summarize(worktree, pullsOf, await this.repositoryFacts(worktree.repoRoot), true), startedFrom: worktree.start?.from ?? null }
   }
 
   /** Where a worktree's new branch started (`origin/main`); null on a branch that existed already, or a folder that isn't one of Mako's worktrees. */
@@ -562,25 +787,40 @@ export class ThreadWorktreeService {
     this.branchPulls.clear()
   }
 
+  /** The pull requests whose head is `branch`, as the summaries last read `repoRoot`'s: no read of GitHub, none before the first. */
+  heldPulls(repoRoot: string, branch: string): WorktreeBranchPull[] {
+    return (this.pullsRead.get(repoRoot) ?? []).filter((pull) => pull.branch === branch)
+  }
+
   private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined) {
     const now = Date.now()
     const cached = this.branchPulls.get(repoRoot)
     if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
     const pulls = (pullsOf?.(repoRoot) ?? Promise.resolve(null)).catch(() => null)
     this.branchPulls.set(repoRoot, { at: now, pulls })
+    void pulls.then((read) => {
+      if (read) this.pullsRead.set(repoRoot, read)
+    })
     return pulls
   }
 
-  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined): Promise<WorktreeSummary> {
-    const [status, landing, into, tip, pulls, behind] = await Promise.all([
-      this.git.output(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => ""),
-      this.landing(worktree),
-      this.git.output(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""),
-      this.git.output(worktree.repoRoot, ["rev-parse", "--verify", "--quiet", `refs/heads/${worktree.branch}`]).catch(() => ""),
+  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined, facts: RepositoryFacts, busy: boolean): Promise<WorktreeSummary> {
+    const { into, point } = facts
+    const tip = facts.tips.get(worktree.branch) ?? ""
+    const from = into ? facts.tips.get(into) : worktree.base
+    const [status, landing, pulls, head] = await Promise.all([
+      this.statusOf(worktree.path, busy),
+      this.landing(worktree, facts),
       this.pullsIn(worktree.repoRoot, pullsOf),
-      this.behind(worktree.repoRoot, worktree.path, false),
+      worktreeHead(worktree.path, facts.tips),
     ])
-    const ahead = Number(await this.git.output(worktree.repoRoot, ["rev-list", "--count", into ? `${into}..${worktree.branch}` : `${worktree.base}..${worktree.branch}`]).catch(() => "0"))
+    const count = (cwd: string, range: string) => this.git.readOutput(cwd, ["rev-list", "--count", range]).then(Number)
+    const aheadRange = into ? `${into}..${worktree.branch}` : `${worktree.base}..${worktree.branch}`
+    const [ahead, behindBy] = await Promise.all([
+      (tip && from ? this.byCommits(this.counts, `ahead\0${worktree.repoRoot}\0${from}\0${tip}`, () => count(worktree.repoRoot, aheadRange)) : count(worktree.repoRoot, aheadRange)).catch(() => 0),
+      point && (head ? this.byCommits(this.counts, `behind\0${worktree.repoRoot}\0${head}\0${point.commit}`, () => count(worktree.repoRoot, `${head}..${point.commit}`)) : count(worktree.path, `HEAD..${point.commit}`)).catch(() => null),
+    ])
+    const behind = point && behindBy !== null ? { from: point.from, commit: point.commit, commits: behindBy } : null
     const pull = branchPull(pulls ?? [], worktree.branch)
     const squashedThere = landing.kind === "open" && pull?.state === "merged" && pull.head === tip
     return {
@@ -748,7 +988,7 @@ export class ThreadWorktreeService {
     const made = new Map<string, { receipt: Receipt; member: Member }>()
     for (const file of receipts) {
       const id = file.endsWith(".json") ? file.slice(0, -5) : ""
-      if (!z.string().uuid().safeParse(id).success) continue
+      if (!ConversationIdSchema.safeParse(id).success) continue
       const receipt = await this.receipt(id).catch(() => undefined)
       if (!receipt) continue
       const members = membersOf(receipt)
@@ -756,8 +996,11 @@ export class ThreadWorktreeService {
       if (members.some((member) => !known.has(member.path) && existsSync(member.path))) await this.attach(id)
     }
     const worktrees: ThreadWorktree[] = []
-    for (const worktree of this.threads.worktrees()) {
-      if (!existsSync(worktree.path)) {
+    const rows = this.threads.worktrees()
+    // Looked for all at once, off the host's thread: a list is asked for every few seconds, of a hundred worktrees.
+    const present = await Promise.all(rows.map((worktree) => stat(worktree.path).then(() => true, () => false)))
+    for (const [index, worktree] of rows.entries()) {
+      if (!present[index]) {
         this.threads.detachWorktree(worktree.path)
         continue
       }
@@ -1085,9 +1328,9 @@ export class ThreadWorktreeService {
       const on = await this.git.output(path, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
       if (on !== receipt.branch || (await this.inUse(path)).length || await removalBlocker(this.git, path)) return
     }
-    for (const { repoRoot, path, base } of members) {
+    for (const { repoRoot, path, base, adopted } of members) {
       if (existsSync(path)) await this.spares.setAside(repoRoot, path)
-      const commits = receipt.adopted ? 1 : await this.git.output(repoRoot, ["rev-list", "--count", `${base}..${receipt.branch}`]).then(Number, () => 1)
+      const commits = receipt.adopted || adopted ? 1 : await this.git.output(repoRoot, ["rev-list", "--count", `${base}..${receipt.branch}`]).then(Number, () => 1)
       if (commits === 0) await this.git.output(repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
     }
     if (receipt.members) await this.trashFolder(receipt.path)
@@ -1121,9 +1364,21 @@ export class ThreadWorktreeService {
   }
 
   private async receipt(conversationId: string): Promise<Receipt | undefined> {
-    if (!z.string().uuid().safeParse(conversationId).success) return undefined
-    const text = await readFile(join(this.receipts(), `${conversationId}.json`), "utf8").catch(() => null)
-    return text === null ? undefined : ReceiptSchema.parse(JSON.parse(text))
+    if (!ConversationIdSchema.safeParse(conversationId).success) return undefined
+    const file = join(this.receipts(), `${conversationId}.json`)
+    // Every list reads every receipt; one unchanged since it was parsed (another host may write one) is taken as read.
+    const stamp = await stat(file).then(({ mtimeMs, size }) => `${mtimeMs}:${size}`, () => null)
+    if (stamp === null) {
+      this.receiptsRead.delete(conversationId)
+      return undefined
+    }
+    const known = this.receiptsRead.get(conversationId)
+    if (known?.stamp === stamp) return known.receipt
+    const text = await readFile(file, "utf8").catch(() => null)
+    if (text === null) return undefined
+    const receipt = ReceiptSchema.parse(JSON.parse(text))
+    this.receiptsRead.set(conversationId, { stamp, receipt })
+    return receipt
   }
 
   private async save(receipt: Receipt): Promise<void> {
@@ -1134,13 +1389,13 @@ export class ThreadWorktreeService {
     await rename(pending, target)
   }
 
-  private async create(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom, onStep?: (step: WorktreeStep) => void): Promise<Receipt> {
+  private async create(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom, onStep?: (step: WorktreeStep) => void, branch?: string): Promise<Receipt> {
     const began = performance.now()
     const source = await realpath(cwd)
     let receipt = await this.receipt(conversationId)
     if (receipt && receipt.source !== source) throw new Error("This conversation's worktree was made from another folder")
     if (receipt?.state === "ready" && existsSync(receipt.path)) return receipt
-    if (receipt?.members) return this.createProject(conversationId, source, name, from, began, onStep, receipt)
+    if (receipt?.members) return this.createProject(conversationId, source, name, from, began, onStep, receipt, branch)
     if (!receipt) {
       let repoRoot: string
       let base: string
@@ -1148,7 +1403,7 @@ export class ThreadWorktreeService {
         ;[repoRoot = "", base = ""] = (await this.git.output(source, ["rev-parse", "--show-toplevel", "--verify", "HEAD^{commit}"])).split("\n")
       } catch (error) {
         if (error instanceof GitError && /not a git repository/i.test(error.stderr))
-          return this.createProject(conversationId, source, name, from, began, onStep)
+          return this.createProject(conversationId, source, name, from, began, onStep, undefined, branch)
         throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or choose Project folder.", { cause: error })
       }
       let adopted: string | undefined
@@ -1163,7 +1418,7 @@ export class ThreadWorktreeService {
       const parent = this.projectFolder(repoRoot)
       const slug = adopted
         ? this.freeFolder(parent, worktreeSlug(adopted.replace(/[/_.]+/g, " ")))
-        : await this.reserveSlug(repoRoot, parent, worktreeSlug(name), base)
+        : await this.reserveSlug(repoRoot, parent, worktreeSlug(branch?.replace(/[/_.]+/g, " ") ?? name), base)
       const path = join(parent, slug)
       const inside = relative(repoRoot, source)
       receipt = {
@@ -1172,7 +1427,7 @@ export class ThreadWorktreeService {
         repoRoot,
         path,
         cwd: inside && !inside.startsWith("..") ? join(path, inside) : path,
-        branch: adopted ?? `${BRANCH_PREFIX}${slug}`,
+        branch: adopted ?? branch ?? `${BRANCH_PREFIX}${slug}`,
         base,
         state: "creating",
       }
@@ -1221,22 +1476,30 @@ export class ThreadWorktreeService {
    * Thread's branch. What lies outside the repositories isn't checked out;
    * the project's recipe's `carry` names what a Thread needs of it.
    */
-  private async createProject(conversationId: string, source: string, name: string | undefined, from: WorktreeFrom, began: number, onStep?: (step: WorktreeStep) => void, existing?: Receipt): Promise<Receipt> {
+  private async createProject(conversationId: string, source: string, name: string | undefined, from: WorktreeFrom, began: number, onStep?: (step: WorktreeStep) => void, existing?: Receipt, exactBranch?: string): Promise<Receipt> {
     let receipt = existing
     if (!receipt) {
       const found = await projectRepositories(this.git, source)
       if ("refusal" in found) throw new Error(found.refusal)
-      if (from.kind !== "newest" && from.kind !== "head")
-        throw new Error(`${basename(source)} holds several repositories, so its Threads start each one on a new branch. Starting from a branch you choose is for a project of one repository.`)
-      const started = await Promise.all(found.roots.map(async (repoRoot) => {
+      if (from.kind !== "newest" && from.kind !== "head" && from.kind !== "branch")
+        throw new Error(`${basename(source)} holds several repositories, so its Threads start each one on a new branch, or on one branch you name in all of them. Starting from another branch or a pull request is for a project of one repository.`)
+      const started: { repoRoot: string; base: string; from: string; adopted?: true }[] = await Promise.all(found.roots.map(async (repoRoot) => {
         const head = await this.git.output(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]).catch(() => "")
         if (!head) throw new Error(`${relative(source, repoRoot)} has no commits yet, so its worktree has nothing to start from. Make a first commit there, or choose Project folder.`)
         if (from.kind === "head") return { repoRoot, base: head, from: await this.git.output(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => head.slice(0, 7)) }
+        // A repository that has the branch works on it; one that doesn't makes it from its newest start.
+        if (from.kind === "branch" && await this.hasBranch(repoRoot, from.branch)) {
+          const { branch, base } = await this.adopt(repoRoot, from)
+          return { repoRoot, base, from: branch, adopted: true as const }
+        }
         const point = await this.starts.point(repoRoot, false)
         return { repoRoot, base: point.commit, from: point.from }
       }))
       const parent = this.projectFolder(source)
-      const slug = await this.reserveProjectSlug(started, parent, worktreeSlug(name))
+      const named = from.kind === "branch" ? started.find((member) => member.adopted)?.from ?? from.branch : exactBranch
+      const slug = named
+        ? this.freeFolder(parent, worktreeSlug(named.replace(/[/_.]+/g, " ")))
+        : await this.reserveProjectSlug(started, parent, worktreeSlug(name))
       const path = join(parent, slug)
       receipt = {
         conversation: conversationId,
@@ -1244,11 +1507,12 @@ export class ThreadWorktreeService {
         repoRoot: source,
         path,
         cwd: path,
-        branch: `${BRANCH_PREFIX}${slug}`,
+        branch: named ?? `${BRANCH_PREFIX}${slug}`,
         base: "",
         state: "creating",
         members: started.map((member) => ({ ...member, path: join(path, relative(source, member.repoRoot)) })),
       }
+      if (started.every((member) => member.adopted)) receipt.adopted = true
       await this.save(receipt)
     }
     onStep?.("checkout")
@@ -1393,6 +1657,12 @@ export class ThreadWorktreeService {
     if (holder)
       throw new Error(`${branch} is checked out in ${holder === repoRoot ? "your project folder" : basename(holder)}. Git keeps a branch in one checkout at a time, so start a new branch from it instead.`)
     return { branch, base: await this.git.output(repoRoot, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]) }
+  }
+
+  /** Whether `adopt` finds `branch` in this repository: a local branch, or a remote's named with its remote. */
+  private async hasBranch(repoRoot: string, branch: string): Promise<boolean> {
+    return await this.git.succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]) ||
+      this.git.succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/remotes/${branch}`])
   }
 
   /** A folder name under `parent` nothing has yet, for a worktree on a branch that already has its name. */

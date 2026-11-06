@@ -21,7 +21,7 @@ export const ThreadPurposeChip = memo(function ThreadPurposeChip({ thread, start
     <span
       data-thread-purpose={kind}
       data-tip={TIP[kind](recorded?.project)}
-      className="flex h-4 shrink-0 items-center rounded bg-fill-selected px-1 text-label leading-none text-muted-foreground"
+      className="flex h-4 shrink-0 items-center bg-fill-selected px-1 text-label leading-none text-muted-foreground"
     >
       {LABEL[kind]}
     </span>

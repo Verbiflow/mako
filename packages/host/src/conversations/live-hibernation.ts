@@ -1,6 +1,7 @@
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
+import { retriesBegun } from "../contracts/delivery-retry.js"
 import { goalWorking } from "../contracts/live-goals.js"
 import { disconnectNativeAgents, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory, ProviderResidencyEntry, ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -10,9 +11,9 @@ import { resumes, restorableTotals, verifyRecoveredSession } from "../harnesses/
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { nativeStart } from "./live-launches.js"
 import { releaseHold } from "./live-ledger.js"
-import { activeBinding, conversationControl, launchRouting, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launchAccount, launchCalls, launchRouting, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { updateBinding } from "./live-sources.js"
-import { reconnectRefusal } from "./live-transfers.js"
+import { reconnectError } from "./live-transfers.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
@@ -449,7 +450,7 @@ export class LiveHibernation {
     try {
       const verdict = await dependencies.resumeVerdict?.(binding)
       if (!verdict || !resumable(verdict, "moved"))
-        throw new Error(reconnectRefusal(verdict))
+        throw reconnectError(verdict)
       if (resident.generation !== generation || resident.closing) return
       if (!this.access.moves.executes(resident)) throw new Error("Execution ownership changed while preparing native recovery.")
       dependencies.memory?.hold(
@@ -498,6 +499,8 @@ export class LiveHibernation {
         conversationTools,
         threadEnvironment,
         nativeRouting: launchRouting(dependencies, resident.snapshot.session.id, conversationTools),
+        nativeCalls: launchCalls(dependencies, resident.snapshot.session.id, resident.snapshot.session.cwd, conversationTools, threadEnvironment),
+        pinnedAccount: launchAccount(dependencies, resident.snapshot.session.id, binding.provider),
       }))
       startedSession = session
       if (resident.generation !== generation) {
@@ -610,18 +613,21 @@ export class LiveHibernation {
         resident.connections.delete(binding.id)
         resident.opening = false
       }
+      const requests = this.access.failedStart(resident, { error }, true)
+      // A message that goes again by itself leaves the session asleep, not failed: the next attempt wakes it.
+      const waits = retriesBegun(resident.snapshot.requests, requests)
       resident.snapshot = {
         ...resident.snapshot,
         session: {
           ...resident.snapshot.session,
-          connection: closed ? "disconnected" : "connected",
+          connection: closed ? (waits ? "hibernated" : "disconnected") : "connected",
           nativeId: closed ? binding.nativeId : resident.snapshot.session.nativeId,
           nativePath: closed ? binding.path : resident.snapshot.session.nativePath,
           executionContext: closed ? binding.executionContext : resident.snapshot.session.executionContext,
-          status: "failed",
-          error: message,
+          status: waits ? "ready" : "failed",
+          error: waits ? undefined : message,
         },
-        requests: this.access.failedStart(resident, { error }, true),
+        requests,
       }
       this.access.flush(resident)
       hostWarn("residency", "provider wake failed", {
@@ -629,6 +635,7 @@ export class LiveHibernation {
         harness: binding.provider,
         nativeId: binding.nativeId,
         error: message,
+        ...waits && { retries: true },
       })
     }
   }

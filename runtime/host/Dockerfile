@@ -77,6 +77,24 @@ RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/i
 # setup wrote there stays.
 RUN node -e 'const fs = require("node:fs"); const file = "/home/node/.config/devin/config.json"; const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}; fs.mkdirSync("/home/node/.config/devin", { recursive: true }); fs.writeFileSync(file, JSON.stringify({ ...config, auto_update: false }, null, 2) + "\n")'
 
+# Mako on a machine of the person's own, as a device of their account
+# (docs/linux-device.md): the host above with the harnesses it's given,
+# OpenCode unless HARNESSES names others, installed the same way. It joins
+# with a code its log shows (`mako-host join`), then runs as that device. Its
+# data, its sign-in and the key that seals it (a 0600 file, as there's no
+# keychain here) are on the volume at /data, so a new container of the image
+# is the same device; arguments go to `mako-host join` (`--name <name>`).
+FROM host AS device
+ARG HARNESSES=opencode
+COPY proof/host-process.mjs proof/install-harnesses.mjs /opt/mako/install/
+RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/install/install-harnesses.mjs /home/node/harnesses.json ${HARNESSES}
+USER root
+RUN install -d -o node -g node -m 700 /data
+USER node
+ENV MAKO_PROD=1 MAKO_DATA_ROOT=/data
+VOLUME /data
+ENTRYPOINT ["/bin/sh", "-c", "mako-host join \"$@\" && exec mako-host", "mako-device"]
+
 # The proof of item 1.1: those harnesses started by the host, and measured.
 FROM harnesses AS proof
 COPY proof/ /opt/mako/proof/

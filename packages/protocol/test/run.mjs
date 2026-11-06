@@ -944,7 +944,7 @@ describe("the live form", () => {
     emit(2)
     runtime.emit("th-1", Payload.encoded("only whole 3"))
     assert.deepEqual(sentEvents(first), [["whole 1", undefined], ["compact 2", COMPACT_LIVE_FORM], ["only whole 3", undefined]])
-    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], form: COMPACT_LIVE_FORM, compact: 1 })
+    assert.deepEqual([threads.stats()[0].form, threads.stats()[0].compact], [COMPACT_LIVE_FORM, 1])
     runtime.close()
 
     const second = scriptedLink()
@@ -1731,28 +1731,37 @@ describe("client frames", () => {
         far = other
         return near
       },
-      { heartbeatMs: 40, silentMs: 100 }
+      { heartbeatMs: 100, silentMs: 2_000 }
     )
     let answering = true
-    const pinged = []
+    let pinged = 0
     const replied = session.call({ ...operation, input: Payload.of({}) })
     const subscription = session.subscribe({ stream: "thread:th-1", after: 0 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     far.addEventListener("message", (event) => {
       if (event.data !== PING) return
-      pinged.push(Date.now())
+      pinged++
       if (answering) far.send(PONG)
     })
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    while (pinged < 4) await new Promise((resolve) => setTimeout(resolve, 10))
     assert.equal(far.readyState, 1, "answered pongs keep it open")
-    // The far end stops answering and never closes: a socket the client would otherwise wait on for minutes.
+    // The far end stops answering and never closes: a socket the client would otherwise wait on for minutes. The next
+    // heartbeat past the silent window ends it; the wait on that is a hang guard thirty windows long.
     answering = false
-    const silent = Date.now()
-    const reply = await replied
-    assert.equal(reply.problem.outcome, "unknown", "the call in flight is answered unknown, to be repeated under its id")
-    await assert.rejects(subscription.next(), "the subscription ends, for its reader to follow again")
-    assert.ok(Date.now() - silent < 250, `ended within a heartbeat of the silence (${Date.now() - silent} ms)`)
-    assert.ok(pinged.length >= 4)
+    const pingedBefore = pinged
+    let guard
+    const hung = new Promise((_, reject) => {
+      guard = setTimeout(() => reject(new Error("still open 60 s after the far end went silent")), 60_000)
+    })
+    try {
+      const reply = await Promise.race([replied, hung])
+      assert.equal(reply.problem.outcome, "unknown", "the call in flight is answered unknown, to be repeated under its id")
+      await assert.rejects(Promise.race([subscription.next(), hung]), (error) => !/still open/.test(error.message), "the subscription ends, for its reader to follow again")
+      // Told in heartbeats, not the clock: a stalled runner sends fewer, and a window that ran long sends more.
+      assert.ok(pinged - pingedBefore <= 22, `ended within a heartbeat of the 20 the silent window holds (${pinged - pingedBefore})`)
+    } finally {
+      clearTimeout(guard)
+    }
   })
   test("waking ends a connection not heard from within a heartbeat at once, and one that doesn't answer a ping soon", async () => {
     let answering = true
@@ -1762,12 +1771,12 @@ describe("client frames", () => {
         far.addEventListener("message", (event) => event.data === PING && answering && far.send(PONG))
         return near
       },
-      { heartbeatMs: 25_000, wakeProbeMs: 60 }
+      { heartbeatMs: 25_000, wakeProbeMs: 1_000 }
     )
     const quiet = session.subscribe({ stream: "thread:th-1", after: 0 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     session.wake()
-    const live = await Promise.race([quiet.next(), new Promise((resolve) => setTimeout(() => resolve("open"), 150))])
+    const live = await Promise.race([quiet.next(), new Promise((resolve) => setTimeout(() => resolve("open"), 1_500))])
     assert.equal(live, "open", "it answered the wake's ping: kept")
     // A short sleep on a network the wake didn't keep: heard moments ago, and nothing comes back now.
     answering = false
@@ -1893,17 +1902,23 @@ describe("a call to a gateway over HTTP", () => {
       () => new Response("{}", { status: 503, headers: { "retry-after": "nonsense" } }),
       () => new Response(JSON.stringify({ missing: [] }), { status: 200 }),
     ]
-    const at = []
-    const fetch = async () => {
-      at.push(performance.now())
-      return answers.shift()()
-    }
+    const fetch = async () => answers.shift()()
     const trace = { tries: 0, failures: [] }
     const remote = recordsOverHttp({ id: "t", base: "https://gw/v1/devices/d/originals", authorization: () => "Bearer t", fetch, backoff: [1, 1] })
-    assert.deepEqual(await remote.missing(["a".repeat(64)], trace), [])
+    // The waits it asks for between tries, counted rather than timed.
+    const timer = globalThis.setTimeout
+    const waits = []
+    globalThis.setTimeout = (run, ms, ...rest) => {
+      waits.push(ms)
+      return timer(run, ms, ...rest)
+    }
+    try {
+      assert.deepEqual(await remote.missing(["a".repeat(64)], trace), [])
+    } finally {
+      globalThis.setTimeout = timer
+    }
     assert.equal(trace.tries, 3)
-    assert.ok(at[1] - at[0] >= 290, `waited ${Math.round(at[1] - at[0])} ms of the 300 the gateway asked`)
-    assert.ok(at[2] - at[1] < 250, "one it can't read is the client's own backoff")
+    assert.deepEqual(waits, [300, 1], "the 300 ms the gateway asked, then for one it can't read the client's own backoff")
     assert.equal(retryAfterMs("2"), 2_000)
     assert.equal(retryAfterMs(new Date(Date.now() + 5_000).toUTCString()) > 3_000, true)
     assert.equal(retryAfterMs("3600"), RETRY_AFTER_MOST_MS)
@@ -1918,6 +1933,29 @@ describe("a call to a gateway over HTTP", () => {
     }
     const call = gatewayCalls({ id: "t", base: "https://gw", authorization: () => "t", fetch })
     await assert.rejects(call("/sessions"), (error) => error instanceof GatewayHttpError && error.call?.correlationId === sent && error.described.includes(`correlation ${sent}`))
+  })
+
+  test("a call refused with a 401 renews its token once and goes again with the renewed one; refused again, it fails", async () => {
+    const tokens = []
+    let current = "Bearer stale"
+    let renewals = 0
+    const fetch = async (_url, init) => {
+      tokens.push(init.headers.get("authorization"))
+      return init.headers.get("authorization") === "Bearer fresh"
+        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        : new Response(JSON.stringify({ title: "The connection token has expired" }), { status: 401 })
+    }
+    const renew = async () => {
+      renewals += 1
+      current = renewals === 1 ? "Bearer fresh" : current
+    }
+    const call = gatewayCalls({ id: "t", base: "https://gw", authorization: () => current, renew, fetch })
+    assert.equal((await call("/sessions/with-chunks", { method: "POST" })).status, 200)
+    assert.deepEqual([tokens, renewals], [["Bearer stale", "Bearer fresh"], 1])
+    current = "Bearer revoked"
+    tokens.length = 0
+    await assert.rejects(call("/sessions/with-chunks", { method: "POST" }), (error) => error instanceof GatewayHttpError && error.status === 401)
+    assert.deepEqual([tokens, renewals], [["Bearer revoked", "Bearer revoked"], 2], "renewed once a call, then the refusal is the call's")
   })
 
   test("a refusal keeps its problem's detail, so its log line says why", async () => {

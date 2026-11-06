@@ -463,7 +463,9 @@ export class FootprintReader {
     }
     const explain = this.deps.options.explain
     const decided = (path: string, verdict: PathVerdict) => explain?.({ thread: trail.thread, turn: trail.turn }, path, verdict)
+    const turn = new Turn()
     for (const path of [...trail.paths].sort()) {
+      await turn.share()
       const verdict = classify(path, input, rules)
       if (!verdict.kept) {
         exclusions.add(verdict.rule, verdict.group, 1, verdict.why)
@@ -599,7 +601,11 @@ export class FootprintReader {
       home: this.deps.options.home, roots: this.deps.options.roots, folders, turn: { named: new Map(), mentioned: new Set(), cwds: new Set() }, others: new Set(), sessions: this.deps.options.sessions?.(""),
     }
     const unexplained: string[] = []
-    for (const path of history.paths) if (classify(path, input, rules).kept) unexplained.push(path)
+    const turn = new Turn()
+    for (const path of history.paths) {
+      await turn.share()
+      if (classify(path, input, rules).kept) unexplained.push(path)
+    }
     const learned = this.baseline.idle(unexplained)
     this.deps.log("noise learned", { read: history.paths.size, ignored: history.ignored.reduce((total, count) => total + count, 0), unexplained: unexplained.length, keys: learned, rows: this.baseline.size, ms: round(performance.now() - readStarted) })
     return learned
@@ -630,6 +636,23 @@ export class FootprintReader {
 }
 
 const round = (ms: number) => Math.round(ms * 100) / 100
+
+/** How long the rules hold the host's one thread before sockets and timers get a turn. */
+const SLICE_MS = 8
+
+/**
+ * A turn's paths go through the rules a slice at a time: a busy temporary
+ * folder once gave one turn 142,000 paths, classified in one 13-second run.
+ */
+class Turn {
+  private started = performance.now()
+
+  async share(): Promise<void> {
+    if (performance.now() - this.started < SLICE_MS) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    this.started = performance.now()
+  }
+}
 const parentOf = (path: string) => path.slice(0, Math.max(1, path.lastIndexOf("/")))
 
 /** The innermost of `folders` holding `path`, by its index, or -1: one lookup per folder on the way up. */

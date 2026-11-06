@@ -13,6 +13,11 @@ for (const provider of ["Claude Code", "Codex", "Cursor", "Grok", "Devin", "Open
   const gone = describeTransferRecovery({ ...transfer, state: { kind: "failed", failure: "missing-folder", error: "gone" } }, provider)
   assert.deepEqual([gone.title, gone.retryLabel], ["This thread's folder no longer exists", undefined])
   assert.doesNotMatch(gone.guidance, /switch|repeat work/, "nothing started, so nothing to switch again or repeat")
+  const removed = describeTransferRecovery({ ...transfer, state: { kind: "failed", error: "Removed before it was sent", removed: true } }, provider)
+  assert.equal(removed.retryLabel, undefined, "what the person removed isn't offered again")
+  const stopped = describeTransferRecovery({ ...transfer, state: { kind: "queued" } }, provider, { ...request, status: "held", pause: "stop" })
+  assert.equal(stopped.title, `Switch to ${provider} is paused`)
+  assert.doesNotMatch(stopped.guidance, /Could not|repeat work/, "a Stop is no failure")
   assert.match(describeTransferRecovery(transfer, provider).guidance, /Delivery is unconfirmed/)
   assert.match(describeTransferRecovery(transfer, provider, { ...request, id: "unrelated", status: "completed" }).guidance, /Delivery is unconfirmed/)
   const received: LiveRequest = { ...request, status: "failed", nativeDelivery: { attemptId: id, bindingId: id, ownerEpoch: "epoch", evidence: { kind: "accepted", source: "native-echo" } } }
@@ -54,6 +59,7 @@ for (const kind of ["compact", "steer", "steer-queued"] as const) {
   const compact: LiveAction = { input: { kind: "compact", id }, digest: "digest", bindingId: id, createdAt: 1, state: { kind: "accepted" } }
   assert.equal(actionNoticeCurrent(compact, []), true, "a compaction in progress shows until it completes")
   assert.equal(actionNoticeCurrent({ ...compact, state: { kind: "completed" } }, []), false)
-  assert.match(describeActionRecovery({ ...steer, state: { kind: "dispatching" } }).title, /waiting for the agent/)
+  assert.match(describeActionRecovery({ ...steer, state: { kind: "dispatching" } }).title, /^Steering$/)
+  assert.match(describeActionRecovery({ ...steer, state: { kind: "dispatching" } }).guidance, /within a second/)
 }
 console.log("PASS: all-six plus future-provider transfer receipts, exact request correlation and every action outcome")

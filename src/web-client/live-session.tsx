@@ -116,7 +116,7 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
           <CompactPresentationContext value={compact}>
           <ShowAgentsContext value={showAgents}>
           <div ref={live} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-            {active ? <AcpPanel asks={false} /> : <div className="flex-1" />}
+            {active ? <AcpPanel asks={false} compact /> : <div className="flex-1" />}
             <WebDock
               conversation={conversation}
               harness={harness}
@@ -207,7 +207,7 @@ function useDeliveryNote(conversation: string) {
           <span data-delivery={state} className="flex items-center gap-1 text-caution">
             {DELIVERY_WORDS[state]}
             <span aria-hidden>·</span>
-            <button type="button" className="pressable -mx-1 rounded px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
+            <button type="button" className="pressable -mx-1 px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
               Retry
             </button>
           </span>

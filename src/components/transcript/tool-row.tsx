@@ -4,14 +4,18 @@ import { memo, useContext, useEffect, useMemo, useState, type ComponentType, typ
 import { readPersonTokenProblem } from "@mako/host/contracts/github-person"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
+  failedExitCode,
   formatToolArguments,
   hasToolArguments,
+  makoCallWords,
   namedByLabel,
   normalizeToolOutput,
   relativeTo,
   toolLabel,
   toolTarget,
 } from "@/lib/tools"
+import { makoToolGroup } from "@mako/sessions/tool-identity"
+import { harnessLabel } from "@/lib/harness-label"
 import { callEntryId } from "@/lib/entry-messages"
 import { cn } from "@/lib/utils"
 import { useAcp } from "@/state/acp"
@@ -30,6 +34,7 @@ import {
   ChevronRightIcon,
   CheckIcon,
   CopyIcon,
+  ExternalLinkIcon,
   FileTextIcon,
 } from "lucide-react"
 import { ToolGlyph } from "@/components/transcript/tool-views"
@@ -54,6 +59,8 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const view = useToolView(call)
 
   const openPath = view?.openPath?.(call)
+  // A pull request a Mako tool opened, read or reported opens from its row, as a file a call touched does.
+  const link = makoCallWords(call)?.link
   const Body = view?.body
   const server = toolServer(call.tool)
   // A page carries the head of each tool output; the rest is read when the
@@ -78,14 +85,14 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
 
   return (
     <div data-transcript-tool={call.id}>
-      <div className="group/row -mx-1.5 flex min-w-0 items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
+      <div className="group/row -mx-1.5 flex min-w-0 items-center transition-colors duration-100 hover:bg-fill-hover">
         <button
           type="button"
           aria-expanded={open}
           data-open={open || undefined}
           data-pending={call.pending || undefined}
           onClick={() => setOpen((value) => !value)}
-          className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-ui"
+          className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 px-1.5 text-left text-ui"
         >
           <LeadSlot open={open} glyph={<CallGlyph call={call} icon={view?.icon} />} />
           <ToolWords call={call} />
@@ -106,10 +113,21 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
                 source.liveId
               )
             }
-            className="pressable mr-1 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
+            className="pressable mr-1 p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
           >
             <FileTextIcon className="size-3" />
           </button>
+        ) : link ? (
+          <a
+            href={link}
+            target="_blank"
+            rel="noreferrer noopener"
+            title={`Open ${link}`}
+            aria-label={`Open ${link}`}
+            className="pressable mr-1 p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
+          >
+            <ExternalLinkIcon className="size-3" />
+          </a>
         ) : null}
       </div>
 
@@ -144,7 +162,9 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   )
 })
 
+/** The server an MCP call came from, at the row's end; Mako's own tools speak as Mako, so theirs isn't named. */
 function toolServer(tool: ToolIdentity): string | undefined {
+  if (tool.kind === "mcp" && tool.server === "mako") return undefined
   return tool.kind === "mcp" || tool.kind === "computer" ? tool.server : undefined
 }
 
@@ -169,6 +189,16 @@ export function ToolWords({ call }: { call: ToolCall }) {
   const turnRunning = useContext(TurnRunningContext)
   const cwd = useTranscriptCwd()
   const running = call.pending && turnRunning
+  // Mako's own tools say what they did in their own words, the whole phrase in one face.
+  const mako = makoCallWords(call, harnessLabel)
+  if (mako && running)
+    return (
+      <>
+        <Shimmer className="min-w-0 truncate">{mako.running}</Shimmer>
+        {call.startedAt !== undefined ? <RunningFor since={call.startedAt} /> : null}
+      </>
+    )
+  if (mako) return <span className={cn("min-w-0 truncate", call.isError ? "text-negative" : "text-muted-foreground")}>{call.isError ? mako.label : mako.done}</span>
   const command = call.tool.kind === "shell"
   const summary = view?.summary ? view.summary(call) : command ? toolTarget(call.tool) : relativeTo(cwd, toolTarget(call.tool))
   // A command and an agent are named by what they do; the label would only repeat the glyph.
@@ -238,7 +268,8 @@ export function LeadSlot({ glyph, open = false, opens = true }: { glyph: ReactNo
 export function CallGlyph({ call, icon }: { call: ToolCall; icon?: ComponentType<{ className?: string }> }) {
   const tone = call.isError ? "text-negative" : call.pending ? "text-foreground/80" : "text-faint"
   if (call.tool.kind === "agent" && !icon) return <AgentMark callId={call.id} className={cn("size-3.5", tone)} />
-  return <ToolGlyph kind={call.tool.kind} override={icon} className={cn("size-3.5", tone)} />
+  const mako = call.tool.server === "mako" && call.tool.tool ? makoToolGroup(call.tool.tool) : undefined
+  return <ToolGlyph kind={call.tool.kind} override={icon} mako={mako} className={cn("size-3.5", tone)} />
 }
 
 /**
@@ -259,12 +290,15 @@ export function AgentMark({ callId, harness, className }: { callId?: string; har
   return runs ? <HarnessIcon harness={runs} className={className} /> : <ToolGlyph kind="agent" className={className} />
 }
 
-/** How the call ended, in words, when it ended other than well; a running call says so in its words (`ToolWords`). */
+/** How the call ended, in words, when it ended other than well ("failed · exit 2"); a running call says so in its words (`ToolWords`). */
 function Status({ call }: { call: ToolCall }) {
+  const harness = useContext(HarnessContext)
   if (call.pending) return null
-  if (call.isError) return <span className="shrink-0 text-label text-negative">failed</span>
+  const exit = failedExitCode(call, harness)
+  if (call.isError) return <span className="shrink-0 text-label text-negative">{exit === undefined ? "failed" : `failed · exit ${exit}`}</span>
   if (call.isCutOff) return <span className="shrink-0 text-label text-faint">{call.isCanceled ? "stopped" : "cut off"}</span>
   if (call.isCanceled) return <span className="shrink-0 text-label text-faint">canceled</span>
+  if (exit !== undefined) return <span className="shrink-0 text-label text-faint">exit {exit}</span>
   return null
 }
 
@@ -288,7 +322,7 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
     <div className="space-y-2">
       {args ? (
         <CopyableBlock label="input" text={input}>
-          <pre className="rounded bg-raised px-2 py-1.5 font-mono text-label leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+          <pre className="bg-raised px-2 py-1.5 font-mono text-label leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
             {input}
           </pre>
         </CopyableBlock>
@@ -374,7 +408,7 @@ function CopyableBlock({
           void copy()
         }}
         className={cn(
-          "pressable absolute top-1 right-1 rounded-md bg-raised p-1 ring-1 ring-hairline backdrop-blur-sm",
+          "pressable absolute top-1 right-1 bg-raised p-1 ring-1 ring-hairline backdrop-blur-sm",
           "text-faint transition-opacity duration-100 hover:text-foreground",
           copied
             ? "opacity-100"

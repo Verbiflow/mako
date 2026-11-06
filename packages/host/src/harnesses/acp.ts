@@ -1,10 +1,10 @@
 import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
-import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
+import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction, compactionOutcome } from "./acp-compaction.js"
@@ -38,11 +38,11 @@ import { adapters } from "./heavy.js"
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { spawnProviderProcess } from "./provider-process.js"
+import { closeProviderProcess, endProviderProcess, providerProcessGone, spawnProviderProcess } from "./provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { acpPromptBlocks } from "./acp-prompt.js"
-import { acpReadable, acpWritable, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
+import { acpReadable, acpWritable, inWireOrder, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
 import type {
   Client,
   ClientSideConnection as Connection,
@@ -64,7 +64,8 @@ import { readRuntimeVersion } from "./runtime-updates.js"
 import { parseVersion } from "../contracts/runtime-version.js"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { launchSpawnsOff } from "./native-routing.js"
+import { acpLayer } from "./acp-layer.js"
+import { layerOf } from "./mako-layer.js"
 import { bindProviderPid } from "../base/provider-children.js"
 import { errorMessage } from "../base/error-message.js"
 import { objectValue } from "../base/json-values.js"
@@ -109,6 +110,8 @@ interface Live {
   id: string
   harness: string
   cwd: string
+  /** Mako's call hooks for `session/resume`, where the launch routes calls (`AcpCallHooks.meta`). */
+  callHooks?: JsonObject
   emit(event: LiveDriverEvent): void
   child: ChildProcessWithoutNullStreams
   connection: Connection | null
@@ -172,14 +175,23 @@ interface Live {
 }
 
 
+/** A session request's `_meta`: the source's own for the launch's settings, and Mako's call hooks where the launch routes calls. */
+function sessionMeta(source: ProviderAcpSource, tuning: AcpTuning | undefined, routesCalls: boolean): NewSessionRequest["_meta"] {
+  const own = tuning ? source.sessionMetadata?.(tuning) : undefined
+  const hooks = routesCalls ? source.callHooks?.meta : undefined
+  return hooks ? { ...own, ...hooks } : own
+}
+
 function newSessionRequest(
   cwd: string,
   source: ProviderAcpSource,
   tuning: AcpTuning | undefined,
-  mcpServers: NewSessionRequest["mcpServers"]
+  mcpServers: NewSessionRequest["mcpServers"],
+  routesCalls: boolean
 ): NewSessionRequest {
   const request: NewSessionRequest = { cwd, mcpServers }
-  if (tuning) request._meta = source.sessionMetadata?.(tuning)
+  const meta = sessionMeta(source, tuning, routesCalls)
+  if (meta) request._meta = meta
   return request
 }
 
@@ -188,10 +200,12 @@ function loadSessionRequest(
   cwd: string,
   source: ProviderAcpSource,
   tuning: AcpTuning | undefined,
-  mcpServers: LoadSessionRequest["mcpServers"]
+  mcpServers: LoadSessionRequest["mcpServers"],
+  routesCalls: boolean
 ): LoadSessionRequest {
   const request: LoadSessionRequest = { sessionId, cwd, mcpServers }
-  if (tuning) request._meta = source.sessionMetadata?.(tuning)
+  const meta = sessionMeta(source, tuning, routesCalls)
+  if (meta) request._meta = meta
   return request
 }
 
@@ -338,7 +352,9 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       tuning: options.tuning,
     }
     if (launchAccess) launchOptions.access = launchAccess
-    if (source.nativeRouting.kind !== "words" && launchSpawnsOff(harness, source.nativeRouting.via, options.conversationId, options.nativeRouting))
+    if (options.nativeCalls) launchOptions.routesCalls = true
+    const adapter = acpLayer(harness, source.layer, source.nativeRouting)
+    if (adapter.apply(layerOf({ nativeRouting: options.nativeRouting }), options.conversationId).spawnsOff())
       launchOptions.nativeSpawnsOff = true
     const spec = await trace.step("runtime-discovery", () => source.launch(launchOptions))
     if (!spec) throw new Error(`${harness} does not speak ACP here yet`)
@@ -366,10 +382,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     if (options.fork && fork?.kind !== "native") throw new Error(`${harness} has no native fork`)
 
     const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
-    const tools = options.conversationTools
-    const makoMcp: McpServer[] = tools
-      ? conversationServers(tools).map(({ name, url }) => ({ type: "http", name, url, headers: [{ name: "Authorization", value: `Bearer ${tools.token}` }] }))
-      : []
+    const makoMcp = adapter.apply(layerOf({ conversationTools: options.conversationTools }), options.conversationId).servers
     preparedServers.push(...makoMcp)
     const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
     const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
@@ -392,6 +405,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       id,
       harness,
       cwd: workingDir,
+      ...options.nativeCalls && source.callHooks && { callHooks: source.callHooks.meta },
       child,
       connection: null,
       sessionId: null,
@@ -503,6 +517,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         return { outcome: { outcome: "selected" as const, optionId: chosen } }
       },
       async extMethod(method: string, params: JsonObject) {
+        // A call hook answers at once and records nothing: it's Mako's, not the transcript's.
+        if (source.callHooks?.method === method && options.nativeCalls) return source.callHooks.answer(params, options.nativeCalls())
         const frame = record({ request: method, params })
         const vendor = decoder.request(method, params)
         // Grok asks about folder trust from a task it starts with the session, so the request can land before session/new's reply.
@@ -703,7 +719,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
 
     const connection = new ClientSideConnection(
       () => client,
-      await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate)
+      inWireOrder(await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate))
     )
     live.connection = connection
 
@@ -757,7 +773,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         open: async () => {
           if (!resume) {
             const created = await trace.step("session-open", () => watch.step("session/new", connection.newSession(
-              newSessionRequest(workingDir, source, options.tuning, live.mcpServers)
+              newSessionRequest(workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
             )))
             record({ response: "session/new", result: created })
             return parseNewAcpSession(created)
@@ -767,7 +783,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
           if (resuming?.kind === "native" && resuming.beforeLoad)
             await trace.step("session-resume", () => resuming.beforeLoad!({ nativeId: resume, cwd: workingDir, env }))
           const reply = await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
-            loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers)
+            loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
           )))
           record({ response: "session/load", result: reply })
           stream?.opened()
@@ -861,7 +877,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         signal: child.signalCode,
         stderr: stderr.slice(-600),
       })
-      await liveClose(id)
+      // One that outlives this stays in `sessions` for the next close; what the start reports is why it failed.
+      await liveClose(id).catch(() => undefined)
       throw new Error(surfaced, { cause: error })
     }
   }
@@ -925,7 +942,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     })
     const compact = source.compaction
     if (compact?.kind === "supported" && text.trim() === compact.command && attachments.length === 0) {
-      dispatch.report({ kind: "submitted", source: "transport-call" })
+      handOff(dispatch, { kind: "submitted", source: "transport-call" })
       await liveCompact(id, randomUUID())
       return
     }
@@ -951,7 +968,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       // update. A process that closed its pipes without exiting is ended so
       // that exit comes.
       if (verdict.status === "failed" && connection.signal.aborted) {
-        if (live.child.exitCode === null && live.child.signalCode === null) live.child.kill()
+        void endProviderProcess(live.child)
         return
       }
       if (verdict.status === "failed")
@@ -963,6 +980,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         })
       update(live, { ...verdict, nativePath: live.locateNativePath(), nativeForkId: verdict.status === "ready" ? live.checkpoint?.() : undefined })
     })
+    const prompt = preparePrompt(dispatch, () => acpPromptBlocks(text, attachments, live.promptCapabilities))
+    handOff(dispatch, { kind: "submitted", source: "transport-call", correlationId: turn.id })
     live.turn = turn
     live.turnReceipt = () => {
       if (live.turn !== turn) return
@@ -976,8 +995,6 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     engine.emitUpdate(live, { kind: "user", text })
     live.sent?.(text, attachments.length)
     live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
-    const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
-    dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
     void turn.send(() => connection.prompt({ sessionId, prompt })).then(
       () => dispatch.report({ kind: "accepted", source: "native-response" }),
       (error: Error) => dispatch.report({ kind: "uncertain", reason: error.message })
@@ -1154,7 +1171,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         reopen: () => {
           const reopening = (async () => {
             await connection.closeSession({ sessionId })
-            await connection.resumeSession({ sessionId, cwd: live.cwd, mcpServers: live.mcpServers })
+            await connection.resumeSession({ sessionId, cwd: live.cwd, mcpServers: live.mcpServers, ...live.callHooks && { _meta: live.callHooks } })
             live.providerTurnCause = undefined
           })().finally(() => {
             if (live.reopening === reopening) live.reopening = undefined
@@ -1200,18 +1217,21 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
    */
   async function endAgent(live: Live): Promise<void> {
     const { child } = live
-    if (child.exitCode !== null || child.signalCode !== null) return
+    if (providerProcessGone(child)) return
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()))
-    const deadline = setTimeout(() => child.kill(), SHUTDOWN_GRACE_MS)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // An agent that never answers `session/close` is ended by this, and past it there is nothing left to wait for.
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => { void endProviderProcess(child); resolve() }, SHUTDOWN_GRACE_MS)
+    })
     if (live.closesSession && live.connection && live.sessionId)
-      await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited])
-    child.stdin.end()
-    await exited
-    clearTimeout(deadline)
+      await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited, deadline])
+    clearTimeout(timer)
+    await closeProviderProcess(child, "input", SHUTDOWN_GRACE_MS)
   }
 
   function stop(): void {
-    for (const id of sessions.keys()) void liveClose(id)
+    for (const id of sessions.keys()) void liveClose(id).catch(() => undefined)
   }
 
   function update(live: Live, patch: Partial<LiveSessionState>): void {

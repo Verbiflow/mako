@@ -19,24 +19,28 @@ import type { AccountHarness, AccountProvider } from "../contracts/accounts.js"
 import { accountRemovalSessions, type AccountSessions } from "./account-removal-sessions.js"
 import { AccountLogins } from "./account-login.js"
 import type { ProviderConnectionAction } from "../contracts/provider-connection.js"
+import type { ModelConnectionCheckInput, ModelConnectionInput } from "../contracts/model-connections.js"
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
 import type { MakoProcesses, ThreadCatalog } from "../threads/index.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 
 export type { PrefetchOutcome } from "./start-prefetch.js"
 export { createHarnessHost, detachedHarnessContext } from "./harness-host.js"
+export { callGateAnswer, HookCall } from "./call-gate.js"
 export type { HarnessContext, ProviderHost } from "./host.js"
 export type { AccountLaunch, HarnessAccounts } from "./accounts.js"
 export { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.js"
-export { TurnInProgressError } from "./prompt-dispatch.js"
+export { HandoffRefused, TurnInProgressError } from "./prompt-dispatch.js"
 export type { AccountHold } from "./account-holds.js"
 export type { AccountSessions } from "./account-removal-sessions.js"
 export { HarnessProfiles } from "./harness-profiles.js"
 export { harnessLabel } from "./harness-descriptors.js"
 export { AccessChoiceStore, declareAccessChoiceMethods, type AccessChoicesAccount } from "./access-choices.js"
+export { FinDefaultsStore, declareFinDefaultMethods } from "./fin-defaults.js"
 export { CloudSignInSync, installCloudSignIns, type CloudSignInStore } from "./cloud-sign-ins.js"
 export type { CloudSignInPlace } from "./cloud-sign-in.js"
 export { resolveHarnessTuning } from "./harness-models.js"
+export { steerHeard, STEER_LANDS_MS } from "./live-driver.js"
 export type { AdmittedLiveDriver, ConversationTools, DriverGoalCommand, DriverSideQuestion, GoalDelivery, GoalsCapability, ProviderLiveDriver, ReviewCapability, ReviewStart, SideQuestionsCapability } from "./live-driver.js"
 export { resumes } from "./live-capabilities.js"
 export { nativeRoutingReadings } from "./native-routing.js"
@@ -186,6 +190,21 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
   methods.handle("mako:account-keep", (harness: AccountHarness, name: string) => accounts.keep(harness, name))
   methods.handle("mako:account-usage", (harness: AccountProvider, name: string) => accounts.usage.read(harness, name))
   methods.handle("mako:account-reset", (harness: AccountProvider, name: string, attempt: string) => accounts.usage.useResetCredit(harness, name, attempt))
+
+  /* Model connections: gateways, local servers and endpoints, served through OpenCode. */
+  const connections = host.modelConnections
+  // What a connection serves is in OpenCode's catalog: read it again, and every window hears the new one.
+  const changed = <T>(result: T): T => {
+    void harnesses.profiles.get("opencode", true).catch(() => undefined)
+    return result
+  }
+  methods.handle("mako:model-connections", () => connections.snapshot())
+  methods.handle("mako:model-connection-check", (input: ModelConnectionCheckInput) => connections.check(input))
+  methods.handle("mako:model-connection-add", async (input: ModelConnectionInput) => changed(await connections.add(input)))
+  methods.handle("mako:model-connection-enable", async (id: string, enabled: boolean) => changed(await connections.setEnabled(id, enabled)))
+  methods.handle("mako:model-connection-remove", async (id: string) => changed(await connections.remove(id)))
+  methods.handle("mako:model-connection-test", (id: string) => connections.test(id))
+  methods.handle("mako:model-connection-local", () => connections.detectLocal())
 
   // The picker opens on what is known; each provider's discovery arrives as
   // its own event, so the slowest CLI no longer hides the rest.

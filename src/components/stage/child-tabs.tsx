@@ -1,10 +1,11 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
-import { childGroup, childLine, childStateOf, childWord, rollup } from "@mako/host/contracts/children"
+import { childLine, childStateOf, childWord, rollup } from "@mako/host/contracts/children"
 import { finsWord } from "@mako/host/contracts/agents"
 import type { ChildState } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { LiveMark } from "@/components/ui/live-mark"
+import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { useHarnessIdentity, harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
@@ -18,29 +19,18 @@ const GAP_PX = 6
 /** The "+N" that stands for the rest at the strip's end. */
 const MORE_PX = 40
 
-/** Queued: started by no one yet, so a dashed ring where the others wear a mark. */
-function QueuedMark({ label }: { label: string }) {
-  return (
-    <span role="img" aria-label={label} title={label} className="flex size-5 shrink-0 items-center justify-center">
-      <span aria-hidden className="size-2 rounded-full border border-dashed border-faint" />
-    </span>
-  )
-}
-
 /**
- * A child's state in the rail's own marks, so its tab reads as a Session tab
- * does: what needs the person, running, failed, an answer to read, or queued.
- * An idle or stopped child has no news, so no mark.
+ * A Fin's live mark: the plain fin doing what the Fin does, its harness a corner badge. A Fin that finished and
+ * hasn't been read wears the unread dot.
  */
-export function ChildStatusMark({ state, read }: { state: ChildState; read?: boolean }) {
+export function FinMark({ agent, state, read, lit, cut, size }: { agent: NativeAgent; state: ChildState; read?: boolean; lit?: boolean; cut?: string; size?: number }) {
   const line = childLine(state)
-  const group = childGroup(state)
-  if (group === "queued") return <QueuedMark label={line ?? childWord(state)} />
-  if (group === "needs") return <ThreadStatusMark status={{ kind: "needs-permission", since: 0, detail: `${childWord(state)}: ${line ?? ""}` }} />
-  if (group === "working") return <ThreadStatusMark status={{ kind: "working", since: 0, detail: line ?? childWord(state) }} />
-  if (group === "failed") return <ThreadStatusMark status={{ kind: "failed", at: 0, detail: line ?? "Failed" }} />
-  if (state.kind === "ended" && state.outcome === "done" && !read) return <ThreadStatusMark status={{ kind: "review", at: 0, unread: true }} />
-  return null
+  const unread = state.kind === "ended" && state.outcome === "done" && state.decision?.on !== "person" && !read
+  return (
+    <LiveMark kind="fin" state={unread ? "unread" : finMarkState(state)} motion={motionOf(line)} lit={lit} cut={cut} size={size} label={line ? `${childWord(state)}: ${line}` : childWord(state)}>
+      <HarnessIcon harness={agent.provider} />
+    </LiveMark>
+  )
 }
 
 /** One child's tab: its harness, its title and its state. Memoized on its entry, which keeps its identity while it's unchanged. */
@@ -63,13 +53,12 @@ const ChildTab = memo(function ChildTab({ agent, selected, onOpen }: { agent: Na
       }}
       style={{ flex: `0 1 ${CHILD_TAB_PX}px`, minWidth: CHILD_TAB_MIN_PX }}
       className={cn(
-        "session-tab group relative flex h-7 items-center gap-1.5 overflow-hidden rounded-md pr-0.5 pl-1.5 text-ui",
+        "session-tab group relative flex h-7 items-center gap-1.5 overflow-hidden pr-0.5 pl-1.5 text-ui",
         selected ? "bg-raised font-medium text-foreground" : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       )}
     >
-      <HarnessIcon harness={agent.provider} className="size-3.5" />
+      <FinMark agent={agent} state={state} read={selected} lit={selected} cut={selected ? "var(--raised)" : "var(--shell)"} />
       <span className="min-w-0 flex-1 truncate text-left">{agent.title}</span>
-      <ChildStatusMark state={state} read={selected} />
     </button>
   )
 })
@@ -114,7 +103,7 @@ export function ApexFinTabs({ thread, apexTitle }: { thread: string; apexTitle: 
         data-apex-count={counts.total}
         onClick={() => stage.open("agents")}
         title={`${finsWord(counts.total)} under ${apexTitle}, in the Agents panel`}
-        className="pressable flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+        className="pressable flex h-7 shrink-0 items-center gap-1 px-1.5 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
       >
         <ApexMark className="size-3.5" />
         <span className="tabular">{counts.total}</span>
@@ -129,7 +118,7 @@ export function ApexFinTabs({ thread, apexTitle }: { thread: string; apexTitle: 
             data-child-more={rest}
             onClick={() => stage.open("agents")}
             title={`${finsWord(rest)} more under ${apexTitle}, in the Agents panel`}
-            className="pressable ml-auto flex h-7 shrink-0 items-center rounded-md px-2 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+            className="pressable ml-auto flex h-7 shrink-0 items-center px-2 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
           >
             <span className="tabular">+{rest}</span>
           </button>

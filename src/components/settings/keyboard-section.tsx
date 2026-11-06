@@ -41,7 +41,7 @@ export function KeyboardSection() {
     <section className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-shell/55 px-2.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
+          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 bg-raised px-2.5 focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
             <SearchIcon className="size-3.5 shrink-0 text-faint" />
             <input
               value={query}
@@ -167,7 +167,7 @@ function ShortcutRow({
               const next = chordFromEvent(event.nativeEvent)
               if (next) onCandidate(next)
             }}
-            className="pressable flex h-7 min-w-28 items-center justify-center rounded-md bg-raised px-2 ring-1 ring-border"
+            className="pressable flex h-7 min-w-28 items-center justify-center bg-raised px-2 ring-1 ring-border"
           >
             {candidate ? (
               <Keys keys={formatChord(candidate)} />
@@ -180,7 +180,7 @@ function ShortcutRow({
             type="button"
             aria-label={`Change shortcut for ${command.title}`}
             onClick={onCapture}
-            className="pressable flex h-7 min-w-20 items-center justify-center rounded-md px-2 hover:bg-fill-hover"
+            className="pressable flex h-7 min-w-20 items-center justify-center px-2 hover:bg-fill-hover"
           >
             {current ? (
               <Keys keys={formatChord(current)} />

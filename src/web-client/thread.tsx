@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -39,6 +39,7 @@ import { DiagnosisCard } from "./trouble"
 import { useNow, useTryAgain } from "./trouble-state"
 import { QuietStrip } from "./quiet-strip"
 import { activeLiveAcp, useAcp } from "@/state/acp"
+import { openFiles } from "./files-open"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
 import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
@@ -341,7 +342,7 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
       <Menu>
         <MenuTrigger asChild>
           {desk ? (
-            <button type="button" aria-label="More for this Thread" className="pressable mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground">
+            <button type="button" aria-label="More for this Thread" className="pressable mr-1 flex size-7 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground">
               <MoreHorizontalIcon className="size-3.5" />
             </button>
           ) : (
@@ -361,6 +362,12 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
             <MenuItem onSelect={() => openReview({ conversation: session.row.conversation, scope: { kind: "thread" } })} className={item}>
               <FileDiffIcon className={glyph} />
               Changes
+            </MenuItem>
+          ) : null}
+          {!session.quietSince ? (
+            <MenuItem onSelect={() => openFiles({ conversation: session.row.conversation })} className={item}>
+              <FolderTreeIcon className={glyph} />
+              Files
             </MenuItem>
           ) : null}
           {session.row.folder && !session.quietSince && !moving ? (
@@ -448,7 +455,7 @@ function SessionSwitcher({ thread, current, wide, onSession, onAdd }: { thread: 
           <span className="shrink-0 text-faint">· {sessionBrief(current.facts, now, label, wide ? parent : undefined)}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-caution" : "bg-ember")} /> : null}
+          {busy ? <span aria-label={busy === "waiting" ? "another is waiting on you" : "another is working"} className={cn("size-1.5 rounded-full", busy === "waiting" ? "bg-attention" : "bg-sea")} /> : null}
           {thread.sessions.length}
           <ChevronsUpDownIcon aria-hidden className="size-3.5" />
         </span>
@@ -504,7 +511,7 @@ function SessionList({ thread, current, now, onPick, onAdd }: { thread: WebThrea
                   <WebHarnessIcon harness={session.row.harness} className="size-5 shrink-0" />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate font-medium">{sessionName(session.facts, label)}</span>
-                    <span className={cn("line-clamp-2 text-label", standing === "waiting" ? "text-caution" : standing === "failed" ? "text-negative" : "text-faint")}>
+                    <span className={cn("line-clamp-2 text-label", standing === "waiting" ? "text-attention" : standing === "failed" ? "text-negative" : "text-faint")}>
                       {session.facts.title ? `${label} · ` : ""}
                       {sessionDetail(session.facts, now, label, forkedFrom(session.facts, facts, webHarnessLabel))}
                     </span>
@@ -564,7 +571,7 @@ export function QuietSession({ session }: { session: WebSession }) {
         {session.waiting.length ? (
           <ul role="list" className="mx-auto mt-4 flex max-w-[460px] flex-col gap-2">
             {session.waiting.map((message) => (
-              <li key={message.id} className="web-waiting flex items-start gap-2 rounded-xl bg-raised px-3.5 py-2.5 ring-1 ring-hairline">
+              <li key={message.id} className="web-waiting flex items-start gap-2 bg-raised px-3.5 py-2.5 ring-1 ring-hairline">
                 <p className="min-w-0 flex-1 text-ui whitespace-pre-wrap">{message.displayText ?? message.text}</p>
                 <span className="shrink-0 pt-0.5 text-label text-faint">Waiting</span>
                 <button type="button" aria-label="Take this message back" onClick={() => remove(message.id)} className="web-icon-button -my-1.5 -mr-2 size-8">
@@ -585,7 +592,7 @@ export function QuietSession({ session }: { session: WebSession }) {
 export function ArchivedThread({ thread }: { thread: WebThread }) {
   return (
     <div className="mx-auto flex max-w-[420px] flex-col items-center px-6 pt-16 text-center">
-      <span className="flex size-11 items-center justify-center rounded-2xl bg-raised ring-1 ring-hairline">
+      <span className="flex size-11 items-center justify-center bg-raised ring-1 ring-hairline">
         <ArchiveIcon className="size-5 text-muted-foreground" />
       </span>
       <p className="mt-4 text-title font-medium">Archived</p>
@@ -598,10 +605,10 @@ export function ArchivedThread({ thread }: { thread: WebThread }) {
 export function TranscriptLoading() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 pt-8" aria-busy aria-label="Opening the conversation">
-      <span className="skeleton ml-auto h-12 w-3/5 rounded-2xl" />
-      <span className="skeleton h-3.5 w-4/5 rounded" />
-      <span className="skeleton h-3.5 w-2/3 rounded" />
-      <span className="skeleton h-3.5 w-3/4 rounded" />
+      <span className="skeleton ml-auto h-12 w-3/5" />
+      <span className="skeleton h-3.5 w-4/5" />
+      <span className="skeleton h-3.5 w-2/3" />
+      <span className="skeleton h-3.5 w-3/4" />
     </div>
   )
 }

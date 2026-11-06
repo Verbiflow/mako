@@ -10,9 +10,9 @@ import { descriptorFor } from "@/state/descriptors"
 import { capabilityText } from "@mako/host/contracts/harness-capabilities"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import { isActiveNativeAgent, isProviderWork, type NativeWork } from "@mako/host/contracts/native-agents"
-import { rollup, rollupLine, rosterChildren } from "@mako/host/contracts/children"
+import { rollup, rollupChip, rollupLabel, rosterChildren } from "@mako/host/contracts/children"
 import { ApexFinsSection } from "@/components/inspector/apex-fins-section"
-import { apexConversation, openFinInApex, useApexView } from "@/state/apex-fins"
+import { apexConversation, openFinInApex, threadRollup, useApexView } from "@/state/apex-fins"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ToolGlyph } from "@/components/transcript/tool-views"
@@ -25,6 +25,9 @@ import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { Blank } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
+import { finTuningLine } from "@mako/host/contracts/fin-tuning"
+import { SignpostIcon } from "lucide-react"
+import { FinMovedLine } from "./fin-moved-line"
 
 const labels = {
   working: "Running",
@@ -160,7 +163,10 @@ export function ConversationAgents({
   const background = useAcp((state) => {
     const live = liveConversation(state, conversation)
     const work = live ? backgroundWork(live.session, live.nativeAgents) : null
-    return { waiting: work ? backgroundWorkText(work) : undefined, unnamed: work?.unnamed ?? 0, stopping: live?.canceling ?? false }
+    // The Fins section counts the Fins; this line says what else the session waits on.
+    const named = work?.named.filter((agent) => !agent.child) ?? []
+    const rest = work && (named.length || work.unnamed) ? { ...work, named, count: named.length + work.unnamed } : null
+    return { waiting: rest ? backgroundWorkText(rest) : undefined, unnamed: work?.unnamed ?? 0, stopping: live?.canceling ?? false }
   }, shallowEqual)
   return (
     <AgentRoster
@@ -229,11 +235,12 @@ function AgentRoster({
         }
       />
     )
-  const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient).length + unnamed
-  const finished = agents.filter((agent) => !isActiveNativeAgent(agent)).length
+  // Fins are counted by their own section, as every surface counts them (`rollup`); this line is the rest.
+  const running = agents.filter((agent) => !agent.child && isActiveNativeAgent(agent) && !agent.ambient).length + unnamed
+  const finished = agents.filter((agent) => !agent.child && !isActiveNativeAgent(agent)).length
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-label text-faint">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label text-faint">
         {waiting ? (
           <span data-background-summary className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             <HourglassIcon aria-hidden className="size-3 shrink-0" />
@@ -248,7 +255,7 @@ function AgentRoster({
             type="button"
             disabled={stopping}
             onClick={() => void acp.stopBackground(conversation)}
-            className="pressable ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
+            className="pressable ml-auto shrink-0 px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
           >
             {stopping ? "Stopping" : "Stop all"}
           </button>
@@ -272,7 +279,7 @@ function AgentRoster({
         {agents.length > visible ? (
           <button
             type="button"
-            className="pressable w-full rounded-md px-3 py-2 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+            className="pressable w-full px-3 py-2 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
             onClick={() => setVisible((count) => count + 40)}
           >
             Show more
@@ -307,7 +314,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
   const facts = [
     kind,
     harnessLabel(agent.provider),
-    agent.model,
+    agent.runsOn ? finTuningLine(agent.runsOn) : agent.model,
     agent.role,
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
     agent.usage?.tokens !== undefined ? `${formatTokens(agent.usage.tokens)} tokens` : undefined,
@@ -319,7 +326,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
       <button
         type="button"
         aria-expanded={more ? expanded : undefined}
-        className={cn("pressable flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", agent.ambient && "opacity-70")}
+        className={cn("pressable flex w-full items-start gap-2.5 px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", agent.ambient && "opacity-70")}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="flex h-5 shrink-0 items-center text-muted-foreground">
@@ -344,12 +351,12 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
             </span>
           ) : null}
           {expanded && agent.detail ? (
-            <span className="mt-1 max-h-40 overflow-y-auto rounded-md bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
+            <span className="mt-1 max-h-40 overflow-y-auto bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
               {agent.detail}
             </span>
           ) : null}
           {expanded && agent.output ? (
-            <span data-native-output className="mt-1 max-h-56 overflow-y-auto rounded-md bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
+            <span data-native-output className="mt-1 max-h-56 overflow-y-auto bg-raised px-2 py-1.5 font-mono text-label break-words whitespace-pre-wrap text-muted-foreground">
               {agent.output}
             </span>
           ) : null}
@@ -361,6 +368,18 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
               </span>
             ))}
           </span>
+          {agent.runsOn?.rule ? (
+            <span data-fin-rule-applied className="flex min-w-0 items-center gap-1 text-label text-faint" title={`Started by your rule: ${agent.runsOn.rule}`}>
+              <SignpostIcon aria-hidden className="size-3 shrink-0" />
+              <span className="truncate">{agent.runsOn.rule}</span>
+            </span>
+          ) : null}
+          <FinMovedLine agent={agent} />
+          {agent.runsOn?.note ? (
+            <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
+              {agent.runsOn.note}
+            </span>
+          ) : null}
         </span>
       </button>
       {transcript && agent.child?.path && agent.child.nativeId ? (
@@ -368,7 +387,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
           type="button"
           data-open-transcript
           onClick={() => openTranscript(agent)}
-          className="pressable mb-1.5 ml-[2.375rem] rounded-md px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+          className="pressable mb-1.5 ml-[2.375rem] px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
         >
           Open transcript
         </button>
@@ -383,7 +402,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
             setStopping(true)
             void acp.stopAgent(conversation, agent.nativeId).finally(() => setStopping(false))
           }}
-          className="pressable absolute top-2 right-2 flex size-6 items-center justify-center rounded bg-surface text-faint opacity-0 group-hover/agent:opacity-100 hover:bg-fill-hover hover:text-foreground focus-visible:opacity-100 disabled:opacity-40"
+          className="pressable absolute top-2 right-2 flex size-6 items-center justify-center bg-surface text-faint opacity-0 group-hover/agent:opacity-100 hover:bg-fill-hover hover:text-foreground focus-visible:opacity-100 disabled:opacity-40"
         >
           <SquareIcon className="size-2.5 fill-current" strokeWidth={0} />
         </button>
@@ -395,19 +414,25 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
 /**
  * The composer's doorway to the Agents panel, there while the roster holds
  * anything. It counts what still runs, and wears the hourglass while the
- * turn has ended and that work is what the session waits on.
+ * turn has ended and that work is what the session waits on. An Apex's Fins
+ * are their number and, when any needs the person, the needs pip; the whole
+ * line is its name and tooltip.
  */
 export function AgentsToggle() {
   useHarnessIdentity()
   const reading = useAcp((state) => {
     const live = activeLiveAcp(state)
     const agents = live?.nativeAgents?.agents ?? []
-    // An Apex's Fins say how they stand by the rollup; the rest of the roster counts as it runs.
-    const children = rollup(rosterChildren(live?.nativeAgents))
+    // An Apex's Fins say how they stand by the Thread's one rollup, as the crew card, the pips and the phone read it;
+    // the rest of the roster counts as it runs.
+    const children = live?.threadId ? threadRollup(state, live.threadId) : rollup(rosterChildren(live?.nativeAgents))
     const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient && !agent.child)
     return {
       total: agents.length,
-      fins: children.total ? rollupLine(children) : "",
+      fins: children.total ? rollupChip(children) : "",
+      finsLabel: children.total ? rollupLabel(children) : "",
+      finsTotal: children.total,
+      needs: children.needs,
       running: running.length,
       // The harnesses at work, as one string so a step elsewhere in the roster re-renders nothing.
       harnesses: [...new Set(running.filter((agent) => (agent.work ?? "agent") === "agent").map((agent) => agent.provider))].slice(0, SHOWN_MARKS).join(" "),
@@ -421,9 +446,11 @@ export function AgentsToggle() {
     <button
       type="button"
       data-agents-toggle
+      data-fin-counts={reading.finsLabel || undefined}
       onClick={() => stage.toggle("agents")}
-      title={reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
-      className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
+      aria-label={reading.fins || undefined}
+      title={reading.finsLabel ? `${reading.finsLabel}; open the Agents panel` : reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
+      className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
     >
       {marks.length ? (
         <span className="flex items-center -space-x-1">
@@ -440,7 +467,8 @@ export function AgentsToggle() {
       ) : (
         <GitBranchIcon className="size-3" />
       )}
-      {label}
+      {reading.fins ? <span className="tabular">{reading.finsTotal}</span> : label}
+      {reading.needs ? <span aria-hidden className="fin-pip" data-pip="needs" /> : null}
     </button>
   )
 }

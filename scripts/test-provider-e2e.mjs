@@ -154,7 +154,7 @@ async function runElectron() {
     },
     controlInstructions: (binding) => {
       const session = sessions.get(binding)
-      return session ? [controlLine(session)] : []
+      return { standing: { control: session && controlLine(session) }, notices: [] }
     },
     revokeTools: async (binding, id) => {
       mcp?.revoke(binding, id)

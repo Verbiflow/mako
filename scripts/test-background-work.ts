@@ -23,7 +23,6 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { reconcileRoster } from "../src/lib/native-roster.ts"
 import { presenceThreadStatus, foldedThreadState, sessionStateText, type FoldRow } from "../src/lib/thread-fold.ts"
-import { boardBucketOf } from "../src/lib/thread-board.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { grokBackground } from "@mako/host/harnesses/grok/background"
 import { devinBackground } from "@mako/host/harnesses/devin/background"
@@ -179,7 +178,6 @@ function replay(capture: Captured, stopAt?: (message: SDKMessage, index: number)
   const status = presenceThreadStatus(presence)
   assert.deepEqual(status, { kind: "background", count: 2 })
   assert.equal(sessionStateText(status), "waiting on 2 background tasks")
-  assert.equal(boardBucketOf(status).bucket, "working", "the Status board keeps it with work under way")
   const folded = foldedThreadState(
     [{ kind: "live", key: "a", presence: { ...presence, key: "a" } }, { kind: "live", key: "b", presence: { ...presence, key: "b", status: "running" } }] satisfies FoldRow[],
     () => ({ kind: "idle" })

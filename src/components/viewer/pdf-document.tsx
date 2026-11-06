@@ -46,9 +46,9 @@ export default function PdfDocument({ url, name, expanded = false }: { url: stri
       {error ? <p role="status" className="p-4 text-ui text-muted-foreground">This document could not be previewed. Open the original file to view it.</p> : (
         <>
           <div className="sticky top-0 z-10 flex items-center justify-center gap-3 border-b border-hairline bg-popover px-3 py-2 text-label">
-            <button type="button" disabled={!document || pageNumber === 1} onClick={() => setPageNumber((page) => page - 1)} className="pressable rounded px-2 py-1 hover:bg-fill-hover disabled:opacity-40">Previous page</button>
+            <button type="button" disabled={!document || pageNumber === 1} onClick={() => setPageNumber((page) => page - 1)} className="pressable px-2 py-1 hover:bg-fill-hover disabled:opacity-40">Previous page</button>
             <span aria-live="polite">{document ? `${pageNumber} / ${document.numPages}` : "Loading document…"}</span>
-            <button type="button" disabled={!document || pageNumber === document.numPages} onClick={() => setPageNumber((page) => page + 1)} className="pressable rounded px-2 py-1 hover:bg-fill-hover disabled:opacity-40">Next page</button>
+            <button type="button" disabled={!document || pageNumber === document.numPages} onClick={() => setPageNumber((page) => page + 1)} className="pressable px-2 py-1 hover:bg-fill-hover disabled:opacity-40">Next page</button>
           </div>
           {document ? <PdfPage key={`${pageNumber}:${width}`} document={document} pageNumber={pageNumber} width={width} name={name} onError={fail} /> : null}
         </>

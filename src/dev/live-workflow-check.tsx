@@ -18,7 +18,7 @@ import { ActivityMark } from "@/components/ui/activity-mark"
 import { Spinner } from "@/components/ui/spinner"
 import { MODE_DRAWS, resolvePreset } from "thinking-orbs"
 import { AgentsPanel } from "@/components/inspector/agents-panel"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { ThreadMark } from "@/components/rail/thread-status"
 import type { ThreadStatus } from "@/state/thread-status"
 import { WorkspaceFocusContext } from "@/components/stage/workspace-focus-context"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -194,7 +194,7 @@ const nativeScenes = {
   compacted: () => ({
     activity: undefined,
     blocks: [
-      { type: "event", label: "Context compacted", detail: "Automatic · 182k → 24k tokens", body: "## Where things stand\n\nThe route guard now keeps the destination through sign-in. Remaining: the session-expiry deep link and its regression test.\n\n- `src/router/guard.ts` — keeps `returnTo`\n- `src/session/refresh.ts` — retries once before signing out" },
+      { type: "event", label: "Context compacted", detail: "Automatic · 182K → 24K tokens", body: "## Where things stand\n\nThe route guard now keeps the destination through sign-in. Remaining: the session-expiry deep link and its regression test.\n\n- `src/router/guard.ts` — keeps `returnTo`\n- `src/session/refresh.ts` — retries once before signing out" },
       { type: "event", label: "Model changed", detail: "claude-opus-4 → claude-sonnet-4 · after a refusal" },
       { type: "event", label: "Rate limited", detail: "Reached your 5-hour limit · resets 3:40 PM", tone: "warning" },
       { type: "event", label: "Turn failed", detail: "Server overloaded", body: "stream disconnected before completion: Our servers are currently overloaded. Please try again later.", tone: "error" },
@@ -567,13 +567,13 @@ export function Fixture() {
             <span>{new URLSearchParams(location.search).has("native") ? "Development UI · real native provider session" : "Isolated live workflow fixture · no agent is started"}</span>
             <HotIndicator />
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               onClick={() => publishQueue("starting")}
             >
               First message startup
             </button>
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               onClick={() => {
                 const receipt = preserveSendingDraft({
                   key: id,
@@ -586,40 +586,40 @@ export function Fixture() {
               Interrupted send
             </button>
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               data-fixture="running"
               onClick={() => publishQueue("reasoning")}
             >
               Working with queue
             </button>
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="responding" onClick={() => publishQueue("responding")}>Streaming reply</button>
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-tool" onClick={() => publishQueue("quiet-tool")}>Quiet tool</button>
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-reply" onClick={() => publishQueue("quiet-reply")}>Quiet reply</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="responding" onClick={() => publishQueue("responding")}>Streaming reply</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="quiet-tool" onClick={() => publishQueue("quiet-tool")}>Quiet tool</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="quiet-reply" onClick={() => publishQueue("quiet-reply")}>Quiet reply</button>
             {(["compacting", "retrying", "compacted"] as const).map((scene) => (
-              <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={scene} onClick={() => publishNative(scene)}>
+              <button key={scene} className="pressable border border-hairline px-2 py-1" data-fixture={scene} onClick={() => publishNative(scene)}>
                 {{ compacting: "Compacting", retrying: "Retrying", compacted: "Provider markers" }[scene]}
               </button>
             ))}
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
             {(["tools", "parallel", "parallel-settling", "agents", "settled", "stopped", "table", "changed", "changed-maybe", "reopened"] as const).map((scene) => (
-              <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
+              <button key={scene} className="pressable border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
                 {{ tools: "Several tools", parallel: "Calls at once", "parallel-settling": "One call of several done", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table", changed: "Turn's changes", "changed-maybe": "Changes, some not sure whose", reopened: "Reopened turn" }[scene]}
               </button>
             ))}
             <span data-fixture="status-marks" className="flex items-center gap-3">
               {statusMarks.map(({ label, status }) => (
-                <span key={label} className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
+                <span key={label} className="flex items-center gap-1 bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
                   {label}
-                  <ThreadStatusMark status={status} />
+                  <ThreadMark status={status} harness="claude" />
                 </span>
               ))}
             </span>
-            <span data-fixture="spinner" className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
+            <span data-fixture="spinner" className="flex items-center gap-1 bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
               Starting
               <Spinner className="size-3.5" />
             </span>
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               onClick={() => setNarrow((value) => !value)}
             >
               {narrow ? "Wide layout" : "Narrow layout"}

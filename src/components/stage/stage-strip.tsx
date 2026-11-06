@@ -1,5 +1,5 @@
 import { IconAction } from "@/components/ui/kit"
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { StillMark } from "@/components/transcript/message-avatar"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
 import { ApexFinTabs } from "@/components/stage/child-tabs"
@@ -140,7 +140,7 @@ export function StageStrip({
             key={id}
             data-active={active || undefined}
             className={cn(
-              "group relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-0.5 overflow-hidden rounded-md",
+              "group relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-0.5 overflow-hidden",
               active
                 ? "bg-raised text-foreground"
                 : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"
@@ -209,7 +209,7 @@ export function StageStrip({
             >
               {agent ? (
                 agentHarness ? (
-                  <HarnessIcon harness={agentHarness} className="size-4" />
+                  <StillMark harness={agentHarness} kind="thread" size={18} />
                 ) : (
                   <MakoMark className="size-4" />
                 )
@@ -226,7 +226,7 @@ export function StageStrip({
                 aria-label={`Close ${title}`}
                 onClick={() => viewer.closeTab(pane.id, id)}
                 className={cn(
-                  "pressable -ml-1 flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground",
+                  "pressable -ml-1 flex size-5 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground",
                   active
                     ? "opacity-80"
                     : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-80"
@@ -249,7 +249,7 @@ export function StageStrip({
  */
 export function WorkbenchStrip({ children, end }: { children: ReactNode; end?: ReactNode }) {
   return (
-    <div className="flex h-10 shrink-0 items-center border-b border-hairline bg-shell">
+    <div className="flex h-10 shrink-0 items-center bg-shell">
       <div
         role="tablist"
         className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2"

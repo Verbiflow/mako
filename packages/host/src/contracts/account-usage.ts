@@ -52,6 +52,34 @@ export function limitResetAt(usage: AccountUsage | undefined, now: number): numb
   return latest
 }
 
+/**
+ * Whether the account is at a limit now, and until when (`limitResetAt`): undefined while no window is spent, `until`
+ * null when a spent one names no reset.
+ */
+export function spentUntil(usage: AccountUsage | undefined, now: number): { until: number | null } | undefined {
+  if (usage?.status !== "ok") return undefined
+  const spent = usage.windows.some((window) => window.usedPercent >= 100 && (window.resetsAt === null || window.resetsAt > now))
+  return spent ? { until: limitResetAt(usage, now) } : undefined
+}
+
+/** A harness whose account in use is at its limit (`HarnessAccounts.limited`): which account, until when, and another of the harness's accounts with room. */
+export interface HarnessLimit {
+  account: string
+  until: number | null
+  instead?: string
+}
+
+/** "1:00 PM PST", or "Wed 1:00 PM PST" past today: when a limit resets, in this host's time zone. */
+export function resetWords(until: number, now: number): string {
+  const day = (at: number) => new Date(at).toDateString()
+  return new Date(until).toLocaleString("en-US", {
+    ...(day(until) !== day(now) && { weekday: "short" }),
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  })
+}
+
 /** The windows as they stand at `now`: one past its reset has emptied. */
 export function windowsAt(windows: readonly UsageWindow[], now: number): UsageWindow[] {
   return windows.map((window) =>
@@ -92,20 +120,23 @@ export const LIMIT_HEADROOM_PERCENT = 70
  * Another account of the same harness with room, offered when the one in
  * use is near its plan limit or the harness just refused a turn on it.
  * Never taken by itself: an account is money, so switching is the person's
- * click. `window` is the binding one, which names the limit.
+ * click; a Fin moves on by their switch in Settings › Fins alone
+ * (`contracts/fin-fallback.ts`). `window` is the binding one, which names the limit.
  */
 export interface AccountLimitOffer {
   harness: string
   because: "near-limit" | "refused"
   from: { name: string; email?: string; window?: UsageWindow }
-  to: { name: string; email?: string; window?: UsageWindow }
+  /** Absent near a limit with no account to offer: a warning before it, so the limit is no surprise. */
+  to?: { name: string; email?: string; window?: UsageWindow }
 }
 
 /**
  * The offer the readings make, or `null`: the active account near its limit
  * (or refused, whatever its reading says) and the account with the most
  * room in its binding window under `LIMIT_HEADROOM_PERCENT`. Accounts whose
- * reading failed are never offered: an unread account may be as spent.
+ * reading failed are never offered: an unread account may be as spent. Near a
+ * limit with no such account it's still said, with nothing to switch to.
  */
 export function limitOffer(
   harness: string,
@@ -125,11 +156,11 @@ export function limitOffer(
     if ((room?.usedPercent ?? 0) >= LIMIT_HEADROOM_PERCENT) continue
     if (!best || (room?.usedPercent ?? 0) < (best.window?.usedPercent ?? 0)) best = { account, window: room }
   }
-  if (!best) return null
+  if (!best && (refused || !window)) return null
   const side = (account: (typeof accounts)[number], window: UsageWindow | null | undefined) => ({
     name: account.name,
     ...account.email !== undefined && { email: account.email },
     ...window && { window },
   })
-  return { harness, because: refused ? "refused" : "near-limit", from: side(active, window), to: side(best.account, best.window) }
+  return { harness, because: refused ? "refused" : "near-limit", from: side(active, window), ...(best && { to: side(best.account, best.window) }) }
 }

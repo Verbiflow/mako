@@ -97,7 +97,7 @@ function BrowserChoice({
     <div data-browser-choice>
       <div
         className={cn(
-          "flex items-center rounded-md transition-colors duration-(--duration-press) ease-(--ease-out) motion-reduce:transition-none",
+          "flex items-center transition-colors duration-(--duration-press) ease-(--ease-out) motion-reduce:transition-none",
           browser.preferred ? "bg-fill-selected/50" : "hover:bg-fill-hover"
         )}
       >
@@ -115,7 +115,7 @@ function BrowserChoice({
             aria-label={`Prefer ${browserTitle(browser)}${browser.profileName ? ` · ${browser.profileName}` : ""}`}
             className="peer sr-only"
           />
-          <span className="pressable flex min-h-14 items-center gap-3 rounded-md px-3 py-2.5 transition-colors duration-(--duration-press) ease-(--ease-out) peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-foreground peer-disabled:opacity-50 motion-reduce:transition-none">
+          <span className="pressable flex min-h-14 items-center gap-3 px-3 py-2.5 transition-colors duration-(--duration-press) ease-(--ease-out) peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-foreground peer-disabled:opacity-50 motion-reduce:transition-none">
             <BrowserIcon browser={browser} />
             <span className="min-w-0 flex-1 pr-6">
               <span className="block truncate text-ui font-medium">
@@ -146,7 +146,7 @@ function BrowserChoice({
             aria-expanded={expanded}
             aria-controls={instructionsId}
             onClick={() => setExpanded(!expanded)}
-            className="pressable mr-2 flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-foreground"
+            className="pressable mr-2 flex size-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-foreground"
           >
             <ChevronRightIcon
               aria-hidden="true"
@@ -162,7 +162,7 @@ function BrowserChoice({
         <div
           id={instructionsId}
           hidden={!expanded}
-          className="mx-3 border-t border-hairline py-3 pr-3 pl-12 text-label leading-relaxed text-muted-foreground"
+          className="mx-3 py-3 pr-3 pl-12 text-label leading-relaxed text-muted-foreground"
         >
           <p>Aside’s text-selection popup can interrupt browser control.</p>
           <ol className="mt-2 list-decimal space-y-1 pl-4">
@@ -211,7 +211,7 @@ export function BrowserConnections() {
       {browsers.length ? (
         <fieldset
           disabled={saving}
-          className="mt-3 min-w-0 space-y-0.5 rounded-lg border border-hairline p-1"
+          className="mt-3 min-w-0 space-y-0.5 p-1 bg-raised"
         >
           <legend className="sr-only">Browser for new tasks</legend>
           {browsers.map((browser) => (
@@ -260,7 +260,7 @@ export function BrowserConnections() {
         </details>
       ) : null}
       {setup ? (
-        <div className="mt-3 border-l border-hairline py-1 pl-4 text-label leading-relaxed text-muted-foreground">
+        <div className="mt-3 border-l py-1 pl-4 text-label leading-relaxed text-muted-foreground">
           <p className="font-medium text-foreground">
             Add the Mako Browser extension
             {selected ? ` in ${browserTitle(selected)}` : ""}
@@ -279,7 +279,7 @@ export function BrowserConnections() {
             aria-label="Browser extension folder"
             readOnly
             value={setup.directory}
-            className="mt-3 w-full rounded border border-hairline bg-transparent px-2 py-1.5 font-mono text-code"
+            className="mt-3 w-full bg-transparent px-2 py-1.5 font-mono text-code"
             onFocus={(event) => event.currentTarget.select()}
           />
           <p className="mt-2">

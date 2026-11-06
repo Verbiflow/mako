@@ -14,7 +14,7 @@ export function ImageThumbs({ diff }: { diff: Pick<GitDiff, "before" | "after"> 
   return (
     <span className="flex shrink-0 items-center gap-0.5" aria-hidden>
       {sides.map((side, index) => (
-        <img key={index} src={side.image} alt="" className={cn("size-5 rounded-sm object-contain ring-1 ring-hairline", CHECKER)} />
+        <img key={index} src={side.image} alt="" className={cn("size-5 object-contain ring-1 ring-hairline", CHECKER)} />
       ))}
     </span>
   )
@@ -57,7 +57,7 @@ function ImageSide({ label, side }: { label: string; side: GitBinarySide | null 
         <span className="font-medium text-muted-foreground">{label}</span>
         {side ? <span className="tabular">{[size ? `${size.width} × ${size.height}` : null, formatBytes(side.bytes)].filter(Boolean).join(" · ")}</span> : null}
       </span>
-      <div className={cn("flex min-h-24 items-center justify-center overflow-hidden rounded-md ring-1 ring-hairline", side?.image && CHECKER)}>
+      <div className={cn("flex min-h-24 items-center justify-center overflow-hidden ring-1 ring-hairline", side?.image && CHECKER)}>
         {side?.image ? (
           <img
             src={side.image}

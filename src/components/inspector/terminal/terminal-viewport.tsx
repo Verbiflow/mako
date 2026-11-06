@@ -10,7 +10,7 @@ import { useTerminalRenderer } from "./use-terminal-renderer"
 
 const useTerminal = createHook(terminalStore)
 const menuItem =
-  "cursor-default rounded px-2 py-1.5 text-ui outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
+  "cursor-default px-2 py-1.5 text-ui outline-none data-[highlighted]:bg-fill-hover data-[disabled]:text-faint"
 /** A notice across the foot of the pane, square to its edges. */
 const bar =
   "absolute inset-x-0 bottom-0 flex h-10 items-center gap-3 border-t border-hairline bg-shell pr-1.5 pl-3 text-ui"

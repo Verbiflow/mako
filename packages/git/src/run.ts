@@ -159,8 +159,17 @@ export class Git {
    * foreground work.
    */
   async output(cwd: string, args: readonly string[], background = false): Promise<string> {
-    const result = await this.run({ cwd, args, background, maxBytes: 16 * 1024 * 1024 })
-    if (result.truncated) throw new GitError({ message: `git ${args[0] ?? ""} wrote more than 16 MB.`, command: args[0], code: result.code })
+    return this.#output({ cwd, args, background })
+  }
+
+  /** `output` for a read: it waits for one of the read slots and never refreshes the index. */
+  readOutput(cwd: string, args: readonly string[]): Promise<string> {
+    return this.#output({ cwd, args, read: true })
+  }
+
+  async #output(options: RunOptions): Promise<string> {
+    const result = await this.run({ ...options, maxBytes: 16 * 1024 * 1024 })
+    if (result.truncated) throw new GitError({ message: `git ${options.args[0] ?? ""} wrote more than 16 MB.`, command: options.args[0], code: result.code })
     return result.stdout.toString("utf8").trim()
   }
 

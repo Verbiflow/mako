@@ -172,14 +172,14 @@ export function TerminalPanel() {
               type="button"
               autoFocus
               onClick={() => terminalActions.cancelClose()}
-              className="pressable rounded-md px-3 py-1.5 text-ui hover:bg-fill-hover"
+              className="pressable px-3 py-1.5 text-ui hover:bg-fill-hover"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={() => closing && void terminalActions.kill(closing.id)}
-              className="pressable rounded-md bg-negative/15 px-3 py-1.5 text-ui text-negative hover:bg-negative/25"
+              className="pressable bg-negative/15 px-3 py-1.5 text-ui text-negative hover:bg-negative/25"
             >
               Close terminal
             </button>
@@ -189,13 +189,13 @@ export function TerminalPanel() {
       {phase === "connecting" && active ? (
         <div
           role="status"
-          className="flex h-8 shrink-0 items-center border-t border-hairline bg-shell px-3 text-ui text-muted-foreground"
+          className="flex h-8 shrink-0 items-center bg-shell px-3 text-ui text-muted-foreground"
         >
           Reconnecting to shell…
         </div>
       ) : null}
       {(fault || phase === "error") && active ? (
-        <div className="dock-alert flex h-10 shrink-0 items-center gap-3 border-t border-hairline bg-shell pr-1.5 pl-3 text-ui">
+        <div className="dock-alert flex h-10 shrink-0 items-center gap-3 bg-shell pr-1.5 pl-3 text-ui">
           <span className="min-w-0 flex-1 truncate text-negative">
             {fault ?? "Terminal connection lost. Reconnecting…"}
           </span>
@@ -217,7 +217,7 @@ function Action({ label, onClick }: { label: string; onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="pressable mt-1 rounded-md bg-raised px-2.5 py-1.5 text-ui font-medium text-foreground hover:bg-foreground/15"
+      className="pressable mt-1 bg-raised px-2.5 py-1.5 text-ui font-medium text-foreground hover:bg-foreground/15"
     >
       {label}
     </button>

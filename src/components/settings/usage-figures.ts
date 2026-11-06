@@ -1,5 +1,5 @@
 import type { UsageAmount, UsageWindow } from "@mako/host/contracts/automations-usage-updates"
-import { formatTokens } from "@/lib/format"
+import { formatTokens, formatUsd } from "@/lib/format"
 
 // How Settings › Usage says its figures: the measure, amounts, shares, the chart's scale and its periods' names.
 
@@ -35,22 +35,7 @@ export function sumOf(amounts: ReadonlyArray<UsageAmount | undefined>): UsageAmo
 /** An amount as the readout says it: a cost with an estimate in it carries "≈", tokens carry their noun. */
 export function readout(amount: UsageAmount, metric: UsageMetric): string {
   if (metric === "tokens") return `${formatTokens(amount.tokens)} tokens`
-  return `${amount.estimatedCost > 0 ? "≈ " : ""}${usageMoney(amount.cost)}`
-}
-
-/** Sub-cent amounts still deserve a real number rather than "$0.00". */
-export function usageMoney(value: number): string {
-  if (value === 0) return "$0"
-  if (value < 0.01) return `$${value.toFixed(4)}`
-  if (value < 1) return `$${value.toFixed(3)}`
-  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
-
-/** An axis tick: as few digits as the step needs. */
-export function axisMoney(value: number): string {
-  if (value >= 1000) return `$${(value / 1000).toFixed(value % 1000 ? 1 : 0)}k`
-  if (value >= 1) return `$${Number.isInteger(value) ? value : value.toFixed(1)}`
-  return `$${value.toFixed(value >= 0.1 ? 1 : 2)}`
+  return `${amount.estimatedCost > 0 ? "≈ " : ""}${formatUsd(amount.cost)}`
 }
 
 /**

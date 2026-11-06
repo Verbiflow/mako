@@ -1,4 +1,6 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
+import type { RequestRetry } from "./delivery-retry.js"
+import type { Notice } from "./agents.js"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
@@ -34,7 +36,7 @@ import type { Entry } from "@mako/sessions/entries"
 import type { Rollup } from "./children.js"
 
 export interface LiveStartOptions {
-  initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
+  initialRequest?: { id: string; text: string; attachments: PromptAttachment[]; grants?: string[] }
   conversationId: string
   resume?: string
   title?: string
@@ -126,6 +128,13 @@ export const INTERRUPTION_REASONS = [
    * didn't finish. The new machine continues the turn once, on its own.
    */
   "machine-lost",
+  /**
+   * The person sent a message into the running turn on a harness that would
+   * have held it until its running step returned (`SteerCapability.landing`),
+   * so Mako stopped the turn and sent the message as the next one, at once.
+   * The agent is told what the stopped turn left (`pendingInterruption`).
+   */
+  "steered",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -144,9 +153,10 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * and newer ones read; a reason added later must say its older reading here.
  * `not-saved` and `goal-budget` read as the person's Stop, which is how every
  * build before them recorded these stops; `machine-lost` reads as a handoff,
- * the nearest a build before it knows: Mako carried the turn to another machine.
+ * the nearest a build before it knows: Mako carried the turn to another machine;
+ * `steered` reads as the person's Stop, which it was, for their message.
  */
-export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)
@@ -180,6 +190,8 @@ export interface Interruption {
    */
   calls?: InterruptedCall[]
   moreCalls?: number
+  /** When the first of `calls` started (epoch ms): what moved in the checkout since is told with them (`checkoutSince`). */
+  since?: number
   /** When the next prompt told the agent about `calls` (epoch ms). It is told once. */
   told?: number
   /**
@@ -219,6 +231,17 @@ export interface TurnContinuation {
   requestId: string
   reason: InterruptionReason
   auto: boolean
+  /**
+   * The Fin's brief this continuation carries again, by its request's id: a crash cut it with nothing to say its
+   * harness had it. Kept through every continuation of it, so a crash of the brief sent again sends it again too;
+   * whether its words or a Continue go is decided as it's sent (`LiveDispatch`).
+   */
+  brief?: string
+  /**
+   * When the turn was cut (epoch ms): the message that continues it says what moved in its checkout since, read as it's
+   * sent (`cutAccount`, `LiveDispatch`), so the read sits behind its place in the queue.
+   */
+  since?: number
 }
 
 /**
@@ -257,6 +280,11 @@ export interface LiveRequest {
    * and the journal cannot say which.
    */
   actor?: Actor
+  /**
+   * The threads the host checked and let this message attach (`Agents.reachOf`), as their refs. An agent's text is never
+   * read as a grant, whatever it spells out: this is what its message gives its receiver. A person's chips are theirs.
+   */
+  grants?: string[]
   /** Native send evidence, independent of execution outcome; absent in older journals. */
   nativeDelivery?: PromptDelivery
   /** Exact request/native-message correspondence from a declared native receipt. */
@@ -279,6 +307,12 @@ export interface LiveRequest {
    * dispatch, for a session without modes, and in older journals.
    */
   mode?: string
+  /**
+   * The person's standing rules its prompt carried, by their line's name (`ROLE_RULE_LINES`), kept from dispatch on:
+   * a conversation that ever read one is told when the person clears them, in every later process. Absent when it
+   * carried none.
+   */
+  ruleLines?: string[]
   inputDigest?: string
   nativeRun?: { bindingId: string; runId: string; forkId?: string }
   id: string
@@ -315,6 +349,18 @@ export interface LiveRequest {
    */
   ownerCheck?: { since: number }
   /**
+   * A `held` request the person paused to edit it (`editQueued` `pause`): it keeps its place and waits for them,
+   * whatever resumes what a stop or an exit paused. Gone once they resume, edit or remove it.
+   */
+  editing?: true
+  /**
+   * A Stop's latch on a request it found waiting or being sent: the person's Stop, or an Apex's of its Fin. Whatever
+   * comes back for it later (a refusal, a retry, a time), it's held as the Stop's pause and never goes by itself,
+   * across a restart too, until a deliberate resume clears the mark: Resume, or for a Fin its next message. What is
+   * sent after it goes ahead. One an exit, a crash or a lost steer paused carries none and keeps its place in line.
+   */
+  pause?: "stop"
+  /**
    * The sign-out this request waits on. A `held` request is unsent and goes
    * when the user resumes; the turn the sign-out cut short keeps its own
    * outcome and is continued, or left for review, on Resume.
@@ -328,6 +374,27 @@ export interface LiveRequest {
    * releases it when the time comes, across restarts, since the journal keeps it.
    */
   wake?: RequestWake
+  /**
+   * A message that didn't reach its harness for a cause that clears by itself (`RetryCause`): `held` until `at`,
+   * when the held-wakes job sends it again, as often as it takes (`nextRetry`). It isn't a failure: the queue says
+   * why it waits and when it goes, a Resume sends it now, and removing it cancels it. Kept once it goes, so a
+   * second failure counts on from this one; gone once it's sent.
+   */
+  retry?: RequestRetry
+  /** A digest of an Apex's Fins' news (`AgentWakes`): the notices it carries, which a notice arriving before it's sent joins. */
+  digest?: {
+    notices: Notice[]
+    /** What rides with its notices and is nobody's report (a Fin's move), said once: it stays with the digest until it goes. */
+    lines?: string[]
+    /** When it went to the harness, for the minute's budget (`WAKES_PER_MINUTE`), which counts what was sent. */
+    sentAt?: number
+    /** A model answered during its turn: the only proof it was heard, as nothing else proves it either way. */
+    heard?: true
+    /** Past Mako's retries and no model heard it: it waits for the next turn that can run. */
+    resting?: true
+    /** When a resting digest tries by itself: a limit's only, once an hour for the Thread, however many reports it holds. */
+    nextTry?: number
+  }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**

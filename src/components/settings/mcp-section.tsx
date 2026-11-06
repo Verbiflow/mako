@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Action, Eyebrow } from "@/components/ui/kit"
+import { Action, Check, Eyebrow } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import type { McpSyncTarget } from "@/lib/types"
 import { mcp, useMcp } from "@/state/mcp"
@@ -51,7 +51,7 @@ export function McpSection() {
       {state.permissions?.supported ? (
         <section
           aria-label="Computer use"
-          className="mb-6 flex items-center justify-between gap-4 border-t border-hairline pt-4"
+          className="mb-6 flex items-center justify-between gap-4 pt-4"
         >
           <div className="min-w-0">
             <h3 className="text-ui font-medium">Computer use</h3>
@@ -78,7 +78,7 @@ export function McpSection() {
         </section>
       ) : null}
       {state.driver?.executable ? (
-        <div className="mb-3 flex items-center gap-3 rounded-lg bg-surface px-2.5 py-2 ring-1 ring-hairline">
+        <div className="mb-3 flex items-center gap-3 bg-raised px-2.5 py-2">
           <span className="min-w-0 flex-1">
             <span className="block text-ui text-foreground/90">
               {state.driver.version
@@ -116,7 +116,7 @@ export function McpSection() {
           </p>
           <div className="flex items-center justify-between pt-2 pb-1">
             <Eyebrow className="px-0">Sync to</Eyebrow>
-            <span className="flex rounded-md bg-raised p-0.5 text-label">
+            <span className="flex bg-raised p-0.5 text-label">
               {(["user", "workspace"] as const).map((value) => (
                 <button
                   key={value}
@@ -126,7 +126,7 @@ export function McpSection() {
                     setTargets([])
                   }}
                   className={cn(
-                    "pressable rounded px-1.5 py-0.5",
+                    "pressable px-1.5 py-0.5",
                     scope === value
                       ? "bg-surface text-foreground"
                       : "text-faint hover:text-foreground"
@@ -151,18 +151,12 @@ export function McpSection() {
                 <label
                   key={`${provider.id}:${provider.account}`}
                   className={cn(
-                    "flex items-center gap-2 rounded-md bg-surface px-2.5 py-2 text-ui ring-1 ring-hairline",
+                    "flex items-center gap-2 bg-raised px-2.5 py-2 text-ui",
                     provider.available ? "cursor-pointer" : "opacity-50"
                   )}
                   title={provider.detail ?? provider.source}
                 >
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    disabled={!provider.available}
-                    onChange={() => toggleTarget(target)}
-                    className="size-3 accent-current"
-                  />
+                  <Check label={provider.label} checked={selected} disabled={!provider.available} onChange={() => toggleTarget(target)} />
                   <span className="min-w-0 flex-1 truncate">
                     {provider.label}
                   </span>
@@ -175,7 +169,7 @@ export function McpSection() {
           </div>
 
           <Eyebrow className="px-0 pb-1">Definitions</Eyebrow>
-          <div className="flex flex-col rounded-lg bg-surface ring-1 ring-hairline">
+          <div className="flex flex-col bg-raised">
             {orderedServers.map((server) => {
               const previews = state.previews[server.id] ?? []
               const previewsCurrent =
@@ -197,14 +191,14 @@ export function McpSection() {
               return (
                 <div
                   key={server.id}
-                  className="flex gap-2.5 border-b border-hairline px-2.5 py-2.5 last:border-b-0"
+                  className="flex gap-2.5 px-2.5 py-2.5"
                 >
                   <div className="min-w-0 flex-1">
                     {/* What can't be copied is dimmed; where it's set stays legible, since it can still be switched. */}
                     <span className={cn("block", disabled && "opacity-60")}>
                     <span className="flex items-center gap-1.5">
                       <span className="font-mono text-ui">{server.name}</span>
-                      <span className="rounded bg-raised px-1 py-0.5 text-label text-faint">
+                      <span className="bg-raised px-1 py-0.5 text-label text-faint">
                         {server.transport}
                       </span>
                       {server.managed ? (

@@ -34,7 +34,7 @@ function TurnOnSurface({ turnOn }: { turnOn: CloudTurnOn }) {
   const said = useSummary(turnOn)
   const [details, setDetails] = useState(false)
   return (
-    <section data-turn-on={turnOn.phase} className="rounded-2xl border border-hairline bg-raised/40 px-5 pt-5 pb-2">
+    <section data-turn-on={turnOn.phase} className="bg-raised/40 px-5 pt-5 pb-2">
       <div className="flex items-center gap-4">
         <CloudMark state={said.mark} />
         <div className="min-w-0 flex-1">
@@ -47,13 +47,13 @@ function TurnOnSurface({ turnOn }: { turnOn: CloudTurnOn }) {
         </div>
         {said.action}
       </div>
-      {said.needs ? <div className="mt-5 border-t border-hairline pt-4">{said.needs}</div> : null}
+      {said.needs ? <div className="mt-5 pt-4">{said.needs}</div> : null}
       <button
         type="button"
         onClick={() => setDetails(!details)}
         aria-expanded={details}
         data-turn-on-details-toggle
-        className="pressable mt-3 -ml-1 flex items-center gap-1 rounded px-1 py-1 text-label text-faint hover:text-muted-foreground"
+        className="pressable mt-3 -ml-1 flex items-center gap-1 px-1 py-1 text-label text-faint hover:text-muted-foreground"
       >
         <ChevronRightIcon className={cn("size-3 transition-transform duration-200 ease-[var(--ease-out)]", details && "rotate-90")} />
         Details
@@ -81,7 +81,7 @@ function CloudMark({ state, small }: { state: MarkState; small?: boolean }) {
           className={cn(
             "absolute flex items-center justify-center rounded-full shadow-xs",
             small ? "-right-0.5 -bottom-0.5 size-2" : "-right-1 -bottom-1 size-[18px]",
-            state === "on" ? "bg-positive text-background" : "bg-background text-muted-foreground ring-1 ring-hairline"
+            state === "on" ? "bg-positive text-background" : "bg-background text-muted-foreground"
           )}
         >
           {small ? null : state === "on" ? <CheckIcon className="size-[10px]" strokeWidth={3.2} /> : <Spinner className="size-[11px]" />}
@@ -253,7 +253,7 @@ function whatNeedsYou(
 function NeedRow({ data, icon, title, detail, action }: { data: string; icon: ReactNode; title: string; detail: string; action?: ReactNode }) {
   return (
     <div data-turn-on-needs={data} className="flex items-start gap-3">
-      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground shadow-xs ring-1 ring-hairline [&_svg]:size-3.5">{icon}</span>
+      <span className="mt-px flex size-7 shrink-0 items-center justify-center bg-background text-muted-foreground shadow-xs [&_svg]:size-3.5">{icon}</span>
       <div className="min-w-0 flex-1">
         <p className="text-ui font-medium text-foreground">{title}</p>
         <p className="mt-0.5 text-label leading-relaxed text-pretty text-muted-foreground">{detail}</p>
@@ -360,7 +360,7 @@ function Details({ turnOn }: { turnOn: CloudTurnOn }) {
 
   return (
     <div data-turn-on-details className="pt-1 pb-3">
-      <dl className="grid grid-cols-[7.5rem_minmax(0,1fr)_auto] gap-x-4 gap-y-1.5 rounded-xl px-1 py-2 text-label">
+      <dl className="grid grid-cols-[7.5rem_minmax(0,1fr)_auto] gap-x-4 gap-y-1.5 px-1 py-2 text-label">
         {rows.map((row) => (
           <div key={row.id} data-turn-on-step={row.id} className="contents">
             <dt className="text-faint">{row.label}</dt>
@@ -437,7 +437,7 @@ function RailLine({ turnOn }: { turnOn: CloudTurnOn }) {
       type="button"
       data-turn-on-rail={turnOn.phase}
       onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" }))}
-      className="pressable flex w-full items-center gap-2.5 border-t border-hairline px-3 py-2.5 text-left hover:bg-fill-hover"
+      className="pressable flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-fill-hover"
     >
       <CloudMark state={working || needs ? "plain" : "on"} small />
       <span className="flex min-w-0 flex-1 flex-col">

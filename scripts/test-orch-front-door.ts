@@ -119,9 +119,10 @@ async function repeatsStopsAndOwnWords(): Promise<void> {
     const empty = await world.agents.send(apex.caller, { to: "ios", clientKey: "k3" })
     assert.equal("refused" in empty && empty.refused, "conflict", "neither words nor forward")
     await world.agents.stop(apex.caller, { child: "ios" })
-    const stopped = await world.agents.send(apex.caller, { to: "ios", text: "One more thing.", clientKey: "k4" })
-    assert.equal("refused" in stopped && stopped.refused, "conflict", "a stopped Thread's delegation stays over")
-    assert.match("refused" in stopped ? stopped.why : "", /agents_start/)
+    const resumed = await world.agents.send(apex.caller, { to: "ios", text: "One more thing.", clientKey: "k4" })
+    assert.ok(!("refused" in resumed), "a stop is a pause: a message resumes it")
+    await world.settle()
+    assert.match(promptsOf(world, ios).at(-1)!.text, /One more thing\.\n\n\[mako · resumed after a stop just now\]/, "beneath an account of its stop")
     const stranger = await world.agents.send(apex.caller, { to: "web", text: "Hi.", clientKey: "k5" })
     assert.equal("refused" in stranger && stranger.refused, "unknown-child")
     const person = await world.agents.send({ kind: "person" }, { to: "android", text: "Hi.", clientKey: "k6" })
@@ -131,7 +132,7 @@ async function repeatsStopsAndOwnWords(): Promise<void> {
   }
 }
 
-/** A running child hears it at its next step where its harness steers there (Claude), after its turn where it doesn't (Cursor). */
+/** Steered, a running child hears it at its next step where its harness steers (Claude), after its turn where it takes no steer (Cursor here). */
 async function steerOrQueue(): Promise<void> {
   let kids: string[] = []
   let busy = false
@@ -147,11 +148,13 @@ async function steerOrQueue(): Promise<void> {
     await until("both children at work", () => [android, ios].every((child) => world.live.snapshot(child)?.session.status === "running"))
     world.say(apex.conversation, "Also bump the target SDK.")
     await until("the Apex's turn", () => promptsOf(world, apex.conversation).some((prompt) => prompt.text.endsWith("Also bump the target SDK.")))
-    const steered = await world.agents.send(apex.caller, { to: "android", forward: true, clientKey: "s1" })
-    const queued = await world.agents.send(apex.caller, { to: "ios", forward: true, clientKey: "s2" })
+    const steered = await world.agents.send(apex.caller, { to: "android", forward: true, deliver: "steer", clientKey: "s1" })
+    const queued = await world.agents.send(apex.caller, { to: "ios", forward: true, deliver: "steer", clientKey: "s2" })
     assert.ok(!("refused" in steered) && !("refused" in queued))
     assert.equal(steered.delivery, "steer")
+    assert.equal(steered.hears, "android hears it at its next step, once what it's running now returns (Claude).")
     assert.equal(queued.delivery, "queued")
+    assert.equal(queued.hears, "ios hears it when its current turn ends, as its next message: Cursor takes no message into a running turn.")
     await until("the steer", () => world.steers.some((steer) => steer.conversation === android))
     assert.equal(agentWords(world.steers.find((steer) => steer.conversation === android)!.text)?.body, "Also bump the target SDK.")
     const before = promptsOf(world, ios).length
@@ -316,9 +319,9 @@ async function addressedFromTheApex(): Promise<void> {
     const elsewhere = await world.agents.direct(android, { to: "ios", request: randomUUID(), text: "Hi." })
     assert.equal("refused" in elsewhere && elsewhere.refused, "unknown-child", "only an Apex's own Fins")
     await world.agents.stop(apex.caller, { child: "ios" })
-    const stopped = await world.agents.direct(apex.conversation, { to: "ios", request: randomUUID(), text: "One more thing." })
-    assert.equal("refused" in stopped && stopped.refused, "conflict", "a stopped Fin's delegation stays over")
-    assert.equal(world.agents.diagnostics().routes.direct, 4)
+    const resumed = await world.agents.direct(apex.conversation, { to: "ios", request: randomUUID(), text: "One more thing." })
+    assert.ok(!("refused" in resumed), "the person's message resumes a stopped Fin too")
+    assert.equal(world.agents.diagnostics().routes.direct, 5)
   } finally {
     await world.close()
   }

@@ -28,8 +28,8 @@ export interface WatchFootprint {
   child?: { pid?: number; since: number }
   /** The child reading the file system's history, while it runs: it ends after a while without reads. */
   historyChild?: { pid?: number; since: number }
-  /** Why the watcher child was started since the host did. */
-  starts: { first: number; crash: number; silence: number }
+  /** Why the watcher child was started since the host did; `recovery` after fseventsd started over. */
+  starts: { first: number; crash: number; silence: number; recovery: number }
   /** How the child's canary hears macOS deliver: `lagMs` is the slowest of its recent beats. */
   delivery: { ok: boolean; lagMs?: number; since: number }
   /** Changed paths delivered to Mako in the last hour. */

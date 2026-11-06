@@ -28,6 +28,7 @@ import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadP
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
 import { sendWithRepeats, type GatewayCallLog } from "../contracts/gateway-host-calls.js"
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
+import { ownerFileRead, type FileOwner } from "../workspaces/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
 import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
 import { AccountSessions, type AccountListHeard } from "@mako/protocol/account-sessions"
@@ -301,6 +302,9 @@ export type ElsewhereFolderRoute = {
   where: string
   call(channel: string, args: readonly unknown[]): Promise<{ value: EncodedValue } | "here">
 }
+
+/** The calls whose answer is a file its owner read, with the URLs it signed: a conversation's, and its folder's. */
+const FILE_READS: ReadonlySet<string> = new Set(["mako:read-live-file", "mako:read-file"])
 
 /** An app's view with an address, as `mako:thread-app` answers for a running one. */
 const ReadyAddressSchema = z.object({ kind: z.literal("ready"), address: z.object({ host: z.string(), port: z.number().int() }) }).loose()
@@ -1435,8 +1439,12 @@ export class CloudConversations {
    * machine wakes: so a send after the machine slept arrives, without the window hearing of the wake. Past that, or for
    * a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
    */
-  #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
-    return this.#callThread(entry.threadId, channel, args, { conversationId: entry.conversationId, runtime: entry.runtime })
+  async #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
+    const value = await this.#callThread(entry.threadId, channel, args, { conversationId: entry.conversationId, runtime: entry.runtime })
+    if (!FILE_READS.has(channel)) return value
+    // A file read there is signed there: served by this host for its owner, so a window here can load it.
+    const owner: FileOwner = entry.runtime ? { kind: "device", deviceId: entry.runtime.slice("d-".length) } : { kind: "thread", threadId: entry.threadId }
+    return ownerFileRead(owner, value)
   }
 
   /** `#call` to a Thread by its ID, for its conversation when it has one, or made ahead of a person's message. */

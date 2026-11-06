@@ -4,10 +4,12 @@ import {
   acpReadable,
   acpSessionNotificationSchema,
   acpWritable,
+  inWireOrder,
   screenSessionUpdates,
   type LossySessionUpdate,
   type RefusedSessionUpdate,
 } from "@mako/host/harnesses/acp-stream"
+import type { AnyMessage } from "@agentclientprotocol/sdk"
 import type { JsonObject } from "@mako/host/contracts/json"
 
 // A provider that closed its stdin but is still running: a write fails with
@@ -64,6 +66,22 @@ const sent = [
   { jsonrpc: "2.0" as const, id: 1, result: { stopReason: "end_turn" } },
   { jsonrpc: "2.0" as const, method: "session/update", params: "not an object" },
 ]
+// The SDK starts each message's handlers and reads the next without waiting: a later message with less to go through
+// finishes first unless it's handed over once the last has run.
+async function handledOrder(stream: ReadableStream<AnyMessage>): Promise<string[]> {
+  const handled: string[] = []
+  const handle = async (message: AnyMessage, depth: number) => {
+    for (let handler = 0; handler < depth; handler++) await Promise.resolve()
+    handled.push("method" in message ? message.method : "response")
+  }
+  for await (const message of stream) void handle(message, "method" in message && message.method === "session/update" ? 1 : 8)
+  await new Promise((resolve) => setImmediate(resolve))
+  return handled
+}
+const wire = [{ jsonrpc: "2.0" as const, method: "_cognition.ai/connection_retry", params: {} }, update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Reconnected." } })]
+assert.deepEqual(await handledOrder(streamOf(wire)), ["session/update", "_cognition.ai/connection_retry"], "handed over at once, the update overtakes the notification")
+assert.deepEqual(await handledOrder(inWireOrder({ readable: streamOf(wire), writable: new WritableStream() }).readable), ["_cognition.ai/connection_retry", "session/update"], "one at a time, they run in wire order")
+
 const refused: RefusedSessionUpdate[] = []
 const screened = await screenSessionUpdates({ readable: streamOf(sent), writable: new WritableStream() }, (value) => refused.push(value))
 const passed = await Array.fromAsync(screened.readable)

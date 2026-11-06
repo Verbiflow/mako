@@ -182,7 +182,7 @@ function PreviewCard({
       aria-label={paused ? "Control preview, last view" : "Live control preview"}
       className={cn(
         "control-preview-card glass-panel pointer-events-auto relative overflow-hidden text-popover-foreground",
-        zoomed ? "w-full max-w-5xl rounded-2xl" : "rounded-xl"
+        zoomed ? "w-full max-w-5xl" : ""
       )}
     >
       {/* The image sets its own height; no letterbox band around it. */}
@@ -223,7 +223,7 @@ function PreviewCard({
         )}
         {/* Just the picture and small glass marks over it. The kind of
             surface (browser or computer) is a glyph, the working state is
-            the ember dot beside it, and the operation's name is the mark's
+            the sea dot beside it, and the operation's name is the mark's
             tooltip and accessible name. A caption band that spelled out
             "Computer · get desktop state" under every frame was a status bar
             stuck to a thumbnail. */}
@@ -242,7 +242,7 @@ function PreviewCard({
             <MonitorIcon className="size-3.5 shrink-0" />
           )}
           {working && (
-            <span className="size-1.5 shrink-0 rounded-full bg-ember" />
+            <span className="size-1.5 shrink-0 rounded-full bg-sea" />
           )}
           {paused && <span className="text-label">Last view</span>}
           {zoomed && activity && !paused && (
@@ -284,7 +284,7 @@ function PreviewCard({
         {error && (
           <p
             role="status"
-            className="glass-control pointer-events-none absolute inset-x-2 bottom-2 truncate rounded-md px-2 py-1 text-label text-muted-foreground"
+            className="glass-control pointer-events-none absolute inset-x-2 bottom-2 truncate px-2 py-1 text-label text-muted-foreground"
             title={error}
           >
             {error}

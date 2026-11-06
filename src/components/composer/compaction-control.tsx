@@ -43,7 +43,7 @@ export function CompactionControl({
         onStart?.()
         void acp.compact(requestId)
       }}
-      className="pressable flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-hover disabled:opacity-40"
+      className="pressable flex w-full flex-col gap-0.5 px-2 py-2 text-left hover:bg-fill-hover disabled:opacity-40"
     >
       <span className="text-ui">Compact conversation</span>
       <span className="text-label text-faint">

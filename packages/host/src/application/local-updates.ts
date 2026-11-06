@@ -21,17 +21,24 @@ import {
   BuildIdentitySchema,
   CHANGE_TITLES,
   type BuildIdentity,
+  type BuildPhase,
   type LocalBuildState,
+  type MissingDependencies,
   type RevisionChanges,
+  type UncommittedChanges,
   type UnsurePerformance,
+  type UpdateBuildFrom,
   type UpdateSource,
 } from "../contracts/app-lifecycle.js"
-import { describeRow, parseVerdicts, PERFORMANCE_VERDICT_VARIABLE } from "../contracts/performance-verdict.js"
+import { describeRow, parseVerdicts } from "../contracts/performance-verdict.js"
 import { busyReasons, describeMachine, readMachine, type MachineReading } from "../base/machine-load.js"
-import { hostLog } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
-import { BUILD_UNCOMMITTED_VARIABLE, bringForward, changesSince, readUncommitted, readUpdateSource } from "./local-update-source.js"
+import { changesSince, readUncommitted, readUpdateSource, type Writers } from "./local-update-source.js"
+import { checkScripts, performanceEnvironment, UPDATE_CHECKS, updateEnvironment, updaterInherited, writeChanged } from "./local-update-checks.js"
+import { describeFailure, failureMessage, StepError, type FailureContext } from "./local-update-failures.js"
+import { checkoutUpstream, seedDependencies } from "./upstream-copy.js"
 import { runProcessGroup } from "./process-group.js"
 import { DependencyInstallError, installDependencies, missingDependencies, uninstalledPackages } from "./local-update-dependencies.js"
 import type { Git } from "@mako/git"
@@ -47,7 +54,6 @@ const sourcePackage = z.object({
   scripts: z.object({
     "package:mac:local": z.string(),
     "test:performance": z.string(),
-    lint: z.string(),
     build: z.string(),
   }),
 })
@@ -177,6 +183,8 @@ export interface LocalUpdateOptions {
   machine?: () => Promise<MachineReading>
   /** How often a waiting update reads the Mac; `QUIET_EVERY_MS` unless a test shortens it. */
   quietEveryMs?: number
+  /** Who changed each uncommitted file, from the change journal; nobody is named without it. */
+  writers?: Writers
 }
 
 export interface CandidateMaker {
@@ -215,7 +223,11 @@ export class LocalUpdates {
   private stamp: string | null = null
   private lastReady: LocalBuildState | null = null
   /** How the last build ran its checks, for measuring its performance again. */
-  private checks: { npm: string; env: NodeJS.ProcessEnv } | null = null
+  private checks: { npm: string; env: NodeJS.ProcessEnv; folder: string; script: string } | null = null
+  /** How long each step of the build under way has taken so far. */
+  private steps: Partial<Record<BuildPhase, number>> = {}
+  /** What the build under way is making, for saying whose code a failure is. */
+  private failureContext: FailureContext = { from: undefined, revision: undefined, upstream: undefined, uncommitted: 0, otherSource: null }
   /** The next reading of the Mac, while an update waits for it to quiet down. */
   private quietTimer: NodeJS.Timeout | null = null
   /** An install or restart is pending; the update stays as it is until it's done or cancelled. */
@@ -305,7 +317,7 @@ export class LocalUpdates {
     }
     const fetching = fetch && (force || Date.now() - this.fetchedAt >= FETCH_EVERY_MS)
     const installed = this.running ? { revision: this.running.revision, dirty: this.running.dirty } : null
-    const read = readUpdateSource(this.git, source, { fetch: fetching, installed })
+    const read = readUpdateSource(this.git, source, { fetch: fetching, installed, ...this.options.writers && { writers: this.options.writers } })
       .then((reading) => {
         if (fetching) this.fetchedAt = Date.now()
         if (this.source === source) this.reading = reading
@@ -381,24 +393,29 @@ export class LocalUpdates {
     void this.check({ fetch: true }).catch(() => undefined)
   }
 
-  start(): void {
+  /** Build the update from `from`, or from what the reading recommends. */
+  start(from?: UpdateBuildFrom): void {
     if (this.job) return
     if (!this.source)
       throw new Error("Choose a trusted Mako source checkout first.")
     const source = this.source
     this.stopWaiting()
-    this.state = { kind: "building", phase: "copying" }
+    const startedAt = new Date().toISOString()
+    this.state = { kind: "building", phase: "copying", startedAt, phaseAt: startedAt, ...from && { from } }
     this.candidate = null
-    this.job = this.build(source)
+    this.failureContext = { from, revision: undefined, upstream: undefined, uncommitted: 0, otherSource: null }
+    this.job = this.build(source, from)
       .catch((error) => {
-        const phase =
-          this.state.kind === "building" ? this.state.phase : "verification"
-        const reason = error instanceof Error ? error.message.slice(0, 1500) : "Unexpected build failure"
-        const what = phase === "installing" ? "couldn't install dependencies" : `failed during ${phase}`
+        const phase = this.state.kind === "building" ? this.state.phase : "verifying"
+        const failure = describeFailure(error instanceof Error ? error : new Error(String(error)), this.failureContext, phase)
+        hostWarn("updates", "build failed", { step: failure.step, blame: failure.blame, from: this.failureContext.from, revision: this.failureContext.revision?.slice(0, 12), what: failure.what, ms: Date.now() - Date.parse(startedAt) })
+        // npm install by hand is the person's to run only in their own checkout, never in Mako's copy.
+        const install = error instanceof StepError && error.cause instanceof DependencyInstallError ? error.cause : error instanceof DependencyInstallError ? error : null
         this.state = {
           kind: "error",
-          message: `The update ${what}: ${reason} Your installed app and agents were not changed.`,
-          ...error instanceof DependencyInstallError && { command: error.command },
+          message: failureMessage(failure),
+          failure: { ...failure, ...failure.details && { details: failure.details.slice(-2000) } },
+          ...install && this.failureContext.from !== "upstream" && { command: install.command },
         }
       })
       .finally(() => {
@@ -429,62 +446,24 @@ export class LocalUpdates {
     const waiting = this.state.kind === "ready" && this.state.performance ? this.state : null
     if (!waiting || !this.checks || !this.preparedRoot) throw new Error("No update is waiting to have its performance measured again.")
     this.stopWaiting()
-    const { npm, env } = this.checks
+    const { npm, env, folder, script } = this.checks
     const revision = waiting.build.revision ?? undefined
-    this.state = { kind: "building", phase: "checking", remeasuring: true, ...revision && { revision } }
-    this.job = this.checkPerformance(npm, join(this.root, CHECKOUT), env, this.preparedRoot, revision)
+    this.state = { kind: "building", phase: "checking", remeasuring: true, ...revision && { revision }, ...waiting.from && { from: waiting.from } }
+    this.job = checkPerformance(npm, folder, script, env, this.preparedRoot, revision)
       .then((performance) => {
-        this.state = { kind: "ready", build: waiting.build, changes: waiting.changes, forwarded: waiting.forwarded, ...performance && { performance } }
+        this.state = { kind: "ready", build: waiting.build, changes: waiting.changes, ...waiting.from && { from: waiting.from }, ...performance && { performance }, ...waiting.took && { took: waiting.took } }
         this.lastReady = performance ? null : this.state
         if (performance) this.waitForQuiet()
       })
       .catch((error) => {
-        const reason = error instanceof Error ? error.message.slice(0, 1500) : "Unexpected failure"
-        this.state = { kind: "error", message: `The update failed its performance check: ${reason} Your installed app and agents were not changed.` }
+        const failure = describeFailure(error instanceof Error ? error : new Error(String(error)), this.failureContext, "checking")
+        this.state = { kind: "error", message: failureMessage(failure), failure }
       })
       .finally(() => {
         this.job = null
         this.changed()
       })
     this.changed()
-  }
-
-  /**
-   * `test:performance`, alone, its verdicts read from the file it's handed
-   * (`PERFORMANCE_VERDICT_VARIABLE`): a slower row fails the build by name,
-   * and rows the Mac was too busy to settle come back as the update's caveat.
-   * A checkout from before verdicts writes none; its exit code says it all.
-   */
-  private async checkPerformance(npm: string, checkout: string, env: NodeJS.ProcessEnv, folder: string, revision: string | undefined): Promise<UnsurePerformance | undefined> {
-    const file = join(folder, VERDICTS)
-    await (await physicalFiles()).rm(file, { force: true })
-    const started = Date.now()
-    let failure: Error | undefined
-    try {
-      await runBuild(npm, ["run", "test:performance"], checkout, { ...env, [PERFORMANCE_VERDICT_VARIABLE]: file }, undefined, PERFORMANCE_CHECK_MS)
-    } catch (error) {
-      failure = error instanceof Error ? error : new Error(String(error))
-    }
-    const verdicts = parseVerdicts(await readFile(file, "utf8").catch(() => ""))
-    const rows = verdicts.flatMap((verdict) => verdict.rows)
-    const slower = rows.filter((row) => row.outcome === "slower").map(describeRow)
-    const unsure = rows.filter((row) => row.outcome === "unsure").map(describeRow)
-    const busy = [...new Set(verdicts.flatMap((verdict) => verdict.busy))]
-    const machine = verdicts.find((verdict) => verdict.busy.length)?.machine ?? verdicts.at(-1)?.machine ?? ""
-    hostLog("updates", "performance check", {
-      revision: revision?.slice(0, 12),
-      outcome: failure ? "failed" : unsure.length ? "unsure" : "passed",
-      measured: rows.length,
-      slower: slower.join("; ") || undefined,
-      unsure: unsure.join("; ") || undefined,
-      machine: machine || undefined,
-      ms: Date.now() - started,
-    })
-    if (failure) {
-      const named = slower.length ? `${slower.length === 1 ? "this row is" : "these rows are"} slower than the code ${slower.length === 1 ? "its baseline" : "their baselines"} measured, beside it on this Mac: ${slower.join("; ")}. ` : ""
-      throw new Error(`test:performance: ${named}${failure.message}`)
-    }
-    return unsure.length ? { rows: unsure, machine, busy, measuredAt: new Date().toISOString() } : undefined
   }
 
   /** Once the Mac reads quiet `QUIET_READINGS` times running, measure the waiting update again. */
@@ -527,74 +506,90 @@ export class LocalUpdates {
     }
   }
 
-  private phase(
-    phase: Extract<LocalBuildState, { kind: "building" }>["phase"]
-  ): void {
-    const revision = this.state.kind === "building" ? this.state.revision : undefined
-    this.state = { kind: "building", phase, ...revision && { revision } }
+  private phase(phase: BuildPhase, dependencies?: MissingDependencies): void {
+    const now = new Date().toISOString()
+    const building = this.state.kind === "building" ? this.state : null
+    if (building?.phaseAt) this.steps[building.phase] = (this.steps[building.phase] ?? 0) + Date.parse(now) - Date.parse(building.phaseAt)
+    this.state = { kind: "building", phase, phaseAt: now, ...building?.revision && { revision: building.revision }, ...building?.from && { from: building.from }, ...building?.startedAt && { startedAt: building.startedAt }, ...dependencies && { dependencies } }
     this.changed()
   }
 
-  private async build(source: string): Promise<void> {
+  private async build(source: string, requested: UpdateBuildFrom | undefined): Promise<void> {
+    this.steps = {}
+    const began = Date.now()
     const node = resolveExecutable("node")
     const npm = resolveExecutable("npm")
     if (!node || !npm)
-      throw new Error("Node.js and npm are required to build Mako.")
-    // What's available decides what's built: fetch, bring the checkout
-    // forward when it can be, and don't rebuild what is already installed.
+      throw new StepError("copying", "Node.js and npm are required to build Mako.", { blame: "machine", next: "Install Node.js, then build again." })
+    // What's available decides what's built: fetch, then build what the
+    // person chose, or what the reading recommends, and never rebuild what
+    // is already installed.
     const reading = await this.check({ fetch: true, force: true })
-    if (reading?.kind === "unreadable") throw new Error(reading.reason)
-    if (reading?.kind === "checkout" && (reading.plan.kind === "current" || (reading.plan.kind === "as-is" && reading.plan.installed))) {
+    if (!reading || reading.kind === "unreadable")
+      throw new StepError("copying", reading?.reason ?? "The source checkout couldn't be read.", { blame: "checkout", next: "Choose a Git checkout of Mako in Settings › Updates." })
+    const { plan, upstream } = reading
+    const from = requested ?? plan.recommended
+    if (!from || (from === "upstream" ? plan.upstream?.installed : plan.checkout.installed)) {
       this.state = { kind: "idle" }
       return
     }
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    await ensureBuildSpace(this.root, await buildCopyBytes(source), this.options.statfs)
-    const forwarded = reading ? await bringForward(this.git, source, reading) : null
-    const built = forwarded ? await this.check({ fetch: false, force: true }) : reading
-    const revision = built?.kind === "checkout" ? { revision: built.head } : {}
-    this.state = { kind: "building", phase: "copying", ...revision }
+    if (from === "upstream" && !upstream)
+      throw new StepError("copying", `${source} has no remote with a default branch to build from.`, { blame: "checkout", next: "Build the checkout as it is instead." })
+    const commit = from === "upstream" ? upstream!.commit : reading.head
+    this.failureContext = { from, revision: commit, upstream: upstream?.name, uncommitted: from === "checkout" ? reading.uncommitted.count : 0, otherSource: from === "upstream" ? (plan.checkout.installed ? null : "checkout") : plan.upstream && !plan.upstream.installed ? "upstream" : null }
+    this.state = { ...this.state.kind === "building" ? this.state : { kind: "building", phase: "copying" }, from, revision: commit }
     this.changed()
-    const inherited = Object.fromEntries(
-      [
-        "HOME",
-        "PATH",
-        "TMPDIR",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "LANG",
-        "LC_ALL",
-      ].flatMap((key) =>
-        process.env[key] === undefined ? [] : [[key, process.env[key]]]
-      )
-    )
-    // A lockfile the fast-forward (or a pull) changed: install what it
-    // lists into the checkout first, with the npm and Node the build uses.
-    const missing = await uninstalledPackages(source)
-    if (missing.length) {
-      this.state = { kind: "building", phase: "installing", ...revision, dependencies: missingDependencies(missing) }
-      this.changed()
-      const env = environmentForExecutable(node, inherited)
-      await installDependencies(this.git, source, missing, {
-        run: (args, signal) => runBuild(npm, args, source, env, signal),
-        timeoutMs: this.options.installTimeoutMs,
-      })
-      this.phase("copying")
-    }
-    const checkout = join(this.root, CHECKOUT)
+    hostLog("updates", "build started", { from, revision: commit.slice(0, 12), upstream: upstream?.name, behind: reading.behind, uncommitted: reading.uncommitted.count })
+    await mkdir(this.root, { recursive: true, mode: 0o700 })
+    await ensureBuildSpace(this.root, await buildCopyBytes(source), this.options.statfs).catch((error: Error) => {
+      throw new StepError("copying", error.message, { blame: "machine", next: "Free some disk space, then build again." })
+    })
+    const inherited = updaterInherited(process.env)
     await moveLegacyCheckout(this.root)
+    // Upstream: its commit, clean, in Mako's own clone. Checkout: the
+    // working tree as it is, synced into the private copy, its uncommitted
+    // files read as the copy is taken so the build carries them by name.
+    const prepared = from === "upstream"
+      ? await (async () => {
+          const folder = await checkoutUpstream(this.git, source, this.root, commit)
+          if (await seedDependencies(source, folder)) await checkDependencyLinks(folder)
+          return { folder, revision: commit, uncommitted: { count: 0, files: [] }, fingerprint: `upstream ${commit} ${await dependencySignature(folder)}` }
+        })()
+      : await (async () => {
+          const folder = join(this.root, CHECKOUT)
+          const [revision, uncommitted, fingerprint] = await Promise.all([
+            this.git.text({ cwd: source, args: ["rev-parse", "HEAD"], timeoutMs: 10_000 }),
+            readUncommitted(this.git, source, undefined, this.options.writers),
+            syncBuildCheckout(source, folder),
+          ])
+          return { folder, revision, uncommitted, fingerprint }
+        })()
+    const { folder: checkout, revision, uncommitted } = prepared
+    // What the copy's package-lock.json lists beyond its node_modules goes
+    // in there, never into the person's checkout.
+    const missing = await uninstalledPackages(checkout)
+    if (missing.length) {
+      this.phase("installing", missingDependencies(missing))
+      const env = environmentForExecutable(node, inherited)
+      await installDependencies(this.git, from === "upstream" ? checkout : source, missing, {
+        run: (args, signal) => runBuild(npm, args, checkout, env, signal),
+        timeoutMs: this.options.installTimeoutMs,
+      }).catch((error: Error) => {
+        const machine = /didn't finish within|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|network/i.test(error.message)
+        throw new StepError("installing", error.message, {
+          blame: machine ? "machine" : "checkout",
+          next: machine ? "This is the network or the Mac, not the code. Build again when it's back."
+            : from === "upstream" ? `Mako installs into its own copy, never your checkout. Build again; if it fails the same way, ${upstream?.name ?? "the upstream"}'s package-lock.json is the problem.`
+            : "Mako installs into its own copy, never your checkout.",
+          cause: error,
+        })
+      })
+    }
     const job = await mkdtemp(join(this.root, "build-"))
     const output = join(job, "output")
     try {
-      // The uncommitted files are read as the copy is taken, and the build carries them by name.
-      const [revision, uncommitted, fingerprint] = await Promise.all([
-        this.git.text({ cwd: source, args: ["rev-parse", "HEAD"], timeoutMs: 10_000 }),
-        readUncommitted(this.git, source),
-        syncBuildCheckout(source, checkout),
-      ])
       const dirty = uncommitted.count > 0
-      const stamp = `${fingerprint}:${revision}:${dirty ? 1 : 0}:${this.identity}`
+      const stamp = `${prepared.fingerprint}:${revision}:${dirty ? 1 : 0}:${this.identity}`
       // Identical inputs produce an identical candidate: when the prepared
       // output from a successful build is still on disk there is nothing to
       // redo — retrying an install or a mistaken second build is instant.
@@ -608,39 +603,21 @@ export class LocalUpdates {
         this.changed()
         return
       }
-      const variables: NodeJS.ProcessEnv = {
-        ...inherited,
-        MAKO_LOCAL_SIGNING_IDENTITY: this.identity,
-        MAKO_BUILD_REVISION: revision,
-        MAKO_BUILD_DIRTY: dirty ? "1" : "0",
-        [BUILD_UNCOMMITTED_VARIABLE]: JSON.stringify(uncommitted),
-      }
-      // The copy has no history; a performance row over budget is measured beside a commit exported from here.
-      if (this.options.buildSource !== false) variables.MAKO_BUILD_SOURCE = source
-      const env = environmentForExecutable(node, variables)
-      this.phase("compiling")
-      // Lint reads only sources, so it overlaps the compile; the test steps
-      // need the built output and then run independently of each other.
-      await Promise.all([
-        runBuild(npm, ["run", "build"], checkout, env),
-        runBuild(npm, ["run", "lint"], checkout, env),
-      ])
-      this.phase("checking")
-      const checks = ["test:application", "test:renderer-assets"]
-      const results = await Promise.allSettled(
-        checks.map((script) => runBuild(npm, ["run", script], checkout, env))
-      )
-      const failures = results.flatMap((result, index) =>
-        result.status === "rejected"
-          ? [`${checks[index]}: ${result.reason instanceof Error ? result.reason.message : result.reason}`]
-          : []
-      )
-      if (failures.length) throw new Error(failures.join(" "))
-      // Alone, after the rest: a timing that shares the Mac with the update's own checks measures them too.
-      const performance = await this.checkPerformance(npm, checkout, env, job, revision)
+      const changed = await this.changedSinceInstalled(source, revision, uncommitted)
+      const env = environmentForExecutable(node, updateEnvironment(inherited, {
+        identity: this.identity,
+        revision,
+        uncommitted,
+        ...this.options.buildSource !== false && { source },
+        ...changed && { changed: await writeChanged(job, changed) },
+      }))
+      const scripts = await checkScripts(checkout)
+      const performance = await runUpdateChecks({ npm, checkout, env, folder: job, revision, performance: scripts.performance, phase: (phase) => this.phase(phase) })
       this.phase("packaging")
       const maker = this.options.candidate ?? this.packager(node)
-      await maker.package(checkout, output, env)
+      await maker.package(checkout, output, env).catch((error: Error) => {
+        throw new StepError("packaging", error.message, { cause: error })
+      })
       this.phase("verifying")
       const candidate = join(output, "mac-arm64/Mako.app")
       const build = await maker.verify(candidate)
@@ -655,9 +632,12 @@ export class LocalUpdates {
       // Counted to the revision the build stamped, whatever moved in the checkout meanwhile.
       const changes = this.running?.revision && build.revision ? await changesSince(this.git, source, this.running.revision, build.revision) : null
       if (changes) await writeFile(join(this.root, BUILD_CHANGES), JSON.stringify({ build: build.id, changes } satisfies z.infer<typeof buildChanges>), { mode: 0o600 })
-      this.state = { kind: "ready", build, changes, forwarded, ...performance && { performance } }
+      if (this.state.kind === "building" && this.state.phaseAt) this.steps.verifying = (this.steps.verifying ?? 0) + Date.now() - Date.parse(this.state.phaseAt)
+      const took = { ms: Date.now() - began, steps: { ...this.steps } }
+      hostLog("updates", "build ready", { from, revision: revision.slice(0, 12), ms: took.ms, ...Object.fromEntries(Object.entries(took.steps).map(([step, ms]) => [`${step}Ms`, ms])), unsure: performance ? performance.rows.length : undefined })
+      this.state = { kind: "ready", build, changes, from, took, ...performance && { performance } }
       this.stamp = stamp
-      this.checks = { npm, env }
+      this.checks = { npm, env, folder: checkout, script: scripts.performance }
       // A build the Mac was too busy to measure isn't one to hand back unmeasured on the next Build.
       this.lastReady = performance ? null : this.state
       if (performance) this.waitForQuiet()
@@ -668,7 +648,99 @@ export class LocalUpdates {
       }
     }
   }
+
+  /**
+   * The files the build differs in from the installed app: the commits
+   * between them and, for a checkout build, its uncommitted files. Null
+   * when the installed revision isn't known here, so every benchmark runs.
+   */
+  private async changedSinceInstalled(source: string, revision: string, uncommitted: UncommittedChanges): Promise<string[] | null> {
+    const installed = this.running?.revision
+    if (!installed || this.running?.dirty || uncommitted.count > uncommitted.files.length) return null
+    const known = (await this.git.run({ cwd: source, args: ["cat-file", "-e", `${installed}^{commit}`], codes: [1, 128], read: true })).code === 0
+    if (!known) return null
+    const diff = await this.git.text({ cwd: source, args: ["diff", "--name-only", "--no-renames", installed, revision, "--"], read: true, timeoutMs: 30_000 })
+    return [...new Set([...diff.split("\n").filter(Boolean), ...uncommitted.files.flatMap((file) => file.from ? [file.path, file.from] : [file.path])])]
+  }
 }
+
+/** What `runUpdateChecks` runs in, and where it reports which step it's on. */
+export interface UpdateCheckRun {
+  npm: string
+  checkout: string
+  env: NodeJS.ProcessEnv
+  /** The build's own folder: the performance verdicts go there. */
+  folder: string
+  revision: string | undefined
+  /** The checkout's performance script (`checkScripts`). */
+  performance: string
+  phase?: (phase: BuildPhase) => void
+}
+
+/**
+ * Every check an update runs before it packages (`UPDATE_CHECKS`), in its
+ * order: the compile alone, the checks together, the performance check
+ * alone. The updater runs this, and so does CI (`ci-update-checks.ts`), in
+ * the same environment, so a check that fails only the updater's way fails
+ * at review. Answers the performance caveat when the Mac was too busy.
+ */
+export async function runUpdateChecks(run: UpdateCheckRun): Promise<UnsurePerformance | undefined> {
+  const { npm, checkout, env } = run
+  run.phase?.("compiling")
+  await runStep("compiling", npm, UPDATE_CHECKS.compile, checkout, env)
+  run.phase?.("checking")
+  const results = await Promise.allSettled(UPDATE_CHECKS.checks.map((script) => runStep("checking", npm, script, checkout, env)))
+  const failed = results.find((result) => result.status === "rejected")
+  if (failed) throw failed.reason
+  // Alone, after the rest: a timing that shares the Mac with the update's own checks measures them too.
+  return checkPerformance(npm, checkout, run.performance, env, run.folder, run.revision)
+}
+
+/**
+ * The performance script (`UPDATE_CHECKS.performance`), alone, its
+ * verdicts read from the file it's handed (`PERFORMANCE_VERDICT_VARIABLE`):
+ * a slower row fails the build by name, and rows the Mac was too busy to
+ * settle come back as the update's caveat. A checkout from before verdicts
+ * writes none; its exit code says it all.
+ */
+export async function checkPerformance(npm: string, checkout: string, script: string, env: NodeJS.ProcessEnv, folder: string, revision: string | undefined): Promise<UnsurePerformance | undefined> {
+  const file = join(folder, VERDICTS)
+  await (await physicalFiles()).rm(file, { force: true })
+  const started = Date.now()
+  let failure: Error | undefined
+  try {
+    await runBuild(npm, ["run", script], checkout, { ...env, ...performanceEnvironment(file) }, undefined, PERFORMANCE_CHECK_MS)
+  } catch (error) {
+    failure = error instanceof Error ? error : new Error(String(error))
+  }
+  const verdicts = parseVerdicts(await readFile(file, "utf8").catch(() => ""))
+  const rows = verdicts.flatMap((verdict) => verdict.rows)
+  const slower = rows.filter((row) => row.outcome === "slower").map(describeRow)
+  const unsure = rows.filter((row) => row.outcome === "unsure").map(describeRow)
+  const busy = [...new Set(verdicts.flatMap((verdict) => verdict.busy))]
+  const machine = verdicts.find((verdict) => verdict.busy.length)?.machine ?? verdicts.at(-1)?.machine ?? ""
+  hostLog("updates", "performance check", {
+    revision: revision?.slice(0, 12),
+    outcome: failure ? "failed" : unsure.length ? "unsure" : "passed",
+    measured: rows.length,
+    slower: slower.join("; ") || undefined,
+    unsure: unsure.join("; ") || undefined,
+    machine: machine || undefined,
+    ms: Date.now() - started,
+  })
+  if (failure) {
+    if (slower.length)
+      throw new StepError("checking", `The performance check found ${slower.length === 1 ? "a timing" : `${slower.length} timings`} clearly slower than the code before it, measured beside it on this Mac: ${slower.join("; ")}.`, {
+        blame: "code",
+        next: "That's the code, not the Mac: a Mac too busy to tell reads as unsure, never slower. Build again once a fix lands.",
+        details: failure.message,
+        script,
+      })
+    throw new StepError("checking", failure.message, { script, cause: failure })
+  }
+  return unsure.length ? { rows: unsure, machine, busy, measuredAt: new Date().toISOString() } : undefined
+}
+
 
 /** The copy an earlier build kept as `checkout`, renamed `CHECKOUT` where nothing is there yet: its manifest and compile output carry over. */
 async function moveLegacyCheckout(root: string): Promise<void> {
@@ -795,11 +867,6 @@ export async function syncBuildCheckout(
     .lstat(join(checkout, "node_modules"))
     .then((info) => info.isDirectory())
     .catch(() => false)
-  const uninstalled = sourceModules ? await uninstalledPackages(source) : []
-  if (uninstalled.length) {
-    const named = uninstalled.slice(0, 3).join(", ") + (uninstalled.length > 3 ? ` and ${uninstalled.length - 3} more` : "")
-    throw new Error(`${source} hasn't installed what its package-lock.json lists (${named}). Run npm install there, then build the update again.`)
-  }
   let resyncedDependencies = false
   if (!sourceModules) {
     await files.rm(join(checkout, "node_modules"), {
@@ -852,28 +919,11 @@ export async function syncBuildCheckout(
       await files.rm(join(checkout, rel), { recursive: true, force: true })
 
   const root = await files.realpath(checkout)
-  const checkLink = async (link: string) => {
-    const resolved = await files.realpath(link).catch(() => null)
-    if (resolved && resolved !== root && !resolved.startsWith(`${root}/`))
-      throw new Error(
-        `The dependency link ${relative(root, link)} leaves the private build copy. Reinstall dependencies in the source checkout before building.`
-      )
-  }
   // A link's resolution is fixed by its location and text, so only newly
   // synced links need checking; a wholesale dependency resync revalidates its
   // tree the way the original copy did.
-  for (const link of newLinks) await checkLink(link)
-  if (resyncedDependencies) {
-    const pending = [join(checkout, "node_modules")]
-    while (pending.length) {
-      const directory = pending.pop()!
-      for (const entry of await files.readdir(directory, { withFileTypes: true })) {
-        const path = join(directory, entry.name)
-        if (entry.isSymbolicLink()) await checkLink(path)
-        else if (entry.isDirectory()) pending.push(path)
-      }
-    }
-  }
+  for (const link of newLinks) await checkLink(files, root, link)
+  if (resyncedDependencies) await checkDependencyLinks(checkout)
 
   await writeFile(
     join(checkout, SYNC_MANIFEST),
@@ -886,6 +936,43 @@ export async function syncBuildCheckout(
   ))
     fingerprint.update(`${path} ${signature}\n`)
   return fingerprint.update(`deps ${deps}`).digest("hex")
+}
+
+async function checkLink(files: Awaited<ReturnType<typeof physicalFiles>>, root: string, link: string): Promise<void> {
+  const resolved = await files.realpath(link).catch(() => null)
+  if (resolved && resolved !== root && !resolved.startsWith(`${root}/`))
+    throw new StepError("copying", `The dependency link ${relative(root, link)} leaves the private build copy.`, { blame: "checkout", next: "Run npm install in the source checkout, then build again." })
+}
+
+/** Every link under `folder`'s node_modules resolves inside `folder`. */
+export async function checkDependencyLinks(folder: string): Promise<void> {
+  const files = await physicalFiles()
+  const root = await files.realpath(folder)
+  const pending = [join(root, "node_modules")]
+  while (pending.length) {
+    const directory = pending.pop()!
+    for (const entry of await files.readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      const path = join(directory, entry.name)
+      if (entry.isSymbolicLink()) await checkLink(files, root, path)
+      else if (entry.isDirectory()) pending.push(path)
+    }
+  }
+}
+
+/** npm's record of what it installed in `folder`, as a signature: what a build's stamp carries for its dependencies. */
+async function dependencySignature(folder: string): Promise<string> {
+  const info = await lstat(join(folder, DEPENDENCIES_SENTINEL)).catch(() => null)
+  return info ? `${info.size}:${info.mtimeMs}` : "none"
+}
+
+/** `npm run <script>` as a step of the build; a failure says which step and script, with what it printed. */
+async function runStep(step: BuildPhase, npm: string, script: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  try {
+    await runBuild(npm, ["run", script], cwd, env)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new StepError(step, message, { script, details: message, cause: error })
+  }
 }
 
 export async function copyBuildSource(

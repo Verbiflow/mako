@@ -28,6 +28,8 @@ const reads = [
   "mako:launch-prewarm",
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
+  /** Agents' asks to move their Thread, as they stand. */
+  "mako:thread-move-asks",
   "mako:handoff-settings",
   "mako:conversation-settings",
   /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
@@ -114,6 +116,13 @@ const reads = [
   "mako:thread-continuation-resolve",
   "mako:thread-owner-resolve",
   "mako:list-files",
+  "mako:files-folders",
+  "mako:files-find",
+  "mako:live-files-folders",
+  "mako:live-files-find",
+  /** A text search changes nothing; a newer one in the same folder stops the last. */
+  "mako:files-grep",
+  "mako:live-files-grep",
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
@@ -121,6 +130,14 @@ const reads = [
   "mako:agents-list",
   "mako:agents-read",
   "mako:agents-wait",
+  /** Simulators' setup line as it stands, re-read when asked; changes nothing on this Mac. */
+  "mako:simulator-setup",
+  /** What the hosts run, who holds each simulator, a page or console read, and a screenshot (`contracts/simulators.ts`). */
+  "mako:simulators-list",
+  "mako:simulators-read",
+  "mako:simulators-shot",
+  /** A viewer's next packets of a simulator's screen: a repeat answered with the first answer loses nothing it can't redraw from the next key frame. */
+  "mako:simulators-watch",
   "mako:live-context-breakdown",
   "mako:live-read",
   "mako:live-attach",
@@ -138,6 +155,8 @@ const reads = [
   "mako:sync-readings",
   /** Mako's processes from `ps`, and its file watching from memory. */
   "mako:mako-footprint",
+  /** fseventsd's health from memory; the restart is never repeated by a client (`mako:file-events-restart`). */
+  "mako:file-events-service",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */
   "mako:continue-readings",
   /** Asks the account what a continue would take now; asked twice, it's asked twice. */
@@ -175,7 +194,13 @@ const reads = [
   "mako:session-reader-history",
   "mako:daemon-login",
   "mako:utility-model-settings",
+  /** Read from one small file; never a key. */
+  "mako:model-connections",
+  /** Asks Ollama's and LM Studio's usual ports on this Mac what they have loaded. */
+  "mako:model-connection-local",
   "mako:harness-order-saved",
+  /** Reads Settings › Fins and what the person used on each harness from one small file. */
+  "mako:fin-defaults",
   "mako:integrations",
   "mako:skills-discover",
   "mako:skills-resolve",
@@ -203,6 +228,8 @@ const reads = [
  * content differs.
  */
 const replays = [
+  /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
+  "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
   "mako:storage-free",
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */
@@ -227,6 +254,7 @@ const replays = [
   "mako:native-submit",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
+  "mako:agents-move",
   "mako:agents-link",
   "mako:agents-report",
   "mako:agents-send",
@@ -258,6 +286,10 @@ const replays = [
   "mako:thread-continue",
   /** A return is settled by its id: a repeat joins the return running, or answers how it went. */
   "mako:thread-return",
+  /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
+  "mako:threads-move",
+  /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
+  "mako:thread-move-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
   /** A move staged again stages the same, or what the device sent since: nothing of it is the machine's own yet. */
@@ -309,6 +341,18 @@ const replays = [
   "mako:utility-choice",
   /** Saving the same harness order again leaves the same order. */
   "mako:harness-order",
+  /** `FinDefaultsStore.choose`: the same choice for a harness saved twice is one choice. */
+  "mako:fin-default-choose",
+  /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
+  "mako:fin-policy-save",
+  /** `FinDefaultsStore.saveRoleRules`: the same words for a role saved twice are saved once. */
+  "mako:fin-role-rules-save",
+  /** `FinDefaultsStore.setLimit`: the same number saved twice is one choice. */
+  "mako:fin-limit-set",
+  /** `FinDefaultsStore.setCeiling`: the same number saved twice is one choice. */
+  "mako:fin-ceiling-set",
+  /** `FinDefaultsStore.chooseMoveOnLimit`: the same switch set twice is set once. */
+  "mako:fin-move-on-limit",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
@@ -345,6 +389,12 @@ const replays = [
   "mako:element-pick-start",
   /** Cancelling a pick that has ended cancels nothing. */
   "mako:element-pick-cancel",
+  /** `Simulators.open`: the Thread that holds it opens it again; a booted simulator boots as it is. */
+  "mako:simulators-open",
+  /** `Simulators.record`: a recording started or stopped already answers as it stands. */
+  "mako:simulators-record",
+  /** `Simulators.release`: a released simulator releases nothing. */
+  "mako:simulators-release",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

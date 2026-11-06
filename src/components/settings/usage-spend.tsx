@@ -6,14 +6,14 @@ import { PRICE_TABLES } from "@mako/host/contracts/usage-ledger"
 import { Eyebrow, IconAction, Segmented } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { Skeleton } from "@/components/ui/skeleton"
-import { formatTokens } from "@/lib/format"
+import { formatTokens, formatUsd } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { descriptorFor } from "@/state/descriptors"
 import { setPref, usePrefs } from "@/state/prefs"
 import { useThreads } from "@/state/threads"
 import { loadUsage } from "@/state/usage"
 import { UsageChart } from "./usage-chart"
-import { periodLabel, share, shortPath, usageMoney, valueOf, type UsageMetric, type UsageSeries } from "./usage-figures"
+import { periodLabel, share, shortPath, valueOf, type UsageMetric, type UsageSeries } from "./usage-figures"
 
 const METRICS = [
   { value: "cost", label: "Cost" },
@@ -80,7 +80,7 @@ export function SpendOverview() {
         </IconAction>
       </div>
       {read.error && !read.summary ? (
-        <p className="rounded-lg bg-surface px-3 py-4 text-ui text-faint ring-1 ring-hairline" data-usage-error>
+        <p className="bg-surface px-3 py-4 text-ui text-faint ring-1 ring-hairline" data-usage-error>
           {read.error}
         </p>
       ) : read.summary === null ? (
@@ -113,18 +113,18 @@ function WindowSpend({ window, metric, truncated }: { window: UsageWindow; metri
 
   return (
     <div className="flex flex-col gap-3" data-usage-window={window.id}>
-      <div className="flex flex-col gap-5 rounded-lg bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
+      <div className="flex flex-col gap-5 bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
         <div className="flex flex-col gap-0.5">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="tabular-nums text-title font-semibold" data-usage-total>
               {metric === "cost" ? cost(window.total) : `${formatTokens(meteredTokens(window.total))} tokens`}
             </span>
             <span className="text-ui text-faint">
-              {metric === "cost" ? "spent" : "processed"} {SINCE[window.id]}
+              {metric === "cost" ? "at API prices" : "processed"} {SINCE[window.id]}
             </span>
           </div>
           <span className="text-label text-faint tabular-nums">
-            {plural(window.sessions, "session")} · {metric === "cost" ? `${formatTokens(meteredTokens(window.total))} tokens` : `${cost(window.total)} spent`}
+            {plural(window.sessions, "session")} · {metric === "cost" ? `${formatTokens(meteredTokens(window.total))} tokens` : `${cost(window.total)} at API prices`}
             {estimated && metric === "cost" ? " · partly Mako's estimate" : ""}
           </span>
         </div>
@@ -140,9 +140,9 @@ function WindowSpend({ window, metric, truncated }: { window: UsageWindow; metri
                 key={source.source}
                 onMouseEnter={() => setFocus(entry?.key ?? null)}
                 title={[outside?.state === "absent" ? outside.reason : undefined, unpriced ? `${formatTokens(source.unpricedTokens ?? 0)} tokens have no known price` : undefined].filter(Boolean).join(" ") || undefined}
-                className="flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100 hover:bg-fill-hover"
+                className="flex items-center gap-2 px-1.5 py-1 transition-colors duration-100 hover:bg-fill-hover"
               >
-                <span aria-hidden className={cn("size-2 shrink-0 rounded-[2px]", entry?.ink)} />
+                <span aria-hidden className={cn("size-2 shrink-0", entry?.ink)} />
                 {source.harness ? <HarnessIcon harness={source.harness} className="size-3.5" /> : <span aria-hidden className="size-3.5 shrink-0" />}
                 <span className="min-w-0 truncate text-ui">{source.source}</span>
                 <span className="shrink-0 text-label text-faint tabular-nums">
@@ -164,8 +164,8 @@ function WindowSpend({ window, metric, truncated }: { window: UsageWindow; metri
       <Breakdowns window={window} metric={metric} />
 
       <p className="text-label leading-relaxed text-faint" data-estimate-policy>
-        Read only from session files on this machine and Mako&rsquo;s own records, its commit drafts included. No figure here is a bill: a harness&rsquo;s cost is what it priced its tokens at, and where it prices none, Mako estimates from API list prices
-        {window.priceTables?.length ? ` read ${window.priceTables.join(", ")}` : ""}, marked ≈. Subscriptions, discounts and billing adjustments are not included. Days start at midnight on this Mac&rsquo;s clock.
+        Read only from session files on this machine and Mako&rsquo;s own records, its commit drafts included. No figure here is a bill: each is what the tokens cost at API prices, a harness&rsquo;s own where it prices them and, where it prices none, Mako&rsquo;s estimate from API list prices
+        {window.priceTables?.length ? ` read ${window.priceTables.join(", ")}` : ""}, marked ≈. A subscription is billed by its plan, whatever its tokens would cost at API prices; discounts and billing adjustments are not included. Days start at midnight on this Mac&rsquo;s clock.
         {truncated ? " Some session records could not be read, so these totals may be low; the host log names them." : ""}
         {window.incomplete?.length ? ` ${NAMES.format(window.incomplete)} recorded some of ${window.incomplete.length === 1 ? "its" : "their"} usage as incomplete, so these totals may be low.` : ""}
       </p>
@@ -178,17 +178,17 @@ function Totals({ window }: { window: UsageWindow }) {
   const { total } = window
   const input = total.input + total.cacheRead + total.cacheWrite
   return (
-    <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg bg-hairline ring-1 ring-hairline" data-usage-totals>
-      <Figure label="Tokens processed" value={formatTokens(meteredTokens(total))} detail={plural(total.messages, "model call")} />
-      <Figure label="Input from cache" value={formatTokens(total.cacheRead)} detail={input ? `${share(total.cacheRead, input)} of input` : undefined} />
+    <div className="grid grid-cols-3 gap-px overflow-hidden bg-hairline ring-1 ring-hairline" data-usage-totals>
+      <Figure label="Total tokens" value={formatTokens(meteredTokens(total))} detail={plural(total.messages, "model call")} />
+      <Figure label="Cache read" value={formatTokens(total.cacheRead)} detail={input ? `${share(total.cacheRead, input)} of input` : undefined} />
       <Figure label="Output" value={formatTokens(total.output)} />
-      <Figure label="Fresh input" value={formatTokens(total.input)} />
-      <Figure label="Written to cache" value={formatTokens(total.cacheWrite)} />
+      <Figure label="Input" value={formatTokens(total.input)} />
+      <Figure label="Cache write" value={formatTokens(total.cacheWrite)} />
       <Figure label="Without a known price" value={`${formatTokens(total.unpricedTokens ?? 0)} tokens`} />
-      <Figure label="As harnesses priced it" value={usageMoney(total.reportedCost ?? 0)} />
+      <Figure label="As harnesses priced it" value={formatUsd(total.reportedCost ?? 0)} />
       <Figure
-        label="Mako's estimate at list prices"
-        value={(total.estimatedCost ?? 0) > 0 ? `≈ ${usageMoney(total.estimatedCost ?? 0)}` : usageMoney(0)}
+        label="Cost at API list prices"
+        value={(total.estimatedCost ?? 0) > 0 ? `≈ ${formatUsd(total.estimatedCost ?? 0)}` : formatUsd(0)}
         title={(total.estimatedCost ?? 0) > 0 ? estimateSource(window.priceTables ?? []) : undefined}
       />
       <Figure label="Total" value={cost(total)} strong />
@@ -306,7 +306,7 @@ function BreakdownRow({
         <span className="flex min-w-0 items-center gap-2">{children}</span>
       </td>
       <td className={cn("py-1.5 text-right tabular-nums", metric !== "cost" && "text-muted-foreground")}>
-        {empty ? "—" : unpriced ? <span className="text-label text-faint">Unpriced</span> : `${(amount?.estimatedCost ?? 0) > 0 ? "≈ " : ""}${usageMoney(amount?.cost ?? 0)}`}
+        {empty ? "—" : unpriced ? <span className="text-label text-faint">Unpriced</span> : `${(amount?.estimatedCost ?? 0) > 0 ? "≈ " : ""}${formatUsd(amount?.cost ?? 0)}`}
       </td>
       <td className="py-1.5 text-right text-label text-faint tabular-nums">{empty || (metric === "cost" && unpriced) ? "—" : share(value, total)}</td>
       <td className={cn("py-1.5 pr-1.5 text-right tabular-nums", metric !== "tokens" && "text-muted-foreground")}>{empty ? "—" : formatTokens(amount?.tokens ?? 0)}</td>
@@ -317,7 +317,7 @@ function BreakdownRow({
 function SpendSkeleton() {
   return (
     <div aria-busy className="flex flex-col gap-3" data-usage-loading>
-      <div className="flex flex-col gap-5 rounded-lg bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
+      <div className="flex flex-col gap-5 bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
         <div className="flex flex-col gap-1.5">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-3.5 w-56" />
@@ -329,13 +329,13 @@ function SpendSkeleton() {
           <Skeleton className="h-4 w-2/3" />
         </div>
       </div>
-      <Skeleton className="h-36 w-full rounded-lg" />
+      <Skeleton className="h-36 w-full" />
     </div>
   )
 }
 
 function Empty({ children }: { children: ReactNode }) {
-  return <p className="rounded-lg bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">{children}</p>
+  return <p className="bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">{children}</p>
 }
 
 function amountOf(totals: UsageTotals): UsageAmount {
@@ -344,7 +344,7 @@ function amountOf(totals: UsageTotals): UsageAmount {
 
 /** A total with any estimate in it is one, and says so. */
 function cost(totals: UsageTotals): string {
-  return `${(totals.estimatedCost ?? 0) > 0 ? "≈ " : ""}${usageMoney(totals.cost)}`
+  return `${(totals.estimatedCost ?? 0) > 0 ? "≈ " : ""}${formatUsd(totals.cost)}`
 }
 
 function meteredTokens(totals: UsageTotals): number {

@@ -1,6 +1,7 @@
+import { cn } from "@/lib/utils"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
-import { Action, IconAction } from "@/components/ui/kit"
+import { FIELD, Action, IconAction } from "@/components/ui/kit"
 import { ProviderIcon } from "@/components/ui/provider-icon"
 import { utilityModels } from "@/state/model-runtime"
 import type {
@@ -9,7 +10,7 @@ import type {
   UtilityProviderInfo,
 } from "@/lib/types"
 import { SearchSelect } from "@/components/ui/search-select"
-import { formatContextWindow } from "@/lib/format"
+import { formatTokens } from "@/lib/format"
 import {
   KeyRoundIcon,
   RefreshCwIcon,
@@ -17,8 +18,7 @@ import {
 } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 
-const inputClass =
-  "h-9 w-full rounded-md bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
+const inputClass = cn(FIELD, "h-9 w-full")
 
 export function ConnectModel({
   provider,
@@ -284,7 +284,7 @@ export function ConnectModel({
                 options={(catalog?.models ?? []).map((entry) => ({
                   value: entry.id,
                   label: entry.name,
-                  detail: `${entry.id}${entry.contextTokens ? ` · ${formatContextWindow(entry.contextTokens)} context tokens` : ""}`,
+                  detail: `${entry.id}${entry.contextTokens ? ` · ${formatTokens(entry.contextTokens)} context tokens` : ""}`,
                   keywords: entry.id,
                 }))}
                 onChange={(next) => {
@@ -358,7 +358,7 @@ export function ConnectModel({
               {error}
             </p>
           ) : null}
-          <footer className="flex flex-col gap-3 border-t border-hairline pt-4">
+          <footer className="flex flex-col gap-3 pt-4">
             <p className="text-label leading-relaxed text-faint">
               Connecting sends a small test request. Your provider may charge
               for it. No repository content is sent during this test.

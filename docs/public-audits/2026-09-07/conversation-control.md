@@ -64,7 +64,7 @@ Focused regressions cover unchanged/changed/missing/active native checkpoints; a
 
 Browser checks used the actual renderer with `?mock`: Claude → Codex → Claude in one conversation, provenance, child creation, lazy fork opening and continuation, and merge-back. Those checks found and fixed a browser-incompatible import and the formerly locked live provider picker. The later provider/relay work is covered by the real runs and regressions above.
 
-Final `verify:sessions`, `test:mcp`, `relay:test`, `backend:test`, and `git diff --check` passed. See [captured verification output](conversation-control-verification.txt). Oxlint reported zero warnings and errors. ESLint has two existing TanStack Virtual / React Compiler warnings; production builds also report existing bundle-size/dynamic-import advisories.
+Final `verify:sessions`, `test:mcp`, `relay:test`, `backend:test`, and `git diff --check` passed. Oxlint reported zero warnings and errors. ESLint has two existing TanStack Virtual / React Compiler warnings; production builds also report existing bundle-size/dynamic-import advisories.
 
 ## Reproduce the paid runs
 

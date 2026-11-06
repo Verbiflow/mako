@@ -21,6 +21,7 @@ import {
   type ClaudeSdkDependencies,
 } from "@mako/host/harnesses/claude/sdk-driver"
 import { claudeExecutablePath } from "@mako/host/harnesses/claude/sdk-process"
+import { HandoffRefused } from "@mako/host/harnesses/prompt-dispatch"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { claudeInputContent, ClaudeInput } from "@mako/host/harnesses/claude/input"
@@ -155,6 +156,14 @@ await driver.start("/tmp", admitted("claude", {
   emit: (event) => events.push(event),
 }))
 const delivery: PromptDeliveryEvidence[] = []
+// The handoff refused (a Stop during preparation, a journal that can't record it as sent): the SDK's input queue never
+// holds it, so its consumer can't take it later, and the session doesn't read as running. The next input is "Begin".
+const refused: PromptDeliveryEvidence[] = []
+await assert.rejects(driver.prompt("sdk-fixture", "Stopped while prepared", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: (evidence) => {
+  if (evidence.kind === "submitted") throw new HandoffRefused("stopped")
+  refused.push(evidence)
+} }), HandoffRefused)
+assert.deepEqual(refused.map((evidence) => evidence.kind), ["not-accepted"], "a refused handoff is proof nothing was sent")
 const attemptId = randomUUID()
 await driver.prompt("sdk-fixture", "Begin", [], undefined, { operationId: randomUUID(), attemptId, report: (evidence) => delivery.push(evidence) })
 assert.equal(delivery.at(-1)?.kind, "submitted", "SDK enqueue does not acknowledge delivery")
@@ -486,7 +495,7 @@ for (const confirmed of [true, false]) {
       "the retry counts down to when Claude tries again")
     assert.deepEqual(
       compactEvents.flatMap((event) => event.type === "live-update" ? [event.update] : []),
-      [{ kind: "event", id: boundary, source: { harness: "claude", record: boundary }, label: "Context compacted", detail: "Manual · 1k → 200 tokens · took 8s", body: "Kept: the parser plan." }],
+      [{ kind: "event", id: boundary, source: { harness: "claude", record: boundary }, label: "Context compacted", detail: "Manual · 1K → 200 tokens · took 8s", body: "Kept: the parser plan." }],
       "the boundary is a transcript event with its trigger, tokens, Claude's own duration and the hook's summary, not assistant text"
     )
   }
@@ -944,7 +953,7 @@ console.log("PASS: A monitor's event and a command that settled mid-turn are dra
   send({ type: "system", subtype: "compact_boundary", ...ids, compact_metadata: { trigger: "auto", pre_tokens: 6200, post_tokens: 900 } })
   await delay(0)
   assert.equal(session()?.usage?.used, 900, "compaction empties the meter to what it kept")
-  assert.equal(markers().at(-1)?.detail, "Automatic · 6k → 900 tokens")
+  assert.equal(markers().at(-1)?.detail, "Automatic · 6.2K → 900 tokens")
 
   await prompt()
   count = markers().length

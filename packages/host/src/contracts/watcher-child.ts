@@ -25,6 +25,8 @@ export const WatcherRequestSchema = z.discriminatedUnion("t", [
    * stat-ed or counted: at most `MAX_EXCLUDED` of them per root.
    */
   z.object({ t: z.literal("since"), id: z.number().int(), mark: HistoryMarkSchema, roots: z.array(z.string()), ignore: z.array(z.string()), exclude: z.array(z.string()).optional() }),
+  /** How late a folder of the child's own hears `beats` writes, one after another: delivery measured now, not over the last minute. */
+  z.object({ t: z.literal("probe"), id: z.number().int(), beats: z.number().int().positive().max(20) }),
 ])
 
 /** FSEventStreamSetExclusionPaths ignores the whole list when it holds more than eight. */
@@ -55,6 +57,10 @@ export const WatcherReplySchema = z.discriminatedUnion("t", [
    * second either way.
    */
   z.object({ t: z.literal("delivery"), ok: z.boolean(), lagMs: z.number().nonnegative().optional() }),
+  /** Each beat the canary hears, with how late: the host's read of fseventsd's health is taken over these. */
+  z.object({ t: z.literal("beat"), lagMs: z.number().nonnegative() }),
+  /** A probe's beats, how late each was heard; one never heard within the probe's wait is left out. */
+  z.object({ t: z.literal("probed"), id: z.number().int(), lagsMs: z.array(z.number().nonnegative()) }),
   z.object({ t: z.literal("marked"), id: z.number().int(), mark: HistoryMarkSchema }),
   /**
    * `lost` roots had events dropped by the system, so their paths may be
@@ -69,19 +75,23 @@ export const WatcherReplySchema = z.discriminatedUnion("t", [
 ])
 export type WatcherReply = z.infer<typeof WatcherReplySchema>
 
-/** Delivery later than this is slow: said in the log and Diagnostics, never a reason to stop listening. */
+/**
+ * Delivery later than this makes every watch poll as well. Far later than a
+ * degraded fseventsd is said to be (`DEGRADED_LAG_MS` in
+ * `file-events-service.ts`): this is when the watches stop trusting it.
+ */
 export const SLOW_DELIVERY_MS = 5_000
 /**
  * While delivery is slow, each watch also looks for changes itself this
- * often. An fseventsd that far behind was seen holding back one stream's
- * events for minutes while its canary's still came.
+ * often. A degraded fseventsd was seen holding back one stream's events for
+ * minutes while its canary's still came.
  */
 export const CALM_POLL_MS = 15_000
 
 /**
  * `MAKO_WATCHER_CANARY_TEST`, for tests only: a shorter beat, a canary that
- * hears nothing while `deafWhile` exists, and one that hears each beat
- * `lagMs` late, as an fseventsd that delivers in batches does.
+ * hears nothing while `deafWhile` exists, and one that hears each beat (and
+ * each probe's) `lagMs` late, as a degraded fseventsd delivers.
  */
 export const CanaryTestSchema = z.object({
   everyMs: z.number().int().positive().optional(),
