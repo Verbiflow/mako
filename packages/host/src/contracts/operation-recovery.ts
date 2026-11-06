@@ -1,4 +1,4 @@
-import type { ContextTransfer } from "./conversation-control.js"
+import { quietSwitch, type ContextTransfer } from "./conversation-control.js"
 import type { LiveAction } from "./live-actions.js"
 import type { LiveRequest } from "./live-conversations.js"
 import { describePromptRecovery } from "./prompt-recovery.js"
@@ -62,6 +62,16 @@ export function describeTransferRecovery(
 ) {
   const state = transfer.state
   const request = candidate?.id === transfer.input.id ? candidate : undefined
+  if (quietSwitch(transfer)) switch (state.kind) {
+    case "queued":
+    case "preparing":
+      return { title: `Moving to ${provider}`, guidance: "Nothing is sent until the next message, which goes there." }
+    case "accepted":
+      return { title: `Moved to ${provider}`, guidance: "The next message goes there with the whole conversation." }
+    case "failed":
+    case "uncertain":
+      return { title: `Could not move to ${provider}`, guidance: "The Thread stays where it was and nothing was sent.", retryLabel: undefined }
+  }
   switch (state.kind) {
     case "queued":
       if (request?.status === "held") return { title: `Switch to ${provider} is paused`, guidance: `Your message is in the queue. Resuming it sends it to ${provider}.` }

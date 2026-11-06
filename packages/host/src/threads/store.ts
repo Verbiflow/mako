@@ -1145,6 +1145,26 @@ export class ThreadStore {
     })
   }
 
+  /** A Fin moved to another harness: its edge says what it runs on now (`Agents.move`), nothing else of it changes. */
+  moveEdge(child: string, asked: Pick<ThreadParent["asked"], "harness" | "model" | "reasoning" | "fast" | "access">, tuned: Omit<NonNullable<ThreadParent["tuned"]>, "rule" | "rerouted"> | undefined): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      const { asked: was, ...edge } = previous
+      const held = { ...was }
+      delete held.harness
+      delete held.model
+      delete held.reasoning
+      delete held.fast
+      delete held.access
+      delete edge.tuned
+      const next: ThreadParent = { ...edge, asked: { ...held, ...asked }, ...(tuned && { tuned }) }
+      this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
   /** The Threads `thread` descends from, its parent first: one chain, since each Thread has one parent. */
   ancestors(thread: string): string[] {
     const edges = this.edges()

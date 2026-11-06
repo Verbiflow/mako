@@ -22,6 +22,10 @@ export const TransferInputSchema = z.object({
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
+  /** The account it goes on, for a Thread moved to another account of its harness: its binding's pin. */
+  account: z.string().optional(),
+  /** What its message may attach (`LiveRequest.grants`), kept with the words it carries. */
+  grants: z.array(z.string().max(1024)).max(100).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */
@@ -38,6 +42,8 @@ export const ProviderBindingSchema = z.object({
   path: z.string().optional(),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
+  /** The account this binding runs on whatever is selected, for a Thread moved to it: a Fin's or an Apex's alike (`LiveConversations.pinnedAccount`). */
+  account: z.string().optional(),
   coveredBlocks: z.number().int().nonnegative(),
   includesBase: z.boolean(),
   /**
@@ -186,11 +192,24 @@ export const ContextTransferSchema = z.object({
    * (`LiveDispatch.drain`), across a restart too, and reads so until it starts.
    */
   behind: z.string().optional(),
+  /** A move's row to go first at its commit, ahead of what waited longer (`arriving`). */
+  first: z.string().optional(),
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
+/** A switch with no message of its own: the Thread moves, and what next goes there carries its history. */
+export function quietSwitch(transfer: Pick<ContextTransfer, "input">): boolean {
+  return !transfer.input.text.trim() && !transfer.input.attachments.length
+}
 /** A switch's input saying what its message in the queue says now. */
 export function carryingWords(input: TransferInput, message: Pick<TransferInput, "text" | "displayText" | "attachments">): TransferInput {
   return { ...input, text: message.text, displayText: message.displayText, attachments: message.attachments }
+}
+/** What a quiet switch a Stop reached before it committed, or a restart, leaves, for whoever asked to ask again. */
+export const STOP_RETIRED_MOVE = "A Stop reached it before it moved. Nothing changed; ask again to move it."
+export const RESTART_RETIRED_MOVE = "Mako restarted before it moved. Nothing changed; ask again to move it."
+/** A quiet switch over before it committed: `removed` keeps it from offering a retry, and it has no message to lose. */
+export function retiredMove(transfer: ContextTransfer, error: string): ContextTransfer {
+  return { ...transfer, retry: undefined, state: { kind: "failed", error, removed: true } }
 }
 export const ConversationControlSchema = z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
