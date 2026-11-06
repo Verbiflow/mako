@@ -159,6 +159,11 @@ try {
   // Mako has no message to hold back: a harness out of usage says so only when it's asked.
   const queued = await agents("send", "proof", "Then write queued-once.txt saying done, with no reply of your own about it.", "--key", "queued")
   await note("a second message", Json.parse(queued))
+  // A Fin at work doesn't move, so its turn on Cursor has to end first, which it does the moment Cursor refuses it.
+  await until("Cursor to refuse the second", async () => {
+    const held = Snapshot.parse(await call("mako:live-snapshot", [conversation]))
+    return held.requests.some((request) => request.text.includes("queued-once.txt") && request.status === "failed") && held.session.status !== "running"
+  }, 120_000)
 
   const toClaude = await agents("move", "proof", "claude", "--key", "to-claude")
   await note("move to Claude Code", Json.parse(toClaude))
