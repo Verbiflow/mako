@@ -38,7 +38,7 @@ if (process.argv[2] === "host") {
   const root = process.argv[3]!
   const fake = fakeCatalog()
   const w = new AgentsWorld({ root, catalog: fake.catalog, finLimit: () => 1, script: script(root) })
-  const shell = spawn(process.execPath, ["-e", "const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync('shared.txt','linked');console.log('ready');setInterval(()=>fs.writeFileSync('shared.txt','linked'),10)"], { cwd: root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+  const shell = spawn(process.execPath, ["-e", "const fs=require('node:fs');process.on('SIGTERM',()=>{});const put=()=>{fs.writeFileSync('shared.tmp','linked');fs.renameSync('shared.tmp','shared.txt')};put();console.log('ready');setInterval(put,10)"], { cwd: root, detached: true, stdio: ["ignore", "pipe", "ignore"] })
   await new Promise<void>((resolve) => shell.stdout!.once("data", () => resolve()))
   const identity = await w.agents.runs.processOf(shell.pid!)
   assert.ok(identity)
@@ -53,6 +53,7 @@ if (process.argv[2] === "host") {
   assert.ok(!("refused" in next) && next.state === "queued")
   await w.agents.stop(apex.caller, { child: "linked" })
   assert.ok(w.agents.runs.isTerminating(linked.child))
+  writeFileSync(join(root, "stopped-at.json"), JSON.stringify(w.store.edges().of(linked.child!)!.run!.stopping!.at))
   process.kill(process.pid, "SIGKILL")
 } else {
   const root = mkdtempSync(join(tmpdir(), "mako-followed-stop-crash-"))
@@ -65,13 +66,19 @@ if (process.argv[2] === "host") {
     assert.equal(signal, "SIGKILL", said)
     const identity = Identity.parse(JSON.parse(readFileSync(join(root, "linked-process.json"), "utf8")))
     assert.ok(await live(identity), "the linked run outlived the host that stopped it")
-    w = new AgentsWorld({ root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: script(root) })
+    // The next host's clock, held a moment short of the run's grace and then moved to it: the kill comes at the grace,
+    // whatever the runner's own clock did. The run never ends by itself: left running, it outlives the hang guard.
+    const graceEnds = z.number().parse(JSON.parse(readFileSync(join(root, "stopped-at.json"), "utf8"))) + STOP_GRACE_MS
+    let clock: number | undefined = graceEnds - 1
+    w = new AgentsWorld({ root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: script(root), now: () => clock ?? Date.now() })
     const started = () => w!.prompts.some((prompt) => prompt.text.includes("You're fin:next,"))
     await pause(500)
     assert.equal(started(), false, "the next host holds the stopped run's place while its process runs")
     assert.equal(readFileSync(join(root, "shared.txt"), "utf8"), "linked")
-    // The run never ends by itself: left running, it outlives this hang guard, thirty times its grace.
-    await until(async () => !(await live(identity)), "the next host to kill the run once its grace is up, not leave it running", 30 * STOP_GRACE_MS)
+    assert.ok(await live(identity), "and its grace isn't up")
+    clock = graceEnds
+    await until(async () => !(await live(identity)), "the next host to kill the run the moment its grace is up", 30 * STOP_GRACE_MS)
+    clock = undefined
     await until(started, "next to start once the run was gone")
     await pause(100)
     assert.equal(readFileSync(join(root, "shared.txt"), "utf8"), "next", "and nothing overwrote its file after")

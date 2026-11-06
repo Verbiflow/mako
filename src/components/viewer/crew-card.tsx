@@ -18,9 +18,11 @@ import {
 } from "lucide-react"
 import {
   CHILD_GROUPS,
+  askWords,
   childGroup,
   childLine,
   childStateOf,
+  openAsk,
   rollup,
   rollupLabel,
   rollupLine,
@@ -77,24 +79,26 @@ const SETTLED: ReadonlySet<ChildGroup> = new Set(["idle", "done"])
 
 /**
  * What needs the person and what's live (needs you, working, queued, failed) as headed groups, then the settled ones
- * as one "24 done · 1 idle" line, their groups under it once it's open.
+ * as one "24 done · 1 idle" line, their groups under it once it's open. A done Fin with a decision still open, its
+ * Apex's to make, is never folded: it stays listed under its own Done heading.
  */
 function buildRows(children: readonly NativeAgent[], settledOpen: boolean): CrewRow[] {
   const live: CrewRow[] = []
   const settled: CrewRow[] = []
   const counts = { done: 0, idle: 0 }
-  let group: ChildGroup | undefined
-  let heading: Extract<CrewRow, { kind: "heading" }> | undefined
+  const headings = new Map<CrewRow[], Extract<CrewRow, { kind: "heading" }>>()
   for (const agent of children) {
-    const next = childGroup(childStateOf(agent))
-    const out = SETTLED.has(next) ? settled : live
-    if (next === "done" || next === "idle") counts[next] += 1
-    if (next !== group) {
-      group = next
+    const state = childStateOf(agent)
+    const next = childGroup(state)
+    const out = SETTLED.has(next) && !openAsk(state) ? settled : live
+    if (out === settled && (next === "done" || next === "idle")) counts[next] += 1
+    let heading = headings.get(out)
+    if (heading?.group !== next) {
       heading = { kind: "heading", group: next, count: 0 }
+      headings.set(out, heading)
       out.push(heading)
     }
-    heading!.count += 1
+    heading.count += 1
     out.push({ kind: "child", agent, group: next })
   }
   if (!settled.length) return live
@@ -169,8 +173,9 @@ const NeedsRow = memo(function NeedsRow({
   useHarnessIdentity()
   const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
   const state = childStateOf(agent)
-  if (state.kind !== "blocked" || !agent.child) return null
-  const ask = state.ask
+  const open = openAsk(state)
+  if (!open || !agent.child) return null
+  const ask = open.ask
   const approval = ask?.kind === "approval"
   const options = ask?.options ?? []
   const order = options
@@ -187,8 +192,9 @@ const NeedsRow = memo(function NeedsRow({
         fin: agent.child.thread,
         title: agent.title,
         harness: agent.provider,
-        question: state.question,
+        question: open.question,
         ask,
+        ...(open.done && { done: true as const }),
       },
       answer
     ).then((answered) => {
@@ -200,6 +206,7 @@ const NeedsRow = memo(function NeedsRow({
       data-crew-row={agent.child.thread}
       data-child-group="needs"
       data-fin-ask={ask?.kind}
+      data-fin-decision={open.done || undefined}
       data-fin={agent.child.thread}
       aria-busy={sent ? true : undefined}
       className="bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
@@ -224,7 +231,7 @@ const NeedsRow = memo(function NeedsRow({
         <span className="flex-1" />
         <CrewElapsed agent={agent} className="text-label text-faint" />
       </div>
-      <p className="mt-1.5 pl-7 text-ui text-foreground/90">{state.question}</p>
+      <p className="mt-1.5 pl-7 text-ui text-foreground/90">{askWords(open)}</p>
       {ask ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
           {approval ? (
@@ -358,7 +365,7 @@ const CrewLineRow = memo(function CrewLineRow({
   const group = childGroup(state)
   const line = childLine(state)
   const live = state.kind === "working" || state.kind === "starting"
-  const lead = state.kind === "blocked" && state.on === "lead"
+  const lead = openAsk(state)?.on === "lead"
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =

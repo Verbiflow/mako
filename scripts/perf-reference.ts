@@ -412,6 +412,8 @@ export interface Settled {
   failed: string[]
   /** Rows the machine was too busy to settle, a line each. */
   unsure: string[]
+  /** Of those, the ones whose rounds were cut short: CI can't call a row not slower on evidence it stopped gathering. */
+  cut: string[]
   rows: MeasuredRow[]
   /** The machine while the rows were measured, and why it was busy, if it was. */
   machine: string
@@ -464,7 +466,9 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
   const { allowed, rounds, say } = settling
   const machine = settling.machine ?? thisMachine
   const budget = { leftMs: settling.quietWaitMs ?? QUIET_WAIT_MS }
-  const busyTime = { leftMs: settling.busyMeasureMs ?? BUSY_MEASURE_MS }
+  // CI has the time, and passes an unsure row, so it measures on; only the updater has a window to end inside.
+  const busyMeasureMs = settling.busyMeasureMs ?? (process.env[UNSURE_REPORTED_VARIABLE] === "1" ? Infinity : BUSY_MEASURE_MS)
+  const busyTime = { leftMs: busyMeasureMs }
   let spent = false
   const here = checkout()
   const scratch = await mkdtemp(join(tmpdir(), "mako-perf-reference-"))
@@ -472,6 +476,7 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
   const build = settling.reference ?? ((commit: string) => references.build(commit))
   const failed: string[] = []
   const unsure: string[] = []
+  const cut: string[] = []
   const rows: MeasuredRow[] = []
   const readings: MachineReading[] = []
   const read = (reading: MachineReading) => readings.push(reading)
@@ -511,7 +516,7 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
           const open = results.filter((result) => result.reference.length && result.head.length && judge(result, allowed, outOfTime).outcome === undefined)
           if (outOfTime && !spent && results.some((result) => judge(result, allowed).outcome === undefined && judge(result, allowed, true).outcome === "unsure")) {
             spent = true
-            say(`Measured for the ${Math.round((settling.busyMeasureMs ?? BUSY_MEASURE_MS) / 1000)} s a busy machine gets; rows it hasn't settled are unsure.`)
+            say(`Measured for the ${Math.round(busyMeasureMs / 1000)} s a busy machine gets; rows it hasn't settled are unsure.`)
           }
           if (!open.length) break
           const busy = open.some((result) => judge(result, allowed).busyShare >= BUSY_RUNS)
@@ -539,6 +544,7 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
         const measured = `${percent(change - 1)} beside ${at.slice(0, 8)} (${median(head).toFixed(3)} against ${median(reference).toFixed(3)}${bounds}, ${head.length} rounds)`
         if (outcome === "slower") failed.push(`${key}: ${measured}: slower`)
         if (outcome === "unsure") unsure.push(`${key}: ${measured}: the machine was too busy to tell, ${busyRounds} rounds busy`)
+        if (outcome === "unsure" && head.length < MAX_ROUNDS) cut.push(`${key}: ${measured}: the run was cut before its rounds could settle it`)
       }
     }
   } finally {
@@ -550,15 +556,16 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<S
     say(`\nMedians in turns, each row's change the median of its rounds' head over reference, "between" where that lies at 95%; ${overall ? describeMachine(overall) : "the machine wasn't read"}.\n`)
     printTable(table, say)
   }
-  return { failed, unsure, rows, machine: overall ? describeMachine(overall) : "", busy }
+  return { failed, unsure, cut, rows, machine: overall ? describeMachine(overall) : "", busy }
 }
 
 /**
  * What a script makes of `settled`: the lines to fail on. Under the local
  * updater, which names a verdict file (`PERFORMANCE_VERDICT_VARIABLE`), the
  * verdict goes there and an unsure row doesn't fail. In CI
- * (`UNSURE_REPORTED_VARIABLE`) an unsure row is printed and passes: CI fails
- * only a row `judge` calls slower, not one a runner's noise moved. Anywhere
+ * (`UNSURE_REPORTED_VARIABLE`) an unsure row is printed and passes once all
+ * its rounds are in, and fails if they were cut short: CI fails a row `judge`
+ * calls slower, not one a runner's noise moved. Anywhere
  * else a person runs it, so an unsure row fails beside a slower one, to be
  * measured again. `null` names no file even under the updater.
  */
@@ -568,7 +575,7 @@ export async function concluded(script: string, settled: Settled, allowed: numbe
     await appendFile(file, `${JSON.stringify(verdict)}\n`)
     return settled.failed
   }
-  if (env[UNSURE_REPORTED_VARIABLE] === "1") return settled.failed
+  if (env[UNSURE_REPORTED_VARIABLE] === "1") return [...settled.failed, ...settled.cut]
   return [...settled.failed, ...settled.unsure.map((line) => `${line}; measure it again on a quieter machine`)]
 }
 

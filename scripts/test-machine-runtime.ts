@@ -32,6 +32,7 @@ import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import { encodeRuntimeEvent, readEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { cpuBetween, type CpuSample } from "@mako/host/usage/process-cpu"
 import { HostProfiler } from "@mako/host/usage/host-profile"
+import { ranOut, ticksSet } from "./lib/ran-out.ts"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-machine-runtime-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -273,8 +274,12 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   const cloud = await machineGateway()
   let work: LifecycleWork[] = []
   const item = (status: LifecycleWork["status"], title: string): LifecycleWork => ({ id: title, token: title, title, provider: "claude", cwd: "/w", status, stoppable: true })
-  const agent = machineAgent({ dataRoot: join(scratch, "activity"), work: () => work })
-  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  const { result: agent, ticks } = await ticksSet(async () => {
+    const started = machineAgent({ dataRoot: join(scratch, "activity"), work: () => work })
+    await started.until("the host's hello", () => started.messages.some((message) => message.type === "hello"))
+    return started
+  })
+  assert.ok(ticks.includes(1_000), `it looks each second: ${ticks.join(", ")} ms`)
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected")
   await cloud.gateway.assign("th-1", RUNTIME)
@@ -457,10 +462,13 @@ test("a machine that woke keeps a connection that survived its pause, and replac
   // heartbeat would have found it dead.
   cloud.silence()
   const woke = Date.now()
-  agent.tell({ type: "wake" })
-  await agent.until("enrolled on it, before the heartbeat", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 20_000)
+  const { waits } = await ranOut(async () => {
+    agent.tell({ type: "wake" })
+    await agent.until("enrolled on it, before the heartbeat", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 20_000)
+  })
   const replacedMs = Date.now() - woke
   assert.ok(replacedMs >= 1_400, `replaced only once the probe went unanswered (${replacedMs} ms)`)
+  assert.ok(waits.includes(1_500), `the probe that ran out was its 1.5 s: ${waits.filter((ms) => ms >= 1_000).join(", ")} ms`)
 })
 
 test("a credential the agent renewed keeps the connection, and the next connection and the records carry it", async () => {

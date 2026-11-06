@@ -6,6 +6,7 @@ import { join } from "node:path"
 import type { AgentsSendResult, AgentsSent } from "@mako/host/contracts/agent-tools"
 import { agentWords } from "@mako/host/contracts/children"
 import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
+import { ranOut } from "./lib/ran-out.ts"
 
 /**
  * How `agents_send` reaches a working Fin (`npm run test:orch-deliver`), by
@@ -175,7 +176,9 @@ async function cursorHoldsASteer(): Promise<void> {
   try {
     await work()
     // The call gives up on the harness's answer after 5 s at most; Cursor here answers only when the test says.
-    const held = sent(await beforeAnswered(world.agents.send(apex.caller, { to: "cursor", text: "Drop the retry loop.", deliver: "steer", clientKey: "c1" })))
+    const { result, waits } = await ranOut(() => beforeAnswered(world.agents.send(apex.caller, { to: "cursor", text: "Drop the retry loop.", deliver: "steer", clientKey: "c1" })))
+    const held = sent(result)
+    assert.ok(waits.every((ms) => ms <= 5_000), `the longest wait for Cursor's answer is 5 s: ${waits.filter((ms) => ms >= 1_000).join(", ")} ms`)
     assert.equal(held.delivery, "steer")
     assert.equal(held.hears, "Cursor holds it until what cursor is running now returns, then cursor hears it; if its turn ends first, it goes as its next message.")
     const second = sent(await world.agents.send(apex.caller, { to: "cursor", text: "And the second retry.", deliver: "steer", clientKey: "c2" }))

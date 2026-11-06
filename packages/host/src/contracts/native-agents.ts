@@ -48,6 +48,40 @@ export const FinAskSchema = z.object({
 export type FinAsk = z.infer<typeof FinAskSchema>
 
 /**
+ * What a Fin that finished leaves for someone to decide (a merge, a choice
+ * between results), from the question its done report asks: its Apex's
+ * (`lead`) or the person's, and the ask that answers it.
+ */
+export const FinDecisionSchema = z.object({ question: note, on: z.enum(["lead", "person"]), ask: FinAskSchema })
+export type FinDecision = z.infer<typeof FinDecisionSchema>
+
+/**
+ * One thing a Fin waits on outside its tree, as its report names it: a pull request until its checks, a review or a
+ * merge; the person, for what they do ("merge"); or anything else in a few words (`other`). Data only: nothing watches it.
+ */
+export const WaitingOnSchema = z.union([
+  z.object({
+    kind: z.literal("pull-request"),
+    /** As the report named it: its URL, `owner/name#412` or `#412`. */
+    ref: z.string().min(1).max(400),
+    /** `owner/name` and the number, read from `ref` as the report is kept (`pullRef`); absent for a bare `#412`. */
+    repository: z.string().min(1).max(200).optional(),
+    number: z.number().int().positive().optional(),
+    until: z.enum(["checks", "review", "merge"]).optional(),
+  }),
+  z.object({ kind: z.literal("person"), what: z.string().min(1).max(200) }),
+  z.object({ kind: z.literal("other"), text: z.string().min(1).max(200) }),
+])
+export type WaitingOn = z.infer<typeof WaitingOnSchema>
+/** The most a report names. */
+export const WAITING_ON_LIMIT = 8
+const waitingOn = z.array(WaitingOnSchema).max(WAITING_ON_LIMIT)
+
+/** Who answered a Fin's question, and with what, while it works on the answer. */
+export const FinAnsweredSchema = z.object({ by: z.enum(["lead", "person"]), answer: z.string().max(400) })
+export type FinAnswered = z.infer<typeof FinAnsweredSchema>
+
+/**
  * A child's state as `childState` computes it (`contracts/agents.ts`), carried
  * on its entry so every surface (the rail's badge, the strip, the panel, the
  * phone) reads that one computation and never infers it from `state`'s words.
@@ -63,12 +97,14 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
     held: note.optional(),
     /** Why it couldn't start once released: it stays, saying so, until its Apex has heard. */
     refused: note.optional(),
+    /** Its Apex is a Fin that was stopped: it waits, whatever room there is, until that Fin resumes. */
+    apexStopped: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
-  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional() }),
+  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional() }),
   z.object({ kind: z.literal("idle") }),
-  z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional() }),
-  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional() }),
+  z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional(), waitingOn: waitingOn.optional() }),
+  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional(), decision: FinDecisionSchema.optional(), waitingOn: waitingOn.optional() }),
 ])
 export type ChildStateReading = z.infer<typeof ChildStateSchema>
 export const NativeAgentObservationSchema = z.object({

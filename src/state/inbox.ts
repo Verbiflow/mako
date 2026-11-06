@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import { finsWord } from "@mako/host/contracts/agents"
+import { askWords } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { LivePermissionRequest, ThreadRef } from "@/lib/types"
 import { workspaceName } from "@/lib/format"
@@ -145,7 +146,7 @@ function finItemsOf(children: readonly NativeAgent[], apex: InboxApex): readonly
       key: `fin:${ask.fin}:${ask.ask.id}`,
       title: ask.title,
       harness: ask.harness,
-      question: ask.question,
+      question: askWords(ask),
       since: agent.observedAt ?? agent.startedAt ?? 0,
       apex,
       ask,

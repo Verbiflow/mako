@@ -15,6 +15,7 @@ import { HostJobs } from "@mako/host/base/host-jobs"
 import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { openAttribution, type Attribution, type TreeWatcher } from "@mako/host/attribution/index"
 import { SHARED_FORMAT, SharedJournal, ownerAddress, sharedJournalFolder, type JournalWrites, type OwnedJournal } from "@mako/host/attribution/shared-journal"
+import { ranOut } from "./lib/ran-out.ts"
 
 /*
  * One record of changes per device: two hosts on one Mac (the installed app
@@ -167,7 +168,8 @@ if (process.argv[2] === "owner-child") {
       const journal = follower
       // A lock the kernel didn't free is waited on for 30 s (`unansweredMs`) and then left, the follower keeping a
       // journal of its own; so the follower owning it shows the lock went with the process.
-      await until("the follower owning the journal or keeping its own", () => ["owner", "private"].includes(journal.status().sharing.role), 40_000)
+      const { waits } = await ranOut(() => until("the follower owning the journal or keeping its own", () => ["owner", "private"].includes(journal.status().sharing.role), 40_000))
+      assert.deepEqual(waits.filter((ms) => ms >= 1_000), [], "it looks again at once and again, with no long wait between")
       assert.equal(journal.status().sharing.role, "owner", "the follower took the lock the kernel freed, not its own journal after waiting out the dead owner's")
 
       const path = join(repo, "a.ts")
@@ -420,7 +422,7 @@ if (process.argv[2] === "owner-child") {
     assert.match(folder, /^\/Users\/someone\/\.mako\/attribution\/[0-9a-f]{16}$/)
     assert.ok(Buffer.byteLength(ownerAddress(folder, "darwin")) <= 100)
     assert.match(ownerAddress(folder, "linux"), /^\0mako-attribution-[0-9a-f]{24}$/)
-    const deep = join("/private/var/folders/xx/yyyyyyyyyyyyyyyyyyyyyyyyyyyy/T", "a".repeat(80), "attribution", "0123456789abcdef")
+    const deep = join("/private/tmp/xx/yyyyyyyyyyyyyyyyyyyyyyyyyyyy/T", "a".repeat(80), "attribution", "0123456789abcdef")
     assert.ok(Buffer.byteLength(ownerAddress(deep, "darwin")) <= 104, "a path too long for a socket falls back to a short one")
     mkdirSync(tmpdir(), { recursive: true })
   })

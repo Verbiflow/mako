@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
+import { promisify } from "node:util"
 import { z } from "zod"
 
 /** How long a stopped step's process group has between SIGTERM and SIGKILL. */
@@ -29,6 +30,21 @@ export interface GroupRunResult {
 }
 
 const errnoSchema = z.object({ code: z.string() })
+const run = promisify(execFile)
+
+/**
+ * Whether the process table shows nothing alive in group `group`. macOS answers EPERM for a group of only zombies, the
+ * last member gone and not yet reaped, as it does for a live member Mako may not signal, so EPERM alone says neither. A
+ * table that can't be read shows nothing, and the group counts as alive.
+ */
+export async function groupHoldsNothingAlive(group: number): Promise<boolean> {
+  const table = await run("ps", ["-A", "-o", "pgid=,stat="], { maxBuffer: 16 * 1024 * 1024, timeout: 5_000 }).catch(() => undefined)
+  if (!table) return false
+  return table.stdout.split("\n").every((row) => {
+    const [pgid, stat] = row.trim().split(/\s+/)
+    return Number(pgid) !== group || stat?.startsWith("Z") === true
+  })
+}
 
 /**
  * Runs a build step (npm install, npm run build, packaging) in a process
@@ -57,18 +73,30 @@ export async function runProcessGroup(command: string, args: string[], options: 
     child.stderr?.setEncoding("utf8").on("data", (text: string) => output("stderr", text))
   }
   let failure: Error | null = null
+  /** The EPERM the group last answered: of a live member Mako may not signal, or of only zombies (`groupHoldsNothingAlive`). */
+  let refused: Error | null = null
   /** Signals the group; false once nothing in it is left. */
   const signalGroup = (name: NodeJS.Signals | 0): boolean => {
     if (!child.pid) return false
     try {
       process.kill(-child.pid, name)
+      refused = null
       return true
     } catch (error) {
-      // macOS answers EPERM for a group of only zombies: this one's last member, gone and not yet reaped.
       const code = errnoSchema.safeParse(error).data?.code
-      if (code !== "ESRCH" && code !== "EPERM") failure ??= error instanceof Error ? error : new Error(String(error))
+      const raised = error instanceof Error ? error : new Error(String(error))
+      if (code === "EPERM") {
+        refused = raised
+        return true
+      }
+      if (code !== "ESRCH") failure ??= raised
       return false
     }
+  }
+  /** Whether the group has anything left, a refusal settled by the process table. */
+  const present = async (): Promise<boolean> => {
+    if (!signalGroup(0)) return false
+    return !refused || !(await groupHoldsNothingAlive(child.pid!))
   }
   let stopped: GroupRunResult["stopped"] = null
   let killAt = 0
@@ -93,13 +121,15 @@ export async function runProcessGroup(command: string, args: string[], options: 
       // The step itself is gone; what it started may not be. Wait for its
       // group to empty, with SIGKILL at the grace for whatever is still there.
       const gone = async (until: number) => {
-        while (signalGroup(0) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 25))
-        return !signalGroup(0)
+        while ((await present()) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 25))
+        return !(await present())
       }
       if (!(await gone(killAt))) {
         signalGroup("SIGKILL")
         await gone(Date.now() + GROUP_REAP_MS)
       }
+      // Something alive that Mako may not signal outlived the stop, so the step's end is no end of its work.
+      if (refused && (await present())) failure ??= refused
     }
     if (failure) throw failure
     return { code, stopped }

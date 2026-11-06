@@ -14,6 +14,7 @@ import {
   PING,
   PONG,
   PROTOCOL_VERSION,
+  PROBE_ANSWER_MS,
   SILENT_WHILE_WORKING_MS,
   Payload,
   RuntimeThreads,
@@ -51,6 +52,7 @@ import type { WaitingClaim } from "@mako/host/usage/cloud-account"
 import type { AccountListHeard } from "@mako/protocol/account-sessions"
 import type { ListedSession, ListedState, SessionListings } from "@mako/protocol/thread-listing"
 import { z } from "zod"
+import { ranOut } from "./lib/ran-out.ts"
 
 /** A move's calls and its way back's, which these conversations never make (`test-cloud-moves.ts` covers them). */
 const unused = () => Promise.reject(new Error("no move in this test"))
@@ -363,15 +365,17 @@ test("another device's conversation followed here picks up where it was: a dropp
   machine.network!.cut()
   for (let revision = 7; revision < 7 + 600; revision++) send(revision)
   await until("windows told to read it again", () => rereads() === 1, 2_000)
-  send(700)
-  await until("live again after", () => revisions().includes(700))
-
   // Stalled while it works: nothing moves on the link and nothing closes it. Silent for a few seconds, its connection
   // is asked whether it's alive, and replaced: the next batch arrives on the new one.
-  machine.network!.sleep()
-  send(701)
-  // Found by the probe once silent and unanswered (`SILENT_WHILE_WORKING_MS`, `PROBE_ANSWER_MS`), not by the heartbeat.
-  await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), BEFORE_HEARTBEAT_MS)
+  const { waits: stallWaits } = await ranOut(async () => {
+    send(700)
+    await until("live again after", () => revisions().includes(700))
+    machine.network!.sleep()
+    send(701)
+    await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), BEFORE_HEARTBEAT_MS)
+  })
+  // Found by the probe, each wait as long as it's set to, not by the heartbeat.
+  assert.ok(stallWaits.includes(SILENT_WHILE_WORKING_MS) && stallWaits.includes(PROBE_ANSWER_MS), `the stream's silence, then the probe's answer, ran out: ${stallWaits.filter((ms) => ms >= 1_000).join(", ")} ms`)
   assert.equal(rereads(), 1, "picked up from what the gateway kept")
   // Diagnostics' readings of it: what went by, what was read again, and why it was followed again each time.
   const reading = readings.readings().follows.find((follow) => follow.stream.endsWith(conversation))

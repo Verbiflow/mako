@@ -1748,6 +1748,7 @@ describe("client frames", () => {
     // The far end stops answering and never closes: a socket the client would otherwise wait on for minutes. The next
     // heartbeat past the silent window ends it; the wait on that is a hang guard thirty windows long.
     answering = false
+    const pingedBefore = pinged
     let guard
     const hung = new Promise((_, reject) => {
       guard = setTimeout(() => reject(new Error("still open 60 s after the far end went silent")), 60_000)
@@ -1756,6 +1757,8 @@ describe("client frames", () => {
       const reply = await Promise.race([replied, hung])
       assert.equal(reply.problem.outcome, "unknown", "the call in flight is answered unknown, to be repeated under its id")
       await assert.rejects(Promise.race([subscription.next(), hung]), (error) => !/still open/.test(error.message), "the subscription ends, for its reader to follow again")
+      // Told in heartbeats, not the clock: a stalled runner sends fewer, and a window that ran long sends more.
+      assert.ok(pinged - pingedBefore <= 22, `ended within a heartbeat of the 20 the silent window holds (${pinged - pingedBefore})`)
     } finally {
       clearTimeout(guard)
     }

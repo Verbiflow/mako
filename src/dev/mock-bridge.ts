@@ -89,6 +89,7 @@ import {
   mockThreads,
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
+import { openAsk } from "@mako/host/contracts/children"
 import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
@@ -969,7 +970,7 @@ export function installMockBridge() {
       const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
       return [
         { number: 812, title: "Fix the login redirect after SSO", branch: "fix/login-redirect", draft: false, author: "ann", updatedAt: ago(2), cross: false },
-        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "kashyab", updatedAt: ago(26), cross: false },
+        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "ana", updatedAt: ago(26), cross: false },
         { number: 801, title: "Typo in the README", branch: "patch-1", draft: false, author: "outside-contributor", updatedAt: ago(120), cross: true },
       ]
     },
@@ -3450,16 +3451,17 @@ export function installMockBridge() {
       respondCalls.push({ conversation, ...input })
       const snapshot = liveSnapshots.get(conversation)
       const agent = snapshot?.nativeAgents?.agents.find((each) => each.child?.thread === input.fin)
-      const state = agent?.child?.state
+      const open = agent?.child?.state && openAsk(agent.child.state)
       if (!snapshot?.nativeAgents || !agent?.child) return { refused: "unknown-child", why: "That isn't one of this Thread's Fins." }
-      if (state?.kind !== "blocked" || state.ask?.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
-      const going: ChildState = { kind: "working", step: "Read your answer" }
+      if (!open?.ask || open.ask.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
+      const picked = input.option === undefined ? input.answer : open.ask.options?.[input.option]?.label
+      const going: ChildState = { kind: "working", step: "Read your answer", ...(open.ask.kind === "report" && picked && { answered: { by: "person" as const, answer: picked } }) }
       const moved: NativeAgent = { ...agent, state: { kind: "working" }, child: { ...agent.child, state: going } }
       const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((each) => (each === agent ? moved : each)) }
       const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
       liveSnapshots.set(conversation, next)
       emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
-      return { child: agent.child.thread, name: agent.child.name ?? agent.title, answered: state.ask.kind, ...(state.ask.kind === "report" && { delivery: "turn" as const }) }
+      return { child: agent.child.thread, name: agent.child.name ?? agent.title, answered: open.ask.kind, ...(open.ask.kind === "report" && { delivery: "turn" as const }) }
     },
     nativeRouting: async () => [
       { harness: "claude", state: "control", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`.", verified: { version: "2.1.314", how: "test:native-routing-live" }, installed: "2.1.314" },

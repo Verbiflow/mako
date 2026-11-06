@@ -24,6 +24,7 @@ import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/run
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { LiveAction } from "@mako/host/contracts/live-actions"
 import { sealedDrivers } from "./fixtures/sealed-drivers.ts"
+import { ranOut } from "./lib/ran-out.ts"
 import { installClaude } from "@mako/host/harnesses/claude/index"
 import { installCodex } from "@mako/host/harnesses/codex/index"
 import { installCursor } from "@mako/host/harnesses/cursor/index"
@@ -111,23 +112,6 @@ async function world(provider: string, landing: SteerLanding | undefined, name: 
       owner.observe({ type: "live-update", id, update: { kind: "tool", id: "build", title: "npm run build", status: "running" } })
     },
     close() { answer.resolve({ kind: "accepted" }); owner.stop() },
-  }
-}
-
-/** The timers that ran out while `work` ran, by what each was set to: a wait as Mako set it, whatever the runner's clock did. */
-async function ranOut<T>(work: () => Promise<T>): Promise<{ result: T; waits: number[] }> {
-  const real = globalThis.setTimeout
-  const waits: number[] = []
-  const recording = (run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => real((...given: unknown[]) => {
-    waits.push(ms ?? 0)
-    run(...given)
-  }, ms, ...args)
-  // SAFETY: the same function with the same arguments, recording when it fires; `__promisify__` is carried over.
-  globalThis.setTimeout = Object.assign(recording, real) as typeof setTimeout
-  try {
-    return { result: await work(), waits }
-  } finally {
-    globalThis.setTimeout = real
   }
 }
 

@@ -158,10 +158,42 @@ const doubled = await Promise.all(seeds.map((seed) => quietly(2, seed)))
 assert.deepEqual(doubled.map((result) => result.rows[0]!.outcome).filter((outcome) => outcome !== "slower"), [], "twice as slow through the same noise always is")
 console.log("PASS: on a quiet machine as noisy as CI's, unchanged code is never slower and a regression of twice always is")
 
+// A busy machine's time cut short, at seven rounds, through the same noise: a row they didn't settle doesn't pass CI.
+const cutShort = (slower: number, seed: number) => {
+  const random = draws(seed)
+  return settle(suspect, {
+    allowed: ALLOWED, rounds: ROUNDS, say: () => {}, quietWaitMs: 0, machine: machine(Infinity), busyMeasureMs: 0, reference: async () => "/reference",
+    measurer: async () => async (tree) => ({ [KEY]: (tree === here ? slower : 1) * (1 + 0.3 * (random() * 2 - 1)) }),
+  })
+}
+const inCI = { [UNSURE_REPORTED_VARIABLE]: "1" }
+// Seed 9 stops at seven rounds with a median of +49%, between +15% and +200%.
+const nine = await cutShort(2, 9)
+assert.equal(nine.rows[0]!.outcome, "unsure")
+assert.equal(nine.rows[0]!.rounds, ROUNDS + CONFIRM_ROUNDS)
+assert.match((await concluded("perf:decoders", nine, ALLOWED, null, inCI))[0]!, /the run was cut before its rounds could settle it$/, "CI fails it, and says the run was cut")
+assert.deepEqual((await Promise.all(seeds.map(async (seed) => {
+  const run = await cutShort(2, seed)
+  return { seed, outcome: run.rows[0]!.outcome, passes: !(await concluded("perf:decoders", run, ALLOWED, null, inCI)).length }
+}))).filter(({ outcome, passes }) => outcome !== "within" && passes), [], "twice as slow passes a cut run only as its first rounds' median")
+assert.deepEqual(await concluded("perf:decoders", { ...nine, unsure: [`${KEY}: unsure`], cut: [] }, ALLOWED, null, inCI), [], "with all its rounds in, an unsure row is only reported")
+process.env[UNSURE_REPORTED_VARIABLE] = "1"
+try {
+  let round = 0
+  const measuredOn = await settle(suspect, {
+    allowed: ALLOWED, rounds: ROUNDS, say: () => {}, quietWaitMs: 0, machine: machine(Infinity), reference: async () => "/reference",
+    measurer: async () => async (tree) => ({ [KEY]: tree === here ? ciNoise[round++ % ciNoise.length]! : 1 }),
+  })
+  assert.equal(measuredOn.rows[0]!.rounds, MAX_ROUNDS, "CI gives a busy machine's row every round, the time it takes no limit")
+} finally {
+  delete process.env[UNSURE_REPORTED_VARIABLE]
+}
+console.log("PASS: a run cut short fails in CI, saying so, and CI itself doesn't cut one short")
+
 const folder = mkdtempSync(join(tmpdir(), "mako-perf-verdict-"))
 try {
   const file = join(folder, "verdict.jsonl")
-  const busy = { ...hurried, unsure: [`${KEY}: unsure`] }
+  const busy = { ...hurried, unsure: [`${KEY}: unsure`], cut: [] }
   assert.deepEqual(await concluded("perf:decoders", busy, ALLOWED, file), [], "under the updater an unsure row doesn't fail the script")
   assert.deepEqual(await concluded("perf:decoders", regression, ALLOWED, file), regression.failed, "a slower one does")
   const verdicts = parseVerdicts(readFileSync(file, "utf8"))
