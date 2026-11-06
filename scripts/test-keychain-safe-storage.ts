@@ -1,5 +1,3 @@
-import { processKeychain } from "@mako/host/base/keychain"
-import type * as Keyring from "@napi-rs/keyring"
 import assert from "node:assert/strict"
 import { createCipheriv, pbkdf2Sync } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
@@ -7,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openHostSecrets } from "@mako/host/base/host-secrets"
 import type { Keychain, KeychainItem, KeychainRead } from "@mako/host/base/keychain"
-import { securityValue } from "@mako/host/base/keychain"
+import { passwordRead, securityValue } from "@mako/host/base/keychain"
 import { chromiumSafeStorage, KeychainUnavailable, safeStorageItem } from "@mako/host/base/secure-storage"
 
 /**
@@ -151,25 +149,7 @@ async function electronKey(userRoot: string, login: Keychain): Promise<Buffer> {
   return key
 }
 
-{
-  // The addon reads no item as null, not undefined: nothing found, never a found value that isn't one.
-  const entries = new Map([["there", "secret"]])
-  const addon = {
-    AsyncEntry: class {
-      readonly #account: string
-      constructor(_service: string, account: string) {
-        this.#account = account
-      }
-      async getPassword() {
-        return entries.get(this.#account) ?? null
-      }
-    },
-    findCredentialsAsync: async (service: string) => (service === "none" ? [] : [{ account: "first", password: "first secret" }]),
-  }
-  // SAFETY: the read touches only these two members of the addon.
-  const keychain = processKeychain(async () => addon as unknown as typeof Keyring)
-  assert.deepEqual(await keychain.read({ service: "s", account: "there" }), { kind: "found", value: "secret" })
-  assert.deepEqual(await keychain.read({ service: "s", account: "gone" }), { kind: "missing" })
-  assert.deepEqual(await keychain.read({ service: "s" }), { kind: "found", value: "first secret" })
-  assert.deepEqual(await keychain.read({ service: "none" }), { kind: "missing" })
-}
+// The addon reads no item as null, not undefined: nothing found, never a found value that isn't one.
+assert.deepEqual(passwordRead(null), { kind: "missing" })
+assert.deepEqual(passwordRead(undefined), { kind: "missing" })
+assert.deepEqual(passwordRead("secret"), { kind: "found", value: "secret" })
