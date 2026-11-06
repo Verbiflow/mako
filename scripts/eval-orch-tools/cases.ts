@@ -12,7 +12,7 @@ import type { CallThread } from "@mako/host/contracts/native-calls"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { digest } from "@mako/host/conversations/agent-wakes"
-import { briefText } from "@mako/host/conversations/agents"
+import { briefText } from "@mako/host/contracts/children"
 import { namedUuid } from "@mako/host/conversations/cloud-moves"
 
 /**

@@ -1054,8 +1054,13 @@ export function installMockBridge() {
       finChoices = { ...finChoices, chosen }
       return finChoices
     },
-    saveFinPolicy: async (policy) => {
-      finChoices = { ...finChoices, policy }
+    saveFinPolicy: async ({ rules, otherwise }) => {
+      const { forFins, forApexes } = finChoices.policy
+      finChoices = { ...finChoices, policy: { rules, ...(otherwise && { otherwise }), ...(forFins && { forFins }), ...(forApexes && { forApexes }) } }
+      return finChoices
+    },
+    saveRoleRules: async (role, text) => {
+      finChoices = { ...finChoices, policy: { ...finChoices.policy, [role]: text.trim() || undefined } }
       return finChoices
     },
     setFinLimit: async (limit) => {

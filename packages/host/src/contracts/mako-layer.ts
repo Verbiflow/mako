@@ -49,6 +49,8 @@ export const INSTRUCTION_BLOCKS = {
   policy: { cadence: "session" },
   "front-door": { cadence: "per-message" },
   rules: { cadence: "per-message" },
+  /** The person's standing rules for every Fin and every Apex (`roleRuleLines`): standing lines of Mako's note, read once and again when they change. */
+  "person-rules": { cadence: "session" },
 } as const satisfies Record<string, { cadence: "session" | "per-message" }>
 export type InstructionBlockId = keyof typeof INSTRUCTION_BLOCKS
 

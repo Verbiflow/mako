@@ -39,7 +39,6 @@ import {
   type AgentsRedirected,
   type AgentsRedirectInput,
   type AgentsRespondInput,
-  type Brief,
   type ChildJournal,
   type ChildStart,
   type FinDeliver,
@@ -88,11 +87,11 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
-import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
+import { FIN_LIMIT, finPolicyNote, placeFull, roleRuleLines, type RoleRuleLines, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LiveRequest, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -591,6 +590,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.roster(conversation).length) return true
     const thread = this.store()?.journalPlacement(conversation)?.thread
     return thread !== undefined && this.store()?.edges().of(thread)?.role === APEX_ROLE
+  }
+
+  /**
+   * The person's standing rules a conversation reads, as standing lines of Mako's note (`roleRuleLines`): a Fin the Fin
+   * rules, and the Apex rules a top-level Thread, an Apex or a Fin started as one. Its process hears them whole once and
+   * then as they change, whoever's message starts its turn (`standingLines`).
+   */
+  ruleLines(conversation: string): RoleRuleLines {
+    const policy = this.deps.finPolicy?.()
+    const requests = this.deps.live.snapshot(conversation)?.requests ?? []
+    const read = new Set(requests.flatMap((request) => request.ruleLines ?? []))
+    if (!policy?.forFins && !policy?.forApexes && !read.size) return {}
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
   }
 
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[] {
@@ -3338,21 +3352,6 @@ function permissionAnswer(pending: PendingAsk, input: Pick<AgentsAnswerInput, "a
 
 function unknownFin(ref: string): AgentRefused {
   return { refused: "unknown-child", why: `No ${FIN_WORD} of this Thread is named ${ref}. agents_list shows them.` }
-}
-
-/** What a Fin's first turn reads: who asked, as an agent's words, and everything it knows of the work. */
-export function briefText(brief: Brief, name: string): string {
-  const lines = [
-    fromAgent(YOUR_APEX),
-    briefIntro(name),
-    "",
-    brief.objective,
-  ]
-  if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
-  if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
-  if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
-  lines.push("", BRIEF_CLOSE)
-  return lines.join("\n")
 }
 
 /** A Fin as another Fin of its Apex reads it: the person's words to it directly stay its own. */
