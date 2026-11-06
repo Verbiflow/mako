@@ -132,6 +132,7 @@ function coldView(store: ThreadStore): Agents {
     catalog: { nativePath: () => undefined, ref: () => undefined, page: async () => null, activity: () => ({}), subscribe: () => () => {}, announce: () => {} },
     jobs: new HostJobs(),
     live: noConversations(() => {}),
+    continueOn: () => Promise.reject(new Error("This test moves no conversation")),
     startLive: async () => {
       throw new Error("a cold view starts nothing")
     },
@@ -370,6 +371,29 @@ try {
     await world.close()
   }
   console.log("report: a typed question woke its Apex with its options, and the answer reached the Fin as its Apex's")
+
+  // A Fin that asks and works on is still asking: the answer isn't refused, it reaches it, and the question is closed.
+  {
+    const answers: AgentsAnswerResult[] = []
+    const { world, fin, state } = await fixture("asks-and-works", {
+      access: "auto", finHarness: "claude",
+      asks: async (world, conversation) => {
+        await world.agents.report(world.caller(conversation), { status: "needs-input", summary: "Which base?", question: "Which base does it go on?", options: [{ label: "main" }], clientKey: "base" })
+        await world.hold(conversation)
+      },
+      onDecision: async (world, caller) => {
+        answers.push(await world.agents.answer(caller, { to: "tests", answer: "main", clientKey: "base" }))
+      },
+    })
+    await until("its Apex to answer", () => answers.length === 1)
+    assert.equal(answered(answers[0]!).answered, "report", "an answer isn't refused while the question stands")
+    await until("the answer to reach it as it works", () => world.steers.some((steer) => steer.conversation === fin && steer.text.includes("Answer: main")))
+    world.release(fin)
+    await world.settle(300)
+    assert.notEqual(state()?.kind, "blocked", "a question answered isn't listed as open once its turn ends")
+    await world.close()
+  }
+  console.log("report: an answer reached a Fin that asked and worked on, and its question closed")
 
   // The Apex leaves it to the person: the ask is the person's, with its options, and the Apex isn't woken again.
   {

@@ -7,7 +7,8 @@ import { disconnectedContext } from "../base/execution-context.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccountRemovalSession } from "../contracts/accounts.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
-import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
+import type { ContextTransfer, ForkInput, TransferInput } from "../contracts/conversation-control.js"
+import type { ThreadMove } from "./continue-on.js"
 import { ASLEEP_AFTER_MS } from "../contracts/session-choice.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
 import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
@@ -63,7 +64,7 @@ import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { latchedByStop } from "../contracts/delivery-retry.js"
-import { holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
+import { arriving, goingFirst, holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -79,7 +80,7 @@ import { LiveRecords, wakeAt } from "./live-records.js"
 import { isPaged } from "./paged-entries.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
-import { ContextBundles } from "./live-context.js"
+import { ContextBundles, prepareLiveContext } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
@@ -135,6 +136,9 @@ export class LiveConversations {
   private readonly approvals: LiveApprovals
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
+  private readonly bundles: ContextBundles
+  /** Each conversation's Stops so far (`stopMark`). */
+  private readonly stopped = new Map<string, number>()
   private readonly sources: LiveSources
   private readonly launches: LiveLaunches
   private readonly hibernation: LiveHibernation
@@ -203,12 +207,13 @@ export class LiveConversations {
         else this.dispatch.drain(resident)
       },
     })
+    this.bundles = new ContextBundles(dependencies.children, dependencies.harnessLabel)
     const observe = (event: LiveDriverEvent) => this.events.observe(event)
     const access: LiveAccess = {
       dependencies,
       reclaims: this.reclaims,
       epoch: this.epoch,
-      bundles: new ContextBundles(dependencies.children, dependencies.harnessLabel),
+      bundles: this.bundles,
       admission: this.admission,
       moves: this.moves,
       bindingOwners: this.records.owners,
@@ -312,7 +317,11 @@ export class LiveConversations {
     })
     this.approvals = new LiveApprovals(access)
     this.questions = new LiveQuestions(access, {
-      continue: (id, bindingId, requestId, text, displayText) => { this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText) },
+      // An answer goes to the session that asked, on the binding it read as active with nothing awaited since: never a switch.
+      continue: (id, bindingId, requestId, text, displayText) => {
+        if (conversationControl(this.records.require(id)).activeBindingId !== bindingId) throw new Error("This question is no longer available on the current session")
+        this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText)
+      },
       steer: (id, input) => this.act(id, input, "native"),
     })
     this.actions = new LiveActions(access, (id, running, input) => this.steerByRestart(id, running, input))
@@ -465,14 +474,8 @@ export class LiveConversations {
     const resuming = new Set(ids)
     const requests = resident.snapshot.requests.map((request) =>
       resuming.has(request.id) && holdOf(request)?.kind === "paused" ? released(request) : request)
-    const own = first === undefined ? undefined : requests.find((request) => request.id === first && request.status === "queued")
-    const rest = own ? requests.filter((request) => request !== own) : requests
-    // Nothing goes ahead of a message the person is editing: `first` goes ahead of what waits after the last of those.
-    let barrier = -1
-    rest.forEach((request, index) => { if (request.status === "held" && request.editing) barrier = index })
-    const ahead = rest.findIndex((request, index) => index > barrier && (request.status === "queued" || request.status === "held"))
     const previous = resident.snapshot
-    resident.snapshot = { ...previous, requests: own && ahead !== -1 ? [...rest.slice(0, ahead), own, ...rest.slice(ahead)] : requests }
+    resident.snapshot = { ...previous, requests: first === undefined ? requests : [...goingFirst(requests, first)] }
     try {
       this.flush(resident)
     } catch (error) {
@@ -507,20 +510,22 @@ export class LiveConversations {
   /**
    * A Stop of `id`, the person's or an Apex's of its Fin: every message waiting there pauses, and one that was to go by
    * itself (again, or at a time) stops being so, so nothing sends until a deliberate resume (`resumeHeld`, Resume),
-   * across a restart too. A message waiting for a sign-in keeps its own hold. Read in if it isn't loaded. How many it
+   * across a restart too. A message waiting for a sign-in keeps its own hold and takes the mark, so a move that lifts
+   * that hold leaves it paused (`arriving`). A switch not yet committed is held, or with no message retired (`holdSwitches`). Read in if it isn't loaded. How many it
    * paused (`docs/delivery-queue.md`).
    */
   stopHolds(id: string): number {
+    this.stopped.set(id, this.stopMark(id) + 1)
     const resident = this.records.load(id)
     // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
     // One being edited takes the mark under its edit, so saving the edit doesn't send it.
     const stops = (request: LiveRequest) => request.pause !== "stop" &&
-      (request.status === "queued" || request.status === "dispatching" || (request.status === "held" && !request.signIn))
+      (request.status === "queued" || request.status === "dispatching" || request.status === "held")
     if (!resident) return 0
     // A switch not yet committed is queued work, held like any message; a committed one's message is in the queue
     // already. Holding moves no generation, so the source binding's events still count (`holdSwitches`).
-    const { snapshot, held } = holdSwitches(resident.snapshot)
-    const count = resident.snapshot.requests.filter(stops).length + held
+    const { snapshot, held, retired } = holdSwitches(resident.snapshot)
+    const count = resident.snapshot.requests.filter(stops).length + held + retired.length
     if (!count) return 0
     const previous = resident.snapshot
     resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => stops(request)
@@ -532,7 +537,16 @@ export class LiveConversations {
       resident.snapshot = previous
       throw error
     }
+    for (const transfer of retired) this.transfers.tell(transfer)
     return count
+  }
+
+  /**
+   * How many Stops `id` has had on this host. What takes this before it waits and reads it after knows whether a Stop
+   * came meanwhile, whatever the conversation looks like by then: idle is what a Stop leaves.
+   */
+  stopMark(id: string): number {
+    return this.stopped.get(id) ?? 0
   }
 
   /** Whether a message to its running turn lands at the agent's next step (`steer` with `step`), not at the turn's end. */
@@ -782,7 +796,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -876,7 +890,8 @@ export class LiveConversations {
         attachments,
         tuning,
         displayText,
-      })
+        ...marks.grants && { grants: marks.grants },
+      }, actor)
       return request
     }
     request.inputDigest = inputDigest
@@ -1157,6 +1172,59 @@ export class LiveConversations {
     return this.transfers.accept(id, input, this.threads.actor(actor), continues)
   }
 
+  /**
+   * The admission of `continueOn`'s move: the Thread goes to `to` with its queue as it stands, and every waiting message
+   * stays a row and goes there once it lands (`arriving`). On another harness, or another account where the session
+   * can't go, that's a quiet switch: nothing is sent, and the transcript goes with whichever row goes first. `stays`: the
+   * session goes on where it is, so it lands now, its binding pinned to the account; the next send takes it there.
+   * Undefined when it's no longer decided: `wanted` is read here, and again with nothing awaited before a switch commits.
+   */
+  moveOn(id: string, move: ThreadMove, stays: boolean, actor?: Actor, stillDecided?: () => boolean): LiveSnapshot | undefined {
+    this.admission.assert()
+    const resident = this.records.require(id)
+    if (resident.rewinding)
+      throw new Error("Wait for the workspace rewind to finish before moving this Thread")
+    this.moves.assertStarts(resident)
+    const wanted = () => !(move.unlessStopped && resident.snapshot.requests.some((request) => request.status === "held" && request.pause === "stop")) && (stillDecided?.() ?? true)
+    if (!wanted()) return undefined
+    const { to } = move
+    if (!stays) return this.transfers.accept(id, { id: move.id, provider: to.harness, text: "", attachments: [], ...(to.tuning && { tuning: to.tuning }), ...(to.modeId && { modeId: to.modeId }), ...(to.account && { account: to.account }) }, this.threads.actor(actor), undefined, { wanted, ...(move.first !== undefined && { first: move.first }) })
+    const previous = resident.snapshot
+    const control = conversationControl(resident)
+    resident.snapshot = {
+      ...previous,
+      requests: arriving(previous.requests, { harness: to.harness, account: to.account, tuning: to.tuning }, false, move.first),
+      control: { ...control, bindings: to.account ? control.bindings.map((binding) => (binding.id === control.activeBindingId ? { ...binding, account: to.account } : binding)) : control.bindings },
+    }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+    this.release(resident)
+    return resident.snapshot
+  }
+
+  /** The account `id` is pinned to on `harness`, whatever is selected: a move's, on its binding, for a Fin and an Apex alike. */
+  pinnedAccount(id: string, harness: string): string | undefined {
+    const resident = this.records.get(id)
+    const binding = resident && activeBinding(resident)
+    return binding?.provider === harness ? binding.account : undefined
+  }
+
+  /** The conversation's whole transcript as a file, the bundle a switch hands over (`prepareLiveContext`). */
+  async transcriptBundle(id: string): Promise<{ file: string } | null> {
+    const snapshot = await this.historySnapshot(id)
+    if (!snapshot) return null
+    return prepareLiveContext({ snapshot, root: join(this.dependencies.root, "context"), fromBlock: 0, includesBase: true, bundles: this.bundles })
+  }
+
+  /** Once the switch `transferId` has gone or can't go (`LiveTransfers.settled`). */
+  switchSettled(transferId: string): Promise<ContextTransfer> {
+    return this.transfers.settled(transferId)
+  }
+
   discoverNativePaths(): void {
     this.sources.discoverNativePaths()
   }
@@ -1416,9 +1484,9 @@ export class LiveConversations {
    * Stops the running turn and sends this message as the next one, ahead of what was queued, which follows it in
    * order; with no turn running it goes as the next message, like any. Answers whether it stopped a turn.
    */
-  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor): boolean {
+  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor, grants?: string[]): boolean {
     const running = this.activeRequest(id)
-    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor)
+    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor, { ...grants && { grants } })
     if (!running) return false
     this.stopFor(id, running, requestId, "person")
     return true

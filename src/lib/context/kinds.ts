@@ -11,6 +11,7 @@ import {
   type QuoteDetail,
 } from "../context-detail"
 import { readFields, writeFields } from "./fields"
+import type { ConversationItem, WrittenItem } from "@mako/sessions/thread-references"
 import type { ItemAttributes, WireItem } from "./wire"
 
 /**
@@ -24,43 +25,9 @@ import type { ItemAttributes, WireItem } from "./wire"
  * these. Round trips are held by `scripts/test-context-kinds.ts`.
  */
 
-export interface WrittenItem {
-  kind: string
-  /** The marker's noun, or null for an item with no place in the words (a skill, a plan). */
-  noun: string | null
-  label: string
-  attrs: ItemAttributes
-  body: string
-}
-
 /* Conversations ------------------------------------------------------------ */
 
-/** What the composer prepared for a referenced conversation. */
-export interface ConversationContext {
-  kind: "file"
-  file: string
-  /** The host's note naming the transcript and how to read it (`transcriptNote`). */
-  note: string
-  title?: string
-  harness: string
-}
-
-export interface ConversationItem {
-  /** The token's body, `thread:<harness>:<id>`, when the reference was typed as one. */
-  ref?: string
-  harness?: string
-  title: string
-}
-
-export function writeConversation(item: ConversationItem, context: ConversationContext | null): WrittenItem {
-  const attrs: ItemAttributes = {}
-  if (item.ref) attrs.ref = item.ref
-  const harness = context?.harness ?? item.harness
-  if (harness) attrs.harness = harness
-  attrs.title = context?.title ?? item.title
-  const body = context ? context.note : "This conversation is unavailable or no longer exists. Do not infer its contents."
-  return { kind: "conversation", noun: "Conversation", label: attrs.title, attrs, body }
-}
+export { writeConversation, type ConversationContext, type ConversationItem, type WrittenItem } from "@mako/sessions/thread-references"
 
 export function readConversation(item: WireItem): ConversationItem {
   const read: ConversationItem = { title: item.attrs.title || "Untitled conversation" }

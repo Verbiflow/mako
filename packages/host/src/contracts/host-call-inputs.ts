@@ -92,8 +92,26 @@ const inputs = {
             z.literal("tree"),
             z.literal("crew"),
             z.literal("apexes"),
+            z.literal("threads"),
           ])
           .optional(),
+        query: z.string().optional(),
+      }),
+    ]),
+  "mako:agents-move": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        child: z.string().optional(),
+        all: z.boolean().optional(),
+        harness: z.string(),
+        model: z.string().optional(),
+        reasoning: z.string().optional(),
+        fast: z.boolean().optional(),
+        clientKey: z.string(),
       }),
     ]),
   "mako:agents-read": () =>
@@ -207,6 +225,7 @@ const inputs = {
             z.literal("interrupt"),
           ])
           .optional(),
+        context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -268,6 +287,7 @@ const inputs = {
         timeoutMs: z.number().optional(),
         after: z.array(z.string()).optional(),
         queue: z.boolean().optional(),
+        context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
         cwd: z.string().optional(),
       }),
@@ -692,7 +712,7 @@ const inputs = {
   "mako:list-sessions": () =>
     z.tuple([
       z.string().optional(),
-      z.union([z.literal("workspace"), z.literal("all")]).optional(),
+      z.union([z.literal("all"), z.literal("workspace")]).optional(),
     ]),
   "mako:live-action": () =>
     z.tuple([
@@ -1039,6 +1059,7 @@ const inputs = {
                 path: z.string().optional(),
               })
             ),
+            grants: z.array(z.string()).optional(),
           })
           .optional(),
         conversationId: z.string(),
@@ -1203,7 +1224,10 @@ const inputs = {
                           connectionName: z.string(),
                           model: z.string(),
                         }),
-                        z.object({ why: z.literal("harness"), harness: z.string() }),
+                        z.object({
+                          why: z.literal("harness"),
+                          harness: z.string(),
+                        }),
                       ])
                       .optional(),
                     at: z.number().optional(),
@@ -1269,6 +1293,8 @@ const inputs = {
           })
           .optional(),
         modeId: z.string().optional(),
+        account: z.string().optional(),
+        grants: z.array(z.string()).optional(),
       }),
     ]),
   "mako:live-turn-changes": () =>
@@ -1748,8 +1774,8 @@ const inputs = {
       z.string(),
       z.string(),
       z.object({
-        conversation: z.string().optional(),
         thread: z.string().optional(),
+        conversation: z.string().optional(),
       }),
       z.union([z.null(), z.number()]),
     ]),
@@ -1913,7 +1939,7 @@ const inputs = {
           caseSensitive: z.boolean().optional(),
           wholeWord: z.boolean().optional(),
           threads: z.boolean().optional(),
-          scope: z.union([z.literal("workspace"), z.literal("all")]).optional(),
+          scope: z.union([z.literal("all"), z.literal("workspace")]).optional(),
         })
         .optional(),
     ]),
@@ -2628,6 +2654,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:agents-direct", "conversations"],
   ["mako:agents-link", "conversations"],
   ["mako:agents-list", "conversations"],
+  ["mako:agents-move", "conversations"],
   ["mako:agents-read", "conversations"],
   ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],

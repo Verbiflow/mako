@@ -75,6 +75,66 @@ export function nextInLine<T extends Pick<LiveRequest, "status" | "signIn" | "ed
   return next
 }
 
+/** Where a row goes first among those waiting: ahead of what waits, after the last message someone is editing, which nothing goes ahead of. */
+export function goingFirst<T extends Pick<LiveRequest, "id" | "status" | "editing">>(requests: readonly T[], first: string): readonly T[] {
+  const own = requests.find((request) => request.id === first && request.status === "queued")
+  if (!own) return requests
+  const rest = requests.filter((request) => request !== own)
+  let barrier = -1
+  rest.forEach((request, index) => { if (request.status === "held" && request.editing) barrier = index })
+  const ahead = rest.findIndex((request, index) => index > barrier && (request.status === "queued" || request.status === "held"))
+  return ahead === -1 ? requests : [...rest.slice(0, ahead), own, ...rest.slice(ahead)]
+}
+
+/** Where a Thread lands: its harness, the account if it names one, and the model its waiting messages go on. */
+export interface Landing {
+  harness: string
+  account?: string | undefined
+  tuning?: LiveRequest["tuning"]
+}
+
+/**
+ * The queue as a switch lands on another place, a harness or an account, whoever asked (`docs/delivery-queue.md`): a
+ * hold about the source's account goes, and a hold about the person doesn't. What waited for a limit or a sign-in goes on
+ * the target in its order, and that sign-out's notice goes with it, which `signInPause` reads from these marks; a
+ * sign-in of the very account it lands on still stands. A Stop and an edit stay as they are, and a row a Stop paused
+ * keeps waiting for its Resume with the sign-in gone. `first` goes ahead of what waited longer, as a digest the landing
+ * freed does by itself. `leaving` says the model a row chose was its harness's, so it runs on the target's.
+ */
+export function arriving(requests: readonly LiveRequest[], to: Landing, leaving: boolean, first?: string): LiveRequest[] {
+  const landed = requests.map((request) => {
+    if (request.signIn && (request.signIn.harness !== to.harness || (to.account !== undefined && request.signIn.account !== to.account))) {
+      const rest = { ...request }
+      delete rest.signIn
+      return retuned({ ...rest, status: request.status === "held" && !request.editing && request.pause !== "stop" ? "queued" as const : request.status }, to, leaving)
+    }
+    return retuned(holdOf(request)?.kind === "retry" ? { ...request, status: "queued" as const, retry: undefined } : request, to, leaving)
+  })
+  const ahead = first ?? landed.find((request, index) => request.digest && request.status === "queued" && requests[index]?.status === "held")?.id
+  return [...(ahead === undefined ? landed : goingFirst(landed, ahead))]
+}
+
+function retuned(request: LiveRequest, to: Landing, leaving: boolean): LiveRequest {
+  if (request.status !== "queued" && request.status !== "held") return request
+  if (to.tuning) return { ...request, tuning: to.tuning }
+  return leaving && request.tuning ? { ...request, tuning: undefined } : request
+}
+
+/**
+ * The queue as it was before a landing that was taken back. What the landing freed waits again as it did, and its order
+ * goes back, but only rows still as the landing left them are the landing's to touch: `landed` is what it made, by
+ * identity, so a Resume, an edit or a Stop since stands, and such a row keeps the place it has.
+ */
+export function departing(requests: readonly LiveRequest[], before: readonly LiveRequest[], landed: readonly LiveRequest[]): LiveRequest[] {
+  const was = new Map(before.map((request) => [request.id, request]))
+  const owned = new Set(landed)
+  const back = requests.map((request) => (owned.has(request) ? was.get(request.id) ?? request : request))
+  const untouched = landed.every((request) => requests.includes(request))
+  if (!untouched || before.every((request, index) => landed[index]?.id === request.id)) return back
+  const place = new Map(before.map((request, index) => [request.id, index]))
+  return back.map((request, index) => ({ request, index })).sort((left, right) => (place.get(left.request.id) ?? before.length + left.index) - (place.get(right.request.id) ?? before.length + right.index)).map(({ request }) => request)
+}
+
 /** When a reconnect waiting to go again (`ContextTransfer.retry`) is due, for the one timer and the listing. */
 export function transferDue(control: Pick<ConversationControl, "transfers"> | undefined): number | undefined {
   let soonest: number | undefined

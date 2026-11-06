@@ -2,7 +2,7 @@ import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { carryingWords } from "../contracts/conversation-control.js"
+import { RESTART_RETIRED_MOVE, carryingWords, quietSwitch, retiredMove } from "../contracts/conversation-control.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
@@ -659,6 +659,8 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
           // One whose message waits in the queue (a Stop held it, or a failed close took it back) waits with that
           // message; a stranded one's retry carries the words its message has now.
           transfers: previous.control.transfers.map((transfer) => {
+            // A move has no message to wait with, and what it was decided on went with the last host.
+            if (quietSwitch(transfer) && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return retiredMove(transfer, RESTART_RETIRED_MOVE)
             const own = previous.requests.find((request) => request.id === transfer.input.id && (request.status === "queued" || request.status === "held"))
             if (own && (transfer.state.kind === "queued" || transfer.state.kind === "preparing"))
               return { ...transfer, state: { kind: "queued" as const } }

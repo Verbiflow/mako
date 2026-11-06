@@ -479,7 +479,7 @@ export interface ChildThread {
 export interface ChildJournal {
   latest?: Report
   /** The last answer to a question in its report: who gave it, when, and the ask it answers, which it settles alone. */
-  answered?: FinAnswered & { ask: string; at: number }
+  answered?: FinAnswered & { ask: string; at: number; /** It reached the Fin, so the question no longer holds it. */ delivered?: true }
 }
 
 /** Its last report's first sentence: what a strip and the digest show it at. */
@@ -513,7 +513,8 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   // By identity, never by time: an answer settles the ask it names, and a newer ask is open whatever the clocks say.
   const answered = journal.answered && latest && journal.answered.ask === reportAsk(latest).id ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
   if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && { answered }) }
-  if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !edge.closedAt)
+  // A question it waits on blocks it until the answer has reached it: that answer is what it goes on with.
+  if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !(answered && journal.answered?.delivered) && !edge.closedAt)
     return {
       kind: "blocked",
       question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.",
@@ -810,6 +811,7 @@ export type AgentRefusalReason =
   | "unknown-child"
   | "unknown-apex"
   | "unknown-harness"
+  | "unknown-thread"
   | "unknown-model"
   | "limited"
   | "unknown-rule"
