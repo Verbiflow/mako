@@ -2719,9 +2719,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (settled && settled.state.kind !== "accepted") return retire(settled.state.kind === "failed" ? settled.state.error : settled.state.kind)
       const rerouted = edge && (store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge)
       moved = store.finishFinMove(thread, this.generation, { visited: [placeKey(place), stepKey(step)] })
-      this.deps.live.recordNote(conversation, words.to, words.why)
       if (edge) this.movedNotes.set(edge.parent, [...(this.movedNotes.get(edge.parent) ?? []), `"${edge.name}" ${line.charAt(0).toLowerCase()}${line.slice(1)}.`])
-      this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) }, words.to.replace(/^Moved to /, ""))
+      // The tree's line says an Apex's move, and more: its own line only when that line has been said already.
+      if (!this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) }, words.to.replace(/^Moved to /, "")) || edge) this.deps.live.recordNote(conversation, words.to, words.why)
       hostLog("agents", "a Thread's account ran out; it goes on at the next step", { thread, from: harness, why: step.why, to: step.harness })
       if (edge) {
         this.forget(edge.parent)
@@ -2745,22 +2745,24 @@ export class Agents implements AgentOperations, ConversationChildren {
    * one with nowhere to go. One notice per account and reset (`limitNoticeId`). Kept as it happens, in the same step as
    * the move: a host that stops while it gathers leaves it to the next (`resume`).
    */
-  private noteLimit(fin: string, limit: { harness: string; account?: string; until?: number }, to?: string, apex = false): void {
+  private noteLimit(fin: string, limit: { harness: string; account?: string; until?: number }, to?: string, apex = false): boolean {
     const store = this.store()
-    if (!store) return
+    if (!store) return false
     const { harness, account, until } = limit
     const root = this.rootOf(fin)
     const now = this.now()
     const id = this.limits.get(root)?.id ?? limitNoticeId(limit, now)
     const first = { id, fin, harness, line: "", at: now, ...(until !== undefined && { until }), gathering: { ...(account && { account }), moved: [], stopped: 0 } }
-    if (store.gatherLimitNotice(root, first, to, apex)) this.gatherNotice(root, id)
+    if (!store.gatherLimitNotice(root, first, to, apex)) return false
+    this.gatherNotice(root, id)
+    return true
   }
 
-  /** A limit's mark on the tree's notice from `mover`: an Apex's, which has no roster entry of its own, on its first Fin's. */
-  private noteMove(mover: Mover, limit: { harness: string; account?: string; until?: number }, to?: string): void {
+  /** A limit's mark on the tree's notice from `mover`: an Apex's, which has no roster entry of its own, on its first Fin's. False when the notice was said already. */
+  private noteMove(mover: Mover, limit: { harness: string; account?: string; until?: number }, to?: string): boolean {
     if (mover.edge) return this.noteLimit(mover.edge.child, limit, to)
     const carrier = this.store()?.edges().children(mover.thread)[0]
-    if (carrier) this.noteLimit(carrier.child, limit, to, true)
+    return carrier ? this.noteLimit(carrier.child, limit, to, true) : false
   }
 
   private gatherNotice(root: string, id: string): void {
@@ -2788,8 +2790,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "a limit's notice", { root, harness, moved: moved.length, stopped })
     // One a host came back to past its reset is no news: it's kept as said, so the episode isn't said again.
     if (conversation && (until === undefined || until > now)) this.deps.live.recordNote(conversation, words.ran, words.did)
-    this.noticeChanged(store.edges().of(fin))
+    // Its end first: a reset that falls between them leaves no timer to say so.
     this.endNotice(root)
+    this.noticeChanged(store.edges().of(fin))
   }
 
   /** A tree's notice ends at its reset: every surface hears it as they hear "Got it", a quiet Thread's too. */
@@ -2827,7 +2830,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * Where a Thread held by a limit could go on, for its card: one Mako doesn't move by itself, as a Thread with no Fins
    * is the person's to decide, and only with somewhere to go.
    */
-  async nextPlace(conversation: string): Promise<{ label: string; target: ThreadTarget } | undefined> {
+  async nextPlace(conversation: string): Promise<{ label: string; harness: string; target: ThreadTarget } | undefined> {
     const store = this.store()
     const moves = this.moves
     const placed = store?.journalPlacement(conversation)
@@ -2846,7 +2849,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const label = (name: string) => this.deps.harnessLabel(name)
     const move: FinMove = { step, from: { harness: session.harness, ...(from && { account: from.label }) } }
     const apex: Apex = { session: placed.session, thread: placed.thread, conversation }
-    return { label: movedWords(move, label, this.now()).to.replace(/^Moved to /, ""), target: await this.targetOf(step, apex, tier, session.cwd) }
+    return { label: movedWords(move, label, this.now()).to.replace(/^Moved to /, ""), harness: step.harness, target: await this.targetOf(step, apex, tier, session.cwd) }
   }
 
   /** The person pressed the card: their Thread goes there as a switch of theirs would, whatever waits going with it. */
@@ -3552,9 +3555,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     return sessionAccessTier(this.deps.live.session(conversation))
   }
 
+  /** The harness a Fin is on now: an automatic move's, which leaves what it was asked for as it was. */
   private harnessOf(edge: ThreadParent): string {
     const running = edge.run && !edge.run.ended ? edge.run.harness : undefined
-    return running ?? edge.asked.harness ?? edge.run?.harness ?? "unknown"
+    return running ?? edge.tuned?.rerouted?.to?.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown"
   }
 
   /**
