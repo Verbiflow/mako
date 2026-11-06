@@ -244,9 +244,8 @@ function check(root: string, point: Point): void {
     for (const report of edge.reports) {
       const parent = settled.edges.find((each) => each.child === edge.parent)
       const conversations = parent ? parent.conversations : [state.apex]
-      // The digest's own entry for it: its Fin's name and its words together, as two Fins' same words aren't one report.
-      const said = report.summary.split("\n")[0]!.slice(0, 40)
-      const carrying = digests.filter((line) => conversations.includes(line.conversation) && line.text.split("\n  • ").some((entry) => entry.includes(`"${edge.name}" (`) && entry.includes(said)))
+      // By its id in the digest's own record of what it carries, as two Fins' same words aren't one report.
+      const carrying = digests.filter((line) => conversations.includes(line.conversation) && line.text.split("<mako-reports>")[1]?.includes(`"report":${JSON.stringify(report.id)}`))
       assert.equal(carrying.length, 1, `${edge.name}'s report "${report.summary.slice(0, 40)}" reached its Apex once (${carrying.length})`)
     }
   if (HELD_POINTS.has(point)) {

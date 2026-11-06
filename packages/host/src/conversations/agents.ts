@@ -201,7 +201,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "moveWaiting" | "switching"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "wakeDue" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "moveWaiting" | "switching"
 >
 
 export interface AgentsDeps {
@@ -480,6 +480,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly starts = new Map<string, StartRecord>()
   /** What each Apex's conversations last heard of its waiting Fins (`queueRefresh`), by its Thread. */
   private readonly queueHeard = new Map<string, string>()
+  /** Fins' conversations whose cut turn's time came with no room (`mayWake`). */
+  private readonly wakingForRoom = new Set<string>()
   /** Fins holding a place now (`occupies`): one that lets go frees it for what waits, at once. */
   private readonly occupying = new Set<string>()
   private stopped = false
@@ -2104,6 +2106,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.draining) return void (this.drainAgain = true)
     this.draining = true
     try {
+      // A cut turn whose time came has waited longest for a place: it goes ahead of what's queued, if there's room yet.
+      if (this.wakingForRoom.size) {
+        this.wakingForRoom.clear()
+        this.deps.live.wakeDue()
+      }
       // Each place's own room: a device's count, or the cloud's plan and spend.
       // Counted once as the drain begins, plus what it starts: a Fin it launched isn't counted again as it comes up.
       const filled = new Map<string, number>()
@@ -3183,6 +3190,19 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** A place has more room: its capacity rose, or the person raised a number. What waits goes now. */
   capacityChanged(): void {
     void this.drain()
+  }
+
+  /**
+   * Whether a Fin's turn a usage limit cut may go on: its place went while it waited, so it takes one again by the same
+   * limits as a start. With no room it stays held, and the next place to free is its (`drain`).
+   */
+  mayWake(conversation: string): boolean {
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    if (!edge) return true
+    const room = this.full(placeOf(edge.asked.place)) === undefined && this.treeCounts(this.rootOf(edge.parent)).running < this.budget.running
+    if (!room) this.wakingForRoom.add(conversation)
+    return room
   }
 
   /** What a place's Fins at once are held to: a device's own count, or the cloud's plan and spend (`placeFull`). */

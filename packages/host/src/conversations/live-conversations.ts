@@ -109,6 +109,11 @@ function residentWork(resident: Resident): LifecycleWork | undefined {
 const startingWork = (id: string): LifecycleWork => ({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
+/** A continuation of a turn a usage limit cut: it can wait days, so it holds no place, and takes one again to go on. */
+function limitCut(request: LiveRequest): boolean {
+  return request.continues !== undefined && request.retry?.cause === "rate-limited"
+}
+
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
   /** The steers whose words `steerByRestart` is sending as a message of their own, under their receipt's ID. */
@@ -444,7 +449,7 @@ export class LiveConversations {
     if (session.status === "running" || session.status === "starting" || requests.some((request) => request.status === "dispatching") || resident.autoContinue) return true
     // A message waiting to go again goes by itself: work, as a continuation Mako scheduled is. A turn a usage limit cut is
     // the exception: it can wait days, so the Fin reads as its failure says, and holds no place meanwhile.
-    if (requests.some((request) => holdOf(request)?.kind === "retry" && !(request.continues && request.retry?.cause === "rate-limited")) || this.transfers.pending(resident)?.retry) return true
+    if (requests.some((request) => holdOf(request)?.kind === "retry" && !limitCut(request)) || this.transfers.pending(resident)?.retry) return true
     const next = session.status === "failed" ? undefined : nextQueued(resident.snapshot)
     if (!next || next.ownerCheck) return false
     return Boolean(resident.driver || resident.starting || resident.opening || resident.waking || resident.hibernating || resident.transferring)
@@ -974,10 +979,11 @@ export class LiveConversations {
     // holds nothing with a time (`close`).
     if (!resident || resident.closing) return true
     // A retry goes again keeping its count, so a failure after it waits longer (`nextRetry`).
+    // A turn a usage limit cut gave up its place, so it takes one again to go on (`Agents.mayWake`): with no room it waits.
     const ready = resident.snapshot.requests.filter((request) => {
       const hold = holdOf(request)
       const at = hold && holdDue(hold)
-      return at !== undefined && at <= now
+      return at !== undefined && at <= now && (!limitCut(request) || this.dependencies.agents?.()?.mayWake?.(id) !== false)
     })
     const previous = resident.snapshot
     try {

@@ -229,6 +229,8 @@ export interface ConversationChildren {
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
+  /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
+  mayWake?(conversation: string): boolean
   /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
   pinnedAccount?(conversation: string, harness: string): string | undefined
   /**

@@ -59,6 +59,12 @@ schedules, and a failing schedule is pinned there.
    always one of its bindings. A failed destination leaves the source as it was,
    and a failed close puts it back.
 
+9. **A turn a usage limit cut gives up its place, and takes one to go on.** Its wait
+   can last days, so it holds no place and the Fin reads as its failure says. When
+   its time comes it takes a place by the same limits as a start (`Agents.mayWake`).
+   With no room it stays held, doesn't fail, and goes ahead of what's queued when one
+   frees. A Stop while it waits stands.
+
 ## What each failure leaves
 
 | What happened | The switch | Its message |
