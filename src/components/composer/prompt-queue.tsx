@@ -425,6 +425,8 @@ function QueueRow({
             ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
             : request.retry
               ? `Sends again by itself${waitsForReset(request.retry) ? "" : ` at ${clockText(request.retry.at)}`}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
+              : request.digest?.resting
+                ? request.digest.nextTry === undefined ? "Your Fins' news, going with your next message." : `Your Fins' news, going with your next message or at ${clockText(request.digest.nextTry)}.`
               : request.editing
                 ? "Held while you edit it. Nothing behind it goes until you save or resume it."
                 : request.pause === "stop"

@@ -83,24 +83,49 @@ export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause,
   return { at: cause === "rate-limited" && reset !== undefined && reset > now ? reset + RESET_MARGIN_MS : now + wait, attempt, since, cause, reason: reason.slice(0, 2_000), ...(reset !== undefined && { until: reset }) }
 }
 
+/** A digest of Fins' news no model answered: only an answer proves it was heard, and its reports already read as heard. */
+export function unheardDigest(request: Pick<LiveRequest, "digest">): boolean {
+  return request.digest !== undefined && !request.digest.heard
+}
+
+/** How often a resting digest tries by itself: an Apex silent after its limit cleared is what this exists to prevent. */
+export const RESTING_TRY_MS = 60 * 60_000
+
+/**
+ * `request` where Mako stops retrying: never the reports. An unheard digest rests and goes with the next turn that can
+ * run, on any harness; one a limit holds also tries by itself, once an hour for its Thread, since nothing else may come
+ * along once the limit clears. Anything else, undefined, fails as ever.
+ */
+export function resting(request: LiveRequest, cause: RetryCause | undefined, now: number): LiveRequest | undefined {
+  if (!unheardDigest(request)) return undefined
+  const { digest } = request
+  return { ...request, status: "held", retry: undefined, digest: { ...digest!, resting: true, ...(cause === "rate-limited" ? { nextTry: now + RESTING_TRY_MS } : { nextTry: undefined }) } }
+}
+
+/**
+ * What a failure leaves of `request`, waiting: its next attempt, or a digest at rest. A digest resting stays resting,
+ * since a retry from nothing would start the budget again; undefined when it fails.
+ */
+export function waitsAgain(request: LiveRequest, cause: RetryCause | undefined, reason: string, now: number): LiveRequest | undefined {
+  const retry = cause && !request.digest?.resting ? nextRetry(request.retry, cause, reason, now) : undefined
+  return retry ? { ...request, status: "held", retry } : resting(request, cause, now)
+}
+
 /**
  * The queued messages a failure left, held to go again (`nextRetry`), or
  * undefined when Mako stops waiting for one of them, so they fail together
  * as before.
  */
 export function holdForRetry(requests: readonly LiveRequest[], cause: RetryCause, reason: string, now: number): LiveRequest[] | undefined {
-  const next = new Map<string, RequestRetry>()
+  const next = new Map<string, LiveRequest>()
   for (const request of requests) {
     if (request.status !== "queued") continue
-    const retry = nextRetry(request.retry, cause, reason, now)
-    if (!retry) return undefined
-    next.set(request.id, retry)
+    const held = waitsAgain(request, cause, reason, now)
+    if (!held) return undefined
+    next.set(request.id, held)
   }
   if (!next.size) return undefined
-  return requests.map((request) => {
-    const retry = next.get(request.id)
-    return retry ? { ...request, status: "held" as const, retry } : request
-  })
+  return requests.map((request) => next.get(request.id) ?? request)
 }
 
 /** Whether `after` holds a message to go again that `before` had queued: the failure between them is waited out. */
