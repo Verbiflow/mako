@@ -352,6 +352,7 @@ export function installMockBridge() {
   let apexPrewarms = 0
   let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
+  const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -496,6 +497,7 @@ export function installMockBridge() {
       directs: () => [...directCalls],
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
+      continues: () => [...continueCalls],
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
@@ -3457,7 +3459,10 @@ export function installMockBridge() {
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
     },
     agentsNextPlace: async () => ({ label: "Codex", harness: "codex" }),
-    agentsContinueNext: async () => true,
+    agentsContinueNext: async (conversation: string) => {
+      continueCalls.push(conversation)
+      return true
+    },
     // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.
     agentsRespond: async (conversation: string, input: AgentsRespondInput): Promise<AgentsAnswered | AgentRefused> => {
       respondCalls.push({ conversation, ...input })

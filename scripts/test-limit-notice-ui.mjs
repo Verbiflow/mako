@@ -277,7 +277,8 @@ async function check() {
   await evaluate("import('/src/state/accounts.ts').then(({ accountsStore }) => accountsStore.set({ limitOffers: {} }))")
   await until("Boolean(document.querySelector('[data-limit-continue]'))", "the card back")
   await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Continue on')).click(); true")
-  await until("!document.querySelector('[data-limit-continue]') || true", "the press")
+  await until("window.apexScene.continues().length === 1", "the press to reach the host")
+  assert.deepEqual(await evaluate("window.apexScene.continues()"), [await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => activeAcp(acpStore.get()).key)")], "for this Thread, once")
   // The laptop's browser and a phone's dock have it too: being away from the desk is when it's needed.
   for (const [name, width, height, mobile, path] of [["laptop-continue", 1280, 800, false, "scripts/web-desk.html?app=apex&thread=apex&fins=limit"], ["phone-continue", 390, 844, true, "scripts/phone-apex.html?app=apex&fins=limit"]]) {
     await viewport(width, height, mobile)
