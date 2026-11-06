@@ -584,18 +584,18 @@ export class Agents implements AgentOperations, ConversationChildren {
       ready: (conversation) => this.ready(conversation),
       // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
       unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
-        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, notices: request.digest.notices }] : []),
+        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, notices: request.digest.notices, ...(request.digest.lines && { lines: request.digest.lines }) }] : []),
       carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
-      admit: (conversation, request, text, notices, actor, hold) => {
+      admit: (conversation, request, text, notices, actor, hold, lines) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
         if (deps.live.snapshot(conversation)?.requests.some((asked) => asked.id === request)) return
         deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor, {
-          digest: { notices: [...notices] },
+          digest: { notices: [...notices], ...(lines?.length && { lines: [...lines] }) },
           ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS } },
         })
       },
-      rewrite: (conversation, request, text, notices) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices] }),
+      rewrite: (conversation, request, text, notices, lines) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
       assign: (reports, request) => {
         this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request)
@@ -606,6 +606,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.dropHeld(id.slice(HELD_PREFIX.length))
       },
       counts: (conversation) => this.counts(conversation),
+      takeLines: (conversation) => this.takeMoved(conversation),
+      giveLines: (conversation, lines) => this.giveMoved(conversation, lines),
       current: (notice) => this.current(notice),
       now: deps.now,
     })
@@ -3782,11 +3784,20 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The digest's last line, for the parent `conversation`. */
   private counts(conversation: string): string {
     const thread = this.store()?.journalPlacement(conversation)?.thread
-    if (!thread) return ""
-    // A Fin's move rides the next digest, said once: it never wakes its Apex by itself.
-    const moved = this.movedNotes.get(thread) ?? []
-    this.movedNotes.delete(thread)
-    return [...moved, this.childCounts(thread)].join("\n")
+    return thread ? this.childCounts(thread) : ""
+  }
+
+  /** A Fin's move rides the next digest, said once: it never wakes its Apex by itself. From here it's that digest's. */
+  private takeMoved(conversation: string): string[] {
+    const thread = this.store()?.journalPlacement(conversation)?.thread
+    const moved = (thread && this.movedNotes.get(thread)) || []
+    if (thread) this.movedNotes.delete(thread)
+    return moved
+  }
+
+  private giveMoved(conversation: string, lines: readonly string[]): void {
+    const thread = this.store()?.journalPlacement(conversation)?.thread
+    if (thread) this.movedNotes.set(thread, [...lines, ...this.movedNotes.get(thread) ?? []])
   }
 
   private childCounts(thread: string): string {

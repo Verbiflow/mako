@@ -384,6 +384,8 @@ export interface LiveRequest {
   /** A digest of an Apex's Fins' news (`AgentWakes`): the notices it carries, which a notice arriving before it's sent joins. */
   digest?: {
     notices: Notice[]
+    /** What rides with its notices and is nobody's report (a Fin's move), said once: it stays with the digest until it goes. */
+    lines?: string[]
     /** When it went to the harness, for the minute's budget (`WAKES_PER_MINUTE`), which counts what was sent. */
     sentAt?: number
   }

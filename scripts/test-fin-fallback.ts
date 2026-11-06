@@ -117,7 +117,7 @@ interface Run {
 /** A Fin's scripted turn: its reply, after `end` says how a limit refused it, if one did. */
 type FinScript = (turn: number, end: (how: ScriptedEnd) => void) => string | Promise<string>
 
-async function run(name: string, options: Partial<WorldOptions> & { fin: FinScript; start?: { harness?: string; model?: string } }): Promise<Run | { refused: string }> {
+async function run(name: string, options: Partial<WorldOptions> & { fin: FinScript; start?: { harness?: string; model?: string }; apexOn?: string }): Promise<Run | { refused: string }> {
   const wakes: string[] = []
   let finConversation = ""
   let turns = 0
@@ -130,7 +130,7 @@ async function run(name: string, options: Partial<WorldOptions> & { fin: FinScri
     return "ok"
   }
   const world = new AgentsWorld({ root: join(root, name), script, now: clock, catalogs: CATALOGS, order: ["claude", "cursor", "codex", "grok", "opencode", "devin"], ladders: { cursor: [{ id: "full", name: "Full", access: "full" }] }, ...options })
-  const apex = await world.apex("claude", "auto")
+  const apex = await world.apex(options.apexOn ?? "claude", "auto")
   const started = await world.agents.start(apex.caller, { brief: { objective: "Label the snippets" }, name: "labels", clientKey: "labels", cwd: world.root, ...options.start })
   if ("refused" in started) {
     await world.close()
@@ -523,6 +523,55 @@ try {
     await until("it said", () => !r.world.store.limitNotices().some(({ notice }) => notice.gathering), 8_000)
     assert.equal(r.world.agents.personAsk(r.apex.conversation), undefined, "over before anyone could read it")
     assert.equal((r.world.live.snapshot(r.apex.conversation)?.blocks ?? []).filter((block) => block.type === "event" && block.label.includes("ran out")).length, 0, "and no line of it")
+    await r.world.close()
+  }
+  // A move rides the digest: a second Fin's result joining it, and a restart under it, keep the line until the Apex hears it.
+  {
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    let limited = false
+    const r = await run("moved-digest", {
+      apexOn: "codex",
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: () => "unused",
+      script: async (turn) => {
+        if (turn.text.includes("HOLD")) return turn.world.hold(turn.conversation).then(() => "ok")
+        if (!limited && turn.harness === "claude" && turn.text.includes("You're fin:")) {
+          limited = true
+          await out
+          turn.world.endWith(turn.conversation, { limit: { resetsAt: RESET }, fail: LIMIT })
+          return "Partial labels."
+        }
+        return "Done."
+      },
+    })
+    assert.ok(!("refused" in r))
+    const apex = r.apex.conversation
+    r.world.say(apex, "HOLD")
+    await until("the Apex at work", () => r.world.live.session(apex)?.status === "running")
+    held.claude[0]!.spentUntil = RESET
+    spent()
+    const waiting = () => r.world.live.snapshot(apex)!.requests.find((request) => request.digest && (request.status === "queued" || request.status === "held"))
+    const MOVED_LINE = '"labels" moved to Codex'
+    await until("the digest", () => Boolean(waiting()?.text.includes(MOVED_LINE)))
+    const first = waiting()!
+    const second = await r.world.agents.start(r.caller, { brief: { objective: "A second result" }, harness: "codex", name: "second", clientKey: "second", cwd: r.world.root })
+    assert.ok(!("refused" in second))
+    await until("the second result to join", () => (waiting()?.digest?.notices.length ?? 0) >= 2)
+    assert.equal(waiting()!.id, first.id, "one digest")
+    assert.equal(waiting()!.text.split(MOVED_LINE).length, 2, "still saying the move, once")
+    assert.equal(waiting()!.digest?.lines?.length, 1, "kept on its row")
+    await r.world.restart()
+    await until("the Apex read in", () => r.world.live.snapshot(apex) !== undefined)
+    assert.equal(r.world.live.snapshot(apex)!.requests.find((request) => request.id === first.id)?.digest?.lines?.length, 1, "across a restart too")
+    // The restart cut the Apex's turn, so its queue waits for a Resume.
+    const paused = r.world.live.snapshot(apex)!.requests.find((request) => request.id === first.id)!
+    if (paused.pause) r.world.live.editQueued(apex, { requestId: paused.id, expectedText: paused.text, change: { kind: "resume" } })
+    await r.world.settle(40, 20_000, "ignore")
+    assert.equal(r.world.prompts.filter((prompt) => prompt.conversation === apex && prompt.text.includes(MOVED_LINE)).length, 1, "the Apex hears it, once")
     await r.world.close()
   }
   console.log("a limit's notice: kept before it gathers, said once after a restart, and over at its reset on every surface")

@@ -26,6 +26,8 @@ export type ParentReady = "steer" | "queue" | "idle" | "paused" | "gone"
 export interface OpenDigest {
   id: string
   notices: readonly Notice[]
+  /** What it carries beside them (`takeLines`), which every rewrite of it keeps. */
+  lines?: readonly string[]
 }
 
 export interface AgentWakesDeps {
@@ -40,9 +42,9 @@ export interface AgentWakesDeps {
    * burst's window), paused when the Apex is a stopped Fin. The minute's budget is the queue's, as it sends. A request taken once already is
    * the same one.
    */
-  admit(conversation: string, request: string, text: string, notices: readonly Notice[], actor: Extract<Actor, { kind: "agent" }>, hold: { at: number } | "paused" | undefined): void
-  /** The unsent digest `request` says `text` now, carrying `notices`; false when it went meanwhile. */
-  rewrite(conversation: string, request: string, text: string, notices: readonly Notice[]): boolean
+  admit(conversation: string, request: string, text: string, notices: readonly Notice[], actor: Extract<Actor, { kind: "agent" }>, hold: { at: number } | "paused" | undefined, lines?: readonly string[]): void
+  /** The unsent digest `request` says `text` now, carrying `notices` and `lines`; false when it went meanwhile. */
+  rewrite(conversation: string, request: string, text: string, notices: readonly Notice[], lines?: readonly string[]): boolean
   /** Joins the digest to the running turn at its next step, resolving whether the harness took it; false when no turn could take one. */
   steer(conversation: string, id: string, text: string): Promise<boolean> | false
   /** The request named before it's sent, and the reports marked heard once it was (`ThreadStore`). */
@@ -50,6 +52,10 @@ export interface AgentWakesDeps {
   delivered(reports: readonly string[], at: number): void
   /** The digest's last line: how the Apex's Fins stand now. */
   counts(conversation: string): string
+  /** What rides the next digest and wakes nobody by itself (a Fin's move): handed over once, to go in that digest. */
+  takeLines?(conversation: string): string[]
+  /** Lines no digest ended up carrying, for the next one. */
+  giveLines?(conversation: string, lines: readonly string[]): void
   /** Whether a notice still says how its Fin stands: an end the host inferred for a Fin that works again doesn't. */
   current?(notice: Notice): boolean
   now?(): number
@@ -116,7 +122,7 @@ export class AgentWakes {
     for (const open of this.deps.unsent(conversation)) {
       const rest = open.notices.filter((notice) => this.deps.current!(notice))
       if (rest.length === open.notices.length) continue
-      this.deps.rewrite(conversation, open.id, rest.length ? digest(rest, this.deps.counts(conversation)) : "", rest)
+      this.narrow(conversation, open, rest)
       hostLog("agents", "stale end not reported", { conversation, reports: open.notices.filter((notice) => !rest.includes(notice)).map((notice) => notice.report.id).join(" ") })
     }
   }
@@ -132,11 +138,22 @@ export class AgentWakes {
     for (const open of this.deps.unsent(conversation)) {
       if (!open.notices.some((notice) => notice.id === id)) continue
       found = true
-      const rest = open.notices.filter((notice) => notice.id !== id)
-      this.deps.rewrite(conversation, open.id, rest.length ? digest(rest, this.deps.counts(conversation)) : "", rest)
+      this.narrow(conversation, open, open.notices.filter((notice) => notice.id !== id))
     }
     if (found) this.heard.add(id)
     return found
+  }
+
+  /** The digest's words: its notices, then what rides with them, then how the Fins stand. */
+  private words(conversation: string, notices: readonly Notice[], lines: readonly string[]): string {
+    return digest(notices, [...lines, this.deps.counts(conversation)].join("\n"))
+  }
+
+  /** `open` keeps only `rest`, and all it carried; with nothing left it's gone, and its lines wait for the next digest. */
+  private narrow(conversation: string, open: OpenDigest, rest: readonly Notice[]): void {
+    const lines = open.lines ?? []
+    const rewritten = this.deps.rewrite(conversation, open.id, rest.length ? this.words(conversation, rest, lines) : "", rest, lines)
+    if (rewritten && !rest.length && lines.length) this.deps.giveLines?.(conversation, lines)
   }
 
   /** Whether a digest waits unsent in this Apex's queue: a turn of its own is coming. */
@@ -171,15 +188,20 @@ export class AgentWakes {
     // A digest carries at most `FIN_REPORTS_MAX`; past that the notice starts the next one.
     if (open.notices.length >= FIN_REPORTS_MAX) return this.start(conversation, [notice], this.deps.ready(conversation))
     const notices = [...open.notices, notice]
+    const fresh = this.deps.takeLines?.(conversation) ?? []
+    const lines = [...open.lines ?? [], ...fresh]
+    const alone = () => {
+      if (fresh.length) this.deps.giveLines?.(conversation, fresh)
+      this.start(conversation, [notice], this.deps.ready(conversation))
+    }
     let text: string
     try {
-      text = digest(notices, this.deps.counts(conversation))
+      text = this.words(conversation, notices, lines)
     } catch (error) {
       hostWarn("agents", "a digest could not be written with this notice; it starts its own", { conversation, error: errorMessage({ error }) })
-      return this.start(conversation, [notice], this.deps.ready(conversation))
+      return alone()
     }
-    if (!this.deps.rewrite(conversation, open.id, text, notices))
-      return this.start(conversation, [notice], this.deps.ready(conversation))
+    if (!this.deps.rewrite(conversation, open.id, text, notices, lines)) return alone()
     hostLog("agents", "digest joined", { conversation, request: open.id, notice: notice.id })
     this.deps.assign([notice.report.id], open.id)
     hostLog("agents", "digest join assigned", { conversation, request: open.id, notice: notice.id })
@@ -193,13 +215,15 @@ export class AgentWakes {
     const request = notices[0]!.wake ?? namedUuid(`wake:${conversation}:${notices.map((notice) => notice.report.id).join("\n")}`)
     const window = notices.some((notice) => notice.settledOnly) ? RESULT_COALESCE_MS : WAKE_COALESCE_MS
     const hold = ready === "paused" ? "paused" : ready === "idle" ? { at: now + window } : undefined
+    const lines = this.deps.takeLines?.(conversation) ?? []
     try {
       if (!notices[0]!.wake) this.deps.assign(notices.map((notice) => notice.report.id), request)
       hostLog("agents", "digest start assigned", { conversation, request, notices: notices.length })
-      this.deps.admit(conversation, request, digest(notices, this.deps.counts(conversation)), notices, { kind: "agent", session: SessionIdSchema.parse(notices[0]!.from) }, hold)
+      this.deps.admit(conversation, request, this.words(conversation, notices, lines), notices, { kind: "agent", session: SessionIdSchema.parse(notices[0]!.from) }, hold, lines)
     } catch (error) {
       // The Apex's conversation refused it for now (a switch or a move under way): asked again after the window.
       hostWarn("agents", "a digest could not be queued yet; it's asked again", { conversation, error: errorMessage({ error }) })
+      if (lines.length) this.deps.giveLines?.(conversation, lines)
       const timer = setTimeout(() => { for (const notice of notices) this.notice(conversation, "", notice) }, WAKE_COALESCE_MS)
       timer.unref?.()
       return
@@ -213,8 +237,13 @@ export class AgentWakes {
   /** Into the running turn at its next step; what the harness doesn't take goes as a digest of its own. */
   private steerIn(conversation: string, notice: Notice): void {
     const request = namedUuid(`wake:${conversation}:${notice.report.id}`)
-    const took = this.deps.steer(conversation, namedUuid(`steer:${request}`), digest([notice], this.deps.counts(conversation)))
-    if (!took) return this.start(conversation, [notice], this.deps.ready(conversation))
+    const lines = this.deps.takeLines?.(conversation) ?? []
+    const back = () => { if (lines.length) this.deps.giveLines?.(conversation, lines) }
+    const took = this.deps.steer(conversation, namedUuid(`steer:${request}`), this.words(conversation, [notice], lines))
+    if (!took) {
+      back()
+      return this.start(conversation, [notice], this.deps.ready(conversation))
+    }
     this.steering.add(notice.id)
     void took.then((answered) => {
       this.steering.delete(notice.id)
@@ -225,6 +254,7 @@ export class AgentWakes {
         return
       }
       hostLog("agents", "steer not taken; its notice goes as the next turn", { conversation, request })
+      back()
       const open = this.deps.unsent(conversation).at(-1)
       if (open) this.join(conversation, open, notice)
       else this.start(conversation, [notice], this.deps.ready(conversation))
