@@ -606,14 +606,49 @@ sends at once. `agents_list`, `agents_read`, `agents_send`,
 `agents_answer`, `agents_stop` and `agents_move` on a placed Fin are the
 same host calls on its device with the Apex as their caller (`ApexCaller`);
 a device that can't be reached is said, and list and read fall back to what
-it last sent. Not yet: `place: cloud`, a Thread attached as context, the
-person's direct message or answer from the Apex's Thread, and a start from
-the Apex's uncommitted work. `npm run test:fins-placed` runs two hosts
-through the protocol's gateway (the start, the outbox with the Apex's device
-off and a host restarted, a repeat, a stale owner, every refusal, a full
-place, a start whose answer is lost and whose host restarts, the routed
-operations); `scripts/prove-fins-placed.ts` runs two
-`mako-host`s against a deployed cloud.
+it last sent. A Stop always wins. Before a start's call leaves, its row says
+so (`QueuedStart.away.sent`): from then whether a Fin runs there is that
+device's to say, whatever became of the answer. A Stop of such a start is
+kept on the row (`away.stop`) and sent as `mako:agents-cancel`, by the
+start's op: the device keeps the stop first (`agent_cancels`), so the start
+is refused there whenever it arrives, then stops the Fin if the start made
+one and answers it, and only that answer retires the row; the Apex's device
+keeps the Fin it then hears of, stopped. A device that can't be reached
+leaves the stop where it is: `agents_stop` answers `pending` with why and
+never `stopped`, and the stop goes again on the room watch, when the device
+is next heard from and when this host starts. A Stop of a placed Fin that
+has its edge is kept the same way on the edge (`Placed.stop`) until its
+device answers or its Apex sends it on. Whether a placed Fin is at work is
+kept on its Apex's edge too (`Placed.working`), never in memory, so a host
+that restarts still counts it against its tree: its start, and each message
+and answer that reaches it, set it, with a count (`Placed.epoch`) the Fin's
+device records as heard (`RemoteParent.heard`). Every notice says how the
+Fin stands as it's sent (`standing`: whether it holds a place, the count it
+had heard, and which saying of its host's this is); the Apex's device takes
+only the newest, and only one that had heard everything it sent, so a
+report from before a message never ends the turn that message started. A
+Fin whose standing changes with nothing to report (its turn ended after a
+report it made itself, or the person sent it on there) says its last report
+again with how it stands now (`restate`). Each place is also asked how the
+tree's Fins stand (`listAway`) before any start in that tree is admitted,
+when the Apex lists them and when its device is back, so work the Apex's
+device never sent counts against the running budget before admission. Where
+it runs, a placed Fin is a Thread of its own in the rail and in the
+account's list (`listedUnderApex`), since its Apex's Thread isn't there:
+that row is where the person reads it and answers its approvals, on that
+device, on the web or from another device. Its Apex never grants them: it
+calls at no more than the device's ceiling, which is below full access. Not
+yet: `place: cloud`, a Thread attached as context, the person's direct
+message or answer from the Apex's Thread, and a start from the Apex's
+uncommitted work. `npm run test:fins-placed` runs two hosts through the
+protocol's gateway (the start, the outbox with the Apex's device off and a
+host restarted, a repeat, a stale owner, every refusal, a full place, a
+start whose answer is lost and whose host restarts, the routed operations,
+a Stop of a start whose answer was lost, with the device reachable and not,
+by name and by `all`, a start that arrives after its Stop, and a Fin's
+activity through its Apex's restart); naming cases after the script runs
+those alone. `scripts/prove-fins-placed.ts` runs two `mako-host`s against a
+deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line

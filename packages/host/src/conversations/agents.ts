@@ -36,6 +36,8 @@ import {
   PlaceSchema,
   ORCHESTRATION_VERSION,
   ReportSchema,
+  type AgentsCancelInput,
+  type AgentsCancelled,
   type AgentsCapabilities,
   type AgentsNoticed,
   type AgentsNoticeInput,
@@ -144,7 +146,7 @@ import { macLoad, type MacLoad, type MacReading } from "./mac-capacity.js"
 import { FinMoves, type FinPlace } from "./fin-moves.js"
 import type { TurnReply } from "./live-goals.js"
 import { PULL_WATCH_EVERY_MS, PullWatch, type PullWait } from "./pull-watch.js"
-import { AgentPlaces, placeName, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
+import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
 
@@ -381,7 +383,7 @@ interface Apex {
    * It runs on another device and calls for the Fins it placed here (`ApexCaller`): its device, its conversation there,
    * its access as this device bounds it, and the person's message its turn answers.
    */
-  away?: { device: string; conversation?: string; access: AccessTier; forwards?: string }
+  away?: { device: string; conversation?: string; access: AccessTier; forwards?: string; epoch?: number }
 }
 
 /** The most access a Fin started from another device runs at here, until the person sets this device's own. */
@@ -423,8 +425,12 @@ interface QueuedStart {
   refused?: string
   /** The request named to tell its Apex why it can't start, kept here since a notice has no report row (`heldIn`). */
   wake?: string
-  /** It starts in another place: where its start is sent, and the Git remote its checkout there is of. */
-  away?: { target: PlaceTarget; remote: string }
+  /**
+   * It starts in another place: where its start is sent, and the Git remote its checkout there is of. `sent` once its
+   * start left for that place, written before the call: from then, whether a Fin runs there is that place's to say.
+   * `stop` once its Apex stopped it with that unsaid, kept until that place answers (`cancelAway`).
+   */
+  away?: { target: PlaceTarget; remote: string; sent?: number; stop?: { at: number; why: string } }
 }
 
 interface AfterRef {
@@ -462,7 +468,7 @@ const QueuedStartSchema = z.object({
   after: z.array(z.object({ name: z.string(), child: z.string().optional(), op: z.string().optional() })).optional(),
   refused: z.string().optional(),
   wake: z.string().optional(),
-  away: z.object({ target: PlaceTargetSchema, remote: z.string() }).optional(),
+  away: z.object({ target: PlaceTargetSchema, remote: z.string(), sent: z.number().optional(), stop: z.object({ at: z.number(), why: z.string() }).optional() }).optional(),
 }) satisfies z.ZodType<QueuedStart>
 /** What a queued start's record still says when it no longer parses whole (an older Mako's): whose it is, and its name. */
 const QueuedLeadSchema = z.object({
@@ -491,6 +497,9 @@ interface StartRecord {
   cancelled: boolean
   answer: Promise<AgentsStartResult>
 }
+
+/** How a kept stop of a start or a Fin on another device went: stopped, as that device said, or why it still waits for it. */
+type StopOutcome = { stopped: true } | { pending: string }
 
 /** A queued start for another device found that device full as it started there, or got no answer from it: it stays queued (`drain`). */
 const FILLED = "\0filled"
@@ -614,8 +623,17 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly places: AgentPlaces | undefined
   /** Starts for another device whose call got no answer, so their record stays for the next ask (`launchAway`). */
   private readonly lostPlacings = new Set<string>()
-  /** Fins placed elsewhere that a message of their Apex's set to work since their last report (`placedReading`). */
-  private readonly placedWorking = new Set<string>()
+  /** Fins placed elsewhere with a message, an answer or a stop of their Apex's on its way to them: what their device says meanwhile may be from before it (`placedStands`). */
+  private readonly placedSending = new Map<string, number>()
+  /** Those whose device said how they stand while one was on its way: asked again once it has settled (`touchPlaced`). */
+  private readonly placedMissed = new Set<string>()
+  /** How each Fin here whose Apex is elsewhere stood when its device last said so, and this host's count of sayings (`standingOf`). */
+  private readonly standingSaid = new Map<string, boolean>()
+  private standingSeq = 0
+  /** The newest standing taken for each Fin placed elsewhere, by the host that said it and its count (`standingHeard`). */
+  private readonly standingTaken = new Map<string, { owner: number; seq: number }>()
+  /** Stops being sent to other places now, by the start's op: one at a time each (`cancelAway`, `retryStops`). */
+  private readonly stopping = new Map<string, Promise<StopOutcome>>()
 
   constructor(deps: AgentsDeps) {
     this.deps = deps
@@ -693,6 +711,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       jobs: deps.jobs,
       waiting: () => this.outbox(),
       taken: (report, at) => this.store()?.markReportsDelivered([report.id], at),
+      standing: (edge, report) => this.standingOf(edge, report),
       ...(deps.now && { now: deps.now }),
     })
   }
@@ -1114,7 +1133,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** Its Apex stopped it: no edge is written for it from now (`startWanted`), and one written already ends. */
-  private cancel(record: StartRecord): void {
+  private cancelRecord(record: StartRecord): void {
     record.cancelled = true
     const edge = this.store()?.edges().byOp(record.op)
     if (edge) void this.end(edge, `its ${APEX_WORD} stopped it`)
@@ -1206,7 +1225,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // What it starts after is read as the call made it; one of those that ends meanwhile is the queue's to tell (`tellHeld`).
     const after = this.afterOf(apex, input.after ?? [])
     if ("refused" in after) return this.refuse(op, after.refused, after.why)
-    await Promise.all([this.readMac(), this.observe(), this.starts.recovery])
+    await Promise.all([this.readMac(), this.observe(), this.reconcilePlaced(this.placedUnder(tree)), this.starts.recovery])
     // From here to its place or its queue row nothing is awaited: every budget is checked and taken in one step, so two
     // starts deciding together never both take the last of one.
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
@@ -1252,6 +1271,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     const op = `start:${apex.session}:${input.clientKey}`
     const kept = store.edges().byOp(op)
     if (kept) return this.started(kept, apex, true)
+    const held = this.queuedAway(op)
+    if (held?.away?.stop)
+      return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it, and the stop waits for ${placeName(held.away.target)} to answer. Start it again under another clientKey if it should run.`)
     if (store.queuedSpawns().some((spawn) => spawn.op === op)) return this.queuedAnswer(op, apex, true)
     const places = this.places
     if (!places || apex.away)
@@ -1292,7 +1314,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       return this.refuse(op, "conflict", `A start waits on at most ${AFTER_LIMIT} ${FIN_WORD}s; it names ${input.after!.length}. Name the last of a chain instead of each one.`)
     const after = this.afterOf(apex, input.after ?? [])
     if ("refused" in after) return this.refuse(op, after.refused, after.why)
-    await this.starts.recovery
+    // What this tree's Fins on other devices are doing is asked of them first, so work this device didn't send them counts.
+    await Promise.all([this.reconcilePlaced(this.placedUnder(tree)), this.starts.recovery])
     // From here to its place or its queue row nothing is awaited, as for a start here.
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
     const counts = this.treeCounts(tree)
@@ -1320,6 +1343,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     start.launching = { where, tree }
     const answer = await this.launch(op, record, start)
+    // Its Apex stopped it meanwhile: its record is the stop's now, settled once that device answers (`cancelAway`).
+    if (start.cancelled || this.queuedAway(op)?.away?.stop) {
+      this.lostPlacings.delete(op)
+      return "refused" in answer ? answer : this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
+    }
     // No answer came, so whether it started there isn't known: its record stays, and it's asked again once that device answers.
     if ("refused" in answer && this.lostPlacings.delete(op))
       return { ...this.queuedAnswer(op, apex, false), why: `${name} didn't answer, so whether it started there isn't known. It's asked again under the same key once ${name} answers, and never started twice; agents_list shows it.` }
@@ -1345,6 +1373,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const name = uniqueName(input.name ?? input.title ?? input.brief.objective, new Set([...store.edges().children(apex.thread).map((edge) => edge.name), ...others]))
     start.name = name
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
+    // Written before the call leaves: from here whether a Fin runs there is that device's to say, so a stop asks it.
+    this.keepAway(op, (away) => ({ ...away, sent: away.sent ?? this.now() }))
     this.forget(apex.thread)
     const placed = await this.places.place(target, {
       version: ORCHESTRATION_VERSION,
@@ -1375,8 +1405,27 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (placed.refused === "budget") this.places.filled(input.place ?? "")
       return this.refuse(op, placed.refused, placed.why)
     }
+    // Stopped while its start was on its way: no edge is written for it here, and the stop kept with its record ends
+    // the Fin there (`cancelAway`).
+    if (start.cancelled || this.queuedAway(op)?.away?.stop) {
+      void this.cancelAway(op)
+      return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
+    }
+    const edge = this.keepPlacedEdge(op, queued, placed)
+    this.places.took(input.place ?? "")
+    hostLog("agents", "start placed", { op, child: edge.child, place: input.place ?? "", harness: placed.harness, access: placed.access, ms: Math.round(performance.now() - began), ...(placed.deduped && { deduped: true }) })
+    this.childMoved(edge, false)
+    return this.started(store.edges().of(edge.child) ?? edge, apex, false)
+  }
+
+  /**
+   * This device's record of a Fin its Apex placed elsewhere, from that place's answer: at work from its brief until
+   * its device says how it went. `closed` when its Apex stopped it before that answer came.
+   */
+  private keepPlacedEdge(op: string, queued: QueuedStart, placed: AgentsPlaced, closed?: { at: number; why: string }): ThreadParent {
+    const { lead: apex, input } = queued
     const session = SessionIdSchema.parse(apex.session)
-    const edge = store.keepEdge({
+    return this.store()!.keepEdge({
       child: ThreadIdSchema.parse(placed.child),
       parent: ThreadIdSchema.parse(apex.thread),
       parentSession: session,
@@ -1400,16 +1449,230 @@ export class Agents implements AgentOperations, ConversationChildren {
       startedBy: { kind: "agent", session },
       createdAt: this.now(),
       ...(placed.note && { tuned: { source: "asked" as const, note: placed.note.slice(0, 2_000) } }),
-      placed: { target, ...(placed.session && { session: placed.session }), ...(placed.conversation && { conversation: placed.conversation }) },
+      placed: { target: queued.away!.target, ...(placed.session && { session: placed.session }), ...(placed.conversation && { conversation: placed.conversation }), working: !closed && placed.state !== "ended", epoch: 1 },
+      ...(closed && { closedAt: closed.at, closedReason: closed.why.slice(0, 2_000) }),
     })
-    this.places.took(input.place ?? "")
-    // It has its brief: at work until its device says how it went.
-    if (placed.state !== "ended") this.placedWorking.add(edge.child)
-    hostLog("agents", "start placed", { op, child: edge.child, place: input.place ?? "", harness: placed.harness, access: placed.access, ms: Math.round(performance.now() - began), ...(placed.deduped && { deduped: true }) })
-    this.childMoved(edge, false)
-    // Stopped while it was being placed: it ends there now, as a stop would have ended it.
-    if (start.cancelled) await this.end(edge, `its ${APEX_WORD} stopped it before it started`)
-    return this.started(store.edges().of(edge.child) ?? edge, apex, false)
+  }
+
+  /** A start queued for another place, by its op, as its row stands now. */
+  private queuedAway(op: string): QueuedStart | undefined {
+    const spawn = this.store()?.queuedSpawns().find((each) => each.away && each.op === op)
+    const queued = spawn && parseQueued(spawn.record)
+    return queued?.away ? queued : undefined
+  }
+
+  /** Rewrites what a queued start for another place keeps of that place (`QueuedStart.away`), in its row as it stands now. */
+  private keepAway(op: string, change: (away: NonNullable<QueuedStart["away"]>) => NonNullable<QueuedStart["away"]>): void {
+    const queued = this.queuedAway(op)
+    if (!queued?.away) return
+    const away = change(queued.away)
+    this.changeQueue((held) => held.keepQueuedSpawn(op, JSON.stringify({ ...queued, away } satisfies QueuedStart)))
+  }
+
+  /**
+   * Stops a start that has no Fin on this device yet: one under way, or its queue row. A start for another place that
+   * already left for it may have made a Fin there, whatever became of its answer, so its stop is kept with its row
+   * and sent to that place (`cancelAway`). True once the start is known not to run; else why that isn't known yet.
+   */
+  private async stopUnstarted(op: string, under: StartRecord | undefined, why: string): Promise<true | string> {
+    // One under way writes no edge, or ends at once if it wrote one: a stop is never undone by its start.
+    if (under) this.cancelRecord(under)
+    const away = this.queuedAway(op)?.away
+    if (away && (away.sent !== undefined || away.stop)) {
+      if (!away.stop) this.keepAway(op, (kept) => ({ ...kept, stop: { at: this.now(), why: why.slice(0, 2_000) } }))
+      hostLog("agents", "stop kept", { op, place: placeName(away.target), ...(under && { underWay: true }) })
+      const outcome = await this.cancelAway(op)
+      return "pending" in outcome ? outcome.pending : true
+    }
+    // Its Apex's conversations hear it go, and every other Apex's held Fins move up the line.
+    this.changeQueue((held) => held.unqueueSpawn(op))
+    hostLog("agents", "end", { op, outcome: "stopped", queued: true, ...(under && { underWay: true }) })
+    return true
+  }
+
+  /**
+   * A kept stop, sent to its place: one call at a time for a start. Whoever asks while one is on its way asks again
+   * if it ends without that place's answer, since the place may have come back since that call left.
+   */
+  private sendStop(op: string, send: () => Promise<StopOutcome>): Promise<StopOutcome> {
+    const running = this.stopping.get(op)
+    if (running) return running.then((outcome) => ("pending" in outcome && !this.stopped ? this.sendStop(op, send) : outcome))
+    const run = send().finally(() => this.stopping.delete(op))
+    this.stopping.set(op, run)
+    return run
+  }
+
+  /** The stop of a placed start, sent to its place (`sendCancel`). */
+  private cancelAway(op: string): Promise<StopOutcome> {
+    return this.sendStop(op, () => this.sendCancel(op))
+  }
+
+  /**
+   * A placed start its Apex stopped while how it went wasn't known (`mako:agents-cancel`). Its place ends the Fin if
+   * the start made one, and keeps the stop if it didn't, so the start never runs there; only that answer retires the
+   * start's record here. A place that can't be reached leaves the record and its stop, to be sent again
+   * (`retryStops`).
+   */
+  private async sendCancel(op: string): Promise<StopOutcome> {
+    const store = this.store()!
+    const queued = this.queuedAway(op)
+    const stop = queued?.away?.stop
+    // Settled already: its record went with its place's answer.
+    if (!queued?.away || !stop) return { stopped: true }
+    const { lead: apex, away } = queued
+    const name = placeName(away.target)
+    const fin = queued.input.name ?? queued.input.title ?? "it"
+    const kept = (why: string) => ({ pending: `${name} can't be reached now, so whether ${fin} started there isn't known and it isn't stopped yet. The stop is kept: it goes once ${name} answers, and a start that arrives after it won't run. ${why}` })
+    const self = await this.places?.self()
+    if (!this.places || !self) return kept("This device isn't signed in to Mako now.")
+    const answer = await this.places.cancel(away.target, {
+      version: ORCHESTRATION_VERSION,
+      op,
+      parent: { device: self, thread: apex.thread, session: apex.session, ...(apex.conversation && { conversation: apex.conversation }), access: this.tierOf(apex) },
+      reason: stop.why,
+    })
+    if ("refused" in answer) {
+      hostLog("agents", "stop waits", { op, place: name, refused: answer.refused, why: answer.why })
+      return kept(answer.why)
+    }
+    // That place had started it and has stopped it now: this device keeps the Fin as it keeps any it placed, stopped.
+    const written = store.edges().byOp(op)
+    const edge = written
+      ? written.closedAt === undefined ? store.keepEdge({ ...written, closedAt: this.now(), closedReason: stop.why }) : written
+      : answer.fin && this.keepPlacedEdge(op, queued, answer.fin, { at: this.now(), why: stop.why })
+    if (written?.placed) store.keepPlaced(written.child, { working: false, stop: undefined })
+    this.changeQueue((held) => held.unqueueSpawn(op))
+    this.lostPlacings.delete(op)
+    hostLog("agents", "end", { op, outcome: "stopped", place: name, ...(edge ? { child: edge.child } : { started: false }) })
+    this.forget(apex.thread)
+    if (edge) this.childMoved(store.edges().of(edge.child) ?? edge, false)
+    void this.drain()
+    return { stopped: true }
+  }
+
+  /** Stops kept for places that couldn't be reached, sent again: a placed start's (`cancelAway`), and a placed Fin's (`stopAway`). */
+  private retryStops(): void {
+    const store = this.store()
+    if (!store || !this.places || this.stopped) return
+    for (const spawn of store.queuedSpawns()) if (spawn.away && parseQueued(spawn.record)?.away?.stop) void this.cancelAway(spawn.op)
+    for (const edge of store.edges().all) {
+      const stop = edge.placed?.stop
+      if (!stop) continue
+      void this.sendStop(edge.op, async () => {
+        const ended = await this.stopAway(this.apexOfEdge(edge), edge, stop.why)
+        if ("pending" in ended) return ended
+        // Its device answered that it won't: the stop has nothing left to wait for.
+        if ("refused" in ended) store.keepPlaced(edge.child, { stop: undefined })
+        return { stopped: true }
+      })
+    }
+  }
+
+  /** The Fins of a tree that run elsewhere, as far down as this device holds the tree. */
+  private placedUnder(root: string): ThreadParent[] {
+    const edges = this.store()?.edges()
+    const found: ThreadParent[] = []
+    const visit = (parent: string, depth: number) => {
+      if (depth > 10_000) return
+      for (const edge of edges?.children(parent) ?? []) {
+        if (edge.placed) found.push(edge)
+        else visit(edge.child, depth + 1)
+      }
+    }
+    visit(root, 0)
+    return found
+  }
+
+  /**
+   * Fins placed elsewhere, asked of their places how they stand: one call for each Apex and place, which also tells
+   * that place this device hears again. It runs before a start is admitted, so work this device didn't send a Fin
+   * (the person writing to it there) counts against its tree. A place that can't be asked leaves what this device keeps.
+   */
+  private async reconcilePlaced(edges: readonly ThreadParent[]): Promise<void> {
+    const asked = new Map<string, ThreadParent>()
+    for (const edge of edges) if (edge.placed) asked.set(`${edge.parentSession}\n${placeOf(edge.asked.place)}`, edge)
+    await Promise.all([...asked.values()].map((edge) => this.listAway(this.apexOfEdge(edge), edge, {})))
+  }
+
+  /**
+   * A place's own word on the Fins one Apex placed there (`mako:agents-list`), kept: each Fin's work as that place
+   * says it, unless this device set it to work meanwhile, which that answer may be from before. Undefined when the
+   * place can't be asked.
+   */
+  private async listAway(apex: Apex, edge: ThreadParent, input: AgentsListInput): Promise<AgentStrip[] | undefined> {
+    const before = new Map<string, number>()
+    for (const each of this.store()!.edges().children(apex.thread)) if (each.placed) before.set(each.child, each.placed.epoch ?? 1)
+    const listed = await this.askPlace<Extract<AgentsListResult, { children: AgentStrip[] }>>(apex, edge, "mako:agents-list", input, "list")
+    if ("refused" in listed) {
+      hostLog("agents", "a place holding Fins of this device's wasn't reached", { place: edge.asked.place ?? "", refused: listed.refused })
+      return undefined
+    }
+    if (!Array.isArray(listed.children)) return undefined
+    for (const strip of listed.children) {
+      const epoch = before.get(strip.child)
+      if (epoch !== undefined) this.placedStands(strip.child, strip.state.kind === "working" || strip.state.kind === "starting", epoch)
+    }
+    return listed.children
+  }
+
+  /**
+   * A placed Fin's work as its device said it, kept on its edge, so its tree's budget counts it after a restart too.
+   * `epoch` is this device's count for the Fin when that word was asked for: one it set to work since, or is sending
+   * to now, keeps what this device knows, which is newer.
+   */
+  private placedStands(child: string, working: boolean, epoch: number): void {
+    const store = this.store()!
+    const edge = store.edges().of(child)
+    if (!edge?.placed || (edge.placed.epoch ?? 1) !== epoch) return
+    if (this.placedSending.get(child)) return void this.placedMissed.add(child)
+    // At work there with its delegation closed here: someone on its device sent it on, so it's open here too.
+    const reopened = working && edge.closedAt !== undefined ? store.reopenEdge(child, this.now()) : undefined
+    if ((edge.placed.working ?? false) === working && !reopened) return
+    const kept = store.keepPlaced(child, { working }) ?? reopened ?? edge
+    hostLog("agents", "placed Fin stands", { child, working, place: edge.asked.place ?? "" })
+    this.forget(edge.parent)
+    this.childMoved(kept, false)
+    if (!working) void this.drain()
+  }
+
+  /**
+   * How a placed Fin stood as its device sent a notice. It's taken when that device had heard everything this one sent
+   * the Fin. One from before a message reached it says nothing of the turn that message started, so its device is
+   * asked instead.
+   */
+  private standingHeard(child: string, standing: AgentsNoticeInput["standing"]): void {
+    const edge = this.store()!.edges().of(child)
+    if (!standing || !edge?.placed) return
+    const epoch = edge.placed.epoch ?? 1
+    if (standing.heard < epoch) {
+      if (!this.placedSending.get(child)) void this.reconcilePlaced([edge])
+      return
+    }
+    // Only the newest said: a notice on its way while the Fin's standing changed arrives after the one that says so.
+    const taken = this.standingTaken.get(child)
+    if (taken && (standing.owner < taken.owner || (standing.owner === taken.owner && standing.seq <= taken.seq))) return
+    this.standingTaken.set(child, { owner: standing.owner, seq: standing.seq })
+    this.placedStands(child, standing.working, epoch)
+  }
+
+  /**
+   * One of an Apex's calls that changes what a Fin it placed does: a message, an answer or a stop. It goes with the
+   * count this device will keep once it has reached the Fin (`Placed.epoch`), and while it's on its way what the
+   * Fin's device says of it is set aside, since that may be from before the call arrived.
+   */
+  private async touchPlaced<Answer extends object>(apex: Apex, edge: ThreadParent, channel: string, input: PlacedAsk, what: string, forwards?: string): Promise<{ answer: Answer | AwayRefused; epoch: number }> {
+    const epoch = (edge.placed?.epoch ?? 1) + 1
+    this.placedSending.set(edge.child, (this.placedSending.get(edge.child) ?? 0) + 1)
+    try {
+      return { answer: await this.askPlace<Answer>(apex, edge, channel, input, what, forwards, epoch), epoch }
+    } finally {
+      const left = (this.placedSending.get(edge.child) ?? 1) - 1
+      if (left > 0) this.placedSending.set(edge.child, left)
+      else {
+        this.placedSending.delete(edge.child)
+        if (this.placedMissed.delete(edge.child)) void this.reconcilePlaced([edge])
+      }
+    }
   }
 
   /**
@@ -1582,9 +1845,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const placed = this.store()!.edges().children(apex.thread).filter((edge) => edge.placed)
     const targets = new Map(placed.map((edge) => [placeOf(edge.asked.place), edge]))
     await Promise.all([...targets].map(async ([where, edge]) => {
-      const listed = await this.askPlace<Extract<AgentsListResult, { children: AgentStrip[] }>>(apex, edge, "mako:agents-list", { ...(input.scope === "tree" && { scope: "tree" }) }, "list")
-      if ("refused" in listed || !Array.isArray(listed.children)) return
-      for (const strip of listed.children) {
+      const listed = await this.listAway(apex, edge, { ...(input.scope === "tree" && { scope: "tree" as const }) })
+      for (const strip of listed ?? []) {
         const at = strips.findIndex((mine) => mine.child === strip.child)
         if (at >= 0) strips[at] = { ...strip, place: where }
         else if (strip.under) strips.push({ ...strip, place: where })
@@ -1680,8 +1942,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const deliver = input.deliver ?? "queue"
     const attached = this.threadRefs(apex, input.context)
     if ("refused" in attached) return this.refuse(op, attached.refused, attached.why)
+    this.toldBy(apex, edge, true)
     const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver, false, passedOnGrants ? { passedOn: passedOnGrants } : { refs: attached })
     if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
+    this.heardFrom(apex, edge)
     const answer: AgentsSent = { child: edge.child, name: edge.name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
     this.sent.set(op, answer)
     if (sent.delivery === "steer") this.steered.set(request, { text, attachments })
@@ -1701,16 +1965,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     const asked = input.forward ? this.personsMessage(apex) : undefined
     if (input.forward && !asked) return this.refuse(op, "unavailable", "No message from the person is in this Thread to pass on: send your own words as text instead.")
     if (!input.forward && !input.text?.trim()) return this.refuse(op, "conflict", "A message needs text, or forward: true to pass on the person's.")
-    const sent = await this.askPlace<AgentsSent>(apex, edge, "mako:agents-send", { ...input, to: edge.child }, "deliver a message", asked?.text)
-    if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
+    const { answer: sent, epoch } = await this.touchPlaced<AgentsSent>(apex, edge, "mako:agents-send", { ...input, to: edge.child }, "deliver a message", asked?.text)
+    if ("refused" in sent) {
+      // No answer came, so whether it reached its Fin isn't known: it counts as at work until its device says.
+      if (sent.lost) {
+        const kept = this.store()!.keepPlaced(edge.child, { working: true, epoch })
+        this.forget(edge.parent)
+        if (kept) this.childMoved(kept, false)
+      }
+      return this.refuse(op, sent.refused, sent.why)
+    }
     this.sent.set(op, sent)
     if (input.forward) this.routes.forwarded += 1
     else this.routes.sent += 1
     // A message opens a stopped delegation there, so it's open here too; and its Fin is at work on it until it reports.
     const open = edge.closedAt === undefined ? edge : this.store()!.reopenEdge(edge.child, this.now()) ?? edge
-    this.placedWorking.add(edge.child)
+    const kept = this.store()!.keepPlaced(edge.child, { working: true, epoch, stop: undefined }) ?? open
     this.forget(edge.parent)
-    this.childMoved(open, false)
+    this.childMoved(kept, false)
     hostLog("agents", "send", { op, child: edge.child, request: sent.request, delivery: sent.delivery, forward: input.forward ?? false, place: edge.asked.place ?? "", ms: Math.round(performance.now() - began) })
     return sent
   }
@@ -1793,18 +2065,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     const kept = this.answers.get(op)
     if (kept) return { ...kept, deduped: true }
     // A Fin placed elsewhere is answered by its device, which holds its question and the claim on it.
-    const answered = edge.placed
-      ? await this.askPlace<AgentsAnswered>(apex, edge, "mako:agents-answer", { ...input, to: edge.child }, "answer")
-      : await this.answerOnce({ kind: "apex", apex }, edge, op, input)
-    if (edge.placed && !("refused" in answered) && answered.answered !== "person") {
-      this.placedWorking.add(edge.child)
-      this.childMoved(edge, false)
+    const touched = edge.placed ? await this.touchPlaced<AgentsAnswered>(apex, edge, "mako:agents-answer", { ...input, to: edge.child }, "answer") : undefined
+    if (!touched && input.person !== true) this.toldBy(apex, edge, true)
+    const answered = touched ? touched.answer : await this.answerOnce({ kind: "apex", apex }, edge, op, input)
+    // Its answer is what its Fin goes on with. One whose outcome isn't known counts as at work until its device says.
+    if (touched && ("refused" in answered ? "lost" in answered && answered.lost === true : answered.answered !== "person")) {
+      const kept = this.store()!.keepPlaced(edge.child, { working: true, epoch: touched.epoch, stop: undefined })
+      this.forget(edge.parent)
+      if (kept) this.childMoved(kept, false)
     }
+    if (!touched && !("refused" in answered)) this.heardFrom(apex, edge)
     const ms = Math.round(performance.now() - began)
     if ("refused" in answered) {
       if (answered.refused === "access") this.answerCounts.refused += 1
       hostLog("agents", "answer refused", { op, child: edge.child, refused: answered.refused, ms })
-      return answered
+      return { refused: answered.refused, why: answered.why }
     }
     this.answers.set(op, answered)
     if (!answered.deduped) this.answerCounts[answered.answered === "person" ? "passed" : "apex"] += 1
@@ -2208,39 +2483,47 @@ export class Agents implements AgentOperations, ConversationChildren {
       const under = [...this.starts.values()].find((start) => start.thread === apex.thread && (start.name === name || (!start.name && start.asked === name) || namedUuid(start.op) === input.child))
       const waiting = this.queuedOfApex(apex).find(({ spawn, queued }) => namedUuid(spawn.op) === input.child || (queued.input.name ?? queued.input.title) === name || spawn.op === under?.op)
       if (!waiting && !under) return unknownFin(input.child)
-      // One under way writes no edge, or ends at once if it wrote one: a stop is never undone by its start.
-      if (under) this.cancel(under)
-      // Its Apex's conversations hear it go, and every other Apex's held Fins move up the line.
-      if (waiting) this.changeQueue((held) => held.unqueueSpawn(waiting.spawn.op))
-      hostLog("agents", "end", { op: waiting?.spawn.op ?? under!.op, outcome: "stopped", queued: true, ...(under && { underWay: true }) })
+      const shown = under?.name ?? under?.asked ?? waiting?.queued.input.name ?? waiting?.queued.input.title ?? name
+      const outcome = await this.stopUnstarted(waiting?.spawn.op ?? under!.op, under, why)
       // What was to start after it is its Apex's to decide now.
       void this.drain()
-      return { stopped: [under?.name ?? under?.asked ?? waiting?.queued.input.name ?? waiting?.queued.input.title ?? name] }
+      return outcome === true ? { stopped: [shown] } : { stopped: [], pending: [{ name: shown, why: outcome }] }
     }
     if (one?.placed) {
       const ended = await this.stopAway(apex, one, why)
-      return "refused" in ended ? ended : { stopped: ended.stopped ? [one.name] : [] }
+      if ("refused" in ended) return ended
+      return "pending" in ended ? { stopped: [], pending: [{ name: one.name, why: ended.pending }] } : { stopped: ended.stopped ? [one.name] : [] }
     }
     const targets = one ? [one] : store.edges().children(apex.thread)
     const stopped = new Set<string>()
+    const pending: { name: string; why: string }[] = []
     // What waits and what's under way go first, so an end below doesn't start it.
     if (input.child === "all") {
-      for (const start of this.starts.values()) {
-        if (start.thread !== apex.thread) continue
-        this.cancel(start)
-        stopped.add(start.name ?? start.asked ?? start.op)
-      }
-      for (const spawn of store.queuedSpawns()) {
-        const queued = parseQueued(spawn.record)
-        if (queued?.lead.thread !== apex.thread) continue
-        this.changeQueue((held) => held.unqueueSpawn(spawn.op))
-        if (!this.starts.has(spawn.op)) stopped.add(queued.input.name ?? queued.input.title ?? spawn.op)
-        hostLog("agents", "end", { op: spawn.op, outcome: "stopped", queued: true })
+      const unstarted = new Map<string, { name: string; under?: StartRecord }>()
+      const rows = new Map(this.queuedOfApex(apex).map(({ spawn, queued }) => [spawn.op, queued]))
+      for (const start of this.starts.values()) if (start.thread === apex.thread) unstarted.set(start.op, { name: start.name ?? start.asked ?? start.op, under: start })
+      for (const [op, queued] of rows) if (!unstarted.has(op)) unstarted.set(op, { name: queued.input.name ?? queued.input.title ?? op })
+      // Each is stopped, or its stop kept, before anything is awaited: what a place answers comes after.
+      const outcomes = [...unstarted].map(async ([op, { name, under }]) => ({ name, outcome: await this.stopUnstarted(op, under, why) }))
+      for (const { name, outcome } of await Promise.all(outcomes)) {
+        if (outcome === true) stopped.add(name)
+        else pending.push({ name, why: outcome })
       }
     }
-    for (const edge of targets) if (await this.end(edge, why)) stopped.add(edge.name)
+    for (const edge of targets) {
+      if (edge.placed) {
+        const ended = await this.stopAway(apex, edge, why)
+        if ("pending" in ended) pending.push({ name: edge.name, why: ended.pending })
+        else if ("refused" in ended) hostWarn("agents", "a Fin placed elsewhere wouldn't stop; it goes on there", { op: edge.op, refused: ended.refused, why: ended.why })
+        else if (ended.stopped) stopped.add(edge.name)
+        continue
+      }
+      this.toldBy(apex, edge, false)
+      if (await this.end(edge, why)) stopped.add(edge.name)
+      this.heardFrom(apex, edge)
+    }
     this.forget(apex.thread)
-    return { stopped: [...stopped] }
+    return { stopped: [...stopped], ...(pending.length && { pending }) }
   }
 
   async wait(caller: AgentCaller, input: AgentsWaitInput): Promise<AgentsWaitResult> {
@@ -2348,6 +2631,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (input.op !== `start:${apex.session}:${input.clientKey}`) return { refused: "conflict", why: "A placed start's op is start:{its Apex's Session}:{its clientKey}." }
     const kept = store.edges().byOp(input.op)
     if (kept) return this.placedAnswer(kept, true)
+    // Its Apex stopped it before it got here (`cancel`): whenever it arrives, it doesn't run.
+    const stopped = `Its ${APEX_WORD} stopped this start before it reached this device, so it doesn't run here.`
+    if (store.startCancelled(input.op)) return this.refuse(input.op, "conflict", stopped)
     const asked = childAccess(input.parent.access, input.access)
     if (!asked) return this.refuse(input.op, "access", `A ${FIN_WORD} runs at most at its ${APEX_WORD}'s access: its ${APEX_WORD} is on ${input.parent.access}, so ${input.access} is refused.`)
     const ceiling = this.deps.placedCeiling?.() ?? PLACED_CEILING
@@ -2360,6 +2646,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if ("refused" in found) return this.refuse(input.op, "place-unavailable", `This device has no checkout of ${remote} and couldn't make one: ${found.refused}`)
       folder = found.folder
     }
+    if (store.startCancelled(input.op)) return this.refuse(input.op, "conflict", stopped)
     const started = await this.admitOnce(caller, {
       brief: input.brief,
       name: input.name,
@@ -2406,6 +2693,38 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
+   * `mako:agents-cancel`: an Apex on another device stopped a start it sent here without knowing how it went. The
+   * stop is kept first, by the start's op, so the start is refused whenever it arrives; then the Fin that start made,
+   * if it made one, is stopped as any stop stops it, and answered. A start under way here ends without a Fin.
+   */
+  async cancel(input: AgentsCancelInput): Promise<AgentsCancelled> {
+    const store = this.store()
+    if (!store) return { refused: "unavailable", why: `${FIN_WORD}s need the Thread store, which didn't open on this device.` }
+    if (input.version !== ORCHESTRATION_VERSION)
+      return { refused: "unsupported", why: `This device speaks version ${ORCHESTRATION_VERSION} of placing ${FIN_WORD}s and the caller version ${input.version}. Update Mako on ${input.version > ORCHESTRATION_VERSION ? "this device" : "the caller's"}.` }
+    const caller: ApexCaller = { kind: "apex", device: input.parent.device, thread: input.parent.thread, session: input.parent.session, ...(input.parent.conversation && { conversation: input.parent.conversation }), access: input.parent.access }
+    const apex = this.apexOf(caller)
+    if ("refused" in apex) return apex
+    if (!input.op.startsWith(`start:${apex.session}:`)) return { refused: "conflict", why: "A stop names its Apex's own start: start:{its Apex's Session}:{its clientKey}." }
+    store.cancelStart(input.op, this.now())
+    const why = input.reason ?? `its ${APEX_WORD} stopped it`
+    const under = this.starts.get(input.op)
+    if (under) {
+      this.cancelRecord(under)
+      await under.answer.catch(() => undefined)
+    }
+    const edge = store.edges().byOp(input.op)
+    if (!edge) {
+      hostLog("agents", "start cancelled", { op: input.op, started: false })
+      return { cancelled: true }
+    }
+    if (edge.parent !== apex.thread || edge.remote?.device !== caller.device) return { refused: "conflict", why: `That start made a ${FIN_WORD} here for another ${APEX_WORD}.` }
+    await this.end(edge, why)
+    hostLog("agents", "start cancelled", { op: input.op, child: edge.child, started: true })
+    return { cancelled: true, fin: this.placedAnswer(store.edges().of(edge.child) ?? edge, true) }
+  }
+
+  /**
    * `mako:agents-notice`: a report of a Fin this device placed elsewhere, from the Fin's device. It's kept once by its
    * report's ID, so a repeat is the same notice; one from an owner older than the newest heard is refused
    * (`stale-owner`); and it wakes its Apex through the same digest as a Fin's here (`noticeOf`).
@@ -2417,7 +2736,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     // One whose start's answer never came (lost on the way, or this host died with it under way) is this device's
     // word that the Fin is there: its start is asked again now, under its op, and answers that Fin.
     if (!store.edges().of(input.child)) {
-      if (!this.starts.has(input.op) && store.queuedSpawns().some((spawn) => spawn.away && spawn.op === input.op)) await this.askRooms()
+      // Its Apex stopped that start: its device plainly answers now, so the stop goes, and the Fin is kept as stopped.
+      if (this.queuedAway(input.op)?.away?.stop) await this.cancelAway(input.op)
+      else if (!this.starts.has(input.op) && store.queuedSpawns().some((spawn) => spawn.away && spawn.op === input.op)) await this.askRooms()
       await this.starts.get(input.op)?.answer.catch(() => undefined)
     }
     const edge = store.edges().of(input.child)
@@ -2426,9 +2747,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const report = ReportSchema.safeParse(input.report)
     if (!report.success || report.data.child !== edge.child || input.id !== `notice:${edge.child}:${report.data.id}`)
       return { refused: "conflict", why: "A notice is notice:{child}:{reportId}, carrying that report of that child." }
-    if (report.data.status !== "progress") this.placedWorking.delete(edge.child)
     const kept = this.keepReport(edge, report.data)
     if ("refused" in kept) return kept
+    // How it stands is its device's word as it sent this, never the report's: an earlier turn's report ends no later turn.
+    this.standingHeard(edge.child, input.standing)
     hostLog("agents", "notice taken", { notice: input.id, child: edge.child, status: report.data.status, ownerGeneration: report.data.ownerGeneration, ...(kept.deduped && { deduped: true }) })
     // A Fin there reported, so its place may have room now: what waits for it asks.
     if (!kept.deduped) void this.askRooms()
@@ -2437,21 +2759,14 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * This device is back on its account (its link opened, or its host started): each place holding Fins it placed is
-   * asked once how they stand, which also tells that place this device hears again, so the notices it kept go now.
+   * asked once how they stand, which is kept (`listAway`) and also tells that place this device hears again, so the
+   * notices it kept go now. The stops this device kept for places it couldn't reach go too.
    */
   knock(): void {
     const store = this.store()
     if (!store || !this.places || this.stopped) return
-    const asked = new Set<string>()
-    for (const edge of store.edges().all) {
-      if (!edge.placed) continue
-      const key = `${edge.parentSession}\n${placeOf(edge.asked.place)}`
-      if (asked.has(key)) continue
-      asked.add(key)
-      void this.askPlace(this.apexOfEdge(edge), edge, "mako:agents-list", {}, "list").then((answer) => {
-        if ("refused" in answer) hostLog("agents", "a place holding Fins of this device's wasn't reached", { place: edge.asked.place ?? "", refused: answer.refused })
-      })
-    }
+    this.retryStops()
+    void this.reconcilePlaced(store.edges().all.filter((edge) => edge.placed))
   }
 
   // ── Starting ──
@@ -2744,6 +3059,8 @@ export class Agents implements AgentOperations, ConversationChildren {
           this.tellHeld(spawn.op, queued, { refused: queued.refused })
           continue
         }
+        // Its Apex stopped it, and the stop waits for its place to answer (`cancelAway`): it never starts.
+        if (queued.away?.stop) continue
         // A stopped Fin's own Fins wait for it to resume (`reopen`): a stop doesn't go on starting work under it.
         if (this.apexStopped(queued.lead.thread)) continue
         if (queued.after?.length) {
@@ -2775,6 +3092,8 @@ export class Agents implements AgentOperations, ConversationChildren {
             // Its place filled between that device's word and its start there, or that device didn't answer: it waits on
             // as it was, until that device says it has room.
             if (refused === FILLED) return void this.retire(start)
+            // Stopped with its start on its way: its row is the stop's now, and goes with its place's answer.
+            if (this.queuedAway(spawn.op)?.away?.stop) return void this.retire(start)
             // One its Apex stopped is gone; one that couldn't start stays, saying why, until its Apex has heard (`tellHeld`).
             if (refused && !start.cancelled && store.queuedSpawns().some((each) => each.op === spawn.op)) {
               hostWarn("agents", "a queued start couldn't start; its Apex is told", { op: spawn.op, why: refused })
@@ -3605,7 +3924,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (edge.placed) {
       const ended = await this.stopAway(this.apexOfEdge(edge), edge, why)
       if ("refused" in ended) hostWarn("agents", "a Fin placed elsewhere couldn't be stopped; it goes on there", { op: edge.op, refused: ended.refused, why: ended.why })
-      return !("refused" in ended) && ended.stopped
+      return "stopped" in ended && ended.stopped
     }
     for (const crossing of this.crossings.get(edge.child) ?? []) crossing.stopped = true
     const conversation = this.conversationOf(edge.child)
@@ -3634,14 +3953,22 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * Stops a Fin placed elsewhere, where it runs (`mako:agents-stop`): once its device says it stopped, the delegation
-   * closes here too, with why. A device that can't be reached is said, and nothing closes: the Fin goes on there.
+   * closes here too, with why. A device that can't be reached is said, and nothing closes: the stop is kept on the
+   * Fin's edge and sent once that device answers (`retryStops`), unless its Apex sends the Fin on first.
    */
-  private async stopAway(apex: Apex, edge: ThreadParent, why: string): Promise<{ stopped: boolean } | AgentRefused> {
-    const answer = await this.askPlace<Exclude<AgentsStopResult, AgentRefused>>(apex, edge, "mako:agents-stop", { child: edge.child, reason: why }, "stop")
-    if ("refused" in answer) return answer
+  private async stopAway(apex: Apex, edge: ThreadParent, why: string): Promise<{ stopped: boolean } | { pending: string } | AgentRefused> {
+    const { answer, epoch } = await this.touchPlaced<Exclude<AgentsStopResult, AgentRefused>>(apex, edge, "mako:agents-stop", { child: edge.child, reason: why }, "stop")
     const store = this.store()!
-    const closed = edge.closedAt === undefined ? store.keepEdge({ ...edge, closedAt: this.now(), closedReason: why.slice(0, 2000) }) : edge
-    this.placedWorking.delete(edge.child)
+    if ("refused" in answer) {
+      // Its device answered that it won't: there's nothing to keep.
+      if (answer.refused !== "place-unavailable" && answer.refused !== "unavailable") return { refused: answer.refused, why: answer.why }
+      const name = edge.placed ? placeName(edge.placed.target) : "its device"
+      store.keepPlaced(edge.child, { stop: edge.placed?.stop ?? { at: this.now(), why: why.slice(0, 2_000) } })
+      hostLog("agents", "stop kept", { op: edge.op, child: edge.child, place: edge.asked.place ?? "", refused: answer.refused })
+      return { pending: `${name} can't be reached now, so ${edge.name} isn't stopped yet and may be at work there. The stop is kept: it goes once ${name} answers. ${answer.why}` }
+    }
+    const shut = edge.closedAt === undefined ? store.keepEdge({ ...edge, closedAt: this.now(), closedReason: why.slice(0, 2000) }) : edge
+    const closed = store.keepPlaced(edge.child, { working: false, epoch, stop: undefined }) ?? shut
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why, place: edge.asked.place ?? "" })
     this.forget(edge.parent)
     this.childMoved(closed, false)
@@ -3712,13 +4039,13 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * A Fin placed elsewhere, read from what its device sent: at work from its start until a report says how it went,
-   * and again once a message of its Apex's reached it. `agents_list` and `agents_read` ask its device how it stands.
+   * A Fin placed elsewhere, read from what this device keeps of it (`Placed.working`): at work from its start, and
+   * from each message and answer of its Apex's that reached it, until its device says it isn't. Its device's word
+   * comes with each notice and whenever it's asked (`agents_list`, `agents_read`, an admission, this device's return).
    */
   private placedReading(edge: ThreadParent): ChildThread {
     const latest = this.latest.get(edge.child)
-    const reported = latest !== undefined && latest.status !== "progress"
-    const working = edge.closedAt === undefined && (!reported || this.placedWorking.has(edge.child))
+    const working = edge.closedAt === undefined && edge.placed?.working === true
     const session = SessionIdSchema.safeParse(edge.placed?.session)
     return {
       source: "placed",
@@ -3799,6 +4126,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (holds) this.occupying.add(edge.child)
     else this.occupying.delete(edge.child)
     const released = held && !holds
+    // Its Apex is on another device, and it stands otherwise than that device last heard, with nothing new to report
+    // (its turn ended after a report it made itself, or someone here sent it on): its last report says so again.
+    if (edge.remote && holds !== held && this.standingSaid.get(edge.child) !== holds) this.restate(edge)
     const before = this.entries.get(edge.child)
     this.entries.delete(edge.child)
     const entry = this.entryOf(edge)
@@ -4044,20 +4374,49 @@ export class Agents implements AgentOperations, ConversationChildren {
     return {
       session: session.data,
       thread: thread.data,
-      away: { device: caller.device, access: childAccess(ceiling, caller.access) ?? ceiling, ...(caller.conversation && { conversation: caller.conversation }), ...(caller.forwards !== undefined && { forwards: caller.forwards }) },
+      away: { device: caller.device, access: childAccess(ceiling, caller.access) ?? ceiling, ...(caller.conversation && { conversation: caller.conversation }), ...(caller.forwards !== undefined && { forwards: caller.forwards }), ...(caller.epoch !== undefined && { epoch: caller.epoch }) },
     }
   }
 
   /** This Apex as another place hears it call for a Fin it placed there (`ApexCaller`). */
-  private async callerOf(apex: Apex, forwards?: string): Promise<ApexCaller | AgentRefused> {
+  private async callerOf(apex: Apex, forwards?: string, epoch?: number): Promise<ApexCaller | AgentRefused> {
     const device = await this.places?.self()
     if (!device) return { refused: "unavailable", why: `This device isn't signed in to Mako now, so it can't reach the ${FIN_WORD}s it placed elsewhere.` }
-    return { kind: "apex", device, thread: apex.thread, session: apex.session, ...(apex.conversation && { conversation: apex.conversation }), access: this.tierOf(apex), ...(forwards !== undefined && { forwards }) }
+    return { kind: "apex", device, thread: apex.thread, session: apex.session, ...(apex.conversation && { conversation: apex.conversation }), access: this.tierOf(apex), ...(forwards !== undefined && { forwards }), ...(epoch !== undefined && { epoch }) }
+  }
+
+  /**
+   * How a Fin here stands as its device sends a notice of `report`: whether it holds a place, and the newest of its
+   * Apex's messages it has heard. One that asks through its harness waits on the answer, whatever its turn shows as
+   * the ask is made.
+   */
+  private standingOf(edge: ThreadParent, report: Report): NonNullable<AgentsNoticeInput["standing"]> {
+    const asks = report.implicit === true && (report.status === "blocked" || report.status === "needs-input")
+    const working = !asks && this.occupies(edge)
+    this.standingSaid.set(edge.child, working)
+    this.standingSeq += 1
+    return { heard: edge.remote?.heard ?? 1, working, owner: this.generation, seq: this.standingSeq }
+  }
+
+  /** An Apex on another device sets its Fin here to work, or stops it: its device knows that from its own call, so it isn't said back (`restate`). */
+  private toldBy(apex: Apex, edge: ThreadParent, working: boolean): void {
+    if (apex.away && edge.remote) this.standingSaid.set(edge.child, working)
+  }
+
+  /** A Fin here stands otherwise than its Apex's device last heard: its last report goes again, saying how (`AgentPlaces.restate`). */
+  private restate(edge: ThreadParent): void {
+    const report = this.latest.get(edge.child)
+    if (report && report.status !== "progress" && this.noticeFor(edge, report)) this.places?.restate({ edge, report })
+  }
+
+  /** A message, an answer or a stop of an Apex on another device reached its Fin here: the count it came with is the newest this Fin heard (`RemoteParent.heard`). */
+  private heardFrom(apex: Apex, edge: ThreadParent): void {
+    if (apex.away?.epoch !== undefined && edge.remote) this.store()!.keepHeard(edge.child, apex.away.epoch)
   }
 
   /** One of this Apex's operations on a Fin it placed, answered by the Fin's device (`AgentPlaces.ask`). */
-  private async askPlace<Answer extends object>(apex: Apex, edge: ThreadParent, channel: string, input: PlacedAsk, what: string, forwards?: string): Promise<Answer | AgentRefused> {
-    const caller = await this.callerOf(apex, forwards)
+  private async askPlace<Answer extends object>(apex: Apex, edge: ThreadParent, channel: string, input: PlacedAsk, what: string, forwards?: string, epoch?: number): Promise<Answer | AwayRefused> {
+    const caller = await this.callerOf(apex, forwards, epoch)
     if ("refused" in caller) return caller
     if (!this.places || !edge.placed) return { refused: "unavailable", why: `${edge.name} isn't placed anywhere this device can reach.` }
     return this.places.ask<Answer>(edge.placed.target, channel, caller, input, what)
@@ -4436,11 +4795,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   private async askRooms(): Promise<void> {
     const places = this.places
     if (!places) return
+    this.retryStops()
     const waiting = new Map<string, PlaceTarget>()
     for (const spawn of this.store()?.queuedSpawns() ?? []) {
       const queued = parseQueued(spawn.record)
       // What waits for room there, and what was on its way there when its device, or this host, stopped answering.
-      if (queued?.away && !queued.refused && !this.starts.has(spawn.op)) waiting.set(placeOf(queued.input.place), queued.away.target)
+      if (queued?.away && !queued.away.stop && !queued.refused && !this.starts.has(spawn.op)) waiting.set(placeOf(queued.input.place), queued.away.target)
     }
     if (!waiting.size) return
     const had = new Set([...waiting.keys()].filter((where) => places.room(where) && this.awayFull(where) === undefined))
@@ -4598,7 +4958,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       const queued = parseQueued(spawn.record)
       if (queued?.lead.thread !== thread) return []
       // A start for another device with nothing to wait for but that device's answer is on its way there.
-      const reason: QueueReason = queued.why ?? (queued.away && !queued.after?.length ? "device-offline" : "tree-running")
+      // One its Apex stopped waits only for its device to answer the stop.
+      const reason: QueueReason = queued.away?.stop ? "device-offline" : queued.why ?? (queued.away && !queued.after?.length ? "device-offline" : "tree-running")
       const ahead = spawns.slice(0, at).filter((other) => (reason === "place-full" ? parseQueued(other.record)?.why === "place-full" : other.tree === spawn.tree)).length
       const stand = queued.after?.length ? this.afterStand(queued) : undefined
       const placeholder: ThreadParent = {

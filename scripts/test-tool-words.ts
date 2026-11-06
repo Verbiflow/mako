@@ -41,6 +41,7 @@ const WORDS: readonly { tool: string; args: ToolArguments; answer?: string; labe
   { tool: "agents_move", args: { all: true, harness: "codex" }, answer: '{"moved":[{"name":"a"},{"name":"b"}]}', label: "Move all Fins to Codex", running: "Moving all Fins to Codex", done: "Moved 2 Fins to Codex" },
   { tool: "agents_stop", args: { child: "rail-search" }, label: "Stop fin:rail-search", running: "Stopping fin:rail-search", done: "Stopped fin:rail-search" },
   { tool: "agents_stop", args: { child: "all" }, answer: '{"stopped":["a","b"]}', label: "Stop all Fins", running: "Stopping all Fins", done: "Stopped 2 Fins" },
+  { tool: "agents_stop", args: { child: "rail-search" }, answer: '{"stopped":[],"pending":[{"name":"rail-search","why":"Studio can\'t be reached now."}]}', label: "Stop fin:rail-search", running: "Stopping fin:rail-search", done: "Stop kept for fin:rail-search" },
   { tool: "agents_wait", args: { children: ["a", "b"] }, label: "Wait on 2 Fins", running: "Waiting on 2 Fins", done: "Waited on 2 Fins" },
   { tool: "agents_wait", args: { children: ["a"] }, label: "Wait on fin:a", running: "Waiting on fin:a", done: "Waited on fin:a" },
   { tool: "agents_wait", args: {}, label: "Wait on all Fins", running: "Waiting on all Fins", done: "Waited on all Fins" },

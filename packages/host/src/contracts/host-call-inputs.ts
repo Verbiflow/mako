@@ -43,6 +43,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -51,6 +52,29 @@ const inputs = {
         allow: z.boolean().optional(),
         person: z.boolean().optional(),
         clientKey: z.string(),
+      }),
+    ]),
+  "mako:agents-cancel": () =>
+    z.tuple([
+      z.object({
+        version: z.number(),
+        op: z.string(),
+        parent: z.object({
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+        }),
+        reason: z.string().optional(),
       }),
     ]),
   "mako:agents-capabilities": () => z.tuple([]),
@@ -97,6 +121,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -136,6 +161,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -172,6 +198,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -256,6 +283,14 @@ const inputs = {
           told: z.literal(true).optional(),
           implicit: z.literal(true).optional(),
         }),
+        standing: z
+          .object({
+            heard: z.number(),
+            working: z.boolean(),
+            owner: z.number(),
+            seq: z.number(),
+          })
+          .optional(),
       }),
     ]),
   "mako:agents-place": () =>
@@ -347,6 +382,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -383,6 +419,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -475,6 +512,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -513,6 +551,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -593,6 +632,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({ child: z.string(), reason: z.string().optional() }),
@@ -618,6 +658,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -1430,6 +1471,8 @@ const inputs = {
           .optional(),
         parent: z
           .object({
+            op: z.string(),
+            parent: z.string(),
             name: z.string(),
             role: z.union([
               z.literal("lead"),
@@ -1438,8 +1481,6 @@ const inputs = {
               z.literal("verifier"),
               z.literal("researcher"),
             ]),
-            op: z.string(),
-            parent: z.string(),
             origin: z.union([
               z.literal("started"),
               z.literal("attached"),
@@ -1518,6 +1559,7 @@ const inputs = {
                   z.literal("chat"),
                 ]),
                 conversation: z.string().optional(),
+                heard: z.number().optional(),
               })
               .optional(),
             tuned: z
@@ -1581,6 +1623,9 @@ const inputs = {
                 ]),
                 session: z.string().optional(),
                 conversation: z.string().optional(),
+                working: z.boolean().optional(),
+                epoch: z.number().optional(),
+                stop: z.object({ at: z.number(), why: z.string() }).optional(),
               })
               .optional(),
           })
@@ -2854,6 +2899,7 @@ const inputs = {
             z.literal("chat"),
           ]),
           forwards: z.string().optional(),
+          epoch: z.number().optional(),
         }),
       ]),
       z.object({
@@ -3011,6 +3057,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
   ["mako:agents-answer", "conversations"],
+  ["mako:agents-cancel", "conversations"],
   ["mako:agents-capabilities", "conversations"],
   ["mako:agents-continue-next", "conversations"],
   ["mako:agents-diagnostics", "conversations"],

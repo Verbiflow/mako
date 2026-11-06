@@ -68,6 +68,8 @@ export const RemoteParentSchema = z.object({
   device: z.string().uuid(),
   conversation: z.string().min(1).max(512).optional(),
   access: z.enum(ACCESS_TIER_NAMES),
+  /** The newest of its Apex's messages that reached it, by the count its Apex's device keeps of them (`Placed.epoch`). */
+  heard: z.number().int().positive().optional(),
 })
 export type RemoteParent = z.infer<typeof RemoteParentSchema>
 
@@ -87,6 +89,19 @@ export const PlacedSchema = z.object({
   /** Its Session and conversation where it runs, as its start answered them. */
   session: z.string().min(1).max(160).optional(),
   conversation: z.string().min(1).max(512).optional(),
+  /**
+   * Whether it's at work: set when this device sets it to work, and by its own device's word after. Kept on the edge,
+   * so a host that restarts still counts it against its tree's budget.
+   */
+  working: z.boolean().optional(),
+  /**
+   * How many times this device set it to work: its start, then each message and answer that reached it. Its device
+   * says the newest it heard with every notice (`RemoteParent.heard`), so a report made before a message reached it
+   * can't end the turn that message started.
+   */
+  epoch: z.number().int().positive().optional(),
+  /** Its Apex stopped it while its device couldn't be reached: kept until that device says it stopped, or its Apex sends it on. */
+  stop: z.object({ at: z.number(), why: z.string().max(2_000) }).optional(),
 })
 export type Placed = z.infer<typeof PlacedSchema>
 
@@ -416,6 +431,16 @@ export const ThreadParentSchema = z.object({
   placed: PlacedSchema.optional(),
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
+
+/**
+ * Whether a Fin is listed inside its Apex's Thread on this device. One whose Apex runs on another device
+ * (`ThreadParent.remote`) has no such Thread here to be listed in, so it's a Thread of its own in this device's rail
+ * and in the account's list: that row is where the person reads it and answers what it asks them, here, on the web
+ * or from another device.
+ */
+export function listedUnderApex(edge: ThreadParent | undefined): edge is ThreadParent {
+  return edge !== undefined && edge.remote === undefined
+}
 
 /**
  * What a start that makes a child says of its edge (`LiveStartOptions.parent`): all of it but the Thread the start makes.
@@ -879,6 +904,8 @@ export interface ApexCaller {
   conversation?: string
   access: AccessTier
   forwards?: string
+  /** With a message or an answer for a Fin: the count its Apex's device will keep once it reaches it (`Placed.epoch`). */
+  epoch?: number
 }
 
 /** What a host says of itself as a place for Fins (`mako:agents-capabilities`), so a caller checks before it places one. */
@@ -948,7 +975,29 @@ export interface AgentsNoticeInput {
   child: string
   /** It crosses the host call unbranded; the Apex's device parses it. */
   report: z.input<typeof ReportSchema>
+  /**
+   * How the Fin stands as this is sent: whether it holds a place, and the newest of its Apex's messages it had heard
+   * by then (`RemoteParent.heard`). Its Apex's device takes it only when that's no older than what it sent the Fin,
+   * and only the newest said: `owner` is the host that says it (its generation) and `seq` its count of sayings. A
+   * Fin whose standing changes with nothing new to report says its last report again, with how it stands now.
+   */
+  standing?: { heard: number; working: boolean; owner: number; seq: number }
 }
+
+/**
+ * A placed start its Apex stopped before it knew how the start went (`mako:agents-cancel`), by the start's op. The
+ * device ends the Fin if that start made one, and answers it; if it made none, it keeps the stop, so the start is
+ * refused whenever it arrives. A repeat answers the same.
+ */
+export interface AgentsCancelInput {
+  version: number
+  op: string
+  parent: { device: string; thread: string; session: string; conversation?: string; access: AccessTier }
+  reason?: string
+}
+
+/** `fin`: the Fin that start had made here, now stopped. Absent: it made none, and never will. */
+export type AgentsCancelled = { cancelled: true; fin?: AgentsPlaced } | AgentRefused
 
 /** Heard, once: a refusal that isn't `stale-owner` leaves it in the Fin's device's outbox, to be sent again. */
 export type AgentsNoticed = { heard: true; deduped?: true } | AgentRefused

@@ -3,6 +3,7 @@ import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
+import { listedUnderApex } from "./contracts/agents.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -514,7 +515,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         hidden: () => new Set(threads.archives.snapshot().keys),
         lastMoved: (id, revision) => live.lastMoved(id, revision),
         placement: (id) => store.journalPlacement(id),
-        childThread: (thread) => store.edges().of(thread) !== undefined,
+        childThread: (thread) => listedUnderApex(store.edges().of(thread)),
         executions: (ids) => store.executionsOf(ids),
         titles: (ids) => store.titlesOf(ids),
         forks: (ids) => store.forksOf(ids),

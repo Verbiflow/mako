@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
-import type { AgentCaller, AgentRefused, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
+import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
 import {
   AGENT_TOOLS,
   type AgentOperations,
@@ -29,6 +29,7 @@ export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOp
   methods.handle("mako:agents-capabilities", () => agents()?.capabilities() ?? UNAVAILABLE)
   methods.handle("mako:agents-place", (input: AgentsPlaceInput) => agents()?.place(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-notice", (input: AgentsNoticeInput) => agents()?.notice(input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-cancel", (input: AgentsCancelInput) => agents()?.cancel(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => agents()?.start(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => agents()?.move(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => agents()?.link(caller, input) ?? UNAVAILABLE)
