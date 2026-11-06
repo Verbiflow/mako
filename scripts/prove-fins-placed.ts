@@ -565,9 +565,10 @@ try {
     return answer
   })
   await step("the person's answer from the Apex's Thread is refused, and says where to go", async () => {
-    const ask = asker.state.ask?.id
-    if (!ask) throw new Error(`the Fin's state names no ask: ${JSON.stringify(asker.state)}`)
-    const answer = RefusedSchema.parse(await apex.call("mako:agents-respond", [apexConversation, { fin: asker.child, ask, allow: true, request: randomUUID() }]))
+    // The ask as the Apex's device holds it: the Fin's report of it, which its notice named.
+    const notice = (await digests()).flatMap((request) => request.digest?.notices ?? []).find((each) => each.id.startsWith(`notice:${asker.child}:`))
+    if (!notice) throw new Error("the Apex's device took no notice of the Fin's ask")
+    const answer = RefusedSchema.parse(await apex.call("mako:agents-respond", [apexConversation, { fin: asker.child, ask: notice.id.slice(`notice:${asker.child}:`.length), allow: true, request: randomUUID() }]))
     if (!answer.refused) throw new Error(`the person's answer from the Apex's Thread was taken: ${JSON.stringify(answer)}`)
     if (place.heard.includes(WORDS.asks)) throw new Error("the command ran on an answer its device never took")
     return answer
