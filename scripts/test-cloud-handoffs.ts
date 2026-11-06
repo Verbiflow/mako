@@ -247,6 +247,7 @@ try {
     await readiness.refresh()
     assert.equal(checkpoints.length, 2, "changed, it goes again")
     assert.equal(await readiness.take("local-1", folder, { url: "https://github.com/someone/else" }), undefined, "another repository's move doesn't take it")
+    assert.equal(await readiness.take("local-1", folder, { ...repository, branch: "another-branch" }), undefined, "nor another branch's: the cloud would refuse it")
     // The cloud ended it unused (nobody kept it ready for a while): the next round stands by with a new one.
     const first = made.at(-1)!.threadId
     ended.add(first)
