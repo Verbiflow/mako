@@ -633,6 +633,24 @@ try {
     assert.equal(heard.filter((text) => text.includes(MOVED_LINE)).length, 1, "the Apex hears it, once")
     await r.world.close()
   }
+  // A Fin placed on another account before the binding kept the pin has it on its edge alone: it comes onto the binding.
+  {
+    const held = accounts()
+    held.claude[0]!.spentUntil = RESET
+    const r = await run("old-edge-pin", { accounts: held, selected: { claude: "personal" }, start: { harness: "claude" }, fin: () => "Done." })
+    assert.ok(!("refused" in r))
+    await until("its first turn", () => r.world.live.session(r.fin())?.status === "ready")
+    const control = r.world.live.snapshot(r.fin())!.control!
+    for (const binding of control.bindings) delete binding.account
+    delete held.claude[0]!.spentUntil
+    await r.world.restart()
+    await until("the pin back on its binding", () => r.world.live.pinnedAccount(r.fin(), "claude") === "work")
+    const sent = await r.world.agents.send(r.world.caller(r.apex.conversation), { to: "labels", text: "After the upgrade.", clientKey: "after" })
+    assert.ok(!("refused" in sent))
+    await until("the message", () => r.world.prompts.some((prompt) => prompt.conversation === r.fin() && prompt.text.includes("After the upgrade.")))
+    assert.equal(r.world.launches.filter((launch) => launch.conversation === r.fin()).at(-1)?.account, "work", "the account it was placed on, though the selected one has room again")
+    await r.world.close()
+  }
   console.log("a limit's notice: kept before it gathers, said once after a restart, and over at its reset on every surface")
 
   // The person's own message in the Fin's Thread is theirs to drive: a limit there ends the turn as before.

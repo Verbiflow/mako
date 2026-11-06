@@ -232,7 +232,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
 >
 
 export interface AgentsDeps {
@@ -683,6 +683,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store) return
     this.sync()
     const edges = store.edges()
+    // Before anything launches: the account a Fin was placed on before its binding kept it.
+    for (const edge of edges.all) {
+      const to = edge.tuned?.rerouted?.to
+      const conversation = to?.why === "account" ? this.conversationOf(edge.child) : undefined
+      if (to?.why === "account" && conversation) this.deps.live.adoptPin(conversation, to.harness, to.account)
+    }
     for (const { report, wake } of store.undeliveredReports()) {
       const edge = edges.of(report.child)
       if (edge && report.status !== "progress") this.noticeOf(edge, report, wake)
@@ -2639,6 +2645,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     const moves = this.moves!
     const store = this.store()!
     const claimed = store.finTurn(thread)?.moving?.wait
+    // Owned before anything is waited for: a Stop with no row to pause leaves only this.
+    const mark = this.deps.live.stopMark(conversation)
+    const stoppedSince = () => this.deps.live.stopMark(conversation) !== mark
     let moved = false
     let ended = false
     try {
@@ -2662,7 +2671,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         if (!edge || !wait) return
         // Every step the person has is at its limit or was run on: the Fin stops saying so, rather than loop.
         if (!order.spent.length && visited.length === 0) return
-        if (!this.stillDecided(conversation, thread, wait.id, wait.id)) return
+        if (stoppedSince() || !this.stillDecided(conversation, thread, wait.id, wait.id)) return
         const line = outOfAccountsLine({ harness, ...(from && { account: from.label }) }, order.spent, label, until, now)
         store.rerouteEdge(edge.child, { ...(store.edges().of(edge.child)?.tuned?.rerouted ?? { from: harness }), line })
         moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place)] })
@@ -2691,14 +2700,17 @@ export class Agents implements AgentOperations, ConversationChildren {
       }
       // It goes as any Thread does, yielding to a Stop. Nothing says it moved until it has: a Stop or a person taking
       // the wait back leaves no trace of it.
-      const decided = () => claimed !== undefined && this.stillDecided(conversation, thread, claimed, wait?.id)
+      const decided = () => claimed !== undefined && !stoppedSince() && this.stillDecided(conversation, thread, claimed, wait?.id)
+      let worded = false
       const retire = (why: string) => {
-        if (wait && said !== undefined) this.deps.live.rewordWaiting(conversation, wait.id, wait.text, wait.displayText)
+        // Only what the move wrote is its to take back: words edited since stand.
+        if (wait && said !== undefined && worded) this.deps.live.rewordWaiting(conversation, wait.id, said, wait.text, wait.displayText)
         moved = store.finishFinMove(thread, this.generation, "retired")
         hostLog("agents", "a move was retired", { thread, harness, why })
         report()
       }
-      if (!decided() || (wait && said !== undefined && !this.deps.live.rewordWaiting(conversation, wait.id, said))) return retire("what it was decided on no longer holds")
+      if (decided() && wait && said !== undefined) worded = this.deps.live.rewordWaiting(conversation, wait.id, wait.text, said)
+      if (!decided() || (said !== undefined && !worded)) return retire("what it was decided on no longer holds")
       const id = namedUuid(`moved:${wait?.id ?? `${conversation}:${claimed}`}`)
       const first = wait && (edge || wait.continues) ? wait.id : undefined
       const snapshot = await this.deps.continueOn(conversation, { kind: "move", move: { id, to: target, ...(first && { first }), unlessStopped: true } }, actor, decided)
@@ -2842,9 +2854,11 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** The person pressed the card: their Thread goes there as a switch of theirs would, whatever waits going with it. */
   async continueNext(conversation: string, id: string): Promise<boolean> {
+    // A Stop while it finds the place outranks the press: one before the press doesn't, as a move after a Stop can go.
+    const mark = this.deps.live.stopMark(conversation)
     const next = await this.nextPlace(conversation)
-    if (!next) return false
-    return (await this.deps.continueOn(conversation, { kind: "move", move: { id, to: next.target } })) !== undefined
+    if (!next || this.deps.live.stopMark(conversation) !== mark) return false
+    return (await this.deps.continueOn(conversation, { kind: "move", move: { id, to: next.target } }, undefined, () => this.deps.live.stopMark(conversation) === mark)) !== undefined
   }
 
   /**

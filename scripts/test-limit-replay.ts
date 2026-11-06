@@ -6,7 +6,7 @@ import { mock } from "node:test"
 import { join } from "node:path"
 import { FROM_AGENTS } from "@mako/host/contracts/children"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
-import { AgentsWorld, HARNESSES, type Script, type WorldAccount } from "./lib/agents-world.ts"
+import { AgentsWorld, HARNESSES, type Script, type WorldAccount, type WorldOptions } from "./lib/agents-world.ts"
 
 /**
  * The outage of 2026-11-05, replayed on each of the six harnesses (`npm run test:limit-replay`): a plan runs out mid-turn
@@ -43,11 +43,12 @@ const rows = (world: AgentsWorld, conversation: string): readonly LiveRequest[] 
 const heardBy = (world: AgentsWorld, conversation: string) => world.prompts.filter((prompt) => prompt.conversation === conversation)
 
 /** A tree on `harness`: an Apex at rest over Fins, two at work and one that took its turn. */
-async function tree(name: string, harness: string, accounts: Record<string, WorldAccount[]>, reset: number, refusal = LIMIT, moveOnLimit = true) {
+async function tree(name: string, harness: string, accounts: Record<string, WorldAccount[]>, reset: number, refusal = LIMIT, moveOnLimit = true, readingAccounts?: WorldOptions["readingAccounts"]) {
   const knocks: string[] = []
-  const state = { out: false, knocks }
+  const state = { out: false, knocks, holdMoved: false }
   const script: Script = async (turn) => {
     if (turn.text.includes("Keep working.")) return turn.world.hold(turn.conversation).then(() => "Stopped.")
+    if (state.holdMoved && turn.text.includes("[mako · moved after a usage limit]")) return turn.world.hold(turn.conversation).then(() => "Done.")
     const fin = NAMES.find((each) => turn.text.includes(`${each}: Report`))
     if (!fin || !turn.text.includes("You're fin:") || turn.harness !== harness) return `Done on ${turn.harness}.`
     // A Fin that said where it stands and rests, its work not finished: idle, not done.
@@ -68,6 +69,7 @@ async function tree(name: string, harness: string, accounts: Record<string, Worl
     catalogs: CATALOGS,
     order,
     moveOnLimit: () => moveOnLimit,
+    ...(readingAccounts && { readingAccounts }),
     refusePrompt: (conversation, on) => {
       if (!state.out || on !== harness) return undefined
       state.knocks.push(conversation)
@@ -262,10 +264,10 @@ async function switchOff(harness: string): Promise<void> {
 }
 
 /** A Stop lands after a move has reworded what waits, while it reads its history: the move goes no further, and leaves no trace. */
-async function stopDeclines(harness: string): Promise<void> {
+async function stopDeclines(harness: string, edit: boolean): Promise<void> {
   const accounts = everyAccount()
   const reset = Date.now() + 3 * 3_600_000
-  const { world, apex, fins, state } = await tree(`${harness}-declines`, harness, accounts, reset)
+  const { world, apex, fins, state } = await tree(`${harness}-declines${edit ? "-edit" : ""}`, harness, accounts, reset)
   const idle = fins.idle!
   let release!: () => void
   const history = new Promise<void>((resolve) => (release = resolve))
@@ -278,8 +280,15 @@ async function stopDeclines(harness: string): Promise<void> {
     await until(`${harness}: the move to say so on it`, () => rows(world, idle).find((request) => request.id === row)?.text.includes("[mako · moved after a usage limit]") === true)
     world.live.stopHolds(idle)
     await until(`${harness}: the Stop to hold it`, () => rows(world, idle).find((request) => request.id === row)?.pause === "stop")
+    if (edit) {
+      const words = rows(world, idle).find((request) => request.id === row)!.text
+      world.live.editQueued(idle, { requestId: row, expectedText: words, change: { kind: "edit", text: "The person's own words." } })
+      await until(`${harness}: their edit`, () => rows(world, idle).find((request) => request.id === row)?.text === "The person's own words.")
+    }
     release()
-    await until(`${harness}: its own words back`, () => rows(world, idle).find((request) => request.id === row)?.text === "Also this.")
+    const words = edit ? "The person's own words." : "Also this."
+    await until(`${harness}: the move retired`, () => world.store.finTurn(world.agents.roster(apex.conversation).find((agent) => agent.child?.name === "idle")!.child!.thread)?.moving === undefined)
+    assert.equal(rows(world, idle).find((request) => request.id === row)?.text, words, `${harness}: the words it should have, an edit standing over the move's`)
     assert.equal(world.live.session(idle)?.harness, harness, `${harness}: it stayed`)
     assert.equal(world.store.edges().of(world.agents.roster(apex.conversation).find((agent) => agent.child?.name === "idle")!.child!.thread)?.tuned?.rerouted, undefined, `${harness}: and nothing says it moved`)
   } finally {
@@ -288,6 +297,78 @@ async function stopDeclines(harness: string): Promise<void> {
     world.release(fins.working!)
     world.release(fins.queued!)
     await world.close()
+  }
+}
+
+/** A Stop with no row to pause, while the move reads the accounts: an idle Apex, and the card, both yield to it. */
+async function stopInTheRead(harness: string): Promise<void> {
+  let reads = 0
+  let reached = false
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => (release = resolve))
+  const hold = async (_harness: string, all: boolean) => {
+    if (!all || (reads += 1) === 1) return
+    reached = true
+    await gate
+  }
+  const accounts = everyAccount()
+  const reset = Date.now() + 3 * 3_600_000
+  const { world, apex, fins, state } = await tree(`${harness}-read`, harness, accounts, reset, LIMIT, true, hold)
+  try {
+    // What the idle Fin said goes first, so the Apex is at rest with an empty queue.
+    world.live.wakeDue(Date.now() + 60 * 60_000)
+    await until(`${harness}: an empty queue`, () => world.live.session(apex.conversation)?.status === "ready" && !rows(world, apex.conversation).some((request) => request.status === "queued" || request.status === "held" || request.status === "dispatching"))
+    accounts[harness]![0]!.spentUntil = reset
+    state.out = true
+    // Its report would be a row for the Stop to pause, which would hide what this is here to show.
+    state.holdMoved = true
+    world.release(fins.working!)
+    await until(`${harness}: the tree's move at the accounts`, () => reached)
+    assert.deepEqual(rows(world, apex.conversation).filter((request) => request.status === "queued" || request.status === "held"), [], `${harness}: nothing for the Stop to pause`)
+    world.live.stopHolds(apex.conversation)
+    release()
+    await until(`${harness}: the Fin at work moved`, () => world.live.session(fins.working!)?.harness !== harness)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    assert.equal(world.live.session(apex.conversation)?.harness, harness, `${harness}: a Stop in the read holds an idle Apex where it is`)
+  } finally {
+    release()
+    world.release(fins.working!)
+    world.release(fins.queued!)
+    await world.close()
+  }
+  let reachedCard = false
+  let releaseCard!: () => void
+  const gateCard = new Promise<void>((resolve) => (releaseCard = resolve))
+  let gating = false
+  const single = new AgentsWorld({
+    root: join(root, `${harness}-card`),
+    script: () => "Done.",
+    accounts: everyAccount(),
+    selected: {},
+    catalogs: CATALOGS,
+    order: [harness, ...HARNESSES.filter((each) => each !== harness)],
+    refusePrompt: (_conversation, on) => (on === harness ? LIMIT : undefined),
+    readingAccounts: async (_harness, all) => {
+      if (!all || !gating) return
+      reachedCard = true
+      await gateCard
+    },
+  })
+  try {
+    const alone = await single.apex(harness, "full")
+    const row = single.say(alone.conversation, "Keep this.")
+    await until(`${harness}: it to wait`, () => rows(single, alone.conversation).some((request) => request.id === row && request.retry))
+    gating = true
+    const pressed = single.agents.continueNext(alone.conversation, randomUUID())
+    await until(`${harness}: the card at the accounts`, () => reachedCard)
+    single.live.stopHolds(alone.conversation)
+    releaseCard()
+    assert.equal(await pressed, false, `${harness}: a Stop in the card's read wins`)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(single.live.session(alone.conversation)?.harness, harness, `${harness}: and it stays`)
+  } finally {
+    releaseCard()
+    await single.close()
   }
 }
 
@@ -325,7 +406,9 @@ try {
     await digestFirst(harness)
     await personFirst(harness)
     await switchOff(harness)
-    await stopDeclines(harness)
+    await stopDeclines(harness, false)
+    await stopDeclines(harness, true)
+    await stopInTheRead(harness)
     await stopWins(harness)
     console.log(`${harness}: the tree went on, every report heard once and nothing knocking; with nowhere to go one digest waited and went once; the person's message went on, or their card took it; a Stop held`)
   }

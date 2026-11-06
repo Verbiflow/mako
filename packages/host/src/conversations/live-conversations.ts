@@ -1206,6 +1206,25 @@ export class LiveConversations {
     return resident.snapshot
   }
 
+  /**
+   * A pin from before the binding kept one (a Fin started on another account, kept on its edge alone) comes onto its
+   * binding, so what a launch reads is the same. A binding with a pin of its own, or on another harness, keeps to it.
+   */
+  adoptPin(id: string, harness: string, account: string): void {
+    const resident = this.records.load(id)
+    const binding = resident && activeBinding(resident)
+    if (!resident || binding?.provider !== harness || binding.account !== undefined) return
+    const control = conversationControl(resident)
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, control: { ...control, bindings: control.bindings.map((each) => (each.id === binding.id ? { ...each, account } : each)) } }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+  }
+
   /** The account `id` is pinned to on `harness`, whatever is selected: a move's, on its binding, for a Fin and an Apex alike. */
   pinnedAccount(id: string, harness: string): string | undefined {
     const resident = this.records.get(id)
@@ -1672,13 +1691,13 @@ export class LiveConversations {
   }
 
   /**
-   * The words a waiting request goes with, as a move says what happened above them (`Agents.moveOn`): a request no
-   * longer waiting stays as it is, and the answer is false.
+   * The words a waiting request goes with, as a move says what happened above them (`Agents.moveOn`), only while it still
+   * says `was`: a request no longer waiting, or that someone edited since, stays as it is, and the answer is false.
    */
-  rewordWaiting(id: string, requestId: string, text: string, displayText?: string): boolean {
+  rewordWaiting(id: string, requestId: string, was: string, text: string, displayText?: string): boolean {
     const resident = this.records.get(id)
     const waiting = resident?.snapshot.requests.find((request) => request.id === requestId)
-    if (!resident || !waiting || (waiting.status !== "queued" && waiting.status !== "held")) return false
+    if (!resident || !waiting || (waiting.status !== "queued" && waiting.status !== "held") || waiting.text !== was) return false
     const previous = resident.snapshot
     const said: LiveRequest = { ...waiting, text, displayText, inputDigest: promptFingerprint(text, waiting.attachments, waiting.tuning) }
     resident.snapshot = { ...previous, requests: previous.requests.map((request) => (request === waiting ? said : request)) }
