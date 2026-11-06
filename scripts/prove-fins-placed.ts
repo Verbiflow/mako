@@ -1,6 +1,6 @@
 import "./lib/scratch-git.mjs"
 import { execFile, spawn, type ChildProcess } from "node:child_process"
-import { randomBytes, randomUUID } from "node:crypto"
+import { randomInt, randomUUID } from "node:crypto"
 import { createWriteStream } from "node:fs"
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
@@ -66,7 +66,7 @@ const run = promisify(execFile)
 const say = (word: string, value?: JsonValue) => console.log(value === undefined ? word : `${word} ${JSON.stringify(value)}`)
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms))
 // Letters alone: the scripted models hear "single word X" for X in capitals.
-const tag = [...randomBytes(5)].map((byte) => String.fromCharCode(65 + (byte % 26))).join("")
+const tag = Array.from({ length: 5 }, () => String.fromCharCode(65 + randomInt(26))).join("")
 const WORDS = { apex: `ALPHA${tag}`, fin: `FOXTROT${tag}`, held: `GOLF${tag}` }
 const ONE_WORD = /Reply with the single word ([A-Za-z0-9-]+)\./g
 const mako = join(process.cwd(), "packages", "host", "dist", "mako-host.js")
