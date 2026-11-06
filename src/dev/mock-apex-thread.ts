@@ -121,7 +121,7 @@ interface ChildShowing {
   journal: ChildJournal
 }
 
-function shown(state: ChildState, child: string, at: number): ChildShowing {
+function shown(state: ChildState, child: string, at: number, placed = false): ChildShowing {
   switch (state.kind) {
     case "queued":
       return { thread: { queued: { reason: state.reason, ahead: state.ahead } }, journal: {} }
@@ -134,7 +134,7 @@ function shown(state: ChildState, child: string, at: number): ChildShowing {
       }
     case "blocked":
       // A placed Fin's ask reaches its Apex's device as its report of it, the person's to answer where it runs.
-      if (state.ask?.kind === "report") return { thread: {}, journal: { latest: { id: state.ask.id, child: ThreadIdSchema.parse(child), status: "blocked", summary: `It waits: ${state.question}`, question: state.question, for: "person", told: true, implicit: true, ownerGeneration: 1, at } } }
+      if (placed && state.ask) return { thread: {}, journal: { latest: { id: state.ask.id, child: ThreadIdSchema.parse(child), status: "blocked", summary: `It waits: ${state.question}`, question: state.question, for: "person", told: true, implicit: true, ownerGeneration: 1, at } } }
       return { thread: { waiting: { question: state.question, on: state.on, ...(state.ask && { ask: state.ask }) } }, journal: {} }
     case "idle":
       return { thread: {}, journal: {} }
@@ -206,7 +206,7 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     createdAt,
     tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }), ...(RULES.has(fixture.name) && { rule: RULES.get(fixture.name) }), ...(MOVED.has(fixture.name) && { rerouted: MOVED.get(fixture.name) }) },
   }
-  const { thread, journal } = shown(state, child, now - 60_000)
+  const { thread, journal } = shown(state, child, now - 60_000, fixture.placed)
   const entry = childEntry(
     edge,
     {
