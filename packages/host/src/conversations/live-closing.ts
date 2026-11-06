@@ -38,13 +38,15 @@ export class LiveClosing {
 
   close(id: string): Promise<void> {
     const resident = this.access.require(id)
+    // A Close under way answers for one asked meanwhile, and no longer: what opened since is the next Close's to close.
     if (resident.closeOperation) return resident.closeOperation
     const operation = this.closeResident(resident, id)
     resident.closeOperation = operation
-    void operation.catch(() => {
+    const done = () => {
       if (resident.closeOperation === operation)
         resident.closeOperation = undefined
-    })
+    }
+    void operation.then(done, done)
     return operation
   }
 
