@@ -284,6 +284,8 @@ interface QueuedStart {
   after?: AfterRef[]
   /** Why it couldn't start once released: it stays, saying so, until its Apex has heard (`tellHeld`). */
   refused?: string
+  /** The request named to tell its Apex why it can't start, kept here since a notice has no report row (`heldIn`). */
+  wake?: string
 }
 
 interface AfterRef {
@@ -298,8 +300,10 @@ interface AfterStand {
   held?: { name: string; outcome: "failed" | "stopped"; reason?: string; session?: string }
 }
 
+/** Whose a queued start is: the Apex that asked, by Session, Thread and conversation. */
+const QueuedByApexSchema = z.object({ session: z.string(), thread: z.string(), conversation: z.string().optional() })
 const QueuedStartSchema = z.object({
-  lead: z.object({ session: z.string(), thread: z.string(), conversation: z.string().optional() }),
+  lead: QueuedByApexSchema,
   input: hostCallSchema("mako:agents-start").def.items[1],
   tier: z.enum(ACCESS_TIER_NAMES),
   harness: z.string(),
@@ -313,7 +317,15 @@ const QueuedStartSchema = z.object({
   why: z.enum(["tree-running", "place-full"]).optional(),
   after: z.array(z.object({ name: z.string(), child: z.string().optional(), op: z.string().optional() })).optional(),
   refused: z.string().optional(),
+  wake: z.string().optional(),
 }) satisfies z.ZodType<QueuedStart>
+/** What a queued start's record still says when it no longer parses whole (an older Mako's): whose it is, and its name. */
+const QueuedLeadSchema = z.object({
+  lead: QueuedByApexSchema,
+  input: z.object({ name: z.string().optional(), title: z.string().optional() }).optional().catch(undefined),
+  harness: z.string().optional().catch(undefined),
+  wake: z.string().optional().catch(undefined),
+})
 
 /** Where a Fin runs, as its limit counts it: `here` (this device), `device:<name>` or `cloud`. */
 const HERE = "here"
@@ -457,7 +469,10 @@ export class Agents implements AgentOperations, ConversationChildren {
         deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor)
       },
       steer: (conversation, id, text) => this.steer(conversation, id, text),
-      assign: (reports, request) => this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request),
+      assign: (reports, request) => {
+        this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request)
+        for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.heldIn(id.slice(HELD_PREFIX.length), request)
+      },
       delivered: (reports, at) => {
         this.store()?.markReportsDelivered(reports.filter((id) => !id.startsWith(HELD_PREFIX)), at)
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.dropHeld(id.slice(HELD_PREFIX.length))
@@ -1030,21 +1045,41 @@ export class Agents implements AgentOperations, ConversationChildren {
    * it heard (`AgentWakes`'s `delivered`). Told again by each host until then, under one id.
    */
   private tellHeld(op: string, queued: QueuedStart, held: NonNullable<AfterStand["held"]> | { refused: string }): void {
-    const conversation = this.frontOf(queued.lead.thread, queued.lead.session)
+    const summary = "refused" in held
+      ? `It didn't start: ${held.refused.replace(/^It didn't start: /, "")} Start it again with agents_start if it should still run.`
+      : `It didn't start: it was to start after ${held.name}, which ${held.outcome === "stopped" ? "was stopped" : "failed"}${held.reason ? ` (${held.reason})` : ""}. Start it again with agents_start, without after or after another ${FIN_WORD}, if it should still run.`
+    this.tellUnstarted(op, { lead: queued.lead, name: queued.input.name ?? queued.input.title ?? "queued", harness: queued.harness, wake: queued.wake }, summary, ("session" in held && held.session) || queued.lead.session)
+  }
+
+  /**
+   * A queued start whose record this Mako can't read whole, such as one an older Mako wrote: it can't start, so its
+   * Apex is told as for one refused, and it's dropped once it heard. One that doesn't say whose it is has nobody to
+   * tell, and goes with a warning.
+   */
+  private tellUnreadable(op: string, record: string): void {
+    const read = queuedLead(record)
+    if (!read) {
+      hostWarn("agents", "a queued start's record can't be read, nor whose it is; it's dropped", { op })
+      return this.unqueued(op)
+    }
+    const name = read.input?.name ?? read.input?.title ?? "queued"
+    this.tellUnstarted(op, { lead: read.lead, name, harness: read.harness ?? "unknown", wake: read.wake }, `It didn't start: Mako couldn't read what was queued for it, as an older version of Mako may have written it. Start it again with agents_start if it should still run.`, read.lead.session)
+  }
+
+  /** Tells an Apex one of its queued starts won't start, under one id each host repeats until it heard (`dropHeld`). */
+  private tellUnstarted(op: string, start: { lead: QueuedStart["lead"]; name: string; harness: string; wake: string | undefined }, summary: string, from: string): void {
+    const conversation = this.frontOf(start.lead.thread, start.lead.session)
     if (!conversation) return
-    const name = queued.input.name ?? queued.input.title ?? "queued"
     const report: Report = {
       id: `${HELD_PREFIX}${op}`,
       child: ThreadIdSchema.parse(namedUuid(op)),
       status: "failed",
-      summary: "refused" in held
-        ? `It didn't start: ${held.refused.replace(/^It didn't start: /, "")} Start it again with agents_start if it should still run.`
-        : `It didn't start: it was to start after ${held.name}, which ${held.outcome === "stopped" ? "was stopped" : "failed"}${held.reason ? ` (${held.reason})` : ""}. Start it again with agents_start, without after or after another ${FIN_WORD}, if it should still run.`,
+      summary,
       implicit: true,
       ownerGeneration: this.generation,
       at: this.now(),
     }
-    this.wakes.notice(conversation, this.rootOf(queued.lead.thread), { id: `notice:${report.id}`, report, label: `"${name}" (${this.deps.harnessLabel(queued.harness)})`, fin: { name, harness: queued.harness }, from: ("session" in held && held.session) || queued.lead.session })
+    this.wakes.notice(conversation, this.rootOf(start.lead.thread), { id: `notice:${report.id}`, report, ...(start.wake && { wake: start.wake }), label: `"${start.name}" (${this.deps.harnessLabel(start.harness)})`, fin: { name: start.name, harness: start.harness }, from })
   }
 
   async link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult> {
@@ -1816,14 +1851,24 @@ export class Agents implements AgentOperations, ConversationChildren {
       const everywhere = this.workingEverywhere()
       for (const spawn of store.queuedSpawns()) {
         if (this.starts.has(spawn.op)) continue
+        // Its Fin started, and a host that died before taking it off the queue left it: it holds no place, and whether
+        // this build can read the row, there's nothing to say of it. Its edge is the start.
+        if (store.edges().byOp(spawn.op)) {
+          this.changeQueue((held) => held.unqueueSpawn(spawn.op))
+          continue
+        }
         const queued = parseQueued(spawn.record)
-        if (queued?.refused) {
+        if (!queued) {
+          this.tellUnreadable(spawn.op, spawn.record)
+          continue
+        }
+        if (queued.refused) {
           this.tellHeld(spawn.op, queued, { refused: queued.refused })
           continue
         }
         // A stopped Fin's own Fins wait for it to resume (`reopen`): a stop doesn't go on starting work under it.
-        if (queued && this.apexStopped(queued.lead.thread)) continue
-        if (queued?.after?.length) {
+        if (this.apexStopped(queued.lead.thread)) continue
+        if (queued.after?.length) {
           const stand = this.afterStand(queued)
           if (stand.held) this.tellHeld(spawn.op, queued, stand.held)
           if (stand.held || stand.pending.length) continue
@@ -1831,17 +1876,12 @@ export class Agents implements AgentOperations, ConversationChildren {
         const counts = this.treeCounts(spawn.tree)
         if (counts.running >= this.budget.running) continue
         // First come, first started: once a place is full, a later spawn of another tree doesn't go ahead of this one there.
-        const where = placeOf(queued?.input.place)
+        const where = placeOf(queued.input.place)
         const started = filled.get(where) ?? 0
         if (!working.has(where)) working.set(where, this.working(where))
         if (this.overCeiling(everywhere + totalStarted) ?? placeFull(this.placeLimit(where), working.get(where)! + started)) continue
         totalStarted += 1
         filled.set(where, started + 1)
-        // Taken off the queue once it started, or was refused: a host that dies between starts it again, as the same Fin.
-        if (!queued || store.edges().byOp(spawn.op)) {
-          this.changeQueue((held) => held.unqueueSpawn(spawn.op))
-          continue
-        }
         hostLog("agents", "start released", { op: spawn.op, waitedMs: this.now() - spawn.at, ...(queued.after?.length && { after: queued.after.map((ref) => ref.name).join(" ") }) })
         // Each starts on its own record: one whose harness is slow to come up holds its place, never the queue behind it.
         const start = this.record(spawn.op, queued.lead.thread, queued.input.name ?? queued.input.title)
@@ -3458,12 +3498,22 @@ export class Agents implements AgentOperations, ConversationChildren {
 
 
 
+  /**
+   * Names the request that will tell an Apex of this queued start, on its row, before it's sent: a notice has no report
+   * row to keep that, and a host that dies before `dropHeld` must find the same request, not tell it again in a new one.
+   */
+  private heldIn(op: string, request: string): void {
+    const store = this.store()
+    const spawn = store?.queuedSpawns().find((queued) => queued.op === op)
+    if (spawn) store?.keepQueuedSpawn(op, JSON.stringify({ ...JSON.parse(spawn.record), wake: request }))
+  }
+
   /** Its Apex heard that a Fin it was to start after didn't finish (`tellHeld`): it's the Apex's to start again. */
   private dropHeld(op: string): void {
     const spawn = this.store()?.queuedSpawns().find((queued) => queued.op === op)
-    const queued = spawn && parseQueued(spawn.record)
-    if (!queued) return
-    hostLog("agents", "end", { op, outcome: "stopped", queued: true, why: queued.refused ? "it couldn't start" : "a Fin it was to start after didn't finish" })
+    if (!spawn) return
+    const queued = parseQueued(spawn.record)
+    hostLog("agents", "end", { op, outcome: "stopped", queued: true, why: !queued ? "its record couldn't be read" : queued.refused ? "it couldn't start" : "a Fin it was to start after didn't finish" })
     this.unqueued(op)
   }
 
@@ -3479,6 +3529,14 @@ export class Agents implements AgentOperations, ConversationChildren {
 function parseQueued(record: string): QueuedStart | undefined {
   try {
     return QueuedStartSchema.parse(JSON.parse(record))
+  } catch {
+    return undefined
+  }
+}
+
+function queuedLead(record: string): z.infer<typeof QueuedLeadSchema> | undefined {
+  try {
+    return QueuedLeadSchema.parse(JSON.parse(record))
   } catch {
     return undefined
   }

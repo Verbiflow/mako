@@ -1036,6 +1036,59 @@ async function stopAllUnqueues(): Promise<void> {
 }
 
 /**
+ * A queued start whose record this Mako can't read whole (an older Mako's) never goes quietly: its Apex is told it
+ * didn't start and why, and it's dropped once it heard; one that doesn't say whose it is goes with a warning.
+ */
+async function unreadableQueuedStarts(): Promise<void> {
+  const w = world("unreadable-queue", () => "ok")
+  try {
+    const apex = await w.apex("claude")
+    const placed = w.store.journalPlacement(apex.conversation)!
+    const lead = { session: placed.session, thread: placed.thread, conversation: apex.conversation }
+    w.store.queueSpawn({ op: `start:${placed.session}:old`, tree: placed.thread, at: Date.now(), record: JSON.stringify({ lead, input: { name: "old", brief: "a brief before briefs were objects" }, harness: "claude", slots: 6 }) })
+    w.store.queueSpawn({ op: "start:nobody:lost", tree: placed.thread, at: Date.now(), record: "{\"input\":" })
+    w.agents.resume()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "both unreadable starts to leave the queue")
+    await w.settle()
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.match(wake, /"old" \(Claude\) failed: It didn't start: Mako couldn't read what was queued for it/, `its Apex is told: ${wake}`)
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * A host that wrote a Fin's edge and died before taking its row off the queue, then a build that can't read that row:
+ * the edge is the start, so the Fin holds its place and goes on, and its Apex hears no "It didn't start".
+ */
+async function startedFinsOldQueueRow(): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, "started-old-row"),
+    script: (turn) => turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok",
+    finLimit: () => 1,
+  })
+  try {
+    const apex = await w.apex("claude")
+    const placed = w.store.journalPlacement(apex.conversation)!
+    const lead = { session: placed.session, thread: placed.thread, conversation: apex.conversation }
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "kept", clientKey: "kept", cwd: w.root })
+    assert.ok(!("refused" in started), JSON.stringify(started))
+    await waitFor(() => w.store.edges().all.some((edge) => edge.name === "kept"), "its edge")
+    const edge = w.store.edges().all.find((each) => each.name === "kept")!
+    w.store.queueSpawn({ op: edge.op, tree: placed.thread, at: Date.now(), record: JSON.stringify({ lead, input: { name: "kept", brief: "a brief before briefs were objects" }, harness: "claude", slots: 6 }) })
+    w.agents.resume()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "the row its start left to leave the queue, the only place in use")
+    assert.ok(w.store.edges().byOp(edge.op), "its edge stays")
+    await w.agents.stop(apex.caller, { child: "all" })
+    await w.settle()
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.doesNotMatch(wake, /didn't start/, `a Fin that started isn't said not to have: ${wake}`)
+  } finally {
+    await w.close()
+  }
+}
+
+/**
  * What a Fin costs is read from the processes its harness runs, owned by its conversation's active binding: one that
  * switched harness is sampled by its new binding, and counted as the harness it runs on now.
  */
@@ -1677,6 +1730,8 @@ try {
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()
+  await unreadableQueuedStarts()
+  await startedFinsOldQueueRow()
   await finsAtWorkByBinding()
   await stoppedApexHolds()
   await followsShellRuns()
