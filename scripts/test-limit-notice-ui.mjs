@@ -39,6 +39,11 @@ async function check() {
   const root = process.env.MAKO_LIMIT_UI_ROOT
   const shots = process.env.MAKO_LIMIT_UI_SHOTS ?? join(root, "shots")
   await mkdir(shots, { recursive: true })
+  // A page that never loads is a failure here, not a job left to time out.
+  setTimeout(() => {
+    console.error("The limit notice's UI check took over four minutes")
+    app.exit(1)
+  }, 240_000).unref()
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
   await app.whenReady()
