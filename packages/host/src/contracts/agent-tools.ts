@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, decisionWords, FIN_WORD, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { APEX_WORD, decisionWords, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -392,6 +392,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
   `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
   `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended. Finished but leaving a decision (a merge, a choice between results)? Report done with the question and options, and \`decides\` saying who decides: \`apex\` or \`person\`.`,
+  `To wait on a pull request, report progress with \`waitingOn\` naming it and what you wait for (checks, review or merge), then end your turn instead of polling its checks, because Mako wakes you with its outcome.`,
   `Other ${APEX_WORD}es of the person: read them with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them.`,
   `Message another ${APEX_WORD} (\`agents_send\` \`to: apex:<title>\`) only when the person asked you to, or when you need something only it can give or decide (it owns the files or branch you'd change, or its work blocks yours).`,
   "Never message for status, thanks or acknowledgement: their digest already says how they stand. One message with everything it needs; its reply wakes you; don't reply to a reply unless it asks you something.",
@@ -460,7 +461,7 @@ function askedWords(state: ChildState, report: FrontDoorChild["report"], now: nu
     case "queued":
       return state.refused ? `not started: ${state.refused.replace(/^It didn't start: /, "")}` : state.held ? `not started: ${state.held} didn't finish` : state.after?.length ? `starts after ${state.after.join(", ")}` : `queued, ${state.ahead} ahead`
     case "idle":
-      return "idle"
+      return state.waitingOn?.length ? waitingStateWords(state.waitingOn, state.since, now) : "idle"
     case "blocked":
       return `waits on ${state.on === "lead" ? "you (agents_answer)" : "the person"}: ${state.question}`
     case "ended":
@@ -574,7 +575,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
         question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
         decides: "With a done question: apex (default) or person, who decides it.",
-        waitingOn: "With a question: what it waits on outside your tree, each {kind: \"pull-request\", ref: \"#412\", until: \"checks\" | \"review\" | \"merge\"}, {kind: \"person\", what: \"merge\"}, or {kind: \"other\", text} in a few words.",
+        waitingOn: "What you wait on outside your tree, with a question or on progress, each {kind: \"pull-request\", ref: \"owner/name#412\" or its URL, until: \"checks\" | \"review\" | \"merge\"}, {kind: \"person\", what: \"merge\"}, or {kind: \"other\", text} in a few words. Mako wakes you with a pull request's outcome.",
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",
         action: "What whoever answers does, in one sentence: \"Pick the branch the release goes from.\"",

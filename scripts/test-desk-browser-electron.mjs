@@ -96,9 +96,13 @@ async function main() {
 
   // Dialogs: raise one from the page, read it, answer it; then auto-dismiss.
   await run({ action: "evaluate", target, expression: "setTimeout(() => { window.confirmed = confirm('Continue?') }, 10); 1" })
-  await new Promise((resolve) => setTimeout(resolve, 200))
-  const pending = await run({ action: "dialog", target })
-  assert.equal(pending.pending?.message, "Continue?")
+  // Past the watchdog, a dialog that never came.
+  let pending = await run({ action: "dialog", target })
+  while (!pending.pending) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    pending = await run({ action: "dialog", target })
+  }
+  assert.equal(pending.pending.message, "Continue?")
   await assert.rejects(run({ action: "observe", target }), /confirm dialog is open/)
   await run({ action: "dialog", target, respond: "accept" })
   const confirmed = await run({ action: "evaluate", target, expression: "window.confirmed" })

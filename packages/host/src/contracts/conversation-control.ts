@@ -139,6 +139,8 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     error: z.string(),
     /** What `error` means; see `provider-failure.ts`. */
     failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+    /** Its message left the queue before it went (`withdrawGone`): nothing went wrong with the switch, and nothing is left to retry. */
+    removed: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
 ])
@@ -151,6 +153,16 @@ export const StoredReason = { reason: z.enum(INTERRUPTION_REASONS), exactReason:
 export function readStoredReason<Fields extends { reason: InterruptionReason; exactReason?: string }>({ exactReason, ...fields }: Fields): Omit<Fields, "exactReason"> {
   return { ...fields, reason: readReason(fields.reason, exactReason) }
 }
+
+/** A message's next attempt after a failure that clears by itself (`RequestRetry`, `delivery-retry.ts`), as the journal keeps it. */
+export const RequestRetrySchema = z.object({
+  at: z.number(),
+  attempt: z.number().int().positive(),
+  since: z.number(),
+  cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
+  reason: z.string(),
+  until: z.number().optional(),
+})
 
 export const ContextTransferSchema = z.object({
   inputDigest: z.string().optional(),
@@ -167,8 +179,19 @@ export const ContextTransferSchema = z.object({
   }).transform(readStoredReason).optional(),
   createdAt: z.number(),
   state: TransferStateSchema,
+  /** A reconnect that failed for a cause that clears by itself: it stays queued and goes again at `at` (`nextRetry`). */
+  retry: RequestRetrySchema.optional(),
+  /**
+   * Asked for while the switch `behind` was committing: it waits for that one to finish and for that one's message
+   * (`LiveDispatch.drain`), across a restart too, and reads so until it starts.
+   */
+  behind: z.string().optional(),
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
+/** A switch's input saying what its message in the queue says now. */
+export function carryingWords(input: TransferInput, message: Pick<TransferInput, "text" | "displayText" | "attachments">): TransferInput {
+  return { ...input, text: message.text, displayText: message.displayText, attachments: message.attachments }
+}
 export const ConversationControlSchema = z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),

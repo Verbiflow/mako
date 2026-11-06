@@ -257,7 +257,17 @@ work is CPU time really spent since the last reading (`coresBusy`), never the
 load average, and the person's own work, the busy cores the Fins' own
 processes weren't measured to take, presses only while it leaves fewer idle
 cores than their reserve: on 2026-11-05 six short `git status` at a time
-held this 14-core Mac's load at 18 with 5 cores idle. The person
+held this 14-core Mac's load at 18 with 5 cores idle. Every check run holds
+one of the builds capacity keeps room for (`BuildSlots`), first come first
+served. A check that finishes frees its slot once its tree is gone, and its
+detached children are left alone: nobody asked for its build daemon to die,
+and what such a daemon takes shows only in busy cores. A check that's stopped
+frees its slot once its tree and every child its mark finds or a look saw are
+gone (`untilGone`, `strays`), and one that outlives SIGKILL keeps the slot
+while a waiting check says so. What a stop has seen is kept beside the run's
+record (`<key>.stopping`), so the next host counts it and goes on with the stop. A check the last host left holds its slot by
+those same two rules, and finding it ends nothing. It's counted before any
+slot goes out, and a read of it that fails holds them all (`recoverSlots`). The person
 can fix a number per device instead of Auto (Settings › Fins), and
 `FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
 machine per Fin, is bounded by the plan and the daily spend ceiling only
@@ -348,11 +358,47 @@ Fin but couldn't be stamped stays pending, and the next start finds it under
 its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
 `test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`). A
-report with a question may name what it waits on outside its tree
+report may name what it waits on outside its tree
 (`waitingOn`: a pull request until its checks, review or merge, the person,
 or `other` in a few words), carried on the blocked state and the open
 decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,
-the front door and the strip; nothing watches it yet. A Fin's strip, its crew
+the front door and the strip. A progress report that names it, with the
+Fin's turn ended, reads as idle waiting since the report (`ChildState`'s
+`idle.waitingOn`, `since`), in the crew row, the strip and the front door
+as "Waiting on acme/app#371 checks · 12m" (`waitingStateWords`); the
+orchestration text tells a Fin to report so and end its turn rather than
+poll checks. `PullWatch` (`conversations/pull-watch.ts`) reads only the pull
+requests open Fins' latest reports name, rebuilt from the stored reports on
+each tick and so on start, through `readPull` (the same `gh pr view` and
+check normalising `pull_request_status` uses), on the job `read the pull
+requests Fins wait on`, which runs only while something is watched: each
+read a minute after it's first watched, doubling while unchanged up to
+`PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
+outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
+(checks settled, or one failed since the report while others run; a review
+submitted since, by anyone but the author; merged or closed, which end any
+wait) is claimed once per Fin, report and pull request
+(`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
+never its Apex, through `deliver` under a named request as Mako's words
+(the `pull-watch` service actor): one line, "Mako: PR acme/app#371 checks
+settled: 2 failed (lint, e2e). <url>" (`pullWakeNote`), queued after a
+working Fin's turn, never steered. It never reopens, resumes or takes over
+a stopped Fin (`deliver`'s automatic send), and goes through the one
+admission point every prompt does, the handoff with its Stop latch
+(`LiveDispatch`, #391): there `Agents.admits` reads the wait again, the
+Fin's exact newest report still naming the pull request and its delegation
+open, and one that no longer holds is refused (`HandoffRefused`'s
+`withdrawn`, the request canceled) and its claim retired as obsolete
+(`retirePullWake`), never sent. The same reading runs before the claim and
+before delivery. A host that stopped first sends a claim once on start
+(`undeliveredPullWakes`), if its wait still holds. The Fin's transcript
+draws it as an event line by its words (`pullWakeWords`, `MakoPrompt`'s
+`pull`). A note an exit or a crash left held, proven unsent, is Mako's, so the
+next host sends it on through that same handoff, keeping a Stop's mark. "Newest
+report" means the store's order of taking them (`rowid`), since `at` can tie.
+`test:fin-pull-waits` covers it with a stub reader and a fake clock, and a real
+SIGKILL with the note prepared on each harness (`test-fin-pull-wake-crash.ts`).
+A Fin's strip, its crew
 mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree
@@ -457,7 +503,22 @@ implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
 its next step where its harness steers there and at its turn's end where it
 doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex
 never polls. A steer the harness doesn't take goes as the Apex's next turn,
-never dropped. Each start sets its `mode` and `wake` (on the edge's
+never dropped. The digest is an entry in the Apex's own queue
+(`LiveRequest.digest`), its reports heard once it's there, so the queue
+keeps it through a crash, sends it once and retries it as any message: a
+burst's window is a hold until its time (`RequestWake.after` is
+`DIGEST_WAITS`), a notice joins the newest digest still unsent
+(`LiveConversations.rewriteWaiting`), a stopped Fin's digest is paused for
+its resume, and a withdrawn notice or one no longer current leaves whichever
+unsent digest has it (`AgentWakes.withdraw`, `refresh`). A digest in the
+queue is its notices' receipt (`carried`): a host killed between the
+digest, its claim in the store and the store's receipt re-notices the
+report on its start and finds it carried, so it's sent once. The minute's
+budget is the queue's, kept as it sends (`LiveDispatch.overBudget`, from
+`LiveRequest.digest.sentAt`). A journal the timer can't write fails its own
+conversation alone, runs storage recovery, and is tried again; the timer
+always arms for what's next. Nothing of it lives only in memory but a steer
+unanswered (`test:wake-queue`). Each start sets its `mode` and `wake` (on the edge's
 `asked`), and `reportRoute` is where its reports go: `background` returns at
 once, `wait` holds the call at most `WAIT_LIMIT_MS` (half the 60 s Cursor's
 MCP client and the MCP default give a tool call) for the result or a
@@ -4170,6 +4231,30 @@ turn or compaction ending. Codex and Claude retry dropped streams inside a
 turn without ending it; only their turn-end signals (`turn/completed`, the
 SDK `result`) settle, so a retry never triggers a continuation.
 
+One delivery queue. Every message into a conversation is an entry in its
+journal's request queue (`LiveRequest`), sent by `LiveDispatch` alone; the
+rules every change to it keeps, a provider switch's included, are in
+`docs/delivery-queue.md`, and `test:switch-interleavings` holds generated
+schedules of switches, Stops, edits and crashes to them after every step.
+Step one: why a held message waits has one reading (`holdOf`, in
+`contracts/request-hold.ts`): `edit` (the person paused it to edit it),
+`sign-in`, `retry`, `until` (a usage limit's timed resume) or `paused`, by
+the person's Stop (or an Apex's of its Fin, `LiveRequest.pause`) or by Mako
+(its exit, a crash, a lost steer). What goes next has one rule
+(`nextInLine`, behind `nextQueued`): an edit, a sign-out's pause, a message
+about to go again or one Mako paused keeps its place and holds what's behind
+it, since nobody chose to put it off; a timed resume or what a Stop paused
+lets later messages go, so after a Stop a new message goes while what the
+Stop paused waits for Resume, as its row says. (`test:send-race` holds a
+restart's pause to the order messages came in.) A new message makes a message
+about to go again due now, so it goes first. Every release goes through
+`released`, and every held message's time through one timer, armed for the
+soonest by each commit that gives one a time (`LiveConversations.armWakes`),
+which replaced the 15 s held-wakes poll. The queue's order is the journal's:
+once a request moves from where it came (an interrupt, a Fin's resume), the
+journal keeps the order (`request_order`), so a restart or a crash reads it
+back as it was (`test:request-holds`, with a host killed by SIGKILL).
+
 A message its harness can't take for now waits and goes again by itself,
 never as a failure (`packages/host/src/contracts/delivery-retry.ts`). On
 2026-11-04 an Apex woken for its Fin's report showed "Could not reopen this
@@ -4198,6 +4283,11 @@ card. A cause the person must fix anywhere in the words is never waited out,
 whatever transient words wrap it (`permanentFailure`: "API error: 400 Bad
 Request: unknown model …"). A turn continued by itself leaves its session
 ready, so what the person queued behind it goes in the order they sent it.
+A first start that fails so, with no session yet to resume (a Fin's brief),
+holds its message the same way, and its release starts the conversation
+again (`LiveLaunches.relaunch`); a transfer that does (a message to a
+session with nothing to wake, a reconnect) stays queued with its own
+`retry`, gated until its time (`LiveTransfers.start`, `transferDue`).
 Signed out still pauses for Sign in, and anything else fails at once with its
 card.
 The queue row says when it goes and why (`retryWords`). This holds for the

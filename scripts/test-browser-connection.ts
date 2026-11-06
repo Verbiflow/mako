@@ -9,6 +9,7 @@ let calls = 0
 server.on("connection", (socket) => socket.on("message", (data) => {
   const { id, method } = JSON.parse(data.toString())
   calls++
+  if (method === "Runtime.evaluate") return
   socket.send(JSON.stringify({ id, error: { code: -32000,
     message: method === "Input.insertText" ? "Detached while handling command." : "Invalid parameters" } }))
 }))
@@ -20,7 +21,10 @@ try {
       (error: Error) => error instanceof BrowserFault && error.detail.outcome === outcome)
   }
   assert.equal(calls, 2, "uncertain input is never replayed")
-  console.log("Browser connection: in-flight detach is uncertain, explicit rejection remains rejected, no replay")
+  await assert.rejects(connection.send("Runtime.evaluate", {}, AbortSignal.timeout(20)),
+    (error: Error) => error instanceof BrowserFault && error.detail.code === "cancelled" && error.detail.message.includes("Runtime.evaluate"),
+    "a request never answered says which it was")
+  console.log("Browser connection: in-flight detach is uncertain, explicit rejection remains rejected, no replay, an unanswered request is named")
 } finally {
   connection.close()
   await new Promise<void>((resolve) => server.close(() => resolve()))

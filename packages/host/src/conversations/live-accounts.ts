@@ -14,7 +14,7 @@ import type { Actor } from "../contracts/thread-identity.js"
 import { continueTurnPrompt } from "../contracts/turn-continuation.js"
 import { promptFingerprint } from "./live-assets.js"
 import { LiveRequestSchema } from "./live-journal.js"
-import { activeBinding, conversationControl, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launched, type LiveAccess, type Resident } from "./live-runtime.js"
 
 type AccountsAccess = Pick<LiveAccess,
   "dependencies" | "epoch" | "admission" | "require" | "residents" | "actor" | "flush" | "drain" | "canHibernate" |
@@ -42,7 +42,8 @@ export class LiveAccounts {
     if (failure === "auth" && !(boundary.error instanceof ExecutionAccountChanged))
       return holdForSignIn(resident.snapshot.requests, this.signInHold(resident))
     const busy = boundary.error instanceof SessionBusyError || boundary.error instanceof SessionHeldError
-    const cause = resuming ? transientCause(message, failure, busy) : undefined
+    // A start with nothing to resume is retried too: its release starts it again (`LiveLaunches.relaunch`).
+    const cause = resuming || !launched(activeBinding(resident)) ? transientCause(message, failure, busy) : undefined
     const retried = cause && holdForRetry(resident.snapshot.requests, cause, message, Date.now())
     if (retried) {
       hostLog("live", "a message waits to go again: its harness couldn't take it for now", { conversation: resident.snapshot.session.id, cause, error: message })

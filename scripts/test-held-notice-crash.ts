@@ -29,14 +29,17 @@ async function host(root: string, when: string): Promise<void> {
   writeFileSync(join(root, "apex"), apex.conversation)
   w.say(apex.conversation, "Warm up.")
   await w.settle()
-  const submit = w.live.submit.bind(w.live)
-  w.live.submit = (...args) => {
-    const both = String(args[2]).includes(REPORTED) && String(args[2]).includes(UNREADABLE)
+  // The digest holding both: new in the queue, or one waiting there that took the other in.
+  const dying = <A extends unknown[], R>(call: (...args: A) => R, text: (args: A) => string) => (...args: A): R => {
+    const said = text(args)
+    const both = said.includes(REPORTED) && said.includes(UNREADABLE)
     if (both && when === "before") process.kill(process.pid, "SIGKILL")
-    const taken = submit(...args)
+    const taken = call(...args)
     if (both) process.kill(process.pid, "SIGKILL")
     return taken
   }
+  w.live.submit = dying(w.live.submit.bind(w.live), (args) => args[2])
+  w.live.rewriteWaiting = dying(w.live.rewriteWaiting.bind(w.live), (args) => args[2])
   const placed = w.store.journalPlacement(apex.conversation)!
   const lead = { session: placed.session, thread: placed.thread, conversation: apex.conversation }
   w.store.queueSpawn({ op: `start:${placed.session}:old`, tree: placed.thread, at: Date.now(), record: JSON.stringify({ lead, input: { name: "old", brief: "a brief before briefs were objects" }, harness: "claude" }) })

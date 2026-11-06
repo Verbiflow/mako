@@ -8,6 +8,7 @@ import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { Admission } from "../base/admission.js"
+import { readPull } from "../git/index.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostMethods } from "../transport/index.js"
@@ -171,6 +172,8 @@ export interface ConversationsDeps {
   invoke: HostMethods["invoke"]
   /** The person's model choices for Fins (Settings › Fins) and what they use on each harness. */
   finDefaults?: Pick<FinDefaultsStore, "reading">
+  /** This machine's build slots now, for a heavy suite's note (`build-slots-full`). */
+  builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
   finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
 }
@@ -197,6 +200,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   let agents: Agents | undefined
   const live = new LiveConversations({
     agents: () => agents,
+    ...(deps.builds && { builds: deps.builds }),
     unattended: deps.unattended,
     foreground: deps.foreground,
     work: deps.work,
@@ -345,6 +349,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
+      readPull: (target) => readPull(target),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     agents.resume()
