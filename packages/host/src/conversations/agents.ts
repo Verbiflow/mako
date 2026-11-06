@@ -4610,10 +4610,15 @@ function parseQueued(record: string): QueuedStart | undefined {
   }
 }
 
-/** What a conversation last ran with. */
-function settingsIn(snapshot: LiveSnapshot): SessionSettings | undefined {
-  const chosen = snapshot.requests.filter((request) => request.tuning?.model).at(-1)?.tuning
-  const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
+/**
+ * What a conversation runs with now: the last model asked of its active binding, else what that binding's session says.
+ * A request that ran on another binding says nothing of it: after a move it's the source's model, not this one.
+ */
+export function settingsIn(snapshot: Pick<LiveSnapshot, "requests"> & { session: Pick<LiveSnapshot["session"], "settings">; control?: Pick<NonNullable<LiveSnapshot["control"]>, "activeBindingId" | "bindings"> }): SessionSettings | undefined {
+  const active = snapshot.control?.activeBindingId
+  const here = (request: LiveRequest) => !active || (request.nativeRun?.bindingId ?? request.targetBindingId ?? active) === active
+  const chosen = snapshot.requests.filter((request) => request.tuning?.model && here(request)).at(-1)?.tuning
+  const binding = snapshot.control?.bindings.find((candidate) => candidate.id === active)
   return chosen ?? snapshot.session.settings ?? binding?.tuning
 }
 
