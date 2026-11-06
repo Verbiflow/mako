@@ -105,7 +105,7 @@ schedules, and a failing schedule is pinned there.
     its question is answered, whatever the words, and an answer sent after that is
     refused as answered. Queueing isn't delivery: a message removed unheard leaves
     the question open. What Mako sends by itself (a digest, a continuation, a goal's
-    step) answers nothing. An answer still on its way that fails doesn't reopen a
+    step) answers nothing, known by where it came from, never by its words. An answer still on its way that fails doesn't reopen a
     question something else closed (`Agents.inputDelivered`).
 
 ## What each failure leaves

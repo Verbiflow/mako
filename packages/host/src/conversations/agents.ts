@@ -415,6 +415,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private answersHeld = new Map<string, KeptAnswer>()
   /** What each `agents_send` key delivered, so a retry answers the same. */
   private readonly sent = new Map<string, AgentsSent>()
+  /** The digests being steered into a running turn, by the steer's ID: Mako's own input, known by where it came from, never its words. */
+  private readonly digestSteers = new Set<string>()
   /** Each move by its op: a repeat joins it, or answers what it became. */
   private readonly moveOps = new Map<string, Promise<AgentsMoveResult>>()
   /** Messages to another Apex, by its conversation and the request whose turn answers it: its reply goes to the sender once. */
@@ -1386,7 +1388,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * What Mako sends by itself answers nothing. An answer still on its way that later fails doesn't open it again.
    */
   inputDelivered(conversation: string, { id: request, text, actor, digest, continues, goal }: LiveRequest | SteerDelivered, delivery: FinDelivery): void {
-    if (digest || continues || goal || actor?.kind === "service" || text.startsWith(FROM_AGENTS)) return
+    if (digest || continues || goal || actor?.kind === "service" || this.digestSteers.has(request)) return
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
     const latest = edge && this.latest.get(edge.child)
@@ -2686,7 +2688,9 @@ export class Agents implements AgentOperations, ConversationChildren {
    * What this caller may attach or find, the one check for both, since what's attached can be read and exported
    * (`thread_history`). The person's picker offers everything to the Apex they talk to, whose every attach shows as a
    * chip in its Thread. A Fin below reaches its own tree and what it holds by reference, so a Thread comes down only as
-   * an Apex deliberately hands it on. Keys are the harness and the ids a ref can carry, so spellings of one session match.
+   * an Apex deliberately hands it on. This scopes what agents are offered and can ask Mako for; it isn't a sandbox. A
+   * Fin's shell runs as the person, so `mako send` reaches the host as them, and a chip written that way is theirs.
+   * Keys are the harness and the ids a ref can carry, so spellings of one session match.
    */
   private reachOf(apex: Apex): (ref: string) => boolean {
     const store = this.store()!
@@ -3158,6 +3162,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private steer(conversation: string, id: string, text: string): Promise<boolean> | false {
     const running = this.deps.live.held(conversation)?.requests.find((request) => request.status === "dispatching")
     if (!running) return false
+    this.digestSteers.add(id)
     return this.deps.live.act(conversation, { kind: "steer", id, requestId: running.id, text, attachments: [] }, "native").then(
       (action) => {
         const took = action.state.kind === "accepted" || action.state.kind === "completed"
@@ -3167,7 +3172,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       (error) => {
         hostWarn("agents", "a digest could not join the running turn", { conversation, error: errorMessage({ error }) })
         return false
-      })
+      }).finally(() => this.digestSteers.delete(id))
   }
 
   /**

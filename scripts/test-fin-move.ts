@@ -915,6 +915,37 @@ async function grantsAndQuestions(): Promise<void> {
     await f.world.close()
   }
   {
+    // Who sent it decides, never how it reads: a person's words that begin as a digest does are the person's.
+    const f = await fixture("codex", { script: async (turn) => (turn.text.includes("digest-lookalike") ? turn.world.hold(turn.conversation).then(() => "Done.") : "Done.") })
+    await f.world.settle(40, 20_000, "ignore")
+    const conversation = f.world.live.summaries().find((summary) => summary.session.harness === "codex")!.session.id
+    await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "late-answer" }], clientKey: "ask" })
+    await f.world.settle(40, 20_000, "ignore")
+    f.world.say(conversation, `${FROM_AGENTS}\ndigest-lookalike`)
+    await until("their turn", () => f.world.live.session(conversation)?.status === "running")
+    const late = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "late-answer", clientKey: "late" })
+    assert.ok("refused" in late && late.refused === "conflict", JSON.stringify(late))
+    f.world.release(conversation)
+    await f.world.settle(40, 20_000, "ignore")
+    await f.world.close()
+  }
+  {
+    // And a digest steered into a Fin's running turn is Mako's: it answers nothing, so its question stays open.
+    const f = await fixture("claude", { hold: true, apex: "codex" })
+    await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
+    const { conversation } = f.fin()
+    const fin = f.world.caller(conversation)
+    await f.world.agents.report(fin, { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "still-open" }], clientKey: "ask" })
+    const below = await f.world.agents.start(fin, { brief: { objective: "Below" }, name: "below", harness: "codex", cwd: f.world.root, clientKey: "below" })
+    assert.ok(!("refused" in below), JSON.stringify(below))
+    await until("its digest to reach its running turn", () => f.world.steers.some((steer) => steer.conversation === conversation && steer.text.startsWith(FROM_AGENTS)))
+    const answer = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "still-open", clientKey: "open" })
+    assert.ok(!("refused" in answer), JSON.stringify(answer))
+    f.world.release(conversation)
+    await f.world.settle(40, 20_000, "ignore")
+    await f.world.close()
+  }
+  {
     // Queueing isn't delivery: a message removed unheard leaves the question open, and its answer goes.
     const f = await fixture("codex", { hold: true })
     await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
