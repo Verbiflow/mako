@@ -1,8 +1,7 @@
+import { moveInRail } from "@/components/rail/rail-keys"
 import { RailRow } from "@/components/rail/rail-row"
 import type { SurfaceDefinition } from "@/extend/surfaces"
 import { stage } from "@/state/stage"
-
-const KEYS = ["ArrowDown", "ArrowUp", "Home", "End"]
 
 /**
  * The right rail's top: the left rail's twin. One row a surface, in a fixed order, each with its quiet reading at the
@@ -16,17 +15,7 @@ export function SideRail({ surfaces, activeId }: { surfaces: SurfaceDefinition[]
       aria-orientation="vertical"
       data-side-rail
       className="flex shrink-0 flex-col gap-px px-2 pt-1.5 pb-2"
-      onKeyDown={(event) => {
-        if (!KEYS.includes(event.key)) return
-        const rows = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-surface-id]")]
-        const index = rows.findIndex((row) => row === event.target)
-        if (index < 0) return
-        event.preventDefault()
-        const next = event.key === "Home" ? rows[0] : event.key === "End" ? rows.at(-1) : rows[(index + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length]
-        if (!next?.dataset.surfaceId) return
-        stage.open(next.dataset.surfaceId)
-        next.focus()
-      }}
+      onKeyDown={moveInRail}
     >
       {surfaces.map((surface) => (
         <SideRow key={surface.id} surface={surface} active={surface.id === activeId} />

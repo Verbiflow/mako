@@ -77,8 +77,8 @@ Use these; don't redraw them.
 
 The window is two rails on the shell and the conversation between them, the one pane on `--surface`. The right rail is
 the left's twin: `SideRail`'s rows, one a surface in a fixed order, each with a quiet reading at its end (`+141 −246`,
-`2 need you` in `--attention`), and what a row opens under them. A row shows only while there's something behind it:
-no Fins and nothing running, no Agents. Changes is a list; what's read at length opens as a tab.
+`2 need you` in `--attention`), and what a row opens under them. Agents shows only while there's someone to show:
+no Fins and nothing running, no row. Changes is a list; what's read at length opens as a tab.
 
 A tab is what someone opened on purpose: a file, a diff, a plan, a Session, the one Fin opened in place. Nothing gets a
 tab by starting. An Apex's Fins stand in the crew card and the rail; opened, a Fin gets one tab, and closing it is the

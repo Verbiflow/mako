@@ -107,8 +107,7 @@ export function Stage() {
     ? surfaces.find((entry) => entry.id === tabStage.dock)
     : undefined
   const min = Math.max(
-    COMPANION_DEFAULT,
-  COMPANION_MIN_DEFAULT,
+    COMPANION_MIN_DEFAULT,
     ...sideSurfaces.map((surface) => surface.minWidth ?? 0)
   )
   const width = sideSurface

@@ -418,10 +418,12 @@ const CrewLineRow = memo(function CrewLineRow({
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {moved ? (
-            <span data-fin-moved title={moved} className="flex shrink-0 items-center gap-1">
+            <span data-fin-moved title={moved} className="flex min-w-0 items-center gap-1">
               <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
-              {moved.split(":")[0]}
-              {line ? " ·" : null}
+              <span className="min-w-0 truncate">
+                {moved.split(":")[0]}
+                {line ? " ·" : null}
+              </span>
             </span>
           ) : null}
           {pr ? (

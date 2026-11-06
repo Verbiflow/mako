@@ -3,7 +3,7 @@ import { memo, useCallback, useMemo, useRef, useState } from "react"
 import { ChevronDownIcon, EyeIcon, GitBranchIcon, HourglassIcon, SquareIcon, WorkflowIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import type { AcpState, LiveAcpConversation } from "@/state/acp-state"
-import { stage } from "@/state/stage"
+import { toggleAgentsPanel } from "@/state/window-routes"
 import { shallowEqual } from "@/state/store"
 import { threads, useThreads } from "@/state/threads"
 import { descriptorFor } from "@/state/descriptors"
@@ -447,7 +447,7 @@ export function AgentsToggle() {
       type="button"
       data-agents-toggle
       data-fin-counts={reading.finsLabel || undefined}
-      onClick={() => stage.toggle("agents")}
+      onClick={toggleAgentsPanel}
       aria-label={reading.fins || undefined}
       title={reading.finsLabel ? `${reading.finsLabel}; open the Agents panel` : reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
       className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"

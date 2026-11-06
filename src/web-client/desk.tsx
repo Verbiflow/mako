@@ -31,6 +31,8 @@ import { store } from "@/state/session"
 import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
+import { AgentsLayer } from "./agents-layer"
+import { agentsOpenStore, closeAgents, deskFinStore, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
 import { FinOfApexContext, childSession } from "./fin-of-apex"
@@ -111,6 +113,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           latest.current.newThread(row ? { place: row.runsOn.kind === "cloud" ? CLOUD_PLACE : row.runsOn.deviceId, project: cwd } : undefined)
         },
         threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
+        agents: toggleAgents,
       }),
     []
   )
@@ -159,6 +162,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         </main>
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -177,6 +181,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
   const live = useAcp((state) => activeLiveAcp(state)?.key)
   const changes = useReviewOpen((state) => state.open !== null)
   const files = useFilesOpen((state) => state.open !== null)
+  const agents = useAgentsOpen((state) => state.open !== null)
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   return (
     <TitleStrip
@@ -201,7 +206,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
           <IconAction label="Search threads and commands" keys={formatChord("mod+k")} onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))}>
             <SearchIcon />
           </IconAction>
-          <IconAction label={changes || files ? "Hide the right sidebar" : "Show the right sidebar"} data-on={changes || files} disabled={!changes && !files && !live} onClick={toggleSide}>
+          <IconAction label={changes || files || agents ? "Hide the right sidebar" : "Show the right sidebar"} data-on={changes || files || agents} disabled={!changes && !files && !agents && !live} onClick={toggleSide}>
             <PanelRightIcon />
           </IconAction>
         </>
@@ -213,6 +218,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
 /** The right rail, for the Session on screen, on Changes as the desktop's starts, or away again, whichever row is open. */
 function toggleSide(): void {
   if (filesOpenStore.get().open) return closeFiles()
+  if (agentsOpenStore.get().open) return closeAgents()
   toggleChanges()
 }
 
@@ -446,11 +452,17 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
   }, [addSessionRef, canAdd])
   const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
   const shown = session?.row.session
-  // The Fin opened from the crew card, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
-  const [child, setChild] = useState<NativeAgent | null>(null)
+  // The Fin opened from the crew card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
+  const child = useDeskFin((state) => state.agent)
+  const apexConversation = session?.row.conversation
   const openChild = useCallback((agent: NativeAgent) => {
-    if (agent.child?.conversation) setChild(agent)
-  }, [])
+    if (agent.child?.conversation) deskFinStore.set({ agent, apex: apexConversation })
+  }, [apexConversation])
+  useEffect(() => {
+    const apex = apexConversation
+    if (deskFinStore.get().agent) deskFinStore.set({ ...deskFinStore.get(), apex })
+    return () => deskFinStore.set({ agent: null })
+  }, [apexConversation])
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {
     if (sessionId === undefined && shown) noteOpenedByScreen(shown)
@@ -485,7 +497,7 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
         }
       >
         {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive={!opened} /> : null}
-        {child && opened ? <FinTab agent={child} onClose={() => setChild(null)} /> : null}
+        {child && opened ? <FinTab agent={child} onClose={() => deskFinStore.set({ agent: null })} /> : null}
       </WorkbenchStrip>
       <RoutedOpenContext value={openChild}>
         <FinOfApexContext value={opened ? thread.title : undefined}>
