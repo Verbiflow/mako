@@ -34,10 +34,12 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  *   lid), finishes while it's off, and its notice waits on the second device; the first device, back, takes it once;
  * - a third Fin starts there on `ask`, and its harness asks to run a command. The report says who hears that: its
  *   Apex's device reads it as waiting on the person, its Apex can't allow it with `agents_answer`, and the person's
- *   answer from the Apex's Thread is refused, with where to go. The second device has no window, so it prints
- *   `ASK {"device","thread","name","title","question"}` and waits ten minutes for a person to allow the command where
- *   they can: in that Fin's own Thread, which the account lists, on the web or from another device. Allowed, the
- *   command runs there and the Fin's result wakes its Apex.
+ *   answer from the Apex's Thread is refused, with where to go. Then the first device goes off the network again, so
+ *   the Apex's device can't be what answers. The second device has no window, so it prints
+ *   `ASK {"device","thread","name","title","question","apex"}` and waits ten minutes for a person to allow the command
+ *   where they can: the Fin's own row, which its device writes to the account's list and every other device shows
+ *   under its Apex, on the web or from another device. Allowed, the command runs there; the first device, back, takes
+ *   the Fin's result and it wakes its Apex.
  *
  * Every word a turn is asked for is one only this run knows, so where each ran is plain: each device's scripted model
  * hears only its own device's turns. The report (`report.json`: each step with its time, the devices, Threads and
@@ -574,21 +576,30 @@ try {
     if (place.heard.includes(WORDS.asks)) throw new Error("the command ran on an answer its device never took")
     return answer
   })
+  // The Apex's device off while the person answers: the Fin's row is its own device's, so nothing of this needs it.
+  const apexOffAt = await step("the first device goes off the network again, with the ask open", async () => {
+    await cut()
+    await until("the first device's link to drop", async () => (AccountSchema.parse(await apex.call("mako:cloud-account", [])).state.connection === "connected" ? undefined : true))
+    return { at: new Date().toISOString() }
+  })
   const askedAt = Date.now()
-  await step("the person allows it in the Fin's own Thread, and its result wakes the Apex", async () => {
-    say("ASK", { device: names.place, thread: asker.child, name: asker.name, title, ...(asker.state.question && { question: asker.state.question }) })
+  await step("the person allows it from under the Apex, in the Fin's own Thread, with the Apex's device off", async () => {
+    say("ASK", { device: names.place, thread: asker.child, name: asker.name, title, ...(asker.state.question && { question: asker.state.question }), apex: { thread: apexThread.thread, title: `Placed Fins proof ${tag}`, offSince: apexOffAt.at } })
     // Ten minutes for whoever answers it: there's no window on that device to answer it in.
     await until("the person's answer", async () => (place.heard.includes(WORDS.asks) ? true : undefined), 10 * 60_000)
-    const msToAnswer = Date.now() - askedAt
+    return { msToAnswer: Date.now() - askedAt, heardOnPlace: [...place.heard], permission: (await place.log()).filter((line) => /permission/i.test(line) && !/gateway trace/.test(line)).slice(-6).map((line) => line.slice(0, 300)) }
+  })
+  if (apex.heard.includes(WORDS.asks)) throw new Error("the asking Fin's turn ran on the wrong device")
+  await step("the first device is back, and the Fin's result wakes the Apex", async () => {
+    await listen()
     // Its result is another notice than its ask's: the digest that carries it is the wake.
-    const wake = await until("the Apex's wake with its result", async () => (await digests()).find((request) => request.status === "completed" && request.digest?.notices.some((each) => each.id.startsWith(`notice:${asker.child}:`) && each.id !== asked)))
+    const wake = await until("the Apex's wake with its result", async () => (await digests()).find((request) => request.status === "completed" && request.digest?.notices.some((each) => each.id.startsWith(`notice:${asker.child}:`) && each.id !== asked)), 5 * 60_000)
     const strip = await until("the Fin to read as ended", async () => {
       const found = await stripOf(asker.child)
       return found?.state.kind === "ended" ? found : undefined
     })
-    return { msToAnswer, request: wake.id, notices: wake.digest?.notices.map((each) => each.id), state: strip.state, heardOnPlace: [...place.heard], heardOnApex: [...apex.heard], permission: (await place.log()).filter((line) => /permission/i.test(line) && !/gateway trace/.test(line)).slice(-6).map((line) => line.slice(0, 300)) }
+    return { request: wake.id, notices: wake.digest?.notices.map((each) => each.id), state: strip.state, heardOnApex: [...apex.heard] }
   })
-  if (apex.heard.includes(WORDS.asks)) throw new Error("the asking Fin's turn ran on the wrong device")
 
   // What each host logged of the calls between them, with the correlation IDs the gateway carried.
   const between = (lines: string[]) => lines.filter((line) => /agents-(place|capabilities|notice|list|read|answer|respond)|ask routed|start placed|notice (sent|waits|taken)|edge written|cloned a project|"wake"|\bwake\b/.test(line)).map((line) => line.slice(0, 600))
