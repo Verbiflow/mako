@@ -264,6 +264,8 @@ const replays = [
   "mako:agents-direct",
   /** The person's answer to a Fin's ask is settled by its request id: a repeat answers once. */
   "mako:agents-respond",
+  /** A move is settled by its id: a repeat is the same move. */
+  "mako:agents-continue-next",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
   /** Stopping a background task that has already ended stops nothing. */

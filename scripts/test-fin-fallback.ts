@@ -126,7 +126,8 @@ async function run(name: string, options: Partial<WorldOptions> & { fin: FinScri
       turns += 1
       return options.fin(turns, (how) => turn.world.endWith(turn.conversation, how))
     }
-    if (turn.text.startsWith(FROM_AGENTS)) wakes.push(turn.text)
+    // An Apex that went with its tree hears them with the conversation handed over above them.
+    if (turn.text.includes(FROM_AGENTS)) wakes.push(turn.text)
     return "ok"
   }
   const world = new AgentsWorld({ root: join(root, name), script, now: clock, catalogs: CATALOGS, order: ["claude", "cursor", "codex", "grok", "opencode", "devin"], ladders: { cursor: [{ id: "full", name: "Full", access: "full" }] }, ...options })
@@ -389,7 +390,7 @@ try {
     out()
     await until("the notice", () => r.world.agents.personAsk(r.apex.conversation) !== undefined, 8_000)
     const said = r.world.agents.personAsk(r.apex.conversation)!
-    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
+    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. This Thread moved to Codex. 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
     assert.deepEqual(said.ask.options?.map((option) => option.label), ["Got it"])
     assert.equal(r.world.agents.roster(r.apex.conversation).find((agent) => agent.child?.limitNotice)?.child?.limitNotice?.harness, "claude", "it names the harness that ran out, though the Fin carrying it has left")
     const carrying = r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice)
@@ -584,6 +585,8 @@ try {
     const heard: string[] = []
     const r = await run("moved-failed", {
       apexOn: "codex",
+      // Claude spent, the Apex at a limit has nowhere to go, or it would move on with its digest.
+      catalogs: { claude: CATALOGS.claude!, codex: CATALOGS.codex! },
       accounts: held,
       selected: { claude: "personal" },
       start: { harness: "claude" },
@@ -766,6 +769,11 @@ try {
     await until("the move to work", () => r.world.launches.some((launch) => launch.conversation === finConversation && launch.account === "work"))
     await until("its turn on work", () => r.finTurns().length === 2)
     await r.world.restart()
+    await new Promise((d) => setTimeout(d, 9000))
+    const fc = r.fin()
+    console.log("DBG rows", JSON.stringify(r.world.live.snapshot(fc)!.requests.map((q) => ({ id: q.id.slice(0, 5), st: q.status, cont: Boolean(q.continues), retry: q.retry && { c: q.retry.cause, at: q.retry.at - Date.now(), r: q.retry.reason?.slice(0, 40) }, wake: q.wake, pause: q.pause, why: q.interruption?.reason, t: q.text.slice(0, 30) }))))
+    console.log("DBG session", JSON.stringify(r.world.live.session(fc)?.status), r.world.live.pinnedAccount(fc, "claude"), JSON.stringify(r.world.store.finTurn(edgeOf(r).child)), JSON.stringify(r.world.agents.roster(r.apex.conversation)[0]?.child?.state))
+    console.log("DBG turns", r.finTurns().length, JSON.stringify(held.claude), JSON.stringify(r.world.continued.map((c) => [c.conversation === fc ? "fin" : "apex", c.to, c.by])), JSON.stringify(r.world.launches.map((l) => [l.conversation === fc ? "fin" : "apex", l.account])))
     await until("it to stop out of accounts", () => { const state = r.world.agents.roster(r.apex.conversation)[0]?.child?.state; return state?.kind === "ended" && state.outcome === "stopped" }, 30_000)
     const accountsRun = r.world.launches.filter((launch) => launch.conversation === finConversation).map((launch) => launch.account)
     assert.equal(accountsRun.lastIndexOf("personal"), 0, `never back to personal: ${accountsRun.join(", ")}`)
