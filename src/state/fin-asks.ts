@@ -19,6 +19,8 @@ export interface PersonAsk {
 export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
   const asks: PersonAsk[] = []
   for (const agent of children) {
+    // A limit's notice is the tree's, not this Fin's: it reads once, and first, and "Got it" tells the host it was seen.
+    if (agent.child?.limitNotice) asks.unshift({ fin: agent.child.thread, title: "Usage", harness: agent.child.limitNotice.harness, question: agent.child.limitNotice.line, ask: { kind: "report", id: agent.child.limitNotice.id, options: [{ label: "Got it" }] } })
     const open = agent.child?.state && openAsk(agent.child.state)
     if (!agent.child || !open || open.on === "lead" || !open.ask) continue
     asks.push({ fin: agent.child.thread, title: agent.title, harness: agent.provider, question: open.question, ask: open.ask, ...(open.done && { done: true as const }) })

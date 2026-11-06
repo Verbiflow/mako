@@ -194,3 +194,48 @@ export function outOfAccountsLine(from: { harness: string; account?: string }, s
   const reset = until === undefined ? "" : ` until ${resetWords(until, now)}`
   return `Out of accounts: ${listed} ${unique.length > 1 ? "are at their limits" : "is at its limit"}${reset}`
 }
+
+/** What one notice says of a limit, for a whole tree: what ran out, until when, what moved where and what stopped or waits. */
+export interface LimitFacts {
+  harness: string
+  account?: string
+  until?: number
+  /** Where each Fin went, as the person reads it ("Claude Code"), and what stopped with nowhere to go. */
+  moved: readonly string[]
+  stopped: number
+  /** Fins' reports waiting for an Apex that can't run yet. */
+  waiting: number
+}
+
+/** The episode's key: one notice per account and reset, however many Fins it stopped. */
+export function limitNoticeId(facts: Pick<LimitFacts, "harness" | "account" | "until">, now: number): string {
+  return `limit:${facts.harness}:${facts.account ?? ""}:${facts.until ?? new Date(now).toDateString()}`
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/** A notice in two parts: what ran out until when, as a transcript's line heads it, and what that did to the tree. */
+export interface LimitNoticeWords {
+  ran: string
+  did: string
+}
+
+/** "Cursor ran out until Sun 12:00 AM PST" and "3 Fins moved to Claude Code. 7 reports are waiting." */
+export function limitNoticeWords(facts: LimitFacts, label: (harness: string) => string, now: number): LimitNoticeWords {
+  const where = facts.account ? `${label(facts.harness)} (${facts.account})` : label(facts.harness)
+  const by = new Map<string, number>()
+  for (const to of facts.moved) by.set(to, (by.get(to) ?? 0) + 1)
+  return {
+    ran: `${where} ran out${facts.until === undefined ? "" : ` until ${resetWords(facts.until, now)}`}`,
+    did: [
+      ...[...by].map(([to, n]) => `${count(n, "Fin", "Fins")} moved to ${to}.`),
+      ...(facts.stopped ? [`${count(facts.stopped, "Fin has", "Fins have")} nowhere to go.`] : []),
+      ...(facts.waiting ? [`${count(facts.waiting, "report is", "reports are")} waiting.`] : []),
+    ].join(" "),
+  }
+}
+
+/** One line of those, fixed once said, since a notice is said again whenever its row's line changes. */
+export function limitNoticeLine(words: LimitNoticeWords): string {
+  return [`${words.ran}.`, words.did].filter(Boolean).join(" ")
+}

@@ -140,6 +140,14 @@ assert.match(mismatch, /data-notice-tone="caution"/)
   assert.match(near, /codex@example\.com is at 96% of its weekly limit · personal@work\.dev is at 12%/)
   assert.match(near, /title="Every Codex session switches to personal@work\.dev"[^>]*>Switch to personal@work\.dev</)
   assert.match(near, />Not now</)
+  // One account near its limit: warned, with nothing to press but Not now.
+  const offered = accountsStore.get().limitOffers.codex!
+  const { to: _to, ...sole } = offered
+  accountsStore.set({ limitOffers: { codex: sole } })
+  const alone = limit(live(session(onDefault)))
+  assert.match(alone, /codex@example\.com is at 96% of its weekly limit · When it runs out, Fins go on with your next harness/)
+  assert.doesNotMatch(alone, /Switch to/)
+  accountsStore.set({ limitOffers: { codex: offered } })
   accountsStore.set((state) => ({ limitOffers: { codex: { ...state.limitOffers.codex!, because: "refused" } } }))
   assert.match(limit(live(session(onDefault))), /Codex stopped the last turn on codex@example\.com&#x27;s limits · personal@work\.dev is at 12%/)
   accountsStore.set((state) => ({ accounts: state.accounts.map((account) => ({ ...account, active: account.name === "personal" })) }))

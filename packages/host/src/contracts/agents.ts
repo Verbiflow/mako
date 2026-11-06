@@ -286,6 +286,19 @@ export const FinTurnSchema = z.object({
 })
 export type FinTurn = z.infer<typeof FinTurnSchema>
 
+/** A limit's one notice for a tree (`limit_notices`, by its root Thread): said once, kept until seen or its reset passes. */
+export const LimitNoticeSchema = z.object({
+  id: z.string().min(1).max(600),
+  fin: z.string().min(1).max(200),
+  /** The harness that ran out, which the Fin that carries it has left. */
+  harness: z.string().min(1).max(100),
+  line: z.string().max(512),
+  at: z.number(),
+  until: z.number().optional(),
+  seen: z.literal(true).optional(),
+})
+export type LimitNotice = z.infer<typeof LimitNoticeSchema>
+
 /**
  * The edge: one row of `thread_parents`, keyed by the child Thread, written
  * by the child's owner. It holds only what nothing else does; the child's
@@ -453,7 +466,9 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   // A stop after its last report is how it ended, in the words of whoever stopped it, whatever its harness still winds down.
   if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
     const reason = stuckWords(edge.run, edge.name) ?? edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
-    return { kind: "ended", outcome: "stopped", ...(reason && { reason }) }
+    // Stopped for want of an account, not by anyone's choice: its work isn't finished, and it never reads as done.
+    const unfinished = reason !== undefined && reason === edge.tuned?.rerouted?.line
+    return { kind: "ended", outcome: "stopped", ...(reason && { reason }), ...(unfinished && { unfinished: true as const }) }
   }
   if (thread.starting) return { kind: "starting", step: thread.starting }
   if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }

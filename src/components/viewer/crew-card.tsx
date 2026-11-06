@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { finMoved } from "@/state/fin-moved"
 import {
+  ArrowRightLeftIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerUpLeftIcon,
@@ -366,6 +368,7 @@ const CrewLineRow = memo(function CrewLineRow({
   const line = childLine(state)
   const live = state.kind === "working" || state.kind === "starting"
   const lead = openAsk(state)?.on === "lead"
+  const moved = finMoved(agent)
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =
@@ -402,13 +405,20 @@ const CrewLineRow = memo(function CrewLineRow({
           {lead ? (
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
+          {moved ? (
+            <span data-fin-moved title={moved} className="flex shrink-0 items-center gap-1">
+              <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
+              {moved.split(":")[0]}
+              {line ? " ·" : null}
+            </span>
+          ) : null}
           {pr ? (
             <GitPullRequestIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {live && line ? (
             <Shimmer text={line} className="min-w-0 truncate" />
           ) : (
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 truncate" title={line}>
               {lead ? `Asking its Apex: ${line}` : line}
             </span>
           )}

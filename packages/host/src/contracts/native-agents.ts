@@ -104,7 +104,7 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional() }),
   z.object({ kind: z.literal("idle") }),
   z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional(), waitingOn: waitingOn.optional() }),
-  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional(), decision: FinDecisionSchema.optional(), waitingOn: waitingOn.optional() }),
+  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional(), unfinished: z.literal(true).optional(), decision: FinDecisionSchema.optional(), waitingOn: waitingOn.optional() }),
 ])
 export type ChildStateReading = z.infer<typeof ChildStateSchema>
 export const NativeAgentObservationSchema = z.object({
@@ -162,6 +162,8 @@ export const NativeAgentObservationSchema = z.object({
       state: ChildStateSchema.optional(),
       /** Where it went on when its harness's account ran out, and why: "Moved to Claude (work): personal is at its limit until 3:10 PM PST". */
       moved: z.string().max(512).optional(),
+      /** The one notice of a limit its tree hit, on the first Fin it touched, until the person has seen it (`limitNoticeLine`). */
+      limitNotice: z.object({ id: z.string().min(1).max(600), line: z.string().max(512), harness: z.string().min(1).max(100) }).optional(),
     })
     .optional(),
   state: NativeAgentStateSchema,

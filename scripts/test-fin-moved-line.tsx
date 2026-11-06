@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
+import { childGroup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMovedLine } from "@/components/inspector/fin-moved-line"
 
@@ -21,4 +22,7 @@ assert.doesNotMatch(shown, /truncate/, "and it isn't cut to a line")
 assert.equal(renderToStaticMarkup(<FinMovedLine agent={fin(OUT, { kind: "ended", outcome: "stopped", reason: OUT })} />), "")
 // A Fin that moved, and later stopped for another reason, still says where it went.
 assert.match(renderToStaticMarkup(<FinMovedLine agent={fin(MOVED, { kind: "ended", outcome: "stopped", reason: "the person stopped it" })} />), /data-fin-moved/)
+// A Fin out of accounts stopped with its work unfinished: it's never filed as done, nor folded away with what is.
+assert.equal(childGroup({ kind: "ended", outcome: "stopped", reason: OUT, unfinished: true }), "failed")
+assert.equal(childGroup({ kind: "ended", outcome: "stopped", reason: "the person stopped it" }), "done", "a Stop stays where it was filed")
 console.log("fin moved line: on two lines at most, and only for a Fin that moved")

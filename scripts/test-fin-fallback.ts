@@ -4,8 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resetWords } from "@mako/host/contracts/account-usage"
 import { fallbackOrder, modelFamily, movedLine, stepKey, type FallbackInput } from "@mako/host/contracts/fin-fallback"
+import { childGroup } from "@mako/host/contracts/children"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import type { AgentCaller } from "@mako/host/contracts/agents"
 import { AgentsWorld, type Script, type ScriptedEnd, type WorldAccount, type WorldOptions } from "./lib/agents-world.ts"
 
 /**
@@ -105,6 +107,7 @@ const CATALOGS = Object.fromEntries(["claude", "codex", "cursor", "grok", "openc
 interface Run {
   world: AgentsWorld
   apex: { conversation: string }
+  caller: AgentCaller
   wakes: string[]
   fin: () => string
   finTurns: () => { harness: string; text: string }[]
@@ -137,6 +140,7 @@ async function run(name: string, options: Partial<WorldOptions> & { fin: FinScri
   return {
     world,
     apex,
+    caller: apex.caller,
     wakes,
     fin: () => finConversation,
     finTurns: () => world.prompts.filter((prompt) => prompt.conversation === finConversation).map((prompt) => ({ harness: prompt.harness, text: prompt.text })),
@@ -338,6 +342,70 @@ try {
   }
   console.log("a message arriving while the next harness prepares: refused in words, and sent again it goes after the move and its context")
 
+  // The exact words that stopped this Mac's Fins on 2026-11-05: Cursor marks no limit and its reading can't say it, so the words alone move it, with their reset.
+  {
+    const words = "Your team has reached its usage limit Please reach out to an admin to increase your limit, or return on 11/8/2026 when your usage resets."
+    const r = await run("cursor-words", {
+      accounts: { cursor: named("default"), claude: named("personal") },
+      selected: { cursor: "default", claude: "personal" },
+      start: { harness: "cursor" },
+      ladders: {},
+      fin: (turn, end) => {
+        if (turn > 1) return "Done."
+        end({ fail: words })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    await until("it to go on", () => r.finTurns().some((turn) => turn.harness !== "cursor"))
+    const moved = edgeOf(r).tuned?.rerouted
+    assert.equal(moved?.until, new Date(2026, 10, 8).getTime(), "until the date Cursor's words name")
+    assert.equal(moved?.from, "cursor")
+    await r.world.close()
+  }
+  console.log("Cursor's exact words, with no limit marked and no reading: it moves, until the date they name")
+
+  // A limit that moves a whole tree says so once, for all of it, in the Apex's row, and "Got it" ends it for good.
+  {
+    const held = { claude: named("personal"), codex: named("default") }
+    let out = () => {}
+    const spent = new Promise<void>((resolve) => (out = resolve))
+    const r = await run("one-notice", {
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 2) return "Done."
+        await spent
+        end({ limit: { resetsAt: RESET }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    const second = await r.world.agents.start(r.caller, { brief: { objective: "Check the labels" }, harness: "claude", name: "checks", clientKey: "checks", cwd: r.world.root })
+    assert.ok(!("refused" in second))
+    await until("both to be at work", () => r.world.prompts.filter((prompt) => prompt.text.includes("You're fin:")).length === 2)
+    held.claude[0]!.spentUntil = RESET
+    out()
+    await until("the notice", () => r.world.agents.personAsk(r.apex.conversation) !== undefined, 8_000)
+    const said = r.world.agents.personAsk(r.apex.conversation)!
+    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
+    assert.deepEqual(said.ask.options?.map((option) => option.label), ["Got it"])
+    assert.equal(r.world.agents.roster(r.apex.conversation).find((agent) => agent.child?.limitNotice)?.child?.limitNotice?.harness, "claude", "it names the harness that ran out, though the Fin carrying it has left")
+    const carrying = r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice)
+    assert.equal(carrying.length, 1, "one notice for the tree, not a card per Fin")
+    for (const agent of r.world.agents.roster(r.apex.conversation)) {
+      assert.match(agent.child?.moved ?? "", /^Moved to Codex/, "a moved Fin reads moved")
+      assert.notEqual(agent.child?.state?.kind === "ended" ? agent.child.state.outcome : undefined, "failed", "never failed")
+    }
+    const seen = await r.world.agents.respond(r.apex.conversation, { fin: said.fin, ask: said.ask.id, request: "seen", option: 0 })
+    assert.ok(!("refused" in seen), JSON.stringify(seen))
+    assert.equal(r.world.agents.personAsk(r.apex.conversation), undefined, "seen, it's gone from every surface")
+    assert.equal(r.world.prompts.filter((prompt) => prompt.text.includes("Got it")).length, 0, "and no Fin was told anything")
+    await r.world.close()
+  }
+  console.log("a limit that moves a whole tree: one notice saying what ran out, until when and what moved where; a moved Fin reads moved; Got it ends it")
+
   // The person's own message in the Fin's Thread is theirs to drive: a limit there ends the turn as before.
   {
     const held = accounts()
@@ -478,6 +546,8 @@ try {
     const line = r.world.agents.roster(r.apex.conversation)[0]!.child!.moved!
     assert.match(line, /^Out of accounts: work and personal are at their limits until /, line)
     assert.equal(edgeOf(r).closedReason, line, "its stop says why in the same words")
+    const stopped = r.world.agents.roster(r.apex.conversation)[0]!.child!.state!
+    assert.equal(childGroup(stopped), "failed", "its work isn't finished, so it never reads as done")
     await r.world.close()
   }
   console.log("a restart mid-turn: never back to an account the turn ran on, and out of accounts it stops saying so")

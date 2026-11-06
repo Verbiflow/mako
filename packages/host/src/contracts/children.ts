@@ -248,7 +248,7 @@ export function childGroup(state: ChildState): ChildGroup {
     case "idle":
       return "idle"
     case "ended":
-      return state.outcome === "failed" ? "failed" : state.decision?.on === "person" ? "needs" : "done"
+      return state.outcome === "failed" || state.unfinished ? "failed" : state.decision?.on === "person" ? "needs" : "done"
   }
 }
 

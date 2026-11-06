@@ -555,13 +555,18 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
   const now = Date.now()
   const window = (usedPercent: number): UsageWindow => ({ usedPercent, windowMinutes: 300, resetsAt: now + 3_600_000 })
   const ok = (usedPercent: number, windows = [window(usedPercent)]): AccountUsage => ({ status: "ok", windows })
-  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }], now), null, "no other account, no offer")
+  // The plan that ran out on 2026-11-05 had one account: its limit is said before it, with nothing to switch to.
+  const sole = limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }], now)
+  assert.equal(sole?.because, "near-limit", "one account, still warned")
+  assert.equal(sole?.to, undefined, "with nothing to switch to")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(50) }], now), null, "one account with room says nothing")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }], now, true), null, "and a refusal is the limit's notice's to say")
   assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(50) }, { name: "b", usage: ok(0) }], now), null, "room left, no offer")
   assert.deepEqual(limitOffer("codex", [{ name: "a", email: "a@x", active: true, usage: ok(95) }, { name: "b", usage: ok(80) }, { name: "c", email: "c@x", usage: ok(12) }], now), {
     harness: "codex", because: "near-limit", from: { name: "a", email: "a@x", window: window(95) }, to: { name: "c", email: "c@x", window: window(12) },
   })
-  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }, { name: "b", usage: ok(75) }], now), null, "an account nearly as spent is no way out")
-  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }, { name: "b", usage: { status: "error" } }], now), null, "an unread account may be as spent")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }, { name: "b", usage: ok(75) }], now)?.to, undefined, "an account nearly as spent is no way out")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }, { name: "b", usage: { status: "error" } }], now)?.to, undefined, "an unread account may be as spent")
   assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(10) }, { name: "b", usage: ok(5) }], now, true)?.because, "refused", "a refused turn offers whatever the reading says")
   assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95, [{ ...window(95), resetsAt: now - 1 }]) }, { name: "b", usage: ok(5) }], now), null, "a window past its reset has emptied")
 
@@ -572,11 +577,17 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
   const percent = new Map([["default", 96], ["spare", 8]])
   const read = mock.method(capability, "accountUsage", async (name: string) => { reads.push(name); return ok(percent.get(name) ?? 0) })
   try {
+    percent.set("default", 50)
+    assert.equal(await accounts.limitOffer("devin"), null, "one account with room: nothing said")
+    assert.deepEqual(reads, ["default"], "one account: read for a warning")
     assert.equal(await accounts.limitOffer("devin"), null)
-    assert.deepEqual(reads, [], "one account: nothing read")
+    assert.deepEqual(reads, ["default"], "and at most every ten minutes, whatever turns end")
+    percent.set("default", 96)
+    accounts.usage.forget("devin", "default")
+    reads.length = 0
     listed.push({ harness: "devin", name: "spare", dir: "", active: false, source: "mako", email: "spare@x" })
     const offer = await accounts.limitOffer("devin")
-    assert.equal(offer?.to.name, "spare")
+    assert.equal(offer?.to?.name, "spare")
     assert.equal(offer?.from.window?.usedPercent, 96)
     assert.equal(await accounts.limitOffer("devin"), null, "an offer near a limit comes once an hour")
     percent.set("default", 20)

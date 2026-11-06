@@ -87,7 +87,7 @@ export function useAccountLimitNotice(): ComposerNotice | null {
   const busy = useAccounts((state) => Boolean(state.busy))
   if (!harness || !offer || !label || (active !== undefined && active !== offer.from.name)) return null
   const text = limitText(offer, label)
-  const to = offer.to.email ?? offer.to.name
+  const to = offer.to && (offer.to.email ?? offer.to.name)
   return {
     id: "account-limit",
     tone: offer.because === "refused" ? "caution" : "info",
@@ -95,7 +95,7 @@ export function useAccountLimitNotice(): ComposerNotice | null {
     title: text.title,
     description: text.description,
     actions: [
-      { label: `Switch to ${to}`, primary: true, disabled: busy, title: `Every ${label} session switches to ${to}`, onClick: () => void accounts.select(harness, offer.to.name) },
+      ...(offer.to ? [{ label: `Switch to ${to}`, primary: true, disabled: busy, title: `Every ${label} session switches to ${to}`, onClick: () => void accounts.select(harness, offer.to!.name) }] : []),
       { label: "Not now", onClick: () => accounts.declineOffer(harness) },
     ],
     data: { "data-account-limit": offer.because },
@@ -104,8 +104,8 @@ export function useAccountLimitNotice(): ComposerNotice | null {
 
 function limitText(offer: AccountLimitOffer, label: string): NoticeWords {
   const from = offer.from.email ?? offer.from.name
-  const to = offer.to.email ?? offer.to.name
-  const room = offer.to.window ? `${to} is at ${Math.round(offer.to.window.usedPercent)}%` : `${to} has room`
+  const to = offer.to && (offer.to.email ?? offer.to.name)
+  const room = !offer.to ? "When it runs out, Fins go on with your next harness" : offer.to.window ? `${to} is at ${Math.round(offer.to.window.usedPercent)}%` : `${to} has room`
   if (offer.because === "refused") return { title: `${label} stopped the last turn on ${from}'s limits`, description: room }
   const window = offer.from.window
   return window

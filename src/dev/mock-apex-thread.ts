@@ -62,6 +62,24 @@ const CHILDREN: ChildFixture[] = ([
   { name: "pull-refresh", title: "Pull to refresh", harness: "grok", model: "grok-4.7", state: { kind: "ended", outcome: "done", reason: "Pull to refresh reads the account list again and keeps its place." }, minutes: 40, toolUses: 33, objective: "Pull to refresh reads the account list again." },
 ] satisfies ChildFixture[]).map((fixture) => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : fixture))
 
+/**
+ * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
+ * one had nowhere to go and stopped with its work unfinished, and the first moved carries the tree's one notice.
+ */
+const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
+const LIMIT_UNTIL = "Sun 12:00 AM PST"
+const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
+const LIMIT_OUT = `Out of accounts: Cursor and Claude Code (work) are at their limits until ${LIMIT_UNTIL}`
+const LIMIT_RAN = `Cursor ran out until ${LIMIT_UNTIL}`
+const LIMIT_DID = "3 Fins moved to Claude Code. 1 Fin has nowhere to go. 7 reports are waiting."
+const LIMIT_NOTICE = { id: "limit:cursor::1793923200000", harness: "cursor", line: `${LIMIT_RAN}. ${LIMIT_DID}` }
+/** What each Fin of the scene becomes: a moved one runs on Claude Code now, and the one that couldn't stays on Cursor. */
+const LIMIT_FINS = new Map<string, (entry: NativeAgent) => NativeAgent>([
+  ["sheet-motion", (entry) => ({ ...entry, provider: "claude", model: "claude-opus-5-5", child: { ...entry.child!, moved: LIMIT_MOVED, limitNotice: LIMIT_NOTICE, state: { kind: "working", step: "Edit src/web-client/sheet.tsx" } } })],
+  ["share-sheet", (entry) => ({ ...entry, provider: "claude", model: "claude-opus-5-5", child: { ...entry.child!, moved: LIMIT_MOVED, state: { kind: "working", step: "Read src/web-client/share.tsx" } } })],
+  ["hunks", (entry) => ({ ...entry, provider: "cursor", model: "composer-2.5", child: { ...entry.child!, moved: LIMIT_OUT, state: { kind: "ended", outcome: "stopped", reason: LIMIT_OUT, unfinished: true } } })],
+])
+
 function childThread(index: number): string {
   return `1ead1ead-3000-4000-8000-${String(index + 1).padStart(12, "0")}`
 }
@@ -166,7 +184,7 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }), ...(RULES.has(fixture.name) && { rule: RULES.get(fixture.name) }), ...(MOVED.has(fixture.name) && { rerouted: MOVED.get(fixture.name) }) },
   }
   const { thread, journal } = shown(state, child, now - 60_000)
-  return childEntry(
+  const entry = childEntry(
     edge,
     {
       source: "live",
@@ -182,6 +200,8 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     },
     journal
   )
+  const limited = LIMIT_SCENE && entry.child ? LIMIT_FINS.get(fixture.name) : undefined
+  return limited ? limited(entry) : entry
 }
 
 export function apexFins(): NativeAgent[] {
@@ -392,6 +412,7 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "event", label: `You wrote to ${CHILDREN[DICTATION]!.name} directly`, body: DIRECT_WORDS, direct: { to: CHILDREN[DICTATION]!.name, fin: childThread(DICTATION), request: DIRECT_REQUEST, received: DIRECT_RECEIVED, delivery: "steer", at: DIRECT_AT } },
       { type: "user", text: wake.text, requestId: wake.id },
       { type: "text", text: "Push wording's tone is yours to pick; Thread list swipe finished with its PR." },
+      ...(LIMIT_SCENE ? [{ type: "event" as const, label: LIMIT_RAN, detail: LIMIT_DID }] : []),
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],

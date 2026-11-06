@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -584,6 +584,7 @@ CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, 
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS limit_notices (root_thread TEXT NOT NULL, id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY (root_thread, id));
 CREATE TABLE IF NOT EXISTS agent_answers (
   ask TEXT PRIMARY KEY, child_thread TEXT NOT NULL, op TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
 CREATE INDEX IF NOT EXISTS agent_answers_child ON agent_answers(child_thread, at);
@@ -980,6 +981,31 @@ export class ThreadStore {
     if (!kept) return undefined
     const parsed = FinTurnSchema.safeParse(JSON.parse(RecordRowSchema.parse(kept).record))
     return parsed.success ? parsed.data : undefined
+  }
+
+  /** The notice of a limit a tree waits on the person's seeing: the newest not seen. */
+  limitNotice(root: string): LimitNotice | undefined {
+    const rows = this.sql("SELECT record FROM limit_notices WHERE root_thread = ?").all(root).flatMap((row) => {
+      const parsed = LimitNoticeSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      return parsed.success ? [parsed.data] : []
+    })
+    return rows.filter((notice) => !notice.seen).sort((a, b) => b.at - a.at)[0]
+  }
+
+  /** Keeps a tree's notice, once: false when this episode was said already, seen or not. */
+  keepLimitNotice(root: string, notice: LimitNotice): boolean {
+    return this.write(() => this.sql("INSERT OR IGNORE INTO limit_notices (root_thread, id, record) VALUES (?, ?, ?)").run(root, notice.id, JSON.stringify(notice)).changes > 0)
+  }
+
+  /** The person has seen it, wherever they were: it stays said. False when it's not theirs to see. */
+  seeLimitNotice(root: string, id: string): boolean {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM limit_notices WHERE root_thread = ? AND id = ?").get(root, id)
+      if (!kept) return false
+      const notice = LimitNoticeSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      this.sql("UPDATE limit_notices SET record = ? WHERE root_thread = ? AND id = ?").run(JSON.stringify({ ...notice, seen: true }), root, id)
+      return true
+    })
   }
 
   /**
