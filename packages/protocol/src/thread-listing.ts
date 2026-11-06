@@ -98,10 +98,31 @@ export type ListedAsking = z.infer<typeof ListedAskingSchema>
 /** The most Fins a row says: a tree's started budget. */
 export const LISTED_FINS = 100
 const finNote = z.string().max(200)
+const finRef = finNote.min(1)
+
+/** The Fins a queued one starts after, as a row says them, and the most it says of what an idle one waits on. */
+export const LISTED_AFTER = 20
+export const LISTED_WAITING_ON = 8
+
+/** One thing an idle Fin waits on (`WaitingOn` in the host's contracts), its words cut to a row's length. */
+const ListedWaitingOnSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("pull-request"),
+      ref: finRef,
+      repository: z.string().min(1).max(200).optional(),
+      number: z.number().int().positive().optional(),
+      until: z.enum(["checks", "review", "merge"]).optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("person"), what: finRef }).strict(),
+  z.object({ kind: z.literal("other"), text: finRef }).strict(),
+])
 
 /**
- * Where one of a Session's Fins stands, as its owner's roster says it (`ChildState` in the host's contracts), without
- * the ask a blocked one or a done one's decision carries: the row's `asking` says that.
+ * Where one of a Session's Fins stands, as its owner's roster says it (`ChildState` in the host's contracts): all that
+ * the selectors every device draws it with read, without the ask a blocked one or a done one's decision carries, which
+ * the row's `asking` says, or what a blocked or ended one still waits on, which none of them reads.
  */
 export const ListedFinStateSchema = z.discriminatedUnion("kind", [
   z
@@ -110,20 +131,41 @@ export const ListedFinStateSchema = z.discriminatedUnion("kind", [
       reason: z.enum(["tree-running", "place-full", "device-offline"]),
       ahead: z.number().int().nonnegative(),
       /** The Fins it starts after that haven't finished, by name. */
-      after: z.array(finNote).min(1).max(20).optional(),
+      after: z.array(finNote).min(1).max(LISTED_AFTER).optional(),
       /** The one of them that failed or was stopped: it won't start, and its Apex decides. */
       held: finNote.optional(),
+      /** Why it couldn't start once released. */
+      refused: finNote.optional(),
+      /** Its Apex is a Fin that was stopped: it waits until that Fin resumes. */
+      apexStopped: z.literal(true).optional(),
     })
     .strict(),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }).strict(),
-  z.object({ kind: z.literal("working"), step: finNote.optional(), phase: finNote.optional() }).strict(),
-  z.object({ kind: z.literal("idle") }).strict(),
+  z
+    .object({
+      kind: z.literal("working"),
+      step: finNote.optional(),
+      phase: finNote.optional(),
+      /** Who answered its question, while it works on the answer. */
+      answered: z.object({ by: z.enum(["lead", "person"]), answer: finNote }).strict().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("idle"),
+      /** What its last report said it waits on, and when, on its owner's clock. */
+      waitingOn: z.array(ListedWaitingOnSchema).max(LISTED_WAITING_ON).optional(),
+      since: z.number().optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal("blocked"), question: finNote, on: z.enum(["lead", "person", "approval"]) }).strict(),
   z
     .object({
       kind: z.literal("ended"),
       outcome: z.enum(["done", "failed", "stopped"]),
       reason: finNote.optional(),
+      /** It was stopped with its work unfinished: it counts as failed. */
+      unfinished: z.literal(true).optional(),
       /** What its finished work leaves to decide, and whose it is: the person's counts it as needing them. */
       decision: z.object({ question: finNote, on: z.enum(["lead", "person"]) }).strict().optional(),
     })

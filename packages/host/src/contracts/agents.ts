@@ -122,8 +122,8 @@ export function decisionOn(asked: Pick<ChildSpec, "mode" | "wake">, report: Pick
  * (Merge · Leave open, recommends Merge)", or "the person decides" for theirs.
  */
 export function decisionWords(decision: Pick<FinDecision, "question" | "on" | "ask">): string {
-  const options = decision.ask.options ?? []
-  const recommended = decision.ask.recommended === undefined ? undefined : options[decision.ask.recommended]?.label
+  const options = decision.ask?.options ?? []
+  const recommended = decision.ask?.recommended === undefined ? undefined : options[decision.ask.recommended]?.label
   const offered = options.length ? ` (${options.map((option) => option.label).join(" · ")}${recommended ? `, recommends ${recommended}` : ""})` : ""
   return `done; ${decision.on === "lead" ? "decide" : "the person decides"}: ${decision.question}${offered}`
 }

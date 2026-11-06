@@ -11,7 +11,7 @@ import { MAX_EVENT_BYTES, NUMBERED_LIVE_VERSION, serveRuntime, type Payload } fr
 import { LISTED_FINS, ListedSessionSchema, ReportedSessionSchema, rowsForLink, type ListedFin, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { randomUUID } from "node:crypto"
 import { entryState, type ChildState } from "@mako/host/contracts/agents"
-import { childStateOf, childWord, finsAsChildren, listedFins, orderedChildren, rollup } from "@mako/host/contracts/children"
+import { childLine, childStateOf, childWord, finsAsChildren, listedFins, orderedChildren, rollup } from "@mako/host/contracts/children"
 import { CHILDREN_BINDING, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { MovesUnderWay } from "@mako/host/conversations/moves-under-way"
@@ -666,15 +666,20 @@ test("an Apex's row says its Fins; a change to them alone waits a quarter second
 })
 
 test("a row's Fins read on another device count, order and say each Fin as its owner's roster does, for any roster", () => {
+  const cut = (line: string | undefined) => line?.slice(0, 100)
   // SAFETY: a blocked Fin's ask, filled only as far as `listedFinState` reads it (it drops the ask whole).
   const states: ChildState[] = [
     { kind: "queued", reason: "place-full", ahead: 3 }, { kind: "queued", reason: "tree-running", ahead: 0 }, { kind: "starting", step: "launching" },
     { kind: "working", step: `Running ${"x".repeat(400)}` }, { kind: "working", phase: "Reading the brief" }, { kind: "working" }, { kind: "idle" },
     { kind: "blocked", question: "Which branch?", on: "person", ask: { id: "a-1", kind: "question" } as never }, { kind: "blocked", question: "Plain or friendly?", on: "lead" },
     { kind: "blocked", question: "Approve: npm ci", on: "approval" }, { kind: "ended", outcome: "done" }, { kind: "ended", outcome: "failed", reason: "exit 1" }, { kind: "ended", outcome: "stopped" },
-    // What later builds' rosters say: a queued Fin's order and what held it, a done one's decision with its ask.
-    { kind: "queued", reason: "tree-running", ahead: 0, after: ["li-protocol", "x".repeat(300)] } as ChildState, { kind: "queued", reason: "tree-running", ahead: 1, after: ["li-flage"], held: "li-flage" } as ChildState,
-    { kind: "ended", outcome: "done", decision: { question: "Merge #371?", on: "person", ask: { id: "d-1", kind: "question" } } } as ChildState, { kind: "ended", outcome: "done", decision: { question: "Pick one", on: "lead", ask: { id: "d-2", kind: "question" } } } as ChildState,
+    { kind: "queued", reason: "tree-running", ahead: 0, after: ["li-protocol", "x".repeat(300)] }, { kind: "queued", reason: "tree-running", ahead: 1, after: ["li-flage"], held: "li-flage" },
+    { kind: "queued", reason: "place-full", ahead: 0, refused: `It didn't start: ${"x".repeat(300)}` }, { kind: "queued", reason: "tree-running", ahead: 0, apexStopped: true },
+    { kind: "ended", outcome: "done", decision: { question: "Merge #371?", on: "person", ask: { id: "d-1", kind: "question" } } }, { kind: "ended", outcome: "done", decision: { question: "Pick one", on: "lead", ask: { id: "d-2", kind: "question" } } },
+    { kind: "ended", outcome: "stopped", reason: "out of usage", unfinished: true }, { kind: "working", answered: { by: "person", answer: `Merge ${"x".repeat(390)}` } },
+    { kind: "idle", waitingOn: [{ kind: "pull-request", ref: "Verbiflow/mako#386", repository: "Verbiflow/mako", number: 386, until: "checks" }, { kind: "person", what: "merge" }, { kind: "other", text: "the deploy" }], since: NOW - 60_000 },
+    // What a roster says that no selector reads: it stays with the owner.
+    { kind: "blocked", question: "Which?", on: "person", waitingOn: [{ kind: "person", what: "merge" }] }, { kind: "ended", outcome: "done", waitingOn: [{ kind: "other", text: "the deploy" }] },
   ]
   let seed = 7
   const next = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31), seed % n)
@@ -690,6 +695,7 @@ test("a row's Fins read on another device count, order and say each Fin as its o
     assert.deepEqual(rollup(orderedChildren(elsewhere)), rollup(roster), "the same counts every surface shows")
     assert.deepEqual(orderedChildren(elsewhere).map((agent) => agent.child?.thread), orderedChildren(roster).map((agent) => agent.child?.thread), "in the same order")
     assert.deepEqual(elsewhere.map((agent) => childWord(childStateOf(agent))), orderedChildren(roster).map((agent) => childWord(childStateOf(agent))), "each with the same word")
+    assert.deepEqual(elsewhere.map((agent) => cut(childLine(childStateOf(agent), NOW))), orderedChildren(roster).map((agent) => cut(childLine(childStateOf(agent), NOW))), "and the same line, as far as a row keeps of it")
     assert.ok(finsAsChildren(fins) === finsAsChildren(fins), "the same entries while the row's Fins are")
   }
   assert.equal(listedFins([]), undefined, "an Apex with no Fins says none")

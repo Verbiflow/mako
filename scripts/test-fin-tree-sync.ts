@@ -16,7 +16,6 @@ import { mayReplace, ReportedSessionSchema, type ListedSession, type ReportedSes
 import { listedSummary } from "@mako/host/contracts/listed-conversations"
 import { listedFins, rollup } from "@mako/host/contracts/children"
 import { conversationShown } from "@mako/host/conversations/session-report"
-import { FIN_LOAD } from "@mako/host/conversations/mac-capacity"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { threadChildren } from "@/state/apex-fins"
 import { apexPips } from "@/state/fin-pips"
@@ -72,13 +71,14 @@ let working = 0
 const w = new AgentsWorld({
   root,
   script: (turn) => (turn.text.includes("You're fin:") ? (working++, turn.world.hold(turn.conversation).then(() => (working--, "stopped"))) : "ok"),
-  capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, load: working * FIN_LOAD }) },
+  capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB }) },
+  finLimit: () => 2,
 })
 try {
   const apex = await w.apex("cursor")
   const placed = w.store.journalPlacement(apex.conversation)!
   const brief = { objective: "Hold" }
-  for (const name of ["li-openoutreach", "li-protocol", "li-flage", "li-parley-fit"]) await w.agents.start(apex.caller, { brief, name, clientKey: name, cwd: w.root })
+  for (const name of ["li-openoutreach", "li-protocol", "li-flage", "li-parley-fit"]) await w.agents.start(apex.caller, { brief, name, clientKey: name, cwd: w.root, queue: true })
   for (const deadline = Date.now() + 8_000; working < 2 && Date.now() < deadline; ) await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(working, 2, "the Mac's room: two at work, two held")
 

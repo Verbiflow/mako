@@ -1,8 +1,8 @@
 import { z } from "zod"
-import { LISTED_FINS, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
+import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
 import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
-import { CHILDREN_BINDING, isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
+import { CHILDREN_BINDING, isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster, type WaitingOn } from "./native-agents.js"
 import type { Waiting } from "@mako/protocol/attention"
 import { isLimitAsk } from "./fin-fallback.js"
 import { readFinReports, type FinReportCard } from "./fin-reports.js"
@@ -297,33 +297,45 @@ export function answeredWords(answered: FinAnswered): string {
   return `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answered.answer}`
 }
 
+type ListedWaitingOn = NonNullable<Extract<ListedFinState, { kind: "idle" }>["waitingOn"]>[number]
+
 const FIN_NOTE = 200
 const finNote = (text: string) => (text.length > FIN_NOTE ? `${text.slice(0, FIN_NOTE - 1)}…` : text)
 
-/**
- * What a roster's states say that a row carries, read whether or not this build's `ChildState` has them yet: a queued
- * Fin's `after` and `held`, and a done one's `decision`.
- */
-type Carried = { after?: readonly string[]; held?: string; decision?: { question: string; on: "lead" | "person" } }
+const listedWaitingOn = (item: WaitingOn): ListedWaitingOn => {
+  switch (item.kind) {
+    case "pull-request":
+      return { ...item, ref: finNote(item.ref) }
+    case "person":
+      return { kind: "person", what: finNote(item.what) }
+    case "other":
+      return { kind: "other", text: finNote(item.text) }
+  }
+}
 
 /**
  * A Fin's state as its Apex's row says it: `ChildState` without a blocked Fin's ask or a done one's, which the row's
- * `asking` says, its words cut to a row's length.
+ * `asking` says, its words cut to a row's length. Each field is named, since what a new one is the gateway refuses.
  */
 function listedFinState(state: ChildState): ListedFinState {
-  // SAFETY: `Carried` names only optional fields, each read and checked below before it's carried.
-  const carried = state as ChildState & Carried
   switch (state.kind) {
     case "queued":
       return {
         kind: "queued",
         reason: state.reason,
         ahead: state.ahead,
-        ...(carried.after?.length && { after: carried.after.slice(0, 20).map(finNote) }),
-        ...(carried.held && { held: finNote(carried.held) }),
+        ...(state.after?.length && { after: state.after.slice(0, LISTED_AFTER).map(finNote) }),
+        ...(state.held && { held: finNote(state.held) }),
+        ...(state.refused && { refused: finNote(state.refused) }),
+        ...(state.apexStopped && { apexStopped: true as const }),
       }
     case "working":
-      return { kind: "working", ...(state.step && { step: finNote(state.step) }), ...(state.phase && { phase: finNote(state.phase) }) }
+      return {
+        kind: "working",
+        ...(state.step && { step: finNote(state.step) }),
+        ...(state.phase && { phase: finNote(state.phase) }),
+        ...(state.answered && { answered: { by: state.answered.by, answer: finNote(state.answered.answer) } }),
+      }
     case "blocked":
       return { kind: "blocked", question: finNote(state.question), on: state.on }
     case "ended":
@@ -331,23 +343,18 @@ function listedFinState(state: ChildState): ListedFinState {
         kind: "ended",
         outcome: state.outcome,
         ...(state.reason && { reason: finNote(state.reason) }),
-        ...(carried.decision && { decision: { question: finNote(carried.decision.question), on: carried.decision.on } }),
+        ...(state.unfinished && { unfinished: true as const }),
+        ...(state.decision && { decision: { question: finNote(state.decision.question), on: state.decision.on } }),
       }
     case "starting":
       return { kind: "starting", step: state.step }
     case "idle":
-      return { kind: "idle" }
+      return {
+        kind: "idle",
+        ...(state.waitingOn?.length && { waitingOn: state.waitingOn.slice(0, LISTED_WAITING_ON).map(listedWaitingOn) }),
+        ...(state.since !== undefined && { since: state.since }),
+      }
   }
-}
-
-/**
- * The state a row's Fin stands for on a device that isn't its owner. A decision comes without its ask, which the
- * row's `asking` carries; every selector reads only its question and whose it is.
- */
-function childStateOfListed(state: ListedFinState): ChildState {
-  // SAFETY: a `ListedFinState` is a `ChildState` but for the ask a blocked Fin or a decision carries, which no
-  // selector of a row's Fins reads (`childGroup`, `childWord`, `childLine` read the question and whose it is).
-  return state as ChildState
 }
 
 /**
@@ -384,12 +391,12 @@ export function finsAsChildren(fins: readonly ListedFin[] | undefined): readonly
       title: fin.title ?? fin.name,
       work: "agent",
       background: true,
-      state: entryState(childStateOfListed(fin.state)),
+      state: entryState(fin.state),
       bindingId: CHILDREN_BINDING,
       provider: fin.harness,
       observedAt: at,
       startedAt: at,
-      child: { thread: fin.thread, name: fin.name, origin: "started", state: childStateOfListed(fin.state) },
+      child: { thread: fin.thread, name: fin.name, origin: "started", state: fin.state },
     }
   }))
   childrenOfFins.set(fins, children)

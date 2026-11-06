@@ -2361,6 +2361,9 @@ describe("a Session continued in the cloud while its device is off", () => {
     assert.deepEqual(ReportedSessionSchema.parse(ordered), ordered, "what a queued Fin starts after, the one that held it, and the decision a done one leaves")
     assert.throws(() => ReportedSessionSchema.parse({ ...apex, fins: [fin("merge", { kind: "ended", outcome: "done", decision: { question: "Merge?", on: "person", ask: { id: "a" } } })] }), "a done Fin's decision comes without its ask, which the row's asking says")
     assert.throws(() => ReportedSessionSchema.parse({ ...apex, fins: [fin("x", { kind: "ended", outcome: "done", decision: { question: "Merge?", on: "approval" } })] }), "a decision is its Apex's or the person's")
+    const whole = { ...apex, fins: [fin("refused", { kind: "queued", reason: "place-full", ahead: 0, refused: "It didn't start: no room" }), fin("waits", { kind: "queued", reason: "tree-running", ahead: 0, apexStopped: true }), fin("answered", { kind: "working", answered: { by: "person", answer: "Merge" } }), fin("idle", { kind: "idle", waitingOn: [{ kind: "pull-request", ref: "#386", until: "checks" }, { kind: "person", what: "merge" }, { kind: "other", text: "the deploy" }], since: 1 }), fin("cut", { kind: "ended", outcome: "stopped", unfinished: true })] }
+    assert.deepEqual(ReportedSessionSchema.parse(whole), whole, "all that the selectors read of a Fin's state")
+    assert.throws(() => ReportedSessionSchema.parse({ ...apex, fins: [fin("x", { kind: "ended", outcome: "done", waitingOn: [{ kind: "person", what: "merge" }] })] }), "what an ended Fin waits on stays with its owner")
     const listed = { ...row, fins: apex.fins }
     assert.deepEqual(ListedSessionSchema.parse(listed).fins, apex.fins)
     const newer = ListedSessionSchema.parse({ ...row, fins: [fin("x", { kind: "hibernating" })] })
