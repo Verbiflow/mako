@@ -352,6 +352,7 @@ export function installMockBridge() {
   let apexPrewarms = 0
   let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
+  const agentAskAnswers: Array<{ conversationId: string; ask: string; allow: boolean }> = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -496,6 +497,7 @@ export function installMockBridge() {
       directs: () => [...directCalls],
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
+      agentAsks: () => [...agentAskAnswers],
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
@@ -1028,8 +1030,15 @@ export function installMockBridge() {
     bringStayedChanges: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     putBackMovedFiles: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     workspaceMoveOutcome: async () => null,
-    threadMoveAsks: async () => [],
-    answerThreadMoveAsk: async () => {},
+    answerAgentAsk: async (conversationId: string, ask: string, allow: boolean) => {
+      agentAskAnswers.push({ conversationId, ask, allow })
+      const snapshot = liveSnapshots.get(conversationId)
+      if (!snapshot?.control) return
+      const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
+      const next = { ...snapshot, revision: snapshot.revision + 1, control }
+      liveSnapshots.set(conversationId, next)
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+    },
     threadChanges: async () => null,
     changeUsage: async () => null,
     resolveFileReferences: async () => null,
