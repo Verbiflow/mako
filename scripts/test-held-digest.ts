@@ -22,7 +22,8 @@ import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-held-digest-"))
 const LATER = 24 * 60 * 60_000
-const LIMIT = "You've hit your usage limit. Try again in 3 hours."
+// No time in its words: with one, the wait counts from that reset (`nextRetry`), and these cases are about the budget.
+const LIMIT = "You've hit your usage limit."
 
 async function until(what: string, ready: () => boolean, ms = 10_000): Promise<void> {
   const deadline = Date.now() + ms
