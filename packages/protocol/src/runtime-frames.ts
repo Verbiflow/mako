@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { BorrowPushSchema, CapabilitySchema, SlotsSchema } from "./borrow.js"
+import { BorrowPushSchema, CapabilitySchema, LEASE_ENDS, LeaseSchema, ProgressSchema, SESSION_STREAMS_MAX, SlotsSchema, SourceAskSchema, StreamSchema } from "./borrow.js"
 import {
   type Operation,
   OperationEnvelopeSchema,
@@ -155,6 +155,12 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       at: z.number().int().nonnegative(),
     })
     .strict(),
+  /**
+   * A session this device serves under a lease is alive (version 21 on, `borrow.ts`'s `heartbeat`), with how far it
+   * is when that changed (`progress`), and the streams it serves when they changed (`streams`). The gateway takes it only
+   * from the lease's own device. Missed beats end the lease.
+   */
+  z.object({ type: z.literal("lease-beat"), lease: z.string().min(1).max(128), progress: ProgressSchema.optional(), streams: z.array(StreamSchema).max(SESSION_STREAMS_MAX).optional() }).strict(),
 ])
 
 /** What a device's runtime says it can serve, and its room (`advertise`). */
@@ -301,6 +307,15 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * answers from, so a runtime that sees a gap asks from the last it had. Never a value.
    */
   z.object({ type: z.literal("borrow"), threadId: ThreadIdSchema, seq: SeqSchema, push: BorrowPushSchema }).strict(),
+  /**
+   * What this device is asked as a source (version 21 on, `borrow.ts`'s `SourceAsk`): it answers on the account's
+   * routes, by itself or after its person. Said as the broker asks, and again on enrolment for any still waiting.
+   */
+  z.object({ type: z.literal("source-ask"), ask: SourceAskSchema }).strict(),
+  /** A lease this device serves was issued (version 21 on): its session starts here, and it holds one of the device's slots. */
+  z.object({ type: z.literal("lent"), lease: LeaseSchema }).strict(),
+  /** A lease this device serves ended, and why (version 21 on): it stops the operation and frees its slot. */
+  z.object({ type: z.literal("lent-ended"), lease: z.string().min(1).max(128), why: z.enum(LEASE_ENDS) }).strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>

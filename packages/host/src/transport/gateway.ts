@@ -30,6 +30,8 @@ export type GatewayHostOptions = {
   ports?: RuntimeOptions["ports"]
   /** SSH from the person's editor to its machine's SSH server (`RuntimeOptions.ssh`); without it, each is refused. */
   ssh?: RuntimeOptions["ssh"]
+  /** What this device lends under borrowing's leases (`RuntimeOptions.lending`); without it, it lends nothing. */
+  lending?: RuntimeOptions["lending"]
 }
 
 /**
@@ -86,6 +88,7 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
   if (options.watch) runtime.watch = options.watch
   if (options.ports) runtime.ports = options.ports
   if (options.ssh) runtime.ssh = options.ssh
+  if (options.lending) runtime.lending = options.lending
   return serveRuntime(link, runtime)
 }
 

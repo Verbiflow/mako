@@ -30,6 +30,7 @@ import {
   type SimulatorsShotResult,
   type SimulatorsWatchInput,
   type SimulatorsWatchResult,
+  type SimulatorVia,
 } from "../../contracts/simulators.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
 import { SimulatorUnsupported, type RemoteSimulatorHost, type SimulatorHost } from "./host.js"
@@ -44,7 +45,15 @@ type Who = ({ kind: "agent" } & SimulatorAgent) | { kind: "person" }
 /** Which Thread ended, by whichever of its names the ending knows. */
 export type EndedThread = { thread?: string; conversation?: string; session?: string }
 
-const NOT_OFFERED = "This Mac doesn't offer its simulators to your other devices. Turn it on in Settings › Simulators on this Mac."
+const NOT_LEASED = "This Mac lends its simulators only under a lease of your Thread. Borrow an iOS simulator first; it's routed to a Mac that has one free."
+
+/** A call from another place under a lease this Mac serves: the lease, and what it heard of it, for its session's progress. */
+export interface SimulatorLeases {
+  /** The live lease the call is under: one of the calling Thread's, from where the gateway says it came. */
+  leaseOf(via: SimulatorVia, thread: string): string | undefined
+  /** A verb ran under the lease, for its session's progress. */
+  used?(lease: string, verb: string): void
+}
 
 /**
  * The simulators every host here can run, and who drives each: one Thread at a time, everyone else watching. Each
@@ -54,14 +63,15 @@ const NOT_OFFERED = "This Mac doesn't offer its simulators to your other devices
  *
  * Another Mac's simulators (`remotes`) are that Mac's to decide: a call for one is checked against this Mac's
  * project consent, then handed on whole with the Thread this Mac already resolved, and its claim is kept there. A
- * call that came here from another device (`via`) is answered only for this Mac's own simulators, and only while
- * this Mac offers them (`offered`).
+ * call that came here from another place (`via`) is answered only for this Mac's own simulators: the person's from
+ * another of their devices, and an agent's only under a live session lease of its Thread that this Mac serves
+ * (`leases`), checked on every call.
  */
 export class Simulators {
   readonly #hosts: ReadonlyMap<string, SimulatorHost>
   readonly #remotes: () => readonly RemoteSimulatorHost[]
   readonly #consent: () => Promise<SetupConsent[]>
-  readonly #offered: () => Promise<boolean>
+  readonly #leases: SimulatorLeases | undefined
   readonly #agent: (session: string) => SimulatorAgent | undefined
   readonly #now: () => number
   readonly #holding: (on: boolean) => void
@@ -78,8 +88,8 @@ export class Simulators {
     agent: (session: string) => SimulatorAgent | undefined
     /** The person's other Macs, as they are now: the account's devices come and go. */
     remotes?: () => readonly RemoteSimulatorHost[]
-    /** Whether this Mac offers its simulators to the account's other devices; never, unless the person said so. */
-    offered?: () => Promise<boolean>
+    /** The leases this Mac serves, which an agent's call from another place must be under; without them, none is. */
+    leases?: SimulatorLeases
     now?: () => number
     /** Whether any simulator is held, as it changes: the idle sweep runs only while one is. */
     holding?: (on: boolean) => void
@@ -88,7 +98,7 @@ export class Simulators {
     this.#hosts = new Map(options.hosts.map((host) => [host.id, host]))
     this.#remotes = options.remotes ?? (() => [])
     this.#consent = options.consent
-    this.#offered = options.offered ?? (async () => false)
+    this.#leases = options.leases
     this.#agent = options.agent
     this.#now = options.now ?? Date.now
     this.#holding = options.holding ?? (() => undefined)
@@ -317,7 +327,11 @@ export class Simulators {
     const who = this.#who(caller, verb)
     if ("refused" in who) return who
     const id = key(input.host, input.simulator)
-    if (caller.via && !(await this.#offered())) return this.#refuse(verb, who, id, { refused: "not-offered", why: NOT_OFFERED })
+    if (caller.via && who.kind === "agent") {
+      const lease = this.#leases?.leaseOf(caller.via, who.thread)
+      if (!lease) return this.#refuse(verb, who, id, { refused: "not-offered", why: NOT_LEASED })
+      this.#leases?.used?.(lease, verb)
+    }
     if (who.kind === "agent" && !caller.via && (await this.#consentFor(who, caller)) !== "allowed")
       return this.#refuse(verb, who, id, { refused: "not-allowed", why: "The person hasn't allowed simulators in this project. They can in Settings › Simulators." })
     const host = this.#hosts.get(input.host)
@@ -392,19 +406,19 @@ export class Simulators {
   }
 
   /**
-   * An agent here by its project's consent; a call from another device by whether this Mac offers its simulators. The
-   * most specific answer for where it works, else for its worktree's project: a subfolder decided on overrides its
-   * project's.
+   * An agent here by its project's consent; an agent's call from another place by a live lease of its Thread that this
+   * Mac serves, which the person granted for that project; the person from any of their devices. The most specific
+   * answer for where it works, else for its worktree's project: a subfolder decided on overrides its project's.
    */
   async #consentFor(who: Who, caller?: SimulatorCaller): Promise<SimulatorConsent> {
-    // Via callers skip project consent: that was the calling Mac's to check; this Mac offers or it doesn't.
-    if (caller?.via) return (await this.#offered()) ? "allowed" : "refused"
-    return who.kind === "person" ? "allowed" : consentFor(await this.#consent(), who)
+    if (who.kind === "person") return "allowed"
+    if (caller?.via) return this.#leases?.leaseOf(caller.via, who.thread) ? "allowed" : "refused"
+    return consentFor(await this.#consent(), who)
   }
 
-  /** This Mac's hosts as another device hears them while it doesn't offer them: there, and not offered. */
+  /** This Mac's hosts as a caller without a lease hears them: there, and not lent to it. */
   async #notOffered(): Promise<SimulatorHostSummary[]> {
-    const blocked = { ready: false as const, blocker: "not-offered" as const, why: NOT_OFFERED }
+    const blocked = { ready: false as const, blocker: "not-offered" as const, why: NOT_LEASED }
     return Promise.all([...this.#hosts.values()].map(async (host) => ({ ...(await host.summary()), platforms: { ios: blocked, android: blocked } })))
   }
 }
