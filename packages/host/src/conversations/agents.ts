@@ -169,6 +169,11 @@ function cutBrief(op: string | undefined, cut: LiveRequest): string | undefined 
   return cut.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
 }
 
+/** A message on its way to a Fin, and whether a Stop came meanwhile. */
+interface Crossing {
+  stopped: boolean
+}
+
 type Live = Pick<
   LiveConversations,
   "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "switching" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
@@ -378,6 +383,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly awaiting = new Map<string, { conversation: string; request: string }>()
   /** Fins' conversations whose cut turn is looked at once Mako's own continuation would have been scheduled (`watchCut`). */
   private readonly cutChecks = new Map<string, NodeJS.Timeout>()
+  /** Messages on their way to each Fin (`deliver`), which a Stop marks: one may open a session before it has a queue to wait in. */
+  private readonly crossings = new Map<string, Set<Crossing>>()
   /** Followed runs' cut turns an answer is continuing now (`answerCut`). */
   private readonly cutsAnswering = new Set<string>()
   /** The decision a blocked Fin's Apex was told of, by Fin: told once per question. */
@@ -2297,6 +2304,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * rather than as a failure that wakes the Apex, which asked for it.
    */
   private async end(edge: ThreadParent, why: string): Promise<boolean> {
+    for (const crossing of this.crossings.get(edge.child) ?? []) crossing.stopped = true
     const conversation = this.conversationOf(edge.child)
     // Stopped already: a turn or a message still going there is what a stop now ends.
     if (edge.closedAt) {
@@ -2977,6 +2985,18 @@ export class Agents implements AgentOperations, ConversationChildren {
    * message, whatever harness the sender runs on.
    */
   private async deliver(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver): Promise<Delivered | AgentRefused> {
+    const crossing = { stopped: false }
+    const crossings = this.crossings.get(stopped.child) ?? new Set()
+    this.crossings.set(stopped.child, crossings.add(crossing))
+    try {
+      return await this.sendInto(stopped, request, text, attachments, actor, want, crossing)
+    } finally {
+      crossings.delete(crossing)
+      if (!crossings.size) this.crossings.delete(stopped.child)
+    }
+  }
+
+  private async sendInto(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver, crossing: Crossing): Promise<Delivered | AgentRefused> {
     const before = this.conversationOf(stopped.child)
     const repeat = before ? this.deps.live.held(before)?.requests.find((asked) => asked.id === request) : undefined
     if (repeat) return repeat.status === "queued" || repeat.status === "held"
@@ -3007,6 +3027,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       return ready === "idle"
         ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
         : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message${why ? `: ${why}` : "."}` }
+    }
+    // A Stop that came while this was on its way, before there was a queue to reach, holds it as it holds any message.
+    if (crossing.stopped) {
+      this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor, { pause: "stop" })
+      return { delivery: "queued", hears: `${name} was stopped as this reached it: it waits, held, and goes when ${name} is resumed.` }
     }
     if (taken) {
       queue()

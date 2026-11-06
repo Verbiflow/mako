@@ -33,7 +33,8 @@ import { AgentsWorld, type Heard, type Script } from "./lib/agents-world.ts"
  *
  * - raced: a Fin's turn is cut by SIGKILL, and as the next host reads what moved in its checkout, slowly, its Apex
  *   stops it, the person writes to it, or that host dies too: a stopped Fin hears nothing, no continuation follows the
- *   person's words, and one cut in its read goes on the host after, once.
+ *   person's words, and one cut in its read goes on the host after, once. And a linked run's Continue with a Stop while
+ *   its session opens: it waits under the Stop.
  *
  * Every continuation carries the account a resumed Fin reads (`finResumedText`).
  */
@@ -133,7 +134,12 @@ async function host(root: string, scenario: Scenario, first: boolean): Promise<v
   })
   if (scenario === "raced" && !first) {
     setInterval(() => {
-      if (existsSync(join(root, "git-reached"))) die("in its read of what moved")
+      if (!existsSync(join(root, "git-reached"))) return
+      const conversation = world.live.summaries().map((summary) => summary.session.id).find((id) => id !== state()?.apex)
+      const pending = conversation ? world.live.snapshot(conversation)?.requests.find((request) => request.continues?.auto && request.status === "dispatching") : undefined
+      if (!pending) return
+      writeFileSync(join(root, "killed-in-read"), pending.id)
+      die("in its read of what moved")
     }, 10)
     return void (await new Promise(() => {}))
   }
@@ -267,13 +273,16 @@ async function raced(base: string, how: "stop" | "person" | "crash"): Promise<vo
   const shim = join(root, "bin")
   mkdirSync(shim)
   const real = execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim()
-  writeFileSync(join(shim, "git"), `#!/bin/sh\n[ -e "${gate}" ] && touch "${reached}"\nwhile [ -e "${gate}" ]; do sleep 0.02; done\nexec "${real}" "$@"\n`, { mode: 0o755 })
+  // `rev-parse --local-env-vars` is scratch-git's own, as a host's process starts: only what the host reads waits.
+  writeFileSync(join(shim, "git"), `#!/bin/sh\ncase "$*" in *--local-env-vars*) exec "${real}" "$@";; esac\n[ -e "${gate}" ] && touch "${reached}"\nwhile [ -e "${gate}" ]; do sleep 0.02; done\nexec "${real}" "$@"\n`, { mode: 0o755 })
   writeFileSync(gate, "")
   const path = process.env.PATH
   process.env.PATH = `${shim}:${path}`
   if (how === "crash") {
     const again = await run([root, "raced", "next"])
     assert.equal(again.signal, "SIGKILL", `the next host dies in its read (${again.code}): ${again.stderr.slice(-800)}`)
+    // A kill by the timeout in `run` is a SIGKILL too: only this says the host died where it was meant to.
+    assert.ok(existsSync(join(root, "killed-in-read")), `the next host died with its continuation in the read, not of the timeout: ${again.stderr.slice(-800)}`)
     rmSync(gate)
   }
   const heard: Heard[] = []
@@ -308,6 +317,49 @@ async function raced(base: string, how: "stop" | "person" | "crash"): Promise<vo
   } finally {
     process.env.PATH = path
     rmSync(gate, { force: true })
+    await world.close()
+  }
+}
+
+/**
+ * The power scenario's linked CLI, its Apex answering Continue, and a Stop while its resumed session opens, before it
+ * has a conversation for the Stop to reach: the continuation waits under that Stop, and nothing goes.
+ */
+async function racedOpen(base: string): Promise<void> {
+  const root = join(base, "raced-open")
+  mkdirSync(root, { recursive: true })
+  const killed = await run([root, "power", "first"])
+  assert.equal(killed.signal, "SIGKILL", `the first host is killed (${killed.code}): ${killed.stderr.slice(-800)}`)
+  try { process.kill(readState(root).run!.pid, "SIGKILL") } catch {}
+  const apex = readState(root).apex
+  const heard: Heard[] = []
+  let opening: (() => void) | undefined
+  let answered: Promise<unknown> | undefined
+  const world = new AgentsWorld({
+    root,
+    catalog: fileCatalog(root),
+    heard: (line) => void heard.push(line),
+    preparing: (options) => (options.resume ? new Promise<void>((resolve) => { opening = resolve }) : undefined),
+    script: async (turn) => {
+      if (turn.conversation === apex && turn.text.includes(FROM_AGENTS) && turn.text.includes("cut short")) answered = turn.world.agents.answer(turn.caller, { to: "cli", answer: "Continue", clientKey: "continue" })
+      return "ok"
+    },
+  })
+  try {
+    await until("its session to open", () => opening !== undefined)
+    const stopped = await world.agents.stop(world.caller(apex), { child: "cli", reason: "enough" })
+    assert.ok("stopped" in stopped, JSON.stringify(stopped))
+    opening!()
+    await answered
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const told = heard.filter((line) => line.conversation !== apex)
+    assert.deepEqual(told.map((line) => line.text.slice(0, 50)), [], "nothing reaches a Fin stopped as its session opened")
+    const fin = world.live.summaries().map((summary) => summary.session.id).find((id) => id !== apex)
+    const waits = fin ? world.live.snapshot(fin)?.requests.find((request) => opensContinuation(request.text)) : undefined
+    assert.deepEqual([waits?.status, waits?.pause], ["held", "stop"], "the continuation waits under the Stop, as any message does")
+    console.log("raced (opening): ok")
+  } finally {
+    opening?.()
     await world.close()
   }
 }
@@ -379,6 +431,13 @@ async function main(): Promise<void> {
           failed = true
           console.error(`raced (${how}): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
         }
+      }
+    if (!only.length || process.argv.includes("raced"))
+      try {
+        await racedOpen(base)
+      } catch (error) {
+        failed = true
+        console.error(`raced (opening): ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
       }
   } finally {
     if (!failed) rmSync(base, { recursive: true, force: true })

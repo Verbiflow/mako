@@ -734,7 +734,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "pause"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -805,7 +805,7 @@ export class LiveConversations {
       return this.admit(resident, { ...request, status: "held", signIn: pause.hold })
     }
     // A message for later waits here, held, whatever the process is doing; `wakeDue` releases it.
-    if (request.wake) {
+    if (request.wake || request.pause) {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held" })
     }
