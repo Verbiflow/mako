@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { carryDrafts } from "@mako/host/contracts/thread-splits"
+import { carryDrafts, type ThreadOrigin } from "@mako/host/contracts/thread-splits"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { readAttachmentDrafts, readDraftStorage, writeDraftStorage } from "@/lib/draft-persistence"
 import { draftsStore } from "@/state/drafts"
@@ -124,4 +124,9 @@ export async function loadThreadSplits(): Promise<void> {
   if (!hasBridge()) return
   const splits = await getMako().threadSplits()
   threadDraftsStore.set((state) => ({ drafts: Object.fromEntries(carryDrafts(Object.values(state.drafts), splits).map((draft) => [draft.thread, draft])) }))
+}
+
+/** Where a Thread came from, for its crumb; a window with no host of its own can't say. */
+export async function readThreadOrigin(thread: string): Promise<ThreadOrigin | null> {
+  return hasBridge() ? getMako().threadOrigin(thread) : null
 }

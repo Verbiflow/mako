@@ -1,7 +1,6 @@
 import type { LiveRequest, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { CHILDREN_BINDING, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { personPromptedAt } from "@mako/host/contracts/worked-at"
-import { ThreadGroupSchema, type ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { ThreadRef } from "@/lib/types"
 
 /*
@@ -31,13 +30,6 @@ function startedAt(index: number): number {
 }
 function askedFrom(index: number): number {
   return agedChoice() && index === 1 ? Date.now() - 20 * DAY - 25 * 60_000 : STARTED + index * 60_000
-}
-
-/** The Thread's group under `?aged`: its second Session began as a fork of its first. */
-export function agedGroup(): ThreadGroup[] {
-  return agedChoice()
-    ? [ThreadGroupSchema.parse({ id: BUSY_THREAD, sessions: BUSY_SESSIONS.map((entry, index) => ({ id: entry.session, origin: index === 1 ? "fork" : index ? "new" : "started", started: true, ...(index === 1 && { forkOf: BUSY_SESSIONS[0]!.session }) })) })]
-    : []
 }
 
 /** The Thread's Sessions, the one that started first first, as its tabs are ordered. */

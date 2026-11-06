@@ -10,7 +10,6 @@ import type {
   ArchiveCommand,
   StopTarget,
 } from "./thread-lifecycle.js"
-import type { ThreadGroup } from "./thread-groups.js"
 import type { ThreadOrigin, ThreadSplit } from "./thread-splits.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
@@ -164,7 +163,6 @@ export function createMakoBridge(transport: BridgeTransport) {
     boot: () => invokeTrustedHost<BootPayload>("mako:boot"),
     threadArchives: () =>
       invokeTrustedHost<ThreadArchiveSnapshot>("mako:thread-archives"),
-    threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
     threadPurposes: () => invokeTrustedHost<ThreadPurpose[]>("mako:thread-purposes"),
     threadSplits: () => invokeTrustedHost<ThreadSplit[]>("mako:thread-splits"),
     threadOrigin: (thread: string) => invokeTrustedHost<ThreadOrigin | null>("mako:thread-origin", thread),

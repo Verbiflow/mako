@@ -12,7 +12,7 @@ import { conversationControl, residentOf, type LiveAccess } from "./live-runtime
 import { baseUnread } from "./base-source.js"
 import { SessionIdSchema } from "../contracts/thread-identity.js"
 
-type ForkAccess = Pick<LiveAccess, "dependencies" | "bundles" | "require" | "load" | "flush" | "stamp" | "add" | "register" | "actor" | "announceGroup">
+type ForkAccess = Pick<LiveAccess, "dependencies" | "bundles" | "require" | "load" | "flush" | "stamp" | "add" | "register" | "actor">
 
 /** Conversations forked from another at an answer, and the findings a fork sends back to its parent. */
 export class LiveForks {
@@ -220,7 +220,6 @@ export class LiveForks {
     const stamped = this.access.stamp(snapshot)
     if (named && stamped.sessionId !== named)
       throw new Error(`The fork was made, but this host's Thread store didn't file it into the Session it was given (${named}).`)
-    if (placement && stamped.threadId) this.access.announceGroup(stamped.threadId)
     return stamped
   }
 }

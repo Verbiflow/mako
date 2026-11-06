@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { GitForkIcon } from "lucide-react"
 import type { ThreadOrigin } from "@mako/host/contracts/thread-splits"
-import { getMako, hasBridge } from "@/lib/bridge"
+import { readThreadOrigin } from "@/state/thread-drafts"
 import { currentThreadTabs, openSessionTab, sessionTabTitle, useOnScreen, useThreadTabs } from "@/state/thread-sessions"
 
 const NOWHERE = {}
@@ -15,9 +15,9 @@ export function ThreadCrumb() {
   const shown = draft ? undefined : thread
   const [known, setKnown] = useState<{ thread: string; origin: ThreadOrigin | null } | null>(null)
   useEffect(() => {
-    if (!shown || !hasBridge()) return
+    if (!shown) return
     let current = true
-    void getMako().threadOrigin(shown).then((origin) => {
+    void readThreadOrigin(shown).then((origin) => {
       if (current) setKnown({ thread: shown, origin })
     }, () => {})
     return () => {

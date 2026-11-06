@@ -436,8 +436,8 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession,
     }
   }, [addSessionRef, canAdd])
   const shown = session?.row.session
-  const here = useMemo<OnScreen>(() => ({ thread: threadId, session: shown }), [threadId, shown])
-  useEffect(() => showInTabs(here), [here])
+  const here: OnScreen = { thread: threadId, session: shown }
+  useEffect(() => showInTabs({ thread: threadId, session: shown }), [threadId, shown])
   const tabs = useOpenTabs(here)
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {

@@ -241,7 +241,6 @@ export class LiveConversations {
         const snapshot = this.records.load(conversationId)?.snapshot
         return snapshot?.base?.ref ?? snapshot?.baseSource
       }),
-      announceGroup: (thread) => this.threads.announceGroup(thread),
       observe,
       takeUpdates: (resident, updates) => this.events.take(resident, updates),
       driverEvents: (resident, bindingId) => driverEvents(resident, bindingId, observe),
@@ -1088,11 +1087,6 @@ export class LiveConversations {
   async historySnapshot(id: string): Promise<LiveSnapshot | null> {
     await this.historyReady(id)
     return this.snapshot(id)
-  }
-
-  /** Tell every window what a Thread's tabs are now, after a Session joined it. */
-  announceGroup(thread: string): void {
-    this.threads.announceGroup(thread)
   }
 
   async previewRewind(

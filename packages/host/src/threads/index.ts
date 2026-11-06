@@ -173,7 +173,7 @@ function openSessionMemory(userRoot: string, ledger: SessionMemoryHost, readOnly
 
 export interface ThreadMethodsDeps {
   threads: Threads
-  live: LiveThreads & { announceGroup(thread: string): void }
+  live: LiveThreads
   native: NativeQueue
   /** Ends a headless run on a native session, given the token its stop control was shown. */
   nativeStops: { token(path: string): string | null; abort(path: string, token: string): void }
@@ -244,7 +244,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   })
   declareThreadLifecycleMethods(methods, lifecycle, archives, emit)
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)
-  declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
+  declareThreadGroupMethods(methods, store, threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
   declareThreadTitleMethods(methods, { store, emit })
   declareChatFolderMethods(methods)
   return lifecycle

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import {
   excerpt,
-  notificationHeadline,
   plainText,
 } from "../src/lib/notification-text.ts"
 import { asks, attentionSummary } from "@mako/host/contracts/notifications"
@@ -753,14 +752,9 @@ assert.equal(parseAuthorizationReadout('{"authorization":"weird","alert":"enable
 }
 
 /* ------------------------------------------------------------------ */
-/* A Thread with several Sessions                                       */
+/* A Thread's item counts once                                         */
 /* ------------------------------------------------------------------ */
 
-assert.equal(notificationHeadline("finished", "Codex", ["Claude Code"]), "Codex finished · Claude Code still working")
-assert.equal(notificationHeadline("failed", "Codex", ["Codex"]), "Codex failed · another Codex session still working")
-assert.equal(notificationHeadline("finished", "Codex", ["Claude Code", "Claude Code"]), "Codex finished · 2 Claude Code sessions still working")
-assert.equal(notificationHeadline("approval", "Codex", ["Claude Code", "Grok", "Devin"]), "Codex needs your approval · Claude Code, Grok and Devin still working")
-assert.equal(notificationHeadline("finished", "Codex", []), "Codex finished")
 {
   reset()
   const fake = fakeEnvironment()

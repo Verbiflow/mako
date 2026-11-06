@@ -19,7 +19,7 @@ import type { AccessChoices } from "@mako/host/contracts/access-choices"
 import type { FinChoicesReading } from "@mako/host/contracts/fin-tuning"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
-import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
+import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
 import { mockStorage } from "./mock-storage"
 import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
@@ -88,7 +88,7 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
-import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
+import { busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
 import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
@@ -884,7 +884,6 @@ export function installMockBridge() {
     }),
     threadSplits: async () => [],
     threadOrigin: async () => null,
-  threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : scene === "busy" ? agedGroup() : []),
     threadPurposes: async () => [...purposes],
     threadTitles: async () => [...titles.values()],
     renameThread: async (_operationId: string, thread: string, title: string | null) => {

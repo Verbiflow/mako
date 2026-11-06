@@ -2422,7 +2422,6 @@ const inputs = {
   "mako:thread-file": () =>
     z.tuple([z.string(), z.string(), z.literal("preview").optional()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
-  "mako:thread-groups": () => z.tuple([]),
   "mako:thread-harness-check": () => z.tuple([z.string()]),
   "mako:thread-move": () =>
     z.tuple([
@@ -2983,7 +2982,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-entry", "threads"],
   ["mako:thread-file", "threads"],
   ["mako:thread-follow", "threads"],
-  ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
   ["mako:thread-move", "conversations"],
   ["mako:thread-move-ask-answer", "conversations"],

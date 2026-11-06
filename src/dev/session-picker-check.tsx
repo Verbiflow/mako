@@ -42,7 +42,7 @@ if (window.mako)
     worktrees: refused,
     worktreeSummaries: refused,
     worktreeInventory: refused,
-    threadGroups: refused,
+    threadSplits: refused,
     threadTitles: refused,
     threadPurposes: refused,
     threadArchives: refused,

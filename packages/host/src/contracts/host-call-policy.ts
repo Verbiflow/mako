@@ -71,7 +71,6 @@ const reads = [
   "mako:thread-children",
   "mako:transcript-document",
   "mako:thread-archives",
-  "mako:thread-groups",
   "mako:thread-purposes",
   "mako:thread-splits",
   "mako:thread-origin",

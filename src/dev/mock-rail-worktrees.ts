@@ -1,5 +1,4 @@
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { ThreadRunState } from "@mako/host/contracts/conversation-session"
 import type { AppMark, RoomApp, RoomView } from "@mako/host/contracts/thread-app"
 import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
@@ -166,11 +165,6 @@ const SESSIONS = [
   { path: "/mock/grok-1.jsonl", harness: "grok", session: SessionIdSchema.parse("00000000-0000-4000-8000-0000000000a2"), run: "running" },
 ] as const
 const SESSION_HOME = 0
-
-export const RAIL_THREAD_GROUPS: ThreadGroup[] = [{
-  id: RAIL_WORKTREES[SESSION_HOME]!.thread,
-  sessions: SESSIONS.map((entry, index) => ({ id: entry.session, origin: index ? "new" : "started", started: true })),
-}]
 
 /** Grok starts before Claude finishes, so Claude's outcome lands while Grok works. */
 export const RAIL_RUNS: ThreadRunState[] = SESSIONS.map((entry) => ({ path: entry.path, harness: entry.harness, status: entry.run })).reverse()
