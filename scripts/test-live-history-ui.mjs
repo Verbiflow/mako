@@ -72,11 +72,15 @@ try {
   await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('Jump to latest'))?.click()")
   await until("(()=>{const s=document.querySelector('.scroll-fade-scroller');return s.scrollHeight-s.scrollTop-s.clientHeight<5})()")
   await until("Array.from(document.querySelectorAll('article')).some(e=>e.textContent.includes('Finding 299'))")
+  // A settled turn folds its work: open the fold, then the tool's own row, whose opening reads the rest of its output.
   await evaluate(`(()=>{
     const article=Array.from(document.querySelectorAll('article')).find(e=>e.textContent.includes('Finding 299'));
-    const button=article?.querySelector('button[aria-expanded]');
-    if(!button)throw Error('Tool row missing');button.click();
+    const button=article?.querySelector('button[aria-expanded="false"]');
+    if(!button)throw Error('The turn fold is missing');button.click();
   })()`)
+  const toolRow = "Array.from(document.querySelectorAll('article')).find(e=>e.textContent.includes('Finding 299')).querySelector('[data-transcript-tool] button[aria-expanded=\"false\"]')"
+  await until(`${toolRow} !== null`)
+  await evaluate(`${toolRow}.click()`)
   await until("historyState().blocks.some(b=>b.type==='tool' && b.id==='tool-299' && !b.historyRest && b.output.length>120000)")
   await until("document.body.textContent.includes('Fixture output 299')")
   await evaluate("Array.from(document.querySelectorAll('article')).find(e=>e.textContent.includes('Finding 299')).scrollIntoView({block:'start',behavior:'instant'})")
