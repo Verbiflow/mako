@@ -412,6 +412,8 @@ async function checkWindow() {
   await until(`document.documentElement.classList.contains('light')`)
   await capture("strip-new-thread-light.png")
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
+  await evaluate(`document.querySelector('[data-session-tab]').scrollIntoView({inline: 'nearest'})`)
+  await frames()
   await click("[data-session-tab]")
   await until(`document.querySelectorAll('.session-tab').length === 3`, "an empty new Thread goes when you leave it")
   const closing = await strip()
