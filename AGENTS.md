@@ -503,7 +503,22 @@ implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
 its next step where its harness steers there and at its turn's end where it
 doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex
 never polls. A steer the harness doesn't take goes as the Apex's next turn,
-never dropped. Each start sets its `mode` and `wake` (on the edge's
+never dropped. The digest is an entry in the Apex's own queue
+(`LiveRequest.digest`), its reports heard once it's there, so the queue
+keeps it through a crash, sends it once and retries it as any message: a
+burst's window is a hold until its time (`RequestWake.after` is
+`DIGEST_WAITS`), a notice joins the newest digest still unsent
+(`LiveConversations.rewriteWaiting`), a stopped Fin's digest is paused for
+its resume, and a withdrawn notice or one no longer current leaves whichever
+unsent digest has it (`AgentWakes.withdraw`, `refresh`). A digest in the
+queue is its notices' receipt (`carried`): a host killed between the
+digest, its claim in the store and the store's receipt re-notices the
+report on its start and finds it carried, so it's sent once. The minute's
+budget is the queue's, kept as it sends (`LiveDispatch.overBudget`, from
+`LiveRequest.digest.sentAt`). A journal the timer can't write fails its own
+conversation alone, runs storage recovery, and is tried again; the timer
+always arms for what's next. Nothing of it lives only in memory but a steer
+unanswered (`test:wake-queue`). Each start sets its `mode` and `wake` (on the edge's
 `asked`), and `reportRoute` is where its reports go: `background` returns at
 once, `wait` holds the call at most `WAIT_LIMIT_MS` (half the 60 s Cursor's
 MCP client and the MCP default give a tool call) for the result or a
@@ -4216,6 +4231,30 @@ turn or compaction ending. Codex and Claude retry dropped streams inside a
 turn without ending it; only their turn-end signals (`turn/completed`, the
 SDK `result`) settle, so a retry never triggers a continuation.
 
+One delivery queue. Every message into a conversation is an entry in its
+journal's request queue (`LiveRequest`), sent by `LiveDispatch` alone; the
+rules every change to it keeps, a provider switch's included, are in
+`docs/delivery-queue.md`, and `test:switch-interleavings` holds generated
+schedules of switches, Stops, edits and crashes to them after every step.
+Step one: why a held message waits has one reading (`holdOf`, in
+`contracts/request-hold.ts`): `edit` (the person paused it to edit it),
+`sign-in`, `retry`, `until` (a usage limit's timed resume) or `paused`, by
+the person's Stop (or an Apex's of its Fin, `LiveRequest.pause`) or by Mako
+(its exit, a crash, a lost steer). What goes next has one rule
+(`nextInLine`, behind `nextQueued`): an edit, a sign-out's pause, a message
+about to go again or one Mako paused keeps its place and holds what's behind
+it, since nobody chose to put it off; a timed resume or what a Stop paused
+lets later messages go, so after a Stop a new message goes while what the
+Stop paused waits for Resume, as its row says. (`test:send-race` holds a
+restart's pause to the order messages came in.) A new message makes a message
+about to go again due now, so it goes first. Every release goes through
+`released`, and every held message's time through one timer, armed for the
+soonest by each commit that gives one a time (`LiveConversations.armWakes`),
+which replaced the 15 s held-wakes poll. The queue's order is the journal's:
+once a request moves from where it came (an interrupt, a Fin's resume), the
+journal keeps the order (`request_order`), so a restart or a crash reads it
+back as it was (`test:request-holds`, with a host killed by SIGKILL).
+
 A message its harness can't take for now waits and goes again by itself,
 never as a failure (`packages/host/src/contracts/delivery-retry.ts`). On
 2026-11-04 an Apex woken for its Fin's report showed "Could not reopen this
@@ -4244,6 +4283,11 @@ card. A cause the person must fix anywhere in the words is never waited out,
 whatever transient words wrap it (`permanentFailure`: "API error: 400 Bad
 Request: unknown model …"). A turn continued by itself leaves its session
 ready, so what the person queued behind it goes in the order they sent it.
+A first start that fails so, with no session yet to resume (a Fin's brief),
+holds its message the same way, and its release starts the conversation
+again (`LiveLaunches.relaunch`); a transfer that does (a message to a
+session with nothing to wake, a reconnect) stays queued with its own
+`retry`, gated until its time (`LiveTransfers.start`, `transferDue`).
 Signed out still pauses for Sign in, and anything else fails at once with its
 card.
 The queue row says when it goes and why (`retryWords`). This holds for the

@@ -1,5 +1,6 @@
 import { clockText } from "@/state/request-recovery"
 import { retryWords, waitsForReset } from "@mako/host/contracts/delivery-retry"
+import { DIGEST_WAITS } from "@mako/host/contracts/children"
 import { harnessLabel } from "@/lib/harness-label"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
@@ -418,11 +419,17 @@ function QueueRow({
       )}
       {request.status === "held" && !editing && !request.signIn ? (
         <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at ?? request.retry?.at} data-queue-retry={request.retry?.cause}>
-          {request.wake
+          {request.wake?.after === DIGEST_WAITS
+            ? "Your Fins' news, going in a moment with whatever else they say."
+            : request.wake
             ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
             : request.retry
               ? `Sends again by itself${waitsForReset(request.retry) ? "" : ` at ${clockText(request.retry.at)}`}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
-              : "Paused until you resume or edit this message"}
+              : request.editing
+                ? "Held while you edit it. Nothing behind it goes until you save or resume it."
+                : request.pause === "stop"
+                  ? "Paused by Stop. Messages you send now go ahead of it; Resume sends it."
+                  : "Paused when Mako stopped. Resume sends it, then what waits behind it."}
         </p>
       ) : null}
       {target.kind === "live" && !editable && !editing && !request.status ? (

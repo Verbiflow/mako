@@ -5,7 +5,7 @@ import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { admittedInPlace } from "../contracts/turn-continuation.js"
-import { TransferInputSchema, resumable } from "../contracts/conversation-control.js"
+import { TransferInputSchema, carryingWords, resumable, type ConversationControl } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
   ContextTransfer,
@@ -15,6 +15,8 @@ import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
+import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
@@ -93,8 +95,11 @@ export class LiveTransfers {
       throw new Error("A transfer needs a request or an attachment")
     if (this.pending(resident))
       throw new Error("A provider switch is already pending")
+    // One switch at a time: asked for while another is committed and closing its source, it waits behind that one,
+    // and so does that one's own message, which goes first.
+    const inFlight = resident.transferPhase && (resident.transferPhase.phase === "committed" || resident.transferPhase.phase === "closing") ? resident.transferPhase.id : undefined
     if (
-      resident.snapshot.requests.some((request) => request.status === "queued")
+      resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== inFlight)
     )
       throw new Error(
         "Send or remove queued messages before switching providers"
@@ -121,6 +126,7 @@ export class LiveTransfers {
             inputDigest,
             createdAt: Date.now(),
             state: { kind: "queued" },
+            ...inFlight && { behind: inFlight },
           },
         ],
       },
@@ -139,6 +145,8 @@ export class LiveTransfers {
     const transfer = this.pending(resident)
     if (
       !transfer ||
+      // One waiting to go again goes at its time (`wakeDue` opens it), not on every drain.
+      (transfer.retry && transfer.retry.at > Date.now()) ||
       resident.transferOperation ||
       resident.storageFault ||
       resident.hibernating ||
@@ -167,14 +175,32 @@ export class LiveTransfers {
     })
   }
 
+  /**
+   * The switch that goes next. One whose message sits held in the queue waits with that message, under its hold, and
+   * holds nothing else up (`docs/delivery-queue.md`).
+   */
   pending(resident: Resident): ContextTransfer | undefined {
-    return this.host
-      .control(resident)
-      .transfers.find(
-        (transfer) =>
-          transfer.state.kind === "queued" ||
-          transfer.state.kind === "preparing"
-      )
+    const { requests } = resident.snapshot
+    const free = this.host.control(resident).transfers.filter(
+      (transfer) => unsettled(transfer) && requests.find((request) => request.id === transfer.input.id)?.status !== "held"
+    )
+    // One under way stays next, whatever a resume releases ahead of it in the meantime: one switch at a time.
+    return free.find((transfer) => transfer.state.kind === "preparing") ?? free[0]
+  }
+
+  /** The switch not yet committed that carries the message `id`, held or not. */
+  unsettled(resident: Resident, id: string): ContextTransfer | undefined {
+    return this.host.control(resident).transfers.find((transfer) => transfer.input.id === id && unsettled(transfer))
+  }
+
+  /**
+   * A switch that can't go, as itself, for good: it fails, and a message of its the queue held goes with it, so the
+   * failure's retry (`retryTransfer`) carries the person's words and nothing else sends them.
+   */
+  private fail(resident: Resident, transfer: ContextTransfer, state: Extract<ContextTransfer["state"], { kind: "failed" }>): void {
+    const own = resident.snapshot.requests.find((request) => request.id === transfer.input.id)
+    if (own) resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.filter((request) => request !== own) }
+    this.save(resident, { ...transfer, input: own ? carryingWords(transfer.input, own) : transfer.input, retry: undefined, state })
   }
 
   save(resident: Resident, transfer: ContextTransfer): void {
@@ -197,13 +223,19 @@ export class LiveTransfers {
   ): Promise<void> {
     resident.transferring = true
     const generation = resident.generation
+    // This attempt goes on only while its own transfer is still the one waiting: a Stop holds it back (`stopHolds`)
+    // without moving the resident's generation, so the source binding and its events stay live.
+    const owned = () => resident.generation === generation &&
+      (phase.phase === "committed" || phase.phase === "closing" || this.pending(resident)?.input.id === transfer.input.id)
+    const phase: NonNullable<Resident["transferPhase"]> = { id: transfer.input.id, phase: "preparing" }
+    resident.transferPhase = phase
     let prepared: ProviderConnection | null = null
     let preparedId: string | null = null
     let held: string | null = null
     let reconnect = false
     let activated = false
     try {
-      this.save(resident, { ...transfer, state: { kind: "preparing" } })
+      this.save(resident, { ...transfer, behind: undefined, state: { kind: "preparing" } })
       await this.host.locateNativePath(resident)
       this.host.returnFromRemovedWorktree(resident)
       const source = resident.snapshot
@@ -288,7 +320,7 @@ export class LiveTransfers {
       const nativeForkDeclined = forkSource && forksNatively?.kind === "native"
         ? await forksNatively.declines?.(forkSource)
         : undefined
-      if (resident.generation !== generation) return
+      if (!owned()) return
       if (nativeForkDeclined) hostLog("transfer", "native fork declined", { conversation: source.session.id, provider: transfer.input.provider, reason: nativeForkDeclined })
       const nativeFork = nativeForkDeclined ? undefined : forkSource
       const manifest = await prepareLiveContext({
@@ -300,7 +332,7 @@ export class LiveTransfers {
       })
       // Records the harness here is too old to restore go as the transcript, and the line above the reply says why.
       if (verdict?.kind === "closed" && verdict.outdated) manifest.outdated = verdict.outdated
-      if (resident.generation !== generation) return
+      if (!owned()) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
       if (!driver) throw new Error("The destination provider was removed")
       // A fork the harness doesn't make itself goes on from the transcript of its history, as a switch to another harness does.
@@ -338,6 +370,7 @@ export class LiveTransfers {
         preparedId = bindingId
         this.host.bindingOwners.set(bindingId, source.session.id)
         resident.transferOpening = { bindingId, said: [] }
+        phase.phase = "opening"
         // Two Mako hosts share every provider store; the ledger's hold is
         // taken before anything spawns so they never open one session twice.
         if (prior?.nativeId) {
@@ -408,7 +441,7 @@ export class LiveTransfers {
           prepared.session = { ...session, currentMode: mode }
         }
       }
-      if (resident.generation !== generation) {
+      if (!owned()) {
         if (preparedId) {
           await prepared.driver.close(preparedId)
           void this.revokeTools(preparedId, source.session.id)
@@ -486,6 +519,14 @@ export class LiveTransfers {
         },
       }
       const previous = resident.snapshot
+      const previousControl = this.host.control(resident)
+      // Its message is already in the queue when this switch was held or taken back: it stays as the person left it.
+      const own = previous.requests.find((request) => request.id === transfer.input.id)
+      const carries = {
+        targetBindingId: transfer.input.bindingId ? bindingId : undefined,
+        tuning: prior ? transfer.input.tuning : undefined,
+        context: manifest.includesBase || manifest.toBlock > manifest.fromBlock ? [manifest] : [],
+      }
       const nextSnapshot: LiveSnapshot = {
         ...previous,
         nativeAgents: disconnectNativeAgents(previous.nativeAgents),
@@ -497,25 +538,9 @@ export class LiveTransfers {
         // The base retains its own native identity. The active native path changes independently.
         threadPath: binding.path,
         permissions: [],
-        requests: arrival(
-          previous.requests,
-          LiveRequestSchema.parse({
-            actor: transfer.actor,
-            continues: transfer.continues,
-            id: transfer.input.id,
-            createdAt: Date.now(),
-            targetBindingId: transfer.input.bindingId ? bindingId : undefined,
-            text: transfer.input.text,
-            displayText: transfer.input.displayText ?? transfer.input.text,
-            attachments: transfer.input.attachments,
-            tuning: prior ? transfer.input.tuning : undefined,
-            context:
-              manifest.includesBase || manifest.toBlock > manifest.fromBlock
-                ? [manifest]
-                : [],
-            status: "queued",
-          }),
-        ),
+        requests: own
+          ? previous.requests.map((request) => (request === own ? { ...own, ...carries } : request))
+          : arrival(previous.requests, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
         control: {
           ...this.host.control(resident),
           activeBindingId: bindingId,
@@ -538,10 +563,21 @@ export class LiveTransfers {
         },
       }
       // Durability precedes retirement. A failed write leaves the source
-      // process, its hold and its grants untouched.
-      const heard = resident.journalSnapshot
-      resident.journal.commit(nextSnapshot, resident.journalSnapshot)
-      resident.journalSnapshot = nextSnapshot
+      // process, its hold and its grants untouched. Committed, the switch's
+      // state is the conversation's own from here: what the person does to
+      // the queue while the source closes (a Stop, an edit, a resume, a
+      // removal) acts on it and is written as itself, and the switch
+      // completes, a Stop or not (`Resident.transferPhase`). The flush tells
+      // the windows all of it: the new process's session, the questions the
+      // old one can no longer answer gone, the request, the binding.
+      resident.snapshot = nextSnapshot
+      try {
+        this.host.flush(resident)
+      } catch (error) {
+        resident.snapshot = previous
+        throw error
+      }
+      phase.phase = "committed"
       const retiring = [...resident.connections].filter(
         ([dormantId]) => dormantId !== bindingId
       )
@@ -556,6 +592,7 @@ export class LiveTransfers {
           dormantId,
           (resident.bindingGenerations.get(dormantId) ?? 0) + 1
         )
+      phase.phase = "closing"
       try {
         await Promise.all(
           retiring.map(([dormantId, dormant]) =>
@@ -563,8 +600,16 @@ export class LiveTransfers {
           )
         )
       } catch (error) {
-        resident.journal.commit(previous, nextSnapshot)
-        resident.journalSnapshot = previous
+        // Back before its commit: only what this switch did to the binding is undone, on the state as it is now, so
+        // whatever else was accepted meanwhile (a Stop, an edit, a removal, another switch behind it) stands. Its
+        // message stays in the queue, and the switch waits with it under whatever hold it has.
+        resident.snapshot = undoSwitch(resident.snapshot, this.host.control(resident), previous, previousControl, transfer.input.id)
+        phase.phase = "opening"
+        try {
+          this.host.flush(resident)
+        } catch (failure) {
+          this.host.storageFailed(resident, { error: failure })
+        }
         for (const [dormantId, retiredGeneration] of retiredGenerations)
           resident.bindingGenerations.set(dormantId, retiredGeneration)
         throw error
@@ -582,21 +627,12 @@ export class LiveTransfers {
             source.session.id
           )
       }
-      if (resident.generation !== generation) {
+      if (!owned()) {
         await abandonPrepared()
         return
       }
       resident.connections.set(bindingId, prepared)
       resident.driver = prepared.driver
-      resident.snapshot = nextSnapshot
-      // The windows and the rest of the host last heard the snapshot before
-      // the switch: the flush below tells them all of it (the new process's
-      // session, the questions the old one can no longer answer gone, the
-      // request, the binding). Measured from what the journal already holds,
-      // it once said nothing, and a window kept the old process's
-      // `disconnected` while the new one ran, offering Continue turn on a
-      // question the running agent was still waiting on.
-      if (resident.journalSnapshot === nextSnapshot && heard) resident.journalSnapshot = heard
       if (prepared.session.nativeId)
         this.host.dependencies.memory?.remember(
           transfer.input.provider,
@@ -657,29 +693,125 @@ export class LiveTransfers {
           held,
           resident.snapshot.session.id
         )
-      if (resident.generation === generation) {
+      if (owned()) {
         hostWarn("transfer", reconnect ? "reconnect failed" : "switch failed", {
           conversation: resident.snapshot.session.id,
           harness: transfer.input.provider,
           continues: transfer.continues?.reason ?? "",
           error: errorMessage({ error }),
         })
+        const words = errorMessage({ error })
+        const failure = classifyStartFailure(words, reconnect)
+        // A cause that clears by itself: the transfer stays queued and goes again at its time (`wakeDue`), once.
+        const cause = transientCause(words, failure, error instanceof SessionBusyError || error instanceof SessionHeldError)
+        const retry = cause && nextRetry(transfer.retry, cause, words, Date.now())
         try {
-          this.save(resident, {
-            ...transfer,
-            state: {
-              kind: "failed",
-              error: errorMessage({ error }),
-              failure: classifyStartFailure(errorMessage({ error }), reconnect),
-            },
-          })
+          if (retry) {
+            this.save(resident, { ...transfer, behind: undefined, state: { kind: "queued" }, retry })
+            hostLog("transfer", "goes again by itself", { conversation: resident.snapshot.session.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+          } else
+            this.fail(resident, transfer, { kind: "failed", error: words, failure })
         } catch (failure) {
           this.host.storageFailed(resident, { error: failure })
         }
       }
     } finally {
+      phase.phase = "done"
+      if (resident.transferPhase === phase) resident.transferPhase = undefined
       resident.transferring = false
       resident.transferOpening = undefined
+      // `preparing` is an attempt under way: one held back as it ran waits as it did before.
+      const left = this.unsettled(resident, transfer.input.id)
+      if (left?.state.kind === "preparing") {
+        try {
+          this.save(resident, { ...left, state: { kind: "queued" } })
+        } catch (failure) {
+          this.host.storageFailed(resident, { error: failure })
+        }
+      }
     }
+  }
+}
+
+/** Whether a switch has yet to commit: it has done nothing to the conversation's binding. */
+function unsettled(transfer: ContextTransfer): boolean {
+  return transfer.state.kind === "queued" || transfer.state.kind === "preparing"
+}
+
+function removed(transfer: ContextTransfer): ContextTransfer {
+  return { ...transfer, retry: undefined, state: { kind: "failed", error: "Removed before it was sent", removed: true } }
+}
+
+/** A switch's message as a row of the queue. */
+function messageOf(transfer: ContextTransfer, createdAt: number, fields: Pick<LiveRequest, "status"> & Partial<LiveRequest>): LiveRequest {
+  return LiveRequestSchema.parse({
+    actor: transfer.actor,
+    continues: transfer.continues,
+    id: transfer.input.id,
+    createdAt,
+    text: transfer.input.text,
+    displayText: transfer.input.displayText ?? transfer.input.text,
+    attachments: transfer.input.attachments,
+    ...fields,
+  })
+}
+
+/**
+ * A switch's message that left the queue took the switch with it, whatever took it (a removal, Clear Queue, a Thread
+ * carrying it away, a start that failed): read at every write (`LiveConversations.flush`), so no path can leave a switch
+ * pending behind a row that will never go.
+ */
+export function withdrawGone(snapshot: LiveSnapshot): LiveSnapshot {
+  const control = snapshot.control
+  const gone = (transfer: ContextTransfer) => {
+    if (!unsettled(transfer)) return false
+    const own = snapshot.requests.find((request) => request.id === transfer.input.id)
+    return own !== undefined && own.status !== "queued" && own.status !== "held"
+  }
+  if (!control?.transfers.some(gone)) return snapshot
+  return { ...snapshot, control: { ...control, transfers: control.transfers.map((transfer) => (gone(transfer) ? removed(transfer) : transfer)) } }
+}
+
+/**
+ * A Stop reaches every switch not yet committed, waiting or under way: each is queued work, so it waits as a message of
+ * the queue, held by the Stop, and from here on is edited, removed and resumed as any message is. An attempt under way
+ * sees its transfer no longer next and drops what it comes back with (`LiveTransfers.perform`).
+ */
+export function holdSwitches(snapshot: LiveSnapshot) {
+  const control = snapshot.control
+  const waiting = control?.transfers.filter(unsettled) ?? []
+  if (!control || !waiting.length) return { snapshot, held: 0 }
+  const fresh = waiting.filter((transfer) => !snapshot.requests.some((request) => request.id === transfer.input.id))
+  return {
+    held: waiting.length,
+    snapshot: {
+      ...snapshot,
+      requests: fresh.reduce((requests, transfer) => admittedInPlace(requests, messageOf(transfer, transfer.createdAt, { status: "held", pause: "stop" })), snapshot.requests),
+      control: { ...control, transfers: control.transfers.map((transfer) => (unsettled(transfer) ? { ...transfer, retry: undefined, state: { kind: "queued" as const } } : transfer)) },
+    },
+  }
+}
+
+/**
+ * A committed switch taken back (its source wouldn't close), as an operation on the conversation as it is now: the
+ * session, binding and history it made the conversation's go back to `before`'s, and nothing else moves. Its message
+ * keeps its words, its place and its holds, losing only the destination's context, and the switch waits with it to go
+ * again (`withdrawGone`: one whose message was removed goes with it).
+ */
+function undoSwitch(current: LiveSnapshot, control: ConversationControl, before: LiveSnapshot, beforeControl: ConversationControl, id: string): LiveSnapshot {
+  const was = beforeControl.transfers.find((transfer) => transfer.input.id === id)
+  return {
+    ...current,
+    nativeAgents: before.nativeAgents,
+    session: before.session,
+    threadPath: before.threadPath,
+    permissions: before.permissions,
+    requests: current.requests.map((request) => (request.id === id ? { ...request, context: undefined, targetBindingId: undefined } : request)),
+    control: {
+      ...control,
+      activeBindingId: beforeControl.activeBindingId,
+      bindings: beforeControl.bindings,
+      transfers: control.transfers.map((transfer) => (transfer.input.id === id && was ? { ...was, behind: undefined, state: { kind: "queued" as const } } : transfer)),
+    },
   }
 }

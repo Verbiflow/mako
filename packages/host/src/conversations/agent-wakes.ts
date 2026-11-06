@@ -1,12 +1,12 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { APEX_WORD, decisionWords, reportAsk, reportPhase, waitingWords, type Report } from "../contracts/agents.js"
+import { APEX_WORD, decisionWords, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
 
-export { FROM_AGENTS, fromAgent } from "../contracts/children.js"
+export { DIGEST_WAITS, FROM_AGENTS, fromAgent, WAKES_PER_MINUTE } from "../contracts/children.js"
 
 /** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
@@ -16,38 +16,33 @@ export const RESULT_COALESCE_MS = 250
 const RESULT_CHARS = 8_000
 /** What a decision's report says beside its question, at most: the rest is `agents_read`'s. */
 const DECISION_CHARS = 600
-/** Wakes an Apex takes in a minute; notices past them wait for the next wake. */
-export const WAKES_PER_MINUTE = 6
-const MINUTE_MS = 60_000
 
-/** `notice:{child}:{reportId}`: a report its Apex's owner hears, under an ID a resend repeats. */
-export interface Notice {
+export type { Notice } from "../contracts/agents.js"
+
+/** What an Apex's conversation can take now; `paused`: it's a Fin its Apex stopped, which hears its own Fins once resumed. */
+export type ParentReady = "steer" | "queue" | "idle" | "paused" | "gone"
+
+/** A digest waiting in an Apex's queue, unsent: its request and the notices it carries (`LiveRequest.digest`). */
+export interface OpenDigest {
   id: string
-  report: Report
-  /** The Fin as the digest names it: `"name" (Harness)`. */
-  label: string
-  /** Who wrote it as the person's card of it names them (`FinReportCard`): its name and its harness's ID, when known. */
-  fin: { name: string; harness?: string }
-  /** The Fin's own Session, which the wake's request names as its actor: an agent's words, never the person's. */
-  from: string
-  /** The request already named to carry it, by a host that stopped before it was sent (`ThreadStore.assignWake`). */
-  wake?: string
-  /** The result of a `wait` start whose window ended first: it starts the Apex's next turn, in full, and is never steered into a running one. */
-  settledOnly?: true
-  /** Another of the person's Apexes' reply to this one's message, in full: the turn the message started, as it ended. */
-  reply?: true
-  /** A done report's question: who decides it (`decisionOn`). */
-  decision?: "lead" | "person"
+  notices: readonly Notice[]
 }
 
-/** What an Apex's conversation can take now. */
-export type ParentReady = "steer" | "queue" | "idle" | "gone"
-
 export interface AgentWakesDeps {
-  /** What the Apex's conversation is doing: busy at a step a message joins, busy until its turn's end, idle, or not here. */
+  /** What the Apex's conversation is doing: busy at a step a message joins, busy until its turn's end, idle, stopped, or not here. */
   ready(conversation: string): ParentReady
-  /** Starts a turn with the digest, under `request`: a request taken once already is taken again as the same one. */
-  wake(conversation: string, request: string, text: string, actor: Extract<Actor, { kind: "agent" }>): void
+  /** The digests waiting unsent in the Apex's queue, oldest first: the newest is the one a new notice joins. */
+  unsent(conversation: string): OpenDigest[]
+  /** Whether a digest in the Apex's queue, sent or not, carries this notice: its receipt, read again after a crash. */
+  carried(conversation: string, notice: string): boolean
+  /**
+   * Puts the digest in the Apex's queue under `request`, as the agent `actor`'s words: held until `at` when given (the
+   * burst's window), paused when the Apex is a stopped Fin. The minute's budget is the queue's, as it sends. A request taken once already is
+   * the same one.
+   */
+  admit(conversation: string, request: string, text: string, notices: readonly Notice[], actor: Extract<Actor, { kind: "agent" }>, hold: { at: number } | "paused" | undefined): void
+  /** The unsent digest `request` says `text` now, carrying `notices`; false when it went meanwhile. */
+  rewrite(conversation: string, request: string, text: string, notices: readonly Notice[]): boolean
   /** Joins the digest to the running turn at its next step, resolving whether the harness took it; false when no turn could take one. */
   steer(conversation: string, id: string, text: string): Promise<boolean> | false
   /** The request named before it's sent, and the reports marked heard once it was (`ThreadStore`). */
@@ -60,214 +55,186 @@ export interface AgentWakesDeps {
   now?(): number
 }
 
-interface Waiting {
-  /** The Apex whose wake budget it spends. */
-  apex: string
-  notices: Notice[]
-  timer?: NodeJS.Timeout
-  /** Waits for the Apex's turn to end (`settled`). */
-  forTurnEnd?: true
-  /** A steer this turn didn't take: the rest go at its end, as a turn of their own. */
-  unsteerable?: true
-}
-
 /**
- * The Apex's side of a report (6.6): the notices its Fins' owners
- * send it, coalesced, and delivered the one way its harness takes them now.
- * An idle Apex waits `WAKE_COALESCE_MS` after a burst's first notice and
- * then starts ONE turn with the digest; an Apex busy on a harness whose
- * steer lands at a step gets them at its next step; one whose steer would
- * interrupt (Cursor) gets them as a message queued for its turn's end. A
- * result the Apex waited for (`settledOnly`) is never steered: it goes
- * once the Apex is idle, after `RESULT_COALESCE_MS`, first and in full.
- * Wakes past `WAKES_PER_MINUTE` for an Apex wait, decisions first. Nothing
- * polls: a timer runs only while notices wait.
+ * The Apex's side of a report (6.6): a producer into the Apex's own queue,
+ * which keeps every digest durably, sends it once and in order, and retries
+ * what its harness can't take for now (`delivery-queue.md`, step 2). A notice
+ * joins the digest still unsent in the Apex's queue, or starts one: held
+ * `WAKE_COALESCE_MS` for an idle Apex so a burst is one wake, `RESULT_COALESCE_MS`
+ * for a result the Apex waited for (`settledOnly`), which also goes first and
+ * in full; queued for a busy Apex's turn end; steered into the running turn
+ * at its next step where the harness takes that, and admitted when it
+ * doesn't; paused for a stopped Fin until it's resumed. Past
+ * `WAKES_PER_MINUTE` a digest waits for the minute's budget, which the queue
+ * keeps as it sends (`LiveDispatch`). Its reports are
+ * heard once it's in the queue: the queue, not this, delivers it.
  */
 export class AgentWakes {
   private readonly deps: AgentWakesDeps
-  private readonly waiting = new Map<string, Waiting>()
   private readonly heard = new Set<string>()
-  /** Notices a steer carries until the harness answers it: heard if it took them, else waiting again. */
+  /** Notices a steer carries until the harness answers it: heard if it took them, else admitted. */
   private readonly steering = new Set<string>()
-  private readonly wakes = new Map<string, number[]>()
+  /** Conversations with a digest admitted, for `pending`. */
+  private readonly digests = new Set<string>()
   private stopped = false
 
   constructor(deps: AgentWakesDeps) {
     this.deps = deps
   }
 
-  /** A notice for `conversation`, the Apex's, under Apex `apex`; one already heard or waiting changes nothing. */
-  notice(conversation: string, apex: string, notice: Notice): void {
+  /** A notice for `conversation`, the Apex's, under Apex `apex`; one already heard, waiting or carried changes nothing. */
+  notice(conversation: string, _apex: string, notice: Notice): void {
     if (this.stopped || this.heard.has(notice.id) || this.steering.has(notice.id)) return
-    const held = this.waiting.get(conversation)
-    if (held?.notices.some((waiting) => waiting.id === notice.id)) return
-    const waiting = held ?? { apex, notices: [] }
-    waiting.notices.push(notice)
-    this.waiting.set(conversation, waiting)
+    // Its receipt: a digest in the queue carries it already (a host that died between the digest and the store's
+    // receipt wrote the one and not the other), so it's heard, never sent twice.
+    if (this.deps.carried(conversation, notice.id)) {
+      this.heardNow([notice])
+      return
+    }
     hostLog("agents", "notice", { notice: notice.id, report: notice.report.id, status: notice.report.status, conversation, ...(notice.settledOnly && { settledOnly: true }) })
-    if (waiting.forTurnEnd) return
-    if (notice.settledOnly && waiting.timer) {
-      clearTimeout(waiting.timer)
-      waiting.timer = undefined
+    if (this.deps.current && !this.deps.current(notice)) {
+      this.heardNow([notice])
+      hostLog("agents", "stale end not reported", { conversation, reports: notice.report.id })
+      return
     }
-    if (!waiting.timer) this.after(conversation, waiting, notice.settledOnly ? RESULT_COALESCE_MS : WAKE_COALESCE_MS)
+    const ready = this.deps.ready(conversation)
+    // Kept unheard in the store: the host that has the Apex sends them on its start.
+    if (ready === "gone") return
+    // A running turn that takes a message at its next step hears this now; a result waits for the turn's end.
+    if (ready === "steer" && !notice.settledOnly && !notice.wake) return this.steerIn(conversation, notice)
+    const open = this.deps.unsent(conversation).at(-1)
+    if (open) return this.join(conversation, open, notice)
+    this.start(conversation, [notice], ready)
   }
 
-  /** The Apex's turn ended: what waited for it, and the results it waited for, go now, as a wake once it's idle. */
+  /**
+   * What the Apex's unsent digests say is read again: a notice no longer current (an end the host inferred for a Fin
+   * that works again) leaves each of them, so no digest says a Fin ended while it works. Asked as a Fin's state moves.
+   */
+  refresh(conversation: string): void {
+    if (!this.deps.current) return
+    for (const open of this.deps.unsent(conversation)) {
+      const rest = open.notices.filter((notice) => this.deps.current!(notice))
+      if (rest.length === open.notices.length) continue
+      this.deps.rewrite(conversation, open.id, rest.length ? digest(rest, this.deps.counts(conversation)) : "", rest)
+      hostLog("agents", "stale end not reported", { conversation, reports: open.notices.filter((notice) => !rest.includes(notice)).map((notice) => notice.report.id).join(" ") })
+    }
+  }
+
+  /** The Apex's turn ended: its queue sends what waits next, said as its Fins stand now (`refresh`). */
   settled(conversation: string): void {
-    const waiting = this.waiting.get(conversation)
-    if (!waiting) return
-    waiting.unsteerable = undefined
-    if (waiting.timer || (!waiting.forTurnEnd && !waiting.notices.some((notice) => notice.settledOnly))) return
-    waiting.forTurnEnd = undefined
-    this.after(conversation, waiting, coalesceMs(waiting.notices))
+    this.refresh(conversation)
   }
 
-  /** Takes back a notice its Apex heard another way (a `wait` start that answers its result); false when none waits. */
+  /** Takes back a notice its Apex heard another way (a `wait` start that answers its result), from whichever unsent digest has it; false when none does. */
   withdraw(conversation: string, id: string): boolean {
-    const waiting = this.waiting.get(conversation)
-    const before = waiting?.notices.length ?? 0
-    if (!waiting || !before) return false
-    waiting.notices = waiting.notices.filter((notice) => notice.id !== id)
-    this.heard.add(id)
-    if (!waiting.notices.length) {
-      clearTimeout(waiting.timer)
-      this.waiting.delete(conversation)
+    let found = false
+    for (const open of this.deps.unsent(conversation)) {
+      if (!open.notices.some((notice) => notice.id === id)) continue
+      found = true
+      const rest = open.notices.filter((notice) => notice.id !== id)
+      this.deps.rewrite(conversation, open.id, rest.length ? digest(rest, this.deps.counts(conversation)) : "", rest)
     }
-    return waiting.notices.length < before
+    if (found) this.heard.add(id)
+    return found
   }
 
-  /** Whether notices wait for this Apex's conversation: a turn of its own is coming. */
+  /** Whether a digest waits unsent in this Apex's queue: a turn of its own is coming. */
   waits(conversation: string): boolean {
-    return Boolean(this.waiting.get(conversation)?.notices.length)
+    return this.deps.unsent(conversation).length > 0
   }
 
-  /** How many notices wait, across every Apex: Diagnostics shows it. */
+  /** How many digests wait unsent, every Apex's, and steers unanswered: Diagnostics shows it. */
   pending(): number {
     let count = this.steering.size
-    for (const waiting of this.waiting.values()) count += waiting.notices.length
+    for (const conversation of this.digests) {
+      const unsent = this.deps.unsent(conversation).length
+      if (unsent) count += unsent
+      else this.digests.delete(conversation)
+    }
     return count
   }
 
   dispose(): void {
     this.stopped = true
-    for (const waiting of this.waiting.values()) clearTimeout(waiting.timer)
-    this.waiting.clear()
   }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now()
   }
 
-  private after(conversation: string, waiting: Waiting, ms: number): void {
-    waiting.timer = setTimeout(() => {
-      waiting.timer = undefined
-      this.flush(conversation)
-    }, ms)
-    waiting.timer.unref()
-  }
-
-  private flush(conversation: string): void {
-    const waiting = this.waiting.get(conversation)
-    if (!waiting?.notices.length || this.stopped) return
-    const stale = this.deps.current ? waiting.notices.filter((notice) => !this.deps.current!(notice)) : []
-    if (stale.length) {
-      this.deps.delivered(stale.map((notice) => notice.report.id), this.now())
-      for (const notice of stale) this.heard.add(notice.id)
-      waiting.notices = waiting.notices.filter((notice) => !stale.includes(notice))
-      hostLog("agents", "stale end not reported", { conversation, reports: stale.map((notice) => notice.report.id).join(" ") })
-      if (!waiting.notices.length) {
-        this.waiting.delete(conversation)
-        return
-      }
-    }
-    const ready = this.deps.ready(conversation)
-    if (ready === "gone") {
-      // Kept unheard in the store: the host that has the Apex sends them on its start.
-      this.waiting.delete(conversation)
-      return
-    }
-    if (ready === "queue" || (ready === "steer" && waiting.unsteerable)) {
-      waiting.forTurnEnd = true
-      return
-    }
-    const steerable = waiting.notices.filter((notice) => !notice.settledOnly)
-    // Results alone wait for the turn's end (`settled`), while what can be steered still is.
-    if (ready === "steer" && !steerable.length) return
-    const batch = nextBatch(ready === "steer" ? steerable : waiting.notices)
-    const ids = batch.map((notice) => notice.report.id)
-    const request = batch[0]!.wake ?? namedUuid(`wake:${conversation}:${ids.join("\n")}`)
+  /**
+   * A notice joins the digest still unsent; one that went meanwhile leaves it to start the next. Its three writes (the
+   * digest, the store's claim, its receipt) are each idempotent and read again on recovery (`carried`).
+   */
+  private join(conversation: string, open: OpenDigest, notice: Notice): void {
+    // A digest carries at most `FIN_REPORTS_MAX`; past that the notice starts the next one.
+    if (open.notices.length >= FIN_REPORTS_MAX) return this.start(conversation, [notice], this.deps.ready(conversation))
+    const notices = [...open.notices, notice]
     let text: string
     try {
-      text = digest(batch, this.deps.counts(conversation))
+      text = digest(notices, this.deps.counts(conversation))
     } catch (error) {
-      hostWarn("agents", "a digest could not be written; its notices wait for the next", { conversation, error: errorMessage({ error }) })
-      return this.after(conversation, waiting, WAKE_COALESCE_MS)
+      hostWarn("agents", "a digest could not be written with this notice; it starts its own", { conversation, error: errorMessage({ error }) })
+      return this.start(conversation, [notice], this.deps.ready(conversation))
     }
-    if (ready === "steer") {
-      const steer = this.deps.steer(conversation, namedUuid(`steer:${request}`), text)
-      if (!steer) {
-        waiting.forTurnEnd = true
+    if (!this.deps.rewrite(conversation, open.id, text, notices))
+      return this.start(conversation, [notice], this.deps.ready(conversation))
+    hostLog("agents", "digest joined", { conversation, request: open.id, notice: notice.id })
+    this.deps.assign([notice.report.id], open.id)
+    hostLog("agents", "digest join assigned", { conversation, request: open.id, notice: notice.id })
+    this.heardNow([notice])
+    hostLog("agents", "wake", { conversation, request: open.id, how: "joined", coalesced: notices.length })
+  }
+
+  /** A digest of its own in the Apex's queue, held for its burst's window. */
+  private start(conversation: string, notices: Notice[], ready: ParentReady): void {
+    const now = this.now()
+    const request = notices[0]!.wake ?? namedUuid(`wake:${conversation}:${notices.map((notice) => notice.report.id).join("\n")}`)
+    const window = notices.some((notice) => notice.settledOnly) ? RESULT_COALESCE_MS : WAKE_COALESCE_MS
+    const hold = ready === "paused" ? "paused" : ready === "idle" ? { at: now + window } : undefined
+    try {
+      if (!notices[0]!.wake) this.deps.assign(notices.map((notice) => notice.report.id), request)
+      hostLog("agents", "digest start assigned", { conversation, request, notices: notices.length })
+      this.deps.admit(conversation, request, digest(notices, this.deps.counts(conversation)), notices, { kind: "agent", session: SessionIdSchema.parse(notices[0]!.from) }, hold)
+    } catch (error) {
+      // The Apex's conversation refused it for now (a switch or a move under way): asked again after the window.
+      hostWarn("agents", "a digest could not be queued yet; it's asked again", { conversation, error: errorMessage({ error }) })
+      const timer = setTimeout(() => { for (const notice of notices) this.notice(conversation, "", notice) }, WAKE_COALESCE_MS)
+      timer.unref?.()
+      return
+    }
+    hostLog("agents", "digest admitted", { conversation, request })
+    this.digests.add(conversation)
+    this.heardNow(notices)
+    hostLog("agents", "wake", { conversation, request, how: "queued", coalesced: notices.length, ...(hold && { hold: hold === "paused" ? "paused" : new Date(hold.at).toISOString() }) })
+  }
+
+  /** Into the running turn at its next step; what the harness doesn't take goes as a digest of its own. */
+  private steerIn(conversation: string, notice: Notice): void {
+    const request = namedUuid(`wake:${conversation}:${notice.report.id}`)
+    const took = this.deps.steer(conversation, namedUuid(`steer:${request}`), digest([notice], this.deps.counts(conversation)))
+    if (!took) return this.start(conversation, [notice], this.deps.ready(conversation))
+    this.steering.add(notice.id)
+    void took.then((answered) => {
+      this.steering.delete(notice.id)
+      if (this.stopped) return
+      if (answered) {
+        this.heardNow([notice])
+        hostLog("agents", "wake", { conversation, request, how: "steer", coalesced: 1 })
         return
       }
-      waiting.notices = waiting.notices.filter((notice) => !batch.includes(notice))
-      for (const notice of batch) this.steering.add(notice.id)
-      void steer.then((took) => this.steered(conversation, waiting.apex, batch, request, took))
-      return
-    }
-    const now = this.now()
-    const recent = (this.wakes.get(waiting.apex) ?? []).filter((at) => now - at < MINUTE_MS)
-    this.wakes.set(waiting.apex, recent)
-    if (recent.length >= WAKES_PER_MINUTE) return this.after(conversation, waiting, recent[0]! + MINUTE_MS - now)
-    try {
-      if (!batch[0]!.wake) this.deps.assign(ids, request)
-      this.deps.wake(conversation, request, text, { kind: "agent", session: SessionIdSchema.parse(batch[0]!.from) })
-    } catch (error) {
-      hostWarn("agents", "a wake could not start; its notices wait for the next", { conversation, error: errorMessage({ error }) })
-      return this.after(conversation, waiting, WAKE_COALESCE_MS)
-    }
-    recent.push(now)
-    this.sent(conversation, waiting, batch, request, "turn")
+      hostLog("agents", "steer not taken; its notice goes as the next turn", { conversation, request })
+      const open = this.deps.unsent(conversation).at(-1)
+      if (open) this.join(conversation, open, notice)
+      else this.start(conversation, [notice], this.deps.ready(conversation))
+    })
   }
 
-  /** The harness answered a steer: what it took is heard; what it didn't goes as the Apex's next turn, never dropped. */
-  private steered(conversation: string, apex: string, batch: readonly Notice[], request: string, took: boolean): void {
-    for (const notice of batch) this.steering.delete(notice.id)
-    if (this.stopped) return
-    const waiting = this.waiting.get(conversation) ?? { apex, notices: [] }
-    this.waiting.set(conversation, waiting)
-    if (took) return this.sent(conversation, waiting, batch, request, "steer")
-    hostLog("agents", "steer not taken; its notices go as the next turn", { conversation, request, notices: batch.length })
-    waiting.notices = [...batch, ...waiting.notices]
-    waiting.unsteerable = true
-    if (!waiting.timer && !waiting.forTurnEnd) this.after(conversation, waiting, WAKE_COALESCE_MS)
+  private heardNow(notices: readonly Notice[]): void {
+    this.deps.delivered(notices.map((notice) => notice.report.id), this.now())
+    for (const notice of notices) this.heard.add(notice.id)
   }
-
-  private sent(conversation: string, waiting: Waiting, batch: readonly Notice[], request: string, how: "turn" | "steer"): void {
-    const ids = batch.map((notice) => notice.report.id)
-    this.deps.delivered(ids, this.now())
-    for (const notice of batch) this.heard.add(notice.id)
-    waiting.notices = waiting.notices.filter((notice) => !batch.includes(notice))
-    const results = batch.filter((notice) => notice.settledOnly).length
-    hostLog("agents", "wake", { conversation, request, how, coalesced: batch.length, ...(results && { results }), waiting: waiting.notices.length })
-    if (!waiting.notices.length) {
-      this.waiting.delete(conversation)
-      return
-    }
-    // The rest go once this wake's turn ends.
-    waiting.forTurnEnd = true
-  }
-}
-
-/**
- * The notices one delivery carries: those a stopped host already named a
- * request for go again alone under it, so a turn the Apex took before the
- * stop is taken as the same turn; the rest go together, decisions first.
- */
-function nextBatch(notices: readonly Notice[]): Notice[] {
-  const named = notices.find((notice) => notice.wake)?.wake
-  if (named) return notices.filter((notice) => notice.wake === named)
-  return notices.filter((notice) => !notice.wake).slice(0, FIN_REPORTS_MAX)
 }
 
 const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
@@ -433,7 +400,3 @@ export function firstParagraph(text: string): string {
 /** The most of a finished report's first paragraph its digest line carries. */
 const FINISHED_CHARS = 480
 
-/** The window before a delivery: short once a result the Apex waited for is among what waits. */
-function coalesceMs(notices: readonly Notice[]): number {
-  return notices.some((notice) => notice.settledOnly) ? RESULT_COALESCE_MS : WAKE_COALESCE_MS
-}

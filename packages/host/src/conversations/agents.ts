@@ -108,7 +108,8 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../c
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type KeptAnswer, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
-import { AgentWakes, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
+import { holdOf } from "../contracts/request-hold.js"
+import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationChildren } from "./live-runtime.js"
@@ -174,6 +175,12 @@ interface ApexAsk {
   fin: { name: string; harness?: string }
 }
 
+/** A message Mako's exit or a crash paused, which the next host resumes for a Fin: never a Stop's, which waits for a deliberate resume. */
+function madePaused(request: LiveRequest): boolean {
+  const hold = holdOf(request)
+  return hold?.kind === "paused" && hold.by === "mako"
+}
+
 /** Entries `agents_read` shows of a transcript, and the characters it returns at most. */
 const READ_ENTRIES = 40
 const READ_CHARS = 8_000
@@ -195,7 +202,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "moveWaiting" | "switching"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "wakeDue" | "snapshot" | "editQueued" | "transfer" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "moveWaiting" | "switching"
 >
 
 export interface AgentsDeps {
@@ -474,6 +481,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly starts = new KeyedAdmission<StartRecord>((record) => record.op)
   /** What each Apex's conversations last heard of its waiting Fins (`queueRefresh`), by its Thread. */
   private readonly queueHeard = new Map<string, string>()
+  /** Fins' conversations whose cut turn's time came with no room (`mayWake`). */
+  private readonly wakingForRoom = new Set<string>()
   /** Fins holding a place now (`occupies`): one that lets go frees it for what waits, at once. */
   private readonly occupying = new Set<string>()
   private stopped = false
@@ -520,11 +529,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
-      wake: (conversation, request, text, actor) => {
+      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
+      unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
+        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, notices: request.digest.notices }] : []),
+      carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
+        request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
+      admit: (conversation, request, text, notices, actor, hold) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
-        if (deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) return
-        deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor)
+        if (deps.live.snapshot(conversation)?.requests.some((asked) => asked.id === request)) return
+        deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor, {
+          digest: { notices: [...notices] },
+          ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS } },
+        })
       },
+      rewrite: (conversation, request, text, notices) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices] }),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
       assign: (reports, request) => {
         this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request)
@@ -673,7 +691,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const request of snapshot.requests) {
       // A continuation a crash stopped short of its handoff is Mako's, not the person's: it goes on, in its place, a brief's
       // recovery with it (`continues.auto`). So does a pull request's note, whose handoff reads its wait again (`admits`).
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || (request.actor?.kind !== "agent" && !request.continues?.auto && !isPullNote(request))) continue
+      if (!madePaused(request) || (request.actor?.kind !== "agent" && !request.continues?.auto && !isPullNote(request))) continue
       const relaunched = !launched && !isPullNote(request)
       try {
         if (!relaunched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
@@ -693,7 +711,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** An exit or a crash pauses the digests waiting for an Apex with the person's messages; they're Mako's, so they go on. */
   private resumeWakes(conversation: string): void {
     for (const request of this.deps.live.snapshot(conversation)?.requests ?? []) {
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || ((request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) && !request.continues?.auto)) continue
+      if (!madePaused(request) || ((request.actor?.kind !== "agent" || !request.text.startsWith(FROM_AGENTS)) && !request.continues?.auto)) continue
       try {
         this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         hostLog("agents", "resumed", { conversation, request: request.id, wake: true })
@@ -2088,6 +2106,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.draining) return void (this.drainAgain = true)
     this.draining = true
     try {
+      // A cut turn whose time came has waited longest for a place: it goes ahead of what's queued, if there's room yet.
+      if (this.wakingForRoom.size) {
+        this.wakingForRoom.clear()
+        this.deps.live.wakeDue()
+      }
       // Each place's own room: a device's count, or the cloud's plan and spend.
       // Counted once as the drain begins, plus what it starts: a Fin it launched isn't counted again as it comes up.
       const filled = new Map<string, number>()
@@ -2888,7 +2911,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     this.rosters.delete(edge.parent)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
-    for (const conversation of this.conversationsOfThread(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
+    for (const conversation of this.conversationsOfThread(edge.parent)) {
+      this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
+      if (kindChanged) this.wakes.refresh(conversation)
+    }
     this.askApex(edge)
     this.watchDecision(edge)
     if (kindChanged) {
@@ -3166,6 +3192,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     void this.drain()
   }
 
+  /**
+   * Whether a Fin's turn a usage limit cut may go on: its place went while it waited, so it takes one again by the same
+   * limits as a start. With no room it stays held, and the next place to free is its (`drain`).
+   */
+  mayWake(conversation: string): boolean {
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    if (!edge) return true
+    const room = this.full(placeOf(edge.asked.place)) === undefined && this.treeCounts(this.rootOf(edge.parent)).running < this.budget.running
+    if (!room) this.wakingForRoom.add(conversation)
+    return room
+  }
+
   /** What a place's Fins at once are held to: a device's own count, or the cloud's plan and spend (`placeFull`). */
   private placeLimit(where: string): FinPlaceLimit {
     if (where === "cloud") return { place: "cloud", ...this.deps.cloudLimits?.() }
@@ -3390,7 +3429,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!session) return "gone"
     // A stopped Fin hears its own Fins' news once it's resumed (`reopen`), not as turns of a Fin its Apex paused.
     const child = this.childOfConversation(conversation)
-    if (child && this.store()?.edges().of(child)?.closedAt !== undefined) return "queue"
+    if (child && this.store()?.edges().of(child)?.closedAt !== undefined) return "paused"
     if (!this.deps.live.atWork(conversation)) return "idle"
     return this.deps.live.steersAtStep(conversation) ? "steer" : "queue"
   }
@@ -3541,7 +3580,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private resumeFin(conversation: string, first: string): void {
     const paused = (this.deps.live.held(conversation)?.requests ?? []).filter((request) =>
-      request.status === "held" && !request.signIn && !request.wake && !request.retry && !request.editing && request.actor?.kind === "agent")
+      holdOf(request)?.kind === "paused" && request.actor?.kind === "agent")
     if (paused.length) {
       try {
         this.deps.live.resumeHeld(conversation, paused.map((request) => request.id), first)

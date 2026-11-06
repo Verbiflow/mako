@@ -82,7 +82,8 @@ async function team(name: string, role?: "lead") {
 async function tell(world: AgentsWorld, apex: { caller: Parameters<AgentsWorld["agents"]["send"]>[0] }, text: string): Promise<void> {
   const sent = await world.agents.send(apex.caller, { to: "android", text, clientKey: text })
   assert.ok(!("refused" in sent), JSON.stringify(sent))
-  await world.settle()
+  // Its reports reach its Apex at the minute's budget (`WAKES_PER_MINUTE`), which these quick turns spend: not what's read here.
+  await world.settle(undefined, undefined, "ignore")
 }
 
 /** Both fields empty: the brief and every note are what they were. */
@@ -124,7 +125,7 @@ async function finRules(): Promise<void> {
     await tell(world, apex, "Sixth.")
     assert.equal(last(world, fin), FIN_NONE, "and after a restart, still told, never silence that leaves the brief's rules standing")
     world.say(apex.conversation, "Anything new?")
-    await world.settle()
+    await world.settle(undefined, undefined, "ignore")
     assert.match(last(world, apex.conversation)!, /^You're this Thread's Apex: /, "an Apex never hears the Fin rules")
   } finally {
     await world.close()

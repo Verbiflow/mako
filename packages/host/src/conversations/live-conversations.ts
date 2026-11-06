@@ -63,6 +63,7 @@ import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { latchedByStop } from "../contracts/delivery-retry.js"
+import { holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -74,7 +75,7 @@ import { LiveLaunches, nativeStart } from "./live-launches.js"
 import { syncMemory } from "./live-ledger.js"
 import { LiveMoves } from "./live-moves.js"
 import { LiveQuestions } from "./live-questions.js"
-import { LiveRecords } from "./live-records.js"
+import { LiveRecords, wakeAt } from "./live-records.js"
 import { isPaged } from "./paged-entries.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
@@ -82,7 +83,7 @@ import { ContextBundles } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
-import { LiveTransfers } from "./live-transfers.js"
+import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
@@ -91,6 +92,8 @@ const BATCH_BASE_ENTRIES = 512
 const SETTLE_EVERY_MS = 15 * 60_000
 /** How often Mako tries again to write a conversation it couldn't save (`saveAgain`): soon after space comes back. */
 const SAVE_AGAIN_MS = 5_000
+/** The longest a timer waits; a held message due later is armed for again when this fires. */
+const MAX_TIMER_MS = 2_147_483_647
 /** What a conversation in memory is working on, as the lifecycle lists it; undefined while it works on nothing. */
 function residentWork(resident: Resident): LifecycleWork | undefined {
   const { snapshot } = resident
@@ -106,6 +109,11 @@ function residentWork(resident: Resident): LifecycleWork | undefined {
 const startingWork = (id: string): LifecycleWork => ({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
+/** A continuation of a turn a usage limit cut: it can wait days, so it holds no place, and takes one again to go on. */
+function limitCut(request: LiveRequest): boolean {
+  return request.continues !== undefined && request.retry?.cause === "rate-limited"
+}
+
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
   /** The steers whose words `steerByRestart` is sending as a message of their own, under their receipt's ID. */
@@ -149,6 +157,9 @@ export class LiveConversations {
    * Readers only compare it, and every batch carries it: 72 random bits, in 12 characters rather than a UUID's 36.
    */
   readonly epoch = randomBytes(9).toString("base64url")
+  /** The one timer for held messages' times (`armWakes`): when it fires, and the timer. */
+  private wakeTimer: { at: number; timer: ReturnType<typeof setTimeout> } | undefined
+  private wakesStopped = false
   private readonly reclaims = new JournalReclaims()
 
   constructor(dependencies: Dependencies) {
@@ -170,6 +181,8 @@ export class LiveConversations {
         // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
         // hears what moved while none was in memory.
         if (this.takeChildren(resident)) this.schedule(resident)
+        // A switch that waited behind another when the last host ended goes on, as it was asked to.
+        if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
       paged: (id) => this.dependencies.historyPaged?.(id),
@@ -434,6 +447,9 @@ export class LiveConversations {
     if (!resident) return false
     const { session, requests } = resident.snapshot
     if (session.status === "running" || session.status === "starting" || requests.some((request) => request.status === "dispatching") || resident.autoContinue) return true
+    // A message waiting to go again goes by itself: work, as a continuation Mako scheduled is. A turn a usage limit cut is
+    // the exception: it can wait days, so the Fin reads as its failure says, and holds no place meanwhile.
+    if (requests.some((request) => holdOf(request)?.kind === "retry" && !limitCut(request)) || this.transfers.pending(resident)?.retry) return true
     const next = session.status === "failed" ? undefined : nextQueued(resident.snapshot)
     if (!next || next.ownerCheck) return false
     return Boolean(resident.driver || resident.starting || resident.opening || resident.waking || resident.hibernating || resident.transferring)
@@ -448,7 +464,7 @@ export class LiveConversations {
     const resident = this.records.require(id)
     const resuming = new Set(ids)
     const requests = resident.snapshot.requests.map((request) =>
-      resuming.has(request.id) && request.status === "held" && !request.signIn && !request.wake && !request.retry && !request.editing ? { ...request, status: "queued" as const, pause: undefined } : request)
+      resuming.has(request.id) && holdOf(request)?.kind === "paused" ? released(request) : request)
     const own = first === undefined ? undefined : requests.find((request) => request.id === first && request.status === "queued")
     const rest = own ? requests.filter((request) => request !== own) : requests
     // Nothing goes ahead of a message the person is editing: `first` goes ahead of what waits after the last of those.
@@ -467,20 +483,47 @@ export class LiveConversations {
   }
 
   /**
+   * An unsent message of `id` says `text` now, carrying `digest`, its place and its hold kept: an Apex's digest a
+   * notice joined before it went (`AgentWakes`). With no notices left it's taken back. False when it went meanwhile.
+   */
+  rewriteWaiting(id: string, requestId: string, text: string, digest: NonNullable<LiveRequest["digest"]>): boolean {
+    const resident = this.records.get(id)
+    const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
+    if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
+    const next: LiveRequest = digest.notices.length
+      ? { ...request, text, digest, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
+      : { ...request, status: "canceled" }
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => (candidate === request ? next : candidate)) }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+    return true
+  }
+
+  /**
    * A Stop of `id`, the person's or an Apex's of its Fin: every message waiting there pauses, and one that was to go by
    * itself (again, or at a time) stops being so, so nothing sends until a deliberate resume (`resumeHeld`, Resume),
-   * across a restart too. A message being edited or waiting for a sign-in keeps its own hold. Read in if it isn't
-   * loaded. How many it paused.
+   * across a restart too. A message waiting for a sign-in keeps its own hold. Read in if it isn't loaded. How many it
+   * paused (`docs/delivery-queue.md`).
    */
   stopHolds(id: string): number {
     const resident = this.records.load(id)
     // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
+    // One being edited takes the mark under its edit, so saving the edit doesn't send it.
     const stops = (request: LiveRequest) => request.pause !== "stop" &&
-      (request.status === "queued" || request.status === "dispatching" || (request.status === "held" && !request.editing && !request.signIn))
-    const count = resident?.snapshot.requests.filter(stops).length ?? 0
-    if (!resident || !count) return 0
+      (request.status === "queued" || request.status === "dispatching" || (request.status === "held" && !request.signIn))
+    if (!resident) return 0
+    // A switch not yet committed is queued work, held like any message; a committed one's message is in the queue
+    // already. Holding moves no generation, so the source binding's events still count (`holdSwitches`).
+    const { snapshot, held } = holdSwitches(resident.snapshot)
+    const count = resident.snapshot.requests.filter(stops).length + held
+    if (!count) return 0
     const previous = resident.snapshot
-    resident.snapshot = { ...previous, requests: previous.requests.map((request) => stops(request)
+    resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => stops(request)
       ? { ...request, pause: "stop" as const, ...request.status !== "dispatching" && { status: "held" as const, retry: undefined, wake: undefined } }
       : request) }
     try {
@@ -739,7 +782,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "pause"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -801,6 +844,9 @@ export class LiveConversations {
     if (rested > ASLEEP_AFTER_MS) hostLog("residency", "a message reaches a session asleep a day or more", { conversation: id, request: requestId, restedMs: rested })
     // The user's own message supersedes any continuation Mako was about to send.
     this.autoContinue.decline(resident)
+    // A new message is the moment to try again: what waits to go again goes now, ahead of it, as it kept its place.
+    if (resident.snapshot.requests.some((request) => holdOf(request)?.kind === "retry"))
+      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (holdOf(request)?.kind === "retry" ? released(request) : request)) }
     if (marks.goal?.step !== "continue") this.goals.decline(resident)
     this.hibernation.clearHibernationTimer(resident)
     const pause = signInPause(resident.snapshot.requests)
@@ -809,7 +855,8 @@ export class LiveConversations {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held", signIn: pause.hold })
     }
-    // A message for later waits here, held, whatever the process is doing; `wakeDue` releases it.
+    // A message for later, or one its sender's stop paused (a stopped Fin's news), waits here, held, whatever the
+    // process is doing; `wakeDue` releases the one, the Fin's resume the other.
     if (request.wake || request.pause) {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held" })
@@ -876,35 +923,99 @@ export class LiveConversations {
    * or not; run by the host's `held-wakes` job. A released request goes as a
    * Resume would: queued, and the session reopened when its process went.
    */
+  /**
+   * One timer for every held message's time, armed for the soonest: each commit that gives a message a time arms it
+   * earlier (`flush`), and each time it fires it sends what's due and arms for the next (`wakeDue`). Undefined `at`
+   * reads the soonest from every conversation's listing, as the host's start does.
+   */
+  armWakes(at = this.soonestWake()): void {
+    if (at === undefined || this.wakesStopped || (this.wakeTimer && this.wakeTimer.at <= at)) return
+    if (this.wakeTimer) clearTimeout(this.wakeTimer.timer)
+    const timer = setTimeout(() => {
+      this.wakeTimer = undefined
+      try {
+        this.wakeDue()
+      } catch (error) {
+        hostWarn("live", "held messages' times couldn't be read; tried again", { error: errorMessage({ error }) })
+        this.armWakes(Date.now() + (this.dependencies.saveAgainMs ?? SAVE_AGAIN_MS))
+      }
+    }, Math.min(Math.max(0, at - Date.now()), MAX_TIMER_MS))
+    timer.unref?.()
+    this.wakeTimer = { at, timer }
+  }
+
+  /** The soonest time a held message anywhere goes, after `after`: one that was due and couldn't go waits for a later arming. */
+  private soonestWake(after = Number.NEGATIVE_INFINITY): number | undefined {
+    let soonest: number | undefined
+    for (const summary of this.records.listing())
+      if (summary.wakeAt !== undefined && summary.wakeAt > after && (soonest === undefined || summary.wakeAt < soonest)) soonest = summary.wakeAt
+    return soonest
+  }
+
   wakeDue(now = Date.now()): string[] {
     const due = this.records.listing().filter((summary) => summary.wakeAt !== undefined && summary.wakeAt <= now).map((summary) => summary.session.id)
-    for (const id of due) {
-      const resident = this.records.load(id)
-      // A session Mako's exit closed reopens for what was due, as for a new message (`release`); one the person closed
-      // holds nothing with a time (`close`).
-      if (!resident || resident.closing) continue
-      // A retry goes again keeping its count, so a failure after it waits longer (`nextRetry`).
-      const released = resident.snapshot.requests.filter((request) => {
-        const at = request.status === "held" ? (request.wake ?? request.retry)?.at : undefined
-        return at !== undefined && at <= now
-      })
-      if (!released.length) continue
-      const ids = new Set(released.map((request) => request.id))
+    let failed = false
+    try {
+      // One conversation's failure (its journal unwritable) is its own: the rest go, and it's tried again.
+      for (const id of due) if (!this.wakeOne(id, now)) failed = true
+    } finally {
+      const next = this.soonestWake(now)
+      const again = failed ? Date.now() + (this.dependencies.saveAgainMs ?? SAVE_AGAIN_MS) : undefined
+      this.armWakes(next === undefined ? again : again === undefined ? next : Math.min(next, again))
+    }
+    return due
+  }
+
+  /** Sends what of `id` was due at `now`; false when its journal couldn't take the release, which then waits to be tried again. */
+  private wakeOne(id: string, now: number): boolean {
+    let resident: Resident | undefined
+    try {
+      resident = this.records.load(id)
+    } catch (error) {
+      hostWarn("live", "a held message's time came, and its conversation couldn't be read", { conversation: id, error: errorMessage({ error }) })
+      return false
+    }
+    // A session Mako's exit closed reopens for what was due, as for a new message (`release`); one the person closed
+    // holds nothing with a time (`close`).
+    if (!resident || resident.closing) return true
+    // A retry goes again keeping its count, so a failure after it waits longer (`nextRetry`).
+    // A turn a usage limit cut gave up its place, so it takes one again to go on (`Agents.mayWake`): with no room it waits.
+    const ready = resident.snapshot.requests.filter((request) => {
+      const hold = holdOf(request)
+      const at = hold && holdDue(hold)
+      return at !== undefined && at <= now && (!limitCut(request) || this.dependencies.agents?.()?.mayWake?.(id) !== false)
+    })
+    const previous = resident.snapshot
+    try {
+      // A reconnect waiting to go again goes at its time too: its gate opens now (`LiveTransfers.start`).
+      const transfer = this.transfers.pending(resident)
+      const transferDue = Boolean(transfer?.retry && transfer.retry.at <= now)
+      if (transfer?.retry && transferDue) this.transfers.save(resident, { ...transfer, retry: { ...transfer.retry, at: Math.min(transfer.retry.at, Date.now()) } })
+      if (!ready.length) {
+        if (transferDue) this.release(resident)
+        return true
+      }
+      const ids = new Set(ready.map((request) => request.id))
       const session = resident.snapshot.session
       resident.snapshot = {
         ...resident.snapshot,
         session: session.status === "failed" ? { ...session, status: "ready", error: undefined } : session,
-        requests: resident.snapshot.requests.map((request) => ids.has(request.id) ? { ...request, status: request.signIn ? "held" : "queued", wake: undefined } : request),
+        requests: resident.snapshot.requests.map((request) => ids.has(request.id) ? released(request) : request),
       }
       this.flush(resident)
-      hostLog("live", "a held message's time came", { conversation: id, requests: released.length })
-      try {
-        this.release(resident)
-      } catch (error) {
-        hostWarn("live", "a held message's time came, and its session couldn't reopen", { conversation: id, error: errorMessage({ error }) })
-      }
+    } catch (error) {
+      // Nothing goes that isn't written: the release is undone, storage recovery runs, and the timer tries it again.
+      resident.snapshot = previous
+      this.storageFailed(resident, { error })
+      return false
     }
-    return due
+    hostLog("live", "a held message's time came", { conversation: id, requests: ready.length })
+    try {
+      this.release(resident)
+    } catch (error) {
+      hostWarn("live", "a held message's time came, and its session couldn't reopen", { conversation: id, error: errorMessage({ error }) })
+    }
+    return true
   }
 
   /** Record a new request in the journal and start it when the session is free. */
@@ -1089,16 +1200,16 @@ export class LiveConversations {
         break
       // A message waiting on a sign-out keeps waiting; only the session's Resume releases it.
       case "resume":
-        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined, retry: undefined, editing: undefined, pause: undefined }
+        next = { ...released(request), retry: undefined }
         break
+      // The person's words stand, and a Stop's hold with them: saving an edit isn't a resume.
       case "edit":
         next = {
           ...request,
-          status: request.signIn ? "held" : "queued",
+          status: request.signIn || request.pause === "stop" ? "held" : "queued",
           wake: undefined,
           retry: undefined,
           editing: undefined,
-          pause: undefined,
           text: command.change.text,
           displayText: undefined,
           nativeDelivery: undefined,
@@ -1133,6 +1244,8 @@ export class LiveConversations {
     if (resident.snapshot.session.status === "closed" && !resident.closing && !resident.driver && launched(activeBinding(resident)))
       this.reopenClosed(resident)
     if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) void this.hibernation.wake(resident)
+    // A conversation whose first start failed before any session existed starts again for what waited for it.
+    else if (!resident.driver && !launched(activeBinding(resident)) && this.launches.relaunch(resident)) return
     else this.dispatch.drain(resident)
   }
 
@@ -1283,7 +1396,9 @@ export class LiveConversations {
     if (this.activeRequest(id) !== requestId) return Promise.resolve(false)
     const resident = this.records.require(id)
     const snapshot = resident.snapshot
-    resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => request.status === "queued" && request.id !== requestId ? { ...request, status: "held" } : request) }
+    // The person's Stop pauses what waited, and what they send next goes ahead of it; any other stop keeps its order.
+    const pause = why === "person" ? { pause: "stop" as const } : {}
+    resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => request.status === "queued" && request.id !== requestId ? { ...request, status: "held", ...pause } : request) }
     try { this.flush(resident) } catch (error) { resident.snapshot = snapshot; return Promise.reject(error) }
     const opening = resident.opening
     // A turn Mako already stopped because it couldn't save it stays Mako's, whoever presses Stop after.
@@ -1350,7 +1465,7 @@ export class LiveConversations {
     // order is kept in memory alone (the journal keeps requests as they came): it must hold only until this message
     // starts, and a host that restarts holds its queue anyway.
     const requests = resident.snapshot.requests.map((request) =>
-      request.id === requestId || (waiting.has(request.id) && request.status === "held") ? { ...request, status: "queued" as const } : request)
+      request.id === requestId || (waiting.has(request.id) && request.status === "held") ? { ...request, status: "queued" as const, pause: undefined } : request)
     const own = requests.find((request) => request.id === requestId)
     const rest = requests.filter((request) => request.id !== requestId)
     const ahead = rest.findIndex((request) => request.status === "queued" || request.status === "held")
@@ -1368,15 +1483,15 @@ export class LiveConversations {
       await this.cancelDriver(resident, why)
       return
     }
-    const pending = this.transfers.pending(resident)
-    if (pending?.input.id === requestId) {
+    const pending = this.transfers.unsettled(resident, requestId)
+    if (pending) {
       if (pending.state.kind === "preparing") resident.generation += 1
       this.transfers.save(resident, {
         ...pending,
         state: { kind: "failed", error: "The remote request was canceled" },
       })
     }
-    if (request?.status === "queued") {
+    if (request?.status === "queued" || (pending && request?.status === "held")) {
       resident.snapshot = {
         ...resident.snapshot,
         requests: resident.snapshot.requests.map((candidate) =>
@@ -1665,6 +1780,9 @@ export class LiveConversations {
 
   stop(): Promise<void> {
     clearTimeout(this.settleTimer)
+    this.wakesStopped = true
+    clearTimeout(this.wakeTimer?.timer)
+    this.wakeTimer = undefined
     return this.closing.stop()
   }
 
@@ -1697,6 +1815,7 @@ export class LiveConversations {
 
   /** Commits what changed to the journal and tells every window, in one batch. */
   private flush(resident: Resident): void {
+    resident.snapshot = withdrawGone(resident.snapshot)
     if (this.records.isReleased(resident)) {
       hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })
       return
@@ -1729,6 +1848,7 @@ export class LiveConversations {
       activityAt: resident.activityAt,
     }
     resident.journal.commit(snapshot, previous, previous.blocks === resident.snapshot.blocks ? delivery.grown : undefined)
+    if (snapshot.requests !== previous.requests || snapshot.control !== previous.control) this.armWakes(sooner(wakeAt(snapshot.requests), transferDue(snapshot.control)))
     resident.flushedAt = performance.now()
     resident.storageFault = false
     resident.updates = []

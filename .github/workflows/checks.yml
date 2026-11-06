@@ -169,10 +169,17 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
       - run: npm run test:start-interleavings
+      # A switch against the queue, generated: the rules of `docs/delivery-queue.md` after every step of seeded schedules.
+      - run: npm run test:switch-interleavings
       - run: npm run test:followed-stop-crash
       - run: npm run test:held-notice-crash
       # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
       - run: npm run test:handoff
+      # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
+      # queue's order kept in the journal; a waiting message surviving SIGKILL (`test:request-holds`).
+      - run: npm run test:request-holds
+      # An Apex's Fins' news as entries in its own queue: coalesced, budgeted, paused and kept through SIGKILL.
+      - run: npm run test:wake-queue
       - run: npm run test:orch-comms
       - run: npm run test:orch-crash
       - run: npm run test:orch-recovery

@@ -91,6 +91,13 @@ export interface Resident {
   connections: Map<string, ProviderConnection>
   bindingGenerations: Map<string, number>
   transferring: boolean
+  /**
+   * Where the transfer under way stands, by its id. A Stop holds it back only while it's `preparing` or `opening`;
+   * once its destination is `committed` (the conversation's state, written, names it the binding), it completes
+   * through `closing` the source to `done`, and a Stop pauses its message with the rest of the queue, so the
+   * conversation always has a binding it can use (`docs/delivery-queue.md`).
+   */
+  transferPhase?: { id: string; phase: "preparing" | "opening" | "committed" | "closing" | "done" }
   transferOperation?: Promise<void>
   /**
    * The binding a transfer is opening, which the conversation doesn't listen
@@ -223,6 +230,8 @@ export interface ConversationChildren {
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
+  /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
+  mayWake?(conversation: string): boolean
   /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
   pinnedAccount?(conversation: string, harness: string): string | undefined
   /**

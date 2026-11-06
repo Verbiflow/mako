@@ -250,6 +250,7 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   const crashedFin = crashedAt("22222222-2222-4222-8222-000000000001", now - 1_000)
   assert.equal(crashedChildTurn([crashedFin], now), crashedFin, "a Fin's turn a crash cut short is continued")
   assert.equal(crashedChildTurn([crashedFin, { ...request, status: "held" }], now), crashedFin, "a message the crash held behind it doesn't hide it")
+  assert.equal(crashedChildTurn([{ ...crashedFin, pause: "stop" }], now), undefined, "a turn a Stop reached before the crash stays stopped")
   assert.equal(crashedChildTurn([quitAt], now), undefined, "Mako's exit is the restart setting's, not this")
   assert.equal(crashedChildTurn([crashedFin, { ...continuation, continues: { requestId: crashedFin.id, reason: "host-crashed", auto: true } }], now), undefined, "a turn already continued is not continued again")
   const crashes = [crashedFin]
