@@ -279,6 +279,11 @@ interface Ruled {
 }
 
 /** An Apex resolved in the store: its Session, its Thread, and its conversation here. */
+/** A request waiting out a limit, which a move can take over: a Stop's latch leaves it where it is. */
+function waitsOnLimit(request: LiveRequest): boolean {
+  return request.status === "held" && request.retry?.cause === "rate-limited" && request.pause !== "stop"
+}
+
 interface Apex {
   session: string
   thread: string
@@ -2140,8 +2145,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const moves = this.moves
     if (!moves?.on() || !edge.asked.access || edge.closedAt !== undefined || (edge.run && !edge.run.ended)) return false
     const requests = this.deps.live.held(conversation)?.requests ?? []
-    const wait = requests.find((request) => request.status === "held" && request.retry?.cause === "rate-limited" && request.pause !== "stop" &&
-      (ended ? request.continues?.requestId === ended.id : request.continues === undefined))
+    const wait = requests.find((request) => waitsOnLimit(request) && (ended ? request.continues?.requestId === ended.id : request.continues === undefined))
     if (!wait || this.moving.has(wait.id)) return false
     const origin = wait.continues ? requests.find((request) => request.id === wait.continues!.requestId) : wait
     if (!origin || origin.actor?.kind === "person") return false
@@ -2158,13 +2162,15 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * Whether the state a move was decided on still holds: the Fin open and Mako's to drive (not stopped, not released
-   * to a process), and this host's claim on the same wait for its limit. Read again right before the move's admission.
+   * to a process), this host's claim on the same wait, and that wait still waiting on its limit: a person who took it
+   * away and started a turn has decided otherwise. Read again right before what the move does, whatever that is.
    */
-  private stillDecided(child: string, wait: string): boolean {
+  private stillDecided(conversation: string, child: string, wait: string): boolean {
     const store = this.store()!
     const edge = store.edges().of(child)
     const claim = store.finTurn(child)?.moving
-    return edge !== undefined && edge.closedAt === undefined && (!edge.run || edge.run.ended !== undefined) && claim?.owner === this.generation && claim.wait === wait
+    const row = this.deps.live.held(conversation)?.requests.find((request) => request.id === wait)
+    return edge !== undefined && edge.closedAt === undefined && (!edge.run || edge.run.ended !== undefined) && claim?.owner === this.generation && claim.wait === wait && row !== undefined && waitsOnLimit(row)
   }
 
   /** `limitMove`'s move: the step, the edge that says it, and the waiting request taken over to carry the work there. */
@@ -2191,7 +2197,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!step) {
         // Every step the person has is at its limit or was run on: the Fin stops saying so, rather than loop.
         if (!order.spent.length && visited.length === 0) return
-        if (!this.stillDecided(edge.child, wait.id)) return
+        if (!this.stillDecided(conversation, edge.child, wait.id)) return
         const line = outOfAccountsLine({ harness, ...(from && { account: from.label }) }, order.spent, label, until, now)
         store.rerouteEdge(edge.child, { ...(store.edges().of(edge.child)?.tuned?.rerouted ?? { from: harness }), line })
         moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place)] })
@@ -2216,7 +2222,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       // From here to admission nothing awaits: the state the move was decided on is read again, the pin the launch
       // reads is written, and the waiting request goes to the send's one admission point (`moveWaiting`, then handOff).
       const previous = store.edges().of(edge.child)?.tuned?.rerouted
-      const decided = this.stillDecided(edge.child, wait.id)
+      const decided = this.stillDecided(conversation, edge.child, wait.id)
       const rerouted = decided ? store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge : edge
       const taken = decided && this.deps.live.moveWaiting(conversation, wait.id, to, actor)
       if (!taken) {

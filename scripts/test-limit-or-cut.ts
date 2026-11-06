@@ -9,7 +9,7 @@ import { AgentsWorld, HARNESSES, type Script, type WorldAccount } from "./lib/ag
 /**
  * A Fin's turn that stops early is either cut or at a limit, on each of the six harnesses (`npm run test:fin-fallback`).
  * A cut that wasn't a limit goes to its Apex, unless a Stop came first. A limit moves the Fin on, and never also reads
- * as a cut, whichever comes first.
+ * as a cut, whichever comes first. A decision that everything's spent stands only while what it was made on does.
  */
 
 const root = mkdtempSync(join(tmpdir(), "mako-limit-or-cut-"))
@@ -62,6 +62,68 @@ async function fin(name: string, harness: string, first?: (spent: WorldAccount, 
   const started = await world.agents.start(apex.caller, { brief: { objective: "Label the snippets" }, harness, name: "labels", clientKey: "labels", cwd: world.root })
   assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
   return { world, fin: started.conversation!, child: ThreadIdSchema.parse(started.child), caller: apex.caller, spent, refusing }
+}
+
+/**
+ * A Fin whose account ran out with every other spent, while the read of them is held open: the person takes the waiting
+ * message away and starts a turn of their own, and only then the read says there's nowhere to go.
+ */
+async function outOfAccountsLate(name: string, harness: string): Promise<void> {
+  const held: WorldAccount[] = [{ name: "personal" }, { name: "work", spentUntil: RESET }]
+  let out = () => {}
+  const spent = new Promise<void>((resolve) => (out = resolve))
+  let answer = () => {}
+  const answered = new Promise<void>((resolve) => (answer = resolve))
+  let reading = false
+  let newer = false
+  let turns = 0
+  const script: Script = async (turn) => {
+    if (turn.text.includes("New work.")) {
+      newer = true
+      return turn.world.hold(turn.conversation).then(() => "Done.")
+    }
+    if (!turn.text.includes("You're fin:") || (turns += 1) > 1) return "ok"
+    await spent
+    held[0]!.spentUntil = RESET
+    turn.world.endWith(turn.conversation, { limit: { resetsAt: RESET }, fail: LIMIT })
+    return "Partial."
+  }
+  const world = new AgentsWorld({
+    root: join(root, name),
+    script,
+    accounts: { [harness]: held },
+    selected: { [harness]: "personal" },
+    catalogs: { [harness]: CATALOGS[harness]! },
+    order: [harness],
+    readingAccounts: async (_harness, all) => {
+      if (!all) return
+      reading = true
+      await answered
+    },
+  })
+  try {
+    const apex = await world.apex(harness, "auto")
+    const started = await world.agents.start(apex.caller, { brief: { objective: "Keep the work" }, harness, name: "one", clientKey: "one", cwd: world.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    const conversation = started.conversation!
+    await until(`${harness} late: the Fin to work`, () => world.live.session(conversation)?.status === "running")
+    out()
+    await until(`${harness} late: the move to read the accounts`, () => reading)
+    const wait = world.live.snapshot(conversation)!.requests.find((request) => request.status === "held" && request.retry?.cause === "rate-limited")!
+    world.live.editQueued(conversation, { requestId: wait.id, expectedText: wait.text, change: { kind: "remove" } })
+    const mine = world.say(conversation, "New work.")
+    await until(`${harness} late: their turn to start`, () => newer)
+    answer()
+    await pause(300)
+    const edge = world.store.edges().of(ThreadIdSchema.parse(started.child))
+    assert.equal(edge?.closedAt, undefined, `${harness} late: out of accounts doesn't stop a turn the person just started`)
+    assert.equal(edge?.tuned?.rerouted?.line, undefined, `${harness} late: nor say it's out`)
+    assert.equal(world.live.snapshot(conversation)!.requests.find((request) => request.id === mine)?.status, "dispatching", `${harness} late: their turn goes on`)
+  } finally {
+    out()
+    answer()
+    await world.close()
+  }
 }
 
 const cutReports = (run: Run) => run.world.store.reportsOf(run.child, 0).filter((report) => report.summary.startsWith("Its turn was cut short"))
@@ -120,7 +182,9 @@ try {
       assert.equal(elsewhere(run, harness).length, 0, `${harness} stop: nothing goes on`)
       await run.world.close()
     }
-    console.log(`${harness}: a cut reaches its Apex, a limit moves and raises no cut, a cut then a limit moves, and a Stop wins over both`)
+    // What decided "out of accounts" no longer stands: the person's newer turn goes on.
+    await outOfAccountsLate(`${harness}-late`, harness)
+    console.log(`${harness}: a cut reaches its Apex, a limit moves and raises no cut, a cut then a limit moves, a Stop wins over both, and a stale "out of accounts" stops nothing`)
   }
   console.log("limit or cut: ok")
 } finally {
