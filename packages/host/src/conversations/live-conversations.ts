@@ -442,8 +442,9 @@ export class LiveConversations {
     if (!resident) return false
     const { session, requests } = resident.snapshot
     if (session.status === "running" || session.status === "starting" || requests.some((request) => request.status === "dispatching") || resident.autoContinue) return true
-    // A message waiting to go again goes by itself: work, as a continuation Mako scheduled is.
-    if (requests.some((request) => holdOf(request)?.kind === "retry") || this.transfers.pending(resident)?.retry) return true
+    // A message waiting to go again goes by itself: work, as a continuation Mako scheduled is. A turn a usage limit cut is
+    // the exception: it can wait days, so the Fin reads as its failure says, and holds no place meanwhile.
+    if (requests.some((request) => holdOf(request)?.kind === "retry" && !(request.continues && request.retry?.cause === "rate-limited")) || this.transfers.pending(resident)?.retry) return true
     const next = session.status === "failed" ? undefined : nextQueued(resident.snapshot)
     if (!next || next.ownerCheck) return false
     return Boolean(resident.driver || resident.starting || resident.opening || resident.waking || resident.hibernating || resident.transferring)
