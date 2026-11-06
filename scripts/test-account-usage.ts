@@ -4,10 +4,12 @@ import { type UsageWindow } from "@mako/host/contracts/accounts"
 import { bindingWindow, hasReset, limitOffer, mergeWindows, nextReset } from "@mako/host/contracts/account-usage"
 import { codexUpdatedWindows, parseCodexRateLimits, parseResetOutcome } from "@mako/host/harnesses/codex/rate-limits"
 import { resetCreditRequest } from "@mako/host/harnesses/codex/accounts"
-import { readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { HarnessAccounts } from "@mako/host/harnesses/accounts"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import type { AccountUsage, HarnessAccount } from "@mako/host/contracts/accounts"
 import { parseChatGptUsage } from "@mako/host/harnesses/chatgpt-usage"
 import { spendWatch } from "@mako/host/usage/index"
@@ -604,31 +606,35 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
 
   // A warning with nothing to offer comes once per limit window: not hourly, and not again from a host rebuilt.
   {
-    let at = Date.now() + 2 * 3_600_000
+    let at = Date.now()
     const clockOn = mock.method(Date, "now", () => at)
+    const home = mkdtempSync(join(tmpdir(), "mako-warned-"))
+    const host = () => new HarnessAccounts(providerHost.accountCapabilities, new AccountRoot(home))
+    const warning = host()
     const sole = mock.method(capability, "listAccounts", async () => [{ harness: "devin", name: "default", dir: "", active: true, source: "cli" }] satisfies HarnessAccount[])
     let reset = at + 24 * 3_600_000
     const usage = mock.method(capability, "accountUsage", async () => ok(96, [{ usedPercent: 96, windowMinutes: 300, resetsAt: reset }]))
     try {
-      assert.equal((await accounts.limitOffer("devin"))?.to, undefined)
-      assert.ok(readFileSync(accounts.root.warned("devin"), "utf8"), "kept where another host reads it")
+      const first = await warning.limitOffer("devin")
+      assert.ok(first && !first.to, "warned, with nothing to offer")
+      assert.ok(readFileSync(warning.root.warned("devin"), "utf8"), "kept where another host reads it")
       at += 61 * 60_000
-      accounts.usage.forget("devin", "default")
-      assert.equal(await accounts.limitOffer("devin"), null, "the same 96% and the same reset an hour on: nothing new")
-      assert.equal(await new HarnessAccounts(providerHost.accountCapabilities, accounts.root).limitOffer("devin"), null, "nor from a host rebuilt")
+      warning.usage.forget("devin", "default")
+      assert.equal(await warning.limitOffer("devin"), null, "the same 96% and the same reset an hour on: nothing new")
+      assert.equal(await host().limitOffer("devin"), null, "nor from a host rebuilt")
       at += 2 * 3_600_000
       reset += 90_000
-      accounts.usage.forget("devin", "default")
-      assert.equal(await accounts.limitOffer("devin"), null, "a reset that drifts between reads is the same window")
+      warning.usage.forget("devin", "default")
+      assert.equal(await warning.limitOffer("devin"), null, "a reset that drifts between reads is the same window")
       at = reset + 3_600_000
       reset = at + 24 * 3_600_000
-      accounts.usage.forget("devin", "default")
-      assert.ok(await accounts.limitOffer("devin"), "the next window is news")
+      warning.usage.forget("devin", "default")
+      assert.ok(await warning.limitOffer("devin"), "the next window is news")
     } finally {
       usage.mock.restore()
       sole.mock.restore()
       clockOn.mock.restore()
-      accounts.usage.forget("devin", "default")
+      rmSync(home, { recursive: true, force: true })
     }
   }
 }
