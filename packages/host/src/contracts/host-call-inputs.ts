@@ -521,8 +521,8 @@ const inputs = {
         text: z.string().optional(),
         deliver: z
           .union([
-            z.literal("steer"),
             z.literal("queue"),
+            z.literal("steer"),
             z.literal("interrupt"),
           ])
           .optional(),
@@ -947,7 +947,7 @@ const inputs = {
   "mako:fork": () =>
     z.tuple([
       z.string(),
-      z.union([z.literal("before"), z.literal("at")]).optional(),
+      z.union([z.literal("at"), z.literal("before")]).optional(),
     ]),
   "mako:git-cancel-generation": () => z.tuple([z.string()]),
   "mako:git-changed-since": () => z.tuple([z.string()]),
@@ -1221,7 +1221,7 @@ const inputs = {
               .optional(),
           }),
         ]),
-        thread: z.union([z.literal("new"), z.literal("parent")]).optional(),
+        thread: z.union([z.literal("parent"), z.literal("new")]).optional(),
         worktree: z.boolean().optional(),
         move: z.boolean().optional(),
         session: z.string().optional(),
@@ -1471,6 +1471,8 @@ const inputs = {
           .optional(),
         parent: z
           .object({
+            op: z.string(),
+            parent: z.string(),
             name: z.string(),
             role: z.union([
               z.literal("lead"),
@@ -1479,7 +1481,6 @@ const inputs = {
               z.literal("verifier"),
               z.literal("researcher"),
             ]),
-            parent: z.string(),
             origin: z.union([
               z.literal("started"),
               z.literal("attached"),
@@ -1545,12 +1546,27 @@ const inputs = {
                 ]),
               }),
             ]),
-            op: z.string(),
+            remote: z
+              .object({
+                device: z.string(),
+                access: z.union([
+                  z.literal("ask"),
+                  z.literal("auto"),
+                  z.literal("full"),
+                  z.literal("deny"),
+                  z.literal("plan"),
+                  z.literal("edits"),
+                  z.literal("chat"),
+                ]),
+                conversation: z.string().optional(),
+                heard: z.number().optional(),
+              })
+              .optional(),
             tuned: z
               .object({
                 source: z.union([
-                  z.literal("harness"),
                   z.literal("apex"),
+                  z.literal("harness"),
                   z.literal("rule"),
                   z.literal("asked"),
                   z.literal("mako"),
@@ -1593,22 +1609,6 @@ const inputs = {
                 rule: z
                   .object({ when: z.string(), n: z.number().optional() })
                   .optional(),
-              })
-              .optional(),
-            remote: z
-              .object({
-                device: z.string(),
-                access: z.union([
-                  z.literal("ask"),
-                  z.literal("auto"),
-                  z.literal("full"),
-                  z.literal("deny"),
-                  z.literal("plan"),
-                  z.literal("edits"),
-                  z.literal("chat"),
-                ]),
-                conversation: z.string().optional(),
-                heard: z.number().optional(),
               })
               .optional(),
             placed: z
@@ -2980,7 +2980,7 @@ const inputs = {
   "mako:workspace-move-answer": () =>
     z.tuple([
       z.string(),
-      z.union([z.literal("allow"), z.literal("deny"), z.literal("always")]),
+      z.union([z.literal("deny"), z.literal("allow"), z.literal("always")]),
     ]),
   "mako:workspace-move-bring": () => z.tuple([z.string(), z.boolean()]),
   "mako:workspace-move-bring-stayed": () => z.tuple([z.string()]),
