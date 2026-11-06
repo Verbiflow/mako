@@ -54,7 +54,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { FinCapacity, FinCostModel, FinCostSampler, MacCapacity, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, mayChangeWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
+import { FinCapacity, FinCostModel, FinCostSampler, MacCapacity, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -273,13 +273,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       late.attribution?.live(event.batch)
       // On a cloud machine, the same reading says when to save the Thread.
       late.machineTracker?.observe(event.batch)
-      if (mayChangeWork(event.batch)) late.keepAwake?.changed()
     }
     // A conversation another device watches goes to it as it changes (`SessionPublisher`), and its row, a Session
     // archived here or a Thread renamed here changes what every device lists.
     late.sessions?.own(event)
     // The account and the agents' sign-ins say each change here; turning the cloud on reads them again then.
     if (event.type === "cloud-account" || event.type === "cloud-sign-ins") void late.turnOn?.changed()
+    if (recountsWork(event)) late.keepAwake?.changed()
     web()?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
@@ -1129,11 +1129,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     readinessOnce = readiness
     shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh())
   }
-  // This Mac kept awake while its agents work: a turn, background work or a subagent, never a wait on the person.
+  // This Mac kept awake while its agents work: a turn, background work or a subagent, never a wait on the person, and never a Fin that sits open.
   const keepAwake = cloudConversations && onMac() ? new KeepAwake({
     file: join(environment.dataRoot, "keep-awake.json"),
     helper: () => sleepWatchHelper(environment),
-    working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations.has(id), asking: false }).length,
+    working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations.has(id), ownWork: true }).length,
     changed: (state) => emit({ type: "keep-awake", state }),
   }) : undefined
   late.keepAwake = keepAwake

@@ -6,6 +6,7 @@ import { createInterface } from "node:readline"
 import { z } from "zod"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { trackProviderChild } from "../base/provider-children.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 import { KEEP_AWAKE_BATTERY_FLOOR, type KeepAwakeHold, type KeepAwakeSettings, type KeepAwakeState } from "../contracts/keep-awake.js"
 import type { LiveBatch } from "../contracts/live-conversations.js"
 
@@ -29,7 +30,7 @@ export type KeepAwakeOptions = {
   file: string
   /** The helper's path (`sleepWatchHelper`); undefined where there is none. */
   helper(): Promise<string | undefined>
-  /** How many of this Mac's Threads have an agent at work now (`workingThreads`, waits on the person left out). */
+  /** How many of this Mac's Threads have an agent at work now (`workingThreads`, `ownWork`). */
   working(): number
   /** What every window shows changed. */
   changed(state: KeepAwakeState): void
@@ -52,8 +53,10 @@ export function keepAwakeHold(settings: KeepAwakeSettings, agents: number, power
   return { kind: settings.lidClosed && power?.kind === "ac" ? "lid" : "idle", agents }
 }
 
+type WorkBatch = Pick<LiveBatch, "session" | "requests" | "requestChanges" | "permissions" | "nativeAgents" | "sessionChanges" | "sessionCleared">
+
 /** Whether a batch can change whether its conversation's agent works: its status, requests, approvals, background work or subagents. */
-export function mayChangeWork(batch: Pick<LiveBatch, "session" | "requests" | "requestChanges" | "permissions" | "nativeAgents" | "sessionChanges" | "sessionCleared">): boolean {
+export function mayChangeWork(batch: WorkBatch): boolean {
   if (batch.session || batch.requests || batch.requestChanges || batch.permissions || batch.nativeAgents) return true
   const changes = batch.sessionChanges
   if (changes && ("status" in changes || "backgroundTasks" in changes)) return true
@@ -61,6 +64,16 @@ export function mayChangeWork(batch: Pick<LiveBatch, "session" | "requests" | "r
 }
 
 /** The assertion's name in `pmset -g assertions`. */
+/**
+ * Whether a host event can change who works, so it's counted now and not at the minute's recount: a batch that says
+ * so, or a sign-out, of the account or of an agent. A sign-out ends no hold itself: a local agent it didn't stop still
+ * works, and that's what the hold follows.
+ */
+export function recountsWork(event: { type: "live-batch"; batch: WorkBatch } | { type: Exclude<HostEvent["type"], "live-batch"> }): boolean {
+  if (event.type === "live-batch") return mayChangeWork(event.batch)
+  return event.type === "cloud-account" || event.type === "cloud-sign-ins"
+}
+
 export function assertionName(agents: number): string {
   return `Mako: ${agents} ${agents === 1 ? "agent" : "agents"} working`
 }
@@ -141,6 +154,7 @@ export class KeepAwake {
   async #refresh(): Promise<void> {
     if (this.#stopped) return
     const settings = await this.#readSettings()
+    if (this.#stopped) return
     const agents = settings.on ? this.#options.working() : 0
     if (agents === 0) {
       this.#asked = undefined
@@ -151,7 +165,9 @@ export class KeepAwake {
     }
     clearTimeout(this.#linger)
     this.#linger = undefined
-    if (!(await this.#start())) {
+    const started = await this.#start()
+    if (this.#stopped) return
+    if (!started) {
       this.#publish({ kind: "failed", agents })
       return
     }
@@ -192,6 +208,8 @@ export class KeepAwake {
     if (this.#ready) return this.#ready
     if (this.#noHelper) return false
     const helper = await this.#options.helper().catch(() => undefined)
+    // Stopped while it looked: a helper started now would hold what nothing is left to release.
+    if (this.#stopped) return false
     if (!helper) {
       this.#noHelper = true
       return false

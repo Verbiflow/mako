@@ -6,9 +6,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import type { KeepAwakeState } from "@mako/host/contracts/keep-awake"
+import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
+import type { LivePermissionRequest } from "@mako/host/contracts/providers-acp"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
-import { KeepAwake, assertionName, keepAwakeHold, mayChangeWork } from "@mako/host/conversations/keep-awake"
+import { KeepAwake, assertionName, keepAwakeHold, mayChangeWork, recountsWork } from "@mako/host/conversations/keep-awake"
 
 /**
  * Keeping this Mac awake while its agents work (`KeepAwake`), against a stand-in for the native helper: what to hold
@@ -99,18 +101,36 @@ try {
   assert.equal(mayChangeWork({ sessionChanges: { title: "New name" } }), false)
   assert.equal(mayChangeWork({}), false)
 
-  // A wait on the person isn't work that holds a Mac awake; background work is. A handoff still takes both.
+  // A sign-out, of the account or an agent's, is read at once rather than at the minute's recount.
+  assert.equal(recountsWork({ type: "cloud-account" }), true)
+  assert.equal(recountsWork({ type: "cloud-sign-ins" }), true)
+  assert.equal(recountsWork({ type: "live-batch", batch: { sessionChanges: { status: "ready" } } }), true)
+  assert.equal(recountsWork({ type: "live-batch", batch: { sessionChanges: { title: "New name" } } }), false)
+  assert.equal(recountsWork({ type: "conversation-settings" }), false)
+
+  // What holds a Mac awake is what an agent does itself. A turn stopped on the person doesn't, even though it still reads
+  // running with its request dispatching; what it left running does. A Fin is a Thread of its own, counted by its own
+  // conversation, so an Apex with an idle one open isn't working. A handoff still takes all of these.
+  const asking: LivePermissionRequest[] = [{ id: "p", sessionId: "s", title: "Run a command", options: [] }]
+  const dispatching: WorkingSnapshot["requests"] = [{ status: "dispatching" }]
+  const agent = (nativeId: string, child?: { thread: string; origin: "started" }): NativeAgent => ({ nativeId, title: nativeId, bindingId: "binding", provider: "codex", observedAt: 1, state: { kind: "working" }, ...child && { child } })
+  const roster = (...agents: NativeAgent[]): NativeAgentRoster => ({ agents, limited: false })
   const snapshots = new Map<string, WorkingSnapshot>([
-    ["asking", { session: { harness: "codex", status: "ready" }, permissions: [{ id: "p", sessionId: "asking", title: "Run a command", options: [] }], requests: [] }],
+    ["turn", { session: { harness: "codex", status: "running" }, permissions: [], requests: dispatching }],
+    ["approval", { session: { harness: "codex", status: "running" }, permissions: asking, requests: dispatching }],
+    ["approval-at-rest", { session: { harness: "codex", status: "ready" }, permissions: asking, requests: [] }],
+    ["approval-with-background", { session: { harness: "codex", status: "running", backgroundTasks: 1 }, permissions: asking, requests: dispatching }],
     ["background", { session: { harness: "codex", status: "ready", backgroundTasks: 1 }, permissions: [], requests: [] }],
+    ["subagent", { session: { harness: "codex", status: "ready" }, permissions: [], requests: [], nativeAgents: roster(agent("subagent")) }],
+    ["idle-fin", { session: { harness: "codex", status: "ready" }, permissions: [], requests: [], nativeAgents: roster(agent("fin", { thread: randomUUID(), origin: "started" })) }],
   ])
   const sources = {
-    live: { summaries: () => [...snapshots.keys()].map((id) => ({ session: { id } })), loaded: () => true, snapshot: (id: string) => snapshots.get(id) ?? null },
+    live: { listed: () => [...snapshots.keys()].map((id) => ({ session: { id } })), loaded: () => true, snapshot: (id: string) => snapshots.get(id) ?? null },
     threads: { journalPlacement: () => ({ thread: ThreadIdSchema.parse(randomUUID()), session: SessionIdSchema.parse(randomUUID()) }), execution: () => ({ state: "here" as const }) },
     cloud: () => false,
   }
-  assert.deepEqual(workingThreads(sources).map((thread) => thread.conversationId), ["asking", "background"])
-  assert.deepEqual(workingThreads({ ...sources, asking: false }).map((thread) => thread.conversationId), ["background"])
+  assert.deepEqual(workingThreads(sources).map((thread) => thread.conversationId), [...snapshots.keys()])
+  assert.deepEqual(workingThreads({ ...sources, ownWork: true }).map((thread) => thread.conversationId), ["turn", "approval-with-background", "background", "subagent"])
 
   {
     // Nothing works: no helper runs at all.
@@ -159,6 +179,77 @@ try {
     awake.stop()
     await settle()
     assert.equal(newest()?.ended(), true)
+  }
+
+  {
+    // A sign-out with nothing left working lets go at once; a local agent it didn't stop keeps its Mac awake.
+    const { awake, work, newest, holds } = harness({ agents: 1 })
+    await awake.refresh()
+    await settle()
+    await holds("idle")
+    awake.changed()
+    await settle()
+    await settle()
+    assert.equal(newest()?.told.at(-1), "hold idle Mako: 1 agent working", "still working: still held")
+    work.agents = 0
+    awake.changed()
+    await settle()
+    await settle()
+    assert.equal(newest()?.told.at(-1), "release")
+    assert.deepEqual((await awake.state()).hold, { kind: "rest" })
+    awake.stop()
+  }
+
+  {
+    // Stop while the helper is being looked for: nothing starts, nothing is held, and the hold isn't said to have failed.
+    let found = (_path: string) => {}
+    const spawned: string[] = []
+    const shown: KeepAwakeState[] = []
+    const awake = new KeepAwake({
+      file: join(root, "stopped-looking.json"),
+      helper: () => new Promise((resolve) => {
+        found = resolve
+      }),
+      working: () => 1,
+      changed: (state) => shown.push(state),
+      spawn: (path) => {
+        spawned.push(path)
+        return standIn().process
+      },
+    })
+    const refreshed = awake.refresh()
+    await settle()
+    awake.stop()
+    found("/helper")
+    await refreshed
+    await settle()
+    assert.deepEqual(spawned, [], "no helper after a stop")
+    assert.deepEqual(shown, [])
+  }
+
+  {
+    // Stop while the helper starts up: it's ended, told nothing, and nothing is said of it.
+    const helper = standIn()
+    const shown: KeepAwakeState[] = []
+    const awake = new KeepAwake({
+      file: join(root, "stopped-starting.json"),
+      helper: async () => "/helper",
+      working: () => 1,
+      changed: (state) => shown.push(state),
+      spawn: () => helper.process,
+    })
+    const refreshed = awake.refresh()
+    await settle()
+    awake.stop()
+    helper.say("ready")
+    helper.say("power ac")
+    await settle()
+    helper.exit(0)
+    await refreshed
+    await settle()
+    assert.deepEqual(helper.told, [], "told nothing after a stop")
+    assert.equal(helper.ended(), true)
+    assert.deepEqual(shown, [])
   }
 
   {

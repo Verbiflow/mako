@@ -84,7 +84,7 @@ export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadS
 export { SYNC_WINDOW_MS, syncTier, windowStart } from "./sync-window.js"
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
-export { KeepAwake, mayChangeWork } from "./keep-awake.js"
+export { KeepAwake, recountsWork } from "./keep-awake.js"
 export { ownerHold } from "./owner-check.js"
 export { CloudReturns } from "./cloud-returns.js"
 export { CloudFollow } from "./cloud-follow.js"
