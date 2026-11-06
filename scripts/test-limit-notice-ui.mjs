@@ -41,29 +41,37 @@ async function check() {
   await mkdir(shots, { recursive: true })
   // A page that never loads is a failure here, not a job left to time out.
   setTimeout(() => {
-    console.error("The limit notice's UI check took over four minutes")
+    console.error("The limit notice's UI check took over eight minutes")
     app.exit(1)
-  }, 240_000).unref()
+  }, 480_000).unref()
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
   await app.whenReady()
   const base = process.env.MAKO_LIMIT_UI_URL
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false, contextIsolation: true } })
   const page = window.webContents
+  page.debugger.attach("1.3")
   const errors = []
   page.on("console-message", (event) => {
     if (event.level === "error") errors.push(event.message)
   })
   const evaluate = (code) => page.executeJavaScript(code)
   const until = async (code, what = code) => {
-    const deadline = Date.now() + 20_000
+    // Generous: a cold dev server bundles its dependencies and reloads the page first. Nothing here is timed.
+    const deadline = Date.now() + 120_000
     while (!(await evaluate(code))) {
       if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`)
       await new Promise((done) => setTimeout(done, 40))
     }
   }
+  /** The page at rest: fonts in and animations done, or a moment on, since a hidden window may never draw their frames. */
   const settle = () =>
-    evaluate("document.fonts.ready.then(() => Promise.all(document.getAnimations().filter((each) => each.effect?.getTiming().iterations !== Infinity).map((each) => each.finished.catch(() => undefined)))).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)")
+    evaluate("Promise.race([document.fonts.ready.then(() => Promise.all(document.getAnimations().filter((each) => each.effect?.getTiming().iterations !== Infinity).map((each) => each.finished.catch(() => undefined)))), new Promise((done) => setTimeout(done, 1500))]).then(() => true)")
+  /** The viewport a surface is drawn at, whatever the screen: a runner's 1024 px one clamps the window. A page first: emulating a window that has drawn nothing crashes. */
+  const viewport = async (width, height, mobile = false) => {
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
+  }
   const theme = (light) => evaluate(`document.documentElement.classList.toggle('light', ${light}); document.documentElement.style.colorScheme = '${light ? "light" : "dark"}'; true`)
   /** The element `selector` names (a selector with no quote in it), cropped with a margin, in both themes. */
   const shoot = async (name, selector) => {
@@ -104,6 +112,8 @@ async function check() {
   const MOVED = "Moved to Claude Code"
   const OUT = "Out of accounts: Cursor and Claude Code (work) are at their limits until Sun 12:00 AM PST"
 
+  await viewport(1440, 900)
+  console.log("LOADING the desk")
   await load(`${base}?mock&app=apex&fins=limit`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row")
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
@@ -113,6 +123,7 @@ async function check() {
   await until("Boolean(document.querySelector('[data-crew]'))", "the crew card")
   await settle()
 
+  console.log("LOADED the desk")
   // 1. The crew card: a move reads as one, a Fin out of accounts stands apart from what finished, never folded.
   const header = await text("[data-crew] header")
   assert.match(header, /1 failed/, `an unfinished Fin counts apart from done: ${header}`)
@@ -171,7 +182,7 @@ async function check() {
 
   // 4. The phone: its row, its Inbox, its Thread and its Agents sheet, the moved line whole.
   const phoneTheme = (light) => evaluate(`document.documentElement.classList.toggle('light', ${light}); document.documentElement.classList.toggle('dark', ${!light}); document.documentElement.style.colorScheme = '${light ? "light" : "dark"}'; true`)
-  window.setContentSize(390, 844)
+  await viewport(390, 844, true)
   await load(`${base}scripts/phone-apex.html?app=apex&fins=limit`)
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
   await settle()
@@ -199,7 +210,7 @@ async function check() {
   console.log("PASS: the phone shows the notice once, and a move whole")
 
   // 5. The laptop's browser: the Apex's Fins and their moves are on its crew card, its only list.
-  window.setContentSize(1280, 800)
+  await viewport(1280, 800)
   await load(`${base}scripts/web-desk.html?app=apex&thread=apex&fins=limit`)
   await until("document.querySelectorAll('[data-crew] [data-crew-row]').length > 0 || document.body.innerText.includes('Mobile polish')", "the laptop's Apex")
   await settle()
