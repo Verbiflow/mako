@@ -264,7 +264,8 @@ detached children are left alone: nobody asked for its build daemon to die,
 and what such a daemon takes shows only in busy cores. A check that's stopped
 frees its slot once its tree and every child its mark finds or a look saw are
 gone (`untilGone`, `strays`), and one that outlives SIGKILL keeps the slot
-while a waiting check says so. A check the last host left holds its slot by
+while a waiting check says so. What a stop has seen is kept beside the run's
+record (`<key>.stopping`), so the next host counts it and goes on with the stop. A check the last host left holds its slot by
 those same two rules, and finding it ends nothing. It's counted before any
 slot goes out, and a read of it that fails holds them all (`recoverSlots`). The person
 can fix a number per device instead of Auto (Settings › Fins), and
