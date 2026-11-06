@@ -54,11 +54,11 @@ import { ACCESS_TIER_NAMES, accessModeId } from "@mako/host/contracts/access"
  * - `offline`, `online`: the relay cut, or listening again on the same port. `OFFLINE {at}`, `ONLINE {at}`
  * - `return <conversation>`: the Thread brought back from the cloud, as Bring back does. `RETURNED {outcome, ms}`
  * - `start-as <access> <title> <word>`: `start` on that access (`full`, `auto`, `ask`, …), as its mode in the composer.
- * - `move <conversation> <token> <word> [ms]`: a turn whose agent calls the `mako` server's `thread_move`, then runs a
- *   command that sleeps five minutes and writes `handoff-<token>.txt`, then says the word. Waits until the Thread runs
- *   elsewhere, or `ms` (ten minutes) pass. `MOVED {answer, elsewhere, ms, read}`: `answer` is what thread_move told the agent.
+ * - `move <conversation> <token> <word>`: a turn whose agent calls the `mako` server's `thread_move`, then runs a
+ *   command that sleeps five minutes and writes `handoff-<token>.txt`, then says the word. `MOVED {answer, ms}`: `answer`
+ *   is what thread_move told the agent. The account says where the Thread runs.
  * - `asks <conversation>`: what its agent asked, as the card shows it. `ASKS [...]`
- * - `allow <conversation> <ask>`: Move to the cloud on that card, then waits until its Thread runs elsewhere. `ALLOWED {elsewhere, ms}`
+ * - `allow <conversation> <ask>`: Move to the cloud on that card. `ALLOWED {ms}`
  * - `back <conversation>`: `mako thread move back --conversation <id>` from a shell outside any Thread, this checkout's
  *   CLI against this host's socket. `BACK {answer, ms}`
  * - `shot <path> [title]`: the window's screenshot, the Thread named by its title selected first. `SHOT <path>`
@@ -246,14 +246,6 @@ const read = async (id: string) => {
   const words = [...kept, ...said(shot.blocks).filter((word) => !kept.includes(word))]
   return { elsewhere: shot.elsewhere ?? null, threadId: shot.threadId ?? null, requests: shot.requests.map(({ id: request, status, error }) => ({ request, status, ...error && { error } })), words }
 }
-/** Where the conversation's folder is once its Thread runs elsewhere, waited for up to `ms`; null if it stayed. */
-const awayWithin = async (conversation: string, ms: number) => {
-  for (const deadline = Date.now() + ms; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 1_000))) {
-    const where = (await snapshot(conversation)).elsewhere
-    if (where) return where
-  }
-  return null
-}
 /** What a conversation's agent asked, as its control keeps it. */
 const AsksSchema = z.object({ control: z.object({ asks: z.array(z.object({ id: z.string() }).loose()).optional() }).loose().optional() }).loose()
 const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), inCloud: z.number() }).loose()).optional() }).loose()
@@ -333,7 +325,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     const outcome = await call("mako:thread-return", [rest[0]!, randomUUID()])
     say("RETURNED", JSON.stringify({ outcome, ms: Date.now() - began }))
   } else if (command === "move") {
-    const [conversation, token, word, wait] = rest
+    const [conversation, token, word] = rest
     if (!conversation || !token || !word) {
       say("UNKNOWN", JSON.stringify({ line }))
       continue
@@ -342,14 +334,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     const text = `Move this Thread to the cloud with thread_move (proof ${token}), finish the work, then reply with the single word ${word}.`
     await call("mako:live-prompt", [conversation, randomUUID(), text, []])
     for (const deadline = Date.now() + 60_000; Date.now() < deadline && !moveAnswers.has(token); ) await new Promise((resolve) => setTimeout(resolve, 500))
-    const elsewhere = await awayWithin(conversation, Number(wait) || 10 * 60_000)
-    say("MOVED", JSON.stringify({ answer: moveAnswers.get(token) ?? null, elsewhere, ms: Date.now() - began, read: await read(conversation) }))
+    say("MOVED", JSON.stringify({ answer: moveAnswers.get(token) ?? null, ms: Date.now() - began }))
   } else if (command === "asks") say("ASKS", JSON.stringify(AsksSchema.parse(await call("mako:live-snapshot", [rest[0]!])).control?.asks ?? []))
   else if (command === "allow") {
     const [conversation, ask] = rest
     const began = Date.now()
     await call("mako:agent-ask-answer", [conversation, ask, true])
-    say("ALLOWED", JSON.stringify({ elsewhere: await awayWithin(conversation!, 10 * 60_000), ms: Date.now() - began }))
+    say("ALLOWED", JSON.stringify({ ms: Date.now() - began }))
   } else if (command === "back") {
     const began = Date.now()
     // The person's own shell: no Session of a Thread's, so the CLI names the conversation and waits for the end.
