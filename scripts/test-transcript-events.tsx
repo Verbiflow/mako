@@ -302,6 +302,14 @@ assert.doesNotMatch(text(warning), /Warning Approaching/, "the category label gi
 const failure = draw(streamed([go, marker({ label: "Turn failed", detail: "stream disconnected before completion", tone: "error" })]))
 assert.match(failure, /lucide-circle-alert[^"]*text-negative/)
 assert.match(failure, /class="[^"]*text-negative">Turn failed</)
+// A usage limit ends a turn, which isn't a failure: what it held waits or goes on, and the line beside it says which.
+for (const words of ["Your team has reached its usage limit Please reach out to an admin to increase your limit, or return on 11/8/2026 when your usage resets.", "You've hit your weekly limit · resets 1pm (America/Los_Angeles)"]) {
+  const limit = eventWords({ label: "Turn failed", detail: words, tone: "error" })
+  assert.deepEqual([limit.title, limit.tone, limit.glyph], ["Usage limit", undefined, "limit"], words)
+  assert.equal(limit.detail, words, "its words stay")
+  assert.doesNotMatch(draw(streamed([go, marker({ label: "Turn failed", detail: words, tone: "error" })])), /text-negative/)
+}
+assert.equal(eventWords({ label: "Turn failed", detail: "Failed to authenticate: invalid API key. Claude usage limit reached.", tone: "error" }).tone, "error", "a fault only the person can fix stays a failure, whatever else it says")
 
 // A provider's retries, quiet either way: the count, its words and how long; the failure after them says itself.
 const recoveredWords = eventWords(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)"))

@@ -1,3 +1,4 @@
+import { usageLimitWords } from "@mako/host/contracts/provider-failure"
 import {
   COMPACTION_FAILED,
   CONTEXT_COMPACTED,
@@ -151,8 +152,17 @@ function glyphOf(note: TranscriptEvent): EventGlyph {
   return note.tone ?? "notice"
 }
 
+/**
+ * A turn a usage limit ended, which isn't a failure to the person: what it held waits, or goes on elsewhere, and the
+ * line beside it says which. One that does fail says so in the queue. Everything else that failed stays a failure.
+ */
+export function limitFailure(note: Pick<TranscriptEvent, "label" | "detail">): boolean {
+  return note.label === TURN_FAILED && usageLimitWords(note.detail)
+}
+
 /** A provider's marker inside a turn, as one line. */
 export function eventWords(note: TranscriptEvent): EventWords {
+  if (limitFailure(note)) return said("limit", "Usage limit", note.detail)
   if (note.cause) {
     const words = causeWords(note.cause)
     if (note.tone && !words.tone) words.tone = note.tone

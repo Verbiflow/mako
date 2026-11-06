@@ -3552,9 +3552,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     return sessionAccessTier(this.deps.live.session(conversation))
   }
 
+  /** The harness a Fin is on now: an automatic move's, which leaves what it was asked for as it was. */
   private harnessOf(edge: ThreadParent): string {
     const running = edge.run && !edge.run.ended ? edge.run.harness : undefined
-    return running ?? edge.asked.harness ?? edge.run?.harness ?? "unknown"
+    return running ?? edge.tuned?.rerouted?.to?.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown"
   }
 
   /**

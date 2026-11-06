@@ -236,6 +236,7 @@ try {
     const thread = edgeOf(r).child
     assert.deepEqual(r.world.store.reportsOf(thread, 0).map((report) => [report.status, report.summary]), [["done", "Labelled all 120."]], "one report, the turn that finished the work: no failure for a limit it moved past")
     await until("its Apex to hear", () => r.wakes.length === 1)
+    assert.ok(r.wakes[0]!.includes('"labels" (Codex)'), `it's named for the harness it's on: ${r.wakes[0]!.slice(0, 200)}`)
     assert.ok(r.wakes[0]!.includes(`"labels" moved to Claude (work): personal is at its limit`), r.wakes[0])
     assert.ok(r.wakes[0]!.includes(`"labels" moved to Codex: Claude (work) is at its limit`), r.wakes[0])
     assert.equal(r.wakes.length, 1, "the moves never woke the Apex by themselves")
