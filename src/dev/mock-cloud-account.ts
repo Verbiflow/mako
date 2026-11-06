@@ -1,4 +1,6 @@
 import type { SyncFailureView, SyncStatus, SyncTier } from "@mako/host/contracts/sync-status"
+import { JOIN_WAIT_MS } from "@mako/host/contracts/account-devices"
+import { advanceFixtureClock } from "./fixture-clock"
 import { mockCloudTurnOn } from "./mock-cloud-turn-on"
 import type { CloudAccount, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
 
@@ -28,8 +30,10 @@ export const MOCK_GITHUB_USER_ID = "583231"
  *
  * The account's devices are every state Settings › Devices draws: this Mac; `build-box`, a Linux machine that's
  * online; `gpu-rig`, one quiet for three hours; `nas`, one whose Mako is too old for this build; Studio, a Mac seen
- * five hours ago; and a terminal that joined and never connected. `globalThis.makoMockAccount.join()` has a machine
- * join as the account's stream would say it (what Add a machine waits for), and lists it.
+ * five hours ago; and a terminal that joined and never connected; `devices=one` has this Mac alone.
+ * `globalThis.makoMockAccount` drives what the account would: `join()` has a machine join as its stream says it
+ * (what Add a machine waits for), and lists it; `lapse()` moves the clock past a join code's life with no machine;
+ * `failRemovals(true)` has the cloud refuse to remove a device.
  */
 export function mockCloudAccount(emit: (event: HostEvent) => void) {
   const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
@@ -59,7 +63,7 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     createdAt: minutesAgo(60 * 24 * 6),
     ...device,
   })
-  let others: CloudDevice[] = [
+  let others: CloudDevice[] = params.get("devices") === "one" ? [] : [
     machine({ id: MOCK_MACHINES.online, name: "build-box", platform: "Linux x64 · Ubuntu 24.04", lastSeenAt: minutesAgo(2) }),
     machine({ id: MOCK_MACHINES.quiet, name: "gpu-rig", platform: "Linux x64 · Debian 13", createdAt: minutesAgo(60 * 24 * 21), lastSeenAt: minutesAgo(60 * 3) }),
     machine({ id: MOCK_MACHINES.behind, name: "nas", platform: "Linux arm64 · Alpine 3.22", appVersion: "0.1.37", enrolledFrom: { city: "San Francisco", region: "California", country: "US" }, createdAt: minutesAgo(60 * 24 * 70), lastSeenAt: minutesAgo(4) }),
@@ -154,7 +158,14 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     others = [device, ...others]
     emit({ type: "cloud-account-event", seq: ++seq, at: new Date().toISOString(), mine: false, event: { type: "device-joined", device: { id: device.id, kind: "runtime", name, platform: device.platform, enrolledBy: "device-code", from: { city: "Frankfurt", region: "Hesse", country: "DE" } } } })
   }
-  Reflect.set(globalThis, "makoMockAccount", { join })
+  let removalsFail = false
+  Reflect.set(globalThis, "makoMockAccount", {
+    join,
+    lapse: () => advanceFixtureClock(JOIN_WAIT_MS + 60_000),
+    failRemovals: (fail: boolean) => {
+      removalsFail = fail
+    },
+  })
   // `joined`: one joins a moment after the desk opens.
   if (params.has("joined")) setTimeout(join, 1_500)
 
@@ -191,6 +202,7 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     cloudDevices: async () => ({ devices: [thisMac, ...others], current: thisMac.id }),
     cloudDeviceRemove: async (id: string) => {
       await new Promise((resolve) => setTimeout(resolve, 400))
+      if (removalsFail) throw new Error("Mako Cloud couldn't be reached. Try again in a moment.")
       if (id === thisMac.id) return signedOut()
       others = others.filter((device) => device.id !== id)
       return account

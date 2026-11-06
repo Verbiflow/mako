@@ -1,15 +1,19 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { errorMessage } from "@mako/host/contracts/error-message"
-import type { DeviceRuns } from "@mako/host/contracts/account-devices"
 import { Devices, type MachineSheetProps } from "@/components/settings/devices"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
+import { deviceReadings } from "./device-readings"
 import { useForm } from "./route"
 import { Sheet, SheetScroll } from "./sheet"
 
+/** How often the devices' records are read again while Settings › Devices shows. */
+const DEVICES_EVERY_MS = 60_000
+
 /**
  * Settings › Devices in a browser: the desktop's own component (`Devices`), fed from the account's list this browser
- * follows. The devices and what each runs are the list's; a quiet device is the account's own word (`device-quiet`);
+ * follows. The devices and what each runs are the list's; a quiet device is the account's own word (`device-quiet`),
+ * and one that lists work and isn't quiet is there, whatever its record's last sign-in says (`deviceReadings`);
  * a machine that joins is heard on the account's stream, so Add a machine says so as it happens. Removing one asks
  * the gateway, as any device of the account may.
  */
@@ -22,17 +26,33 @@ export function WebDevices() {
   const phase = useAccountList((state) => state.phase)
   const joined = useAccountList((state) => state.joined)
   const [removing, setRemoving] = useState<string>()
-  const [failure, setFailure] = useState<string>()
-  // A Session is a row of the list; which of them are Fins the list doesn't say, so none are counted here.
-  const runs = useMemo(() => {
-    const counts = new Map<string, DeviceRuns>()
-    for (const row of rows) {
-      if (row.runsOn.kind !== "device") continue
-      const there = counts.get(row.runsOn.deviceId) ?? { sessions: 0, fins: 0 }
-      counts.set(row.runsOn.deviceId, { ...there, sessions: there.sessions + 1 })
+  const [failure, setFailure] = useState<{ device: string; message: string }>()
+  // The cloud's own address is the gateway's word, said with this browser's connection: the page's origin passes on
+  // only the app's routes, so a machine can't join there. Until it's said, the lines leave the cloud to the machine.
+  const [cloud, setCloud] = useState<string>()
+  useEffect(() => {
+    let shown = true
+    void client.gateway.connection().then(
+      (connection) => shown && setCloud(connection.cloud),
+      () => undefined
+    )
+    return () => {
+      shown = false
     }
-    return counts
-  }, [rows])
+  }, [client])
+  const { runs, heard } = useMemo(() => deviceReadings({ rows, quiet }), [rows, quiet])
+  // The devices' own records (their Mako, when each last signed in) are read again while this shows: once a minute and
+  // whenever the window comes back to the front, as a Mac's Settings does. A read that fails keeps the last one.
+  useEffect(() => {
+    const read = () => void client.list.refreshDevices().catch(() => undefined)
+    read()
+    const timer = setInterval(read, DEVICES_EVERY_MS)
+    window.addEventListener("focus", read)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener("focus", read)
+    }
+  }, [client])
   const list = useMemo(() => [...devices.values()], [devices])
   const remove = async (id: string): Promise<boolean> => {
     setRemoving(id)
@@ -41,7 +61,7 @@ export function WebDevices() {
       await client.list.removeDevice(id)
       return true
     } catch (error) {
-      setFailure(errorMessage({ error }))
+      setFailure({ device: id, message: errorMessage({ error }) })
       return false
     } finally {
       setRemoving(undefined)
@@ -54,13 +74,15 @@ export function WebDevices() {
       current={client.deviceId}
       currentLabel="This browser"
       quiet={quiet}
+      heard={heard}
       runs={runs}
       removing={removing}
       busy={removing !== undefined}
       failure={failure}
       unread={undefined}
+      eyebrow
       onRemove={remove}
-      cloud={client.options.cloud}
+      cloud={cloud}
       joined={joined}
       openUrl={(url) => void window.open(url, "_blank", "noopener")}
       Sheet={MachineSheet}
@@ -68,10 +90,13 @@ export function WebDevices() {
   )
 }
 
-/** Add a machine in a browser: a sheet from the bottom on a phone, a dialog in the middle on a laptop. */
+/**
+ * Add a machine in a browser: a sheet from the bottom on a phone, a dialog in the middle on a tablet and a laptop. Its
+ * steps and what it's waiting for are read together, so it's let stand taller than a choice's sheet before it scrolls.
+ */
 function MachineSheet({ open, onDismiss, title, children }: MachineSheetProps) {
   return (
-    <Sheet open={open} onDismiss={onDismiss} label={title}>
+    <Sheet open={open} onDismiss={onDismiss} label={title} className="max-h-[min(780px,calc(100%-32px))]!">
       <h2 className="web-sheet-title">{title}</h2>
       <SheetScroll className="px-5 pb-[calc(env(safe-area-inset-bottom)+20px)]">{children}</SheetScroll>
     </Sheet>

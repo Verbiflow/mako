@@ -2075,9 +2075,15 @@ const ENDED_KEPT = 64
 /** A native session of a harness, as `nativeChanged` names it. */
 const nativeKey = (harness: string, nativeId: string) => `${harness}\n${nativeId}`
 
-/** A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. */
+/**
+ * A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. Where it runs
+ * stays what the summary said: a device's name and kind for one the account's list put on a device, so a batch of its
+ * never turns a machine's or a Mac's conversation into a cloud machine's for a window that lists after it. A machine's
+ * own answer names no place, and is the cloud's.
+ */
 function summaryOf(snapshot: LiveSummary): LiveSummary {
-  const summary: LiveSummary = { session: snapshot.session, revision: snapshot.revision, createdAt: snapshot.createdAt, elsewhere: CLOUD_FOLDER_WHERE }
+  const summary: LiveSummary = { session: snapshot.session, revision: snapshot.revision, createdAt: snapshot.createdAt, elsewhere: snapshot.elsewhere ?? CLOUD_FOLDER_WHERE }
+  if (snapshot.elsewhereKind) summary.elsewhereKind = snapshot.elsewhereKind
   // A Thread moved from this Mac has the same IDs in both stores: a window places its tabs by them.
   if (snapshot.threadId) summary.threadId = snapshot.threadId
   if (snapshot.sessionId) summary.sessionId = snapshot.sessionId

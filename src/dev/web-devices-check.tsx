@@ -1,6 +1,8 @@
 // Explicit isolated fixture for the web app's Settings › Devices; never imported by the application entry point.
 import { createRoot } from "react-dom/client"
 import type { ListedSession } from "@mako/protocol/thread-listing"
+import { JOIN_WAIT_MS } from "@mako/host/contracts/account-devices"
+import { advanceFixtureClock } from "./fixture-clock"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Avatar } from "@/components/ui/avatar"
@@ -15,8 +17,10 @@ import "../web-client/style.css"
  * The web app's Settings › Devices (`WebDevices`, the desktop's own `Devices`) in Settings' frame, on an account's
  * list held here: this browser; `build-box`, a Linux machine that's online and runs two Sessions; `gpu-rig`, one
  * quiet for three hours; `nas`, one whose Mako is behind; a Mac; and a terminal that never connected. A phone's
- * width draws the touch form and its sheet, a laptop's the desk's. `?theme=light` draws it light.
- * `webDevicesCheck.join()` has a machine join as the account's stream says it.
+ * width draws the touch form and its sheet, a laptop's the desk's. `?theme=light` draws it light; `?devices=one` has
+ * this browser alone, `?devices=none` nothing at all. `webDevicesCheck` drives what the account would: `join()` has a
+ * machine join as its stream says it, `lapse()` moves the clock past a join code's life with no machine, and
+ * `failRemovals(true)` has the gateway refuse to remove a device.
  */
 
 const search = new URLSearchParams(location.search)
@@ -47,23 +51,35 @@ function row(index: number, deviceId: string, title: string): ListedSession {
   return { session: id(1), thread: id(2), conversation: id(3), harness: "codex", title, state: "idle", folder: "/home/ada/api", createdAt: at, activityAt: at, generation: 1, runsOn: { kind: "device", deviceId }, listedAt: at }
 }
 
+const listed = search.get("devices") === "none" ? [] : search.get("devices") === "one" ? devices.slice(0, 1) : devices
 accountListStore.set({
   phase: "live",
-  rows: [row(1, ONLINE, "Rebuild the search index"), row(2, ONLINE, "Bisect the upload timeout"), row(3, MAC, "Fix the flaky login test")],
-  devices: new Map(devices.map((device) => [device.id, device])),
+  rows: listed.length > 1 ? [row(1, ONLINE, "Rebuild the search index"), row(2, ONLINE, "Bisect the upload timeout"), row(3, MAC, "Fix the flaky login test")] : [],
+  devices: new Map(listed.map((device) => [device.id, device])),
   // The account's own word on the machine it stopped hearing from, as its stream says it.
   quiet: new Map([[QUIET, minutesAgo(60 * 3)]]),
 })
+
+let removalsFail = false
+/** How often Settings › Devices read the devices' records again. */
+let refreshes = 0
 
 // A stand-in for the started client, without its constructor's gateway: what Settings › Devices asks of it. Removing a
 // device answers as the gateway does, after a moment.
 const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: [] },
   deviceId: BROWSER,
-  options: { origin: location.origin, base: "/", cloud: "https://cloud.example.com" },
+  options: { origin: location.origin, base: "/" },
+  // The gateway's answer to this browser's sign-in, with its own address as it says it; `?cloud=unsaid` is a gateway
+  // from before it did.
+  gateway: { connection: async () => ({ token: "fixture", expiresAt: Date.now() + 300_000, deviceId: BROWSER, account: { id: "account-check", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: [] }, ...(search.get("cloud") !== "unsaid" && { cloud: "https://cloud.example.com" }) }) },
   list: {
+    refreshDevices: async () => {
+      refreshes += 1
+    },
     removeDevice: async (id: string) => {
       await new Promise((resolve) => setTimeout(resolve, 300))
+      if (removalsFail) throw new Error("Mako Cloud couldn't be reached. Try again in a moment.")
       const left = new Map(accountListStore.get().devices)
       left.delete(id)
       accountListStore.set({ devices: left })
@@ -71,8 +87,16 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   },
 })
 
-/** What `test-web-devices-ui.mjs` drives as the account would: a machine joins, said on the stream and then listed. */
+/**
+ * What `test-web-devices-ui.mjs` drives as the account would: a machine joins, said on the stream and then listed; a
+ * join code runs out with no machine; the gateway refuses a removal.
+ */
 Reflect.set(window, "webDevicesCheck", {
+  refreshes: () => refreshes,
+  lapse: () => advanceFixtureClock(JOIN_WAIT_MS + 60_000),
+  failRemovals(fail: boolean) {
+    removalsFail = fail
+  },
   join(name = "render-box") {
     const device: WebDevice = { id: crypto.randomUUID(), kind: "runtime", name, platform: "Linux x64 · Ubuntu 24.04", appVersion: "0.4.0", enrolledBy: "device-code", enrolledFrom: frankfurt, createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() }
     heardDeviceJoined({ id: device.id, kind: device.kind, name, platform: device.platform, enrolledBy: "device-code", from: frankfurt })

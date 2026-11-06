@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
-import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
+import { LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
 import { InboxView } from "@/components/inbox/inbox-view"
@@ -8,6 +8,8 @@ import { inboxView } from "@/state/inbox"
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
 import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
 import { SessionTabList } from "@/components/stage/session-tabs"
 import { Welcome } from "@/components/transcript/transcript"
@@ -453,14 +455,16 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
       </>
     )
   }
-  const Place = session.row.runsOn.kind === "cloud" ? CloudIcon : session.quietSince ? MoonIcon : LaptopIcon
+  // Where it runs, in the place's one glyph: a cloud, a server for a machine of the person's own, a laptop for a Mac;
+  // a device asleep or offline under the moon.
+  const place = runPlace(session.row.runsOn.kind === "cloud", session.machine ? "runtime" : undefined)
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id}>
       <WorkbenchStrip
         end={
           <>
             <span className="flex min-w-0 shrink items-center gap-1.5 px-2 text-label text-faint">
-              <Place aria-hidden className="size-3 shrink-0" />
+              {session.quietSince && place !== "cloud" ? <MoonIcon aria-hidden data-place="quiet" className="size-3 shrink-0" /> : <PlaceMark place={place} />}
               <span className="truncate">{subtitle(thread, session)}</span>
             </span>
             {thread.archived ? null : <ThreadActions desk thread={thread} session={session} onArchived={onArchived} onAdd={undefined} />}

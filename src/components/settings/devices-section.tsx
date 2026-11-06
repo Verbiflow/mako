@@ -35,30 +35,53 @@ export function DevicesSection() {
   )
 }
 
+/** What this window knows of a place from the conversations it holds there. */
+interface PlaceReading extends DeviceRuns {
+  /** When the account last heard from the device, as its listed conversations say while it's quiet (`quietSince`). */
+  quietSince?: number
+  /** It lists work the account doesn't call quiet: it's there now. */
+  heard: boolean
+}
+
 /**
  * What this window knows runs where, by a device's name: the conversations it holds, its own and the ones the
- * account's list named on another device, each a Session, and those with an Apex its Fins. A cloud machine's are
- * nobody's here. Compared by its counts, so a token streaming somewhere wakes nothing.
+ * account's list named on another device, folded into their Threads, and those with an Apex its Fins; and the
+ * account's own word on that device, quiet since a time or there, which the host's listing puts on each. A cloud
+ * machine's are nobody's here. Compared by its numbers, so a token streaming somewhere wakes nothing.
  */
-function useRunsByPlace(): ReadonlyMap<string, DeviceRuns> {
-  // Two counts a place, under `s` and `f` before its name, so the whole reading compares by its numbers.
+function useRunsByPlace(): ReadonlyMap<string, PlaceReading> {
+  // A few numbers a place, each under a letter before its name (`t` Threads, `f` Fins, `q` quiet since, `h` heard),
+  // so the whole reading compares by its numbers.
   const counts = useAcp((state) => {
+    const threads = new Map<string, Set<string>>()
     const counted: Record<string, number> = {}
     for (const conversation of Object.values(state.conversations)) {
       if (conversation.kind !== "live") continue
-      const key = `${conversation.parent ? "f" : "s"}${conversation.elsewhere ?? ""}`
-      counted[key] = (counted[key] ?? 0) + 1
+      const place = conversation.elsewhere ?? ""
+      if (conversation.elsewhere !== undefined) {
+        if (conversation.quietSince === undefined) counted[`h${place}`] = 1
+        else counted[`q${place}`] = Math.max(counted[`q${place}`] ?? 0, conversation.quietSince)
+      }
+      if (conversation.parent) {
+        counted[`f${place}`] = (counted[`f${place}`] ?? 0) + 1
+        continue
+      }
+      const there = threads.get(place) ?? new Set<string>()
+      there.add(conversation.threadId ?? conversation.key)
+      threads.set(place, there)
     }
+    for (const [place, there] of threads) counted[`t${place}`] = there.size
     return counted
   }, shallowEqual)
   return useMemo(() => {
-    const runs = new Map<string, DeviceRuns>()
+    const places = new Map<string, PlaceReading>()
     for (const [key, count] of Object.entries(counts)) {
       const place = key.slice(1)
-      const there = runs.get(place) ?? { sessions: 0, fins: 0 }
-      runs.set(place, key.startsWith("f") ? { ...there, fins: count } : { ...there, sessions: count })
+      const there = places.get(place) ?? { threads: 0, fins: 0, heard: false }
+      const letter = key.charAt(0)
+      places.set(place, letter === "f" ? { ...there, fins: count } : letter === "t" ? { ...there, threads: count } : letter === "q" ? { ...there, quietSince: count } : { ...there, heard: true })
     }
-    return runs
+    return places
   }, [counts])
 }
 
@@ -91,9 +114,15 @@ function AccountDevices({ state, cloud }: { state: SignedIn; cloud: string | nul
   const byPlace = useRunsByPlace()
   const list: CloudDevice[] = devices?.list ?? [current]
   const runs = new Map<string, DeviceRuns>()
+  const quiet = new Map<string, string>()
+  const heard = new Set<string>()
   for (const device of list) {
     const there = byPlace.get(device.id === current.id ? "" : device.name)
-    if (there) runs.set(device.id, there)
+    if (!there) continue
+    runs.set(device.id, { threads: there.threads, fins: there.fins })
+    // The account's word, as the list's rows carry it: quiet since a time, else there while it lists work.
+    if (there.quietSince !== undefined && !there.heard) quiet.set(device.id, new Date(there.quietSince).toISOString())
+    else if (there.heard) heard.add(device.id)
   }
   return (
     <Devices
@@ -103,10 +132,13 @@ function AccountDevices({ state, cloud }: { state: SignedIn; cloud: string | nul
       currentLabel="This Mac"
       currentReach={state.runtime ? REACH_WORDS[state.runtime] : undefined}
       runs={runs}
+      quiet={quiet}
+      heard={heard}
       removing={busy?.startsWith("remove:") ? busy.slice("remove:".length) : undefined}
       busy={Boolean(busy)}
-      failure={failure?.action.startsWith("remove:") ? failure.message : undefined}
+      failure={failure?.action.startsWith("remove:") ? { device: failure.action.slice("remove:".length), message: failure.message } : undefined}
       unread={!devices && failure?.action === "devices" ? failure.message : undefined}
+      eyebrow={false}
       onRemove={(id) => cloudAccount.removeDevice(id)}
       cloud={cloud ?? undefined}
       joined={joined}

@@ -34,6 +34,18 @@ export function deviceKindWords(device: Pick<DeviceRecord, "kind" | "platform">)
 }
 
 /**
+ * A device's facts as its row lists them, each a few words: its kind, its system and its Mako. The system is its
+ * platform's parts, less what the kind already said, so a Linux machine reads "Linux machine", "x64", "Ubuntu 24.04"
+ * and says Linux once. A row keeps each fact whole when its line breaks.
+ */
+export function deviceFacts(device: Pick<DeviceRecord, "kind" | "platform" | "appVersion">): string[] {
+  const kind = deviceKindWords(device)
+  const system = device.platform.split(" · ").map((part) => part.trim())
+  if (kind === "Linux machine" && system[0] !== undefined) system[0] = system[0].replace(/^linux\s*/i, "")
+  return [kind, ...system.filter(Boolean), ...(device.appVersion ? [`Mako ${device.appVersion}`] : [])]
+}
+
+/**
  * Where a Thread or a Fin runs when it isn't here, as its mark draws it: a cloud machine, a machine of the person's
  * own, or another of their computers.
  */
@@ -115,9 +127,9 @@ export function needsMakoUpdate(appVersion: string | null | undefined, needed: s
   return false
 }
 
-/** What runs on a device, as far as a list knows: its Sessions, and the Fins placed there (none where the list can't say). */
+/** What runs on a device, as far as a list knows: its Threads, and the Fins placed there (none where the list can't say). */
 export interface DeviceRuns {
-  sessions: number
+  threads: number
   fins: number
 }
 
@@ -137,6 +149,16 @@ export interface JoinedDevice {
  * Adding a machine: what a person runs there, in one place, so Settings, the web and the guide say the same lines.
  * `docs/linux-device.md` is the guide; a line here changes with it.
  */
+
+/** How long the code a joining machine prints can be confirmed, as the cloud gives it out (`docs/linux-device.md`). */
+export const JOIN_CODE_MINUTES = 10
+
+/**
+ * How long Add a machine says it's waiting before it stops saying so: the code's life and a little to run the line.
+ * The account says when a machine joins and never that one didn't, so past this nothing is on its way that a window
+ * can know of, and the wait is no longer claimed.
+ */
+export const JOIN_WAIT_MS = (JOIN_CODE_MINUTES + 2) * 60_000
 
 /** The guide to running Mako on a machine of one's own: building its host or its image, the service, the sign-in's key. */
 export const MACHINE_GUIDE_URL = "https://github.com/Verbiflow/mako/blob/main/docs/linux-device.md"
@@ -165,10 +187,12 @@ export const MACHINE_IMAGE = "mako-device"
 
 /**
  * The same in a container of the host's image, its data on a volume so a new container is the same device: it joins on
- * its first start, then runs. `MAKO_CLOUD_URL` is left for the person to fill where the window doesn't know the cloud.
+ * its first start, then runs. Where the window doesn't know the cloud, the line passes the shell's own
+ * `MAKO_CLOUD_URL` on, for the person to set: every line here runs as it's written, so none holds a placeholder a
+ * shell would read as something else.
  */
 export function containerCommand(cloud: string | undefined): string {
-  return `docker run -d --init --name ${MACHINE_IMAGE} -v ${MACHINE_IMAGE}:/data \\\n  -e MAKO_CLOUD_URL=${cloud ? cloudAddress(cloud) : "<your Mako cloud>"} ${MACHINE_IMAGE}`
+  return `docker run -d --init --name ${MACHINE_IMAGE} -v ${MACHINE_IMAGE}:/data \\\n  -e MAKO_CLOUD_URL=${cloud ? cloudAddress(cloud) : '"$MAKO_CLOUD_URL"'} ${MACHINE_IMAGE}`
 }
 
 /** Where a container says the page and the code to confirm. */
