@@ -29,6 +29,7 @@ import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
 import { isSpareCheckout } from "./worktree-carry.js"
+import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
@@ -180,6 +181,8 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     /** Each running copy's peak counts toward its project's "about N at once"; with nothing running a look reads no process table. */
     deps.jobs.every("measure thread apps' memory", 30_000, async () => { await processes.memory() })
   }
+  const borrowing = shared ? CheckoutBorrowing.open(git, deps.readOnly ? undefined : join(shared, "borrowing")) : undefined
+  if (borrowing && !deps.readOnly) deps.jobs.every("keep what worktrees borrowed", 60 * 60_000, () => borrowing.keep())
   const worktrees = store && shared
     ? new ThreadWorktreeService(git, join(shared, "worktrees"), store, deps.inUse, deps.working, processes && environments ? {
         stop: async (thread) => { await processes.stop(AppKeySchema.parse(thread)) },
@@ -197,6 +200,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         prepared: (checkout) => processes.prepared(checkout),
         savePrepared: (checkout, prepared) => processes.savePrepared(checkout, prepared),
         forgetPrepared: (checkout) => processes.forgetPrepared(checkout),
+        borrowing,
         spareInstall: spareInstaller({
           git,
           processes,
@@ -303,6 +307,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   })
   const appTools = environments && processes ? environmentTools({
     git,
+    borrowing: worktrees?.borrowing,
     cwd: (id) => live.session(id)?.cwd,
     environment: (id, cwd) => environments.forConversation(id, live.session(id)?.title, cwd),
     launchedWith: (id) => environments.launchedWith(id),
