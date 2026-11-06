@@ -1,9 +1,10 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from "react"
+import { Fragment, useEffect, useState, type ComponentType, type ReactNode } from "react"
 import { ArrowUpRightIcon, CheckIcon, CopyIcon, GlobeIcon, LaptopIcon, MonitorSmartphoneIcon, PlusIcon, ServerIcon, TerminalIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   codePage,
   CONTAINER_LOGS_COMMAND,
+  CONTAINER_START_COMMAND,
   containerCommand,
   deviceFacts,
   deviceFamily,
@@ -306,8 +307,9 @@ function DeviceRow({
   const touch = form === "touch"
   const body = (
     <div className="min-w-0 flex-1">
-      <div className="flex items-center gap-2">
-        <span data-device-name className={cn("truncate text-ui", touch ? "" : "font-medium")}>{device.name}</span>
+      {/* A chip that doesn't fit beside the name goes under it: the name is never squeezed to nothing. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span data-device-name className={cn("max-w-full truncate text-ui", touch ? "" : "font-medium")}>{device.name}</span>
         {current ? <Chip className="shrink-0 whitespace-nowrap">{currentLabel}</Chip> : null}
         {behind ? (
           <Chip tone="caution" data-device-behind className="shrink-0 whitespace-nowrap" title={`${device.name} runs Mako ${device.appVersion}, older than this Mako works with. Update Mako there.`}>
@@ -319,18 +321,25 @@ function DeviceRow({
         <p data-device-stops className="mt-0.5 text-label leading-relaxed text-pretty text-caution">{removalWords(device, runs)}</p>
       ) : (
         <>
-          {/* Each fact keeps its dot behind it, so a line that breaks never starts with one. */}
+          {/*
+            Each fact is whole and keeps its dot behind it, and the space between two facts is outside both: a narrow
+            row breaks its line there, so no fact runs into Remove and no line starts with a dot.
+          */}
           <p data-device-facts className={cn("mt-0.5 text-label text-faint", touch ? "" : "truncate")} title={facts.join(" · ")}>
             {facts.map((fact, index) => (
-              <span key={fact} className="whitespace-nowrap">
-                {fact}
-                {index < facts.length - 1 ? " · " : ""}
-              </span>
+              <Fragment key={fact}>
+                <span className="whitespace-nowrap">
+                  {fact}
+                  {index < facts.length - 1 ? " ·" : ""}
+                </span>
+                {index < facts.length - 1 ? " " : null}
+              </Fragment>
             ))}
           </p>
-          <p data-device-health={health.state} className="flex min-w-0 items-center gap-1.5 text-label text-faint">
-            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", HEALTH_DOTS[health.state])} />
-            <span className="truncate">{standing}</span>
+          {/* On a phone the line wraps under its dot, which stays on the first line: nothing of it is cut. */}
+          <p data-device-health={health.state} className={cn("flex min-w-0 gap-1.5 text-label text-faint", touch ? "items-start" : "items-center")}>
+            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", touch && "mt-[5px]", HEALTH_DOTS[health.state])} />
+            <span className={touch ? "min-w-0 text-pretty" : "truncate"}>{standing}</span>
           </p>
           {joined ? (
             <p data-device-joined className={cn("text-label text-faint", touch ? "text-pretty" : "truncate")} title={joined}>
@@ -476,7 +485,8 @@ function AddMachine({
         {/* The account says when a machine joins, never that one didn't: past a code's life the wait isn't claimed. */}
         {lapsed ? (
           <p role="status" data-machine-waiting="lapsed" className="min-w-0 text-label leading-relaxed text-pretty text-muted-foreground">
-            No machine yet. A code lasts {JOIN_CODE_MINUTES} minutes, so {way === "host" ? "run the join line again" : "start the container again"} for a new one.
+            {/* A container whose code ran out has stopped and keeps its name, so the run line can't run again: it's started. */}
+            No machine yet. A code lasts {JOIN_CODE_MINUTES} minutes, so {way === "host" ? "run the join line again" : <>run <code className="font-mono text-foreground">{CONTAINER_START_COMMAND}</code></>} for a new one.
           </p>
         ) : (
           <p role="status" data-machine-waiting="waiting" className="min-w-0 truncate text-label text-faint">

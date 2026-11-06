@@ -1889,7 +1889,12 @@ joined; while it's open the join's toast is left out (`addingMachine`). The
 account never says a join failed, so the sheet stops claiming a wait once a
 code's life is past (`JOIN_WAIT_MS`, by the list's clock, which is read again
 when the window comes to the front; copying a line starts the wait again) and
-says how to get a new code; a machine that joins after still turns it. A
+says how to get a new code (the join line again; in a container
+`CONTAINER_START_COMMAND`, since a container whose code ran out has stopped
+and keeps its name, so its run line can't run twice); a machine that joins
+after still turns it. On a phone a row's facts break between facts and its
+lines wrap, so nothing runs into Remove or is cut; the web UI test measures
+that at 393 and 320 wide. A
 removal pressed in the sheet fails in the sheet (`failure.device`), never
 behind it. Where a Thread runs is one glyph
 (`ui/place-mark.tsx`, `runPlace`): a cloud, a server for a machine of the

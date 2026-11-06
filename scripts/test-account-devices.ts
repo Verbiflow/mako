@@ -10,6 +10,7 @@ import {
   cloudAddress,
   codePage,
   CONTAINER_LOGS_COMMAND,
+  CONTAINER_START_COMMAND,
   containerCommand,
   DEVICE_MAKO_NEEDED,
   deviceFacts,
@@ -274,6 +275,12 @@ test("the lines a browser shows name the cloud its gateway says of itself, and e
     // Without the gateway's word, the container takes the address the person set in their shell.
     assert.deepEqual(run(containerCommand(unsaid), { MAKO_CLOUD_URL: "https://set-by-hand.example.com" }).stdout.trim().split("\n").slice(-3), ["-e", "MAKO_CLOUD_URL=https://set-by-hand.example.com", "mako-device"])
     assert.deepEqual(run(joinCommand(unsaid)).stdout.trim().split("\n"), ["mako-host", "join"])
+    // A container whose code ran out is started again, by the name the run line gave it; the run line can't run
+    // twice, since that name is taken.
+    assert.equal(CONTAINER_START_COMMAND, "docker start mako-device")
+    assert.equal(/--name (\S+) /.exec(containerCommand(said))?.[1], CONTAINER_START_COMMAND.split(" ").at(-1), "it starts the container the run line named")
+    assert.notEqual(CONTAINER_START_COMMAND, containerCommand(said))
+    assert.deepEqual(run(CONTAINER_START_COMMAND).stdout.trim().split("\n"), ["docker", "start", "mako-device"])
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

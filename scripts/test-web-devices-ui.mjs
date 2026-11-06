@@ -17,6 +17,9 @@ import { literal } from "./lib/page-code.mjs"
  *   bottom on a phone, a dialog on a tablet and a laptop. A machine that joins turns it into what joined, as the
  *   stream says it. With no machine past a code's life it stops saying it waits and says how to try again; a machine
  *   that joins late still turns it. A removal that fails there is said there, with the machine still shown.
+ * - On a phone, at 393 and at 320 wide, a row's facts break between facts and stay in their column: none runs into
+ *   Remove or off the screen, the Mako version is whole, and a name beside a chip is whole. Measured, not read off
+ *   the markup.
  * - This browser alone, or no device at all, gets a line about what a machine is for, and empty its own words.
  * - A Thread on a machine of the person's own wears a server: on a phone in its row and its bar
  *   (`phone-apex.html?machine`), in a laptop's browser in the rail, the strip above the Thread and the composer's
@@ -26,7 +29,7 @@ import { literal } from "./lib/page-code.mjs"
  * laptop (1280 wide under a mouse).
  *
  * Screenshots, dark and light, go to the printed directory, or to the directory given as the first argument.
- * `--only phone|tablet|laptop|marks` (any number, by commas) runs those parts alone.
+ * `--only phone|widths|tablet|laptop|marks` (any number, by commas) runs those parts alone.
  */
 if (process.versions.electron) {
   const { app } = await import("electron")
@@ -64,7 +67,7 @@ async function check() {
   const root = process.env.MAKO_DEVICES_ROOT
   const evidence = process.env.MAKO_DEVICES_EVIDENCE
   const base = process.env.MAKO_DEVICES_URL
-  const parts = new Set((process.env.MAKO_DEVICES_ONLY || "phone,tablet,laptop,marks").split(","))
+  const parts = new Set((process.env.MAKO_DEVICES_ONLY || "phone,widths,tablet,laptop,marks").split(","))
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const watchdog = setTimeout(() => {
@@ -217,6 +220,18 @@ async function check() {
     assert.equal(await evaluate(`document.querySelector('[data-machine-waiting]').textContent`), "No machine yet. A code lasts 10 minutes, so run the join line again for a new one.")
     assert.equal(await evaluate(`Boolean(document.querySelector('.web-sheet .shimmer-text'))`), false, "nothing shimmers once nothing is on its way")
     await both(`${prefix}-add-machine-no-machine`)
+    // In a container the code's end stopped it, and its name is taken: the words name the line that starts it again,
+    // never the run line above, which can't run twice.
+    await pressNamed("[data-add-machine-sheet]", "Docker")
+    await until(`document.querySelector('[data-machine-command] pre').textContent.startsWith('docker run')`, "the container's lines, the wait given up")
+    assert.equal(await evaluate(`document.querySelector('[data-machine-waiting]').textContent`), "No machine yet. A code lasts 10 minutes, so run docker start mako-device for a new one.")
+    assert.equal(await evaluate(`document.querySelector('[data-machine-waiting] code').textContent`), "docker start mako-device", "set as a line to run")
+    assert.match((await commands())[0], /--name mako-device /, "the container it starts is the one the run line named")
+    // The words are the sheet's last line: brought into view on a phone, where the container's lines are taller than the screen.
+    await evaluate(`(document.querySelector('.web-sheet [data-sheet-scroll]')?.scrollTo(0, 100000), true)`)
+    await both(`${prefix}-add-machine-no-machine-docker`)
+    await pressNamed("[data-add-machine-sheet]", "Mako's host")
+    await until(`document.querySelector('[data-machine-waiting]').textContent.includes('run the join line again')`, "the host's words, as they were")
 
     // A machine that joins late still turns the sheet into what joined. Removing it fails: said in the sheet, where
     // Remove was pressed, with the machine still shown, and not behind it.
@@ -265,6 +280,54 @@ async function check() {
     window.setContentSize(390, 844)
     await devices("touch", "web-phone", "sheet")
     console.log("Phone: the account's devices, a removal asked with what stops, a machine added from a sheet and said as it joins, a wait that runs out, a removal that fails in the sheet")
+  }
+
+  if (parts.has("widths")) {
+    // A phone's widths, measured: every fact inside its column, clear of Remove and of the screen's edge; the Mako
+    // version whole; a name whole beside its chip.
+    await pointer(true)
+    for (const width of [393, 320]) {
+      window.setContentSize(width, 1400)
+      await open("touch")
+      await until(`document.querySelectorAll('${DEVICES} [data-device-name]').length >= 6`, `the devices at ${width}`)
+      await settle()
+      const rows = await evaluate(`[...document.querySelectorAll('${DEVICES} [data-device-row]')].map((row) => {
+        const box = (node) => node.getBoundingClientRect()
+        const name = row.querySelector('[data-device-name]')
+        const facts = row.querySelector('[data-device-facts]')
+        const spans = [...facts.querySelectorAll('span')]
+        const remove = [...row.querySelectorAll('button')].find((button) => button.innerText.trim() === 'Remove')
+        const standing = row.querySelector('[data-device-health] span:last-child')
+        return {
+          standing: standing.textContent,
+          standingCut: standing.scrollWidth - standing.clientWidth,
+          standingRight: box(standing).right,
+          name: name.textContent,
+          nameWidth: name.clientWidth,
+          nameCut: name.scrollWidth - name.clientWidth,
+          column: box(facts).right,
+          furthest: Math.max(...spans.map((span) => box(span).right)),
+          last: spans.at(-1).textContent,
+          lastLeft: box(spans.at(-1)).left,
+          lastRight: box(spans.at(-1)).right,
+          remove: remove ? box(remove).left : null,
+          screen: innerWidth,
+        }
+      })`)
+      assert.equal(rows.length, 6)
+      for (const row of rows) {
+        const said = `${row.name} at ${width}: ${JSON.stringify(row)}`
+        assert.ok(row.furthest <= row.column + 0.5, `a fact runs past its column: ${said}`)
+        assert.ok(row.furthest <= (row.remove ?? row.screen) + 0.5, `a fact runs into Remove or off the screen: ${said}`)
+        assert.ok(row.lastLeft >= 0 && row.lastRight <= row.screen, `the last fact is whole on screen: ${said}`)
+        assert.ok(row.nameWidth > 0 && row.nameCut <= 0, `the name is whole: ${said}`)
+        assert.ok(row.standingCut <= 0 && row.standingRight <= (row.remove ?? row.screen) + 0.5, `its health and what runs there are whole: ${said}`)
+      }
+      assert.deepEqual(rows.filter((row) => row.last.startsWith("Mako ")).map((row) => row.name).sort(), ["Ada's MacBook Pro", "build-box", "gpu-rig", "nas"], "each device that says its Mako shows it last, whole")
+      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, "nothing runs off the screen sideways")
+      await both(`web-phone-${width}-devices`)
+    }
+    console.log("Phone at 393 and 320 wide: every fact in its column, clear of Remove, the Mako version and each name whole")
   }
 
   if (parts.has("marks")) {

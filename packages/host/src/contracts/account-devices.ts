@@ -195,6 +195,13 @@ export function containerCommand(cloud: string | undefined): string {
   return `docker run -d --init --name ${MACHINE_IMAGE} -v ${MACHINE_IMAGE}:/data \\\n  -e MAKO_CLOUD_URL=${cloud ? cloudAddress(cloud) : '"$MAKO_CLOUD_URL"'} ${MACHINE_IMAGE}`
 }
 
+/**
+ * The line that starts a stopped container again. A join code that runs out unconfirmed ends the join, and with it
+ * the container, which keeps its name: the run line can't run twice ("name is already in use"), and this one starts
+ * the same container, which asks for a new code.
+ */
+export const CONTAINER_START_COMMAND = `docker start ${MACHINE_IMAGE}`
+
 /** Where a container says the page and the code to confirm. */
 export const CONTAINER_LOGS_COMMAND = `docker logs -f ${MACHINE_IMAGE}`
 

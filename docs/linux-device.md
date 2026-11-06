@@ -74,7 +74,10 @@ docker exec mako-device mako-host status
 ```
 
 On its first start the container joins and then runs the host; after that it
-starts as the device it joined as. The image is x64: Node's pointer-compressed
+starts as the device it joined as. A code that runs out before it's confirmed
+ends the join, and the container stops and keeps its name, so `docker run`
+can't run again; `docker start mako-device` starts it with a new code, which
+`docker logs` shows. The image is x64: Node's pointer-compressed
 build, which the host runs on, is published for x64 only.
 
 ## As a service

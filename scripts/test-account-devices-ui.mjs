@@ -201,7 +201,13 @@ async function checkWindow() {
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-machine-sheet] .shimmer-text'))`), false, "nothing shimmers once nothing is on its way")
   await both("add-machine-no-machine", ["[data-machine-sheet]"])
   await evaluate(`([...document.querySelectorAll('[data-add-machine-sheet] button')].find((each) => each.innerText.trim() === 'Docker').click(), true)`)
-  await until(`document.querySelector('[data-machine-waiting]').textContent.includes('start the container again')`, "the container's way to try again")
+  // In a container the code's end stopped it, and its name is taken: the words name the line that starts it again,
+  // never the run line above, which can't run twice. The host's words stay.
+  await until(`document.querySelector('[data-machine-command] pre').textContent.startsWith('docker run')`, "the container's lines, the wait given up")
+  assert.equal(await evaluate(`document.querySelector('[data-machine-waiting]').textContent`), "No machine yet. A code lasts 10 minutes, so run docker start mako-device for a new one.")
+  assert.equal(await evaluate(`document.querySelector('[data-machine-waiting] code').textContent`), "docker start mako-device", "set as a line to run")
+  assert.match((await commands())[0], /--name mako-device /, "the container it starts is the one the run line named")
+  await both("add-machine-no-machine-docker", ["[data-machine-sheet]"])
 
   // A machine that joins late still turns the sheet into what joined. Removing it fails: said in the sheet, where
   // Remove was pressed, with the machine still there, and not behind it.
