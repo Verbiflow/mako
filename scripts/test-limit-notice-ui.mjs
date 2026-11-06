@@ -71,6 +71,7 @@ async function check() {
   const viewport = async (width, height, mobile = false) => {
     await window.loadURL("about:blank")
     await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
+    await page.debugger.sendCommand("Emulation.setScrollbarsHidden", { hidden: true })
   }
   const theme = (light) => evaluate(`document.documentElement.classList.toggle('light', ${light}); document.documentElement.style.colorScheme = '${light ? "light" : "dark"}'; true`)
   /** The element `selector` names (a selector with no quote in it), cropped with a margin, in both themes. */
@@ -198,6 +199,10 @@ async function check() {
   await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
   await settle()
+  // A long line ends in its ellipsis, short of the time: a `nowrap` line takes its whole width unless the row gives it one.
+  const crew = await evaluate("[...document.querySelectorAll('button[data-crew-row]')].map((row) => ({ text: row.innerText, over: [...row.querySelectorAll('.truncate')].some((each) => each.getBoundingClientRect().right > row.children[1].getBoundingClientRect().right + 1) }))")
+  assert.ok(crew.length > 0, "the phone's crew rows")
+  assert.deepEqual(crew.filter((row) => row.over).map((row) => row.text), [], "a phone's crew line stops short of its time")
   await screen("phone-thread", phoneTheme)
   await evaluate("document.querySelector('[data-apex-count]').click(); true")
   await until("Boolean(document.querySelector('[data-agents-sheet]'))", "the phone's Agents sheet")

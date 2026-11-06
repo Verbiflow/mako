@@ -389,7 +389,7 @@ const CrewLineRow = memo(function CrewLineRow({
       <span
         className={cn(
           "flex min-w-0 flex-1",
-          compact ? "flex-col items-start" : "items-center gap-2"
+          compact ? "flex-col" : "items-center gap-2"
         )}
       >
         <span
