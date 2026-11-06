@@ -288,10 +288,11 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
     }
   }
   /** An Apex and one Fin whose first turn reports it waits on acme/app#7's merge; `busy` holds a turn of the Fin's that says so. */
-  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED) => {
+  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED, now?: () => number) => {
     const fin = { conversation: "", ready: false }
     const world: AgentsWorld = new AgentsWorld({
       root: join(roots, name),
+      ...(now && { now }),
       readPull: () => read(),
       script: async (turn) => {
         if (turn.text.includes("You're fin:")) {
@@ -399,6 +400,42 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
       await world.restart()
       await world.settle(300)
       assert.deepEqual(notes(), [], "and a restart doesn't send it")
+      await world.close()
+    }
+
+    // Reports in one millisecond keep the order they were taken in, whatever their ids say, read live and after a
+    // restart: "supersede" and "a" both sort before "wait", and each was taken after it.
+    {
+      const at = 1_900_000_000_000
+      const { world, supersede, notes, fin } = await waiting("same-millisecond", undefined, () => at)
+      const reports = () => world.store.reportsOf(world.store.edges().all[0]!.child).map((report) => report.id)
+      claimed(world)
+      await supersede("supersede")
+      assert.equal(world.store.latestReports().get(world.store.edges().all[0]!.child)?.waitingOn, undefined, "the latest report is the last taken")
+      assert.equal(new Set(world.store.reportsOf(world.store.edges().all[0]!.child).map((report) => report.at)).size, 1, "all in one millisecond")
+      await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Newest.", clientKey: "a" })
+      assert.equal(world.store.reportsOf(world.store.edges().all[0]!.child).at(-1)?.summary, "Newest.", `taken last, whatever its id sorts as: ${reports().join()}`)
+      await world.restart()
+      await world.settle(300)
+      assert.deepEqual(notes(), [], "the withdrawn wait's note isn't sent")
+      assert.equal(world.store.latestReports().get(world.store.edges().all[0]!.child)?.summary, "Newest.", "and the next host reads the same order")
+      assert.deepEqual(world.agents.pulls.keys(), [], "and watches nothing")
+      await world.close()
+    }
+
+    // A note queued behind a running turn when Mako quits: the exit pauses it with the queue, and the next host sends it.
+    {
+      const { world, fin } = await waiting("queued-at-quit")
+      world.say(fin.conversation, "busy")
+      await until("the turn to run", () => world.live.session(fin.conversation)?.status === "running")
+      await world.agents.pulls.tick()
+      await until("the note to queue", () => world.live.snapshot(fin.conversation)?.requests.some((request) => request.text.startsWith("Mako: PR") && request.status === "queued") === true)
+      await world.restart()
+      // Beneath Mako's word of the turn the quit cut.
+      const sent = () => world.prompts.filter((prompt) => prompt.conversation === fin.conversation && prompt.text.includes("Mako: PR acme/app#7"))
+      await until("the note to go by itself", () => sent().length > 0)
+      await world.settle(300)
+      assert.equal(sent().length, 1, "once")
       await world.close()
     }
 

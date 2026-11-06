@@ -1105,7 +1105,7 @@ export class ThreadStore {
         if (first.status !== report.status || first.summary !== report.summary || first.child !== report.child) throw new ThreadOperationConflictError(report.id)
         return { report: first, deduped: true }
       }
-      const newest = this.sql("SELECT record FROM thread_reports WHERE child_thread = ? ORDER BY at DESC LIMIT 1").get(report.child)
+      const newest = this.sql("SELECT record FROM thread_reports WHERE child_thread = ? ORDER BY rowid DESC LIMIT 1").get(report.child)
       if (newest && ReportSchema.parse(JSON.parse(RecordRowSchema.parse(newest).record)).ownerGeneration > report.ownerGeneration) return { stale: true }
       this.sql("INSERT INTO thread_reports (id, child_thread, record, at, delivered_at) VALUES (?, ?, ?, ?, ?)")
         .run(report.id, report.child, JSON.stringify(report), report.at, null)
@@ -1113,10 +1113,13 @@ export class ThreadStore {
     })
   }
 
-  /** A child's reports, oldest first; `after` leaves out those at or before it. */
+  /**
+   * A child's reports in the order the store took them, oldest first; `after` leaves out those at or before it. A
+   * report's `rowid` is that order: `at` can tie or run backward with the clock, and an id is its client's to choose.
+   */
   reportsOf(child: string, after = 0): Report[] {
     this.syncVersion()
-    return this.sql("SELECT record FROM thread_reports WHERE child_thread = ? AND at > ? ORDER BY at, id").all(child, after)
+    return this.sql("SELECT record FROM thread_reports WHERE child_thread = ? AND at > ? ORDER BY rowid").all(child, after)
       .flatMap((row) => {
         const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
         return parsed.success ? [parsed.data] : []
@@ -1143,7 +1146,7 @@ export class ThreadStore {
   latestReports(): Map<string, Report> {
     this.syncVersion()
     const latest = new Map<string, Report>()
-    for (const row of this.sql(`SELECT record FROM thread_reports r WHERE at = (SELECT max(at) FROM thread_reports WHERE child_thread = r.child_thread) ORDER BY at, id`).all()) {
+    for (const row of this.sql(`SELECT record FROM thread_reports r WHERE rowid = (SELECT max(rowid) FROM thread_reports WHERE child_thread = r.child_thread)`).all()) {
       const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
       if (parsed.success) latest.set(parsed.data.child, parsed.data)
     }
@@ -1153,7 +1156,7 @@ export class ThreadStore {
   /** Reports no parent has heard yet, oldest first: the outbox a starting host sends again under their ids. */
   undeliveredReports(): WaitingReport[] {
     this.syncVersion()
-    return this.sql("SELECT record, wake_request FROM thread_reports WHERE delivered_at IS NULL ORDER BY at, id").all().flatMap((row) => {
+    return this.sql("SELECT record, wake_request FROM thread_reports WHERE delivered_at IS NULL ORDER BY rowid").all().flatMap((row) => {
       const found = ReportRowSchema.parse(row)
       const parsed = ReportSchema.safeParse(JSON.parse(found.record))
       return parsed.success ? [{ report: parsed.data, ...(found.wake_request && { wake: found.wake_request }) }] : []

@@ -127,6 +127,10 @@ const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting"
 const SWITCH_WAIT_MS = WAIT_LIMIT_MS / 2
 /** Who a pull request's outcome reaches its Fin as: Mako, never the person. */
 const PULL_WATCH_ACTOR: Actor = { kind: "service", name: "pull-watch" }
+/** Whether a message is Mako's note of a pull request's outcome. */
+function isPullNote(request: Pick<LiveRequest, "actor">): boolean {
+  return request.actor?.kind === "service" && request.actor.name === "pull-watch"
+}
 /** How often what waits looks again, for a limit the person raised or a Fin that ended unseen. */
 const ROOM_EVERY_MS = 10_000
 /** The job that looks every `ROOM_EVERY_MS`. */
@@ -664,11 +668,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     let launched = Boolean(binding?.nativeId)
     for (const request of snapshot.requests) {
-      // A continuation a crash stopped short of its handoff is Mako's, not the person's: it goes on, in its place.
-      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || (request.actor?.kind !== "agent" && !request.continues?.auto)) continue
-      const relaunched = !launched
+      // A continuation a crash stopped short of its handoff is Mako's, not the person's: it goes on, in its place, a brief's
+      // recovery with it (`continues.auto`). So does a pull request's note, whose handoff reads its wait again (`admits`).
+      if (request.status !== "held" || request.signIn || request.wake || request.retry || request.editing || request.pause === "stop" || (request.actor?.kind !== "agent" && !request.continues?.auto && !isPullNote(request))) continue
+      const relaunched = !launched && !isPullNote(request)
       try {
-        if (launched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
+        if (!relaunched) this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
         else {
           // Its harness never started: the exit cut its launch. It starts now, the brief its first message, and the rest wait behind it.
           this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "remove" } })
@@ -1669,7 +1674,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** At a request's handoff: a pull request's note goes only while its wait holds, and is retired once it doesn't. */
   admits(conversation: string, request: Pick<LiveRequest, "id" | "actor">): boolean {
-    if (request.actor?.kind !== "service" || request.actor.name !== "pull-watch") return true
+    if (!isPullNote(request)) return true
     const child = this.childOfConversation(conversation)
     const kept = child ? this.store()?.pullWakeOfRequest(child, request.id) : undefined
     if (!kept || kept.obsolete !== undefined) return false

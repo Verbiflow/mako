@@ -383,7 +383,11 @@ open, and one that no longer holds is refused (`HandoffRefused`'s
 before delivery. A host that stopped first sends a claim once on start
 (`undeliveredPullWakes`), if its wait still holds. The Fin's transcript
 draws it as an event line by its words (`pullWakeWords`, `MakoPrompt`'s
-`pull`). `test:fin-pull-waits` covers it with a stub reader and a fake clock.
+`pull`). A note an exit or a crash left held, proven unsent, is Mako's, so the
+next host sends it on through that same handoff, keeping a Stop's mark. "Newest
+report" means the store's order of taking them (`rowid`), since `at` can tie.
+`test:fin-pull-waits` covers it with a stub reader and a fake clock, and a real
+SIGKILL with the note prepared on each harness (`test-fin-pull-wake-crash.ts`).
 A Fin's strip, its crew
 mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
