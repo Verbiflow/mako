@@ -29,6 +29,8 @@ const script = (root: string) => async (turn: { text: string; conversation: stri
   }
   return "ok"
 }
+/** A stopped run's grace, written out: read from the product, a longer one there would move this test's clock with it. */
+const GRACE_MS = 5_000
 /** The linked run's process as the first host wrote it down, by pid and start. */
 const Identity = z.object({ pid: z.number().int().positive(), startedAt: z.number().optional() })
 const live = (identity: { pid: number; startedAt?: number }) => processIdentityMatches({ ...identity, exact: true, signal: new AbortController().signal }).catch(() => false)
@@ -52,6 +54,7 @@ if (process.argv[2] === "host") {
   assert.ok(!("refused" in next) && next.state === "queued")
   await w.agents.stop(apex.caller, { child: "linked" })
   assert.ok(w.agents.runs.isTerminating(linked.child))
+  writeFileSync(join(root, "stopped-at.json"), JSON.stringify(w.store.edges().of(linked.child!)!.run!.stopping!.at))
   process.kill(process.pid, "SIGKILL")
 } else {
   const root = mkdtempSync(join(tmpdir(), "mako-followed-stop-crash-"))
@@ -64,14 +67,19 @@ if (process.argv[2] === "host") {
     assert.equal(signal, "SIGKILL", said)
     const identity = Identity.parse(JSON.parse(readFileSync(join(root, "linked-process.json"), "utf8")))
     assert.ok(await live(identity), "the linked run outlived the host that stopped it")
-    const stoppedAt = Date.now()
-    w = new AgentsWorld({ root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: script(root) })
+    // The next host's clock, held a moment short of the run's grace and then moved to it: the kill comes at the grace,
+    // whatever the runner's own clock did. The run never ends by itself: left running, it outlives the hang guard.
+    const graceEnds = z.number().parse(JSON.parse(readFileSync(join(root, "stopped-at.json"), "utf8"))) + GRACE_MS
+    let clock: number | undefined = graceEnds - 1
+    w = new AgentsWorld({ root, catalog: fakeCatalog().catalog, finLimit: () => 1, script: script(root), now: () => clock ?? Date.now() })
     const started = () => w!.prompts.some((prompt) => prompt.text.includes("You're fin:next,"))
     await pause(500)
     assert.equal(started(), false, "the next host holds the stopped run's place while its process runs")
     assert.equal(readFileSync(join(root, "shared.txt"), "utf8"), "linked")
-    await until(async () => !(await live(identity)), "the next host to kill the run once its grace is up", 12_000)
-    assert.ok(Date.now() - stoppedAt < 9_000, "killed in the next host's turn, not left running")
+    assert.ok(await live(identity), "and its grace isn't up")
+    clock = graceEnds
+    await until(async () => !(await live(identity)), "the next host to kill the run the moment its grace is up", 30 * GRACE_MS)
+    clock = undefined
     await until(started, "next to start once the run was gone")
     await pause(100)
     assert.equal(readFileSync(join(root, "shared.txt"), "utf8"), "next", "and nothing overwrote its file after")

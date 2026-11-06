@@ -53,6 +53,8 @@ exit 2
     PATH: [standIn, process.env.PATH].filter(Boolean).join(delimiter),
     // A turn of the stand-in: two and a half seconds of words, a thought, and a command with its output at two.
     MEASURE_STREAM_MS: "2500",
+    // The turn stopped below runs until it's stopped: however long two CLIs take to start, it's still running.
+    MEASURE_UNTIL_CANCELLED: "Once more",
   }
   for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR", "NODE_OPTIONS"]) delete env[key]
   host = spawn(process.execPath, [join(repo, "packages/host/dist/mako-host.js")], { env, stdio: ["ignore", "ignore", "pipe"] })
@@ -95,7 +97,7 @@ exit 2
   assert.deepEqual(history.filter((line) => line.kind === "user").length, 3, "each message, read back in order")
   assert.ok(text(history).length > text(first).length, "the turns' words, read back")
   const statuses = new Map(history.flatMap((line) => (line.kind === "request" ? [[z.string().parse(line.id), z.string().parse(line.status)] as const] : [])))
-  assert.deepEqual([statuses.get(started.requestId), statuses.get(requestId)].map((status) => status === "completed"), [true, false], `the stopped turn didn't complete: ${statuses.get(requestId)}`)
+  assert.deepEqual([statuses.get(started.requestId), statuses.get(requestId)], ["completed", "interrupted"], "the first turn completed, and the stopped one was stopped")
 
   console.log(`PASS: the headless client started a conversation (first turn ${Math.round(firstMs)} ms end to end), sent to it, stopped it and read it back, through a real host's own calls and events`)
 } finally {

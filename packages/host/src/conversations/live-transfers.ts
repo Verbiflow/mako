@@ -13,20 +13,29 @@ import type {
 } from "../contracts/conversation-control.js"
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
-import type { TurnContinuation, LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
+import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
   Resident,
   ProviderConnection,
 } from "./live-runtime.js"
+
+/**
+ * The queue as a switch lands: its message goes ahead of what's queued, which waited behind it or came after it, so the
+ * hand-over's context reaches the harness first.
+ */
+function arrival(requests: readonly LiveRequest[], arrived: LiveRequest): LiveRequest[] {
+  const at = arrived.continues?.brief ? -1 : requests.findIndex((request) => request.status === "queued")
+  return at < 0 ? admittedInPlace(requests, arrived) : [...requests.slice(0, at), arrived, ...requests.slice(at)]
+}
 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
@@ -400,6 +409,7 @@ export class LiveTransfers {
           threadEnvironment,
           nativeRouting: launchRouting(this.host.dependencies, source.session.id, conversationTools),
           nativeCalls: launchCalls(this.host.dependencies, source.session.id, source.session.cwd, conversationTools, threadEnvironment),
+          pinnedAccount: launchAccount(this.host.dependencies, source.session.id, transfer.input.provider),
           title: source.session.title,
           tuning,
           modeId,
@@ -530,7 +540,7 @@ export class LiveTransfers {
         permissions: [],
         requests: own
           ? previous.requests.map((request) => (request === own ? { ...own, ...carries } : request))
-          : admittedInPlace(previous.requests, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
+          : arrival(previous.requests, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
         control: {
           ...this.host.control(resident),
           activeBindingId: bindingId,

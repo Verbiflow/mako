@@ -38,13 +38,15 @@ export class LiveClosing {
 
   close(id: string, forExit = false): Promise<void> {
     const resident = this.access.require(id)
+    // A Close under way answers for one asked meanwhile, and no longer: what opened since is the next Close's to close.
     if (resident.closeOperation) return resident.closeOperation
     const operation = this.closeResident(resident, id, forExit)
     resident.closeOperation = operation
-    void operation.catch(() => {
+    const done = () => {
       if (resident.closeOperation === operation)
         resident.closeOperation = undefined
-    })
+    }
+    void operation.then(done, done)
     return operation
   }
 
@@ -64,8 +66,9 @@ export class LiveClosing {
       )
         return
       resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => request.status === "queued" ? { ...request, status: "held" } : request) }
-      // A child's turn its lead waits on goes on in the next host, as a quit leaves it; the person's own stop where they are.
-      const cut = this.isChild(resident) ? this.cutForNextHost(resident) : undefined
+      // A Fin's turn its Apex waits on, and an Apex's turn its open Fins' work rests on, go on in the next host, as a
+      // quit leaves them; the person's own stop where they are.
+      const cut = this.inTree(resident) ? this.cutForNextHost(resident) : undefined
       if (cut) left.push(cut)
       this.access.flush(resident)
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -103,14 +106,16 @@ export class LiveClosing {
     }
     recordCutOff(resident, running.id, this.access.dependencies.root)
     if (autoContinueCandidate(resident.snapshot.requests, true)?.id !== running.id) return undefined
-    return { conversationId: resident.snapshot.session.id, requestId: running.id, ...(this.isChild(resident) && { always: true as const }) }
+    return { conversationId: resident.snapshot.session.id, requestId: running.id, ...(this.inTree(resident) && { always: true as const }) }
   }
 
-  /** Whether a conversation's Thread is a child's (`ThreadStore.edges`). */
-  private isChild(resident: Resident): boolean {
+  /** Whether a conversation's Thread is a Fin, or an Apex with Fins still open (`ThreadStore.edges`). */
+  private inTree(resident: Resident): boolean {
     const threads = this.access.dependencies.threads
     const placed = threads?.journalPlacement(resident.snapshot.session.id)
-    return placed ? threads?.edges().of(placed.thread) !== undefined : false
+    if (!placed || !threads) return false
+    const edges = threads.edges()
+    return edges.of(placed.thread) !== undefined || edges.children(placed.thread).some((edge) => edge.closedAt === undefined)
   }
 
   private async closeResident(

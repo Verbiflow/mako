@@ -250,9 +250,14 @@ on that machine (`FinCostModel`, 75th percentiles moving over days, priors
 from 2026-11-03: 0.35 core, 0.8 GB, builds 6 cores and 3 GB). That is 17 on
 a 14-core, 36 GB Mac, 2 on a 2 vCPU 8 GB box, and at most `DEVICE_CEILING`
 (64). `CapacityGovernor` lowers it only under pressure that holds (memory
-pressure or swap, heat, the person's own load, disk; a 5-minute average,
+pressure or swap, heat, the person's own work, disk; a 5-minute average,
 held 3 minutes, then a Fin a minute, never below half) and brings it back
-after relief holds 5 minutes; running Fins are never touched. The person
+after relief holds 5 minutes; running Fins are never touched. A machine's
+work is CPU time really spent since the last reading (`coresBusy`), never the
+load average, and the person's own work, the busy cores the Fins' own
+processes weren't measured to take, presses only while it leaves fewer idle
+cores than their reserve: on 2026-11-05 six short `git status` at a time
+held this 14-core Mac's load at 18 with 5 cores idle. The person
 can fix a number per device instead of Auto (Settings › Fins), and
 `FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
 machine per Fin, is bounded by the plan and the daily spend ceiling only
@@ -343,11 +348,47 @@ Fin but couldn't be stamped stays pending, and the next start finds it under
 its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
 `test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`). A
-report with a question may name what it waits on outside its tree
+report may name what it waits on outside its tree
 (`waitingOn`: a pull request until its checks, review or merge, the person,
 or `other` in a few words), carried on the blocked state and the open
 decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,
-the front door and the strip; nothing watches it yet. A Fin's strip, its crew
+the front door and the strip. A progress report that names it, with the
+Fin's turn ended, reads as idle waiting since the report (`ChildState`'s
+`idle.waitingOn`, `since`), in the crew row, the strip and the front door
+as "Waiting on acme/app#371 checks · 12m" (`waitingStateWords`); the
+orchestration text tells a Fin to report so and end its turn rather than
+poll checks. `PullWatch` (`conversations/pull-watch.ts`) reads only the pull
+requests open Fins' latest reports name, rebuilt from the stored reports on
+each tick and so on start, through `readPull` (the same `gh pr view` and
+check normalising `pull_request_status` uses), on the job `read the pull
+requests Fins wait on`, which runs only while something is watched: each
+read a minute after it's first watched, doubling while unchanged up to
+`PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
+outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
+(checks settled, or one failed since the report while others run; a review
+submitted since, by anyone but the author; merged or closed, which end any
+wait) is claimed once per Fin, report and pull request
+(`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
+never its Apex, through `deliver` under a named request as Mako's words
+(the `pull-watch` service actor): one line, "Mako: PR acme/app#371 checks
+settled: 2 failed (lint, e2e). <url>" (`pullWakeNote`), queued after a
+working Fin's turn, never steered. It never reopens, resumes or takes over
+a stopped Fin (`deliver`'s automatic send), and goes through the one
+admission point every prompt does, the handoff with its Stop latch
+(`LiveDispatch`, #391): there `Agents.admits` reads the wait again, the
+Fin's exact newest report still naming the pull request and its delegation
+open, and one that no longer holds is refused (`HandoffRefused`'s
+`withdrawn`, the request canceled) and its claim retired as obsolete
+(`retirePullWake`), never sent. The same reading runs before the claim and
+before delivery. A host that stopped first sends a claim once on start
+(`undeliveredPullWakes`), if its wait still holds. The Fin's transcript
+draws it as an event line by its words (`pullWakeWords`, `MakoPrompt`'s
+`pull`). A note an exit or a crash left held, proven unsent, is Mako's, so the
+next host sends it on through that same handoff, keeping a Stop's mark. "Newest
+report" means the store's order of taking them (`rowid`), since `at` can tie.
+`test:fin-pull-waits` covers it with a stub reader and a fake clock, and a real
+SIGKILL with the note prepared on each harness (`test-fin-pull-wake-crash.ts`).
+A Fin's strip, its crew
 mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree
@@ -384,7 +425,44 @@ them through the Mac, and a Fin's row says its model, reasoning and fast lane
 one whose Apex named no harness or model starts on the person's next harness
 with room (`harnessOrder`), its answer's `limited` and its row's note saying
 until when and which other account of that harness has room; a named one,
-or one with nowhere to go, is refused (`limited`) with the same. The person's rules for Fins (`FinPolicy`,
+or one with nowhere to go, is refused (`limited`) with the same. That is the
+rule with Settings › Fins' one switch, "When an account runs out, continue on
+the next one" (`FinChoicesReading.moveOnLimit`), off. On, the default, a Fin
+goes on at the first step of one harness-blind order with room
+(`fallbackOrder`, `contracts/fin-fallback.ts`, read by `FinMoves`): the
+person's other accounts of its harness in their order
+(`HarnessAccounts.standing`; an unread one is never taken), keeping harness
+and model; their model connections its harness's routes take for its model's
+family (`ModelRouteAdapter.model` names the model as the harness lists it);
+then their next harness that fits its access and has room. At a start it
+applies whether or not the harness was named, and a named model keeps the
+refusal. Another account runs only that Fin's launches
+(`ProviderStartOptions.pinnedAccount`, from its edge's `tuned.rerouted.to`),
+never the person's selection, and admission checks the pin before each input
+as it checks a selection. Mid-run, what waits out the limit (#391's held
+request with its `retry`: the continuation of a turn the limit cut, or a
+message the harness refused) moves instead, when the harness's own marker
+(`TurnReply.limit`) or the account's reading says it's a limit: the move takes
+that very request over (`LiveConversations.moveWaiting`), only while it still
+waits for its time on this host, and handOff guards its send as every send's.
+Right before that, with nothing awaited between, it reads again what it was
+decided on (`stillDecided`: the Fin open and not released, this host's claim
+on the same wait); when that or the request's state (a Stop's latch, `pause`)
+no longer holds, the move is retired in the store and nothing is sent. It goes
+on in the same session on another account where its driver declares
+`accountContinuation` `resumes` (Claude; `test-harness-definitions.ts`
+requires every harness to declare it), on a connection's model, or by a
+hand-off to the next harness, each told where it stopped and what moved in
+its checkout since (`finMovedText`). The logical turn's places, the waits it
+moved for and the host generation taking a move are the store's (`fin_moves`,
+`FinTurn`, cleared when a turn ends without a limit), so a restart never sends
+it back to a place it ran on; with every step at its limit or run on, the Fin
+stops, its row saying "Out of accounts: personal and work are at their limits
+until …" (`outOfAccountsLine`). A turn the person sent in the Fin's Thread, or
+a run Mako doesn't drive, never moves.
+Its row and strip say "Moved to Claude (work): personal is at its limit until
+…" (`child.moved`, `movedLine`), its transcript has the line, and its Apex's
+next digest says it once without being woken for it (`test:fin-fallback`). The person's rules for Fins (`FinPolicy`,
 Settings › Fins: their own words, each to a harness and maybe a model, first
 fit wins, and where the rest go) reach every Thread's agent ahead of the
 person's next message once they change (`finPolicyNote`, `rulesNote`), and
@@ -441,7 +519,24 @@ default) wakes the Apex for results and questions, `finish` for results
 only, `never` for none unless it waited; a question its Apex doesn't hear is
 the person's, never dropped. A Fin's turn an exit or an update cut short
 always continues in the next host (`LeftTurn.always`), and its messages the
-exit paused go on. Fins are roster entries (`childEntry` under
+exit paused go on. So does an Apex's own turn while it has open Fins
+(`inTree`, `continueCrashed`), under the same loop guard. A crash's cut reads
+as `uncertain`. A Fin's cut turn that nothing picks up within
+`STRANDED_AFTER_MS` (`strandedTurn`) becomes a question for its Apex
+(`reportCut`). That covers the loop guard being spent, a sign-out, a reason
+Mako doesn't continue, and a continuation that was dropped. The question says
+what cut it (`CUT_BY`), why it isn't going on, and what it had in flight. A
+followed run whose process ended unexplained asks the same way, naming a quit,
+crash or shutdown when no host saw it alive. The Apex answers with one
+`agents_answer`: `Continue` continues the turn, or resumes a run's session
+here, through the resume path a stopped Fin takes; `Stop` pauses it; other
+words go to the Fin as its next message. Beneath its words, a continuation
+Mako sends for a Fin or an Apex carries the account a resumed Fin reads
+(`finResumedText` with `how: "cut"`, `cutAccount`). That account says when and
+what cut the turn, what moved in its checkout since, and where its branch
+stands. `savedContinuation` still reads it as a continuation. A message to
+a Fin whose session is reopening waits for that to settle (`switchSettled`).
+`test:orch-recovery` kills hosts to show each of these. Fins are roster entries (`childEntry` under
 `CHILDREN_BINDING`, `withChildren`) built from the store, never saved in a
 journal. `npm run test:background-agents` covers the engine,
 `test:agents-doors` the three doors, `test:agents-migrate` migration 6 from
@@ -2267,7 +2362,7 @@ the same core over `listFiles`. Highlighting runs in Pierre's worker pool (`lib/
 `lib/syntax-theme.ts`, onto the `--syntax-*` tokens; each file wears its kind's mark (`lib/file-kinds.ts`,
 `components/ui/file-icon.tsx`), drawn in one stroke on one grid and told apart by shape, never hue.
 `scripts/test-file-index.ts` holds it to that, and `scripts/bench-file-search.ts` (CI's `file-search`) times it against
-the old way in the same run on this checkout and 100,000 generated files. `node scripts/files-ui.mjs` serves the real
+the old way in turns in the same run on this checkout and 100,000 generated files. `node scripts/files-ui.mjs` serves the real
 panel and viewer over a folder's index, and `scripts/files-ui-shots.mjs` draws them, `--phone` as the web app does.
 
 ## Git
@@ -2288,7 +2383,7 @@ The agent's Git tools work in a project folder of several repositories, whose Th
 
 `git.openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds. Previews are cached per repository within one 64 MB budget per `Git`, least recently used first; worktree previews are cached only while watched. Commit drafting reuses piece summaries only from the `DraftSummaries` a caller passes; the host keeps one in `GitDrafting`.
 
-Every spawn holds the host's thread for a moment, so what windows poll reads what a repository shares once, not once per worktree. `summaries` (every window's rail, every half minute and on focus) runs one pass at a time, shared by everyone who asked while the last ran; each pass reads a repository's branch tips with one `for-each-ref`, its start point once, and each worktree's `status` at most every 15 s unless its index changed (a spawn on Linux forks the whole host and held its thread for 300-450 ms), and keeps landing, ahead and behind by the commits they were read at. Before, each worktree spawned about seventeen processes outside the read slots: 1,800 a pass at 104 worktrees.
+Every spawn holds the host's thread for a moment, so what windows poll reads what a repository shares once, not once per worktree. `summaries` (every window's rail, every half minute and on focus) runs one pass at a time, shared by everyone who asked while the last ran; each pass reads a repository's branch tips with one `for-each-ref`, its start point once, and each worktree's `status` at most every 15 s, a wait that doubles to 5 minutes while nothing changes there unless a conversation is at work in it or its index changed (a spawn on Linux forks the whole host and held its thread for 300-450 ms, and 180 worktrees read every pass took 5 cores on this Mac), and keeps landing, ahead and behind by the commits they were read at. Before, each worktree spawned about seventeen processes outside the read slots: 1,800 a pass at 104 worktrees.
 
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
 
@@ -3507,11 +3602,26 @@ Mac, six link disturbances (words missed, time to current, rereads, a stall
 noticed, and with the owner's last batch lost, when the turn's end showed),
 quiet devices, messages and bytes per token per hop, and from each word to
 its paint on each device (`paint`: the device's arrivals through the window's
-own `StreamFrames`, which per-hop latency leaves out). Past the
-plan's budgets it exits 1 unless `--report-only`; a run that doesn't finish
-exits 2. It takes about two minutes and needs a real Codex CLI; CI runs it
-against its budgets with Codex at the tested build (`sync-bench` in
-`checks.yml`). The first baseline is `docs/public-audits/2026-10-28/sync-latency/`.
+own `StreamFrames`, which per-hop latency leaves out). It judges the plan's
+budgets so a busy runner can't fail them and a real regression still does.
+Counts fail at once: words missed, whole snapshots read, batches past one a
+paint frame (`LIVE_FRAME_MS`) of the words
+the model wrote, and bytes a token as if each batch carried the plan's two
+tokens, so the runner's pace doesn't move them; and the design itself (the
+protocol's silence and probe within the stall budget, a frame of at least two
+tokens). Times, and a change held past the status budget that a device
+never showed, are read past the owner's own showing, which leaves the
+harness's time out, and at the median; a stall must be noticed while it
+lasts (8 s, against the design's 4.5). A time over its limit is measured
+again in a second run, and fails only if it's over in both (`--once` skips
+that). On 2026-11-05 a turn's start on the second Mac read 327 ms at p95 on
+one CI run, Codex taking the prompt; the regressions these guard (a report
+waiting for a tick, a hop held a frame, a reconnect waiting a second) are in
+every run. Past a budget it exits 1 unless `--report-only`; a run that
+doesn't finish exits 2. Every check goes to the job's summary. It takes
+about two minutes and needs a real Codex CLI; CI runs it against its
+budgets with Codex at the tested build (`sync-bench` in `checks.yml`). The
+first baseline is `docs/public-audits/2026-10-28/sync-latency/`.
 
 The account's rows here (`CloudConversations`) take nothing from a catalog that
 isn't read: until `catalog.ready()`, and while a lost reader is replaced,
@@ -4565,17 +4675,21 @@ Before each run the machine is read for a second with nothing measured
 running (`@mako/host/base/machine-load`): other work holding more than half
 the cores, thermal pressure or memory pressure makes it busy; the load
 average is printed but not judged, since it lags and counts the measurement's
-own threads. On a quiet machine the median decides, within on three rounds
-and slower after seven; a busy machine is first waited out for up to 3
-minutes, then a row gets up to 15 rounds (past seven, only within 5 minutes
-of busy measuring), and one they can't settle is unsure, not slower. On the
+own threads. On a quiet machine a median under the allowance is within on
+three rounds; a busy machine is first waited out for up to 3 minutes. A row
+over it at the median alone, on either, gets up to 15 rounds (past seven,
+only within 5 minutes of busy measuring), and one they can't settle is
+unsure, not slower: on 2026-11-05 a quiet CI runner's median read unchanged
+code 29 to 36% slower on three runs, between -29% and +52% at 95%. On the
 morning a person's update failed, the update's own dependency copy had Spotlight
 indexing at a full core and the load average at 26.7: unchanged merge code read
 +43% there and +3% on CI. Every load is simulated in `test-perf-reference.ts`;
 `test-machine-load.ts` loads every core for real. Without
 `MAKO_PERFORMANCE_VERDICT` an unsure row fails as a slower one does, saying to
-measure it on a quieter machine; the table prints each row's rounds, its
-interval and how many rounds were busy.
+measure it on a quieter machine, except in CI's `performance` job
+(`MAKO_PERFORMANCE_UNSURE_REPORTED=1`), which fails only a row its rounds
+show slower; the table prints each row's rounds, its interval and how many
+rounds were busy.
 A passing run builds nothing. A reference that can't be built or has no such
 row fails the row as before, with the reason. The rows read `@mako/*` from
 `packages/*/dist`, so build the packages before measuring, or a run times
@@ -4839,7 +4953,10 @@ step held the daemon 8 to 14 s on a loaded Mac. A push's export reads 500
 rows and passes at most 2,000 units a read (`RecordStore.exportSteps`), and
 what the account holds after it is noted 500 units a turn (`remoteHolds`).
 `test/loop-holds.mjs` times each on a 25MB Cursor chat, a push of 30,000
-versions and an SDK run of 23,400 events against a 50 ms budget. `npm run
+versions and an SDK run of 23,400 events against a 50 ms budget of the
+thread's own CPU time, which a runner taking the CPU away doesn't stretch
+(a push once read 117 ms on the clock on CI, unchanged), and a write
+waiting on another's lock by the loop turning all through the wait. `npm run
 bench:syncd-loop` runs the real daemon on a large chat as it goes on
 (`--store <store.db>` for a copy of a real one, `--sdk <dir>` for copies of an
 SDK agent's `store.db` and of an `index.db` of its rows, `--writer-holds-ms`

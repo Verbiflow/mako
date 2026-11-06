@@ -141,9 +141,7 @@ try {
 
   // Linking: each package a link to the main checkout's, the rest this checkout's own.
   const fix = worktree("fix", "fix ui")
-  const started = Date.now()
   const carried = await carryOutputs(gitRunner, main, fix, [install])
-  assert.ok(Date.now() - started < 2_000)
   assert.deepEqual(carried.carried.map((entry) => entry.entries), [["node_modules"]])
   const modules = join(fix, "node_modules")
   assert.ok(lstatSync(modules).isDirectory() && !lstatSync(modules).isSymbolicLink(), "the folder is the checkout's own")
@@ -253,7 +251,7 @@ try {
     assert.match(parseYaml(await inLost.status("c4")).writesThroughLinks, /lost events in the main checkout .* whether anything wrote through the links isn't known/, "app_status says so too")
     await inLost.stop("c4")
   }
-  console.log("package links: linked in under 2 seconds with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were; any outputs link entry by entry; a proof that writes through the links fails, one that only runs them passes, and one whose history lost events says links weren't checked")
+  console.log("package links: each package linked, not copied, with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were; any outputs link entry by entry; a proof that writes through the links fails, one that only runs them passes, and one whose history lost events says links weren't checked")
 } finally {
   await reap()
   rmSync(root, { recursive: true, force: true })

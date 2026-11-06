@@ -526,6 +526,7 @@ const inputs = {
     ]),
   "mako:fin-defaults": () => z.tuple([]),
   "mako:fin-limit-set": () => z.tuple([z.union([z.null(), z.number()])]),
+  "mako:fin-move-on-limit": () => z.tuple([z.boolean()]),
   "mako:fin-policy-save": () =>
     z.tuple([
       z.object({
@@ -564,7 +565,10 @@ const inputs = {
       }),
     ]),
   "mako:fin-role-rules-save": () =>
-    z.tuple([z.union([z.literal("forFins"), z.literal("forApexes")]), z.string()]),
+    z.tuple([
+      z.union([z.literal("forFins"), z.literal("forApexes")]),
+      z.string(),
+    ]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
@@ -603,8 +607,8 @@ const inputs = {
       z.object({
         head: z.string().optional(),
         action: z.union([
-          z.literal("abort"),
           z.literal("merge"),
+          z.literal("abort"),
           z.literal("fetch"),
           z.literal("pull"),
           z.literal("continue"),
@@ -1160,6 +1164,7 @@ const inputs = {
                   z.literal("migration"),
                   z.literal("auto-continue"),
                   z.literal("relay"),
+                  z.literal("pull-watch"),
                 ]),
               }),
             ]),
@@ -1168,12 +1173,13 @@ const inputs = {
               .object({
                 source: z.union([
                   z.literal("harness"),
+                  z.literal("apex"),
                   z.literal("rule"),
                   z.literal("asked"),
                   z.literal("mako"),
                   z.literal("fins"),
-                  z.literal("apex"),
                   z.literal("used"),
+                  z.literal("connection"),
                 ]),
                 note: z.string().optional(),
                 rerouted: z
@@ -1181,6 +1187,27 @@ const inputs = {
                     from: z.string(),
                     until: z.number().optional(),
                     instead: z.string().optional(),
+                    account: z.string().optional(),
+                    to: z
+                      .union([
+                        z.object({
+                          why: z.literal("account"),
+                          harness: z.string(),
+                          account: z.string(),
+                          label: z.string(),
+                        }),
+                        z.object({
+                          why: z.literal("connection"),
+                          harness: z.string(),
+                          connection: z.string(),
+                          connectionName: z.string(),
+                          model: z.string(),
+                        }),
+                        z.object({ why: z.literal("harness"), harness: z.string() }),
+                      ])
+                      .optional(),
+                    at: z.number().optional(),
+                    line: z.string().optional(),
                   })
                   .optional(),
                 rule: z
@@ -2687,6 +2714,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-limit-set", "harnesses"],
+  ["mako:fin-move-on-limit", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
   ["mako:fin-role-rules-save", "harnesses"],
   ["mako:fork", "workspaces"],

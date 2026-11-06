@@ -44,7 +44,7 @@ import { admittedInPlace, type ConversationSettings } from "../contracts/turn-co
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
-import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate } from "@mako/sessions/live-content"
+import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { DirectRoute } from "@mako/sessions/events"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
@@ -551,6 +551,11 @@ export class LiveConversations {
     return { ...turnReply(resident, requestId), request: resident.snapshot.requests.find((request) => request.id === requestId) }
   }
 
+  /** The conversation a driver's binding speaks for: a hand-off's new session is another binding of the same one. */
+  ownerOf(bindingId: string): string {
+    return this.records.owners.get(bindingId) ?? bindingId
+  }
+
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
   loaded(id: string): boolean {
     return this.records.has(id)
@@ -844,7 +849,6 @@ export class LiveConversations {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held", signIn: pause.hold })
     }
-    // A message for later waits here, held, whatever the process is doing; `wakeDue` releases it.
     // A message for later, or one its sender's stop paused (a stopped Fin's news), waits here, held, whatever the
     // process is doing; `wakeDue` releases the one, the Fin's resume the other.
     if (request.wake || request.pause) {
@@ -1287,13 +1291,19 @@ export class LiveConversations {
     }
   }
 
+  /** Whether `id` is switching provider or reopening its session (`transfer`): a message waits for it to settle. */
+  switching(id: string): boolean {
+    const resident = this.records.load(id)
+    return resident ? Boolean(this.transfers.pending(resident)) : false
+  }
+
   /** Whether the host before this one left a message of `id` waiting, paused or running: an exit pauses them, a crash cuts the turn. */
   leftUnsettled(id: string): boolean {
     return this.records.leftUnsettled(id)
   }
 
   /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. `brief`: the Fin's brief it carries again. */
-  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string }): LiveSnapshot {
+  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string; since?: number }): LiveSnapshot {
     this.autoContinue.continueNow(id, input)
     return this.records.require(id).snapshot
   }
@@ -1582,6 +1592,61 @@ export class LiveConversations {
     this.keep(resident)
     if (resident.snapshot.blocks.some((block) => block.type === "event" && block.direct?.request === direct.request)) return true
     queueLiveUpdate(resident, { kind: "event", label: `You wrote to ${direct.to} directly`, body: text, direct })
+    this.keep(resident)
+    return true
+  }
+
+  /**
+   * A request waiting out a usage limit (held with its `retry`: a turn's continuation Mako made, or a message its
+   * harness refused) goes on now where the limit doesn't hold: `send` sends it as `text` on this conversation's
+   * harness (a Fin pinned to another account, or on a connection's model), `hand-off` withdraws it and starts the
+   * conversation on `provider` with `text`, what waited behind it following there. All in one step, and only while it
+   * still waits for its time on this host: a Stop's latch (`pause`), a send, a removal or another owner having it
+   * leaves it as it is, and the answer is false. What goes is then the handoff's to guard, as every send is.
+   */
+  moveWaiting(id: string, requestId: string, to: { kind: "send"; text: string; tuning?: SessionSettings } | { kind: "hand-off"; id: string; provider: string; text: string; tuning?: SessionSettings; modeId?: string }, actor?: Actor): boolean {
+    const resident = this.records.get(id)
+    const waiting = resident?.snapshot.requests.find((request) => request.id === requestId)
+    if (!resident || !waiting || waiting.status !== "held" || !waiting.retry || waiting.pause === "stop" || !this.moves.executes(resident)) return false
+    const previous = resident.snapshot
+    if (to.kind === "send") {
+      const tuning = to.tuning ?? waiting.tuning
+      const sent: LiveRequest = { ...waiting, text: to.text, displayText: undefined, ...(tuning && { tuning }), status: "queued", retry: undefined, inputDigest: promptFingerprint(to.text, waiting.attachments, tuning) }
+      resident.snapshot = { ...previous, requests: previous.requests.map((request) => (request === waiting ? sent : request)) }
+      try {
+        this.flush(resident)
+      } catch (error) {
+        resident.snapshot = previous
+        throw error
+      }
+      this.release(resident)
+      return true
+    }
+    // A switch takes nothing queued with it; what waited behind is held for the step that starts it, then waits there.
+    const behind = new Set(previous.requests.filter((request) => request.status === "queued").map((request) => request.id))
+    resident.snapshot = { ...previous, requests: previous.requests.map((request) => request === waiting ? { ...request, status: "canceled" as const, retry: undefined } : behind.has(request.id) ? { ...request, status: "held" as const } : request) }
+    try {
+      this.transfer(id, { id: to.id, provider: to.provider, text: to.text, attachments: waiting.attachments, ...(to.tuning && { tuning: to.tuning }), ...(to.modeId && { modeId: to.modeId }) }, actor)
+    } catch (error) {
+      resident.snapshot = previous
+      this.flush(resident)
+      throw error
+    }
+    resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (behind.has(request.id) && request.status === "held" ? { ...request, status: "queued" as const } : request)) }
+    this.flush(resident)
+    return true
+  }
+
+  /**
+   * A line Mako writes into a conversation that no harness's record holds, as `recordDirect` does: a Fin's move to
+   * another account or harness when its own ran out. Said once: the same words again change nothing.
+   */
+  recordNote(id: string, label: string, detail: string): boolean {
+    const resident = this.records.load(id)
+    if (!resident) return false
+    this.keep(resident)
+    if (reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
+    queueLiveUpdate(resident, { kind: "event", label, detail })
     this.keep(resident)
     return true
   }

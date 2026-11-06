@@ -1,15 +1,19 @@
 import { execFile } from "node:child_process"
 import { statfs } from "node:fs/promises"
-import { availableParallelism, homedir, loadavg, totalmem } from "node:os"
+import { availableParallelism, homedir, totalmem } from "node:os"
 import { promisify } from "node:util"
+import { coresBusy, cpuTicks, type CpuTicks } from "../base/machine-load.js"
 import { onMac } from "../base/platform.js"
 
 /** What this Mac has and what's at work on it, as a Fin's start reads it (`macLoad`). */
 export interface MacReading {
   cores: number
   memoryBytes: number
-  /** The 1-minute load average: runnable threads, the person's own work and every Fin's alike. */
-  load: number
+  /**
+   * Cores busy on average since the last reading, the person's own work and every Fin's alike; the rest are idle
+   * (`coresBusy`). Undefined until CPU time has passed to measure: no time spent says nothing, not that it's idle.
+   */
+  busyCores?: number
   /** Swap still free; undefined where it can't be read. */
   swapFreeBytes?: number
   /** Free space where worktrees are made; undefined where it can't be read. */
@@ -25,16 +29,15 @@ export interface MacReading {
  * limit (`FIN_LIMIT`); a busy Mac says so in the start's answer, so its Apex runs heavy work one at a time.
  */
 export interface MacLoad {
-  /** In the person's words: "14 cores, 36 GB, 3 cores of other work". */
+  /** In the person's words: "14 cores, 36 GB, 3 cores busy". */
   why: string
-  /** Set while the Fins at work already take what the person's own work leaves, or it's out of swap or disk. */
+  /** Set while its idle cores or memory leave no room for another Fin, or it's out of swap or disk. */
   busy?: true
 }
 
 /**
- * A working Fin's share of the Mac, in cores of load. Measured 2026-11-03 on a 14-core Mac: 13 Fins at work, with
- * the builds and tests they ran, held the 1-minute load at 26.8, and one Fin building took 6 cores at its peak while
- * idle ones took none.
+ * The idle cores a Fin wants to start into. Measured 2026-11-03 on a 14-core Mac: 13 Fins at work, with the builds and
+ * tests they ran, held the 1-minute load at 26.8, and one Fin building took 6 cores at its peak while idle ones took none.
  */
 export const FIN_LOAD = 2
 /** A working Fin's memory: the largest Fin's processes held 1.8 GB that day and the average 0.35 GB. */
@@ -49,42 +52,60 @@ export const DISK_FREE_LEAST = 10 * 1024 ** 3
 const GB = (bytes: number) => Math.round(bytes / 1024 ** 3)
 
 /**
- * Whether this Mac is busy: the Fins at work take the cores the person's own work leaves, a Fin's `FIN_LOAD` each, or
- * its memory, a Fin's `FIN_MEMORY` each, or it's swapping or short of disk. The person's own work is the load the
- * working Fins don't account for.
+ * Whether this Mac is busy: its idle cores, past the person's, have no room for another Fin at `FIN_LOAD`, or the Fins
+ * at work take its memory, a Fin's `FIN_MEMORY` each, or it's swapping or short of disk. An idle core is room whatever
+ * keeps the others busy.
  */
 export function macLoad(reading: MacReading, working: number): MacLoad {
-  const others = Math.max(0, reading.load - working * FIN_LOAD)
-  const cpu = Math.floor((reading.cores - PERSON_CORES(reading.cores) - others) / FIN_LOAD)
+  const busy = reading.busyCores
+  const full = busy !== undefined && reading.cores - busy - PERSON_CORES(reading.cores) < FIN_LOAD
   const memory = Math.floor((reading.memoryBytes - PERSON_MEMORY) / FIN_MEMORY)
   const short = reading.swapFreeBytes !== undefined && reading.swapFreeBytes < SWAP_FREE_LEAST ? "it's out of swap"
     : reading.diskFreeBytes !== undefined && reading.diskFreeBytes < DISK_FREE_LEAST ? `it has ${GB(reading.diskFreeBytes)} GB of disk free`
     : undefined
-  const parts = [`${reading.cores} cores`, `${GB(reading.memoryBytes)} GB`, ...others >= 1 ? [`${Math.round(others)} cores of other work`] : [], ...short ? [short] : []]
+  const parts = [`${reading.cores} cores`, `${GB(reading.memoryBytes)} GB`, ...busy !== undefined && busy >= 1 ? [`${Math.round(busy)} cores busy`] : [], ...short ? [short] : []]
   const load: MacLoad = { why: parts.join(", ") }
-  if (short || working >= Math.min(cpu, memory)) load.busy = true
+  if (short || full || working >= memory) load.busy = true
   return load
 }
 
 /** Reads this Mac for `macLoad`, at most every `READ_EVERY_MS`: a burst of starts reads it once. */
 export class MacCapacity {
   #last: { at: number; reading: MacReading } | undefined
+  #reading: Promise<MacReading> | undefined
   readonly #folder: string
   readonly #now: () => number
+  readonly #ticks: () => CpuTicks
+  #ticksThen: CpuTicks
 
-  constructor(options: { folder?: string; now?: () => number } = {}) {
+  constructor(options: { folder?: string; now?: () => number; ticks?: () => CpuTicks } = {}) {
     this.#folder = options.folder ?? homedir()
     this.#now = options.now ?? Date.now
+    this.#ticks = options.ticks ?? cpuTicks
+    this.#ticksThen = this.#ticks()
   }
 
-  async read(): Promise<MacReading> {
+  read(): Promise<MacReading> {
     const now = this.#now()
-    if (this.#last && now - this.#last.at < READ_EVERY_MS) return this.#last.reading
+    if (this.#last && now - this.#last.at < READ_EVERY_MS) return Promise.resolve(this.#last.reading)
+    // One at a time: a read beside this one would find no CPU time spent since it.
+    this.#reading ??= this.#read(now).finally(() => {
+      this.#reading = undefined
+    })
+    return this.#reading
+  }
+
+  async #read(now: number): Promise<MacReading> {
+    const ticks = this.#ticks()
+    const cores = availableParallelism()
+    const passed = ticks.total > this.#ticksThen.total
+    const busyCores = passed ? coresBusy(this.#ticksThen, ticks, cores) : this.#last?.reading.busyCores
+    if (passed) this.#ticksThen = ticks
     const [swapFreeBytes, diskFreeBytes, memoryPressure, hot] = await Promise.all([swapFree(), statfs(this.#folder).then((stats) => stats.bavail * stats.bsize, () => undefined), pressured(), throttled()])
     const reading: MacReading = {
-      cores: availableParallelism(),
+      cores,
       memoryBytes: totalmem(),
-      load: loadavg()[0] ?? 0,
+      ...busyCores !== undefined && { busyCores },
       ...swapFreeBytes !== undefined && { swapFreeBytes },
       ...diskFreeBytes !== undefined && { diskFreeBytes },
       ...memoryPressure !== undefined && { memoryPressure },

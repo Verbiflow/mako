@@ -161,6 +161,7 @@ export const RequestRetrySchema = z.object({
   since: z.number(),
   cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
   reason: z.string(),
+  until: z.number().optional(),
 })
 
 export const ContextTransferSchema = z.object({
@@ -174,6 +175,7 @@ export const ContextTransferSchema = z.object({
     ...StoredReason,
     auto: z.boolean(),
     brief: z.string().optional(),
+    since: z.number().optional(),
   }).transform(readStoredReason).optional(),
   createdAt: z.number(),
   state: TransferStateSchema,

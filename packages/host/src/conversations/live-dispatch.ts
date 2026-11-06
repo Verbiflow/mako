@@ -15,6 +15,7 @@ import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
 import { checkoutSince } from "../base/checkout-since.js"
+import { cutAccount } from "./cut-account.js"
 import { standingLines } from "./control-cadence.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
@@ -322,6 +323,7 @@ export class LiveDispatch {
       // Stop reached while it was prepared, and one the journal can't record as sent all go no further.
       if (handoff && (!own || target?.status !== "dispatching" || target.nativeDelivery?.evidence.kind !== "prepared")) throw new HandoffRefused("superseded")
       if (handoff && target?.pause === "stop") throw new HandoffRefused("stopped")
+      if (handoff && target && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, target) === false) throw new HandoffRefused("withdrawn")
       if (!own || !target?.nativeDelivery) return
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
@@ -367,6 +369,9 @@ export class LiveDispatch {
         const words = request.continues?.brief && await briefInTranscript(resident.snapshot, this.access.control(resident), request.continues.brief, dependencies.history)
           ? continueTurnPrompt("host-crashed", "mako")
           : request.text
+        // A continuation says what moved since the cut, read here too, so nothing crosses the read (`TurnContinuation.since`).
+        const since = request.continues?.since
+        const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
         const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: dependencies.agents?.()?.isApex(resident.snapshot.session.id) ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
@@ -392,7 +397,7 @@ export class LiveDispatch {
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
             ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
           ]),
-          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), words),
+          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })
@@ -405,10 +410,12 @@ export class LiveDispatch {
             candidate.id === request.id && candidate.status === "dispatching"
         )
         if (generation !== resident.generation || !target) return
-        // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's.
+        // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's. One whose
+        // reason went away is canceled, never to go.
         if (error instanceof HandoffRefused) {
+          const status = error.why === "withdrawn" ? "canceled" : "held"
           resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((candidate) =>
-            candidate === target ? { ...candidate, status: "held", error: undefined, snapshots: undefined } : candidate) }
+            candidate === target ? { ...candidate, status, error: undefined, snapshots: undefined } : candidate) }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           hostWarn("live", "a message went no further than its handoff", { conversation: resident.snapshot.session.id, request: request.id, why: error.why })
           try {

@@ -278,6 +278,44 @@ async function reconnectAfterRestart() {
 }
 
 /**
+ * Close, carry on, Close again, as often as the person likes: each Close closes what's open and lets go of its hold,
+ * however many came before it, and a Close of what's closed changes nothing.
+ */
+async function closeAfterReconnect() {
+  const starts: string[] = []
+  const owner = new LiveConversations({
+    appPath: root,
+    driver: () => fixtureDriver("agent-reclose", starts),
+    history: async () => null,
+    emit: () => {},
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+    root: join(root, "reclose"),
+    memory: installed,
+  })
+  const id = randomUUID()
+  const held = () => dev.heldBy("cursor", "agent-reclose")
+  try {
+    await owner.start("cursor", "/repo", { conversationId: id })
+    await until(() => owner.snapshot(id)?.session.status === "ready" && held() !== null, "the first session to hold")
+    for (const round of [1, 2, 3]) {
+      await owner.close(id)
+      assert.equal(owner.snapshot(id)?.session.status, "closed", `close ${round}`)
+      assert.equal(held(), null, `close ${round} lets go of its hold`)
+      await owner.close(id)
+      assert.equal(owner.snapshot(id)?.session.status, "closed", `close ${round}, again, changes nothing`)
+      const input: TransferInput = { id: randomUUID(), provider: "cursor", text: `Carry on ${round}`, attachments: [] }
+      owner.transfer(id, input)
+      await until(() => owner.snapshot(id)?.session.status !== "closed" && held() !== null, `reconnect ${round} to hold the session`)
+    }
+    await owner.close(id)
+    assert.equal(held(), null, "the last close lets go of its hold too")
+    assert.equal(starts.length, 4, "one session opened for each time it went on, and none for a close")
+  } finally {
+    owner.stop()
+  }
+}
+
+/**
  * The host died during a turn it had sent; the provider wrote that turn's
  * progress before it was cut off. The move is Mako's own and the transcript
  * already holds what streamed, so the reconnect says nothing about it.
@@ -622,6 +660,7 @@ hostDataRoots()
   await liveConversationsRoundTrip()
   await reconnectAfterRestart()
   await reconnectAfterOwnTurn()
+  await closeAfterReconnect()
   await backfillFromJournals()
   await newerLedger()
   console.log("Session memory: legacy route retirement, cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, quiet reconnect after an interrupted turn, journal backfill, a newer Mako's ledger read and its facts taken after the update")

@@ -172,7 +172,7 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
   try {
     const file = join(folder, "fin-defaults.json")
     const store = new FinDefaultsStore(file)
-    assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] }, ceiling: FIN_CEILING }, "nothing chosen: every harness's Fins run as the person does, this device on its capacity")
+    assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] }, ceiling: FIN_CEILING, moveOnLimit: true }, "nothing chosen: every harness's Fins run as the person does, this device on its capacity, and go on at the next account when theirs runs out")
     store.use("cursor", { model: "composer-2.5", options: { fast: "true" } })
     store.use("cursor", { options: { effort: "high" } })
     store.choose("codex", { model: "gpt-6.1-sol", options: { effort: "high" } })
@@ -181,6 +181,7 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
       used: { cursor: { model: "composer-2.5", options: { fast: "true" } } },
       policy: { rules: [] },
       ceiling: FIN_CEILING,
+      moveOnLimit: true,
     }, "another host reads the same, and a send that names no model changes nothing")
     store.choose("codex", null)
     assert.deepEqual(store.reading().chosen, {}, "Same as you again")
@@ -212,6 +213,12 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
     assert.throws(() => store.setCeiling(FIN_CEILING_MAX + 1))
     assert.equal(store.setCeiling(FIN_CEILING).ceiling, FIN_CEILING)
     assert.equal("ceiling" in JSON.parse(readFileSync(file, "utf8")), false, "the default ceiling is kept as none chosen")
+    assert.equal(store.chooseMoveOnLimit(false).moveOnLimit, false, "the switch turned off")
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).moveOnLimit, false)
+    assert.equal(new FinDefaultsStore(file).reading().moveOnLimit, false, "another host reads it off")
+    assert.equal(new FinDefaultsStore(file).reading().policy.rules.length, 2, "the switch changes nothing else")
+    assert.equal(store.chooseMoveOnLimit(true).moveOnLimit, true)
+    assert.equal("moveOnLimit" in JSON.parse(readFileSync(file, "utf8")), false, "on is the default, kept as nothing")
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }
