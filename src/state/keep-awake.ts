@@ -1,4 +1,4 @@
-import type { KeepAwakeSettings, KeepAwakeState } from "@mako/host/contracts/keep-awake"
+import type { KeepAwakeHold, KeepAwakeSettings, KeepAwakeState } from "@mako/host/contracts/keep-awake"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 
@@ -9,6 +9,20 @@ import { createHook, createStore } from "@/state/store"
  */
 export const keepAwakeStore = createStore<{ state: KeepAwakeState | null }>({ state: null })
 export const useKeepAwake = createHook(keepAwakeStore)
+
+export function agentsWorking(agents: number): string {
+  return `${agents} ${agents === 1 ? "agent" : "agents"} working`
+}
+
+/**
+ * What's wrong when agents work on a Mac that may sleep, in the same words in the titlebar and in the setting it opens;
+ * undefined when nothing is. The setting's switch says the person's choice; this says what's happening.
+ */
+export function keepAwakeWarning(hold: KeepAwakeHold | undefined): string | undefined {
+  if (hold?.kind === "low-battery") return `Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep with ${agentsWorking(hold.agents)}.`
+  if (hold?.kind === "failed") return `Mako couldn't keep this Mac awake, so it may sleep with ${agentsWorking(hold.agents)}. Mako tries again within a minute.`
+  return undefined
+}
 
 export const keepAwake = {
   async load(): Promise<void> {

@@ -287,11 +287,14 @@ export function Segmented<T extends string>({
 /** One setting: a name and an explanation on the left, its control on the right. */
 export function SettingRow({
   title,
+  warning,
   description,
   htmlFor,
   children,
 }: {
   title: string
+  /** What's wrong now, when the control alone would read as all's well. */
+  warning?: string
   description?: string
   htmlFor?: string
   children?: ReactNode
@@ -306,6 +309,7 @@ export function SettingRow({
         ) : (
           <div className="text-ui font-medium">{title}</div>
         )}
+        {warning ? <p className="mt-0.5 max-w-[34rem] text-label leading-relaxed text-caution">{warning}</p> : null}
         {description ? (
           <p className="mt-0.5 max-w-[34rem] text-label leading-relaxed text-muted-foreground">
             {description}

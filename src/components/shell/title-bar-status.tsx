@@ -3,7 +3,7 @@ import { Slot } from "@/extend/slot"
 import { useSession } from "@/state/session"
 import { HotIndicator } from "@/components/shell/hot-indicator"
 import { updates, useUpdates } from "@/state/updates"
-import { keepAwake, useKeepAwake } from "@/state/keep-awake"
+import { agentsWorking, keepAwake, keepAwakeWarning, useKeepAwake } from "@/state/keep-awake"
 import { cn } from "@/lib/utils"
 import { useEffect } from "react"
 import { ArrowUpCircleIcon, BatteryLowIcon, CoffeeIcon, PlugZapIcon, TriangleAlertIcon } from "lucide-react"
@@ -87,13 +87,8 @@ function KeepAwakePill() {
     void keepAwake.load()
   }, [])
   if (!hold || hold.kind === "rest") return null
-  const agents = `${hold.agents} ${hold.agents === 1 ? "agent" : "agents"} working`
   const held = hold.kind === "idle" || hold.kind === "lid"
-  const title = hold.kind === "low-battery"
-    ? `Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep with ${agents}.`
-    : hold.kind === "failed"
-      ? `Mako couldn't keep this Mac awake, so it may sleep with ${agents}. Mako tries again within a minute.`
-      : `Keeping this Mac awake: ${agents}. ${hold.kind === "lid" ? "Mako asked macOS to stay awake with the lid closed, on power." : "Closing the lid still puts it to sleep."}`
+  const title = keepAwakeWarning(hold) ?? `Keeping this Mac awake: ${agentsWorking(hold.agents)}. ${hold.kind === "lid" ? "Mako asked macOS to stay awake with the lid closed, on power." : "Closing the lid still puts it to sleep."}`
   const Icon = hold.kind === "low-battery" ? BatteryLowIcon : held ? CoffeeIcon : TriangleAlertIcon
   return (
     <button

@@ -2,7 +2,7 @@ import { useEffect } from "react"
 import { ListCard, SettingRow, Toggle } from "@/components/ui/kit"
 import { conversationSettings, useConversationSettings } from "@/state/conversation-settings"
 import { togglePref, usePrefs } from "@/state/prefs"
-import { keepAwake, useKeepAwake } from "@/state/keep-awake"
+import { keepAwake, keepAwakeWarning, useKeepAwake } from "@/state/keep-awake"
 import { KEEP_AWAKE_BATTERY_FLOOR } from "@mako/host/contracts/keep-awake"
 
 export function ConversationSection() {
@@ -47,7 +47,8 @@ export function ConversationSection() {
       </SettingRow>
       <SettingRow
         title="Keep this Mac awake while agents work"
-        description={awake?.unavailable ?? `Holds off idle sleep while an agent here works or runs a command, not while it waits on you. Below ${KEEP_AWAKE_BATTERY_FLOOR}% battery, Mako lets the Mac sleep and says so`}
+        warning={keepAwakeWarning(awake?.hold)}
+        description={awake?.unavailable ?? `Holds off idle sleep while an agent here works or runs a command, not while it waits on you. ${awakeLid ? "" : "Closing the lid still sleeps it. "}Below ${KEEP_AWAKE_BATTERY_FLOOR}% battery, Mako lets the Mac sleep and says so`}
       >
         <Toggle
           label="Keep this Mac awake while agents work"
