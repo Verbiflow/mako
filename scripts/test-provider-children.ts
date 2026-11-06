@@ -212,6 +212,9 @@ try {
     ),
     "tracking new children retains unresolved foreign ownership"
   )
+  // This host stops writing before the test edits its registry, as the abandoned host did above: the first
+  // identity read of `mine` can land while the edit is half written, read no records and replace the file.
+  next.untrackPid(mine.pid!)
   const retry = JSON.parse(await readFile(next.path, "utf8"))
   retry.children.find((entry: { owner: string }) => entry.owner === "uncertain-image").executableIdentity = wrappedExecutable
   await writeFile(next.path, JSON.stringify(retry))
