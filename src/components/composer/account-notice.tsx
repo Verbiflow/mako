@@ -59,7 +59,7 @@ export function limitContinueNotice(offer: LimitContinue): ComposerNotice {
     id: "limit-continue",
     tone: "info",
     icon: <HarnessIcon harness={offer.harness} />,
-    title: `${offer.to} has room now`,
+    title: `${offer.to} can take this`,
     actions: [
       { label: `Continue on ${offer.to}`, primary: true, disabled: offer.busy, title: "This Thread goes on there with its whole conversation, and what waits goes with it", onClick: offer.go },
       { label: "Not now", onClick: offer.notNow },

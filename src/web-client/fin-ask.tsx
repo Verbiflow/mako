@@ -99,9 +99,9 @@ export function LimitContinueCard() {
     <div className="web-ask" data-ask="limit" data-limit-continue={offer.to}>
       <div className="web-ask-body" aria-busy={offer.busy || undefined} data-busy={offer.busy || undefined}>
         <p className="web-ask-title">
-          <span className="min-w-0 break-words">{offer.to} has room now</span>
+          <span className="min-w-0 break-words">{offer.to} can take this</span>
         </p>
-        <div className="web-ask-options" role="group" aria-label="Answers">
+        <div className="web-ask-options" data-row role="group" aria-label="Answers">
           <button type="button" className="web-ask-option" data-primary disabled={offer.busy} onClick={offer.go}>Continue on {offer.to}</button>
           <button type="button" className="web-ask-option" onClick={offer.notNow}>Not now</button>
         </div>

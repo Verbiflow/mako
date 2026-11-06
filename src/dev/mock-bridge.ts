@@ -3456,7 +3456,7 @@ export function installMockBridge() {
       }
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
     },
-    agentsNextPlace: async () => ({ label: "Claude Code" }),
+    agentsNextPlace: async () => ({ label: "Codex", harness: "codex" }),
     agentsContinueNext: async () => true,
     // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.
     agentsRespond: async (conversation: string, input: AgentsRespondInput): Promise<AgentsAnswered | AgentRefused> => {

@@ -230,6 +230,7 @@ async function personFirst(harness: string): Promise<void> {
     accounts[harness]![0]!.spentUntil = reset
     const next = await world.agents.nextPlace(alone.conversation)
     assert.ok(next, `${harness}: its card says where it would go`)
+    assert.notEqual(next.harness, harness, `${harness}: and names the harness it would go on, for its mark`)
     assert.equal(await world.agents.continueNext(alone.conversation, randomUUID()), true, `${harness}: and one press takes it there`)
     await until(`${harness}: their message there`, () => rows(world, alone.conversation).find((request) => request.id === words)?.status === "completed")
     assert.notEqual(heardBy(world, alone.conversation).at(-1)!.harness, harness)

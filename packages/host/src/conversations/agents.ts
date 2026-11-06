@@ -2790,8 +2790,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "a limit's notice", { root, harness, moved: moved.length, stopped })
     // One a host came back to past its reset is no news: it's kept as said, so the episode isn't said again.
     if (conversation && (until === undefined || until > now)) this.deps.live.recordNote(conversation, words.ran, words.did)
-    this.noticeChanged(store.edges().of(fin))
+    // Its end first: a reset that falls between them leaves no timer to say so.
     this.endNotice(root)
+    this.noticeChanged(store.edges().of(fin))
   }
 
   /** A tree's notice ends at its reset: every surface hears it as they hear "Got it", a quiet Thread's too. */
@@ -2829,7 +2830,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * Where a Thread held by a limit could go on, for its card: one Mako doesn't move by itself, as a Thread with no Fins
    * is the person's to decide, and only with somewhere to go.
    */
-  async nextPlace(conversation: string): Promise<{ label: string; target: ThreadTarget } | undefined> {
+  async nextPlace(conversation: string): Promise<{ label: string; harness: string; target: ThreadTarget } | undefined> {
     const store = this.store()
     const moves = this.moves
     const placed = store?.journalPlacement(conversation)
@@ -2848,7 +2849,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const label = (name: string) => this.deps.harnessLabel(name)
     const move: FinMove = { step, from: { harness: session.harness, ...(from && { account: from.label }) } }
     const apex: Apex = { session: placed.session, thread: placed.thread, conversation }
-    return { label: movedWords(move, label, this.now()).to.replace(/^Moved to /, ""), target: await this.targetOf(step, apex, tier, session.cwd) }
+    return { label: movedWords(move, label, this.now()).to.replace(/^Moved to /, ""), harness: step.harness, target: await this.targetOf(step, apex, tier, session.cwd) }
   }
 
   /** The person pressed the card: their Thread goes there as a switch of theirs would, whatever waits going with it. */

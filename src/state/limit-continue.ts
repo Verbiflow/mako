@@ -6,6 +6,7 @@ import { promptDelivery } from "@/state/prompt-delivery"
 
 /** A Thread a limit holds, with somewhere to go: where, and the person's two answers. */
 export interface LimitContinue {
+  /** The harness it would go on: the offer's mark, as this is a choice of where to go. */
   harness: string
   to: string
   busy: boolean
@@ -27,22 +28,22 @@ export function useLimitContinue(): LimitContinue | null {
     return current && promptDelivery(current).queued.find((prompt) => prompt.retry?.cause === "rate-limited" && prompt.pause !== "stop")?.retry?.since
   })
   const offered = useAccounts((state) => (harness ? state.limitOffers[harness] : undefined))
-  const [place, setPlace] = useState<{ key: string; to: string }>()
+  const [place, setPlace] = useState<{ key: string; to: string; harness: string }>()
   const [busy, setBusy] = useState(false)
   const [declined, setDeclined] = useState<string>()
   const held = since !== undefined
   useEffect(() => {
     if (!key || !held) return
     let current = true
-    void nextPlace(key).then((to) => {
-      if (current) setPlace(to ? { key, to } : undefined)
+    void nextPlace(key).then((next) => {
+      if (current) setPlace(next ? { key, to: next.label, harness: next.harness } : undefined)
     })
     return () => { current = false }
   }, [key, held])
   const wait = `${key}:${since}`
-  if (!key || !harness || !held || place?.key !== key || declined === wait || offered?.to) return null
+  if (!key || !held || place?.key !== key || declined === wait || offered?.to) return null
   return {
-    harness,
+    harness: place.harness,
     to: place.to,
     busy,
     go: () => {

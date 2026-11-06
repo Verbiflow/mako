@@ -944,6 +944,13 @@
   flex-direction: column;
   gap: 8px;
 }
+.web-ask-options[data-row] {
+  flex-direction: row;
+}
+.web-ask-options[data-row] .web-ask-option:not([data-primary]) {
+  width: auto;
+  flex-shrink: 0;
+}
 .web-ask-option {
   @apply flex w-full items-center justify-center gap-2 bg-fill-hover px-3.5 py-2.5 text-ui text-foreground;
   min-height: 44px;

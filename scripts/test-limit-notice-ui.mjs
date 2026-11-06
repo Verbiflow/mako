@@ -268,7 +268,7 @@ async function check() {
   const HOLD_AT_LIMIT = `import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => { const state = acpStore.get(); const current = activeAcp(state); const at = Date.now() + 3 * 60 * 60_000; acpStore.set({ conversations: { ...state.conversations, [current.key]: { ...current, requests: [...(current.requests ?? []), { id: 'held-at-limit', text: 'Keep going.', attachments: [], status: 'held', retry: { at, until: at, attempt: 1, since: Date.now(), cause: 'rate-limited', reason: "You've hit your usage limit" } }] } } }) })`
   await evaluate(HOLD_AT_LIMIT)
   await until("Boolean(document.querySelector('[data-limit-continue]'))", "the card")
-  assert.match(await text("[data-limit-continue]"), /Claude Code has room now.*Continue on Claude Code.*Not now/, "only the choice, as its queue row says what holds it")
+  assert.match(await text("[data-limit-continue]"), /Codex can take this.*Continue on Codex.*Not now/, "only the choice, as its queue row says what holds it")
   assert.equal(await evaluate("document.querySelectorAll('[data-limit-continue]').length"), 1, "one card")
   await shoot("continue-card", "[data-limit-continue]")
   // Another account to switch to is the same decision: one winner, not a stack.
@@ -291,7 +291,7 @@ async function check() {
     for (const deadline = Date.now() + 30_000; !(await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => Boolean(activeAcp(acpStore.get())))")); await new Promise((done) => setTimeout(done, 100))) assert.ok(Date.now() < deadline, `${name}: its conversation`)
     await evaluate(HOLD_AT_LIMIT)
     await until("Boolean(document.querySelector('[data-limit-continue]'))", `${name}: the card`)
-    assert.match(await text("[data-limit-continue]"), /Continue on Claude Code.*Not now/, `${name}: the same offer`)
+    assert.match(await text("[data-limit-continue]"), /Continue on Codex.*Not now/, `${name}: the same offer`)
     await shoot(name, "[data-limit-continue]")
     await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Not now')).click(); true")
     await until("!document.querySelector('[data-limit-continue]')", `${name}: Not now ends it`)

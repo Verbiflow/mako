@@ -465,7 +465,8 @@ try {
     assert.ok(!("refused" in r))
     held.claude[0]!.spentUntil = reset
     spent()
-    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
+    // A quiet Thread may be unloaded by then, with no roster at all: which says no notice as well as an empty one does.
+    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length ?? 0
     await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
     await until("its reset, with nobody reading", () => shown() === 0, 12_000)
     await r.world.close()
@@ -788,11 +789,6 @@ try {
     await until("the move to work", () => r.world.launches.some((launch) => launch.conversation === finConversation && launch.account === "work"))
     await until("its turn on work", () => r.finTurns().length === 2)
     await r.world.restart()
-    await new Promise((d) => setTimeout(d, 9000))
-    const fc = r.fin()
-    console.log("DBG rows", JSON.stringify(r.world.live.snapshot(fc)!.requests.map((q) => ({ id: q.id.slice(0, 5), st: q.status, cont: Boolean(q.continues), retry: q.retry && { c: q.retry.cause, at: q.retry.at - Date.now(), r: q.retry.reason?.slice(0, 40) }, wake: q.wake, pause: q.pause, why: q.interruption?.reason, t: q.text.slice(0, 30) }))))
-    console.log("DBG session", JSON.stringify(r.world.live.session(fc)?.status), r.world.live.pinnedAccount(fc, "claude"), JSON.stringify(r.world.store.finTurn(edgeOf(r).child)), JSON.stringify(r.world.agents.roster(r.apex.conversation)[0]?.child?.state))
-    console.log("DBG turns", r.finTurns().length, JSON.stringify(held.claude), JSON.stringify(r.world.continued.map((c) => [c.conversation === fc ? "fin" : "apex", c.to, c.by])), JSON.stringify(r.world.launches.map((l) => [l.conversation === fc ? "fin" : "apex", l.account])))
     await until("it to stop out of accounts", () => { const state = r.world.agents.roster(r.apex.conversation)[0]?.child?.state; return state?.kind === "ended" && state.outcome === "stopped" }, 30_000)
     const accountsRun = r.world.launches.filter((launch) => launch.conversation === finConversation).map((launch) => launch.account)
     assert.equal(accountsRun.lastIndexOf("personal"), 0, `never back to personal: ${accountsRun.join(", ")}`)
