@@ -434,9 +434,11 @@ export type ThreadParent = z.infer<typeof ThreadParentSchema>
 
 /**
  * Whether a Fin is listed inside its Apex's Thread on this device. One whose Apex runs on another device
- * (`ThreadParent.remote`) has no such Thread here to be listed in, so it's a Thread of its own in this device's rail
- * and in the account's list: that row is where the person reads it and answers what it asks them, here, on the web
- * or from another device.
+ * (`ThreadParent.remote`) has no such Thread here to be listed in, so on this device it's a Thread of its own, in the
+ * rail and in the account's list, and this device is the one that writes its row there: what it's doing and what it
+ * asks come from here, whether or not its Apex's device is up. Every other device shows that row under its Apex
+ * (`listedApexOf`) and opens it from there, so the person reaches it, and answers what it asks, on the web or from
+ * any device of theirs.
  */
 export function listedUnderApex(edge: ThreadParent | undefined): edge is ThreadParent {
   return edge !== undefined && edge.remote === undefined
@@ -673,7 +675,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -908,11 +910,16 @@ export interface ApexCaller {
   epoch?: number
 }
 
-/** What a host says of itself as a place for Fins (`mako:agents-capabilities`), so a caller checks before it places one. */
+/**
+ * What a host says of itself as a place for Fins (`mako:agents-capabilities`), so a caller checks before it places one.
+ * A stand-in: the same room goes out on the runtime link's `advertise` frame (`slots: { used, of }`, the shape here,
+ * with no harnesses), which replaces this call once that lands. Then `harnesses` and the version join the probe, room
+ * is read from one place, the version refusal stays, and this call goes.
+ */
 export interface AgentsCapabilities {
   orchestration: { version: number }
-  /** How many Fins run here at once, and how many more it takes now. */
-  slots: { free: number; of: number }
+  /** How many Fins this device runs at once, and how many are at work or on their way now, as `advertise` says them. */
+  slots: { used: number; of: number }
   /** The harnesses a Fin can run on here. */
   harnesses: string[]
 }

@@ -7,7 +7,7 @@ import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
 import { attentionFact } from "@mako/protocol/attention"
-import { CLOUD_FOLDER_WHERE, listedContinueChoice, listedOwner, listedPromptedAt, listedSummary } from "../contracts/listed-conversations.js"
+import { CLOUD_FOLDER_WHERE, listedContinueChoice, listedOwner, listedPromptedAt, listedSummary, listedApexOf } from "../contracts/listed-conversations.js"
 import { laterPrompt, promptedAfter } from "../contracts/worked-at.js"
 import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
 import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
@@ -1881,7 +1881,7 @@ export class CloudConversations {
         }
         continue
       }
-      const summary = listedSummary(row, where, quietSince)
+      const summary = listedSummary(row, where, quietSince, listedApexOf(row, everyRow))
       if (quietSince !== undefined) summary.cloudContinue = listedContinueChoice(row, everyRow, quiet)
       // What its change says, by the rule the account's notices use: only of a row heard here before (the first
       // listing is where things stand, which a window marks without announcing), never of an archive's rows (listed

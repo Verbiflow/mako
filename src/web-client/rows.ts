@@ -13,6 +13,8 @@ export interface RowDetail {
   elapsed?: string
   /** A word before the rest, in the row's own ink: "Done", for a run that finished since the Thread was last opened. */
   lead?: "Done"
+  /** The device the glyph stands for, said beside it: a Fin placed there, waiting on the person. */
+  where?: string
   /** On its way between a Mac and the cloud: its mark is a blinking arrow, up or down, where its place stood. */
   move?: MoveWay
 }
@@ -44,7 +46,8 @@ export function workingFor(ms: number): string {
  */
 export function rowDetail(thread: WebThread, named: boolean, context: RowContext = {}): RowDetail {
   if (thread.archived) return { text: `Archived ${formatRelative(Date.parse(thread.archived.archivedAt))}`, tone: "faint" }
-  if (thread.standing === "waiting") return { text: attentionLine(thread.waitingFor ?? "needs-you", thread.waitingOn), tone: "attention" }
+  // A Fin placed on another device says the device, before what it waits on there.
+  if (thread.standing === "waiting") return { text: attentionLine(thread.waitingFor ?? "needs-you", thread.waitingOn), tone: "attention", ...(thread.apex && thread.where !== CLOUD_WHERE && { place: "device" as const, where: thread.where }) }
   if (thread.standing === "failed") return { text: "Failed", tone: "negative" }
   if (thread.standing === "working") {
     const since = context.workingSince

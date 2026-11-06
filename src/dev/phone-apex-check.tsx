@@ -12,7 +12,8 @@ import { accountListStore } from "@/web-client/account-list"
 import { applyTheme } from "@/web-client/theme"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
-import { apexSnapshots, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { apexFins, apexSnapshots, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
+import { listedFins } from "@mako/host/contracts/children"
 import { PhoneApexScreen } from "./phone-apex-screen"
 import "../web-client/style.css"
 
@@ -28,6 +29,9 @@ applyTheme(search.get("theme") === "light" ? "light" : "dark")
 installMockBridge()
 threadsStore.set({ descriptors: fixtureHarnesses })
 for (const snapshot of apexSnapshots()) applyLiveSnapshot(snapshot)
+// `?placed=loft|off`: a Fin placed on Loft, which lists it to the account; `off` leaves the Apex's device quiet.
+const placed = placedSnapshot()
+if (placed) applyLiveSnapshot(placed)
 // The Apex's host moving its Fins on (an answer, a stop), as the gateway brings its batches to the phone.
 getMako().onEvent((event) => {
   if (event.type === "live-batch") applyLiveBatch(event.batch)
@@ -41,15 +45,23 @@ function row(session: string, thread: string, conversation: string, title: strin
   return { session, thread, threadTitle: title, conversation, harness, title, state, folder: APEX_CWD, createdAt: at, activityAt: at, generation: 1, runsOn: { kind: "device", deviceId: DEVICE }, listedAt: now }
 }
 
+const apexRow = row(APEX_SESSION, APEX_THREAD, APEX_CONVERSATION, APEX_TITLE, "claude", "working", 1)
+if (PLACED_SCENE) apexRow.fins = listedFins(apexFins())
+const placedRow: ListedSession = { ...row(PLACED_SESSION, PLACED_THREAD, PLACED_CONVERSATION, PLACED_TITLE, "opencode", "waiting", 3), folder: "/home/you/.mako/projects/mako/.mako/worktrees/docs-sweep", runsOn: { kind: "device", deviceId: PLACED_DEVICE }, waitingOn: PLACED_ASKS, waitingFor: "approval" }
 accountListStore.set({
   phase: "live",
+  ...(PLACED_SCENE === "off" && { quiet: new Map([[DEVICE, new Date(Date.now() - 25 * 60_000).toISOString()]]) }),
   rows: [
-    row(APEX_SESSION, APEX_THREAD, APEX_CONVERSATION, APEX_TITLE, "claude", "working", 1),
+    apexRow,
+    ...(placed ? [placedRow] : []),
     row("00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b1", "00000000-0000-4000-8000-0000000000c1", "Release 3 checks", "codex", "idle", 12),
     row("00000000-0000-4000-8000-0000000000a2", "00000000-0000-4000-8000-0000000000b2", "00000000-0000-4000-8000-0000000000c2", "Fix the flaky login test", "cursor", "idle", 20),
     row("00000000-0000-4000-8000-0000000000a3", "00000000-0000-4000-8000-0000000000b3", "00000000-0000-4000-8000-0000000000c3", "Composer focus after paste", "claude", "idle", 64),
   ],
-  devices: new Map([[DEVICE, { id: DEVICE, kind: "desktop", name: "Studio", platform: "darwin" }]]),
+  devices: new Map([
+    [DEVICE, { id: DEVICE, kind: "desktop", name: "Studio", platform: "darwin" }],
+    [PLACED_DEVICE, { id: PLACED_DEVICE, kind: "runtime", name: PLACED_WHERE, platform: "Linux x64 · Debian GNU/Linux 12" }],
+  ]),
 })
 
 // A stand-in for the started client, without its constructor's gateway: its conversations are in the store already,

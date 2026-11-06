@@ -40,7 +40,7 @@ import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { DiagnosisCard } from "./trouble"
-import { useWebFinAsks, waitingThreads, webInboxCount, type WebFinAsk } from "./inbox"
+import { useWebFinAsks, waitingThreads, webInboxCount, type WebFinAsk, asksBesidePlaced } from "./inbox"
 import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
 
 /**
@@ -48,8 +48,9 @@ import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
  * its own), what's at work, and the rest, a failure among them wearing its mark. An Apex whose asks are its Fins'
  * stands with the work, its Fins' rows saying what they ask.
  */
-function sections(threads: readonly WebThread[], fins: readonly WebFinAsk[]) {
-  const needs = waitingThreads(threads, fins)
+function sections(threads: readonly WebThread[], asks: readonly WebFinAsk[], placed: readonly WebThread[]) {
+  const fins = asksBesidePlaced(asks, placed)
+  const needs = waitingThreads(threads, asks, placed)
   const waiting = new Set(needs.map((thread) => thread.id))
   const working = threads.filter((thread) => !waiting.has(thread.id) && (thread.standing === "working" || thread.standing === "moving" || thread.standing === "waiting"))
   const rest = threads.filter((thread) => thread.standing === "idle" || thread.standing === "failed")
@@ -75,9 +76,11 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   // A Thread swiped away leaves the list at once; it's back only if the archive is taken back or refused.
   const hidden = useArchiving((state) => state.hidden)
   const threads = useMemo(() => (hidden.size ? folded.threads.filter((thread) => !hidden.has(thread.id)) : folded.threads), [folded, hidden])
-  const { archived } = folded
+  const { archived, placed } = folded
   const fins = useWebFinAsks()
   const byId = useMemo(() => new Map(threads.map((thread) => [thread.id, thread])), [threads])
+  // A Fin placed on another device opens as its own row, where its device answers; its Apex's row otherwise.
+  const placedById = useMemo(() => new Map(placed.map((thread) => [thread.id, thread])), [placed])
   const read = useReadState((state) => state)
   // Threads listed here for the first time read as seen: only what happens from now on is news.
   useEffect(() => {
@@ -146,12 +149,12 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
-          {onInbox && (threads.length > 0 || archived.length > 0) ? <TopChips count={webInboxCount(threads, fins)} open={inbox} onInbox={onInbox} /> : null}
+          {onInbox && (threads.length > 0 || archived.length > 0) ? <TopChips count={webInboxCount(threads, fins, placed)} open={inbox} onInbox={onInbox} /> : null}
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : (
             <>
-              {sections(threads, fins).map((section) => (
+              {sections(threads, fins, placed).map((section) => (
                 <section key={section.id} aria-labelledby={`section-${section.id}`} data-list-section={section.id} className="web-section">
                   <h2 id={`section-${section.id}`} className={cn("web-section-label", section.id === "needs" && "text-attention")}>
                     {section.label}
@@ -163,7 +166,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
                       </li>
                     ))}
                     {section.fins.map((fin) => {
-                      const apex = byId.get(fin.apex.thread)
+                      const apex = placedById.get(fin.ask.fin) ?? byId.get(fin.apex.thread)
                       return (
                         <li key={fin.key} data-flip-key={fin.key}>
                           <FinAskRow fin={fin} onOpen={apex ? () => onOpen(apex) : onInbox} />
@@ -389,6 +392,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
         aria-current={selected ? "page" : undefined}
         aria-label={threadLabel(thread, spoken, unread)}
         data-thread={thread.id}
+        data-under={thread.apex?.thread}
         data-standing={thread.standing}
         data-moving={detail.move}
         data-unread={unread || undefined}
@@ -399,7 +403,10 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-baseline gap-2">
-            <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
+            <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>
+              {shownTitle(thread)}
+              {thread.apex ? <span data-row-apex={thread.apex.thread} className="text-label font-normal text-faint"> · {thread.apex.title}</span> : null}
+            </span>
             <span className="flex shrink-0 items-center gap-1.5 self-center">
               <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
             </span>
@@ -407,6 +414,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
           <ApexLineOr thread={thread.id} fins={thread.sessions.find((session) => session.summary.fins)?.summary.fins}>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
             {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
+            {detail.where ? <span data-row-where className="shrink-0 text-faint">{detail.where} ·</span> : null}
             {detail.tone === "working" ? (
               <Shimmer className="min-w-0 truncate">
                 {detail.text}

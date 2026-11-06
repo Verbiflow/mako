@@ -566,8 +566,10 @@ A Fin can run on another of the person's devices: `agents_start` with
 resolved among the account's devices that run Threads, whatever its case;
 none or several of that name is refused with the names there are, and this
 device's own name is `here`. The Apex's host asks the device what it offers
-(`mako:agents-capabilities`: the version of placement it speaks, its free
-slots of how many, its harnesses) and refuses with why when it isn't
+(`mako:agents-capabilities`: the version of placement it speaks, its slots
+used of how many, its harnesses; a stand-in for the runtime link's
+`advertise` frame, whose `slots` these are, until that lands and the probe
+carries the harnesses and the version too) and refuses with why when it isn't
 connected (`place-unavailable`), when its Mako has no such call or speaks
 another version (`unsupported`), or when it lacks the harness. Admission is
 a start's here, against that place's room by the device's own word
@@ -633,11 +635,28 @@ again with how it stands now (`restate`). Each place is also asked how the
 tree's Fins stand (`listAway`) before any start in that tree is admitted,
 when the Apex lists them and when its device is back, so work the Apex's
 device never sent counts against the running budget before admission. Where
-it runs, a placed Fin is a Thread of its own in the rail and in the
-account's list (`listedUnderApex`), since its Apex's Thread isn't there:
-that row is where the person reads it and answers its approvals, on that
-device, on the web or from another device. Its Apex never grants them: it
-calls at no more than the device's ceiling, which is below full access. Not
+it runs, a placed Fin is a Thread of its own in the rail, and the device
+running it writes its row to the account's list (`listedUnderApex`), since
+its Apex's Thread isn't there. Every other device shows that row under its
+Apex, by the Apex's row that names the Fin among its Fins (`listedApexOf`,
+the one rule a Mac's host and a browser fold by), never as a Thread of its
+own, and opens it from there with the Fin's own device answering: the
+desk's rows (`finOpening`: its listed conversation, else its transcript
+here; one with neither draws as not openable and sets no view), the
+phone's chips and its Needs you, where a placed Fin waiting on the person
+is a row of its own that opens on its device (`placedWaiting`). The Fin's
+row carries what it asks whatever its Apex's device is doing: a window's
+roster of the Apex takes the Fin's own conversation and standing from it
+(`placedOver`), the Apex's word standing only while the Fin's device is
+quiet. So the person answers a placed Fin's approvals in its own Thread, on
+that device, on the web or from another device, with the Apex's device off
+too. Its Apex never grants them: it calls at no more than the device's
+ceiling (`PLACED_CEILING`, `auto`: decision B2's recommended answer, kept
+in one place until the person decides), which is below full access.
+`scripts/test-placed-rows.ts` holds the fold, the Apex-off case and what
+opens; `test:placed-fin-ui` draws the row on the device running it, under
+its Apex on the desk, the laptop browser and the phone, waiting on an
+approval, on a quiet device and with the Apex's device off. Not
 yet: `place: cloud`, a Thread attached as context, the person's direct
 message or answer from the Apex's Thread, and a start from the Apex's
 uncommitted work. `npm run test:fins-placed` runs two hosts through the

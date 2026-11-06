@@ -386,7 +386,12 @@ interface Apex {
   away?: { device: string; conversation?: string; access: AccessTier; forwards?: string; epoch?: number }
 }
 
-/** The most access a Fin started from another device runs at here, until the person sets this device's own. */
+/**
+ * The most access a Fin started from another device runs at here, until the person sets this device's own. One
+ * place, so another answer is a one-line change: `auto` is decision B2's recommended answer, provisional until the
+ * person gives theirs. Below full, so an Apex on another device never grants a Fin's approvals here: the person does,
+ * in the Fin's own Thread.
+ */
 export const PLACED_CEILING: AccessTier = "auto"
 
 /** What a limit moves on: a Fin, by its edge, or the Apex at the top of a tree, which has none. */
@@ -2605,12 +2610,16 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   // ── Other places ──
 
-  /** `mako:agents-capabilities`: what this device offers as a place for Fins, so a caller checks before it places one. */
+  /**
+   * `mako:agents-capabilities`: what this device offers as a place for Fins, so a caller checks before it places one.
+   * A stand-in for the runtime link's `advertise` frame, whose `slots` these are (`AgentsCapabilities`): once that
+   * lands, the probe carries the harnesses and the version too, room is read from it alone, and this call goes.
+   */
   capabilities(): AgentsCapabilities {
     const limit = this.placeLimit(HERE)
     const of = limit.place === "device" ? limit.atOnce : FIN_LIMIT
-    const free = this.full(HERE) ? 0 : Math.max(0, of - this.working(HERE) - this.waitingForRoom(HERE))
-    return { orchestration: { version: ORCHESTRATION_VERSION }, slots: { free, of }, harnesses: [...this.deps.harnesses()] }
+    const used = this.full(HERE) ? of : Math.min(of, this.working(HERE) + this.waitingForRoom(HERE))
+    return { orchestration: { version: ORCHESTRATION_VERSION }, slots: { used, of }, harnesses: [...this.deps.harnesses()] }
   }
 
   /**
@@ -4789,7 +4798,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private awayFull(where: string, more = 0): string | undefined {
     const room = where === HERE ? undefined : this.places?.room(where)
     if (!room) return undefined
-    const free = room.slots.free - this.unwritten((launch) => launch.where === where) - more
+    const free = room.slots.of - room.slots.used - this.unwritten((launch) => launch.where === where) - more
     return free > 0 ? undefined : `the ${room.slots.of} ${FIN_WORD}s ${where.slice("device:".length)} runs at once are at work`
   }
 
