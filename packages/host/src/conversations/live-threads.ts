@@ -1,6 +1,6 @@
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { ChildStartSchema, type ChildStart } from "../contracts/agents.js"
+import { ChildStartSchema, listedUnderApex, type ChildStart } from "../contracts/agents.js"
 import type { LiveSnapshot, LiveStartOptions, LiveSummary } from "../contracts/live-conversations.js"
 import { CLOUD_FOLDER_WHERE } from "../contracts/listed-conversations.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId } from "../contracts/thread-identity.js"
@@ -149,7 +149,7 @@ export class LiveThreads {
       const threads = this.dependencies.threads
       const placed = threads?.journalPlacement(id)
       const edge = placed && threads?.edges().of(placed.thread)
-      return placed ? { threadId: placed.thread, sessionId: placed.session, ...(edge && { parent: { thread: edge.parent, session: edge.parentSession } }) } : {}
+      return placed ? { threadId: placed.thread, sessionId: placed.session, ...(listedUnderApex(edge) && { parent: { thread: edge.parent, session: edge.parentSession } }) } : {}
     } catch (error) {
       if (!this.placementWarned) hostWarn("threads", "a conversation's Thread could not be read; it is served without one", { conversation: id, error: errorMessage({ error }) })
       this.placementWarned = true

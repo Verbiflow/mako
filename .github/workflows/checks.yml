@@ -49,9 +49,12 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm run build:control-runtime
+      # The host call schemas are generated from the handlers' types: one edited by hand drops what a type declares.
+      - run: node scripts/generate-host-inputs.mjs --check
       - run: npm run test:protocol
       # A window's connection banner follows its host's event stream, never one call's failure or slowness.
       - run: npx tsx scripts/test-host-liveness.ts
+      - run: npm run test:loop-profile
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
       # Every whole file a harness writes, through one publisher: a writer killed mid-write, writers in several

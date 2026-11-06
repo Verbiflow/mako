@@ -7,7 +7,7 @@ import { PROTOCOL_VERSION, problem, serveRuntime, type Actor, type ClientSession
 import { createFakeGateway, type FakeGateway } from "@mako/protocol/fake-gateway"
 import { unwatchedWork } from "@mako/host/base/event-loop"
 import type { AccessTier } from "@mako/host/contracts/access"
-import { ORCHESTRATION_VERSION, type AgentRefused, type AgentsNoticed, type AgentsNoticeInput, type ThreadParent } from "@mako/host/contracts/agents"
+import { ORCHESTRATION_VERSION, type AgentCaller, type AgentRefused, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, type ThreadParent } from "@mako/host/contracts/agents"
 import type { AgentsReadResult, AgentsSendResult, AgentsStarted, AgentsStartResult, AgentsStopResult } from "@mako/host/contracts/agent-tools"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
@@ -50,6 +50,11 @@ interface Account {
   devices: Device[]
   /** Calls whose answer the network loses once, by channel: the device does what was asked, and its caller never hears. */
   lose: Set<string>
+  /** Calls the network loses once on their way, by channel: the device never hears them, and its caller can't tell. */
+  drop: Set<string>
+  /** Calls held on their way once, by channel, until the promise settles; `held` names those waiting there. */
+  delay: Map<string, Promise<void>>
+  held: Set<string>
 }
 
 function linkOf(account: Account, self: string): PlaceLink {
@@ -62,6 +67,14 @@ function linkOf(account: Account, self: string): PlaceLink {
       assert.equal(target.kind, "device")
       const runtime = `d-${target.kind === "device" ? target.device : ""}`
       session ??= account.gateway.connectClient(actor)
+      const delayed = account.delay.get(channel)
+      if (delayed) {
+        account.delay.delete(channel)
+        account.held.add(channel)
+        await delayed
+        account.held.delete(channel)
+      }
+      if (account.drop.delete(channel)) throw new RuntimeDisconnectedError(true)
       const send = gatewayHostCalls(await session, { runtimeId: runtime, actor }).call(channel, args)
       const answer = decodeRuntimeValue(await sendWithRepeats(channel, send, { runtime }))
       if (account.lose.delete(channel)) throw new RuntimeDisconnectedError(true)
@@ -107,7 +120,7 @@ async function device(account: Account, name: string, script: Script, options: P
 }
 
 function account(): Account {
-  return { gateway: createFakeGateway(), devices: [], lose: new Set() }
+  return { gateway: createFakeGateway(), devices: [], lose: new Set(), drop: new Set(), delay: new Map(), held: new Set() }
 }
 
 function started(answer: AgentsStartResult): AgentsStarted {
@@ -115,7 +128,7 @@ function started(answer: AgentsStartResult): AgentsStarted {
   return answer
 }
 
-function refused(answer: AgentsStartResult | AgentsNoticed): AgentRefused {
+function refused(answer: AgentsStartResult | AgentsNoticed | AgentsPlaced): AgentRefused {
   assert.ok("refused" in answer, JSON.stringify(answer))
   return answer
 }
@@ -135,6 +148,10 @@ const placedEdge = (apex: Device, child: string | undefined): ThreadParent => {
   assert.ok(edge?.placed, "the Apex's device keeps where it placed the Fin")
   return edge
 }
+const conversationOf = (on: Device, child: string) => on.world.store.conversationsOf(on.world.store.thread(on.world.store.edges().of(child)!.child)!.sessions[0]!).at(-1)!
+/** The Fins a device runs that are at work on it now. */
+const atWorkOn = (on: Device) => on.world.store.edges().all.filter((edge) => !edge.placed && on.world.live.atWork(conversationOf(on, edge.child))).length
+const stateOn = (apex: Device, conversation: string, name: string) => apex.world.agents.roster(conversation).find((entry) => entry.child?.name === name)?.child?.state?.kind
 const undelivered = (on: Device) => on.world.store.undeliveredReports().filter(({ report }) => report.status !== "progress").length
 
 /** An Apex on one device starts a Fin on another: it runs there, and its result wakes the Apex here, once. */
@@ -197,6 +214,11 @@ async function startsOnAnotherDevice(): Promise<void> {
     assert.ok(!("refused" in placedAgain) && placedAgain.deduped && placedAgain.child === answer.child, "a repeat of the op answers the same Fin")
     assert.equal(studio.world.store.edges().all.length, 1)
     assert.equal(studio.world.prompts.filter((prompt) => isBrief(prompt.text)).length, 1, "its brief was sent once")
+    // Where it runs it's a Thread of its own, since its Apex's Thread isn't there: that row is where the person reads
+    // it and answers what it asks them, on that device, on the web or from another device.
+    const where = studio.world.live.summaries().find((summary) => summary.threadId === answer.child)
+    assert.ok(where, "its conversation is live on Studio")
+    assert.equal(where.parent, undefined, "a Fin whose Apex is elsewhere is listed as a Thread where it runs")
     console.log(`placed start: a Fin on Studio for an Apex on MacBook, its result heard there in ${wokenMs} ms, once; a repeat of its key and of its op answer the same Fin`)
   } finally {
     await mac.close()
@@ -586,6 +608,234 @@ async function waitsForAPlacedResult(): Promise<void> {
   }
 }
 
+/** A Fin on Studio whose brief's turn holds until it's released or stopped. */
+const holdsItsBrief: Script = async (turn) => {
+  if (isBrief(turn.text)) await turn.world.hold(turn.conversation)
+  return "Done."
+}
+const PROBE = { brief: { objective: "probe" }, name: "probe", harness: "codex", place: "device:Studio", clientKey: "probe" }
+
+/**
+ * Stop wins over a start whose answer was lost. The Fin did start on the other device: the Stop ends it there, by its
+ * name and by `all`, and what the Apex's device keeps is the stopped Fin, through its own restart.
+ */
+async function stopEndsAStartWhoseAnswerWasLost(which: "probe" | "all"): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.")
+  const studio = await device(cloud, "Studio", holdsItsBrief)
+  try {
+    const apex = await mac.world.apex("claude")
+    cloud.lose.add("mako:agents-place")
+    assert.equal(started(await mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root })).state, "queued")
+    await until("the Fin at work on Studio", () => atWorkOn(studio) === 1)
+    assert.deepEqual(await mac.world.agents.stop(apex.caller, { child: which }), { stopped: ["probe"] })
+    await until("the Fin stopped on Studio", () => atWorkOn(studio) === 0)
+    assert.ok(studio.world.store.edges().all[0]?.closedAt !== undefined, "its delegation is closed where it ran")
+    assert.equal(mac.world.store.queuedSpawns().length, 0, "the start's record went once Studio said how it ended")
+    const kept = mac.world.store.edges().all[0]
+    assert.ok(kept?.placed && kept.closedAt !== undefined, "and the Apex's device keeps the Fin, stopped")
+    await mac.world.restart()
+    assert.equal(atWorkOn(studio), 0, "nothing runs there after the Apex's host restarts")
+    assert.equal(mac.world.store.queuedSpawns().length, 0)
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "ended")
+    console.log(`stop, lost answer (${which}): the Fin that started on Studio was stopped there, and its Apex's device keeps it as stopped through a restart`)
+  } finally {
+    await mac.close()
+    await studio.close()
+  }
+}
+
+/**
+ * The other device can't be reached when the Stop comes: the Stop isn't called done, it's kept with the start through
+ * the Apex's restart, and it ends the Fin once that device answers.
+ */
+async function stopWaitsForAnUnreachableDevice(which: "probe" | "all"): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.")
+  const studio = await device(cloud, "Studio", holdsItsBrief)
+  try {
+    const apex = await mac.world.apex("claude")
+    cloud.lose.add("mako:agents-place")
+    assert.equal(started(await mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root })).state, "queued")
+    await until("the Fin at work on Studio", () => atWorkOn(studio) === 1)
+    studio.offline()
+    const answer = await mac.world.agents.stop(apex.caller, { child: which })
+    assert.ok(!("refused" in answer), JSON.stringify(answer))
+    assert.deepEqual(answer.stopped, [], "a stop nobody confirmed isn't reported as stopped")
+    assert.equal(answer.pending?.[0]?.name, "probe")
+    assert.match(answer.pending?.[0]?.why ?? "", /Studio/)
+    assert.equal(mac.world.store.queuedSpawns().length, 1, "the stop is kept with the start")
+    assert.equal(atWorkOn(studio), 1)
+    // The same start asked again starts nothing, and the Stop asked again is the same Stop.
+    const again = await mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root })
+    assert.ok("refused" in again || again.state === "queued", JSON.stringify(again))
+    const repeat = await mac.world.agents.stop(apex.caller, { child: which })
+    assert.ok(!("refused" in repeat) && repeat.stopped.length === 0 && repeat.pending?.[0]?.name === "probe", JSON.stringify(repeat))
+    await mac.world.restart()
+    assert.equal(mac.world.store.queuedSpawns().length, 1, "through the Apex's restart")
+    assert.equal(atWorkOn(studio), 1)
+    await studio.online()
+    // The Apex's device is told its link is back, as its runtime's link opening tells it.
+    mac.world.agents.knock()
+    await until("the Fin stopped on Studio", () => atWorkOn(studio) === 0)
+    await until("the start's record retired", () => mac.world.store.queuedSpawns().length === 0)
+    assert.ok(studio.world.store.edges().all[0]?.closedAt !== undefined)
+    const kept = mac.world.store.edges().all[0]
+    assert.ok(kept?.placed && kept.closedAt !== undefined, "the Apex's device keeps the Fin, stopped")
+    assert.equal(studio.world.prompts.filter((prompt) => isBrief(prompt.text)).length, 1, "and it was never started again")
+    console.log(`stop, device unreachable (${which}): the Stop said Studio couldn't be reached, was kept through a restart, and ended the Fin once Studio answered`)
+  } finally {
+    await mac.close()
+    await studio.close()
+  }
+}
+
+/**
+ * A Fin its Apex's device has a record of, stopped while its device can't be reached: the same rule. Nothing says it
+ * stopped, the stop is kept on its record through a restart, and it ends the Fin once its device answers.
+ */
+async function stopOfAPlacedFinWaitsForItsDevice(): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.")
+  const studio = await device(cloud, "Studio", holdsItsBrief)
+  try {
+    const apex = await mac.world.apex("claude")
+    const fin = started(await mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root }))
+    await until("the Fin at work on Studio", () => atWorkOn(studio) === 1)
+    studio.offline()
+    const answer = await mac.world.agents.stop(apex.caller, { child: "probe" })
+    assert.ok(!("refused" in answer) && answer.stopped.length === 0 && answer.pending?.[0]?.name === "probe", JSON.stringify(answer))
+    assert.ok(placedEdge(mac, fin.child).placed?.stop, "the stop is kept on the Apex's record of the Fin")
+    assert.equal(placedEdge(mac, fin.child).closedAt, undefined, "and its delegation isn't closed on a guess")
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working")
+    await mac.world.restart()
+    assert.ok(placedEdge(mac, fin.child).placed?.stop)
+    await studio.online()
+    mac.world.agents.knock()
+    await until("the Fin stopped on Studio", () => atWorkOn(studio) === 0)
+    await until("the stop settled", () => placedEdge(mac, fin.child).closedAt !== undefined)
+    assert.equal(placedEdge(mac, fin.child).placed?.stop, undefined)
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "ended")
+    console.log("stop, placed Fin unreachable: the Stop was kept on the Fin's record through a restart and ended it once Studio answered")
+  } finally {
+    await mac.close()
+    await studio.close()
+  }
+}
+
+/** The start as it reaches Studio late, after its Apex stopped it: the same call the Apex's device sent. */
+function lateStart(mac: Device, apex: { conversation: string; caller: AgentCaller }): AgentsPlaceInput {
+  assert.ok(apex.caller.kind === "agent")
+  const thread = mac.world.store.journalPlacement(apex.conversation)?.thread
+  assert.ok(thread)
+  return { version: ORCHESTRATION_VERSION, op: `start:${apex.caller.session}:probe`, clientKey: "probe", parent: { device: mac.id, thread, session: apex.caller.session, conversation: apex.conversation, access: "auto" }, brief: PROBE.brief, name: "probe", harness: "codex", access: "auto", workspace: { remote: REMOTE } }
+}
+
+/**
+ * The other order: the start hadn't reached Studio when its Apex stopped it. Lost on its way, or still on its way, a
+ * start that arrives after the Stop is refused there and never runs.
+ */
+async function stopBeatsAStartStillOnItsWay(how: "lost" | "slow"): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.")
+  const studio = await device(cloud, "Studio", holdsItsBrief)
+  try {
+    const apex = await mac.world.apex("claude")
+    let arrive = () => {}
+    if (how === "lost") cloud.drop.add("mako:agents-place")
+    else cloud.delay.set("mako:agents-place", new Promise<void>((resolve) => { arrive = resolve }))
+    const starting = mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root })
+    if (how === "lost") assert.equal(started(await starting).state, "queued")
+    else await until("the start on its way", () => cloud.held.has("mako:agents-place"))
+    assert.equal(studio.world.store.edges().all.length, 0)
+    assert.deepEqual(await mac.world.agents.stop(apex.caller, { child: "probe" }), { stopped: ["probe"] }, "Studio said nothing of it had started, and holds the Stop")
+    assert.equal(mac.world.store.queuedSpawns().length, 0)
+    if (how === "slow") {
+      arrive()
+      assert.equal(refused(await starting).refused, "conflict", "the start's own answer says its Apex stopped it")
+    } else assert.equal(refused(await studio.world.agents.place(lateStart(mac, apex))).refused, "conflict", "the start, arriving after the Stop, is refused")
+    await mac.world.settle(200)
+    assert.equal(studio.world.store.edges().all.length, 0, "no Fin was made there")
+    assert.equal(studio.world.prompts.filter((prompt) => isBrief(prompt.text)).length, 0, "and nothing ran")
+    assert.equal(mac.world.store.edges().all.length, 0)
+    assert.equal(mac.world.store.queuedSpawns().length, 0)
+    await mac.world.restart()
+    assert.equal(mac.world.store.queuedSpawns().length, 0)
+    assert.equal(atWorkOn(studio), 0)
+    console.log(`stop, start ${how === "lost" ? "lost on its way" : "still on its way"}: the start that reached Studio after the Stop was refused there and never ran`)
+  } finally {
+    await mac.close()
+    await studio.close()
+  }
+}
+
+/**
+ * What a placed Fin is doing is the Apex's device's own record, so its tree's running budget holds through a restart:
+ * a Fin sent more work is at work after its Apex's host restarts, an earlier turn's report can't say a later turn
+ * ended, and work its Apex didn't send (the person writing to it on its own device) is counted before a start is
+ * admitted.
+ */
+async function activitySurvivesTheApexRestart(): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.", { budget: { running: 1, started: 100 } })
+  const studio = await device(cloud, "Studio", async (turn) => {
+    if (turn.text.includes("extra work")) await turn.world.hold(turn.conversation)
+    return "Done."
+  })
+  const second = (key: string) => mac.world.agents.start(apex.caller, { brief: { objective: "another" }, name: key, harness: "codex", place: "device:Studio", clientKey: key, cwd: mac.world.root })
+  const apex = await mac.world.apex("claude")
+  try {
+    const fin = started(await mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root }))
+    await until("its first result", () => wakesOf(mac, apex.conversation).length === 1)
+    await mac.world.settle(40)
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "ended")
+    const conversation = conversationOf(studio, fin.child!)
+    const sent = await mac.world.agents.send(apex.caller, { to: "probe", text: "extra work", clientKey: "extra" })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    await until("its second turn at work", () => studio.world.live.atWork(conversation))
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working")
+
+    // Its first turn's report again, and a late report from before the message reached it: neither ends its second turn.
+    const edge = studio.world.store.edges().of(fin.child!)!
+    const first = studio.world.store.reportsOf(fin.child!)[0]!
+    const notice: AgentsNoticeInput = { id: `notice:${edge.child}:${first.id}`, op: edge.op, parent: { thread: edge.parent, session: edge.parentSession }, child: edge.child, report: first, standing: { heard: 1, working: false, owner: first.ownerGeneration, seq: 1_000_000 } }
+    assert.deepEqual(await mac.world.agents.notice(notice), { heard: true, deduped: true })
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working", "a repeat of its first turn's report doesn't end its second")
+    const late = { ...first, id: `report:${edge.child}:late`, summary: "Done, again.", at: first.at + 1 }
+    assert.deepEqual(await mac.world.agents.notice({ ...notice, id: `notice:${edge.child}:${late.id}`, report: late }), { heard: true })
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working", "nor does a report its device sent before the message reached it")
+
+    await mac.world.restart()
+    assert.equal(studio.world.live.atWork(conversation), true)
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working", "it's at work after its Apex's host restarts")
+    const listed = await mac.world.agents.list(apex.caller, {})
+    assert.ok("tree" in listed && listed.tree.running === 1, JSON.stringify(listed))
+    const over = await second("second")
+    assert.ok("refused" in over && over.refused === "budget", `a tree running its one Thread takes no second: ${JSON.stringify(over)}`)
+    assert.equal(atWorkOn(studio), 1)
+
+    // Its second turn ends: the report its device sends for it is the one that says so.
+    studio.world.release(conversation)
+    await until("its second result", () => stateOn(mac, apex.conversation, "probe") === "ended")
+    await mac.world.settle(40)
+    await mac.world.restart()
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "ended", "and it's ended after a restart too")
+
+    // The person writes to it on its own device: its Apex's device hears nothing, and asks before it admits a start.
+    studio.world.say(conversation, "extra work, from the person")
+    await until("the person's turn at work", () => studio.world.live.atWork(conversation))
+    const third = await second("third")
+    assert.ok("refused" in third && third.refused === "budget", `work its Apex didn't send is counted too: ${JSON.stringify(third)}`)
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working")
+    assert.equal(atWorkOn(studio), 1)
+    console.log("activity: a placed Fin sent more work is at work through its Apex's restart and holds its tree's budget; an earlier turn's report didn't end it, and work the person gave it there was counted at admission")
+  } finally {
+    studio.world.release(conversationOf(studio, studio.world.store.edges().all[0]!.child))
+    await mac.close()
+    await studio.close()
+  }
+}
+
 function remotes(): void {
   const same = ["git@github.com:Acme/App.git", "https://github.com/acme/app", "https://github.com/acme/app.git/", "ssh://git@github.com/acme/app.git"]
   for (const spelling of same) assert.equal(remoteKey(spelling), "github.com/acme/app", spelling)
@@ -596,18 +846,33 @@ function remotes(): void {
   console.log("remotes: every spelling of one remote is one checkout's")
 }
 
+/** Every case by its name; naming some after the script runs those alone. */
+const CASES = {
+  remotes,
+  starts: startsOnAnotherDevice,
+  routed: operationsAreRouted,
+  "apex-offline": apexOfflineThenBack,
+  notices: dedupeAndStaleOwners,
+  refusals,
+  "full-place": fullPlaceQueues,
+  access: accessIsCapped,
+  wait: waitsForAPlacedResult,
+  "lost-answer": lostAnswerIsFoundAgain,
+  "stop-lost-answer": () => stopEndsAStartWhoseAnswerWasLost("probe"),
+  "stop-lost-answer-all": () => stopEndsAStartWhoseAnswerWasLost("all"),
+  "stop-unreachable": () => stopWaitsForAnUnreachableDevice("probe"),
+  "stop-unreachable-all": () => stopWaitsForAnUnreachableDevice("all"),
+  "stop-placed-unreachable": stopOfAPlacedFinWaitsForItsDevice,
+  "stop-start-lost": () => stopBeatsAStartStillOnItsWay("lost"),
+  "stop-start-slow": () => stopBeatsAStartStillOnItsWay("slow"),
+  activity: activitySurvivesTheApexRestart,
+} satisfies Record<string, () => Promise<void> | void>
+
 try {
-  remotes()
-  await startsOnAnotherDevice()
-  await operationsAreRouted()
-  await apexOfflineThenBack()
-  await dedupeAndStaleOwners()
-  await refusals()
-  await fullPlaceQueues()
-  await accessIsCapped()
-  await waitsForAPlacedResult()
-  await lostAnswerIsFoundAgain()
-  console.log("fins placed: ok")
+  const only = process.argv.slice(2)
+  for (const name of only) assert.ok(name in CASES, `no case named ${name}: ${Object.keys(CASES).join(", ")}`)
+  for (const [name, run] of Object.entries(CASES)) if (!only.length || only.includes(name)) await run()
+  console.log(only.length ? `fins placed: ok (${only.join(", ")})` : "fins placed: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

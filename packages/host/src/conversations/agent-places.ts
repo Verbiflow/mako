@@ -9,6 +9,8 @@ import {
   ORCHESTRATION_VERSION,
   placeDevice,
   type AgentRefused,
+  type AgentsCancelInput,
+  type AgentsCancelled,
   type AgentsCapabilities,
   type AgentsNoticed,
   type AgentsNoticeInput,
@@ -55,6 +57,9 @@ interface Room {
   at: number
 }
 
+/** A refusal for a call to another place; `lost` when the call left and no answer came, so what it did there isn't known. */
+export type AwayRefused = AgentRefused & { lost?: true }
+
 /** A place a start named, resolved: this device, another one, or why it can't be one. */
 export type ResolvedPlace = { kind: "here" } | { kind: "away"; target: PlaceTarget; where: string } | AgentRefused
 
@@ -76,6 +81,7 @@ const PlacedAnswerSchema = z.object({
   note: z.string().optional(),
   deduped: z.literal(true).optional(),
 }).loose()
+const CancelledSchema = z.object({ cancelled: z.literal(true), fin: PlacedAnswerSchema.optional() })
 const NoticedSchema = z.union([z.object({ heard: z.literal(true), deduped: z.literal(true).optional() }), RefusedSchema])
 
 /** What an old host answers a call it doesn't have (`fromHostOperation`). */
@@ -101,6 +107,8 @@ export interface AgentPlacesDeps {
   waiting(): OutboxNotice[]
   /** The Apex's device took it, or will never take it (a stale owner's): it leaves the outbox. */
   taken(report: Report, at: number): void
+  /** How a Fin here stands as a notice of `report` is sent (`AgentsNoticeInput.standing`). */
+  standing(edge: ThreadParent, report: Report): NonNullable<AgentsNoticeInput["standing"]>
   now?(): number
 }
 
@@ -235,7 +243,7 @@ export class AgentPlaces {
    * One of an Apex's operations on a Fin it placed (`mako:agents-<verb>`), answered by the Fin's device as it answers
    * its own Apexes, with this Apex as the caller. A refusal comes back as one; a place that can't be reached is one too.
    */
-  async ask<Answer extends object>(target: PlaceTarget, channel: string, caller: ApexCaller, input: PlacedAsk, what: string): Promise<Answer | AgentRefused> {
+  async ask<Answer extends object>(target: PlaceTarget, channel: string, caller: ApexCaller, input: PlacedAsk, what: string): Promise<Answer | AwayRefused> {
     try {
       const answer = await this.deps.link.call(target, channel, [wire(caller), wire(input)])
       const refused = RefusedSchema.safeParse(answer)
@@ -244,6 +252,25 @@ export class AgentPlaces {
       return answer as Answer
     } catch (error) {
       return awayRefusal({ error }, placeName(target), what)
+    }
+  }
+
+  /**
+   * A stop of a placed start whose outcome isn't known (`mako:agents-cancel`), settled by the start's op on the
+   * place's host. Any refusal leaves the stop where it was kept, to be sent again.
+   */
+  async cancel(target: PlaceTarget, input: AgentsCancelInput): Promise<AgentsCancelled> {
+    const name = placeName(target)
+    try {
+      const answer = await this.deps.link.call(target, "mako:agents-cancel", [wire(input)])
+      const refused = RefusedSchema.safeParse(answer)
+      if (refused.success) return asRefused(refused.data)
+      const cancelled = CancelledSchema.safeParse(answer)
+      if (!cancelled.success) return { refused: "unavailable", why: `${name} answered the stop with something this Mako can't read: ${z.prettifyError(cancelled.error)}` }
+      // SAFETY: PlacedAnswerSchema holds every field of AgentsPlaced to its type; `state` is one of ChildState's kinds.
+      return { cancelled: true, ...(cancelled.data.fin && { fin: cancelled.data.fin as AgentsPlaced }) }
+    } catch (error) {
+      return awayRefusal({ error }, name, "be stopped")
     }
   }
 
@@ -261,6 +288,25 @@ export class AgentPlaces {
   heard(device: string): void {
     if (!this.retries.delete(device) && !this.deps.waiting().some(({ edge }) => edge.remote?.device === device)) return
     void this.flush(device)
+  }
+
+  /**
+   * A Fin here stands otherwise than its last notice said, with nothing new to report: its last report again, with
+   * how it stands now. Sent once and not kept: its Apex's device asks how its Fins stand when it's back and before
+   * it admits a start, so one this misses is still counted.
+   */
+  restate(notice: OutboxNotice): void {
+    const device = notice.edge.remote?.device
+    if (!device || this.stopped) return
+    const input = this.noticeOf(notice)
+    this.deps.link.call({ kind: "device", device, name: device }, "mako:agents-notice", [wire(input)]).then(
+      () => hostLog("agents", "standing sent", { notice: input.id, device, working: input.standing?.working ?? false }),
+      (error: Error) => hostLog("agents", "standing not sent", { notice: input.id, device, why: errorMessage({ error }) }),
+    )
+  }
+
+  private noticeOf({ edge, report }: OutboxNotice): AgentsNoticeInput {
+    return { id: `notice:${edge.child}:${report.id}`, op: edge.op, parent: { thread: edge.parent, session: edge.parentSession }, child: edge.child, report, standing: this.deps.standing(edge, report) }
   }
 
   /** How many notices wait for an Apex's device to take them, for Diagnostics. */
@@ -302,8 +348,8 @@ export class AgentPlaces {
     for (const { edge, report } of this.deps.waiting()) {
       if (this.stopped) return
       if (edge.remote?.device !== device) continue
-      const id = `notice:${edge.child}:${report.id}`
-      const input: AgentsNoticeInput = { id, op: edge.op, parent: { thread: edge.parent, session: edge.parentSession }, child: edge.child, report }
+      const input = this.noticeOf({ edge, report })
+      const id = input.id
       const began = this.now()
       let answer: AgentsNoticed
       try {
@@ -345,18 +391,18 @@ function asRefused(refused: z.infer<typeof RefusedSchema>): AgentRefused {
 }
 
 /** A call's argument as it crosses: what JSON carries of it, an absent member left out. */
-function wire(value: ApexCaller | PlacedAsk | AgentsPlaceInput | AgentsNoticeInput): Json {
+function wire(value: ApexCaller | PlacedAsk | AgentsPlaceInput | AgentsNoticeInput | AgentsCancelInput): Json {
   return z.json().parse(JSON.parse(JSON.stringify(value)))
 }
 
 /** Why a call to a place didn't answer, as a refusal: it isn't connected, its Mako is too old, or the call was lost. */
-export function awayRefusal({ error }: FailureBoundary, name: string, what: string): AgentRefused {
+export function awayRefusal({ error }: FailureBoundary, name: string, what: string): AwayRefused {
   if (error instanceof OwnerUnavailableError && !error.unconfirmed)
     return { refused: "place-unavailable", why: `${name} isn't online: its Mako isn't connected to the account now, so nothing can ${what} there. Try again once it's back, or leave place out to work here.` }
   if (error instanceof RuntimeDisconnectedError)
-    return { refused: "unavailable", why: error.unconfirmed
-      ? `${name} didn't answer, so whether it took this isn't known. Ask again with the same clientKey: it answers what it did, and does nothing twice.`
-      : `This device couldn't reach ${name} through the account now: ${error.message}` }
+    return error.unconfirmed
+      ? { refused: "unavailable", why: `${name} didn't answer, so whether it took this isn't known. Ask again with the same clientKey: it answers what it did, and does nothing twice.`, lost: true }
+      : { refused: "unavailable", why: `This device couldn't reach ${name} through the account now: ${error.message}` }
   const message = errorMessage({ error })
   if (message.startsWith(NO_SUCH_CALL))
     return { refused: "unsupported", why: `${name} runs a Mako from before ${FIN_WORD}s could be placed on another device. Update Mako there, then ask again.` }

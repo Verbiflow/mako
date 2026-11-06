@@ -50,7 +50,7 @@ export type ReportSources = {
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
-  /** Whether a Thread is a child's (`ThreadStore.edges`): it goes up inside its parent's Thread, never as a row. */
+  /** Whether a Thread is a child's whose Apex is here (`listedUnderApex`): it goes up inside its parent's Thread, never as a row. */
   childThread?(thread: ThreadId): boolean
   /**
    * Who may execute each of these Sessions (`ThreadStore.executionsOf`), asked once a report for every row's Session,
@@ -82,6 +82,8 @@ export type ReportSources = {
   background?(conversationId: string): number | undefined
   /** What one of a conversation's Fins asks the person, which its row waits on (`finAsking`). */
   asking?(conversationId: string): FinAsking | undefined
+  /** A conversation's Fins, as its roster lists them for every other device (`listedFins`). */
+  fins?(conversationId: string): ReportedSession["fins"]
   now(): number
 }
 
@@ -118,7 +120,7 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
 }
 
 /** What a list shows of a conversation that its own turns move: where it stands, its title, what it waits on, and its background work. */
-export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background" | "promptedAt" | "asking">
+export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background" | "promptedAt" | "asking" | "fins">
 
 /**
  * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
@@ -136,6 +138,7 @@ export function conversationShown(conversation: {
   background?: number | undefined
   promptedAt?: number | undefined
   asking?: ((conversationId: string) => FinAsking | undefined) | undefined
+  fins?: ((conversationId: string) => ReportedSession["fins"]) | undefined
 }): ConversationShown {
   const { session, working, execution } = conversation
   const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
@@ -164,6 +167,8 @@ export function conversationShown(conversation: {
     shown.asking = { ...fin.asking, under }
     delete shown.background
   }
+  const fins = conversation.fins?.(session.id)
+  if (fins) shown.fins = fins
   return shown
 }
 
@@ -268,7 +273,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const { session } = summary
     const execution = executions.get(placed.session)
     if (execution?.state === "elsewhere") continue
-    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn, background: sources.background?.(session.id), promptedAt: summary.promptedAt, asking: sources.asking })
+    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn, background: sources.background?.(session.id), promptedAt: summary.promptedAt, asking: sources.asking, fins: sources.fins })
     const movedAt = Math.max(summary.createdAt, sources.lastMoved(session.id, summary.revision) ?? 0)
     const row: ReportedSession = {
       session: placed.session,
@@ -360,7 +365,7 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
     left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
     left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf &&
-    JSON.stringify(left.asking) === JSON.stringify(right.asking)
+    JSON.stringify(left.asking) === JSON.stringify(right.asking) && JSON.stringify(left.fins) === JSON.stringify(right.fins)
 }
 
 /**
@@ -447,6 +452,8 @@ const REPORT_MS = 1_000
 const SWEEP_MS = 30_000
 /** A change is reported this soon after it, the first in a quiet stretch; the tick then paces the rest. */
 const SOON_MS = 200
+/** How long a change to a row's Fins alone waits for others with it: one report for a burst of steps. */
+export const FINS_COALESCE_MS = 250
 /**
  * A change a list shows (a conversation starting or ending work, waiting on a person, renamed; a Session archived) goes
  * on the next turn of the event loop, with whatever else changed in that turn, at most this many times in any second:
@@ -490,10 +497,11 @@ export class SessionPublisher {
   #soonAsked = false
   readonly #shown: ((conversation: string) => ConversationShown | undefined) | undefined
   /** What a list shows of each conversation as its last batch left it, so a batch that moved it is told from one that didn't. */
-  readonly #shownOf = new Map<string, { key: string; promptedAt: string | undefined }>()
+  readonly #shownOf = new Map<string, { key: string; base: string; promptedAt: string | undefined }>()
   /** A change a list shows is waiting for its report: the next report goes whatever the second's pacing says. */
   #urgent = false
   #shownAsked = false
+  #finsAsked = false
   /** When the early reports of the last second went, oldest first, at most `SHOWN_PER_SECOND`. */
   readonly #shownAt: number[] = []
   /** When what a list shows of each conversation last changed, said with its row (`changedAt`). */
@@ -763,10 +771,22 @@ export class SessionPublisher {
   #sawBatch(conversation: string, trace: string | undefined): void {
     const shown = this.#shown?.(conversation)
     if (!shown) return
-    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}\0${shown.promptedAt ?? ""}\0${shown.asking ? JSON.stringify(shown.asking) : ""}`
+    const base = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}\0${shown.promptedAt ?? ""}\0${shown.asking ? JSON.stringify(shown.asking) : ""}`
+    const key = `${base}\0${shown.fins ? JSON.stringify(shown.fins) : ""}`
     const before = this.#shownOf.get(conversation)
     if (before?.key === key) return
-    this.#shownOf.set(conversation, { key, promptedAt: shown.promptedAt })
+    this.#shownOf.set(conversation, { key, base, promptedAt: shown.promptedAt })
+    // Only its Fins moved (a step, a place in line): said within FINS_COALESCE_MS, once for all that move meanwhile.
+    if (before?.base === base) {
+      this.#changedAt.set(conversation, this.#now())
+      if (this.#finsAsked) return
+      this.#finsAsked = true
+      this.#schedule(() => {
+        this.#finsAsked = false
+        this.showsChanged()
+      }, FINS_COALESCE_MS)
+      return
+    }
     if (before && shown.promptedAt !== before.promptedAt)
       hostLog("sync", "a message the person sent goes on its row at once, and every rail moves its project", { conversation, promptedAt: shown.promptedAt, ...(trace && { trace }) })
     this.#changedAt.set(conversation, this.#now())

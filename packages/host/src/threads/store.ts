@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -589,6 +589,7 @@ CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, 
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_placings (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_cancels (op TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS limit_notices (root_thread TEXT NOT NULL, id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY (root_thread, id));
 CREATE TABLE IF NOT EXISTS agent_answers (
@@ -1159,6 +1160,49 @@ export class ThreadStore {
       this.sql("UPDATE thread_parents SET record = ?, closed_at = NULL WHERE child_thread = ?").run(JSON.stringify(next), child)
       return next
     })
+  }
+
+  /**
+   * A Fin placed elsewhere, as its Apex's device keeps how it stands: whether it's at work, how many times this
+   * device set it to work, and a stop its device hasn't confirmed (`Placed`); a member given as undefined is dropped.
+   * The edge as it stands after; undefined when there's none, or it isn't placed.
+   */
+  keepPlaced(child: string, standing: Partial<Pick<Placed, "working" | "epoch" | "stop">>): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      if (!previous.placed) return undefined
+      const next: ThreadParent = { ...previous, placed: { ...previous.placed, ...standing } }
+      this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
+  /** The newest of its Apex's messages a Fin here heard, its Apex on another device (`RemoteParent.heard`): it only rises. */
+  keepHeard(child: string, heard: number): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      if (!previous.remote || (previous.remote.heard ?? 1) >= heard) return previous
+      const next: ThreadParent = { ...previous, remote: { ...previous.remote, heard } }
+      this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
+  /**
+   * A start for an Apex on another device that its Apex stopped (`mako:agents-cancel`), kept by its op in a table of
+   * its own: the start is refused here whenever it arrives, after a restart too.
+   */
+  cancelStart(op: string, at: number): void {
+    this.write(() => this.sql("INSERT OR IGNORE INTO agent_cancels (op, at) VALUES (?, ?)").run(op, at))
+  }
+
+  startCancelled(op: string): boolean {
+    this.syncVersion()
+    return this.sql("SELECT op FROM agent_cancels WHERE op = ?").get(op) !== undefined
   }
 
   /** A Fin moved to another harness: its edge says what it runs on now (`Agents.move`), nothing else of it changes. */
