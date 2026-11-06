@@ -220,11 +220,14 @@ async function explicitReports(): Promise<void> {
 
 async function finLimit(): Promise<void> {
   const GB = 1024 ** 3
-  // The person's Mac as it stood when Fins took it over: 14 cores, 36 GB, 13 Fins at work and the load at 26.8.
-  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 26.8 }, 13), { why: "14 cores, 36 GB", busy: true }, "13 Fins at once is more than this Mac takes easily")
-  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 0 }, 0), { why: "14 cores, 36 GB" }, "an idle Mac isn't busy")
-  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 12 }, 2), { why: "14 cores, 36 GB, 8 cores of other work", busy: true }, "the person's own work counts first")
-  assert.equal(macLoad({ cores: 14, memoryBytes: 36 * GB, load: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).busy, true, "a Mac out of swap is busy")
+  // The person's Mac as it stood when Fins took it over: 14 cores, 36 GB, 13 Fins at work and no core idle.
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, busyCores: 14 }, 13), { why: "14 cores, 36 GB, 14 cores busy", busy: true }, "13 Fins at once is more than this Mac takes easily")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, busyCores: 0 }, 0), { why: "14 cores, 36 GB" }, "an idle Mac isn't busy")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, busyCores: 12 }, 2), { why: "14 cores, 36 GB, 12 cores busy", busy: true }, "the person's own work counts first")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB, busyCores: 9 }, 1), { why: "14 cores, 36 GB, 9 cores busy" }, "five idle cores are room for another Fin")
+  assert.deepEqual(macLoad({ cores: 14, memoryBytes: 36 * GB }, 0), { why: "14 cores, 36 GB" }, "no reading of its cores yet says nothing of them")
+  assert.equal(macLoad({ cores: 14, memoryBytes: 36 * GB, busyCores: 14 }, 8).busy, true, "a full Mac is said whatever a count of Fins would account for")
+  assert.equal(macLoad({ cores: 14, memoryBytes: 36 * GB, busyCores: 0, swapFreeBytes: 100 * 1024 ** 2 }, 0).busy, true, "a Mac out of swap is busy")
 
   // Each place has its own bound: a device its count, the cloud the person's plan and spend, never a device's count.
   assert.equal(placeFull({ place: "device", atOnce: 16 }, 15), undefined)
@@ -240,7 +243,7 @@ async function finLimit(): Promise<void> {
   const w = new AgentsWorld({
     root: join(root, "fin-limit"),
     script: (turn) => turn.text.includes("You're fin:") ? (working++, turn.world.hold(turn.conversation).then(() => (working--, "stopped"))) : "ok",
-    capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, load: 20 }) },
+    capacity: { read: async () => ({ cores: 6, memoryBytes: 16 * GB, busyCores: 6 }) },
     finLimit: () => 2,
   })
   try {
@@ -249,7 +252,7 @@ async function finLimit(): Promise<void> {
     const brief = { objective: "Hold" }
     const one = await w.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: w.root })
     assert.ok(!("refused" in one) && one.state !== "queued", JSON.stringify(one))
-    assert.match(one.mac ?? "", /^This Mac is busy \(6 cores, 16 GB, 20 cores of other work\): it starts anyway/, "a busy Mac is said, and it starts")
+    assert.match(one.mac ?? "", /^This Mac is busy \(6 cores, 16 GB, 6 cores busy\): it starts anyway/, "a busy Mac is said, and it starts")
     const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in two) && two.state !== "queued", JSON.stringify(two))
     await waitFor(() => working === 2, "both Fins at work")
@@ -611,6 +614,49 @@ function signalsTo(pid: number) {
     return kill(target, signal)
   }) as typeof process.kill
   return { sent, restore: () => (process.kill = kill) }
+}
+
+/**
+ * A link's look at the pid it names: a stalled read of a running process is read again, one that stays unreadable
+ * says so, and only a process that's gone is called gone.
+ */
+async function linkTellsUnreadableFromGone(): Promise<void> {
+  let failures = 0
+  const fake = fakeCatalog()
+  const w = new AgentsWorld({
+    root: join(root, "link-reads"),
+    catalog: fake.catalog,
+    processes: {
+      ...PROCESS_READS,
+      startedAt: (pid, signal) => (failures-- > 0 ? Promise.reject(new Error("ps ran past its limit")) : PROCESS_READS.startedAt(pid, signal)),
+    },
+    script: () => "ok",
+  })
+  const shell = spawn("/bin/sh", ["-c", "sleep 60"], { detached: true, stdio: "ignore" })
+  try {
+    const apex = await w.apex("claude", "full")
+    const write = (nativeId: string) => fake.write({ harness: "claude", nativeId, path: join(w.root, `${nativeId}.jsonl`), cwd: w.root, startedAt: new Date().toISOString() }, [{ type: "tool", id: "one", name: "Bash", input: "{}", status: "completed" }])
+    const stalled = randomUUID()
+    write(stalled)
+    failures = 2
+    const linked = await w.agents.link(apex.caller, { harness: "claude", session: stalled, pid: shell.pid! })
+    assert.ok(!("refused" in linked), `two stalled reads of a running process aren't its end: ${JSON.stringify(linked)}`)
+    const unreadable = randomUUID()
+    write(unreadable)
+    failures = Infinity
+    const refused = await w.agents.link(apex.caller, { harness: "claude", session: unreadable, pid: shell.pid! })
+    assert.ok("refused" in refused && refused.refused === "unavailable", JSON.stringify(refused))
+    assert.match(refused.why, new RegExp(`Process ${shell.pid} is running, but Mako couldn't read when it started \\(ps ran past its limit\\)`))
+    const exited = spawn("/bin/sh", ["-c", "exit 0"], { stdio: "ignore" })
+    await new Promise((resolve) => exited.once("exit", resolve))
+    const gone = await w.agents.link(apex.caller, { harness: "claude", session: unreadable, pid: exited.pid! })
+    assert.ok("refused" in gone && gone.refused === "unknown-child", JSON.stringify(gone))
+    assert.match(gone.why, new RegExp(`No process ${exited.pid} runs on this device`))
+    failures = 0
+  } finally {
+    shell.kill("SIGKILL")
+    await w.close()
+  }
 }
 
 /**
@@ -1037,6 +1083,59 @@ async function stopAllUnqueues(): Promise<void> {
 }
 
 /**
+ * A queued start whose record this Mako can't read whole (an older Mako's) never goes quietly: its Apex is told it
+ * didn't start and why, and it's dropped once it heard; one that doesn't say whose it is goes with a warning.
+ */
+async function unreadableQueuedStarts(): Promise<void> {
+  const w = world("unreadable-queue", () => "ok")
+  try {
+    const apex = await w.apex("claude")
+    const placed = w.store.journalPlacement(apex.conversation)!
+    const lead = { session: placed.session, thread: placed.thread, conversation: apex.conversation }
+    w.store.queueSpawn({ op: `start:${placed.session}:old`, tree: placed.thread, at: Date.now(), record: JSON.stringify({ lead, input: { name: "old", brief: "a brief before briefs were objects" }, harness: "claude", slots: 6 }) })
+    w.store.queueSpawn({ op: "start:nobody:lost", tree: placed.thread, at: Date.now(), record: "{\"input\":" })
+    w.agents.resume()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "both unreadable starts to leave the queue")
+    await w.settle()
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.match(wake, /"old" \(Claude\) failed: It didn't start: Mako couldn't read what was queued for it/, `its Apex is told: ${wake}`)
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * A host that wrote a Fin's edge and died before taking its row off the queue, then a build that can't read that row:
+ * the edge is the start, so the Fin holds its place and goes on, and its Apex hears no "It didn't start".
+ */
+async function startedFinsOldQueueRow(): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, "started-old-row"),
+    script: (turn) => turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok",
+    finLimit: () => 1,
+  })
+  try {
+    const apex = await w.apex("claude")
+    const placed = w.store.journalPlacement(apex.conversation)!
+    const lead = { session: placed.session, thread: placed.thread, conversation: apex.conversation }
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, name: "kept", clientKey: "kept", cwd: w.root })
+    assert.ok(!("refused" in started), JSON.stringify(started))
+    await waitFor(() => w.store.edges().all.some((edge) => edge.name === "kept"), "its edge")
+    const edge = w.store.edges().all.find((each) => each.name === "kept")!
+    w.store.queueSpawn({ op: edge.op, tree: placed.thread, at: Date.now(), record: JSON.stringify({ lead, input: { name: "kept", brief: "a brief before briefs were objects" }, harness: "claude", slots: 6 }) })
+    w.agents.resume()
+    await waitFor(() => w.store.queuedSpawns().length === 0, "the row its start left to leave the queue, the only place in use")
+    assert.ok(w.store.edges().byOp(edge.op), "its edge stays")
+    await w.agents.stop(apex.caller, { child: "all" })
+    await w.settle()
+    const wake = w.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text).join("\n")
+    assert.doesNotMatch(wake, /didn't start/, `a Fin that started isn't said not to have: ${wake}`)
+  } finally {
+    await w.close()
+  }
+}
+
+/**
  * What a Fin costs is read from the processes its harness runs, owned by its conversation's active binding: one that
  * switched harness is sampled by its new binding, and counted as the harness it runs on now.
  */
@@ -1217,7 +1316,7 @@ async function relinkedRuns(): Promise<void> {
       marked: async () => (successor === undefined ? [] : [{ pid: successor, value: apex.session }]),
       holding: async (_file, pids) => new Set(pids.filter((pid) => pid === successor)),
       folders: async () => new Map(),
-      startedAt: async () => Date.now(),
+      startedAt: PROCESS_READS.startedAt,
     },
   })
   const [first, second, third] = [sleeper(folder), sleeper(folder), sleeper(folder)]
@@ -1276,7 +1375,7 @@ async function messagesReachLinkedRuns(): Promise<void> {
     root: join(root, "taken-over"),
     script: (turn) => (turn.text.includes("fix the footer") ? "Footer fixed." : "ok"),
     catalog: fake.catalog,
-    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: async () => Date.now() },
+    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: PROCESS_READS.startedAt },
   })
   const run = sleeper(w.root)
   try {
@@ -1337,7 +1436,7 @@ async function staleEndsStayOut(): Promise<void> {
     root: join(root, "stale-ends"),
     script: (turn) => (turn.text === "Hold on." ? turn.world.hold(turn.conversation).then(() => "Done holding.") : "ok"),
     catalog: fake.catalog,
-    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: async () => Date.now() },
+    processes: { marked: async () => [], holding: async () => new Set(), folders: async () => new Map(), startedAt: PROCESS_READS.startedAt },
   })
   const run = sleeper(w.root)
   try {
@@ -1354,7 +1453,7 @@ async function staleEndsStayOut(): Promise<void> {
     const child = ThreadIdSchema.parse(linked.child)
     run.kill("SIGTERM")
     await waitFor(() => w.store.edges().of(child)?.run?.ended !== undefined, "its end", END_CONFIRM_MS + 20_000)
-    assert.equal(w.store.reportsOf(child, 0).at(-1)?.status, "failed")
+    assert.equal(w.store.reportsOf(child, 0).at(-1)?.status, "blocked", "a run whose process ended unexplained is a cut its Apex decides on")
     session()
     w.release(apex.conversation)
     await w.settle()
@@ -1672,6 +1771,7 @@ try {
   await launchesBeforeTheirEdge()
   await stopHoldsUntilCancelled()
   await followedStopHoldsUntilExit()
+  await linkTellsUnreadableFromGone()
   await followedStopUnknownIdentity()
   await followedStopStaleIdentity()
   await followedStopStuck()
@@ -1680,6 +1780,8 @@ try {
   await harnessLadders()
   await accessFits()
   await stopAllUnqueues()
+  await unreadableQueuedStarts()
+  await startedFinsOldQueueRow()
   await finsAtWorkByBinding()
   await stoppedApexHolds()
   await followsShellRuns()

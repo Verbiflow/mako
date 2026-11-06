@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react"
 import { targetLine } from "./agent-reads"
 import { FinRules } from "./fin-rules"
+import { FinMoveOnLimit } from "./fin-move-on-limit"
 import { RoleRules } from "./role-rules"
 import { toast } from "sonner"
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, MinusIcon, PlusIcon, ZapIcon } from "lucide-react"
@@ -55,6 +56,7 @@ export function FinsSection() {
       </div>
       {failed ? <p className="text-label text-caution">This Mac's choices for Fins couldn't be read. Reopen Settings to try again.</p> : null}
       </section>
+      <FinMoveOnLimit />
     </div>
   )
 }
@@ -145,6 +147,7 @@ const SOURCE_WORDS = {
   used: () => "your last here",
   mako: () => "Mako's recommendation",
   harness: (harness) => `${harnessLabel(harness)}'s own default`,
+  connection: () => "a connection's model",
 } satisfies Record<FinTuningSource, (harness: string) => string>
 
 function FinRow({ harness, profile }: { harness: string; profile: HarnessProfile | undefined }) {

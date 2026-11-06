@@ -168,26 +168,12 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
-      - run: npm run test:background-agents
       - run: npm run test:start-interleavings
       # A switch against the queue, generated: the rules of `docs/delivery-queue.md` after every step of seeded schedules.
       - run: npm run test:switch-interleavings
       - run: npm run test:followed-stop-crash
-      - run: npm run test:agents-migrate
-      # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
-      # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
-      - run: npm run test:thread-split
-      - run: npm run test:agents-wake
-      # An Apex let go of while at rest still hears its Fins move, so a window coming back shows them as they are.
-      - run: npm run test:fins-reach-released-apex
-      - run: npm run test:orch-answer
-      - run: npm run test:fin-resume
       - run: npm run test:fin-move
-      # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
-      - run: npm run test:fin-states
-      # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
-      # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
-      - run: npm run test:delivery-retry
+      - run: npm run test:held-notice-crash
       # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
       - run: npm run test:handoff
       # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
@@ -196,17 +182,8 @@ jobs:
       # An Apex's Fins' news as entries in its own queue: coalesced, budgeted, paused and kept through SIGKILL.
       - run: npm run test:wake-queue
       - run: npm run test:orch-comms
-      - run: npm run test:orch-front-door
-      # The person's rules for every Fin and Apex: kept, carried by every brief, said once and on change, nothing when empty.
-      - run: npm run test:person-rules
-      - run: npm run test:orch-deliver
-      # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
-      - run: npm run test:steer-landing
-      - run: npm run test:agents-doors
-      - run: npm run test:agents-cli
-      - run: npm run test:thread-move-tool
-      - run: npm run test:orch-update
       - run: npm run test:orch-crash
+      - run: npm run test:orch-recovery
 
   # Every harness's decoders against its recorded pairs (live and saved draw the same, or say why not), and the
   # three readers of spend (live, saved, the store's scan) agreeing on each pair.
@@ -249,13 +226,62 @@ jobs:
       # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.
       - run: npm test -w @mako/sessions
 
+  # The engine's own work, split from `orchestration` so that neither nears its limit: an Apex's Fins held by the tree's
+  # budget, woken, answered and routed, each message queued, steered or interrupting as its sender chose, through the
+  # engine's three doors, and what can't go for now going again by itself.
+  orchestration-engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+      - run: npm run test:background-agents
+      - run: npm run test:agents-migrate
+      # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
+      # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
+      - run: npm run test:thread-split
+      - run: npm run test:agents-wake
+      # An Apex let go of while at rest still hears its Fins move, so a window coming back shows them as they are.
+      - run: npm run test:fins-reach-released-apex
+      - run: npm run test:orch-answer
+      # A Fin waiting on a pull request is woken once per outcome, never its Apex, across restarts; GitHub is a stub.
+      - run: npm run test:fin-pull-waits
+      - run: npm run test:fin-resume
+      - run: npm run test:fin-fallback
+      # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
+      - run: npm run test:fin-states
+      # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
+      # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
+      - run: npm run test:delivery-retry
+      - run: npm run test:orch-front-door
+      # The person's rules for every Fin and Apex: kept, carried by every brief, said once and on change, nothing when empty.
+      - run: npm run test:person-rules
+      - run: npm run test:orch-deliver
+      # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
+      - run: npm run test:steer-landing
+      - run: npm run test:agents-doors
+      - run: npm run test:agents-cli
+      - run: npm run test:thread-move-tool
+      - run: npm run test:orch-update
+
   # Every harness's decode, live host, projection, recorder, merge and saved-open paths, measured beside the commit
   # this change goes onto, in turns on this runner (`perf-reference.ts`): HEAD^1 is a pull request's base in the merge
-  # commit checked out, and main's previous commit on a push. A row more than 25% slower than that code fails here,
-  # at review, rather than adding up under its baseline's budget until an update's `test:performance` meets it.
+  # commit checked out, and main's previous commit on a push. A row more than 25% slower than that code at 95% (every
+  # round of seven over it, or twelve of fifteen) fails here, at review, rather than adding up under its baseline's
+  # budget until an update's `test:performance` meets it; one the rounds can't tell from the runner's noise is printed
+  # as unsure and passes.
   performance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -270,9 +296,15 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       # The rows read `@mako/*` from the packages' builds.
       - run: npm run build:control-runtime
+      # How a row is judged, on simulated machines: unchanged code as noisy as this runner is never slower, twice as slow always is.
+      - run: npx tsx scripts/test-perf-reference.ts
       - run: npm run perf:decoders -- --reference HEAD^1
+        env:
+          MAKO_PERFORMANCE_UNSURE_REPORTED: "1"
       # The host's live delivery, the window's reduction, usage and tool identity (`test-performance-budgets.ts`), the same way.
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --reference HEAD^1
+        env:
+          MAKO_PERFORMANCE_UNSURE_REPORTED: "1"
 
   # The local updater's own checks (`UPDATE_CHECKS`), through the function Settings › Updates runs, on a Mac, in the
   # environment it builds: the variables it sets (its verdict file and gross line for the performance check alone, the
@@ -347,10 +379,12 @@ jobs:
 
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
-  # the owner's Codex at the tested build sealed against the bench's stand-in model.
+  # the owner's Codex at the tested build sealed against the bench's stand-in model. Counts (words missed, rereads,
+  # batches a frame, bytes a token at the plan's cadence) fail at once; a time, read past the owner at the median,
+  # fails only when a second run in this job has it over too. Every check goes to the job's summary.
   sync-bench:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -363,15 +397,17 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - uses: ./.github/actions/codex-sandbox
+      # How two runs are judged: a count fails in either, and only a time gets a second try.
+      - run: npx tsx scripts/test-sync-bench-judge.ts
       - name: The sync bench at the tested Codex
         run: |
           version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run bench:sync-latency
 
-  # A message the person sends into a running turn reaches the model within `LANDS_BUDGET_MS`, through Mako's own host,
-  # on the real harnesses this runner has (Claude Code from its SDK, Codex at the tested build), each against the
-  # probe's stand-in model with a 15 s command running (`probe-steer-semantics.ts --lands`).
+  # A message the person sends into a running turn reaches the model while the turn's 15 s command still runs, not
+  # once it returns, through Mako's own host, on the real harnesses this runner has (Claude Code from its SDK, Codex
+  # at the tested build), each against the probe's stand-in model (`probe-steer-semantics.ts --lands`).
   steer-latency:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

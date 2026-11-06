@@ -231,6 +231,18 @@ export interface ConversationChildren {
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
+  /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
+  pinnedAccount?(conversation: string, harness: string): string | undefined
+  /**
+   * At a request's handoff: whether a message Mako sent a Fin by itself (a pull request's outcome) still holds. False
+   * refuses it with nothing sent; any other request is always admitted.
+   */
+  admits?(conversation: string, request: Pick<LiveRequest, "id" | "actor">): boolean
+}
+
+/** What a launch of `conversation` on `harness` reads its account from: the Fin's pin, else the selected account. */
+export function launchAccount(dependencies: Pick<Dependencies, "agents">, conversation: string, harness: string): () => string | undefined {
+  return () => dependencies.agents?.()?.pinnedAccount?.(conversation, harness)
 }
 export interface Dependencies {
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

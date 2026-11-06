@@ -77,9 +77,9 @@ schedules, and a failing schedule is pinned there.
     person doesn't.** A retry on its limit and a sign-out's hold belong to the
     account the Thread is leaving, and mean nothing on the target. So when any
     switch lands on another harness or account, a person's or a move, those rows
-    go, in their order, and the sign-in notice with them. A digest that was held
-    with them goes first. The transcript goes with the first row to go, not
-    with the switch's message when one goes ahead of it. Landing on the very
+    go, and the sign-in notice with them. A switch's message goes ahead of them
+    with the transcript, and a digest that was held with them goes ahead of that,
+    taking the transcript with it. Landing on the very
     account that signed out changes nothing, and its hold stays. A Stop and a
     person's edit stay whatever the switch: a row a Stop paused while it waited on
     a sign-in stops waiting on the sign-in and goes on waiting for its Resume

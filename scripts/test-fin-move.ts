@@ -314,7 +314,7 @@ async function landing(): Promise<void> {
     await f.world.close()
   }
   {
-    // The person's switch lands the same way: what waited out the limit goes first, carrying the transcript, then their words.
+    // The person's switch lands the same way: what waited out the limit goes on the target, behind their words, which carry the transcript.
     let out = false
     const f = await fixture("codex", { refusePrompt: (_conversation, harness) => (out && harness === "codex" ? "You've hit your usage limit." : undefined) })
     await f.world.settle(40, 20_000)
@@ -327,10 +327,10 @@ async function landing(): Promise<void> {
     await f.world.continueOn(conversation, { kind: "words", input: { id, provider: "claude", text: "row-words", attachments: [] } })
     await until("both", () => ["row-waited", "row-words"].every((words) => f.prompts().some((prompt) => prompt.text.includes(words))))
     await f.world.settle(40, 20_000)
-    assert.deepEqual(f.prompts().filter((prompt) => prompt.text.includes("row-")).map((prompt) => (prompt.text.includes("row-words") ? "row-words" : "row-waited")), ["row-waited", "row-words"])
+    assert.deepEqual(f.prompts().filter((prompt) => prompt.text.includes("row-")).map((prompt) => (prompt.text.includes("row-words") ? "row-words" : "row-waited")), ["row-words", "row-waited"])
     const requests = f.world.live.snapshot(conversation)!.requests
-    assert.equal(requests.find((request) => request.id === row)?.context?.length, 1, "the transcript goes with the first to go")
-    assert.ok(!requests.find((request) => request.id === id)?.context?.length)
+    assert.equal(requests.find((request) => request.id === id)?.context?.length, 1, "the transcript goes with the first to go")
+    assert.ok(!requests.find((request) => request.id === row)?.context?.length)
     await f.world.close()
   }
   {
@@ -475,7 +475,8 @@ async function landing(): Promise<void> {
     assert.equal(f.world.live.pinnedAccount(conversation, "claude"), "spare")
     assert.equal(f.world.live.pinnedAccount(conversation, "codex"), undefined)
     await f.world.close()
-    const g = await fixture("codex")
+    const launched: (string | undefined)[] = []
+    const g = await fixture("codex", { launchedOn: (_harness, account) => void launched.push(account) })
     await g.world.settle(40, 20_000)
     const handed = g.fin().conversation
     const was = g.world.live.snapshot(handed)!.control!
@@ -486,6 +487,8 @@ async function landing(): Promise<void> {
     const now = g.world.live.snapshot(handed)!.control!
     assert.notEqual(now.activeBindingId, was.activeBindingId, "a harness that can't go on hands over to a session of its own")
     assert.equal(g.world.live.pinnedAccount(handed, "codex"), "spare")
+    assert.equal(g.world.agents.pinnedAccount(handed, "codex"), "spare", "every later launch reads it")
+    assert.ok(launched.includes("spare"), "and the hand-over's own launch runs on it")
     assert.equal(now.merges.filter((merge) => merge.status === "pending").length, 1, "with the conversation")
     await g.world.close()
   }
@@ -990,10 +993,10 @@ function onePath(): void {
     }
   }
   walk(host)
-  /** Who may call it, each for what it is: `continueOn` itself, and reconnects, which stay on their own harness. */
+  /** Who may call it, each for what it is: `continueOn` itself, reconnects, which stay on their own harness, and #398's `moveWaiting`, until it retires into `continueOn`. */
   const allowed = new Map([
     ["conversations/continue-on.ts", /live\.transfer\(id, \{ \.\.\.continuation\.input/],
-    ["conversations/live-conversations.ts", /this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
+    ["conversations/live-conversations.ts", /this\.transfer\(id, \{ id: to\.id, provider: to\.provider|this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
     ["conversations/live-auto-continue.ts", /this\.access\.transfer\(id, \{ id: request\.id, provider: reconnect\.provider/],
   ])
   for (const path of files) {
@@ -1005,8 +1008,8 @@ function onePath(): void {
       assert.ok(allow.test(text.slice(call.index, call.index + 200)), `${file} calls transfer with something new: ${text.slice(call.index, call.index + 80)}`)
     }
     // A reply to a binding can become a switch at its admission, so it has no way around either.
-    for (const call of text.matchAll(/\.(?:moveOn|continueBinding)\(/g)) {
-      const answers = file === "conversations/live-conversations.ts" && text.startsWith(".continueBinding(id, bindingId, requestId, text, [], undefined, displayText)", call.index) && text.slice(call.index - 180, call.index).includes("activeBindingId !== bindingId")
+    for (const call of text.matchAll(/(?:live\.(?:moveOn|continueBinding)|this\.continueBinding)\(/g)) {
+      const answers = file === "conversations/live-conversations.ts" && text.startsWith("this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText)", call.index) && text.slice(call.index - 180, call.index).includes("activeBindingId !== bindingId")
       assert.ok(file === "conversations/continue-on.ts" || answers, `${file} goes beside continueOn: ${text.slice(call.index, call.index + 60)}`)
     }
   }

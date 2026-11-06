@@ -13,7 +13,7 @@ import type {
 } from "../contracts/conversation-control.js"
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
-import type { TurnContinuation, LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
+import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
@@ -21,13 +21,22 @@ import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
   Resident,
   ProviderConnection,
 } from "./live-runtime.js"
+
+/**
+ * The queue as a switch lands: its message goes ahead of what's queued, which waited behind it or came after it, so the
+ * hand-over's context reaches the harness first. Only the row `ahead` goes before it (`arriving`), and carries that context.
+ */
+function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: string | undefined): LiveRequest[] {
+  const at = arrived.continues?.brief ? -1 : requests.findIndex((request) => request.status === "queued" && request.id !== ahead)
+  return at < 0 ? admittedInPlace(requests, arrived) : [...requests.slice(0, at), arrived, ...requests.slice(at)]
+}
 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
@@ -449,6 +458,8 @@ export class LiveTransfers {
           threadEnvironment,
           nativeRouting: launchRouting(this.host.dependencies, source.session.id, conversationTools),
           nativeCalls: launchCalls(this.host.dependencies, source.session.id, source.session.cwd, conversationTools, threadEnvironment),
+          // A hand-over to another account: the binding that will name it isn't active yet.
+          pinnedAccount: transfer.input.account ? () => transfer.input.account : launchAccount(this.host.dependencies, source.session.id, transfer.input.provider),
           title: source.session.title,
           tuning,
           modeId,
@@ -572,7 +583,9 @@ export class LiveTransfers {
         ? arriving(previous.requests, { harness: transfer.input.provider, account: transfer.input.account, tuning: transfer.input.tuning }, leaving, transfer.first)
         : previous.requests
       // The transcript goes with the first to go: this switch's message, unless a row goes ahead of it.
-      const followsRow = staying.find((request) => request.status === "queued")?.id !== own?.id || (!own && staying.some((request) => request.status === "queued"))
+      const lead = staying.find((request) => request.status === "queued")
+      const ahead = lead && lead.id !== own?.id && (lead.digest || lead.id === transfer.first) ? lead.id : undefined
+      const followsRow = own ? lead !== undefined && lead.id !== own.id : ahead !== undefined
       const transcript = manifest.includesBase || manifest.toBlock > manifest.fromBlock ? [manifest] : []
       const merged = quiet || (leaving && followsRow)
       const carries = {
@@ -593,7 +606,7 @@ export class LiveTransfers {
         permissions: [],
         requests: own
           ? staying.map((request) => (request.id === own.id ? { ...request, ...carries } : request))
-          : quiet ? staying : admittedInPlace(staying, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
+          : quiet ? staying : arrival(staying, messageOf(transfer, Date.now(), { ...carries, status: "queued" }), ahead),
         control: {
           ...this.host.control(resident),
           // Its history goes with whichever goes next.

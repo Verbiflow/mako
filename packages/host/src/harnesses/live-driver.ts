@@ -26,6 +26,7 @@ import type { InstructionBlock, LayerCapabilities } from "../contracts/mako-laye
 import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
 import type { ModelRouteAdapter } from "./model-routes.js"
+import type { AccountContinuation } from "../contracts/fin-fallback.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
@@ -365,6 +366,12 @@ export interface ProviderStartOptions extends LiveStartOptions {
    */
   unattended?: boolean
   /**
+   * The account this conversation runs on instead of the harness's selected one: a Fin moved off an account at its
+   * limit (`contracts/fin-fallback.ts`). Read as it launches and before each input, so a pin set or cleared since
+   * reopens the session on the account it names, as a change of selection does. Absent: the selected account.
+   */
+  pinnedAccount?: () => string | undefined
+  /**
    * Whether this launch carries Mako's instruction blocks (`primerText`),
    * and on Claude the `fin` subagent and the in-process `mako` server.
    * Absent means yes. The eval's off arm passes false: only how media is
@@ -479,6 +486,12 @@ export interface ProviderLiveDriver extends ProviderCapability {
   layer?: LayerCapabilities
   /** Which of the person's model connections it runs on, and how (`contracts/model-routes.ts`). */
   modelRoutes: ModelRouteAdapter
+  /**
+   * Whether its session goes on under another of the person's accounts of it (`contracts/fin-fallback.ts`): a Fin
+   * whose account runs out mid-turn resumes there only where this says so. Every installed harness declares it
+   * (`test-harness-definitions.ts`).
+   */
+  accountContinuation?: AccountContinuation
   contextBreakdown: ContextBreakdownCapability
   compaction: ProviderCompaction
   goals: GoalsCapability
@@ -604,6 +617,8 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : ""
   if (!reason.trim())
     throw new Error(`${driver.provider}: declare how Stop ends its background work, or the evidence that none outlives its turn`)
+  if (driver.accountContinuation?.kind === "resumes" && !resumes)
+    throw new Error(`${driver.provider}: a session goes on under another account on its native session, which needs native resume`)
   const recovery = driver.turnRecovery
   if (recovery?.kind === "continues") {
     if (!resumes)
@@ -625,6 +640,8 @@ function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
     ["side questions", text(sideQuestions)], ["review", text(review)], ["mode switching", text(modeSwitching)],
   ]
   if (resume.kind === "native") texts.push(["idle wake", resume.wake])
+  const continuation = driver.accountContinuation
+  if (continuation) texts.push(["account continuation", continuation.kind === "resumes" ? continuation.via : continuation.reason])
   // A routing control is declared only once it was seen to work: on which build, and how.
   if (nativeRouting.kind !== "words") texts.push(["native routing's version", nativeRouting.verified.version], ["native routing's check", nativeRouting.verified.how])
   return texts

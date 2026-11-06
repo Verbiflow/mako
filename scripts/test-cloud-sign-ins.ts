@@ -506,7 +506,8 @@ else process.exit(1);
   await Promise.all([launched, synced2])
   assert.deepEqual(order, ["sync's own read", "launch"], "the sync's own reads never wait; a launch waits for the check")
   assert.equal(unreachable, -1, "tried until the cloud answered")
-  assert.ok(performance.now() - wokeAt < 2_000)
+  // The launch went as the check answered, not when its own 5 s wait (`LAUNCH_WAIT_MS`) gave up on it.
+  assert.ok(performance.now() - wokeAt < 5_000, `launched ${Math.round(performance.now() - wokeAt)} ms after the wake`)
   await woken.inStep()
   woken.stop()
   console.log("ok  after a wake the check is retried until the cloud answers, and launches wait for it")

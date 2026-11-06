@@ -239,6 +239,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     setFinLimit: (limit: number | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-limit-set", limit),
     /** The person's Fins at once across every place, 1 to `FIN_CEILING_MAX`. */
     setFinCeiling: (ceiling: number) => invokeTrustedHost<FinChoicesReading>("mako:fin-ceiling-set", ceiling),
+    /** Settings › Fins: whether a Fin whose account runs out goes on to the next one. */
+    chooseFinMoveOnLimit: (on: boolean) => invokeTrustedHost<FinChoicesReading>("mako:fin-move-on-limit", on),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>

@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type Brief, type ChildState } from "./agents.js"
+import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
 import { readFinReports, type FinReportCard } from "./fin-reports.js"
@@ -417,8 +417,11 @@ export function readableStep(step: string | undefined): string | undefined {
   return phrase.length > STEP_CHARS ? `${phrase.slice(0, STEP_CHARS - 1).trimEnd()}…` : phrase
 }
 
-/** What a child's state says in a line: its question, its phase or step, why it waits, or how it ended. */
-export function childLine(state: ChildState): string | undefined {
+/**
+ * What a child's state says in a line: its question, its phase or step, why it waits, or how it ended. With `now`, a
+ * Fin waiting on what its report named says for how long: "Waiting on acme/app#371 checks · 12m".
+ */
+export function childLine(state: ChildState, now?: number): string | undefined {
   switch (state.kind) {
     case "queued":
       if (state.refused) return "Not started: it couldn't start"
@@ -432,7 +435,7 @@ export function childLine(state: ChildState): string | undefined {
     case "blocked":
       return state.question
     case "idle":
-      return "Idle: a message gives it its next turn"
+      return state.waitingOn?.length ? waitingStateWords(state.waitingOn, state.since, now) : "Idle: a message gives it its next turn"
     case "ended":
       return state.decision?.question ?? state.reason
   }
@@ -450,7 +453,7 @@ export function childWord(state: ChildState): string {
     case "blocked":
       return state.on === "lead" ? `Asks its ${APEX_WORD}` : state.on === "approval" ? "Needs approval" : "Needs your answer"
     case "idle":
-      return "Idle"
+      return state.waitingOn?.length ? "Waiting" : "Idle"
     case "ended":
       return state.outcome === "done" ? (state.decision?.on === "person" ? DONE_NEEDS_YOU : "Done") : state.outcome === "failed" ? "Failed" : "Stopped"
   }

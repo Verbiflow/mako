@@ -190,6 +190,11 @@ export interface FinChoicesReading {
   ceiling?: number
   /** The cloud's, once Fins start there: by the person's plan and spend ceiling, never this device's count. */
   cloud?: CloudFinLimits
+  /**
+   * "When an account runs out, continue on the next one" (`contracts/fin-fallback.ts`): on unless the person turned
+   * it off, which keeps a Fin where it is when its account runs out, as before.
+   */
+  moveOnLimit: boolean
 }
 
 /**
@@ -207,8 +212,8 @@ export function finPolicyNote(policy: FinPolicy, target: (target: FinTarget) => 
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
 
-/** Where a Fin's model came from, most specific first. */
-export const FinTuningSourceSchema = z.enum(["asked", "rule", "fins", "apex", "used", "mako", "harness"])
+/** Where a Fin's model came from, most specific first; `connection` is a connection's model its harness's account ran out for. */
+export const FinTuningSourceSchema = z.enum(["asked", "rule", "fins", "apex", "used", "mako", "harness", "connection"])
 export type FinTuningSource = z.infer<typeof FinTuningSourceSchema>
 
 /** What a spawn named, as the person said it through its Apex. */

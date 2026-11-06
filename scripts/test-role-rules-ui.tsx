@@ -19,7 +19,7 @@ const policy: FinPolicy = {
   forFins: "Run the tests you touch before you report.",
   forApexes: "Ask me before starting more than four Fins.",
 }
-const reading: FinChoicesReading = { chosen: {}, used: {}, policy }
+const reading: FinChoicesReading = { chosen: {}, used: {}, policy, moveOnLimit: true }
 const sent: unknown[][] = []
 Object.assign(globalThis, {
   window: {

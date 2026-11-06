@@ -214,6 +214,10 @@ try {
   const freshArchived = join(fresh, ".codex", "archived_sessions")
   await mkdir(freshDated, { recursive: true })
   await writeFile(join(freshDated, name), line("session_meta", { id, cwd: home }))
+  // The catalog's sweep (`DISCOVERY_RECONCILE_MS`) first runs 30 s after it's made; this timer, made before it, fires
+  // first, so an archive heard before it was heard by the watcher.
+  let swept = false
+  const sweep = setTimeout(() => (swept = true), 30_000)
   const watched = new SessionCatalog([new CodexProvider(nativeStores, fresh)])
   const watchedEvents = []
   watched.onEvent((event) => watchedEvents.push(event))
@@ -223,9 +227,11 @@ try {
   const movedAt = Date.now()
   await mkdir(freshArchived)
   await rename(join(freshDated, name), join(freshArchived, name))
-  while (!watchedEvents.some((event) => event.type !== "removed" && event.ref.path === join(freshArchived, name)) && Date.now() - movedAt < 5000) await delay(25)
+  const heard = () => watchedEvents.some((event) => event.type !== "removed" && event.ref.path === join(freshArchived, name))
+  while (!heard() && !swept) await delay(25)
+  clearTimeout(sweep)
+  assert.ok(heard() && !swept, "the first archive is heard before the 30 s sweep could find it")
   const heardIn = Date.now() - movedAt
-  assert.ok(heardIn < 5000, `the first archive is heard in ${heardIn} ms, not at the 30 s sweep`)
   await watched.stop()
   console.log(`Native archive: the first archive, which creates archived_sessions, is heard in ${heardIn} ms`)
 
