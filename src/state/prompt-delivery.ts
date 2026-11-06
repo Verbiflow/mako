@@ -229,6 +229,8 @@ export interface PendingPrompt {
   wake?: LiveRequest["wake"]
   /** Set on a held message that goes again by itself: its harness couldn't take it for now. */
   retry?: LiveRequest["retry"]
+  /** Set on a digest of Fins' news: one `resting` goes with the next message. */
+  digest?: LiveRequest["digest"]
   /** Set on a held message the person paused to edit: it keeps its place. */
   editing?: LiveRequest["editing"]
   /** Set on a held message the person's Stop paused: what they send next goes ahead of it. */

@@ -69,24 +69,36 @@ export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause,
   return { at: now + wait, attempt, since, cause, reason: reason.slice(0, 2_000) }
 }
 
+/** A digest of Fins' news no model answered: only an answer proves it was heard, and its reports already read as heard. */
+export function unheardDigest(request: Pick<LiveRequest, "digest">): boolean {
+  return request.digest !== undefined && !request.digest.heard
+}
+
+/**
+ * `request` where Mako stops trying: giving up stops the retrying, never the reports. An unheard digest rests, with no
+ * time of its own, and goes with the next turn that can run, on any harness; anything else, undefined, fails as ever.
+ */
+export function resting(request: LiveRequest): LiveRequest | undefined {
+  if (!unheardDigest(request)) return undefined
+  return { ...request, status: "held", retry: undefined, digest: { ...request.digest!, resting: true } }
+}
+
 /**
  * The queued messages a failure left, held to go again (`nextRetry`), or
  * undefined when Mako stops waiting for one of them, so they fail together
  * as before.
  */
 export function holdForRetry(requests: readonly LiveRequest[], cause: RetryCause, reason: string, now: number): LiveRequest[] | undefined {
-  const next = new Map<string, RequestRetry>()
+  const next = new Map<string, LiveRequest>()
   for (const request of requests) {
     if (request.status !== "queued") continue
     const retry = nextRetry(request.retry, cause, reason, now)
-    if (!retry) return undefined
-    next.set(request.id, retry)
+    const held = retry ? { ...request, status: "held" as const, retry } : resting(request)
+    if (!held) return undefined
+    next.set(request.id, held)
   }
   if (!next.size) return undefined
-  return requests.map((request) => {
-    const retry = next.get(request.id)
-    return retry ? { ...request, status: "held" as const, retry } : request
-  })
+  return requests.map((request) => next.get(request.id) ?? request)
 }
 
 /** Whether `after` holds a message to go again that `before` had queued: the failure between them is waited out. */

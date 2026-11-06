@@ -4,7 +4,10 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { mock } from "node:test"
 import { join } from "node:path"
+import { holdForRetry } from "@mako/host/contracts/delivery-retry"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import { holdDue, holdOf } from "@mako/host/contracts/request-hold"
+import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import { FROM_AGENTS } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
@@ -63,8 +66,9 @@ function worldOf(name: string) {
   return { world, limits }
 }
 
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const rows = (world: AgentsWorld, conversation: string): readonly LiveRequest[] => world.live.snapshot(conversation)?.requests ?? []
-const digests = (world: AgentsWorld, conversation: string) => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith(FROM_AGENTS))
+const digests = (world: AgentsWorld, conversation: string) => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes(FROM_AGENTS))
 
 /** An Apex that took a turn, with Fins at work that report when released. */
 async function apexWithFins(world: AgentsWorld, harness: string, names: readonly string[]): Promise<{ conversation: string; fins: string[] }> {
@@ -113,6 +117,20 @@ async function goesAsOne(world: AgentsWorld, conversation: string, names: readon
 }
 
 try {
+  // A start that fails past the budget, the third way a digest stops being retried: it rests, and what isn't one fails.
+  {
+    const since = Date.now() - 7 * 60 * 60_000
+    const retry = { at: since, attempt: 9, since, cause: "rate-limited" as const, reason: LIMIT }
+    const digest = LiveRequestSchema.parse({ id: randomUUID(), text: FROM_AGENTS, attachments: [], status: "queued", retry, digest: { notices: [] } })
+    const message = LiveRequestSchema.parse({ id: randomUUID(), text: "Words", attachments: [], status: "queued", retry })
+    assert.equal(holdForRetry([message], "rate-limited", LIMIT, Date.now()), undefined, "a message past the budget fails, as ever")
+    const [rested] = holdForRetry([digest], "rate-limited", LIMIT, Date.now()) ?? []
+    assert.equal(rested?.status, "held", "a digest past the budget stays")
+    assert.equal(rested?.digest?.resting, true, "at rest")
+    assert.equal(holdDue(holdOf(rested!)!), undefined, "with no time of its own")
+    assert.equal(holdForRetry([{ ...digest, digest: { notices: [], heard: true as const } }], "rate-limited", LIMIT, Date.now()), undefined, "one a model answered has nothing to keep")
+  }
+
   for (const harness of HARNESSES) {
     const names = ["fin-a", "fin-b", "fin-c"]
 
@@ -254,6 +272,57 @@ try {
       const order = world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => prompt.text)
       assert.ok(order.lastIndexOf(went[0]!.text) < order.findIndex((text) => text.includes("Then this.")), `${harness} ${failures} failures: the digest went first`)
       assert.equal(world.store.undeliveredReports().filter(({ report: kept }) => kept.status !== "progress").length, 0, `${harness} ${failures} failures: nothing left unheard`)
+      await world.close()
+      time.mock.restore()
+    }
+
+    // Giving up stops the retrying, never the reports: past the budget nothing knocks, and a digest no model heard rests,
+    // through a restart, taking later news, until the next turn that can run, on any harness. A failed turn and a refused
+    // send end the same way, and a limit outlasts the budget as a rule: Cursor's lasted three days.
+    for (const [how, release] of [["failed", "message"], ["refused", "message"], ["failed", "switch"]] as const) {
+      const { world, limits } = worldOf(`${harness}-rest-${how}-${release}`)
+      const { conversation, fins } = await apexWithFins(world, harness, names)
+      const out = how === "failed" ? limits.failing : limits.refused
+      out.add(conversation)
+      limits.on = harness
+      await report(world, conversation, fins.slice(0, 2), names)
+      await until(`${harness} rest: the limit to hold it`, () => limits.knocks.length === 1 && rows(world, conversation).some((request) => request.status === "held" && request.digest !== undefined && (request.retry !== undefined)))
+      let passed = 0
+      const clock = Date.now.bind(Date)
+      const time = mock.method(Date, "now", () => clock() + passed)
+      passed += 7 * 60 * 60_000
+      world.live.wakeDue(Date.now() + LATER)
+      await until(`${harness} rest: the attempt past the budget`, () => limits.knocks.length === 2)
+      await until(`${harness} rest: it to rest`, () => rows(world, conversation).some((request) => request.status === "held" && request.digest?.resting === true))
+      assert.ok(!rows(world, conversation).some((request) => request.status === "held" && request.digest?.resting && request.retry !== undefined && request.retry.at <= Date.now()), `${harness} rest: no time of its own`)
+      world.live.wakeDue(Date.now() + 10 * LATER)
+      await pause(60)
+      assert.equal(limits.knocks.length, 2, `${harness} rest: nothing knocks after the budget, however long`)
+      await world.restart()
+      await until(`${harness} rest: read in`, () => world.live.snapshot(conversation) !== undefined)
+      world.live.wakeDue(Date.now() + 10 * LATER)
+      await pause(60)
+      assert.equal(limits.knocks.length, 2, `${harness} rest: nor after a restart`)
+      await report(world, conversation, fins.slice(2), names, 2)
+      assert.equal(limits.knocks.length, 2, `${harness} rest: later news joins it and knocks at nothing`)
+      waitsAsOne(world, conversation, names, `${harness} rest`)
+      const sent = digests(world, conversation).length
+      out.clear()
+      passed += 61_000
+      if (release === "message") {
+        world.say(conversation, "Then this.")
+        await until(`${harness} rest: their message`, () => rows(world, conversation).some((request) => request.text === "Then this." && request.status === "completed"))
+      } else {
+        const next = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+        await world.live.transfer(conversation, { id: randomUUID(), provider: next, text: "Then this.", attachments: [] })
+        await until(`${harness} rest: the switch's message`, () => rows(world, conversation).some((request) => request.text === "Then this." && request.status === "completed"))
+      }
+      const went = digests(world, conversation).slice(sent)
+      assert.equal(went.length, 1, `${harness} rest: the digest went, once`)
+      for (const name of names) assert.equal(readFinReports(went[0]!.text).reports.filter((report) => report.name === name).length, 1, `${harness} rest: ${name} was heard once`)
+      const order = world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => prompt.text)
+      assert.ok(order.lastIndexOf(went[0]!.text) < order.findIndex((text) => text.includes("Then this.")), `${harness} rest: the digest went first`)
+      assert.equal(world.store.undeliveredReports().filter(({ report: kept }) => kept.status !== "progress").length, 0, `${harness} rest: nothing left unheard`)
       await world.close()
       time.mock.restore()
     }

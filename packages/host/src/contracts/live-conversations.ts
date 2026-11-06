@@ -378,6 +378,8 @@ export interface LiveRequest {
     sentAt?: number
     /** A model answered during its turn: the only proof it was heard, as nothing else proves it either way. */
     heard?: true
+    /** Mako stopped trying and no model heard it: it waits, with no time of its own, for the next turn that can run. */
+    resting?: true
   }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption

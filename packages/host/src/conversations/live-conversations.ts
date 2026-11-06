@@ -64,7 +64,7 @@ import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { latchedByStop } from "../contracts/delivery-retry.js"
-import { arriving, goingFirst, holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
+import { arriving, goesNext, goingFirst, holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -488,7 +488,7 @@ export class LiveConversations {
     const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
     if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
     const next: LiveRequest = digest.notices.length
-      ? { ...request, text, digest, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
+      ? { ...request, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
       : { ...request, status: "canceled" }
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => (candidate === request ? next : candidate)) }
@@ -848,8 +848,8 @@ export class LiveConversations {
     // The user's own message supersedes any continuation Mako was about to send.
     this.autoContinue.decline(resident)
     // A new message is the moment to try again: what waits to go again goes now, ahead of it, as it kept its place.
-    if (resident.snapshot.requests.some((request) => holdOf(request)?.kind === "retry"))
-      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (holdOf(request)?.kind === "retry" ? released(request) : request)) }
+    if (resident.snapshot.requests.some(goesNext))
+      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (goesNext(request) ? released(request) : request)) }
     if (marks.goal?.step !== "continue") this.goals.decline(resident)
     this.hibernation.clearHibernationTimer(resident)
     const pause = signInPause(resident.snapshot.requests)
