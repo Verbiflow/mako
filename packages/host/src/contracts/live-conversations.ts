@@ -236,6 +236,11 @@ export interface TurnContinuation {
    * whether its words or a Continue go is decided as it's sent (`LiveDispatch`).
    */
   brief?: string
+  /**
+   * When the turn was cut (epoch ms): the message that continues it says what moved in its checkout since, read as it's
+   * sent (`cutAccount`, `LiveDispatch`), so the read sits behind its place in the queue.
+   */
+  since?: number
 }
 
 /**

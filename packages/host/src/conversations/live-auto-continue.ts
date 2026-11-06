@@ -128,15 +128,16 @@ export class LiveAutoContinue {
    * to another machine continues where the Thread runs next. `continues` names the request that was cut short, which
    * may be in another host's journal; `stopped` is the background work the cut stopped, else what that request kept
    * of it (`Interruption.stopped`). `stayed`: the move didn't happen and the turn goes on where it was, which its words
-   * say (`continueTurnPrompt`). Asked again under the same `requestId`, it changes nothing.
+   * say (`continueTurnPrompt`). `since`: when the cut was, for the account of what moved since, beneath those words
+   * (`finResumedText`). Asked again under the same `requestId`, it changes nothing.
    */
-  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string }): void {
+  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string; since?: number }): void {
     const resident = this.access.resident(id)
     if (!resident) throw new Error("This conversation is no longer available")
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
     this.decline(resident)
     const tuning = [...resident.snapshot.requests].reverse().find((request) => request.tuning)?.tuning
-    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...input.brief && { brief: input.brief } }
+    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...input.brief && { brief: input.brief }, ...input.since !== undefined && { since: input.since } }
     // A brief carried again goes as itself, framed; as it's sent, a transcript that shows it has a Continue go instead.
     const brief = input.brief && resident.snapshot.requests.find((request) => request.id === input.brief)
     const request = LiveRequestSchema.parse({

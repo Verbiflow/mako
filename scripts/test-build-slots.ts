@@ -69,7 +69,7 @@ const release = (folder: string, file = "go") => writeFileSync(join(folder, file
 
 // ── How many: the builds capacity keeps room for, and one more while the machine is idle.
 {
-  let reading: MacReading = { cores: 14, memoryBytes: 36 * GB, load: 2 }
+  let reading: MacReading = { cores: 14, memoryBytes: 36 * GB, busyCores: 2 }
   let now = 0
   const capacity = new FinCapacity({ read: async () => reading, costs: new FinCostModel(), own: () => undefined, hardware: () => ({ cores: 14, memoryBytes: 36 * GB }), now: () => now })
   let heard = 0
@@ -78,11 +78,11 @@ const release = (folder: string, file = "go") => writeFileSync(join(folder, file
   await capacity.observe(0, {})
   assert.equal(capacity.builds(), 2, "an idle Mac takes one more")
   assert.equal(heard, 1, "and says so, so what waits goes")
-  reading = { ...reading, load: 9 }
+  reading = { ...reading, busyCores: 9 }
   now += 10_000
   await capacity.observe(0, {})
   assert.equal(capacity.builds(), 1, "a busy one doesn't")
-  reading = { ...reading, load: 2, memoryPressure: true }
+  reading = { ...reading, busyCores: 2, memoryPressure: true }
   now += 10_000
   await capacity.observe(0, {})
   assert.equal(capacity.builds(), 1, "nor one under pressure, from the first reading of it")

@@ -415,9 +415,10 @@ async function cost(): Promise<void> {
     let at = 0
     const sampler = new FinCostSampler({ table: async () => rows, owned: () => owned, now: () => at })
     const fins = [{ conversation: codexId, harness: "codex" }, { conversation: grokId, harness: "grok" }]
-    assert.deepEqual(await sampler.sample(fins), [])
+    assert.equal(await sampler.sample(fins), undefined)
     at = 2_000
     const readings = await sampler.sample(fins)
+    assert.ok(readings)
     assert.equal(readings[0]?.memoryBytes, (1000 + 2000 + 5000) * 1024, "codex is charged for grok's child, or not for the shared process")
     assert.equal(readings[1]?.memoryBytes, (3000 + 4000 + 5000) * 1024, "grok is charged for codex's child, or not for the shared process")
     console.log("fin cost: two trees, the shared process charged to both")
