@@ -120,7 +120,8 @@ export const LIMIT_HEADROOM_PERCENT = 70
  * Another account of the same harness with room, offered when the one in
  * use is near its plan limit or the harness just refused a turn on it.
  * Never taken by itself: an account is money, so switching is the person's
- * click. `window` is the binding one, which names the limit.
+ * click; a Fin moves on by their switch in Settings › Fins alone
+ * (`contracts/fin-fallback.ts`). `window` is the binding one, which names the limit.
  */
 export interface AccountLimitOffer {
   harness: string

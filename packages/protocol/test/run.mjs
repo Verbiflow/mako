@@ -1731,28 +1731,37 @@ describe("client frames", () => {
         far = other
         return near
       },
-      { heartbeatMs: 40, silentMs: 100 }
+      { heartbeatMs: 100, silentMs: 2_000 }
     )
     let answering = true
-    const pinged = []
+    let pinged = 0
     const replied = session.call({ ...operation, input: Payload.of({}) })
     const subscription = session.subscribe({ stream: "thread:th-1", after: 0 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     far.addEventListener("message", (event) => {
       if (event.data !== PING) return
-      pinged.push(Date.now())
+      pinged++
       if (answering) far.send(PONG)
     })
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    while (pinged < 4) await new Promise((resolve) => setTimeout(resolve, 10))
     assert.equal(far.readyState, 1, "answered pongs keep it open")
-    // The far end stops answering and never closes: a socket the client would otherwise wait on for minutes.
+    // The far end stops answering and never closes: a socket the client would otherwise wait on for minutes. The next
+    // heartbeat past the silent window ends it; the wait on that is a hang guard thirty windows long.
     answering = false
-    const silent = Date.now()
-    const reply = await replied
-    assert.equal(reply.problem.outcome, "unknown", "the call in flight is answered unknown, to be repeated under its id")
-    await assert.rejects(subscription.next(), "the subscription ends, for its reader to follow again")
-    assert.ok(Date.now() - silent < 250, `ended within a heartbeat of the silence (${Date.now() - silent} ms)`)
-    assert.ok(pinged.length >= 4)
+    const pingedBefore = pinged
+    let guard
+    const hung = new Promise((_, reject) => {
+      guard = setTimeout(() => reject(new Error("still open 60 s after the far end went silent")), 60_000)
+    })
+    try {
+      const reply = await Promise.race([replied, hung])
+      assert.equal(reply.problem.outcome, "unknown", "the call in flight is answered unknown, to be repeated under its id")
+      await assert.rejects(Promise.race([subscription.next(), hung]), (error) => !/still open/.test(error.message), "the subscription ends, for its reader to follow again")
+      // Told in heartbeats, not the clock: a stalled runner sends fewer, and a window that ran long sends more.
+      assert.ok(pinged - pingedBefore <= 22, `ended within a heartbeat of the 20 the silent window holds (${pinged - pingedBefore})`)
+    } finally {
+      clearTimeout(guard)
+    }
   })
   test("waking ends a connection not heard from within a heartbeat at once, and one that doesn't answer a ping soon", async () => {
     let answering = true
@@ -1762,12 +1771,12 @@ describe("client frames", () => {
         far.addEventListener("message", (event) => event.data === PING && answering && far.send(PONG))
         return near
       },
-      { heartbeatMs: 25_000, wakeProbeMs: 60 }
+      { heartbeatMs: 25_000, wakeProbeMs: 1_000 }
     )
     const quiet = session.subscribe({ stream: "thread:th-1", after: 0 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     session.wake()
-    const live = await Promise.race([quiet.next(), new Promise((resolve) => setTimeout(() => resolve("open"), 150))])
+    const live = await Promise.race([quiet.next(), new Promise((resolve) => setTimeout(() => resolve("open"), 1_500))])
     assert.equal(live, "open", "it answered the wake's ping: kept")
     // A short sleep on a network the wake didn't keep: heard moments ago, and nothing comes back now.
     answering = false
@@ -1893,17 +1902,23 @@ describe("a call to a gateway over HTTP", () => {
       () => new Response("{}", { status: 503, headers: { "retry-after": "nonsense" } }),
       () => new Response(JSON.stringify({ missing: [] }), { status: 200 }),
     ]
-    const at = []
-    const fetch = async () => {
-      at.push(performance.now())
-      return answers.shift()()
-    }
+    const fetch = async () => answers.shift()()
     const trace = { tries: 0, failures: [] }
     const remote = recordsOverHttp({ id: "t", base: "https://gw/v1/devices/d/originals", authorization: () => "Bearer t", fetch, backoff: [1, 1] })
-    assert.deepEqual(await remote.missing(["a".repeat(64)], trace), [])
+    // The waits it asks for between tries, counted rather than timed.
+    const timer = globalThis.setTimeout
+    const waits = []
+    globalThis.setTimeout = (run, ms, ...rest) => {
+      waits.push(ms)
+      return timer(run, ms, ...rest)
+    }
+    try {
+      assert.deepEqual(await remote.missing(["a".repeat(64)], trace), [])
+    } finally {
+      globalThis.setTimeout = timer
+    }
     assert.equal(trace.tries, 3)
-    assert.ok(at[1] - at[0] >= 290, `waited ${Math.round(at[1] - at[0])} ms of the 300 the gateway asked`)
-    assert.ok(at[2] - at[1] < 250, "one it can't read is the client's own backoff")
+    assert.deepEqual(waits, [300, 1], "the 300 ms the gateway asked, then for one it can't read the client's own backoff")
     assert.equal(retryAfterMs("2"), 2_000)
     assert.equal(retryAfterMs(new Date(Date.now() + 5_000).toUTCString()) > 3_000, true)
     assert.equal(retryAfterMs("3600"), RETRY_AFTER_MOST_MS)

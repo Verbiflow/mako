@@ -223,6 +223,13 @@ export interface ConversationChildren {
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
+  /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
+  pinnedAccount?(conversation: string, harness: string): string | undefined
+}
+
+/** What a launch of `conversation` on `harness` reads its account from: the Fin's pin, else the selected account. */
+export function launchAccount(dependencies: Pick<Dependencies, "agents">, conversation: string, harness: string): () => string | undefined {
+  return () => dependencies.agents?.()?.pinnedAccount?.(conversation, harness)
 }
 export interface Dependencies {
   /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */

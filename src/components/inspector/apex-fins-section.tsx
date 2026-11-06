@@ -14,6 +14,7 @@ import { threadChildren, useThreadChildren } from "@/state/apex-fins"
 import { Elapsed } from "@/components/inspector/elapsed"
 import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 import { SignpostIcon } from "lucide-react"
+import { FinMovedLine } from "./fin-moved-line"
 
 const HEADINGS = {
   needs: "Needs you",
@@ -178,6 +179,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
               <span className="truncate">{agent.runsOn.rule}</span>
             </span>
           ) : null}
+          <FinMovedLine agent={agent} />
           {agent.runsOn?.note ? (
             <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
               {agent.runsOn.note}

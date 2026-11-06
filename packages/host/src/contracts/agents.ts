@@ -4,6 +4,7 @@ import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, WAITING_ON_LIMIT, Waiti
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 import { FinTuningSourceSchema, type FinTuningWords } from "./fin-tuning.js"
+import type { FallbackStep } from "./fin-fallback.js"
 
 export { CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type WaitingOn }
 
@@ -249,6 +250,42 @@ export const FollowedRunSchema = z.object({
 })
 export type FollowedRun = z.infer<typeof FollowedRunSchema>
 
+const HarnessName = z.string().min(1).max(64)
+/** A step of a Fin's fallback order it took (`fallbackOrder`): another account of its harness, a connection's model on it, or the next harness. */
+export const FinStepSchema = z.discriminatedUnion("why", [
+  z.object({ why: z.literal("account"), harness: HarnessName, account: z.string().min(1).max(320), label: z.string().max(320) }),
+  z.object({ why: z.literal("connection"), harness: HarnessName, connection: z.string().min(1).max(64), connectionName: z.string().max(120), model: z.string().min(1).max(300) }),
+  z.object({ why: z.literal("harness"), harness: HarnessName }),
+]) satisfies z.ZodType<FallbackStep>
+
+/**
+ * It was meant for a harness whose account was at its limit, and started or went on elsewhere: the harness it left
+ * (`from`), until when, another account the person could switch to (`instead`), and from this build the account at
+ * its limit, the step it took (`to`), when it moved mid-run (`at`, absent at its start) and its row's words (`line`).
+ */
+export const FinReroutedSchema = z.object({
+  from: HarnessName,
+  until: z.number().optional(),
+  instead: z.string().max(320).optional(),
+  account: z.string().max(320).optional(),
+  to: FinStepSchema.optional(),
+  at: z.number().optional(),
+  line: z.string().max(512).optional(),
+})
+export type FinRerouted = z.infer<typeof FinReroutedSchema>
+
+/**
+ * A Fin's logical turn as its fallback reads it (`fin_moves`, beside its edge), so it never loops across a restart:
+ * the places it ran on (`placeKey`), the waits for a limit it already moved for, and the host generation taking a
+ * move now and for which wait. It's cleared once a turn of the Fin ends without a limit.
+ */
+export const FinTurnSchema = z.object({
+  visited: z.array(z.string().min(1).max(400)).max(64),
+  handled: z.array(z.string().min(1).max(600)).max(64),
+  moving: z.object({ owner: z.number(), wait: z.string().min(1).max(600), at: z.number() }).optional(),
+})
+export type FinTurn = z.infer<typeof FinTurnSchema>
+
 /**
  * The edge: one row of `thread_parents`, keyed by the child Thread, written
  * by the child's owner. It holds only what nothing else does; the child's
@@ -283,8 +320,8 @@ export const ThreadParentSchema = z.object({
     .object({
       source: FinTuningSourceSchema,
       note: z.string().max(2_000).optional(),
-      /** It was meant for its Apex's harness, whose account was at its limit, and started on the person's next one. */
-      rerouted: z.object({ from: z.string().min(1).max(64), until: z.number().optional(), instead: z.string().max(320).optional() }).optional(),
+      /** Its harness's account was at its limit, so it started or went on on the next step of its order (`FinRerouted`). */
+      rerouted: FinReroutedSchema.optional(),
       /** The person's rule it was started by, as it read then (`n` absent: their choice for work no rule fits). */
       rule: z.object({ n: z.number().int().positive().optional(), when: z.string().max(400) }).optional(),
     })
@@ -494,7 +531,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model

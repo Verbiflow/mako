@@ -221,3 +221,34 @@ export function finResumedText(resume: FinResume): string {
   const now = branches.length ? `\n\nWhere your branch stands now:\n${branches.join("\n")}` : ""
   return `${head}\n${opening}\n\n${since}${now}\n\nCheck what you had in flight when you stopped (a command half-run, a file half-written) and anything that landed meanwhile before going on.`
 }
+/** A Fin whose turn stopped on its account's usage limit, going on elsewhere (`finMovedText`). */
+export interface FinMovedOn {
+  /** Where it was, where it goes on, and why, in the person's words (`movedWords`). */
+  from: string
+  to: string
+  why: string
+  /** The same session on another account, or the conversation handed to a new session. */
+  session: "same" | "handed-over"
+  checkout: readonly RepositoryChanges[]
+}
+
+/**
+ * What a Fin reads as it goes on after its account ran out mid-turn: where it
+ * stopped and why, where it goes on now, and what moved in its checkout since
+ * the turn began, so it checks what it had in flight before carrying on.
+ */
+export function finMovedText(moved: FinMovedOn): string {
+  const session = moved.session === "same"
+    ? "This is the same session: everything above is yours."
+    : `The conversation above is yours, carried over from ${moved.from}.`
+  const changed = checkoutLines(moved.checkout)
+  const since = changed.length ? `In your checkout since that turn began:\n${changed.join("\n")}` : "Nothing moved in your checkout since that turn began: no commit, push or file change."
+  return [
+    "[mako · moved after a usage limit]",
+    `Your last turn stopped on ${moved.from}: ${moved.why}. Mako ${moved.to.replace(/^Moved/, "moved you")}, so the work goes on there. ${session}`,
+    "",
+    since,
+    "",
+    "Check what you had in flight when it stopped (a command half-run, a file half-written), then carry on with the work.",
+  ].join("\n")
+}
