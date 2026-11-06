@@ -342,6 +342,8 @@ export class AgentRuns {
     let unconfirmed = kept?.unconfirmed === true
     while (!this.stopped) {
       const identity = await this.identity(process)
+      // A host that shut down during that read leaves the stop to the next one, its store closed with it.
+      if (this.stopped) return
       // Another process's pid now: a pid isn't reused while its group lives, so the group under that id is the new one's.
       // Gone: only once nothing of its group is left either.
       if (identity === "other" && (signalable(process.pid) || !groupRuns(process.pid))) break
