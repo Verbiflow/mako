@@ -9,7 +9,7 @@ import { threadReferenceId, threadToken, writeReference } from "@mako/sessions/t
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { AgentMoved, AgentsMoveInput, AgentsMoveResult } from "@mako/host/contracts/agent-tools"
-import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { ActorSchema, SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { arriving } from "@mako/host/contracts/request-hold"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
@@ -341,7 +341,7 @@ async function landing(): Promise<void> {
     const { conversation } = f.fin()
     out = true
     const digest = randomUUID()
-    f.world.live.submit(conversation, digest, "row-digest", [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(f.world.caller(conversation).kind === "agent" ? f.world.caller(conversation).session : "") }, { digest: { notices: [] } })
+    f.world.live.submit(conversation, digest, "row-digest", [], undefined, undefined, undefined, ActorSchema.parse(f.world.caller(conversation)), { digest: { notices: [] } })
     await until("it to wait", () => f.world.live.snapshot(conversation)!.requests.some((request) => request.id === digest && request.retry))
     const id = randomUUID()
     await f.world.continueOn(conversation, { kind: "words", input: { id, provider: "claude", text: "row-words", attachments: [] } })
