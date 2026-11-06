@@ -109,6 +109,11 @@ export function retriesBegun(before: readonly LiveRequest[], after: readonly Liv
   return after.some((request) => queued.has(request.id) && request.status === "held" && request.retry !== undefined)
 }
 
+/** Whether its next attempt is the one its reset was waited for; past that, it goes on the steps, each with its own time. */
+export function waitsForReset(retry: Pick<RequestRetry, "at" | "until">): boolean {
+  return retry.until !== undefined && retry.at <= retry.until + RESET_MARGIN_MS
+}
+
 /** The queue row's line for a message that goes again by itself: what holds it, in the harness's name. */
 export function retryWords(retry: Pick<RequestRetry, "cause" | "until">, harness: string, now = Date.now()): string {
   switch (retry.cause) {

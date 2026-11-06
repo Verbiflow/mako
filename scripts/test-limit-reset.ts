@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { classifyProviderFailure, permanentFailure, usageLimitWords, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
 import { limitReset } from "@mako/host/contracts/limit-reset"
-import { GIVE_UP_MS, nextRetry, RESET_MARGIN_MS, RETRY_STEPS_MS, retryWords, transientCause } from "@mako/host/contracts/delivery-retry"
+import { GIVE_UP_MS, nextRetry, RESET_MARGIN_MS, RETRY_STEPS_MS, retryWords, transientCause, waitsForReset } from "@mako/host/contracts/delivery-retry"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
 
 /**
@@ -112,6 +112,9 @@ console.log("limit words: Cursor's and Claude's exact lines and every harness's 
   // It's kept with the row: a restart doesn't lose it.
   assert.equal(LiveRequestSchema.parse({ id: randomUUID(), text: "x", attachments: [], status: "held", retry }).retry?.until, until, "the journal keeps it")
   assert.match(retryWords(retry, "Cursor", NOW), /^Cursor is at its usage limit until /)
+  assert.equal(waitsForReset(retry), true, "its next attempt is the reset's")
+  assert.equal(waitsForReset(again), false, "past it, the row says the attempt's own time")
+  assert.equal(waitsForReset(nextRetry(undefined, "rate-limited", "429 Too Many Requests", NOW)!), false, "as it does with no reset")
   assert.equal(retryWords({ cause: "rate-limited" }, "Cursor", NOW), "Cursor is at capacity or its usage limit")
   assert.equal(retryWords({ cause: "rate-limited", until }, "Cursor", until + 1), "Cursor is at capacity or its usage limit", "a reset gone by isn't what it waits for")
 }
