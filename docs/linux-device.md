@@ -25,6 +25,9 @@ and confirm the code BCDF-GHJK there (or go to https://api.runmako.co/device and
 Waiting for the code to be confirmed…
 ```
 
+Settings › Devices › Add a machine, in the app and on the web, shows these
+lines with your account's cloud filled in, and says so when the machine joins.
+
 Open the page anywhere you're signed in to Mako, check the code matches, and
 approve. The machine is named by its hostname; `--name <name>` names it
 otherwise. Once joined, `mako-host` runs as that device, against the same

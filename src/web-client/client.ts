@@ -23,6 +23,11 @@ export interface WebClientOptions {
   /** The build serving the page, for Diagnostics. */
   build?: string
   /**
+   * The Mako cloud's own address, where a machine joins the account (`mako-host join --cloud`): given by a page served
+   * from another host than the gateway's. Without it, Add a machine leaves the cloud to the host's own build.
+   */
+  cloud?: string
+  /**
    * Called once, after the app's first screen has painted with the account's Threads and the screens it reads next (a
    * Thread, New) have arrived: the moment for the page's own work that can wait, such as installing its service worker.
    */

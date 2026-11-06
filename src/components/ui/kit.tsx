@@ -331,9 +331,9 @@ export function ListCard({ className, children }: ComponentProps<"div">) {
   )
 }
 
-export function ListCardRow({ className, children }: ComponentProps<"div">) {
+export function ListCardRow({ className, children, ...props }: ComponentProps<"div">) {
   return (
-    <div className={cn("py-3 first:pt-3.5 last:pb-3.5", className)}>
+    <div className={cn("py-3 first:pt-3.5 last:pb-3.5", className)} {...props}>
       {children}
     </div>
   )

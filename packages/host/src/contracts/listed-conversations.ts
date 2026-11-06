@@ -22,9 +22,9 @@ export const QUIET_STATUS = { ...LISTED_STATUS, working: "ready", waiting: "read
 /**
  * What a window lists of a Session it knows only from the account's list: the row, where it runs in words, and nothing
  * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's. A row of a quiet device
- * is listed as that device left it, but not at work.
+ * is listed as that device left it, but not at work. `deviceKind`: its device's kind, where the account's devices say.
  */
-export function listedSummary(row: ListedSession, where: string, quietSince: string | undefined): LiveSummary {
+export function listedSummary(row: ListedSession, where: string, quietSince: string | undefined, deviceKind?: string): LiveSummary {
   const quiet = quietSince !== undefined
   // At work only on what its ended turn left running: its turn is over, and the rail says what it waits on.
   const background = !quiet && row.state === "working" && row.background !== undefined
@@ -46,6 +46,7 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
     sessionId: row.session,
     movedAt: Date.parse(row.activityAt),
   }
+  if (deviceKind && row.runsOn.kind === "device") summary.elsewhereKind = deviceKind
   const promptedAt = listedPromptedAt(row)
   if (promptedAt !== undefined) summary.promptedAt = promptedAt
   if (row.title) summary.session.title = row.title

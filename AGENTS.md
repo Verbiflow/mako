@@ -1851,6 +1851,32 @@ refused move paused goes on here in words that say it stayed
 (`SavedContinuation.stayed`), so no transcript draws "Moved to the cloud" over
 it.
 
+The account's devices are one component on a Mac and in a browser
+(`src/components/settings/devices.tsx`, `Devices`): Settings › Devices on the
+desk (`devices-section.tsx`, fed by the host's `mako:cloud-devices`) and the
+web app's Settings (`web-client/devices.tsx`, fed by the account's list and
+the gateway). It reads nothing itself; `form` picks a window's sizes or a
+finger's. Every rule it shows is in `contracts/account-devices.ts`, so both
+say the same of a device: its family (`deviceFamily`: a `runtime` device is a
+machine of the person's own), its health (`deviceHealth`: the account's
+`device-quiet` where the list hears it, else `lastSeenAt`, which the cloud
+writes as a device joins, so one that never moved past that never connected),
+whether its Mako is behind (`needsMakoUpdate` against `DEVICE_MAKO_NEEDED`; a
+checkout's 0.0.1 is never judged), and the lines Add a machine shows
+(`joinCommand`, `containerCommand`), which are `docs/linux-device.md`'s and
+change with it. What runs on a device is counted from what the window already
+holds: a browser counts the list's rows, a Mac its conversations by the
+place they name; which rows are Fins the list doesn't say. Add a machine
+waits on the account's `device-joined` (`cloudAccountStore.joined`,
+`accountListStore.joined`) and turns into what joined; while it's open the
+join's toast is left out (`addingMachine`). Where a Thread runs is one glyph
+(`ui/place-mark.tsx`, `runPlace`): a cloud, a server for a machine of the
+person's own, a laptop for a Mac. The device's kind travels with the row
+(`LiveSummary.elsewhereKind`, from the account's devices in
+`CloudConversations` and `sessionOf`). `scripts/test-account-devices.ts`
+holds the rules, `npm run test:account-devices-ui` both windows
+(`?mock&cloud=signed-in` and `scripts/web-devices.html` hold every state).
+
 ## MCP
 
 Mako owns a redacted, provider-neutral MCP registry. Use the current
