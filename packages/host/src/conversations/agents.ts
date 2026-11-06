@@ -8,7 +8,8 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
 import { finMovedText, finResumedText } from "../contracts/resume-account.js"
-import { movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
+import { usageLimitWords } from "../contracts/provider-failure.js"
+import { isLimitAsk, limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
 import { homedir } from "node:os"
@@ -56,6 +57,7 @@ import {
   type QueueReason,
   FinReroutedSchema,
   type FinRerouted,
+  type LimitNotice,
   queuedWords,
   type Report,
   type ThreadParent,
@@ -122,6 +124,7 @@ import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-run
 import { holdOf } from "../contracts/request-hold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
+import { carriedDigest } from "../contracts/delivery-retry.js"
 import { settledWithin, type ContinueOn } from "./continue-on.js"
 import type { LiveConversations } from "./live-conversations.js"
 import { heldReferences, treeEdges } from "./thread-tree.js"
@@ -330,12 +333,26 @@ interface Ruled {
   rule: { n?: number; when: string }
 }
 
-/** An Apex resolved in the store: its Session, its Thread, and its conversation here. */
 /** A request waiting out a limit, which a move can take over: a Stop's latch leaves it where it is. */
 function waitsOnLimit(request: LiveRequest): boolean {
   return request.status === "held" && request.retry?.cause === "rate-limited" && request.pause !== "stop"
 }
 
+/** A notice gathers what one limit does across its tree for this long, so it says it all at once. */
+const NOTICE_GATHER_MS = 3_000
+/** A notice's only answer. */
+const SEEN_OPTIONS = [{ label: "Got it" }]
+
+/** A notice gathering what a limit does to its tree: kept in the store, this is only its time to go. */
+interface LimitEpisode {
+  id: string
+  timer: NodeJS.Timeout
+}
+
+/** The longest a timer holds: a limit's reset can be further off. */
+const LONGEST_TIMER_MS = 2 ** 31 - 1
+
+/** An Apex resolved in the store: its Session, its Thread, and its conversation here. */
 interface Apex {
   session: string
   thread: string
@@ -530,6 +547,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly moves: FinMoves | undefined
   /** By Apex, the moves of its Fins its next digest says, once. */
   private readonly movedNotes = new Map<string, string[]>()
+  /** By root Thread, the limit its tree hit in the last moments, gathered into its one notice (`noteLimit`). */
+  private readonly limits = new Map<string, LimitEpisode>()
+  private readonly noticeEnds = new Map<string, NodeJS.Timeout>()
   /** The waits for a limit a move of this host is taking now (`limitMove`). */
   private readonly moving = new Set<string>()
 
@@ -565,18 +585,18 @@ export class Agents implements AgentOperations, ConversationChildren {
       ready: (conversation) => this.ready(conversation),
       // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
       unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
-        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, notices: request.digest.notices }] : []),
+        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
       carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
-      admit: (conversation, request, text, notices, actor, hold) => {
+      admit: (conversation, request, text, notices, actor, hold, lines) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
         if (deps.live.snapshot(conversation)?.requests.some((asked) => asked.id === request)) return
         deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor, {
-          digest: { notices: [...notices] },
+          digest: { notices: [...notices], ...(lines?.length && { lines: [...lines] }) },
           ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS } },
         })
       },
-      rewrite: (conversation, request, text, notices) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices] }),
+      rewrite: (conversation, request, text, notices, lines) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
       assign: (reports, request) => {
         this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request)
@@ -587,6 +607,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.dropHeld(id.slice(HELD_PREFIX.length))
       },
       counts: (conversation) => this.counts(conversation),
+      takeLines: (conversation) => this.takeMoved(conversation),
+      giveLines: (conversation, lines) => this.giveMoved(conversation, lines),
       current: (notice) => this.current(notice),
       now: deps.now,
     })
@@ -654,6 +676,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) this.resumePaused(edge)
       // Whatever the last host left of it, a cut turn nothing picks up reaches its Apex.
       if (conversation) this.watchCut(conversation)
+    }
+    // A notice the last host was gathering goes on and is said, and one standing still ends at its reset.
+    for (const { root, notice } of store.limitNotices()) {
+      if (notice.gathering) this.gatherNotice(root, notice.id)
+      else this.endNotice(root)
     }
     // An answer kept and not delivered when the last host stopped goes once, under the request it was kept with.
     for (const kept of store.undeliveredAnswers()) {
@@ -781,7 +808,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const thread = store.journalPlacement(conversation)?.thread
     if (!thread) return NONE
     const held = this.rosters.get(thread)
-    if (held) return held
+    if (held && !held.some((agent) => agent.child?.limitNotice && agent.child.limitNotice.id !== this.standingNotice(this.rootOf(thread))?.id)) return held
     const children = store.edges().children(thread)
     const queued = this.queuedOf(thread)
     if (!children.length && !queued.length) return NONE
@@ -1470,6 +1497,18 @@ export class Agents implements AgentOperations, ConversationChildren {
     return answered
   }
 
+  /** The notice of a limit its tree hit, on the first Fin it touched, while it stands. */
+  private noticeOn(edge: ThreadParent): { id: string; line: string; harness: string } | undefined {
+    const notice = this.standingNotice(this.rootOf(edge.child))
+    return notice?.fin === edge.child ? { id: notice.id, line: notice.line, harness: notice.harness } : undefined
+  }
+
+  /** A tree's notice until it's seen or its reset has passed: by then it's no news. */
+  private standingNotice(root: string): LimitNotice | undefined {
+    const notice = this.store()?.limitNotice(root)
+    return notice && (notice.until === undefined || notice.until > this.now()) ? notice : undefined
+  }
+
   /**
    * The person answering one of an Apex's Fins from the Apex's Thread, on any
    * device: theirs to answer whatever the Apex's access, as its own Thread's
@@ -1479,6 +1518,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     const began = performance.now()
     const placed = this.store()?.journalPlacement(conversation)
     if (!placed) return { refused: "unavailable", why: "That conversation isn't a Thread here." }
+    // A limit's notice answers nothing: it goes no further than the person having seen it.
+    if (isLimitAsk(input.ask)) {
+      const root = this.rootOf(placed.thread)
+      if (!this.store()!.seeLimitNotice(root, input.ask)) return { refused: "conflict", why: "That notice has passed." }
+      const edge = this.store()!.edges().of(input.fin)
+      this.noticeChanged(edge)
+      return { answered: "person", child: input.fin, name: edge?.name ?? "Usage" }
+    }
     const edge = this.resolve({ session: placed.session, thread: placed.thread, conversation }, input.fin, true)
     if (!edge) return unknownFin(input.fin)
     const op = `respond:${input.request}`
@@ -1515,6 +1562,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const placed = store?.journalPlacement(conversation)
     if (!store || !placed || !store.edges().children(placed.thread).length) return undefined
     if (this.frontOf(placed.thread, placed.session) !== conversation) return undefined
+    const notice = placed.thread === this.rootOf(placed.thread) ? this.standingNotice(placed.thread) : undefined
+    if (notice) return { fin: ThreadIdSchema.parse(notice.fin), name: "Usage", line: notice.line, ask: { kind: "report", id: notice.id, options: SEEN_OPTIONS }, more: 0 }
     const asks: { edge: ThreadParent; question: string; ask: FinAsk }[] = []
     const look = (thread: string, depth: number) => {
       for (const edge of store.edges().children(thread)) {
@@ -1932,6 +1981,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   dispose(): void {
+    for (const episode of this.limits.values()) clearTimeout(episode.timer)
+    this.limits.clear()
+    for (const timer of this.noticeEnds.values()) clearTimeout(timer)
+    this.noticeEnds.clear()
     this.stopped = true
     for (const timer of this.cutChecks.values()) clearTimeout(timer)
     this.cutChecks.clear()
@@ -2514,14 +2567,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       const pinned = this.pinnedAccount(conversation, harness)
       const accounts = await moves.accounts(harness, pinned, true)
       const from = accounts.find((account) => account.name === pinned) ?? accounts.find((account) => account.active)
-      // Without the harness's own word for the limit, the account's reading has to say it ran out.
-      if (!limit && !from?.spent) return
+      // The harness's own word for the limit, the words it refused with, or the account's reading has to say it ran out.
+      if (!limit && !usageLimitWords(wait.retry?.reason) && !from?.spent) return
       const session = this.deps.live.session(conversation)
       const model = this.settingsOf(conversation)?.model
       const place: FinPlace = { harness, ...(from && { account: from.name }), ...(model && { model }) }
       const order = await moves.order({ from: place, when: "mid-run", tier, ...(session?.cwd && { cwd: session.cwd }), visited, accounts })
       const now = this.now()
-      const until = limit?.resetsAt ?? from?.spent?.until ?? undefined
+      const until = limit?.resetsAt ?? wait.retry?.until ?? from?.spent?.until ?? undefined
       const label = (name: string) => this.deps.harnessLabel(name)
       const step = order.steps[0]
       if (!step) {
@@ -2531,6 +2584,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         const line = outOfAccountsLine({ harness, ...(from && { account: from.label }) }, order.spent, label, until, now)
         store.rerouteEdge(edge.child, { ...(store.edges().of(edge.child)?.tuned?.rerouted ?? { from: harness }), line })
         moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place)] })
+        this.noteLimit(edge.child, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) })
         hostLog("agents", "a Fin's account ran out and every other is at its limit; it stops", { op: edge.op, harness })
         ended = true
         await this.end(store.edges().of(edge.child) ?? edge, line)
@@ -2566,6 +2620,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place), stepKey(step)] })
       this.deps.live.recordNote(conversation, words.to, words.why)
       this.movedNotes.set(edge.parent, [...(this.movedNotes.get(edge.parent) ?? []), `"${edge.name}" ${line.charAt(0).toLowerCase()}${line.slice(1)}.`])
+      this.noteLimit(edge.child, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) }, words.to.replace(/^Moved to /, ""))
       hostLog("agents", "a Fin's account ran out; it goes on at the next step", { op: edge.op, from: harness, why: step.why, to: step.harness })
       this.forget(edge.parent)
       this.childMoved(rerouted, false)
@@ -2575,6 +2630,73 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!moved) store.finishFinMove(edge.child, this.generation)
       if (!moved && !ended) report()
     }
+  }
+
+  /**
+   * A limit touched Fin `fin` of a tree: the tree's one notice gathers it (`NOTICE_GATHER_MS`), then says what ran out,
+   * until when, what moved where and what waits. A moved Fin says nothing of its own; `to` is where it went, none for
+   * one with nowhere to go. One notice per account and reset (`limitNoticeId`). Kept as it happens, in the same step as
+   * the move: a host that stops while it gathers leaves it to the next (`resume`).
+   */
+  private noteLimit(fin: string, limit: { harness: string; account?: string; until?: number }, to?: string): void {
+    const store = this.store()
+    if (!store) return
+    const { harness, account, until } = limit
+    const root = this.rootOf(fin)
+    const now = this.now()
+    const id = this.limits.get(root)?.id ?? limitNoticeId(limit, now)
+    const first = { id, fin, harness, line: "", at: now, ...(until !== undefined && { until }), gathering: { ...(account && { account }), moved: [], stopped: 0 } }
+    if (store.gatherLimitNotice(root, first, to)) this.gatherNotice(root, id)
+  }
+
+  private gatherNotice(root: string, id: string): void {
+    if (this.limits.has(root)) return
+    const timer = setTimeout(() => this.sayLimit(root, id), NOTICE_GATHER_MS)
+    timer.unref()
+    this.limits.set(root, { id, timer })
+  }
+
+  private sayLimit(root: string, id: string): void {
+    this.limits.delete(root)
+    const store = this.store()
+    if (!store || this.stopped) return
+    const notice = store.limitNotices().find((each) => each.root === root && each.notice.id === id)?.notice
+    if (!notice?.gathering) return
+    const { harness, until, fin, gathering: { account, moved, stopped } } = notice
+    const now = this.now()
+    const conversation = this.conversationOf(root)
+    const waiting = store.undeliveredReports().filter(({ report }) => report.status !== "progress" && this.rootOf(report.child) === root).length
+    const words = limitNoticeWords({ harness, ...(account && { account }), ...(until !== undefined && { until }), moved, stopped, waiting }, (name) => this.deps.harnessLabel(name), now)
+    const line = limitNoticeLine(words)
+    if (!store.sayLimitNotice(root, id, line)) return
+    hostLog("agents", "a limit's notice", { root, harness, moved: moved.length, stopped })
+    // One a host came back to past its reset is no news: it's kept as said, so the episode isn't said again.
+    if (conversation && (until === undefined || until > now)) this.deps.live.recordNote(conversation, words.ran, words.did)
+    this.noticeChanged(store.edges().of(fin))
+    this.endNotice(root)
+  }
+
+  /** A tree's notice ends at its reset: every surface hears it as they hear "Got it", a quiet Thread's too. */
+  private endNotice(root: string): void {
+    clearTimeout(this.noticeEnds.get(root))
+    this.noticeEnds.delete(root)
+    const notice = this.standingNotice(root)
+    if (notice?.until === undefined) return
+    const timer = setTimeout(() => {
+      this.noticeEnds.delete(root)
+      if (this.standingNotice(root)?.id !== notice.id) this.noticeChanged(this.store()?.edges().of(notice.fin))
+      this.endNotice(root)
+    }, Math.min(notice.until - this.now(), LONGEST_TIMER_MS))
+    timer.unref()
+    this.noticeEnds.set(root, timer)
+  }
+
+  /** The notice on `edge`'s entry came or went: every surface reads the entry again. */
+  private noticeChanged(edge: ThreadParent | undefined): void {
+    if (!edge) return
+    this.entries.delete(edge.child)
+    this.forget(edge.parent)
+    this.childMoved(edge, false)
   }
 
   /**
@@ -2996,8 +3118,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   private entryOf(edge: ThreadParent): NativeAgent {
     this.sync()
     const held = this.entries.get(edge.child)
-    if (held) return held
-    const entry = childEntry(edge, this.childReading(edge), this.journalOf(edge.child))
+    // A notice past its reset leaves what's held whatever's next to say so: the Inbox and a phone read it from here.
+    if (held && (!held.child?.limitNotice || this.noticeOn(edge))) return held
+    const read = childEntry(edge, this.childReading(edge), this.journalOf(edge.child))
+    const notice = this.noticeOn(edge)
+    const entry = notice && read.child ? { ...read, child: { ...read.child, limitNotice: notice } } : read
     this.entries.set(edge.child, entry)
     return entry
   }
@@ -3660,11 +3785,20 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The digest's last line, for the parent `conversation`. */
   private counts(conversation: string): string {
     const thread = this.store()?.journalPlacement(conversation)?.thread
-    if (!thread) return ""
-    // A Fin's move rides the next digest, said once: it never wakes its Apex by itself.
-    const moved = this.movedNotes.get(thread) ?? []
-    this.movedNotes.delete(thread)
-    return [...moved, this.childCounts(thread)].join("\n")
+    return thread ? this.childCounts(thread) : ""
+  }
+
+  /** A Fin's move rides the next digest, said once: it never wakes its Apex by itself. From here it's that digest's. */
+  private takeMoved(conversation: string): string[] {
+    const thread = this.store()?.journalPlacement(conversation)?.thread
+    const moved = (thread && this.movedNotes.get(thread)) || []
+    if (thread) this.movedNotes.delete(thread)
+    return moved
+  }
+
+  private giveMoved(conversation: string, lines: readonly string[]): void {
+    const thread = this.store()?.journalPlacement(conversation)?.thread
+    if (thread) this.movedNotes.set(thread, [...lines, ...this.movedNotes.get(thread) ?? []])
   }
 
   private childCounts(thread: string): string {

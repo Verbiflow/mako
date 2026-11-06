@@ -3463,6 +3463,16 @@ export function installMockBridge() {
       const agent = snapshot?.nativeAgents?.agents.find((each) => each.child?.thread === input.fin)
       const open = agent?.child?.state && openAsk(agent.child.state)
       if (!snapshot?.nativeAgents || !agent?.child) return { refused: "unknown-child", why: "That isn't one of this Thread's Fins." }
+      // A limit's notice goes no further than the person having seen it (`Agents.respond`).
+      if (input.ask.startsWith("limit:")) {
+        const child = { ...agent.child }
+        delete child.limitNotice
+        const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((each) => (each === agent ? { ...agent, child } : each)) }
+        const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
+        liveSnapshots.set(conversation, next)
+        emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
+        return { answered: "person", child: agent.child.thread, name: agent.child.name ?? agent.title }
+      }
       if (!open?.ask || open.ask.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
       const picked = input.option === undefined ? input.answer : open.ask.options?.[input.option]?.label
       const going: ChildState = { kind: "working", step: "Read your answer", ...(open.ask.kind === "report" && picked && { answered: { by: "person" as const, answer: picked } }) }

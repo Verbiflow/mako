@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -584,6 +584,7 @@ CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, 
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS limit_notices (root_thread TEXT NOT NULL, id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY (root_thread, id));
 CREATE TABLE IF NOT EXISTS agent_answers (
   ask TEXT PRIMARY KEY, child_thread TEXT NOT NULL, op TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
 CREATE INDEX IF NOT EXISTS agent_answers_child ON agent_answers(child_thread, at);
@@ -593,6 +594,7 @@ CREATE TABLE IF NOT EXISTS agent_pull_wakes (
 CREATE INDEX IF NOT EXISTS agent_pull_wakes_waiting ON agent_pull_wakes(at) WHERE delivered_at IS NULL;
 `
 const RecordRowSchema = z.object({ record: z.string() })
+const LimitNoticeRowSchema = z.object({ root_thread: z.string(), record: z.string() })
 const ReportRowSchema = z.object({ record: z.string(), wake_request: z.string().nullable() })
 
 /**
@@ -1008,6 +1010,65 @@ export class ThreadStore {
     if (!kept) return undefined
     const parsed = FinTurnSchema.safeParse(JSON.parse(RecordRowSchema.parse(kept).record))
     return parsed.success ? parsed.data : undefined
+  }
+
+  /** The notice of a limit a tree waits on the person's seeing: the newest not seen. */
+  limitNotice(root: string): LimitNotice | undefined {
+    const rows = this.sql("SELECT record FROM limit_notices WHERE root_thread = ?").all(root).flatMap((row) => {
+      const parsed = LimitNoticeSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      return parsed.success ? [parsed.data] : []
+    })
+    return rows.filter((notice) => !notice.seen && !notice.gathering).sort((a, b) => b.at - a.at)[0]
+  }
+
+  /** Every tree's notices, said or gathering: what a host picks up from the last. */
+  limitNotices(): { root: string; notice: LimitNotice }[] {
+    return this.sql("SELECT root_thread, record FROM limit_notices").all().flatMap((row) => {
+      const { root_thread: root, record } = LimitNoticeRowSchema.parse(row)
+      const parsed = LimitNoticeSchema.safeParse(JSON.parse(record))
+      return parsed.success ? [{ root, notice: parsed.data }] : []
+    })
+  }
+
+  private keptLimitNotice(root: string, id: string): LimitNotice | undefined {
+    const kept = this.sql("SELECT record FROM limit_notices WHERE root_thread = ? AND id = ?").get(root, id)
+    return kept ? LimitNoticeSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
+  }
+
+  /**
+   * A limit touched a Fin of tree `root`, gone on to `to` or nowhere: kept now, gathering what else it touches until
+   * `sayLimitNotice`. False when this episode was said already, seen or not.
+   */
+  gatherLimitNotice(root: string, first: LimitNotice & { gathering: NonNullable<LimitNotice["gathering"]> }, to?: string): boolean {
+    return this.write(() => {
+      const kept = this.keptLimitNotice(root, first.id)
+      if (kept && !kept.gathering) return false
+      const notice = kept ?? first
+      const { moved, stopped, ...rest } = notice.gathering!
+      const gathering = to ? { ...rest, moved: [...moved, to], stopped } : { ...rest, moved, stopped: stopped + 1 }
+      this.sql("INSERT INTO limit_notices (root_thread, id, record) VALUES (?, ?, ?) ON CONFLICT (root_thread, id) DO UPDATE SET record = excluded.record").run(root, first.id, JSON.stringify({ ...notice, gathering }))
+      return true
+    })
+  }
+
+  /** A gathered notice is said, once: false when it was already. */
+  sayLimitNotice(root: string, id: string, line: string): boolean {
+    return this.write(() => {
+      const kept = this.keptLimitNotice(root, id)
+      if (!kept?.gathering) return false
+      this.sql("UPDATE limit_notices SET record = ? WHERE root_thread = ? AND id = ?").run(JSON.stringify({ ...kept, gathering: undefined, line }), root, id)
+      return true
+    })
+  }
+
+  /** The person has seen it, wherever they were: it stays said. False when it's not theirs to see. */
+  seeLimitNotice(root: string, id: string): boolean {
+    return this.write(() => {
+      const notice = this.keptLimitNotice(root, id)
+      if (!notice) return false
+      this.sql("UPDATE limit_notices SET record = ? WHERE root_thread = ? AND id = ?").run(JSON.stringify({ ...notice, seen: true }), root, id)
+      return true
+    })
   }
 
   /**

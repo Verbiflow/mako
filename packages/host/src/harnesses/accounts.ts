@@ -43,8 +43,9 @@ import type {
   HarnessAccount,
   SelectedAccount,
 } from "../contracts/accounts.js"
-import { clearLoginPending, loginPending, type AccountRoot } from "./accounts-common.js"
+import { clearLoginPending, loginPending, readOptionalFile, type AccountRoot } from "./accounts-common.js"
 import { childProcessEnv } from "../base/child-environment.js"
+import { z } from "zod"
 import { publishFile } from "../base/published-files.js"
 import type {
   AccountLoginLaunch,
@@ -92,6 +93,16 @@ export class ExecutionIdentityMismatch extends Error {
 }
 
 const SUGGEST_THROTTLE_MS = 60 * 60 * 1000
+/** How long a warning counts for a window with no reset to read: a day. */
+const WARNED_UNREAD_RESET_MS = 24 * 60 * 60_000
+const WarnedSchema = z.record(z.string(), z.number())
+
+/** What's kept of a provider's warnings: nothing, should it not read, which at worst warns once more. */
+function readWarned(text: string | null): Record<string, number> {
+  try { return WarnedSchema.parse(JSON.parse(text ?? "{}")) } catch { return {} }
+}
+/** How often a harness with one account is read for a warning: turns end far more often than a limit moves. */
+const SOLE_ACCOUNT_READ_MS = 10 * 60_000
 /** How often the watch for limits spent elsewhere looks for a harness that is due. */
 const ELSEWHERE_TICK_MS = 60_000
 /** The longest a failing read elsewhere waits before trying again. */
@@ -134,6 +145,7 @@ export class HarnessAccounts {
   private readonly mutations = new Map<string, Promise<unknown>>()
   private readonly removalListeners = new Set<(harness: string, name: string, event: AccountRemovalEvent) => void>()
   private readonly suggestedAt = new Map<string, number>()
+  private readonly soleReadAt = new Map<string, number>()
   private gate: ((provider: string) => Promise<void>) | undefined
   private route: ((provider: string, env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>) | undefined
   private readonly capabilities: ProviderRegistry<ProviderAccountCapability>
@@ -505,16 +517,21 @@ export class HarnessAccounts {
    * by itself: an account is money, and money moves are the user's to make.
    * A Fin goes on under another account only by their switch in Settings ›
    * Fins, and only that Fin's launches (`launch`'s `account`). A harness
-   * with one account is never read for this. Offers near a limit come at
-   * most once an hour per harness, since a nag repeated is a nag ignored; a
-   * refused turn always asks.
+   * with one account is warned of its limit with nothing to switch to, read
+   * for it at most `SOLE_ACCOUNT_READ_MS` apart, and once per limit window
+   * (`firstWarning`). Offers near a limit come at most once an hour per
+   * harness, since a nag repeated is a nag ignored; a refused turn always asks.
    */
   async limitOffer(harness: string, refused = false): Promise<AccountLimitOffer | null> {
     if (this.capabilities.get(harness)?.mode !== "selectable") return null
     if (!refused && Date.now() - (this.suggestedAt.get(harness) ?? 0) < SUGGEST_THROTTLE_MS) return null
     const accounts = (await this.harnessAccounts(harness)).filter((account) => !account.missing && !account.removing)
     const active = accounts.find((account) => account.active)
-    if (!active || accounts.length < 2) return null
+    if (!active || (refused && accounts.length < 2)) return null
+    if (accounts.length < 2) {
+      if (Date.now() - (this.soleReadAt.get(harness) ?? 0) < SOLE_ACCOUNT_READ_MS) return null
+      this.soleReadAt.set(harness, Date.now())
+    }
     // The account in use first: only one near its limit, or refused, is worth reading the others for.
     const usage = await this.usage.read(harness, active.name)
     if (!refused && (spentPercent(usage) ?? 0) < LIMIT_NEAR_PERCENT) return null
@@ -523,7 +540,29 @@ export class HarnessAccounts {
       readings.push({ ...account, usage: account === active ? usage : await this.usage.read(harness, account.name) })
     const offer = limitOffer(harness, readings, Date.now(), refused)
     if (offer && !refused) this.suggestedAt.set(harness, Date.now())
+    if (offer && !refused && !offer.to && !await this.firstWarning(offer)) return null
     return offer
+  }
+
+  /**
+   * Whether a warning with nothing to offer is the first for its account's limit window, kept on disk since another
+   * host, or this one rebuilt, reads the same 96% and has nothing new to say. A reset that drifts between reads is the
+   * same window; once it has passed the next is news.
+   */
+  private async firstWarning(offer: AccountLimitOffer): Promise<boolean> {
+    const window = offer.from.window
+    const key = `${offer.from.name}:${window?.windowMinutes ?? 0}:${window?.scope ?? ""}`
+    const now = Date.now()
+    const path = this.root.warned(offer.harness)
+    const warned = Object.fromEntries(Object.entries(readWarned(await readOptionalFile(path).catch(() => null))).filter(([, until]) => until > now))
+    if (warned[key] !== undefined) return false
+    warned[key] = window?.resetsAt && window.resetsAt > now ? window.resetsAt : now + WARNED_UNREAD_RESET_MS
+    try {
+      await publishFile(path, JSON.stringify(warned))
+    } catch (error) {
+      hostWarn("accounts", "a limit's warning wasn't kept; it may come again", { harness: offer.harness, error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
   }
 
   /**
@@ -543,7 +582,7 @@ export class HarnessAccounts {
     for (const account of accounts)
       readings.push({ ...account, active: account === active, usage: account === active ? usage : await this.usage.read(harness, account.name) })
     const offer = accounts.length > 1 ? limitOffer(harness, readings, now, true) : null
-    return { account: active.email ?? active.name, until: spent.until, ...(offer && { instead: offer.to.email ?? offer.to.name }) }
+    return { account: active.email ?? active.name, until: spent.until, ...(offer?.to && { instead: offer.to.email ?? offer.to.name }) }
   }
 
   /**
@@ -601,7 +640,7 @@ export class HarnessAccounts {
   /** The same offer in a sentence, for a headless run's notice. */
   async switchSuggestion(harness: AccountHarness): Promise<string | null> {
     const offer = await this.limitOffer(harness)
-    if (!offer) return null
+    if (!offer?.to) return null
     const percent = (side: AccountLimitOffer["from"]) => `${Math.round(side.window?.usedPercent ?? 0)}%`
     return `${this.label(harness)} account ${offer.from.email ?? offer.from.name} is at ${percent(offer.from)} of its limit. ${offer.to.email ?? offer.to.name} is at ${percent(offer.to)}. Switch in Settings → Agents.`
   }

@@ -10,6 +10,7 @@ import { ReportSchema, type Notice } from "@mako/host/contracts/agents"
 import { DIGEST_WAITS } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentWakes, FROM_AGENTS, RESULT_COALESCE_MS, WAKE_COALESCE_MS, WAKES_PER_MINUTE, type AgentWakesDeps, type ParentReady } from "@mako/host/conversations/agent-wakes"
+import { carriedDigest } from "@mako/host/contracts/delivery-retry"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
@@ -42,7 +43,7 @@ async function until(what: string, done: () => boolean, timeoutMs = 10_000): Pro
   }
 }
 
-interface Entry { id: string; text: string; notices: Notice[]; hold: { at: number } | "paused" | undefined; sent?: number; canceled?: boolean }
+interface Entry { id: string; text: string; notices: Notice[]; lines?: readonly string[]; hold: { at: number } | "paused" | undefined; sent?: number; canceled?: boolean }
 
 /** One Apex conversation as the queue would hold it, and every call the producer made. */
 function fakes(ready: () => ParentReady, now: () => number, steer: (text: string) => Promise<boolean> | false = () => false, current: (notice: Notice) => boolean = () => true) {
@@ -51,15 +52,16 @@ function fakes(ready: () => ParentReady, now: () => number, steer: (text: string
   const unsent = () => entries.filter((entry) => entry.sent === undefined && !entry.canceled)
   const deps: AgentWakesDeps = {
     ready,
-    unsent: () => unsent().map((entry) => ({ id: entry.id, notices: entry.notices })),
+    unsent: () => unsent().map((entry) => ({ id: entry.id, notices: entry.notices, ...(entry.lines && { lines: entry.lines }) })),
     carried: (_conversation, id) => entries.some((entry) => !entry.canceled && entry.notices.some((each) => each.id === id)),
-    admit: (_conversation, id, text, notices, _actor, hold) => { if (!entries.some((entry) => entry.id === id)) entries.push({ id, text, notices: [...notices], hold }) },
-    rewrite: (_conversation, id, text, notices) => {
+    admit: (_conversation, id, text, notices, _actor, hold, lines) => { if (!entries.some((entry) => entry.id === id)) entries.push({ id, text, notices: [...notices], hold, ...(lines && { lines }) }) },
+    rewrite: (_conversation, id, text, notices, lines) => {
       const entry = unsent().find((candidate) => candidate.id === id)
       if (!entry) return false
       if (!notices.length) entry.canceled = true
       entry.text = text
       entry.notices = [...notices]
+      entry.lines = lines ?? []
       return true
     },
     steer: (_conversation, _id, text) => steer(text),
@@ -187,6 +189,55 @@ try {
     assert.equal(steered.length, 2, "a result is never steered")
     assert.equal(f.open()!.notices.length, 2)
   }
+  {
+    // What rides a digest stays with it whatever happens to its reports, and is said once. Nothing takes it away but its going.
+    let waiting: string[] = []
+    let ready: ParentReady = "queue"
+    let answer: Promise<boolean> | false = false
+    const live = new Set<string>()
+    const f = fakes(() => ready, () => 6_000_000, () => answer, (each) => !live.has(each.id))
+    const wakes = new AgentWakes({
+      ...f.deps,
+      takeLines: () => { const lines = waiting; waiting = []; return lines },
+      giveLines: (_conversation, lines) => { waiting = [...lines, ...waiting] },
+    })
+    const said = () => f.open()?.text.split("labels moved").length ?? 1
+    waiting = ["labels moved to Codex"]
+    const first = notice()
+    wakes.notice("apex", "", first)
+    assert.equal(said(), 2, "the first digest carries it")
+    const second = notice()
+    wakes.notice("apex", "", second)
+    assert.equal(said(), 2, "a report joining keeps it, once")
+    assert.equal(wakes.withdraw("apex", first.id), true)
+    assert.equal(said(), 2, "a withdrawal keeps it")
+    live.add(second.id)
+    wakes.refresh("apex")
+    assert.equal(f.open(), undefined, "its last report gone, the digest goes")
+    assert.deepEqual(waiting, ["labels moved to Codex"], "and what it carried waits for the next")
+    live.clear()
+    wakes.notice("apex", "", notice())
+    assert.equal(said(), 2, "which says it")
+    assert.deepEqual(waiting, [])
+    waiting = ["share moved to Codex"]
+    const open = f.open()!
+    open.sent = 1
+    wakes.notice("apex", "", notice())
+    assert.ok(f.open()!.text.includes("share moved"), "a digest that went meanwhile leaves it to the next one")
+    f.open()!.sent = 2
+    // Refused and not taken, it isn't lost.
+    waiting = ["grok moved to Codex"]
+    const refused = new AgentWakes({ ...f.deps, admit: () => { throw new Error("a switch is under way") }, takeLines: () => { const lines = waiting; waiting = []; return lines }, giveLines: (_conversation, lines) => { waiting = [...lines, ...waiting] } })
+    refused.notice("apex", "", notice())
+    assert.deepEqual(waiting, ["grok moved to Codex"], "a digest the queue refused gives it back")
+    ready = "steer"
+    answer = Promise.resolve(false)
+    wakes.notice("apex", "", notice())
+    await pause(0)
+    assert.ok(f.open()!.text.includes("grok moved"), "a steer not taken: it goes in the digest instead")
+  }
+  // A digest goes on with all it carries; what's left behind is how that attempt went, named once.
+  assert.deepEqual(carriedDigest({ notices: [], lines: ["moved"], sentAt: 1, heard: true, resting: true, nextTry: 2 }), { notices: [], lines: ["moved"] })
   console.log("wakes: a burst is one digest held for its window; joins, results, busy, stopped, steered, carried receipts, and withdrawals and stale ends across every unsent digest")
 
   // A host killed by SIGKILL at each write between a digest, its claim and its receipt: each report delivered once.

@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { finMoved } from "@/state/fin-moved"
 import {
+  ArrowRightLeftIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerUpLeftIcon,
@@ -30,6 +32,7 @@ import {
   type Rollup,
 } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contracts/agents"
+import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -45,9 +48,10 @@ import {
   apexConversation,
   openFinInApex,
   threadChildren,
+  useThreadAsks,
   useThreadChildren,
 } from "@/state/apex-fins"
-import { answerFin, type FinAnswer } from "@/state/fin-asks"
+import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { mountCrewCard, unmountCrewCard } from "@/state/crew-card-view"
 
 const HEADINGS = {
@@ -374,6 +378,7 @@ const CrewLineRow = memo(function CrewLineRow({
   const line = waiting ? waited : childLine(state)
   const live = state.kind === "working" || state.kind === "starting"
   const lead = openAsk(state)?.on === "lead"
+  const moved = finMoved(agent)
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =
@@ -394,7 +399,7 @@ const CrewLineRow = memo(function CrewLineRow({
       <span
         className={cn(
           "flex min-w-0 flex-1",
-          compact ? "flex-col items-start" : "items-center gap-2"
+          compact ? "flex-col" : "items-center gap-2"
         )}
       >
         <span
@@ -410,13 +415,20 @@ const CrewLineRow = memo(function CrewLineRow({
           {lead ? (
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
+          {moved ? (
+            <span data-fin-moved title={moved} className="flex shrink-0 items-center gap-1">
+              <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
+              {moved.split(":")[0]}
+              {line ? " ·" : null}
+            </span>
+          ) : null}
           {pr ? (
             <GitPullRequestIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {live && line ? (
             <Shimmer text={line} className="min-w-0 truncate" />
           ) : (
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 truncate" title={line}>
               {lead ? `Asking its Apex: ${line}` : line}
             </span>
           )}
@@ -431,6 +443,39 @@ const CrewLineRow = memo(function CrewLineRow({
     </button>
   )
 })
+
+/** A limit's one notice, heading its tree's card: the tree's, so no Fin's row, and "Got it" ends it everywhere. */
+function LimitNoticeRow({ apex, ask, compact }: { apex: string; ask: PersonAsk; compact: boolean }) {
+  const [sent, setSent] = useState(false)
+  const seen = () => {
+    if (sent) return
+    setSent(true)
+    void answerFin(apex, ask, { option: 0 }).then((answered) => {
+      if (!answered) setSent(false)
+    })
+  }
+  return (
+    <div
+      data-limit-notice={ask.ask.id}
+      aria-busy={sent || undefined}
+      className="mb-1.5 bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
+    >
+      <p className="text-ui text-foreground/90">{ask.question}</p>
+      <button
+        type="button"
+        data-limit-seen
+        disabled={sent}
+        onClick={seen}
+        className={cn(
+          "pressable mt-2 flex items-center bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
+          compact ? "h-9" : "h-7"
+        )}
+      >
+        {ask.ask.options?.[0]?.label ?? "Got it"}
+      </button>
+    </div>
+  )
+}
 
 /** The settled Fins, folded: "24 done · 1 idle", which opens their list and closes it again. */
 function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
@@ -476,6 +521,7 @@ export function CrewCard({
   )
   const apexTitle = useApexCardTitle(thread)
   const children = useThreadChildren(thread)
+  const notice = useThreadAsks(thread).find((ask) => isLimitAsk(ask.ask.id))
   const scroller = useRef<HTMLDivElement>(null)
   const card = useRef<HTMLElement>(null)
   // In view until the observer says otherwise, so the dock doesn't also draw the asks for the frame before it reports.
@@ -563,6 +609,7 @@ export function CrewCard({
           </button>
         ) : null}
       </header>
+      {notice && conversation ? <LimitNoticeRow key={notice.ask.id} apex={conversation} ask={notice} compact={compact} /> : null}
       <div
         ref={scroller}
         data-crew-scroller

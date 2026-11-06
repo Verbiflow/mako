@@ -1,6 +1,6 @@
 import { toast } from "sonner"
 import type { AgentsRespondInput } from "@mako/host/contracts/agents"
-import { askWords, openAsk, rosterChildren } from "@mako/host/contracts/children"
+import { askWords, finAskWaiting, openAsk, rosterChildren } from "@mako/host/contracts/children"
 import type { FinAsk, NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { getMako, hasBridge } from "@/lib/bridge"
 
@@ -19,6 +19,8 @@ export interface PersonAsk {
 export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
   const asks: PersonAsk[] = []
   for (const agent of children) {
+    // A limit's notice is the tree's, not this Fin's: it reads once, and first, and "Got it" tells the host it was seen.
+    if (agent.child?.limitNotice) asks.unshift({ fin: agent.child.thread, title: "Usage", harness: agent.child.limitNotice.harness, question: agent.child.limitNotice.line, ask: { kind: "report", id: agent.child.limitNotice.id, options: [{ label: "Got it" }] } })
     const open = agent.child?.state && openAsk(agent.child.state)
     if (!agent.child || !open || open.on === "lead" || !open.ask) continue
     asks.push({ fin: agent.child.thread, title: agent.title, harness: agent.provider, question: open.question, ask: open.ask, ...(open.done && { done: true as const }) })
@@ -29,7 +31,7 @@ export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
 /** The first of a conversation's Fins' asks that's the person's, as its Thread's mark says it: "Sheet motion: Approve: npm ci". */
 export function finAskLine(conversation: { nativeAgents?: NativeAgentRoster }): string | undefined {
   const ask = personAsks(rosterChildren(conversation.nativeAgents))[0]
-  return ask && `${ask.title}: ${askWords(ask)}`
+  return ask && finAskWaiting(ask.ask, ask.title, askWords(ask)).line
 }
 
 /** How the person answers: one of its options by its place, their own words, or for an approval, allow or refuse. */

@@ -88,6 +88,19 @@ export function unheardDigest(request: Pick<LiveRequest, "digest">): boolean {
   return request.digest !== undefined && !request.digest.heard
 }
 
+/** What says how one attempt at a digest went, rather than what the digest is. */
+const DIGEST_ATTEMPT = ["sentAt", "heard", "resting", "nextTry"] as const
+
+/**
+ * What a digest carries to the row that goes on from it: all of it but how this attempt went. Named by what it leaves
+ * out, so whatever a digest comes to hold goes on with it.
+ */
+export function carriedDigest(digest: NonNullable<LiveRequest["digest"]>): NonNullable<LiveRequest["digest"]> {
+  const carried = { ...digest }
+  for (const field of DIGEST_ATTEMPT) delete carried[field]
+  return carried
+}
+
 /** How often a resting digest tries by itself: an Apex silent after its limit cleared is what this exists to prevent. */
 export const RESTING_TRY_MS = 60 * 60_000
 

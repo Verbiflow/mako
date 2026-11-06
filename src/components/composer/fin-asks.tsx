@@ -6,6 +6,7 @@ import {
   childWord,
   DONE_NEEDS_YOU,
 } from "@mako/host/contracts/children"
+import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import { FinMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -38,9 +39,13 @@ export function FinsNeedYou({
       children.filter((agent) => childGroup(childStateOf(agent)) === "needs"),
     [children]
   )
-  if (visible !== false || !needs.length) return null
-  const word =
-    needs.length === 1 ? "1 Fin needs you" : `${needs.length} Fins need you`
+  const notice = useThreadAsks(thread).some((ask) => isLimitAsk(ask.ask.id))
+  if (visible !== false || (!needs.length && !notice)) return null
+  const word = !needs.length
+    ? "Usage needs you"
+    : needs.length === 1
+      ? "1 Fin needs you"
+      : `${needs.length} Fins need you`
   return (
     <div className={cn(!compact && "bg-surface/60")}>
       <button
