@@ -172,18 +172,10 @@ jobs:
       # A switch against the queue, generated: the rules of `docs/delivery-queue.md` after every step of seeded schedules.
       - run: npm run test:switch-interleavings
       - run: npm run test:followed-stop-crash
-      - run: npm run test:fin-move
       - run: npm run test:held-notice-crash
       # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
       - run: npm run test:handoff
-      # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
-      # queue's order kept in the journal; a waiting message surviving SIGKILL (`test:request-holds`).
-      - run: npm run test:request-holds
-      # An Apex's Fins' news as entries in its own queue: coalesced, budgeted, paused and kept through SIGKILL.
-      - run: npm run test:wake-queue
       - run: npm run test:orch-comms
-      - run: npm run test:orch-crash
-      - run: npm run test:orch-recovery
 
   # Every harness's decoders against its recorded pairs (live and saved draw the same, or say why not), and the
   # three readers of spend (live, saved, the store's scan) agreeing on each pair.
@@ -226,9 +218,9 @@ jobs:
       # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.
       - run: npm test -w @mako/sessions
 
-  # The engine's own work, split from `orchestration` so that neither nears its limit: an Apex's Fins held by the tree's
-  # budget, woken, answered and routed, each message queued, steered or interrupting as its sender chose, through the
-  # engine's three doors, and what can't go for now going again by itself.
+  # The orchestration tests take about 32 minutes, split into four jobs of about 10 so that a slow runner can't reach a
+  # limit: `orchestration` above, and this one's Fins: held by the tree's budget, woken, resumed and what each reads as.
+  # A job past 12 minutes is split again, not given a longer limit.
   orchestration-engine:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -253,13 +245,56 @@ jobs:
       - run: npm run test:agents-wake
       # An Apex let go of while at rest still hears its Fins move, so a window coming back shows them as they are.
       - run: npm run test:fins-reach-released-apex
-      - run: npm run test:orch-answer
       # A Fin waiting on a pull request is woken once per outcome, never its Apex, across restarts; GitHub is a stub.
       - run: npm run test:fin-pull-waits
       - run: npm run test:fin-resume
       - run: npm run test:fin-fallback
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
+
+  # What comes back: a crash, a recovery or a Fin moved, with its queue and its Apex's news kept through SIGKILL.
+  orchestration-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+      - run: npm run test:fin-move
+      # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
+      # queue's order kept in the journal; a waiting message surviving SIGKILL (`test:request-holds`).
+      - run: npm run test:request-holds
+      # An Apex's Fins' news as entries in its own queue: coalesced, budgeted, paused and kept through SIGKILL.
+      - run: npm run test:wake-queue
+      - run: npm run test:orch-crash
+      - run: npm run test:orch-recovery
+
+  # Each message queued, steered or interrupting as its sender chose, through the engine's three doors, answered and
+  # routed, and what can't go for now going again by itself.
+  orchestration-messages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+      - run: npm run test:orch-answer
       # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
       # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
       - run: npm run test:delivery-retry
