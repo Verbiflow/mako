@@ -406,6 +406,127 @@ try {
   }
   console.log("a limit that moves a whole tree: one notice saying what ran out, until when and what moved where; a moved Fin reads moved; Got it ends it")
 
+  // A host that stops while a notice gathers leaves it kept: the next says it once, and it still ends at its reset.
+  {
+    const reset = clock() + 15_000
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    const r = await run("notice-restart", {
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 1) return "Done."
+        await out
+        end({ limit: { resetsAt: reset }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    held.claude[0]!.spentUntil = reset
+    spent()
+    await until("the move", () => r.finTurns().some((turn) => turn.harness === "codex"))
+    const tree = r.world.store.journalPlacement(r.apex.conversation)!.thread
+    assert.equal(r.world.store.limitNotice(tree), undefined, "said to nobody yet: it gathers")
+    assert.equal(r.world.store.limitNotices().filter(({ notice }) => notice.gathering).length, 1, "and is kept already")
+    await r.world.restart()
+    await until("the notice after a restart", () => r.world.agents.personAsk(r.apex.conversation) !== undefined, 8_000)
+    assert.match(r.world.agents.personAsk(r.apex.conversation)!.line, /ran out until .*1 Fin moved to Codex\.$/)
+    assert.equal((r.world.live.snapshot(r.apex.conversation)?.blocks ?? []).filter((block) => block.type === "event" && block.label.includes("ran out")).length, 1, "the transcript says it once")
+    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
+    await until("the Apex's snapshot to hold it", () => r.world.agents.roster(r.apex.conversation).some((agent) => agent.child?.limitNotice))
+    await r.world.restart()
+    await until("it read in again", () => r.world.agents.roster(r.apex.conversation).some((agent) => agent.child?.limitNotice))
+    r.world.live.childrenChanged(r.apex.conversation, false)
+    assert.equal(shown(), 1, "standing, a host read it in")
+    await until("its reset, heard by a quiet Thread", () => shown() === 0, 20_000)
+    await r.world.close()
+  }
+  // No restart at all: the notice is said, the Thread goes quiet, and its reset alone ends it there.
+  {
+    const reset = clock() + 7_000
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    const r = await run("notice-ends", {
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 1) return "Done."
+        await out
+        end({ limit: { resetsAt: reset }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    held.claude[0]!.spentUntil = reset
+    spent()
+    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
+    await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
+    await until("its reset, with nobody reading", () => shown() === 0, 12_000)
+    await r.world.close()
+  }
+  // Past its reset a notice is off the entry that carries it, whatever the cache held; and a host that comes back to
+  // one it was gathering keeps it as said, with no line of news that's over.
+  {
+    let now = NOW
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    const r = await run("notice-reset", {
+      now: () => now,
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 1) return "Done."
+        await out
+        end({ limit: { resetsAt: RESET }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    held.claude[0]!.spentUntil = RESET
+    spent()
+    await until("the notice", () => r.world.agents.personAsk(r.apex.conversation) !== undefined, 8_000)
+    assert.equal(r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice).length, 1)
+    now = RESET + 1
+    assert.equal(r.world.agents.personAsk(r.apex.conversation), undefined)
+    assert.equal(r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice).length, 0, "the Inbox and the phone read the roster")
+    await r.world.close()
+  }
+  {
+    let now = NOW
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    const r = await run("notice-late", {
+      now: () => now,
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 1) return "Done."
+        await out
+        end({ limit: { resetsAt: RESET }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    held.claude[0]!.spentUntil = RESET
+    spent()
+    await until("the move", () => r.finTurns().some((turn) => turn.harness === "codex"))
+    now = RESET + 1
+    await r.world.restart()
+    await until("it said", () => !r.world.store.limitNotices().some(({ notice }) => notice.gathering), 8_000)
+    assert.equal(r.world.agents.personAsk(r.apex.conversation), undefined, "over before anyone could read it")
+    assert.equal((r.world.live.snapshot(r.apex.conversation)?.blocks ?? []).filter((block) => block.type === "event" && block.label.includes("ran out")).length, 0, "and no line of it")
+    await r.world.close()
+  }
+  console.log("a limit's notice: kept before it gathers, said once after a restart, and over at its reset on every surface")
+
   // The person's own message in the Fin's Thread is theirs to drive: a limit there ends the turn as before.
   {
     const held = accounts()

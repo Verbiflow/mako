@@ -7,6 +7,7 @@ import { resetCreditRequest } from "@mako/host/harnesses/codex/accounts"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { HarnessAccounts } from "@mako/host/harnesses/accounts"
 import type { AccountUsage, HarnessAccount } from "@mako/host/contracts/accounts"
 import { parseChatGptUsage } from "@mako/host/harnesses/chatgpt-usage"
 import { spendWatch } from "@mako/host/usage/index"
@@ -599,6 +600,36 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
     read.mock.restore()
     accounts.usage.forget("devin", "default")
     accounts.usage.forget("devin", "spare")
+  }
+
+  // A warning with nothing to offer comes once per limit window: not hourly, and not again from a host rebuilt.
+  {
+    let at = Date.now() + 2 * 3_600_000
+    const clockOn = mock.method(Date, "now", () => at)
+    const sole = mock.method(capability, "listAccounts", async () => [{ harness: "devin", name: "default", dir: "", active: true, source: "cli" }] satisfies HarnessAccount[])
+    let reset = at + 24 * 3_600_000
+    const usage = mock.method(capability, "accountUsage", async () => ok(96, [{ usedPercent: 96, windowMinutes: 300, resetsAt: reset }]))
+    try {
+      assert.equal((await accounts.limitOffer("devin"))?.to, undefined)
+      assert.ok(readFileSync(accounts.root.warned("devin"), "utf8"), "kept where another host reads it")
+      at += 61 * 60_000
+      accounts.usage.forget("devin", "default")
+      assert.equal(await accounts.limitOffer("devin"), null, "the same 96% and the same reset an hour on: nothing new")
+      assert.equal(await new HarnessAccounts(providerHost.accountCapabilities, accounts.root).limitOffer("devin"), null, "nor from a host rebuilt")
+      at += 2 * 3_600_000
+      reset += 90_000
+      accounts.usage.forget("devin", "default")
+      assert.equal(await accounts.limitOffer("devin"), null, "a reset that drifts between reads is the same window")
+      at = reset + 3_600_000
+      reset = at + 24 * 3_600_000
+      accounts.usage.forget("devin", "default")
+      assert.ok(await accounts.limitOffer("devin"), "the next window is news")
+    } finally {
+      usage.mock.restore()
+      sole.mock.restore()
+      clockOn.mock.restore()
+      accounts.usage.forget("devin", "default")
+    }
   }
 }
 

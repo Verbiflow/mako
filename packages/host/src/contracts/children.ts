@@ -2,7 +2,7 @@ import { z } from "zod"
 import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
-import type { WaitingFor } from "@mako/protocol/attention"
+import type { Waiting } from "@mako/protocol/attention"
 import { isLimitAsk } from "./fin-fallback.js"
 import { readFinReports, type FinReportCard } from "./fin-reports.js"
 
@@ -281,7 +281,7 @@ export function askWords(ask: Pick<OpenAsk, "question" | "done">): string {
  * What a Fin's ask of the person makes its Apex's row, banner and mark say: the Fin's name before its line. A limit's
  * notice asks nothing and is no Fin's: it needs the person, and its line already says what ran out.
  */
-export function finAskWaiting(ask: Pick<FinAsk, "id" | "kind">, name: string, line: string): { for: WaitingFor; line: string } {
+export function finAskWaiting(ask: Pick<FinAsk, "id" | "kind">, name: string, line: string): Waiting {
   if (isLimitAsk(ask.id)) return { for: "needs-you", line }
   return { for: ask.kind === "approval" ? "approval" : "question", line: `${name}: ${line}` }
 }

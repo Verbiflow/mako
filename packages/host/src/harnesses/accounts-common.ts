@@ -139,6 +139,11 @@ export class AccountRoot {
     return join(this.path, "holds")
   }
 
+  /** The limit windows of a provider's accounts already warned of, each until it resets. */
+  warned(provider: string): string {
+    return join(this.path, "warned", `${providerName(provider)}.json`)
+  }
+
   /** Where a provider's removals wait, or every provider's without one. */
   removing(provider?: string): string {
     return provider === undefined ? join(this.path, "removing") : join(this.path, "removing", providerName(provider))

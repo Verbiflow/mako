@@ -43,8 +43,9 @@ import type {
   HarnessAccount,
   SelectedAccount,
 } from "../contracts/accounts.js"
-import { clearLoginPending, loginPending, type AccountRoot } from "./accounts-common.js"
+import { clearLoginPending, loginPending, readOptionalFile, type AccountRoot } from "./accounts-common.js"
 import { childProcessEnv } from "../base/child-environment.js"
+import { z } from "zod"
 import { publishFile } from "../base/published-files.js"
 import type {
   AccountLoginLaunch,
@@ -92,6 +93,14 @@ export class ExecutionIdentityMismatch extends Error {
 }
 
 const SUGGEST_THROTTLE_MS = 60 * 60 * 1000
+/** How long a warning counts for a window with no reset to read: a day. */
+const WARNED_UNREAD_RESET_MS = 24 * 60 * 60_000
+const WarnedSchema = z.record(z.string(), z.number())
+
+/** What's kept of a provider's warnings: nothing, should it not read, which at worst warns once more. */
+function readWarned(text: string | null): Record<string, number> {
+  try { return WarnedSchema.parse(JSON.parse(text ?? "{}")) } catch { return {} }
+}
 /** How often a harness with one account is read for a warning: turns end far more often than a limit moves. */
 const SOLE_ACCOUNT_READ_MS = 10 * 60_000
 /** How often the watch for limits spent elsewhere looks for a harness that is due. */
@@ -509,9 +518,9 @@ export class HarnessAccounts {
    * A Fin goes on under another account only by their switch in Settings ›
    * Fins, and only that Fin's launches (`launch`'s `account`). A harness
    * with one account is warned of its limit with nothing to switch to, read
-   * for it at most `SOLE_ACCOUNT_READ_MS` apart. Offers near a limit come at
-   * most once an hour per harness, since a nag repeated is a nag ignored; a
-   * refused turn always asks.
+   * for it at most `SOLE_ACCOUNT_READ_MS` apart, and once per limit window
+   * (`firstWarning`). Offers near a limit come at most once an hour per
+   * harness, since a nag repeated is a nag ignored; a refused turn always asks.
    */
   async limitOffer(harness: string, refused = false): Promise<AccountLimitOffer | null> {
     if (this.capabilities.get(harness)?.mode !== "selectable") return null
@@ -531,7 +540,29 @@ export class HarnessAccounts {
       readings.push({ ...account, usage: account === active ? usage : await this.usage.read(harness, account.name) })
     const offer = limitOffer(harness, readings, Date.now(), refused)
     if (offer && !refused) this.suggestedAt.set(harness, Date.now())
+    if (offer && !refused && !offer.to && !await this.firstWarning(offer)) return null
     return offer
+  }
+
+  /**
+   * Whether a warning with nothing to offer is the first for its account's limit window, kept on disk since another
+   * host, or this one rebuilt, reads the same 96% and has nothing new to say. A reset that drifts between reads is the
+   * same window; once it has passed the next is news.
+   */
+  private async firstWarning(offer: AccountLimitOffer): Promise<boolean> {
+    const window = offer.from.window
+    const key = `${offer.from.name}:${window?.windowMinutes ?? 0}:${window?.scope ?? ""}`
+    const now = Date.now()
+    const path = this.root.warned(offer.harness)
+    const warned = Object.fromEntries(Object.entries(readWarned(await readOptionalFile(path).catch(() => null))).filter(([, until]) => until > now))
+    if (warned[key] !== undefined) return false
+    warned[key] = window?.resetsAt && window.resetsAt > now ? window.resetsAt : now + WARNED_UNREAD_RESET_MS
+    try {
+      await publishFile(path, JSON.stringify(warned))
+    } catch (error) {
+      hostWarn("accounts", "a limit's warning wasn't kept; it may come again", { harness: offer.harness, error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
   }
 
   /**
