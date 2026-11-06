@@ -26,7 +26,7 @@ table = [
   row(20, 1, 160, 50, "/opt/codex/bin/codex app-server"),
   row(30, 1, 120, 10, "mako-cursor-sdk"),
 ]
-assert.deepEqual(await sampler.sample(fins), [], "the first reading only opens the window")
+assert.equal(await sampler.sample(fins), undefined, "the first reading only opens the window")
 
 now = 10_000
 table = [
@@ -39,6 +39,7 @@ table = [
   row(30, 1, 120, 40, "mako-cursor-sdk"),
 ]
 const readings = await sampler.sample(fins)
+assert.ok(readings)
 assert.equal(readings.length, 2, "a Fin whose provider isn't running gives no reading, and a session that isn't a Fin isn't read")
 const [cursor, codex] = readings
 assert.equal(cursor!.harness, "cursor")
@@ -48,10 +49,11 @@ assert.equal(cursor!.build, true, "a tsc under the Fin's shell marks the reading
 assert.deepEqual(codex, { harness: "codex", cores: 0.3, memoryBytes: 170 * 1024 * 1024 }, "the Mako app's own time is no Fin's")
 
 now = 10_500
-assert.deepEqual(await sampler.sample(fins), [], "a window under a second gives nothing and keeps the last reading")
+assert.equal(await sampler.sample(fins), undefined, "a window under a second gives nothing and keeps the last reading")
 now = 20_000
 table = table.filter((entry) => entry.pid !== 12).map((entry) => (entry.pid === 10 ? { ...entry, cpuSeconds: 103 } : entry))
 const after = await sampler.sample(fins)
+assert.ok(after)
 assert.ok(Math.abs(after[0]!.cores - 0.1) < 1e-9 && after[0]!.build === undefined, "once the build ends the Fin reads light again")
 
 for (const [command, expected] of [
