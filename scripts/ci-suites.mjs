@@ -8,21 +8,36 @@ import { appendFile } from "node:fs/promises"
  * `test:shared-runtime` reads the Devin CLI, `test:opencode-native-forms` runs a real OpenCode, and
  * `test:simulators-ui` draws with Chrome, none of which works on this runner.
  *
+ * Left out though they pass: `test:acp-registry`, `test:cursor-fork`, `test:model-connections-live`,
+ * `test:native-authoring-live` and `test:native-routing-cursor` skip their real part without a sign-in or a local
+ * model, so a pass here would prove less than it reads. `test:control-api-e2e` and `test:cloud-archive-ui` each failed
+ * one run in four.
+ *
  *   node scripts/ci-suites.mjs <shard> <shards>     what CI runs, shards counted from 1
  */
 const SUITES = [
-  "test:acp-background-work", "test:action-recovery", "test:attachment-sweep", "test:automations",
-  "test:background-work", "test:checkout-heads", "test:client", "test:cloud-account", "test:codex-archived-resume",
-  "test:codex-background-work", "test:codex-protocol", "test:control-cli", "test:control-driver-install",
-  "test:control-media-sources", "test:control-packages", "test:control-preview", "test:control-recording-continuous",
+  "test:account-devices-ui", "test:account-threads-ui", "test:acp-background-work", "test:action-recovery",
+  "test:animations-ui", "test:approval-answer-ui", "test:appshot-shortcut", "test:appshot-ui",
+  "test:attachment-sweep", "test:authoring-ui", "test:automations", "test:background-work", "test:background-work-ui",
+  "test:carried-files-ui", "test:checkout-heads", "test:client", "test:cloud-account", "test:cloud-turn-on-ui",
+  "test:codex-archived-resume", "test:codex-background-work", "test:codex-protocol", "test:commit-generation",
+  "test:control-cli", "test:control-driver-install", "test:control-media-sources", "test:control-packages",
+  "test:control-preview", "test:control-recording-continuous", "test:crew-card-ui", "test:cursor-child",
   "test:desktop-answers", "test:desktop-crashes", "test:dev-updates", "test:execution-ownership",
-  "test:file-previews", "test:git", "test:git-remote", "test:host", "test:host-shutdown", "test:host-signals",
-  "test:host-single", "test:lazy", "test:listed-repositories", "test:mcp", "test:message-queue",
-  "test:mobile-behavior", "test:moves", "test:native-authoring", "test:opencode-agents", "test:opencode-api",
-  "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:queued-steering",
-  "test:rail-list", "test:scripted-model", "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal",
-  "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
-  "test:tree-watcher", "test:update-local", "test:usage-worker", "test:window-boot",
+  "test:file-previews", "test:fin-counts-ui", "test:fin-pips-ui", "test:fin-view-keeps-ui",
+  "test:fins-fresh-on-return-ui", "test:full-access-never-asks", "test:full-access-questions", "test:git",
+  "test:git-remote", "test:grok-modes-live", "test:host", "test:host-shutdown", "test:host-signals",
+  "test:host-single", "test:inbox-ui", "test:lazy", "test:listed-repositories", "test:live-actions",
+  "test:live-approvals", "test:live-context-children", "test:live-refresh", "test:local-signing", "test:mcp",
+  "test:message-queue", "test:mobile-behavior", "test:model-connections-ui", "test:moves", "test:moves-ui",
+  "test:native-authoring", "test:native-routing-live", "test:node-host-secrets", "test:opencode-agents",
+  "test:opencode-api", "test:opening-send-ui", "test:orch-ui", "test:owner-check", "test:plugins",
+  "test:proposed-plans", "test:provider-launch-options", "test:provider-ui", "test:queued-steering", "test:rail-list",
+  "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:simulators-remote", "test:skills",
+  "test:sync-status-ui", "test:telemetry", "test:terminal", "test:terminal-live-ui", "test:terminal-ui",
+  "test:thread-app", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees",
+  "test:tool-rows-ui", "test:transfer-scheduling", "test:tree-watcher", "test:update-local", "test:usage-worker",
+  "test:web-delivery", "test:window-boot",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
 const SUITE_MS = 20 * 60_000
