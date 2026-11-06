@@ -19,7 +19,7 @@ export function SideRail({ surfaces, activeId }: { surfaces: SurfaceDefinition[]
       onKeyDown={(event) => {
         if (!KEYS.includes(event.key)) return
         const rows = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-surface-id]")]
-        const index = rows.indexOf(event.target as HTMLButtonElement)
+        const index = rows.findIndex((row) => row === event.target)
         if (index < 0) return
         event.preventDefault()
         const next = event.key === "Home" ? rows[0] : event.key === "End" ? rows.at(-1) : rows[(index + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length]
