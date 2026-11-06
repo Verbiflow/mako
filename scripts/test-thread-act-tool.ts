@@ -5,9 +5,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
-import { THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
-import { AgentAskGate, registerThreadTools, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
-import { threadActInput } from "../packages/client/src/thread"
+import { SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
+import { AgentAskGate, registerThreadTools, SettingsTool, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
+import { settingsInput, threadActInput } from "../packages/client/src/thread"
 
 /** `thread`: Rename, Archive and Restore through the host calls the app's menu makes, asking below full access. */
 const agent = (session: string) => ({ kind: "agent" as const, session })
@@ -117,5 +117,58 @@ function world(tier: "full" | "auto" = "full", fails = false) {
 assert.deepEqual({ ...threadActInput(["thread", "rename", "Ship", "it", "--key", "k"]) }, { action: "rename", clientKey: "k", title: "Ship it" })
 assert.deepEqual({ ...threadActInput(["thread", "archive", "--conversation", "c", "--key", "k"]) }, { action: "archive", clientKey: "k", conversation: "c" })
 assert.throws(() => threadActInput(["thread", "pin"]), /needs a command/)
+assert.deepEqual({ ...settingsInput(["settings", "set", "harness-order", "codex,claude", "--key", "k"]) }, { action: "set", setting: "harness-order", value: ["codex", "claude"], clientKey: "k" })
+assert.deepEqual({ ...settingsInput(["settings", "set", "hand-off-on-sleep", "false", "--key", "k"]) }, { action: "set", setting: "hand-off-on-sleep", value: false, clientKey: "k" })
+assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { action: "read", clientKey: "k" })
+
+{
+  // `settings`: reads at any access; a change through the host call Settings makes, asked below full access.
+  const calls: Array<{ channel: string; args: unknown[] }> = []
+  const kept = new Map<string, AgentAsk[]>()
+  const gate = new AgentAskGate({
+    open: (id) => kept.get(id) ?? [],
+    raise: (id, ask) => void kept.set(id, [...(kept.get(id) ?? []), ask]),
+    settle: (id, ask) => {
+      const found = kept.get(id)?.find((each) => each.id === ask)
+      if (found) kept.set(id, (kept.get(id) ?? []).filter((each) => each !== found))
+      return found
+    },
+  })
+  let tier: "full" | "auto" = "auto"
+  const tool = new SettingsTool({
+    conversationOf: (session) => (session === "s-mine" ? "mine" : undefined),
+    tier: () => tier,
+    invoke: async (channel, args) => {
+      calls.push({ channel, args })
+      return channel === "mako:harness-order-saved" ? ["claude"] : { saved: true }
+    },
+    gate,
+  })
+  gate.runs = { setting: async (_id, want) => void (await tool.run(want.setting)) }
+  const read = await tool.call(agent("s-mine"), { action: "read", clientKey: "k" })
+  assert.deepEqual(read, { outcome: "read", settings: { handOff: { saved: true }, conversations: { saved: true }, harnessOrder: ["claude"] } })
+  calls.length = 0
+  const asked = await tool.call(agent("s-mine"), { action: "set", setting: "hand-off-on-sleep", value: true, clientKey: "k" })
+  assert.equal("outcome" in asked && asked.outcome, "asked")
+  assert.equal(calls.length, 0, "nothing changed on the agent's word alone")
+  assert.equal(agentAskLine(kept.get("mine")![0]!.want), "Wants to turn on handing agents off when this Mac sleeps")
+  await gate.answer("mine", "ask" in asked ? asked.ask : "", true)
+  assert.deepEqual(calls, [{ channel: "mako:handoff-settings-set", args: [true] }])
+  tier = "full"
+  const cases: Array<[string, boolean | string | string[], string, unknown[]]> = [
+    ["continue-after-restart", false, "mako:conversation-settings-set", [{ continueAfterRestart: false }]],
+    ["harness-order", ["codex", "claude"], "mako:harness-order", [["codex", "claude"]]],
+    ["commit-model", "auto", "mako:utility-choice", ["commit", "auto"]],
+  ]
+  for (const [setting, value, channel, args] of cases) {
+    assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting, value, clientKey: "k" }), { outcome: "set", setting, value })
+    assert.deepEqual(calls.at(-1), { channel, args })
+  }
+  for (const bad of [{ setting: "telemetry", value: true }, { setting: "hand-off-on-sleep", value: "yes" }, { setting: "harness-order", value: [] }, {}])
+    assert.equal(await tool.call(agent("s-mine"), { action: "set", clientKey: "k", ...bad }).then((answer) => "refused" in answer && answer.refused), "bad-value", JSON.stringify(bad))
+  assert.equal(await tool.call(agent("nobody"), { action: "set", setting: "commit-model", value: "m", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-thread")
+  assert.equal(hostCallReplay(SETTINGS_TOOL.channel), SETTINGS_TOOL.replay)
+  assert.ok(SETTINGS_TOOL.mcp.description.length < 700, "its description stays short")
+}
 
 console.log("thread tool: ok")

@@ -53,7 +53,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
+import { AgentAskGate, SettingsTool, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -177,6 +177,7 @@ interface LateParts {
   /** Agents' and shells' moves of a Thread between this Mac and the cloud (`thread_move`). */
   threadMoves?: ThreadMoveTool
   threadActs?: ThreadActTool
+  settingsTool?: SettingsTool
   agentAsks?: AgentAskGate
   /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
   cloudFollow?: CloudFollow
@@ -1089,7 +1090,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     invoke: (channel, args) => methods.invoke(channel, args),
     gate: late.agentAsks,
   })
+  late.settingsTool = new SettingsTool({
+    conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    tier: (id) => sessionAccessTier(live.session(id)),
+    invoke: async (channel, args) => decodeRuntimeValue(await methods.invoke(channel, args)),
+    gate: late.agentAsks,
+  })
   late.agentAsks.runs = {
+    setting: async (_id, want) => void (await late.settingsTool?.run(want.setting)),
     move: (id, want) => late.threadMoves?.allowed(id, want),
     rename: async (id, want) => void (await late.threadActs?.run(id, want)),
     archive: async (id, want) => void (await late.threadActs?.run(id, want)),
@@ -1418,6 +1426,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   declareThreadMoveMethods(methods, () => late.threadMoves)
   declareThreadActMethods(methods, () => late.threadActs)
+  declareSettingsMethods(methods, () => late.settingsTool)
   declareAgentAskMethods(methods, () => late.agentAsks)
   const application: Application = declareApplicationMethods(methods, {
     live,

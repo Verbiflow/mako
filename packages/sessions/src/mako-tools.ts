@@ -69,6 +69,12 @@ const START = verb("Start", "Starting", "Started")
 const READ = verb("Read", "Reading", "Read")
 const MOVE = verb("Move", "Moving", "Moved")
 
+/** `settings`: what it read, or which it changed. */
+function settingsWords(args: Fields): Said {
+  if (args.action === "read") return { verb: verb("Read", "Reading", "Read"), what: "Settings" }
+  return { verb: verb("Change", "Changing", "Changed"), what: typeof args.setting === "string" ? `the setting ${args.setting}` : "a setting" }
+}
+
 /** `thread`, by its action, in the words of the Thread's menu. */
 function threadWords(args: Fields): Said {
   if (args.action === "archive") return { verb: verb("Archive", "Archiving", "Archived"), what: "this Thread" }
@@ -335,6 +341,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["port_holder", { group: "port", say: ({ args }) => ({ verb: CHECK, what: text(args["port"]) ? `port ${text(args["port"])}` : "a port" }) }],
   ["thread_move", { group: "cloud", say: () => ({ verb: MOVE, what: "this Thread to the cloud" }) }],
   ["thread", { group: "cloud", say: ({ args }) => threadWords(args) }],
+  ["settings", { group: "cloud", say: ({ args }) => settingsWords(args) }],
 ])
 
 /** The worktree tools' earlier names, in saved history. */
