@@ -29,8 +29,8 @@
 
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { readdir, rm } from "node:fs/promises"
+import { join } from "node:path"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import type {
   AccountCatalog,
@@ -43,8 +43,10 @@ import type {
   HarnessAccount,
   SelectedAccount,
 } from "../contracts/accounts.js"
-import { clearLoginPending, loginPending, type AccountRoot } from "./accounts-common.js"
+import { clearLoginPending, loginPending, readOptionalFile, type AccountRoot } from "./accounts-common.js"
 import { childProcessEnv } from "../base/child-environment.js"
+import { z } from "zod"
+import { publishFile } from "../base/published-files.js"
 import type {
   AccountLoginLaunch,
   AccountLoginTarget,
@@ -57,12 +59,14 @@ import { AccountHolds, type AccountHold, type AccountHolder } from "./account-ho
 import { AccountUsageReadings } from "./account-usage-readings.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, spentUntil, windowsAt, type AccountLimitOffer, type HarnessLimit } from "../contracts/account-usage.js"
+import type { FallbackAccount } from "../contracts/fin-fallback.js"
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
 export interface AccountLaunch {
   env: NodeJS.ProcessEnv
   account: SelectedAccount
-  selection: { kind: "selectable"; name: string | null } | { kind: "observed" } | { kind: "unavailable" }
+  /** `pinned`: the account one conversation runs on instead of the one selected (`launch`'s `account`). */
+  selection: { kind: "selectable"; name: string | null; pinned?: true } | { kind: "observed" } | { kind: "unavailable" }
   /** Opaque configured-source equality. Host-only, never a native principal. */
   credential?: { name: string; revision: string }
   /** Keeps a Mako-kept account's credentials until the launched work ends. */
@@ -89,6 +93,16 @@ export class ExecutionIdentityMismatch extends Error {
 }
 
 const SUGGEST_THROTTLE_MS = 60 * 60 * 1000
+/** How long a warning counts for a window with no reset to read: a day. */
+const WARNED_UNREAD_RESET_MS = 24 * 60 * 60_000
+const WarnedSchema = z.record(z.string(), z.number())
+
+/** What's kept of a provider's warnings: nothing, should it not read, which at worst warns once more. */
+function readWarned(text: string | null): Record<string, number> {
+  try { return WarnedSchema.parse(JSON.parse(text ?? "{}")) } catch { return {} }
+}
+/** How often a harness with one account is read for a warning: turns end far more often than a limit moves. */
+const SOLE_ACCOUNT_READ_MS = 10 * 60_000
 /** How often the watch for limits spent elsewhere looks for a harness that is due. */
 const ELSEWHERE_TICK_MS = 60_000
 /** The longest a failing read elsewhere waits before trying again. */
@@ -109,6 +123,11 @@ function capabilitySelection(root: AccountRoot, capability: ProviderAccountCapab
   return capability.mode === "selectable" ? root.readSelection(capability.provider) : Promise.resolve(null)
 }
 
+/** An account's name as a selection holds it: the CLI's own login is no selection. */
+function selectionOf(account: string): string | null {
+  return account === "default" ? null : account
+}
+
 function spentPercent(usage: AccountUsage): number | null {
   if (usage.status !== "ok") return null
   return bindingWindow(windowsAt(usage.windows, Date.now()))?.usedPercent ?? 0
@@ -126,6 +145,7 @@ export class HarnessAccounts {
   private readonly mutations = new Map<string, Promise<unknown>>()
   private readonly removalListeners = new Set<(harness: string, name: string, event: AccountRemovalEvent) => void>()
   private readonly suggestedAt = new Map<string, number>()
+  private readonly soleReadAt = new Map<string, number>()
   private gate: ((provider: string) => Promise<void>) | undefined
   private route: ((provider: string, env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>) | undefined
   private readonly capabilities: ProviderRegistry<ProviderAccountCapability>
@@ -218,8 +238,7 @@ export class HarnessAccounts {
       // The marker goes before holds are read: a holder letting go meanwhile
       // either finds it and finishes the removal, or is already gone below.
       const marker = removalMarker(this.root, harness, name)
-      await mkdir(dirname(marker), { recursive: true, mode: 0o700 })
-      await writeFile(marker, JSON.stringify({ version: 1, requestedAt: new Date().toISOString() }), { mode: 0o600 })
+      await publishFile(marker, JSON.stringify({ version: 1, requestedAt: new Date().toISOString() }), { mode: 0o600, dirMode: 0o700 })
       if (await this.held(harness, name)) return { status: "pending" }
       return this.finishRemoval(capability, name)
     })
@@ -417,24 +436,30 @@ export class HarnessAccounts {
     this.route = route
   }
 
+  /**
+   * `account` runs this launch on one of the harness's accounts instead of the one selected: a Fin moved off an
+   * account at its limit (`contracts/fin-fallback.ts`). Only a selectable harness takes it.
+   */
   async launch(
     provider: string,
     base: NodeJS.ProcessEnv,
-    options: { trackCredential?: boolean; holder?: AccountHolder } = {}
+    options: { trackCredential?: boolean; holder?: AccountHolder; account?: string } = {}
   ): Promise<AccountLaunch> {
     if (options.trackCredential !== false) await this.gate?.(provider)
     const env = childProcessEnv(base)
     const capability = this.capabilities.get(provider)
     if (!capability) return { env: await this.routed(provider, env), account: { name: "default" }, selection: { kind: "unavailable" } }
+    const pinned = capability.mode === "selectable" && options.account !== undefined ? selectionOf(options.account) : undefined
     const resolve = async () => {
-      const selection = await capabilitySelection(this.root, capability)
+      if (pinned) this.refuseRemoving(provider, pinned)
+      const selection = pinned !== undefined ? pinned : await capabilitySelection(this.root, capability)
       const name = selection ?? "default"
       const before = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
       const resolved = await this.routed(provider, await capability.accountEnv(selection, env))
       const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
       if (before !== revision) throw new ExecutionAccountChanged("credentials")
       const launch: AccountLaunch = { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"
-        ? { kind: "selectable" as const, name: selection }
+        ? { kind: "selectable" as const, name: selection, ...(pinned !== undefined && { pinned: true as const }) }
         : { kind: "observed" as const }, credential: revision === undefined ? undefined : { name, revision } }
       // The CLI's own login is never Mako's to remove; only kept accounts are held.
       if (options.holder && capability.mode === "selectable" && selection !== null)
@@ -457,9 +482,12 @@ export class HarnessAccounts {
 
   /** Linearizes new input against configured selection and credential revision.
    * Running work keeps its launch identity. Equality of the configured source
-   * does not prove the principal reported by native code or OAuth refresh health. */
-  async assertLaunch(provider: string, launch: AccountLaunch): Promise<void> {
-    if (launch.selection.kind === "selectable" && await this.root.readSelection(provider) !== launch.selection.name)
+   * does not prove the principal reported by native code or OAuth refresh health.
+   * `pinned` is the account the conversation runs on now instead of the selected one; a pin set or cleared since
+   * the launch changes it as a selection would. */
+  async assertLaunch(provider: string, launch: AccountLaunch, pinned?: string): Promise<void> {
+    const wanted = pinned !== undefined && this.capabilities.get(provider)?.mode === "selectable" ? selectionOf(pinned) : undefined
+    if (launch.selection.kind === "selectable" && (wanted !== undefined ? wanted : await this.root.readSelection(provider)) !== launch.selection.name)
       throw new ExecutionAccountChanged("selection")
     if (launch.credential) {
       const capability = this.capabilities.get(provider)
@@ -485,18 +513,25 @@ export class HarnessAccounts {
   /**
    * Another account to switch to, when the one in use is near its plan
    * limit or the harness just refused a turn on it, and another of the
-   * harness's accounts has room (`limitOffer`). Never switches by itself:
-   * an account is money, and money moves are the user's to make. A harness
-   * with one account is never read for this. Offers near a limit come at
-   * most once an hour per harness, since a nag repeated is a nag ignored; a
-   * refused turn always asks.
+   * harness's accounts has room (`limitOffer`). Never switches the selection
+   * by itself: an account is money, and money moves are the user's to make.
+   * A Fin goes on under another account only by their switch in Settings ›
+   * Fins, and only that Fin's launches (`launch`'s `account`). A harness
+   * with one account is warned of its limit with nothing to switch to, read
+   * for it at most `SOLE_ACCOUNT_READ_MS` apart, and once per limit window
+   * (`firstWarning`). Offers near a limit come at most once an hour per
+   * harness, since a nag repeated is a nag ignored; a refused turn always asks.
    */
   async limitOffer(harness: string, refused = false): Promise<AccountLimitOffer | null> {
     if (this.capabilities.get(harness)?.mode !== "selectable") return null
     if (!refused && Date.now() - (this.suggestedAt.get(harness) ?? 0) < SUGGEST_THROTTLE_MS) return null
     const accounts = (await this.harnessAccounts(harness)).filter((account) => !account.missing && !account.removing)
     const active = accounts.find((account) => account.active)
-    if (!active || accounts.length < 2) return null
+    if (!active || (refused && accounts.length < 2)) return null
+    if (accounts.length < 2) {
+      if (Date.now() - (this.soleReadAt.get(harness) ?? 0) < SOLE_ACCOUNT_READ_MS) return null
+      this.soleReadAt.set(harness, Date.now())
+    }
     // The account in use first: only one near its limit, or refused, is worth reading the others for.
     const usage = await this.usage.read(harness, active.name)
     if (!refused && (spentPercent(usage) ?? 0) < LIMIT_NEAR_PERCENT) return null
@@ -505,7 +540,29 @@ export class HarnessAccounts {
       readings.push({ ...account, usage: account === active ? usage : await this.usage.read(harness, account.name) })
     const offer = limitOffer(harness, readings, Date.now(), refused)
     if (offer && !refused) this.suggestedAt.set(harness, Date.now())
+    if (offer && !refused && !offer.to && !await this.firstWarning(offer)) return null
     return offer
+  }
+
+  /**
+   * Whether a warning with nothing to offer is the first for its account's limit window, kept on disk since another
+   * host, or this one rebuilt, reads the same 96% and has nothing new to say. A reset that drifts between reads is the
+   * same window; once it has passed the next is news.
+   */
+  private async firstWarning(offer: AccountLimitOffer): Promise<boolean> {
+    const window = offer.from.window
+    const key = `${offer.from.name}:${window?.windowMinutes ?? 0}:${window?.scope ?? ""}`
+    const now = Date.now()
+    const path = this.root.warned(offer.harness)
+    const warned = Object.fromEntries(Object.entries(readWarned(await readOptionalFile(path).catch(() => null))).filter(([, until]) => until > now))
+    if (warned[key] !== undefined) return false
+    warned[key] = window?.resetsAt && window.resetsAt > now ? window.resetsAt : now + WARNED_UNREAD_RESET_MS
+    try {
+      await publishFile(path, JSON.stringify(warned))
+    } catch (error) {
+      hostWarn("accounts", "a limit's warning wasn't kept; it may come again", { harness: offer.harness, error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
   }
 
   /**
@@ -525,7 +582,38 @@ export class HarnessAccounts {
     for (const account of accounts)
       readings.push({ ...account, active: account === active, usage: account === active ? usage : await this.usage.read(harness, account.name) })
     const offer = accounts.length > 1 ? limitOffer(harness, readings, now, true) : null
-    return { account: active.email ?? active.name, until: spent.until, ...(offer && { instead: offer.to.email ?? offer.to.name }) }
+    return { account: active.email ?? active.name, until: spent.until, ...(offer?.to && { instead: offer.to.email ?? offer.to.name }) }
+  }
+
+  /**
+   * Each of the harness's accounts as a Fin's fallback order reads them (`fallbackOrder`), in the order Settings ›
+   * Agents lists them: which is in use, which is at its limit and until when, and which can't be read or started on.
+   * The account in use (or `on`) is read first and the others only when it is at its limit or `all` asks, so a start
+   * with room reads one account. An account whose reading failed is unread, never taken as having room.
+   */
+  async standing(harness: string, on?: string, all = false): Promise<FallbackAccount[]> {
+    const capability = this.capabilities.get(harness)
+    if (!capability) return []
+    const accounts = (await this.harnessAccounts(harness)).filter((account) => !account.missing)
+    const active = accounts.find((account) => account.active) ?? (accounts.length === 1 ? accounts[0] : undefined)
+    const from = accounts.find((account) => account.name === on) ?? active
+    const now = Date.now()
+    const first = from ? await this.usage.read(harness, from.name) : undefined
+    const spent = from && spentUntil(first, now)
+    const standing: FallbackAccount[] = []
+    for (const account of accounts) {
+      const usage = account === from ? first : spent || all ? await this.usage.read(harness, account.name) : undefined
+      const limit = usage ? spentUntil(usage, now) : undefined
+      standing.push({
+        name: account.name,
+        label: account.name === "default" ? account.email ?? account.name : account.name,
+        active: account === active,
+        ...(limit && { spent: limit }),
+        ...(usage && usage.status !== "ok" && { unread: true as const }),
+        ...((account.removing || account.signedOut || (capability.mode !== "selectable" && account !== active)) && { unusable: true as const }),
+      })
+    }
+    return standing
   }
 
   /**
@@ -552,7 +640,7 @@ export class HarnessAccounts {
   /** The same offer in a sentence, for a headless run's notice. */
   async switchSuggestion(harness: AccountHarness): Promise<string | null> {
     const offer = await this.limitOffer(harness)
-    if (!offer) return null
+    if (!offer?.to) return null
     const percent = (side: AccountLimitOffer["from"]) => `${Math.round(side.window?.usedPercent ?? 0)}%`
     return `${this.label(harness)} account ${offer.from.email ?? offer.from.name} is at ${percent(offer.from)} of its limit. ${offer.to.email ?? offer.to.name} is at ${percent(offer.to)}. Switch in Settings → Agents.`
   }

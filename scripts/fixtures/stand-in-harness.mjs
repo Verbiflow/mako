@@ -114,6 +114,8 @@ export async function installStandIn({ load, providerHost, context, store }) {
       },
     },
     backgroundStop: { kind: "ends-with-turn", evidence: "Its only tool runs in the foreground, and Stop's session/cancel ends it." },
+    modelRoutes: { kind: "absent", reason: "The stand-in runs its one scripted model and no connection of the person's." },
+    nativeRouting: { kind: "words", reason: "The stand-in starts no agents of its own to send to Mako." },
     steering: { kind: "supported", via: "A prompt sent while a turn runs joins it.", wire: "concurrent-prompt" },
     access: { native: { full: "full", plan: "plan" }, default: "full" },
     nativeModes: [{ id: "full", name: "Full access" }, { id: "plan", name: "Plan" }],

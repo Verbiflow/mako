@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import { finsWord } from "@mako/host/contracts/agents"
+import { askWords } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { LivePermissionRequest, ThreadRef } from "@/lib/types"
 import { workspaceName } from "@/lib/format"
@@ -17,7 +18,7 @@ import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
 import { threadTitle } from "@/state/thread-titles"
-import { allAsks, askWords, setupStore } from "@/state/setup"
+import { allAsks, setupAskWords, setupStore } from "@/state/setup"
 import { openAppSetup } from "@/state/app-setup"
 import type { SetupAsk } from "@mako/host/contracts/setup"
 
@@ -160,7 +161,7 @@ function finItemsOf(children: readonly NativeAgent[], apex: InboxApex): readonly
       key: `fin:${ask.fin}:${ask.ask.id}`,
       title: ask.title,
       harness: ask.harness,
-      question: ask.question,
+      question: askWords(ask),
       since: agent.observedAt ?? agent.startedAt ?? 0,
       apex,
       ask,
@@ -260,7 +261,7 @@ function buildModel(acp: AcpState, threads: ThreadsState, setup: SetupStateOf): 
     asks.push({ kind: "waiting", key: `waiting:${path}`, title: refTitle(ref), harness: ref.harness, question: status.detail ?? "Waiting for you", since: status.since, open: { kind: "ref", ref } })
   }
   for (const { folder, ask } of allAsks(setup))
-    asks.push({ kind: "setup", key: `setup:${folder}:${ask.id}`, title: ask.by.title, harness: ask.by.harness ?? "", question: askWords(ask), since: ask.at, folder, ask })
+    asks.push({ kind: "setup", key: `setup:${folder}:${ask.id}`, title: ask.by.title, harness: ask.by.harness ?? "", question: setupAskWords(ask), since: ask.at, folder, ask })
   asks.sort((left, right) => left.since - right.since)
 
   const toRead: ReadInboxItem[] = []

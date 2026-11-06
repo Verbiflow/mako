@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto"
-import { mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parse, type ParseError } from "jsonc-parser"
 import { z } from "zod"
 import { hostLog } from "../../base/host-log.js"
+import { publishFile } from "../../base/published-files.js"
 
 /**
  * Mako's OpenCode plugin for native calls: each tool call is posted to the
@@ -50,8 +50,7 @@ export default {
 /** The plugin's folder, the same for every launch of this build: OpenCode loads a folder holding `server.js`, never a bare file. */
 async function pluginFolder(): Promise<string> {
   const folder = join(tmpdir(), `mako-opencode-calls-${createHash("sha256").update(PLUGIN_SOURCE).digest("hex").slice(0, 16)}`)
-  await mkdir(folder, { recursive: true, mode: 0o700 })
-  await writeFile(join(folder, "server.js"), PLUGIN_SOURCE, { mode: 0o600 })
+  await publishFile(join(folder, "server.js"), PLUGIN_SOURCE, { mode: 0o600, dirMode: 0o700 })
   return folder
 }
 

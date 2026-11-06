@@ -97,7 +97,7 @@ if (!process.versions.electron) {
   })
   void main(app).then(() => {
     if (unhandled.length) throw new Error(`The host left ${unhandled.length} unhandled rejection(s) or listener leak(s)`)
-  }).then(() => app.exit(0), (error) => { console.error(error.message); app.exit(1) })
+  }).then(() => app.exit(0), (error) => { console.error(error.stack); app.exit(1) })
 }
 
 function options() {

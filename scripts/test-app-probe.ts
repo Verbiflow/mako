@@ -211,6 +211,7 @@ try {
     const found = await probeApp(await inputFor())
     const entry = folder(found, join(support, "probe-app"))
     return entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") &&
+      folder(found, join(support, "other-app"))?.paths.includes(join("x", "y", "z.txt")) &&
       folder(found, join("/private", socket)) ? found : undefined
   })
   console.log(`probe with history: ${Math.round(performance.now() - began)} ms until the deep writes showed`)

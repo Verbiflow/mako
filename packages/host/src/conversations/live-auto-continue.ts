@@ -3,7 +3,8 @@ import { join } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
-import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { BRIEF_AGAIN } from "../contracts/children.js"
+import { transientCause, unheardDigest, waitsAgain, carriedDigest } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -127,20 +128,23 @@ export class LiveAutoContinue {
    * to another machine continues where the Thread runs next. `continues` names the request that was cut short, which
    * may be in another host's journal; `stopped` is the background work the cut stopped, else what that request kept
    * of it (`Interruption.stopped`). `stayed`: the move didn't happen and the turn goes on where it was, which its words
-   * say (`continueTurnPrompt`). Asked again under the same `requestId`, it changes nothing.
+   * say (`continueTurnPrompt`). `since`: when the cut was, for the account of what moved since, beneath those words
+   * (`finResumedText`). Asked again under the same `requestId`, it changes nothing.
    */
-  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor }): void {
+  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor; brief?: string; since?: number }): void {
     const resident = this.access.resident(id)
     if (!resident) throw new Error("This conversation is no longer available")
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
     this.decline(resident)
     const tuning = [...resident.snapshot.requests].reverse().find((request) => request.tuning)?.tuning
-    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true }
+    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...input.brief && { brief: input.brief }, ...input.since !== undefined && { since: input.since } }
+    // A brief carried again goes as itself, framed; as it's sent, a transcript that shows it has a Continue go instead.
+    const brief = input.brief && resident.snapshot.requests.find((request) => request.id === input.brief)
     const request = LiveRequestSchema.parse({
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
-      text: continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
+      text: brief ? `${BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
       attachments: [],
       tuning,
       status: "queued",
@@ -170,27 +174,33 @@ export class LiveAutoContinue {
     // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
     if (failed.pause === "stop") return
     const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false)
-    // Only a turn its harness ran is continued: one it never took has nothing to pick up.
+    // Only a turn its harness ran is continued: one it never took has nothing to pick up. A digest no model answered is
+    // the exception, whatever ended it: it stays until one does.
     const ran = failed.nativeRun !== undefined || failed.nativeDelivery?.evidence.kind === "accepted"
-    if (!cause || !ran) return
+    const unheard = unheardDigest(failed) ? failed.digest : undefined
+    if ((!cause || !ran) && !unheard) return
     if (resident.snapshot.requests.some((request) => request.continues?.requestId === failed.id)) return
     const now = Date.now()
-    const retry = nextRetry(failed.retry, cause, failed.error ?? "", now)
-    if (!retry) return
+    const waits = cause || unheard ? waitsAgain(failed, cause, failed.error ?? "", now) : undefined
+    if (!waits) return
+    const retry = waits.retry
     const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
+    // Its reports read as heard, so it goes again as itself, for later news to join, as often as it fails, where "carry
+    // on" would tell nothing of them; past the retries it rests (`resting`).
     const request = LiveRequestSchema.parse({
       actor: { kind: "service", name: "auto-continue" },
       id: randomUUID(),
       createdAt: now,
-      text: continueTurnPrompt("connection-lost", "mako"),
+      text: unheard ? failed.text : continueTurnPrompt("connection-lost", "mako"),
+      ...(unheard && { displayText: "", digest: { ...carriedDigest(unheard), ...(!retry && { resting: true as const, ...(waits.digest?.nextTry !== undefined && { nextTry: waits.digest.nextTry }) }) } }),
       attachments: [],
       tuning: failed.tuning,
       status: "held",
       continues,
-      retry,
+      ...(retry && { retry }),
     })
     request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
-    const requests = resident.snapshot.requests.map((candidate) => (candidate === failed ? { ...candidate, retry } : candidate))
+    const requests = resident.snapshot.requests.map((candidate) => (candidate === failed && retry ? { ...candidate, retry } : candidate))
     const at = requests.findIndex((candidate) => candidate.id === failed.id) + 1
     // The failure is being picked up, not left to the person: the session reads ready, so what was queued after the
     // turn goes in the order it came, behind the continuation or after a message that supersedes it.
@@ -201,13 +211,14 @@ export class LiveAutoContinue {
       requests: [...requests.slice(0, at), request, ...requests.slice(at)],
     }
     this.access.flush(resident)
-    hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+    hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
   }
 
   /** Drop a pending continuation and its stamp; a later prompt, close or host exit made it moot. */
   decline(resident: Resident): void {
     // A failed turn's continuation that waits for its time gives way the same way.
-    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry)
+    // One carrying a digest doesn't: it's the only way its reports are heard.
+    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry && !request.digest)
     if (waiting.length) {
       const failed = new Set(waiting.map((request) => request.continues!.requestId))
       const ids = new Set(waiting.map((request) => request.id))

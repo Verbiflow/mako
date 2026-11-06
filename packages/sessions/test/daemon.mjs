@@ -137,19 +137,35 @@ assert.deepEqual(await client.entry(thread.ref.path, "call-7"), {
 })
 assert.equal(entryAt, "call-7")
 // A thread carrying megabytes of tool output crosses the socket in the time
-// the socket needs, not the time it takes to rescan the buffer per chunk.
+// the socket needs, not the time it takes to rescan the buffer per chunk:
+// ten times the entries take about ten times as long, a rescan a hundred.
 const large = {
   ref: thread.ref,
   entries: Array.from({ length: 120 }, (_, i) => ({ type: "text", id: `@${i}`, text: `${i} ` + "tool output café 🦈 ".repeat(6_000) })),
 }
-catalog.open = async () => large
-const startedLarge = performance.now()
-const roundTrip = await client.open(thread.ref.path)
-const largeMs = performance.now() - startedLarge
-assert.equal(roundTrip.entries.length, 120)
-assert.equal(roundTrip.entries[119].text, large.entries[119].text)
 const largeBytes = Buffer.byteLength(JSON.stringify(large))
-assert.ok(largeMs < 1_000, `${(largeBytes / 1e6).toFixed(1)} MB thread took ${largeMs.toFixed(0)} ms to cross the socket`)
+/**
+ * How many times more CPU the large thread takes to cross than a tenth of it: the least of five turns each, the
+ * tenth crossing ten times a turn. CPU time, so a runner busy with other processes counts against neither.
+ */
+const growth = async (open) => {
+  const least = [Infinity, Infinity]
+  for (let round = 0; round < 5; round++)
+    for (const [index, count, times] of [[0, 12, 10], [1, 120, 1]]) {
+      catalog.open = async () => ({ ref: thread.ref, entries: large.entries.slice(0, count) })
+      const started = process.cpuUsage()
+      for (let time = 0; time < times; time++) {
+        const back = await open(thread.ref.path)
+        assert.equal(back.entries.length, count)
+        assert.equal(back.entries.at(-1).text, large.entries[count - 1].text)
+      }
+      const { user, system } = process.cpuUsage(started)
+      least[index] = Math.min(least[index], (user + system) / 1_000 / times)
+    }
+  return { ratio: least[1] / least[0], ms: least[1] }
+}
+const socketGrowth = await growth((path) => client.open(path))
+assert.ok(socketGrowth.ratio < 10 ** 1.5, `${(largeBytes / 1e6).toFixed(1)} MB took ${socketGrowth.ratio.toFixed(1)} times a tenth of it to cross the socket`)
 catalog.open = async () => {
   await new Promise((resolve) => setTimeout(resolve, 150))
   return thread
@@ -214,12 +230,11 @@ assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 3, op: "follow", path: 
   assert.deepEqual(syncScoped.sessions.map((each) => each.tier), ["now", "week"], "this build's scope reaches the catalog")
   assert.deepEqual(await ask({ id: 90, op: "sync-scope", scope: { sessions: [session("day"), session("month")], paused: true } }), { id: 90, ok: true, result: null })
   assert.deepEqual(syncScoped.sessions.map((each) => each.tier), ["day", "week"], "an earlier build's month is read as the week, the oldest tier this one keeps")
-  const refusedAt = performance.now()
+  // Answered, not left to time out: `ask` gives up on a request the reader never answers.
   const refused = await ask({ id: 91, op: "sync-scope", scope: { sessions: "every one" } })
   assert.equal(refused.id, 91)
   assert.equal(refused.ok, false)
   assert.match(refused.error, /couldn't read this sync-scope request/)
-  assert.ok(performance.now() - refusedAt < 1_000, "answered at once, not left to time out")
   await assert.rejects(client.scopeSync({ sessions: "every one", paused: false }), /couldn't read this sync-scope request/, "a client hears the refusal as its request's error")
   const status = await ask({ id: 92, op: "sync-status" })
   // The status as a build of the 30-day window reads it: all four tiers required.
@@ -276,16 +291,23 @@ let portMs
   assert.equal(over.stats.pid, process.pid)
   assert.deepEqual(await over.open(thread.ref.path), thread)
   catalog.open = async () => ({ ref: thread.ref, entries: [{ kind: "user", text: "an earlier build's message" }] })
-  const refusedAt = performance.now()
-  await assert.rejects(over.open(thread.ref.path), /open reply doesn't match this build's schema/)
-  assert.ok(performance.now() - refusedAt < 1_000, "a reply this build can't read fails at once, not at the request's timeout")
+  // The request's own timeout would say it timed out, 30 s on.
+  await assert.rejects(over.open(thread.ref.path), /open reply doesn't match this build's schema/, "a reply this build can't read fails at once, not at the request's timeout")
   catalog.open = async () => large
-  const started = performance.now()
+  const post = channel.port2.postMessage.bind(channel.port2)
+  let posted = 0
+  channel.port2.postMessage = (value) => {
+    posted++
+    post(value)
+  }
   const back = await over.open(thread.ref.path)
-  portMs = performance.now() - started
+  channel.port2.postMessage = post
   assert.equal(back.entries.length, 120)
   assert.equal(back.entries[119].text, large.entries[119].text)
-  assert.ok(portMs < 500, `${(largeBytes / 1e6).toFixed(1)} MB thread took ${portMs.toFixed(0)} ms over the port`)
+  assert.equal(posted, 1, `the ${(largeBytes / 1e6).toFixed(1)} MB thread crossed the port as one message`)
+  const portGrowth = await growth((path) => over.open(path))
+  assert.ok(portGrowth.ratio < 10 ** 1.5, `${(largeBytes / 1e6).toFixed(1)} MB took ${portGrowth.ratio.toFixed(1)} times a tenth of it over the port`)
+  portMs = portGrowth.ms
   const live = new Promise((resolve) => {
     over.onEvent((event) => {
       if (event.event === "entries") resolve(event)
@@ -315,4 +337,4 @@ let portMs
   assert.equal(await exited, 0)
 }
 
-console.log(`Daemon checks clean: locking, frame bounds, restart, long reads, live broadcasts and the worker port verified; a ${(largeBytes / 1e6).toFixed(1)} MB thread crossed the socket in ${largeMs.toFixed(0)} ms and the port in ${portMs.toFixed(0)} ms.`)
+console.log(`Daemon checks clean: locking, frame bounds, restart, long reads, live broadcasts and the worker port verified; a ${(largeBytes / 1e6).toFixed(1)} MB thread crossed the socket in ${socketGrowth.ms.toFixed(0)} ms of CPU (${socketGrowth.ratio.toFixed(1)} times a tenth of it) and the port in ${portMs.toFixed(0)} ms.`)

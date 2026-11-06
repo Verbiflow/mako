@@ -58,7 +58,7 @@ async function checkWindow() {
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const window = new BrowserWindow({ width: 1280, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  const window = new BrowserWindow({ width: 1600, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
   const page = window.webContents
   page.debugger.attach("1.3")
   const watchdog = setTimeout(() => {

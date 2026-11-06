@@ -88,7 +88,7 @@ export function installBuiltins(): () => void {
       minWidth: 360,
     }),
     registerSurface({ id: "agents", label: "Agents", icon: GitBranchIcon, render: AgentsPanel, order: 4, minWidth: 360 }),
-    registerSurface({ id: "setup", label: "Setup", icon: PackageIcon, render: SetupPanel, order: 5, minWidth: 360 }),
+    registerSurface({ id: "setup", label: "Setup", icon: PackageIcon, render: SetupPanel, order: 6, minWidth: 360 }),
     installSetupDrafter(),
     installSimulatorSurface(),
     // Identity, through the same slots a plugin would use. It lives in the
@@ -176,7 +176,7 @@ function installSimulatorSurface(): () => void {
   let unregister: (() => void) | undefined
   const sync = () => {
     const runnable = simulatorsRunnable(simulatorsStore.get().listed)
-    if (runnable && !unregister) unregister = registerSurface({ id: "simulator", label: "Simulator", icon: SmartphoneIcon, render: SimulatorPanel, order: 6, minWidth: 360 })
+    if (runnable && !unregister) unregister = registerSurface({ id: "simulator", label: "Simulator", icon: SmartphoneIcon, render: SimulatorPanel, order: 5, minWidth: 360 })
     else if (!runnable && unregister) {
       unregister()
       unregister = undefined

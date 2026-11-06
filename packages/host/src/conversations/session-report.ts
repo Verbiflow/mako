@@ -1,5 +1,6 @@
 import { LISTED_ASK_OPTIONS, LISTED_LINEAGE, LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, sameHead, type ListedAsking, type ListedHead, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import type { ThreadRef } from "@mako/sessions"
+import { finAskWaiting } from "../contracts/children.js"
 import type { FinAsk } from "../contracts/native-agents.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { CheckoutHead } from "../contracts/checkout-heads.js"
@@ -95,7 +96,8 @@ export function finAsking(found: { fin: ThreadId; name: string; line: string; as
   if (options?.length) asking.options = options
   if (options && found.ask.recommended !== undefined && found.ask.recommended < options.length) asking.recommended = found.ask.recommended
   if (found.more) asking.more = found.more
-  return { waiting: { for: found.ask.kind === "approval" ? "approval" : "question", line: line(`${found.name}: ${found.line}`) }, asking }
+  const waiting = finAskWaiting(found.ask, found.name, found.line)
+  return { waiting: { for: waiting.for, line: line(waiting.line) }, asking }
 }
 
 const iso = (ms: number) => new Date(ms).toISOString()

@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
-import { dirname } from "node:path"
+import { readFileSync, statSync } from "node:fs"
+import { publishFileSync } from "../base/published-files.js"
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessTierOfModeId } from "../contracts/access.js"
 import type { AccessChoice, AccessChoices } from "../contracts/access-choices.js"
@@ -207,10 +207,7 @@ export class AccessChoiceStore {
 
   #write(next: Stored): void {
     this.#stored = next
-    mkdirSync(dirname(this.#deps.file), { recursive: true })
-    const temporary = `${this.#deps.file}.${process.pid}.tmp`
-    writeFileSync(temporary, `${JSON.stringify({ version: 1, ...next })}\n`)
-    renameSync(temporary, this.#deps.file)
+    publishFileSync(this.#deps.file, `${JSON.stringify({ version: 1, ...next })}\n`)
     this.#readAt = statSync(this.#deps.file).mtimeMs
   }
 }
