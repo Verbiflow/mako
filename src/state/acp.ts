@@ -1,4 +1,5 @@
 import { answerLiveApproval } from "./live-approvals"
+import { openNextInOwnTab } from "@/state/open-tabs"
 import type { WorktreeStart } from "@mako/host/contracts/thread-worktrees"
 import type { TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
@@ -616,13 +617,11 @@ export const acp = {
   },
 
   /**
-   * A fork joins this conversation's Thread as a tab unless `thread` is `new`. It opens at once unless `open` is false
-   * (the web app opens it as the Thread's new tab once its owner lists it). Its conversation, or undefined when it
-   * wasn't made (the reason is said).
+   * A fork is a Thread of its own in its parent's place, in a tab of its own. It opens at once unless `open` is false
+   * (the web app opens it once its owner lists it). Its conversation, or undefined when it wasn't made (the reason is said).
    */
   async fork(
     answer: ForkAnswer,
-    thread: "parent" | "new" = "parent",
     current = activeLiveAcp(acpStore.get()),
     open = true
   ): Promise<string | undefined> {
@@ -639,10 +638,12 @@ export const acp = {
         id: crypto.randomUUID(),
         provider: current.harness,
         point,
-        thread,
       })
       applyLiveSnapshot(snapshot)
-      if (open) acp.activate(snapshot.session.id)
+      if (open) {
+        openNextInOwnTab()
+        acp.activate(snapshot.session.id)
+      }
       return snapshot.session.id
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))

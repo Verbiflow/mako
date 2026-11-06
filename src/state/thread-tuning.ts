@@ -1,5 +1,5 @@
 import { setPref } from "@/state/prefs"
-import { rememberDraftHarness } from "@/state/thread-groups"
+import { rememberDraftHarness } from "@/state/thread-drafts"
 import { threadsStore } from "@/state/thread-store"
 
 /** The composer's agent, remembered across launches. */

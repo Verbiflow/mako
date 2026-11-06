@@ -4,23 +4,23 @@ import { prefetchThreadReferences } from "@/lib/thread-references"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { draftText, rememberDraft, useDrafts } from "@/state/drafts"
-import { sessionDraftKey, type SessionDraft } from "@/state/thread-groups"
+import { sessionDraftKey, type SessionDraft } from "@/state/thread-drafts"
 import { sessionTabTitle, useThreadTabs } from "@/state/thread-sessions"
 import { threadsStore, useThreads } from "@/state/threads"
 
-/** The new tab before its first message: which Thread it joins, and that nothing runs yet. */
+/** A new Thread before its first message: whose place it works in, and that nothing runs yet. */
 export function SessionDraftReceipt({ draft }: { draft: SessionDraft }) {
   return (
     <div className="animate-enter flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <p className="max-w-md truncate text-title font-medium text-foreground">New session in {draft.title}</p>
-      <p className="text-ui text-muted-foreground">Pick an agent below. Nothing starts until you send.</p>
+      <p className="max-w-md truncate text-title font-medium text-foreground">New thread beside {draft.title}</p>
+      <p className="text-ui text-muted-foreground">Same folder and branch. Pick an agent below. Nothing starts until you send.</p>
       <ThreadTranscripts draft={draft} />
     </div>
   )
 }
 
 /**
- * The Thread's other Sessions, each a reference the first message can carry.
+ * The Thread it opened from, a reference the first message can carry.
  * A chip only adds or removes the `@thread` token in the draft, so the
  * composer's chip and this one always agree, and the send reads each
  * transcript as it is then.

@@ -197,17 +197,17 @@ export async function ownerCall<Result>(gateway: HostCalling, webDeviceId: strin
 }
 
 /**
- * Adds a Session to a Thread, as the desk's `+` tab does: an empty Session made in the Thread on its owner
- * (`mako:thread-create-session`), then the harness started in it in the Thread's folder, in the person's mode for it,
- * with the first message.
+ * A new Thread beside another, as the desk's `+` does: an empty Session made on its owner
+ * (`mako:thread-create-session`), which says the Thread it's in (a cloud Thread keeps it, left whole), then the harness
+ * started in it in the same folder, in the person's mode for it, with the first message.
  */
 export function addSession(gateway: Gateway, webDeviceId: string, owner: Owner, start: Loadout & { thread: string; folder: string; message: FirstMessage }): Promise<Started> {
   return whileBusy(
     (async () => {
-      const placement = await ownerCall<{ session: string }>(gateway, webDeviceId, owner, "mako:thread-create-session", [crypto.randomUUID(), start.thread])
+      const placement = await ownerCall<{ thread: string; session: string }>(gateway, webDeviceId, owner, "mako:thread-create-session", [crypto.randomUUID(), start.thread])
       const conversationId = crypto.randomUUID()
       await ownerCall<Json>(gateway, webDeviceId, owner, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start, { session: placement.session })], { history: true })
-      return { conversationId, threadId: start.thread }
+      return { conversationId, threadId: placement.thread }
     })()
   )
 }

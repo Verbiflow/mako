@@ -173,7 +173,7 @@ export function ContinueCloudPage() {
   if (!phone) return <Desk route={route} navigate={(next) => setRoute(next)} back={() => setRoute({ kind: "list" })} onStarted={() => undefined} />
   return (
     <main className="relative flex min-w-0 flex-1 flex-col">
-      <ThreadScreen threadId={THREAD} sessionId={SESSION} wide={false} onBack={() => undefined} onSession={() => undefined} />
+      <ThreadScreen threadId={THREAD} sessionId={SESSION} wide={false} onBack={() => undefined} onSession={() => undefined} onThread={() => undefined} onStarted={() => undefined} />
     </main>
   )
 }

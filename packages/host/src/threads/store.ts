@@ -45,6 +45,7 @@ import {
   type SessionExecution,
 } from "../contracts/thread-execution.js"
 import { ThreadGroupSchema, type ThreadGroup } from "../contracts/thread-groups.js"
+import type { ThreadOrigin } from "../contracts/thread-splits.js"
 import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
@@ -1588,6 +1589,21 @@ export class ThreadStore {
       const found = z.object({ thread_id: z.string(), from_thread: z.string(), session_id: z.string(), from_title: z.string().nullable() }).parse(row)
       return { thread: ThreadIdSchema.parse(found.thread_id), from: ThreadIdSchema.parse(found.from_thread), session: SessionIdSchema.parse(found.session_id), ...(found.from_title !== null && { fromTitle: found.from_title }) }
     })
+  }
+
+  /** Where a Thread came from, for its crumb: the Thread a split took it from, or the one it was forked from. */
+  threadOrigin(id: ThreadId): ThreadOrigin | undefined {
+    const thread = this.thread(id)
+    if (!thread) return undefined
+    const split = this.sql("SELECT from_thread, from_title FROM thread_splits WHERE thread_id = ?").get(thread.id)
+    if (split) {
+      const found = z.object({ from_thread: z.string(), from_title: z.string().nullable() }).parse(split)
+      return { kind: "split", from: this.thread(ThreadIdSchema.parse(found.from_thread))?.id ?? ThreadIdSchema.parse(found.from_thread), ...(found.from_title !== null && { title: found.from_title }) }
+    }
+    const first = thread.sessions[0]
+    const parent = first && this.forksOf([first]).get(first)
+    const from = parent && this.canonical(parent)
+    return from ? { kind: "fork", from: this.placeSession(from).thread } : undefined
   }
 
   /** A Thread of its own for a fork or a second conversation, in `source`'s place. */

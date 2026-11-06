@@ -1,13 +1,11 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useRef, useState } from "react"
 import { formatRelative } from "@/lib/format"
-import { harnessLabel } from "@/components/rail/harness-meta"
 import type { ThreadStatus } from "@/state/threads"
 import { LiveMark } from "@/components/ui/live-mark"
 import { motionOf, threadMarkState, threadStatusLabel, type LiveMarkState } from "@/lib/live-mark-state"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { railAnnouncement, type RailAsk } from "@/lib/rail-announcement"
-import { unreadReview, type FoldedSession } from "@/lib/thread-fold"
 
 /** Slack for an answer that lands as its row is painted: still fresh. */
 const REVIEW_FRESH_MS = 2_000
@@ -60,31 +58,6 @@ export function ThreadStatusEnd({ status, updatedAt }: { status: ThreadStatus; u
       </span>
     )
   return updatedAt ? <span className="tabular shrink-0 text-label text-faint">{formatRelative(updatedAt)}</span> : null
-}
-
-/**
- * A folded row's second mark: another Session's answer is ready while the
- * row's own mark says one is still working, waiting or failed. Both facts are
- * true at once, so both are drawn; the dot is the same one an unread row wears.
- */
-export function ReadyBesideMark({ sessions }: { sessions: readonly FoldedSession[] }) {
-  useHarnessIdentity()
-  const [mountedAt] = useState(() => Date.now())
-  const ready = sessions.filter((session) => unreadReview(session.status))
-  const names = [...new Set(ready.map((session) => harnessLabel(session.harness)))]
-  const label = `${names.join(" and ")} finished: ${ready.length === 1 ? "answer" : "answers"} ready to review`
-  const latest = Math.max(...ready.map((session) => (session.status.kind === "review" ? session.status.at : 0)))
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      data-ready-beside
-      className="flex h-5 w-2.5 shrink-0 items-center justify-center"
-    >
-      <span aria-hidden className="review-dot" data-new={latest >= mountedAt - REVIEW_FRESH_MS || undefined} />
-    </span>
-  )
 }
 
 /**

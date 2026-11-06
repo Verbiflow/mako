@@ -191,6 +191,8 @@ export function WebApp() {
           wide={wide}
           onBack={back}
           onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })}
+          onThread={(thread) => navigate({ kind: "thread", thread }, { replace: true })}
+          onStarted={onStarted}
         />
       ) : (
         <div data-thread-loading className="flex-1 bg-surface" />

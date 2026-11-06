@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
@@ -23,6 +23,7 @@ import { startMove, type MoveMac } from "./move-actions"
 import type { MoveWay } from "./move-progress"
 import { listedMove, useMoves } from "./moves"
 import { StartSheet, type AddingTo } from "./new-thread"
+import type { Started } from "./start"
 import { PreviewSheet, ServerCard } from "./preview"
 import { appKey, appShownAs, askPreview, loopbackTarget, useApps, useThreadApp } from "./previews"
 import { useForm } from "./route"
@@ -48,7 +49,7 @@ import { transcriptChunk } from "./chunks"
 import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 
-export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: { threadId: string; sessionId?: string; onBack: () => void; onSession: (session: string) => void; wide: boolean }) {
+export function ThreadScreen({ threadId, sessionId, onBack, onSession, onThread, onStarted, wide }: { threadId: string; sessionId?: string; onBack: () => void; onSession: (session: string) => void; onThread: (thread: string) => void; onStarted: (started: Started, where: string) => void; wide: boolean }) {
   const thread = useThread(threadId)
   const phase = useAccountList((state) => state.phase)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -64,9 +65,10 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   if (child && child.apex !== threadId) setChild(null)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
-  // A branch made from a reply here opens as this Thread's new tab once its owner lists it.
-  const listedSessions = useMemo(() => thread?.sessions.map((each) => ({ conversation: each.row.conversation, session: each.row.session })) ?? [], [thread])
-  useBranchOpening(listedSessions, onSession)
+  // A branch made from a reply here opens once its owner lists it: a Thread of its own, or a cloud Thread's new Session.
+  const rows = useAccountList((state) => state.rows)
+  const openBranch = useCallback((row: { thread: string; session: string }) => (row.thread === threadId ? onSession(row.session) : onThread(row.thread)), [threadId, onSession, onThread])
+  useBranchOpening(rows, openBranch)
   // A Thread on screen is seen: its notices go from this device and every other (`WebPush.seen`), now and each time the
   // page comes back to the front on it (a notification tapped while it was open lands here without a new route). By its
   // Mako Thread ID, which the notices are kept by, whichever ID the route named it by.
@@ -140,9 +142,13 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
           open={adding}
           adding={addingTo}
           onDismiss={() => setAdding(false)}
-          onStarted={(started) => {
+          onStarted={(started, where) => {
             setAdding(false)
-            // The new Session opens once its owner lists it; until then the Thread stays on the one it was on.
+            if (started.threadId !== thread.id) {
+              onStarted(started, where)
+              return
+            }
+            // A cloud Thread's new Session opens once its owner lists it; until then the Thread stays on the one it was on.
             const listed = thread.sessions.find((each) => each.row.conversation === started.conversationId)
             if (listed) onSession(listed.row.session)
           }}
@@ -355,7 +361,7 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
           {onAdd ? (
             <MenuItem onSelect={onAdd} className={item}>
               <PlusIcon className={glyph} />
-              Add a Session
+              New thread here
             </MenuItem>
           ) : null}
           {!session.quietSince ? (
@@ -423,7 +429,7 @@ function cloudOn(entitlements: readonly string[]): boolean {
 }
 
 /**
- * A Thread's Sessions under a finger, phone and tablet alike: one line naming the Session the composer sends to (its
+ * A Thread left whole under a finger, phone and tablet alike (only a cloud Thread can be, until those split): one line naming the Session the composer sends to (its
  * harness's mark, its own name, how it stands and when the person last worked in it), and how many there are, with a
  * dot when another waits on the person or works. Pressed, the Sessions newest first, each said the same way, the ones
  * asleep folded under the rest; `+` adds one. A row of harness names told nothing apart: a Thread's Sessions are often
@@ -461,7 +467,7 @@ function SessionSwitcher({ thread, current, wide, onSession, onAdd }: { thread: 
         </span>
       </button>
       {onAdd ? (
-        <button type="button" aria-label="Add a Session" onClick={onAdd} className="web-icon-button size-9 shrink-0">
+        <button type="button" aria-label="New thread here" onClick={onAdd} className="web-icon-button size-9 shrink-0">
           <PlusIcon className="size-4" />
         </button>
       ) : null}
@@ -531,7 +537,7 @@ function SessionList({ thread, current, now, onPick, onAdd }: { thread: WebThrea
         {onAdd ? (
           <button type="button" className="web-choice text-muted-foreground" onClick={onAdd}>
             <PlusIcon aria-hidden className="size-[18px] shrink-0" />
-            Add a Session
+            New thread here
           </button>
         ) : null}
       </SheetScroll>

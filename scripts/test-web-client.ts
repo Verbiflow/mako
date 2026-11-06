@@ -33,7 +33,7 @@ import { recordedSwitches, sameSwitches, switchedWords, switchesOf } from "../sr
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { listedHeads, listedSummaries, listingChanges } from "../src/web-client/desk-listing"
 import { selectAcpPresence } from "../src/state/acp-presence"
-import { presenceThreadStatus } from "../src/lib/thread-fold"
+import { presenceThreadStatus } from "../src/lib/presence-status"
 import { acpStore } from "../src/state/acp-state"
 import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
 import type { ToolCall } from "../src/extend/slots"
@@ -122,31 +122,6 @@ test("the phone folds the account's Sessions into Threads as a Mac's rail does: 
     row(17, { thread: uuid(800), runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Run the payments suite" }),
   ]
   const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
-  // The rail reads its modules' stores at import, which keep drafts in the browser's storage.
-  const kept = new Map<string, string>()
-  Object.assign(globalThis, { localStorage: { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => kept.set(key, value), removeItem: (key: string) => kept.delete(key) } })
-  const { foldThreads: foldRail } = await import("../src/lib/thread-fold")
-  // What a Mac's window holds for each row the account lists (`selectAcpPresence` of the host's `listedSummary`): no
-  // Thread of this Mac's store, so its Thread is the one the row names.
-  const sessions = threads.flatMap((thread) => thread.sessions)
-  const rail = foldRail(
-    sessions.map(({ summary }) => ({
-      kind: "live" as const,
-      key: summary.session.id,
-      presence: { key: summary.session.id, harness: summary.session.harness, cwd: summary.session.cwd, createdAt: summary.createdAt, status: "ready" as const, threadId: summary.threadId, sessionId: summary.sessionId, elsewhere: summary.elsewhere },
-    })),
-    {},
-    {}
-  )
-  const railThreads = sessions
-    .map((session) => session.row.conversation)
-    .filter((conversation) => !rail.hidden.has(conversation))
-    .map((lead) => rail.byLead.get(lead)?.members.map((member) => member.key) ?? [lead])
-  assert.deepEqual(
-    threads.map((thread) => thread.sessions.map((session) => session.row.conversation)).sort(),
-    railThreads.sort(),
-    "the same Sessions make each Thread, in the same order, on the phone and on a Mac"
-  )
   assert.equal(threads.length, 4, "a fork is a Session of its Thread; two Threads with one title stay two")
   assert.deepEqual(threads.find((thread) => thread.id === uuid(500))?.sessions.map((session) => session.row.conversation), ["c11", "c12", "c13"])
 })

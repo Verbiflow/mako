@@ -35,13 +35,13 @@ function detail(step: ThreadMoveStep, handOff: boolean): string {
     case "own-branch":
       return "Only its own changes leave the project folder; yours and other threads' stay there. It moves to the cloud from its new worktree."
     case "packing":
-      return handOff ? "Its worktree and sessions go ahead while its agent keeps working here." : "Its worktree and sessions go ahead while it still runs here."
+      return handOff ? "Its worktree and conversation go ahead while its agent keeps working here." : "Its worktree and conversation go ahead while it still runs here."
     case "pausing":
       return "Its turn stops where it is. What it did so far is saved and goes with it."
     case "handing-over":
       return "This Mac let go of it; nothing runs it until a cloud machine takes it."
     case "resuming":
-      return handOff ? "A cloud machine took it. Its turn goes on there from where it paused, at the same folder." : "A cloud machine took it. Its sessions pick up where they left off, at the same folder."
+      return handOff ? "A cloud machine took it. Its turn goes on there from where it paused, at the same folder." : "A cloud machine took it. It picks up where it left off, at the same folder."
     case "unsettled":
       return step.reason
     default:
@@ -58,9 +58,9 @@ const RETURN_STEPS = [
 function returnDetail(step: ThreadReturnStep): string {
   switch (step.kind) {
     case "packing":
-      return "Its cloud machine takes no new work and sends back its worktree and sessions. Until they're sent, it's still the cloud's."
+      return "Its cloud machine takes no new work and sends back its worktree and conversation. Until they're sent, it's still the cloud's."
     case "bringing":
-      return "The cloud let go of it. Its worktree and sessions are arriving here; nothing runs it until they have."
+      return "The cloud let go of it. Its worktree and conversation are arriving here; nothing runs it until they have."
     default:
       return ""
   }

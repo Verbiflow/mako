@@ -882,7 +882,9 @@ export function installMockBridge() {
       stop: null,
       external: false,
     }),
-    threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : scene === "busy" ? agedGroup() : []),
+    threadSplits: async () => [],
+    threadOrigin: async () => null,
+  threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : scene === "busy" ? agedGroup() : []),
     threadPurposes: async () => [...purposes],
     threadTitles: async () => [...titles.values()],
     renameThread: async (_operationId: string, thread: string, title: string | null) => {

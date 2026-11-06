@@ -49,7 +49,7 @@ export function AttentionRow({
           )}
         </span>
         <span className="text-label text-muted-foreground">
-          {notificationHeadline(item.kind, item.subject.agent, item.alongside)}
+          {notificationHeadline(item.kind, item.subject.agent)}
           {item.subject.workspace ? ` · ${item.subject.workspace}` : ""}
         </span>
         <span className="line-clamp-2 text-label leading-snug text-faint">{item.body}</span>

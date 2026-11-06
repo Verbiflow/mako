@@ -6,8 +6,7 @@ import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { inCloud, threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
 import { archivedWithWorktree, removeWorktree, useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
-import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
-import { wholeThreadTargets } from "@/state/session-archive"
+import { discardSessionDraft } from "@/state/thread-drafts"
 import { viewer } from "@/state/viewer"
 import { lostVersions } from "@/state/lost-versions"
 import { RestoreVersions } from "@/components/rail/restore-versions"
@@ -22,8 +21,6 @@ export interface ThreadMenuProps {
   path?: string
   thread?: string
   cwd?: string
-  /** Every Session a folded row stands for; archive puts them all away. */
-  archiveTargets?: ThreadTarget[]
   pinned?: boolean
   onPin?: () => void
   onRename?: () => void
@@ -84,22 +81,18 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
 }
 
 function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
-  const { target, title, archived, running, path, thread, cwd, archiveTargets, pinned, onPin, onRename } = props
+  const { target, title, archived, running, path, thread, cwd, pinned, onPin, onRename } = props
   const { controls, error } = menu
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
   const uncommitted = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path]?.changes ?? 0 : 0))
-  // An archived row of a Thread whose other Sessions are still out is one Session of it.
-  const oneOfMany = useThreadGroups((state) => !archiveTargets && thread !== undefined && state.groups[thread] !== undefined)
   // A cloud Thread is archived in the cloud, for every device, and only between turns: its machine packs as it goes.
   const cloud = inCloud(target)
   const archive = async () => {
-    const restoringOne = archived && oneOfMany && !cloud
-    const targets = restoringOne ? [target] : (thread && wholeThreadTargets(thread)) || archiveTargets || [target]
-    // Putting the whole Thread away, with nothing running in it, is when its worktree stops being needed; a cloud
+    const targets = [target]
+    // Putting the Thread away, with nothing running in it, is when its worktree stops being needed; a cloud
     // Thread's is where restoring it brings it back to.
     const leftBehind = !archived && !running && !cloud ? worktree : undefined
-    const changed = await threadLifecycle.archive(targets, !archived, !restoringOne && !leftBehind)
-    if (changed && restoringOne) toast("Session restored")
+    const changed = await threadLifecycle.archive(targets, !archived, !leftBehind)
     if (changed && leftBehind) void archivedWithWorktree(leftBehind, () => void threadLifecycle.archive(targets, false, false))
     if (changed && !archived && thread) discardSessionDraft(thread)
   }
@@ -153,7 +146,7 @@ function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Re
       ) : null}
       <MenuItem data-thread-action="archive" disabled={cloud && running && !archived} onSelect={() => { void archive() }}>
         {archived ? <ArchiveRestoreIcon className="size-3.5" /> : <ArchiveIcon className="size-3.5" />}
-        {archived ? (oneOfMany && !cloud ? "Restore session" : "Restore thread") : cloud && running ? "Archive once its turn ends" : running ? "Archive when finished" : "Archive thread"}
+        {archived ? "Restore thread" : cloud && running ? "Archive once its turn ends" : running ? "Archive when finished" : "Archive thread"}
       </MenuItem>
       {error ? <p role="alert" className="max-w-64 px-2 py-1 text-label text-negative">{error}</p> : null}
     </>

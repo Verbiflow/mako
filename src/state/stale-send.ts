@@ -5,7 +5,6 @@ import { staleSendWords } from "@/lib/session-words"
 import { acpStore } from "@/state/acp-state"
 import { appendRecoveredDraft, clearCapturedDraft, draftsStore } from "@/state/drafts"
 import { createHook, createStore } from "@/state/store"
-import { threadGroupsStore } from "@/state/thread-groups"
 import { currentOnScreen, currentThreadTabs, noteOpenedByScreen, openedBy, openSessionTab, sessionPromptedAt, sessionTabFacts, type SessionTab } from "@/state/thread-sessions"
 
 /**
@@ -25,11 +24,10 @@ export const useStaleSend = createHook(staleSendStore)
 type SessionTabOf = Extract<SessionTab, { kind: "session" }>
 
 function threadFacts(thread: string): Array<{ tab: SessionTabOf; facts: SessionFacts }> {
-  const group = threadGroupsStore.get().groups[thread]
   const acp = acpStore.get()
   return currentThreadTabs(thread)
     .filter((tab): tab is SessionTabOf => tab.kind === "session")
-    .map((tab) => ({ tab, facts: sessionTabFacts(tab, group, sessionPromptedAt(acp, tab.id)) }))
+    .map((tab) => ({ tab, facts: sessionTabFacts(tab, sessionPromptedAt(acp, tab.id)) }))
 }
 
 /** Whether a send to the Session on screen asks first; when it does, the line asking shows and the send waits. */

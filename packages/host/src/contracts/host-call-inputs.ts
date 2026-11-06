@@ -2442,6 +2442,7 @@ const inputs = {
   "mako:thread-move-ask-answer": () => z.tuple([z.string(), z.boolean()]),
   "mako:thread-move-asks": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
+  "mako:thread-origin": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
   "mako:thread-page": () =>
@@ -2988,6 +2989,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-move-ask-answer", "conversations"],
   ["mako:thread-move-asks", "conversations"],
   ["mako:thread-open", "threads"],
+  ["mako:thread-origin", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],
   ["mako:thread-page", "threads"],

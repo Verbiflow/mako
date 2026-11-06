@@ -25,10 +25,11 @@ import {
   closeSessionDraft,
   currentOnScreen,
   currentThreadTabs,
-  newSessionInThread,
+  closeOnScreenTab,
+  newThreadHere,
   sessionTabTitle,
-  stepThreadSession,
-  threadHasTabs,
+  stepOpenTab,
+  hasOpenTabs,
   type SessionTab,
 } from "@/state/thread-sessions"
 import { archiveSessionTab, hasThreadUndo, threadUndoLabel, undoLastThreadChange } from "@/state/session-archive"
@@ -76,7 +77,7 @@ function closeActiveTab() {
     viewer.closeTab(pane.id, pane.activeId)
     return
   }
-  if (closeSessionDraft()) return
+  if (closeSessionDraft() || closeOnScreenTab()) return
   const tabId = tabsStore.get().activeId
   if (tabId) void actions.closeTab(tabId)
 }
@@ -149,17 +150,17 @@ const DESK_COMMANDS: DeskCommand[] = [
     id: "tab.new",
     title: "New tab",
     section: "Session",
-    hint: "A new session in the Thread on screen, any agent; outside a Thread, another attached session",
+    hint: "A new thread beside the one on screen, in the same folder and branch, any agent",
     keys: "mod+t",
     run: () => {
-      if (!newSessionInThread()) void actions.openTab()
+      if (!newThreadHere()) void actions.openTab()
     },
   },
   {
     id: "tab.close",
     title: "Close active tab",
     section: "Session",
-    hint: "Closes the active file or new tab, or detaches the active session",
+    hint: "Closes the active file or thread tab. The thread stays in the sidebar",
     keys: "mod+w",
     run: closeActiveTab,
   },
@@ -167,29 +168,29 @@ const DESK_COMMANDS: DeskCommand[] = [
     id: "tab.next",
     title: "Next tab",
     section: "Session",
-    hint: "The Thread's next session, or the next attached session",
+    hint: "The next thing open in this window",
     keys: "mod+shift+]",
-    when: () => threadHasTabs() || tabsStore.get().tabs.length > 1,
+    when: () => hasOpenTabs() || tabsStore.get().tabs.length > 1,
     run: () => {
-      if (!stepThreadSession(1)) stepTab(1)
+      if (!stepOpenTab(1)) stepTab(1)
     },
   },
   {
     id: "tab.previous",
     title: "Previous tab",
     section: "Session",
-    hint: "The Thread's previous session, or the previous attached session",
+    hint: "The previous thing open in this window",
     keys: "mod+shift+[",
-    when: () => threadHasTabs() || tabsStore.get().tabs.length > 1,
+    when: () => hasOpenTabs() || tabsStore.get().tabs.length > 1,
     run: () => {
-      if (!stepThreadSession(-1)) stepTab(-1)
+      if (!stepOpenTab(-1)) stepTab(-1)
     },
   },
   {
     id: "chat.split",
     title: "Split chat",
     section: "Session",
-    hint: "Moves this session to a new pane beside the Thread's next one. To see two Threads, drag one from the sidebar into the chat",
+    hint: "Moves this thread to a new pane beside the next tab. To see another, drag it from the sidebar into the chat",
     keys: "mod+\\",
     when: () => chatPanes().length === 0 && onScreenSessionTab() !== null,
     run: () => void splitOnScreenSession(),
@@ -198,7 +199,7 @@ const DESK_COMMANDS: DeskCommand[] = [
     id: "chat.focus-other-pane",
     title: "Focus other chat pane",
     section: "Session",
-    hint: "Its session becomes the one you're talking to, with the caret in its composer",
+    hint: "Its thread becomes the one you're talking to, with the caret in its composer",
     keys: "mod+shift+\\",
     when: () => chatPanes().length > 1,
     run: () => {
@@ -208,7 +209,7 @@ const DESK_COMMANDS: DeskCommand[] = [
   },
   {
     id: "session.open-transcript",
-    title: "Open this session's transcript",
+    title: "Open this thread's transcript",
     section: "Session",
     hint: "A document tab that updates while it runs",
     keywords: "transcript markdown read conversation document",
@@ -220,18 +221,18 @@ const DESK_COMMANDS: DeskCommand[] = [
   },
   {
     id: "thread.archive-session",
-    title: "Archive this session",
+    title: "Archive this thread",
     section: "Session",
-    hint: "The thread's other sessions stay",
-    when: () => threadHasTabs() && onScreenSessionTab() !== null,
+    hint: "From its tab, leaving what else is open",
+    when: () => hasOpenTabs() && onScreenSessionTab() !== null,
     run: () => {
       const found = onScreenSessionTab()
-      if (found) void archiveSessionTab(found.tab, found.thread)
+      if (found) void archiveSessionTab(found.tab)
     },
   },
   {
     id: "thread.undo",
-    title: "Undo archiving the session",
+    title: "Undo archiving the thread",
     section: "Session",
     get hint() {
       return threadUndoLabel()

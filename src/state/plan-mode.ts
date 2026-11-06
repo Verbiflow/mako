@@ -40,8 +40,8 @@ import {
   savedProviderMode,
   threadAccessMode,
 } from "@/state/provider-access"
-import { openSessionDraft, sessionDraftKey, threadGroupsStore } from "@/state/thread-groups"
-import { newSessionInThread } from "@/state/thread-sessions"
+import { openSessionDraft, sessionDraftKey, threadDraftsStore } from "@/state/thread-drafts"
+import { newThreadHere } from "@/state/thread-sessions"
 import type { ThreadsState } from "@/state/thread-state"
 import { threadsStore, useThreads } from "@/state/thread-store"
 import { threads } from "@/state/threads"
@@ -459,7 +459,7 @@ export async function buildPlan(source: PlanSource, plan: ProposedPlan): Promise
   }
   const latest = latestPlan(source, conversation)
   if (latest !== undefined && latest !== plan.id)
-    throw new Error("This is an earlier revision. Build it in a new session from the plan's menu.")
+    throw new Error("This is an earlier revision. Build it in a new thread from the plan's menu.")
   if (conversation?.kind === "live" && conversation.permission?.implementsPlan)
     throw new Error("The agent is waiting on its newest plan. Build or answer that one first.")
   const ref = source.threadPath ? threadRef(threadsStore.get(), source.threadPath) : undefined
@@ -501,11 +501,11 @@ export async function buildPlanInNewSession(source: PlanSource, plan: ProposedPl
     if (acpStore.get().activeKey !== conversation.key) acp.activate(conversation.key, false)
     await acp.cancel()
   }
-  if (!newSessionInThread())
-    throw new Error("This conversation isn't in a Thread, so there's no Thread to add a session to.")
-  const draft = openSessionDraft(threadGroupsStore.get())
+  if (!newThreadHere())
+    throw new Error("This conversation isn't in a Thread, so there's nothing to start a new thread beside.")
+  const draft = openSessionDraft(threadDraftsStore.get())
   const key = sessionDraftKey(draft)
-  if (!key) throw new Error("The new session's tab did not open.")
+  if (!key) throw new Error("The new thread's tab did not open.")
   setPendingPlan(currentSettingsTarget(), null)
   rememberDraftPlan(key, plan)
   const request = proposedPlanReply(plan, "implement")

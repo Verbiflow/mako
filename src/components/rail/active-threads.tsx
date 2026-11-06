@@ -8,28 +8,20 @@ import { useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
-import { APEX_SURFACE, ROW_ACTIONS, ROW_SURFACE, RowLine, SessionCount } from "@/components/rail/thread-row"
+import { APEX_SURFACE, ROW_ACTIONS, ROW_SURFACE, RowLine } from "@/components/rail/thread-row"
 import { WorktreeMark } from "@/components/rail/worktree-mark"
-import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
+import { archivedLive, useThreadArchives } from "@/state/thread-lifecycle"
 import { copyAge, formatRelative, workspaceName } from "@/lib/format"
-import {
-  foldedThreadState,
-  presenceThreadStatus,
-  sameFoldedThreadState,
-  sessionStateText,
-  type FoldedThread,
-} from "@/lib/thread-fold"
-import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
-import { threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
+import { presenceThreadStatus } from "@/lib/presence-status"
+import { ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
+import { useThreads, type ThreadStatus } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
-import { acpForThread, useAcp } from "@/state/acp"
+import { useAcp } from "@/state/acp"
 import { openConversation, useWindowRoutes } from "@/state/window-routes"
 import { CLOUD_WHERE } from "@/state/cloud-moves"
 import type { AcpPresence } from "@/state/acp-presence"
-import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useThreadPurposes } from "@/state/thread-purposes"
 import { useThreadTitles } from "@/state/thread-titles"
-import { openFoldedThread } from "@/state/thread-sessions"
 import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
 
@@ -37,36 +29,21 @@ const IDLE: ThreadStatus = { kind: "idle" }
 
 export function LiveAgentRow({
   presence,
-  folded,
   indent = false,
 }: {
   presence: AcpPresence
-  /** Set when this row stands for a Thread with several Sessions. */
-  folded?: FoldedThread
   indent?: boolean
 }) {
   useHarnessIdentity()
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
-  const thread = useThreadGroups((state) => folded?.thread ?? rowThread(presence, state.threadOf))
+  const thread = presence.threadId
   const setup = useThreadPurposes((state) => (thread ? state.byThread[thread]?.kind : undefined) ?? presence.purpose) === "setup"
   const checkout = useWorktrees((state) => worktreeAt(state.worktrees, presence.cwd)?.worktree.path)
+  const apex = useIsApex(thread)
   // Lit by the same rule as `ThreadRow`: a thread open in the viewer is the
   // selection; otherwise the live conversation on screen is.
-  const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
-  const apex = useIsApex(thread)
-  const viewedMember = useThreads((state) => {
-    const path = state.opening?.ref.path ?? state.viewing?.ref.path
-    return path === undefined ? undefined : Boolean(folded?.members.some((member) => member.kind === "native" && member.ref.path === path))
-  })
-  const liveOnScreen = useAcp((state) =>
-    Boolean(
-      state.activeKey &&
-        (folded
-          ? folded.members.some((member) => (member.kind === "live" ? member.presence.key : acpForThread(state, member.ref)?.key) === state.activeKey)
-          : presence.key === state.activeKey)
-    )
-  )
-  const lit = draftOpen || (viewedMember ?? liveOnScreen)
+  const viewing = useThreads((state) => (state.opening?.ref.path ?? state.viewing?.ref.path) !== undefined)
+  const lit = useAcp((state) => !viewing && state.activeKey === presence.key)
   // In a browser every computer is elsewhere: only the cloud is marked, as the place apart from the person's own Macs.
   const routed = useWindowRoutes((state) => state.routes !== null)
   // Its device can't be heard: nothing there is shown at work, and the row says when it was last seen instead.
@@ -86,28 +63,15 @@ export function LiveAgentRow({
               : presence.openElsewhere
                 ? `Open in ${harnessLabel(presence.harness)}`
                 : "Ready"
-  const foldState = useThreads(
-    (threadState) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, threadState)) : null),
-    sameFoldedThreadState
-  )
-  // A folded row whose other Session is the one doing something shows that
-  // Session's state; this conversation's own mark is for when it's the news.
-  const otherSession = foldState && foldState.status.kind !== "idle" && foldState.sessions[0]?.status !== foldState.status
   // A device that can't be heard shows nothing of its at work.
   const quiet = presence.quietSince !== undefined && presence.status === "ready"
-  const status = otherSession ? foldState.status : quiet ? IDLE : presenceThreadStatus(presence)
-  const markHarness = otherSession ? (foldState.sessions.find((session) => session.status === foldState.status)?.harness ?? presence.harness) : presence.harness
+  const status = quiet ? IDLE : presenceThreadStatus(presence)
+  const markHarness = presence.harness
   const named = useThreadTitles((titles) => (thread ? titles.byThread[thread]?.title : undefined))
   // A Thread's name titles its row, this Mac's from its store, another device's from the account's list.
   const title =
     named ?? presence.threadTitle ?? presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
-  const open = () => {
-    if (folded) openFoldedThread(folded.thread, folded.members)
-    else openConversation(presence)
-  }
-  const archiveTargets = folded?.members.map((member): ThreadTarget =>
-    member.kind === "native" ? nativeThreadTarget(member.ref) : { kind: "live", id: member.key }
-  )
+  const open = () => openConversation(presence)
   const menu: ThreadMenuProps = {
     target: { kind: "live", id: presence.key },
     title,
@@ -117,7 +81,6 @@ export function LiveAgentRow({
     path: presence.threadPath,
     thread,
     cwd: presence.cwd,
-    archiveTargets,
   }
   return (
     <>
@@ -130,9 +93,7 @@ export function LiveAgentRow({
           title,
           where,
           setup ? "setup Thread" : undefined,
-          foldState
-            ? `${foldState.sessions.length} sessions: ${foldState.sessions.map((session) => `${harnessLabel(session.harness)} ${sessionStateText(session.status)}`).join(", ")}`
-            : label,
+          label,
         ].filter(Boolean).join(", ")}
         data-thread-row
         data-tip={where ? `${title} · ${where}${presence.waitingOn ? ` · ${presence.waitingOn}` : ""}` : undefined}
@@ -148,18 +109,17 @@ export function LiveAgentRow({
         <RowLine apex={apex}>
         <ThreadMark
           status={status}
-          state={!otherSession && presence.status === "starting" ? "starting" : undefined}
+          state={presence.status === "starting" ? "starting" : undefined}
           harness={markHarness}
           lit={lit}
           cut={lit ? "var(--raised)" : undefined}
-          label={otherSession ? undefined : label}
+          label={label}
         />
         <span className={cn("min-w-0 flex-[1_1_60%] truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>
           {title}
         </span>
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
         {presence.elsewhere && (!routed || presence.elsewhere === CLOUD_WHERE) ? <ElsewhereMark where={presence.elsewhere} /> : null}
-        {folded ? <SessionCount count={folded.members.length} /> : null}
         {/* The branch its owner's worktree is on, as a row this Mac made one for wears it. */}
         {presence.worktreeBranch ? <WorktreeMark worktree={{ branch: presence.worktreeBranch }} summary={undefined} /> : null}
         {!indent ? (
@@ -175,7 +135,6 @@ export function LiveAgentRow({
           <ThreadActions {...menu} />
         </span>
         {checkout ? <AppMarkIcon checkout={checkout} /> : null}
-        {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
         {quiet ? (
           <span data-last-seen title={`Last seen ${copyAge(presence.quietSince!)}`} className="tabular shrink-0 text-label text-faint">
             {/* "seen", so it doesn't read as an idle row's time of its last change. */}

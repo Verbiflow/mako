@@ -764,20 +764,17 @@ assert.equal(notificationHeadline("finished", "Codex", []), "Codex finished")
 {
   reset()
   const fake = fakeEnvironment()
-  const working = new Map([["/codex", ["Claude Code"]], ["/claude", []]])
-  fake.env.siblings = (target) =>
-    target.kind === "thread" && working.has(target.path) ? { thread: "t1", working: working.get(target.path) ?? [] } : undefined
+  const inThread = new Set(["/codex", "/claude"])
+  fake.env.threadOf = (target) => (target.kind === "thread" && inThread.has(target.path) ? "t1" : undefined)
   const uninstall = installNotificationEnvironment(fake.env)
   fake.setFocused(false)
   noteOutcome({ kind: "finished", subject: { ...subjectFor("/codex", "Fold"), agent: "Codex" }, marker: "t1" })
   await fake.advance(BURST_SETTLE_MS)
   const first = notificationsStore.get().items[0]
   assert.equal(first?.thread, "t1")
-  assert.deepEqual(first?.alongside, ["Claude Code"], "the item names the Session still working")
-  assert.equal(fake.log.desktop.at(-1)?.subtitle, "Codex finished · Claude Code still working · mako")
+  assert.equal(fake.log.desktop.at(-1)?.subtitle, "Codex finished · mako")
   noteOutcome({ kind: "finished", subject: subjectFor("/claude", "Fold"), marker: "t1" })
   await fake.advance(BURST_SETTLE_MS)
-  assert.equal(notificationsStore.get().items[0]?.alongside, undefined, "the last Session to finish has nothing beside it")
   assert.equal(fake.log.desktop.at(-1)?.subtitle, "Claude Code finished · mako")
   assert.equal(unseenItems(notificationsStore.get().items).length, 2, "each Session's answer opens on its own")
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["mako-thread:t1"], "two Sessions of one Thread count once")

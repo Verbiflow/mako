@@ -10,7 +10,7 @@ import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
 import { InboxView } from "@/components/inbox/inbox-view"
 import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
-import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
+import { openSessionDraft, useThreadDrafts } from "@/state/thread-drafts"
 import { Divider } from "@/components/shell/divider"
 import { ErrorBoundary } from "@/components/shell/error-boundary"
 import { useSurfaces, type SurfaceDefinition } from "@/extend/surfaces"
@@ -31,6 +31,7 @@ import { QUIET_WORDS } from "@/lib/quiet-device"
 import { Blank } from "@/components/ui/kit"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { ChildBreadcrumb } from "@/components/stage/child-view"
+import { ThreadCrumb } from "@/components/stage/thread-crumb"
 import type { TabStage } from "@/state/stage"
 
 /** Identity-stable fallback so the selector never allocates per render. */
@@ -247,6 +248,7 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
   return (
     <main className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {composer ? <ChildBreadcrumb /> : null}
+      {composer ? <ThreadCrumb /> : null}
       <ConversationScopeContext.Provider value={scope}>
         <TranscriptPaneContext value={paneId ?? null}>
           <ConversationSurface />
@@ -271,8 +273,8 @@ function PaneNotice({ scope }: { scope: Extract<ConversationScope, { kind: "draf
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-ui text-faint">
       {scope.kind === "draft"
-        ? `New session${scope.title ? ` in “${scope.title}”` : ""}, not sent yet. Click to write it here.`
-        : "This session isn't in its thread any more. Close the pane or open another tab."}
+        ? `New thread${scope.title ? ` beside “${scope.title}”` : ""}, not sent yet. Click to write it here.`
+        : "This thread isn't here any more. Close the pane or open another tab."}
     </div>
   )
 }
@@ -382,7 +384,7 @@ function ConversationSurface() {
   // conversation in full. Swapping to the live panel any earlier showed the
   // new prompt alone until the history arrived a moment later.
   const starting = useAcp((state) => activeAcp(state)?.kind === "starting")
-  const draft = useThreadGroups(openSessionDraft)
+  const draft = useThreadDrafts(openSessionDraft)
   if (scope) {
     if (scope.kind === "live") return <AcpPanel />
     if (scope.kind === "history") return <ThreadViewer />

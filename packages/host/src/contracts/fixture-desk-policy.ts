@@ -49,6 +49,7 @@ const fixtureReads = [
   "mako:thread-archives",
   "mako:thread-groups",
   "mako:thread-splits",
+  "mako:thread-origin",
   "mako:thread-purposes",
   "mako:thread-titles",
   "mako:worktrees",

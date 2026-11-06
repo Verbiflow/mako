@@ -197,7 +197,7 @@ const named = SCENES.find((scene) => scene.key === search.get("session"))?.sessi
 
 export function TouchPage() {
   const [session, setSession] = useState(named)
-  return <ThreadScreen key={THREAD} threadId={THREAD} sessionId={session} wide={form === "tablet"} onBack={() => undefined} onSession={setSession} />
+  return <ThreadScreen key={THREAD} threadId={THREAD} sessionId={session} wide={form === "tablet"} onBack={() => undefined} onSession={setSession} onThread={() => undefined} onStarted={() => undefined} />
 }
 
 export function DeskPage() {

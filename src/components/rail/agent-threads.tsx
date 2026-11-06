@@ -29,8 +29,6 @@ import {
   type ThreadFolderActivity,
 } from "@/lib/thread-folders"
 import { useRowFlip } from "@/components/rail/use-row-flip"
-import { EMPTY_FOLD, foldThreads, foldedThreadState, presenceStatusOf, unreadReview, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
-import { useThreadGroups } from "@/state/thread-groups"
 import { RailTip } from "@/components/rail/rail-tip"
 import { railRanksStore } from "@/state/rail-ranks"
 import {
@@ -273,28 +271,7 @@ export function AgentThreads() {
     )
   }, [all, cwd, deferred, filter, scope, archiveKeys, grouping, attention, working, externalActivity])
 
-  // A Thread with several Sessions is one row, wherever they run: its first
-  // Session's row stands for the rest, which leave the list before anything
-  // counts or ranks them.
-  const groups = useThreadGroups((state) => state.groups)
-  const threadOf = useThreadGroups((state) => state.threadOf)
-  const fold = useMemo((): ThreadFold => {
-    const rows: FoldRow[] = [
-      ...matched.map((ref): FoldRow => ({ kind: "native", key: ref.path, ref })),
-      ...unboundLiveAgents.map((presence): FoldRow => ({ kind: "live", key: presence.key, presence })),
-    ]
-    return rows.length ? foldThreads(rows, groups, threadOf) : EMPTY_FOLD
-  }, [matched, unboundLiveAgents, groups, threadOf])
-  const shownRefs = useMemo(
-    () => (fold.hidden.size ? matched.filter((ref) => !fold.hidden.has(ref.path)) : matched),
-    [fold, matched]
-  )
-  const shownLive = useMemo(
-    () => (fold.hidden.size ? unboundLiveAgents.filter((presence) => !fold.hidden.has(presence.key)) : unboundLiveAgents),
-    [fold, unboundLiveAgents]
-  )
-
-  const { priorities, threadActivity, statuses, countedLive } = useMemo(() => {
+  const { priorities, threadActivity, statuses } = useMemo(() => {
     const state = {
       ...threadsStore.get(),
       attention,
@@ -305,66 +282,54 @@ export function AgentThreads() {
     const nextPriorities: Record<string, number> = {}
     const nextActivity: Record<string, ThreadFolderActivity> = {}
     const nextStatuses: Record<string, ThreadStatus> = {}
-    for (const ref of shownRefs) {
-      const folded = fold.byLead.get(ref.path)
-      // A folded Thread counts each fact any of its Sessions holds: one
-      // running and one finished is a running Thread and one to review.
-      const foldState = folded ? foldedThreadState(folded.members, (member) => threadStatus(member, state)) : undefined
-      const status = foldState?.status ?? threadStatus(ref, state)
-      const sessions = foldState?.sessions.map((session) => session.status) ?? [status]
+    for (const ref of matched) {
+      const status = threadStatus(ref, state)
       nextStatuses[ref.path] = status
-      nextPriorities[ref.path] = foldState?.priority ?? threadStatusPriority(status)
+      nextPriorities[ref.path] = threadStatusPriority(status)
       nextActivity[ref.path] = {
-        running: sessions.some((session) => session.kind === "working"),
-        needsInput: sessions.some((session) => session.kind === "needs-permission"),
-        failed: sessions.some((session) => session.kind === "failed"),
-        unread: sessions.some(unreadReview),
-        active: sessions.some((session) => session.kind === "external-active"),
-        observed: sessions.some((session) => session.kind === "observed"),
+        running: status.kind === "working",
+        needsInput: status.kind === "needs-permission",
+        failed: status.kind === "failed",
+        unread: status.kind === "review" && status.unread,
+        active: status.kind === "external-active",
+        observed: status.kind === "observed",
       }
     }
-    // A folded Thread whose row is a conversation's counts as the Thread: one of its Sessions waiting on you is the
-    // folder's to say, whichever Session leads it.
-    const live = shownLive.map((presence) => {
-      const folded = fold.byLead.get(presence.key)
-      const standing = folded && presenceStatusOf(foldedThreadState(folded.members, (member) => threadStatus(member, state)).status)
-      return standing && standing !== presence.status ? { ...presence, status: standing } : presence
-    })
-    return { priorities: nextPriorities, threadActivity: nextActivity, statuses: nextStatuses, countedLive: live }
-  }, [attention, externalActivity, fold, shownRefs, shownLive, observed, working])
+    return { priorities: nextPriorities, threadActivity: nextActivity, statuses: nextStatuses }
+  }, [attention, externalActivity, matched, observed, working])
 
   const asks = useMemo((): RailAsk[] => [
-    ...shownRefs.flatMap((ref): RailAsk[] => {
+    ...matched.flatMap((ref): RailAsk[] => {
       const kind = statuses[ref.path]?.kind
       return kind === "needs-permission" || kind === "failed" ? [{ key: ref.path, title: ref.title ?? "A thread", kind }] : []
     }),
-    ...countedLive.flatMap((presence): RailAsk[] =>
+    ...unboundLiveAgents.flatMap((presence): RailAsk[] =>
       presence.status === "needs-permission" || presence.status === "failed"
         ? [{ key: presence.key, title: presence.title ?? "A conversation", kind: presence.status }]
         : []),
-  ], [shownRefs, countedLive, statuses])
+  ], [matched, unboundLiveAgents, statuses])
 
   // Ranks from the last render decide this one, so a thread that is busy
   // keeps its place instead of climbing on every appended byte.
   const ranks = useMemo(
-    () => stableThreadRanks(shownRefs, threadActivity, railRanksStore.get().ranks),
-    [shownRefs, threadActivity]
+    () => stableThreadRanks(matched, threadActivity, railRanksStore.get().ranks),
+    [matched, threadActivity]
   )
   const shownRanks = hold?.ranks ?? ranks
 
   const held = useMemo(() => {
     const set = new Set(pinned)
-    const list = shownRefs.filter((ref) => set.has(ref.path))
+    const list = matched.filter((ref) => set.has(ref.path))
     list.sort((a, b) => pinned.indexOf(a.path) - pinned.indexOf(b.path))
     return list
-  }, [shownRefs, pinned])
+  }, [matched, pinned])
 
   const folderMap = useWorktrees((state) => state.folderMap)
   const grouped = useMemo(
     () =>
       groupThreadFolders({
-        refs: shownRefs,
-        live: countedLive,
+        refs: matched,
+        live: unboundLiveAgents,
         currentCwd: cwd,
         pinnedThreads: pinned,
         pinnedFolders: pinnedProjects,
@@ -374,9 +339,9 @@ export function AgentThreads() {
         sortBy,
         folderMap,
       }),
-    [cwd, shownRefs, countedLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
+    [cwd, matched, unboundLiveAgents, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
   )
-  // A folder sits by when you last worked there, on any device: every Session counts, a Thread's folded ones too, so
+  // A folder sits by when you last worked there, on any device: every Session counts, so
   // agent output never moves one and every device puts them in the same order.
   const folderRanks = useMemo(
     () => workedFolderRanks({ refs: matched, live: unboundLiveAgents, owners, folderMap }),
@@ -390,9 +355,9 @@ export function AgentThreads() {
     [grouped, hold, folderRanks, sortBy]
   )
   const recent = useMemo(() => [
-    ...shownRefs.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: shownRanks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
-    ...shownLive.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.movedAt ?? presence.createdAt).toISOString(), presence })),
-  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [shownRefs, shownRanks, threadActivity, shownLive])
+    ...matched.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: shownRanks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
+    ...unboundLiveAgents.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.movedAt ?? presence.createdAt).toISOString(), presence })),
+  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [matched, shownRanks, threadActivity, unboundLiveAgents])
   const searchActive = Boolean(deferred.trim())
   useRowFlip(scroller, `${grouping}:${searchActive}`)
   const inboxOpen = useInboxView((state) => state.open)
@@ -421,8 +386,7 @@ export function AgentThreads() {
       key={folder.key}
       folder={folder}
       now={now}
-      fold={fold}
-      liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key).sort(byLatestMove)}
+      liveAgents={unboundLiveAgents.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key).sort(byLatestMove)}
       collapsed={collapsed.includes(`ws:${folder.key}`)}
       hidden={hidden}
       onToggle={() => {
@@ -461,7 +425,7 @@ export function AgentThreads() {
       if (index < 9) row.dataset.jumpIndex = String(index + 1)
       else delete row.dataset.jumpIndex
     })
-  }, [folders, held, jumpHints, shownRefs, shownLive, pages, showAllPinned, showAllFolders])
+  }, [folders, held, jumpHints, matched, unboundLiveAgents, pages, showAllPinned, showAllFolders])
 
   return (
     <div
@@ -554,9 +518,9 @@ export function AgentThreads() {
             <div className="pt-1">
               {grouping !== "archived" ? <DraftThreads /> : null}
               {recent.map((row) => row.kind === "native"
-                ? <ThreadRow key={row.key} threadRef={row.ref} folded={fold.byLead.get(row.key)} showFolder />
-                : <LiveAgentRow key={row.key} presence={row.presence} folded={fold.byLead.get(row.key)} />)}
-              {shownRefs.length + shownLive.length > recent.length ? (
+                ? <ThreadRow key={row.key} threadRef={row.ref} showFolder />
+                : <LiveAgentRow key={row.key} presence={row.presence} />)}
+              {matched.length + unboundLiveAgents.length > recent.length ? (
                 <button type="button" onClick={() => setSearching(true)} className="pressable h-7 w-full px-2 text-left text-label text-faint hover:text-foreground">Search older threads</button>
               ) : null}
             </div>
@@ -570,7 +534,7 @@ export function AgentThreads() {
                     Pinned
                   </p>
                   {shownPinned.map((ref) => (
-                    <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} showFolder />
+                    <ThreadRow key={ref.path} threadRef={ref} showFolder />
                   ))}
                   {hiddenPinned > 0 || showAllPinned ? (
                     <button
@@ -621,8 +585,7 @@ export function AgentThreads() {
                 <FolderSection
                   folder={sessions}
                   now={now}
-                  fold={fold}
-                  liveAgents={shownLive.filter((presence) => !threadFolderKey(presence, folderMap))}
+                  liveAgents={unboundLiveAgents.filter((presence) => !threadFolderKey(presence, folderMap))}
                   collapsed={collapsed.includes(`ws:${sessions.key}`)}
                   onToggle={() => {
                     const key = `ws:${sessions.key}`
@@ -976,7 +939,6 @@ function hideProject(folder: ThreadFolder & { cwd: string }, hidden: boolean) {
 function FolderSection({
   folder,
   now,
-  fold,
   liveAgents,
   collapsed,
   hidden = false,
@@ -988,7 +950,6 @@ function FolderSection({
 }: {
   folder: ThreadFolder
   now: number
-  fold: ThreadFold
   liveAgents: AcpPresence[]
   collapsed: boolean
   /** Shown from the Hidden row: dimmed, and its menu offers Show. */
@@ -1011,9 +972,9 @@ function FolderSection({
   const contentId = `folder-${folder.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
   const limit = FOLDER_LEAD_ROWS + pages * PAGE_ROWS
-  const shownLive = liveAgents.slice(0, limit)
-  const visible = folder.refs.slice(0, Math.max(0, limit - shownLive.length))
-  const more = folder.refs.length + liveAgents.length - visible.length - shownLive.length
+  const unboundLiveAgents = liveAgents.slice(0, limit)
+  const visible = folder.refs.slice(0, Math.max(0, limit - unboundLiveAgents.length))
+  const more = folder.refs.length + liveAgents.length - visible.length - unboundLiveAgents.length
   const project = folder.cwd === null ? null : { ...folder, cwd: folder.cwd }
   const menuItems = project ? (
     <FolderMenuItems folder={project} closed={closed} hidden={hidden} onToggle={onToggle} onNew={onNew} onPin={onPin} onHide={(next) => hideProject(project, next)} />
@@ -1141,9 +1102,9 @@ function FolderSection({
         )}
       >
         <div className="min-h-0 overflow-hidden">
-          {shownLive.map((presence) => <LiveAgentRow key={presence.key} presence={presence} folded={fold.byLead.get(presence.key)} indent />)}
+          {unboundLiveAgents.map((presence) => <LiveAgentRow key={presence.key} presence={presence} indent />)}
           {visible.map((ref) => (
-            <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />
+            <ThreadRow key={ref.path} threadRef={ref} indent />
           ))}
           {more > 0 ? (
             <button

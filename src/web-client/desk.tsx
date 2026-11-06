@@ -9,7 +9,7 @@ import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
 import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
-import { SessionTabList } from "@/components/stage/session-tabs"
+import { ThreadTabList } from "@/components/stage/thread-tabs"
 import { Welcome } from "@/components/transcript/transcript"
 import { OceanScene } from "@/components/ui/ocean-scene"
 import { WorkbenchStrip } from "@/components/stage/stage-strip"
@@ -25,7 +25,8 @@ import { cn } from "@/lib/utils"
 import { acp, acpStore, activeLiveAcp, useAcp } from "@/state/acp"
 import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { store } from "@/state/session"
-import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
+import { showInTabs } from "@/state/open-tabs"
+import { noteOpenedByScreen, useOpenTabs, type OnScreen } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
@@ -63,7 +64,7 @@ const NEW_THREAD_KEYS = "mod+shift+o"
 /**
  * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
  * the left, without a window's traffic lights), its rail (`AgentThreads`: every Thread on the account by project, its
- * Sessions folded into one row, its top rows and the Inbox they open, its Threads by project, search and the filter), the open Thread's Sessions as the
+ * top rows and the Inbox they open, its Threads by project, search and the filter), what's open as the
  * desktop's tabs over its own transcript and composer, its command palette, and its keys: ⌘K for everything, ⌘B for
  * the rail, arrows through the rail, ⌥↑/⌥↓ between Threads, ⌘L to the composer, ⌘⎋ to stop.
  *
@@ -101,6 +102,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           if (presence.threadId) latest.current.open({ kind: "thread", thread: presence.threadId, ...(presence.sessionId && { session: presence.sessionId }) })
         },
         newSession: () => addSession.current?.() ?? false,
+        closeThread: () => latest.current.open({ kind: "list" }),
         newThreadIn: (cwd) => {
           // Where the folder's Sessions run: its Mac, or the cloud.
           const row = latest.current.list.rows.find((each) => each.folder === cwd)
@@ -143,7 +145,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           {starting ? (
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
-            <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
+            <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} onStarted={onStarted} />
           ) : under.kind === "settings" ? (
             <Suspense fallback={null}>
               <Settings onBack={undefined} />
@@ -399,10 +401,10 @@ function DeskEmpty({ onNew }: { onNew: () => void }) {
 }
 
 /**
- * The open Thread: the desktop's strip (its Session tabs, the desktop's own, then where it runs and its menu), then
- * the Session's transcript and composer.
+ * The open Thread: the desktop's strip (what's open, the desktop's own tabs, then where it runs and its menu), then
+ * its transcript and composer.
  */
-function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession }: { threadId: string; sessionId?: string; addSessionRef: React.RefObject<(() => boolean) | null>; onArchived: () => void; onSession: (session: string) => void }) {
+function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession, onStarted }: { threadId: string; sessionId?: string; addSessionRef: React.RefObject<(() => boolean) | null>; onArchived: () => void; onSession: (session: string) => void; onStarted: (started: Started, where: string) => void }) {
   const thread = useThread(threadId)
   const phase = useAccountList((state) => state.phase)
   const client = useWebClient()
@@ -433,8 +435,10 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
       addSessionRef.current = null
     }
   }, [addSessionRef, canAdd])
-  const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
   const shown = session?.row.session
+  const here = useMemo<OnScreen>(() => ({ thread: threadId, session: shown }), [threadId, shown])
+  useEffect(() => showInTabs(here), [here])
+  const tabs = useOpenTabs(here)
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {
     if (sessionId === undefined && shown) noteOpenedByScreen(shown)
@@ -467,7 +471,7 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
           </>
         }
       >
-        {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive /> : null}
+        {tabs.length ? <ThreadTabList tabs={tabs} here={here} paneId="main" agentActive /> : null}
       </WorkbenchStrip>
       <ThreadBody thread={thread} session={session} desk />
       {addingTo ? (
@@ -475,8 +479,12 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
           open={adding}
           adding={addingTo}
           onDismiss={() => setAdding(false)}
-          onStarted={(started) => {
+          onStarted={(started, where) => {
             setAdding(false)
+            if (started.threadId !== thread.id) {
+              onStarted(started, where)
+              return
+            }
             const listed = thread.sessions.find((each) => each.row.conversation === started.conversationId)
             if (listed) onSession(listed.row.session)
           }}

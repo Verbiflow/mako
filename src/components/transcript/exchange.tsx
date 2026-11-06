@@ -1401,7 +1401,7 @@ function useLiveFork(exchange: ExchangeData): (() => Promise<string | undefined>
     return descriptorFor(threadsStore.get(), current.harness)?.capabilities.fork.state === "implemented" ? current.key : undefined
   })
   if (!live || !requestId) return undefined
-  return () => acp.fork({ kind: "run", requestId }, "parent", scopedLiveAcp(acpStore.get(), scope), false)
+  return () => acp.fork({ kind: "run", requestId }, scopedLiveAcp(acpStore.get(), scope), false)
 }
 
 /**
@@ -1450,8 +1450,8 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
         <button
           type="button"
           data-transcript-action="fork"
-          title="Fork after this answer into a new tab in this Thread. Option-click forks into a new Thread."
-          onClick={(event) => void acp.fork(liveAnswer, event.altKey ? "new" : "parent", scopedLiveAcp(acpStore.get(), scope))}
+          title="Fork after this answer into a new thread beside this one"
+          onClick={() => void acp.fork(liveAnswer, scopedLiveAcp(acpStore.get(), scope))}
           className="pressable flex items-center gap-1 px-1 hover:text-foreground"
         >
           <GitForkIcon className="size-3" /> Fork
@@ -1501,9 +1501,9 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
           <button
             key={target}
             type="button"
-            onClick={(event) => {
+            onClick={() => {
               setOpen(false)
-              void threads.forkAt(viewing, anchor, target, event.altKey ? "new" : "parent")
+              void threads.forkAt(viewing, anchor, target)
             }}
             className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-ui text-foreground/90 transition-colors duration-100 hover:bg-fill-hover"
           >

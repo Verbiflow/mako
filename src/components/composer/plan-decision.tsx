@@ -69,7 +69,7 @@ export function PlanDecisionBar({ decision }: { decision: PlanDecision }) {
         ) : null}
         <Action size="sm" tone="outline" disabled={building !== null} onClick={() => start("new")}>
           <SendIcon />
-          {building === "new" ? "Opening…" : "Build in new session"}
+          {building === "new" ? "Opening…" : "Build in new thread"}
         </Action>
         <div className="flex items-center">
           <Action

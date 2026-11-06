@@ -27,24 +27,24 @@ export async function copyReply(text: string): Promise<void> {
   }
 }
 
-/** The branch made last, opened as its Thread's tab once its owner lists it (`useBranchOpening`). */
+/** The branch made last, opened once its owner lists it (`useBranchOpening`). */
 const branchStore = createStore<{ opening: string | undefined }>({ opening: undefined })
 const useBranch = createHook(branchStore)
 
-/** A branch opens as a new Session tab in this Thread once its host lists it. */
+/** A branch opens once its host lists it: a Thread of its own, or a cloud Thread's new Session. */
 export async function branchReply(branch: NonNullable<CompactReply["branch"]>): Promise<void> {
   const made = await branch()
   if (made) branchStore.set({ opening: made })
 }
 
-/** Opens the branch just made as soon as the Thread lists its Session: `sessions` are the Thread's, by conversation. */
-export function useBranchOpening(sessions: ReadonlyArray<{ conversation: string; session: string }>, open: (session: string) => void): boolean {
+/** Opens the branch just made as soon as the account lists it: `sessions` are every row, by conversation. */
+export function useBranchOpening<Row extends { conversation: string }>(sessions: readonly Row[], open: (row: Row) => void): boolean {
   const opening = useBranch((state) => state.opening)
   const listed = opening ? sessions.find((each) => each.conversation === opening) : undefined
   useEffect(() => {
     if (!listed) return
     branchStore.set({ opening: undefined })
-    open(listed.session)
+    open(listed)
   }, [listed, open])
   return opening !== undefined
 }

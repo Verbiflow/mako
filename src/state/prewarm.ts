@@ -1,7 +1,7 @@
 import { getMako } from "@/lib/bridge"
 import { acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { store as sessionStore } from "@/state/session"
-import { openSessionDraft, threadGroupsStore } from "@/state/thread-groups"
+import { openSessionDraft, threadDraftsStore } from "@/state/thread-drafts"
 import { runPlaceStore } from "@/state/run-place"
 import { currentSettingsTarget, settingsForSend } from "@/state/composer-settings"
 import { chosenAccessModes } from "@/state/access-choices"
@@ -43,7 +43,7 @@ export function noteComposing(text: string, now = Date.now()): void {
     return
   }
   if (activeAcp(acpState)) return
-  const cwd = openSessionDraft(threadGroupsStore.get())?.cwd ?? sessionStore.get().meta?.cwd
+  const cwd = openSessionDraft(threadDraftsStore.get())?.cwd ?? sessionStore.get().meta?.cwd
   if (!cwd) return
   if (runPlaceStore.get().cloud) return prepareCloud(cwd, text, now)
   const key = `folder\0${cwd}`
