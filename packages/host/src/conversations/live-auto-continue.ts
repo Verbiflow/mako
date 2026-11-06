@@ -4,7 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { BRIEF_AGAIN } from "../contracts/children.js"
-import { nextRetry, transientCause, unheardDigest } from "../contracts/delivery-retry.js"
+import { transientCause, unheardDigest, waitsAgain } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -180,8 +180,9 @@ export class LiveAutoContinue {
     if ((!cause || !ran) && !unheard) return
     if (resident.snapshot.requests.some((request) => request.continues?.requestId === failed.id)) return
     const now = Date.now()
-    const retry = cause && nextRetry(failed.retry, cause, failed.error ?? "", now)
-    if (!retry && !unheard) return
+    const waits = cause || unheard ? waitsAgain(failed, cause, failed.error ?? "", now) : undefined
+    if (!waits) return
+    const retry = waits.retry
     const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
     // Its reports read as heard, so it goes again as itself, for later news to join, as often as it fails, where "carry
     // on" would tell nothing of them; past the retries it rests (`resting`).
@@ -190,7 +191,7 @@ export class LiveAutoContinue {
       id: randomUUID(),
       createdAt: now,
       text: unheard ? failed.text : continueTurnPrompt("connection-lost", "mako"),
-      ...(unheard && { displayText: "", digest: { notices: unheard.notices, ...(!retry && { resting: true as const }) } }),
+      ...(unheard && { displayText: "", digest: { notices: unheard.notices, ...(!retry && { resting: true as const, ...(waits.digest?.nextTry !== undefined && { nextTry: waits.digest.nextTry }) }) } }),
       attachments: [],
       tuning: failed.tuning,
       status: "held",

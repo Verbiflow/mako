@@ -74,13 +74,27 @@ export function unheardDigest(request: Pick<LiveRequest, "digest">): boolean {
   return request.digest !== undefined && !request.digest.heard
 }
 
+/** How often a resting digest tries by itself: an Apex silent after its limit cleared is what this exists to prevent. */
+export const RESTING_TRY_MS = 60 * 60_000
+
 /**
- * `request` where Mako stops trying: giving up stops the retrying, never the reports. An unheard digest rests, with no
- * time of its own, and goes with the next turn that can run, on any harness; anything else, undefined, fails as ever.
+ * `request` where Mako stops retrying: never the reports. An unheard digest rests and goes with the next turn that can
+ * run, on any harness; one a limit holds also tries by itself, once an hour for its Thread, since nothing else may come
+ * along once the limit clears. Anything else, undefined, fails as ever.
  */
-export function resting(request: LiveRequest): LiveRequest | undefined {
+export function resting(request: LiveRequest, cause: RetryCause | undefined, now: number): LiveRequest | undefined {
   if (!unheardDigest(request)) return undefined
-  return { ...request, status: "held", retry: undefined, digest: { ...request.digest!, resting: true } }
+  const { digest } = request
+  return { ...request, status: "held", retry: undefined, digest: { ...digest!, resting: true, ...(cause === "rate-limited" ? { nextTry: now + RESTING_TRY_MS } : { nextTry: undefined }) } }
+}
+
+/**
+ * What a failure leaves of `request`, waiting: its next attempt, or a digest at rest. A digest resting stays resting,
+ * since a retry from nothing would start the budget again; undefined when it fails.
+ */
+export function waitsAgain(request: LiveRequest, cause: RetryCause | undefined, reason: string, now: number): LiveRequest | undefined {
+  const retry = cause && !request.digest?.resting ? nextRetry(request.retry, cause, reason, now) : undefined
+  return retry ? { ...request, status: "held", retry } : resting(request, cause, now)
 }
 
 /**
@@ -92,8 +106,7 @@ export function holdForRetry(requests: readonly LiveRequest[], cause: RetryCause
   const next = new Map<string, LiveRequest>()
   for (const request of requests) {
     if (request.status !== "queued") continue
-    const retry = nextRetry(request.retry, cause, reason, now)
-    const held = retry ? { ...request, status: "held" as const, retry } : resting(request)
+    const held = waitsAgain(request, cause, reason, now)
     if (!held) return undefined
     next.set(request.id, held)
   }

@@ -383,8 +383,10 @@ export interface LiveRequest {
     sentAt?: number
     /** A model answered during its turn: the only proof it was heard, as nothing else proves it either way. */
     heard?: true
-    /** Mako stopped trying and no model heard it: it waits, with no time of its own, for the next turn that can run. */
+    /** Past Mako's retries and no model heard it: it waits for the next turn that can run. */
     resting?: true
+    /** When a resting digest tries by itself: a limit's only, once an hour for the Thread, however many reports it holds. */
+    nextTry?: number
   }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption

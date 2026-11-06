@@ -488,7 +488,7 @@ export class LiveConversations {
     const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
     if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
     const next: LiveRequest = digest.notices.length
-      ? { ...request, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
+      ? { ...request, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
       : { ...request, status: "canceled" }
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => (candidate === request ? next : candidate)) }
