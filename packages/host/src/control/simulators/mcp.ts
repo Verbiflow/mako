@@ -41,11 +41,17 @@ export function simulatorToolText(answer: Json | undefined): string {
  */
 export class SimulatorTools {
   readonly #agent: (session: string) => SimulatorAgent | undefined
+  readonly #borrowed: boolean
   #setup: SimulatorSetup | undefined
 
-  /** `agent`: what the host knows of a Session, as `Simulators` reads it, so consent is read the same way. */
-  constructor(agent: (session: string) => SimulatorAgent | undefined) {
+  /**
+   * `agent`: what the host knows of a Session, as `Simulators` reads it, so consent is read the same way. `borrowed`: a
+   * cloud Thread's machine, whose simulators are a Mac of the person's borrowed under a lease, so its own setup line
+   * (no macOS here) doesn't decide whether its agents have the tools; the person's grant does, at each call.
+   */
+  constructor(agent: (session: string) => SimulatorAgent | undefined, borrowed = false) {
     this.#agent = agent
+    this.#borrowed = borrowed
   }
 
   heard(setup: SimulatorSetup): void {
@@ -54,12 +60,13 @@ export class SimulatorTools {
 
   offered(session: string | undefined): boolean {
     const agent = session === undefined ? undefined : this.#agent(session)
+    if (agent && this.#borrowed) return true
     if (!agent || !this.#setup || !iosAvailability(this.#setup).ready) return false
     return consentFor(setupStep(this.#setup, "agents")?.projects ?? [], agent) === "allowed"
   }
 
   register(server: McpServer, door: SimulatorToolDoor): void {
-    if (!this.#setup || !iosAvailability(this.#setup).ready) return
+    if (!this.#borrowed && (!this.#setup || !iosAvailability(this.#setup).ready)) return
     // A server built as its agent launches (Claude's in-process one) has no turn yet to name its Thread by: its tools
     // are offered, and `Simulators` decides each call by the project's consent.
     let caller: ReturnType<SimulatorToolDoor["caller"]> | "not yet"

@@ -127,6 +127,8 @@ jobs:
       # Settings › Simulators' setup line and the local simulator host, against Xcode's recorded words and fakes of its
       # tools: the hub's gate, the screen stream, touches however the device is turned, and the agent tools' offer.
       - run: npm run test:simulator-setup
+      # Another Mac's simulators and a cloud Thread's borrowed one, driven under a session lease over a fake gateway.
+      - run: npm run test:simulators-remote
       - run: npm run test:simulator-host
 
   # The Files view's index (`test-file-index.ts`): the tree a folder at a time, names found as they're typed, text

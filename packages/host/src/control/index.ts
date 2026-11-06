@@ -34,6 +34,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { SimulatorSetupFollower } from "./simulators/setup.js"
 import { Simulators, type SimulatorLeases } from "./simulators/simulators.js"
+import { BorrowedSimulators, KEEP_ALIVE_MS } from "./simulators/borrowed.js"
 import { LocalSimulatorHost, localDriving } from "./simulators/local-host.js"
 import { declareSimulatorMethods } from "./simulators/methods.js"
 import type { SimulatorAgent } from "../contracts/simulators.js"
@@ -42,6 +43,7 @@ import { SimulatorTools } from "./simulators/mcp.js"
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
 export type { SimulatorLeases } from "./simulators/simulators.js"
+export { BorrowedSimulators, LeaseEnded, type SimulatorBorrowing } from "./simulators/borrowed.js"
 export { controlVideoMedia } from "./video-media.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
@@ -113,7 +115,9 @@ export function openControl(
   updated: () => void,
   simulatorAgent: (session: string) => SimulatorAgent | undefined,
   /** The session leases this Mac serves, which another place's agent's every simulator call must be under. */
-  simulatorLeases?: SimulatorLeases
+  simulatorLeases?: SimulatorLeases,
+  /** On a cloud Thread's machine: its simulators, a Mac of the person's borrowed under a lease. */
+  borrowedSimulators?: BorrowedSimulators
 ): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
@@ -270,7 +274,7 @@ export function openControl(
     folder: join(environment.dataRoot, "simulators"),
     driving: localDriving({ dataRoot: environment.dataRoot, hub: { entry: join(environment.appRoot, "dist-electron", "simulator-hub-entry.js") } }),
   })
-  const simulatorTools = new SimulatorTools(simulatorAgent)
+  const simulatorTools = new SimulatorTools(simulatorAgent, borrowedSimulators !== undefined)
   const simulatorSetup = new SimulatorSetupFollower({
     dataRoot: environment.dataRoot,
     jobs,
@@ -283,12 +287,14 @@ export function openControl(
   void simulatorSetup.read().catch(() => undefined)
   const simulatorHeld = jobs.demand("A simulator is held")
   const simulators = new Simulators({
-    hosts: [localSimulators],
+    hosts: borrowedSimulators ? [] : [localSimulators],
     consent: () => simulatorSetup.consent(),
     agent: simulatorAgent,
     holding: (on) => simulatorHeld.set(on),
     ...(simulatorLeases && { leases: simulatorLeases }),
+    ...(borrowedSimulators && { remotes: () => borrowedSimulators.remotes(), borrowing: borrowedSimulators }),
   })
+  const stopKeepingAlive = borrowedSimulators ? jobs.every("keep a borrowed simulator's claim", KEEP_ALIVE_MS, () => borrowedSimulators.keepAlive()) : undefined
   const stopSimulatorSweep = jobs.every("simulator-claims", 60_000, () => simulators.sweep(), { needs: [simulatorHeld] })
   let service: ControlService | undefined
   return {
@@ -340,6 +346,7 @@ export function openControl(
       unsubscribe?.()
       simulatorSetup.stop()
       stopSimulatorSweep()
+      stopKeepingAlive?.()
       void simulators.close()
     },
   }
