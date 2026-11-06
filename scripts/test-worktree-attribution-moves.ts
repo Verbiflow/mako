@@ -635,7 +635,7 @@ test("Bring these and Put back killed part way finish on the next start, keep th
   }
 })
 
-test("a move of 100 changed files, timed end to end", async () => {
+test("a move of 100 changed files runs Git a few times in all, not per file", async () => {
   const files = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`src/file-${String(i).padStart(3, "0")}.ts`, lines(200)]))
   const f = await fixture("hundred", files)
   f.clock.advance(1_000)
@@ -654,15 +654,18 @@ test("a move of 100 changed files, timed end to end", async () => {
   const { worktrees } = service(f)
   const id = randomUUID()
   const made = await worktrees.prepare(id, f.repo, "Hundred", { kind: "head" })
+  const run = runner.run.bind(runner)
+  const ran: string[] = []
+  runner.run = (options) => (ran.push(options.args.join(" ")), run(options))
   const started = performance.now()
-  const outcome = await worktrees.moveChanges(id, { thread: "T1" })
+  const outcome = await worktrees.moveChanges(id, { thread: "T1" }).finally(() => { runner.run = run })
   const ms = performance.now() - started
   assert.equal(outcome.came.files, 100)
+  assert.ok(ran.length < 50, `Git ran ${ran.length} times for 100 files, so some step runs it per file:\n${ran.map((args) => args.slice(0, 120)).join("\n")}`)
   assert.equal(read(join(made.path, "src/file-000.ts")), lines(200, { 10: "line 10 by T1" }))
   assert.equal(read(f.abs("src/file-000.ts")), lines(200))
   assert.equal(read(f.abs("src/file-001.ts")), lines(200, { 100: "line 100 by T2" }))
   assert.equal(read(join(made.path, "src/file-001.ts")), lines(200, { 10: "line 10 by T1" }))
-  console.log(`  move of 100 changed files (200 lines each): ${ms.toFixed(0)} ms end to end`)
-  assert.ok(ms < 3_000, `took ${ms} ms`)
+  console.log(`  move of 100 changed files (200 lines each): ${ran.length} Git runs, ${ms.toFixed(0)} ms end to end`)
   await f.tracker.close()
 })

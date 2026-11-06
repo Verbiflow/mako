@@ -112,6 +112,7 @@ async function run(count: number, follow: boolean): Promise<Run> {
   if (follow) {
     agents = new Agents({
       store: () => threads, catalog, jobs, live,
+      continueOn: () => Promise.reject(new Error("The bench moves no conversation")),
       startLive: () => Promise.reject(new Error("The bench starts no conversation")),
       harnesses: () => ["claude"], runs: () => false, harnessLabel: () => "Claude", modes: () => undefined,
     })

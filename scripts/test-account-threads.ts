@@ -381,6 +381,9 @@ test("an Apex's row waits on its Fin's ask that's the person's, saying what it s
   assert.deepEqual({ state: own.state, waitingOn: own.waitingOn, asking: own.asking }, { state: "waiting", waitingOn: "Approve: git push", asking: undefined }, "its own ask first")
   const approval = finAsking({ fin, name: "sheet-motion", line: "Approve: npm ci", ask: { kind: "approval", id: "a-1" }, more: 0 })
   assert.deepEqual(approval, { waiting: { for: "approval", line: "sheet-motion: Approve: npm ci" }, asking: { fin, name: "sheet-motion", ask: "a-1" } })
+  // A limit's notice asks nothing and is no Fin's: no "has a question", and its line isn't cut short by a name.
+  const notice = finAsking({ fin, name: "Usage", line: "Cursor ran out until Sun 12:00 AM PST.", ask: { kind: "report", id: "limit:cursor::1", options: [{ label: "Got it" }] }, more: 0 })
+  assert.deepEqual(notice?.waiting, { for: "needs-you", line: "Cursor ran out until Sun 12:00 AM PST." })
 })
 
 test("a Thread moving to the cloud says so on every row of it from the move's first step, each step once, and not after it ends", () => {

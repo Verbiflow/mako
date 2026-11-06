@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto"
-import { mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parse, type ParseError } from "jsonc-parser"
 import { z } from "zod"
+import { publishFile } from "../../base/published-files.js"
 
 const Config = z.looseObject({ instructions: z.array(z.string()).optional() })
 
@@ -17,8 +17,7 @@ export async function configureOpenCodePrimer(env: NodeJS.ProcessEnv, primer: st
   if (!primer) return
   const folder = join(tmpdir(), `mako-opencode-primer-${createHash("sha256").update(primer).digest("hex").slice(0, 16)}`)
   const file = join(folder, "MAKO.md")
-  await mkdir(folder, { recursive: true, mode: 0o700 })
-  await writeFile(file, `${primer}\n`, { mode: 0o600 })
+  await publishFile(file, `${primer}\n`, { mode: 0o600, dirMode: 0o700 })
   const errors: ParseError[] = []
   const config = Config.parse(parse(env.OPENCODE_CONFIG_CONTENT || "{}", errors, { allowTrailingComma: true }))
   if (errors.length) throw new Error("OpenCode inline configuration contains invalid JSON.")

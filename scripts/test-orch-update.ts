@@ -79,8 +79,11 @@ async function childrenMidTurn(): Promise<void> {
 async function reportsUnheard(): Promise<void> {
   const { world, apex } = await tree("unheard", (turn) => (turn.text.includes("You're fin:") ? `Done: ${turn.harness} reviewed its part.` : "ok"))
   try {
-    await until("the reports", () => world.store.undeliveredReports().length === CHILDREN.length)
+    // Each report is in the Apex's queue, in the one digest still gathering its burst, when the update comes.
+    const gathered = () => world.live.snapshot(apex.conversation)?.requests.find((request) => request.digest && request.status === "held")?.digest?.notices.length ?? 0
+    await until("the reports", () => gathered() === CHILDREN.length)
     assert.equal(digests(world, apex.conversation).length, 0, "still coalescing when the update comes")
+    assert.equal(world.store.undeliveredReports().length, 0, "heard once they're in the Apex's queue")
     await world.restart()
     await world.settle()
     const woken = digests(world, apex.conversation)

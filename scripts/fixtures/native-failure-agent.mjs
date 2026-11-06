@@ -7,6 +7,7 @@
 // - "exit-on-prompt": starts a child in its own process group that keeps
 //   this process's stdout and stderr open, and one in its group, then exits
 //   as the prompt arrives, before acknowledging it.
+// - "stay": starts as asked, then ignores its input closing: only a signal ends it.
 // Its pid and its children's are written to MAKO_STANDIN_PIDS.
 import { spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
@@ -85,7 +86,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (protocol === "claude") return claude(JSON.parse(line))
   const { id, method, params } = JSON.parse(line)
   if (id === undefined) return
+  // A turn that never answers, so cancel is reached with the session running. Every other method still answers.
+  if (behavior === "hang-on-prompt" && method === prompts) return
   if (method === prompts) process.exit(1)
   send({ id, result: results[method]?.(params) ?? {} })
 })
-process.stdin.on("end", () => process.exit(0))
+process.stdin.on("end", () => {
+  if (behavior === "stay") setInterval(() => {}, 1000)
+  else process.exit(0)
+})

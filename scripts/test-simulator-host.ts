@@ -121,10 +121,11 @@ function join8(...parts: Uint8Array[]): Uint8Array {
 }
 
 test("inspect-webkit's socket is in the hub's folder, or in this user's temporary folder when that path is too long to bind", () => {
-  assert.equal(inspectorSocket("/Users/ada/Library/Application Support/Mako/simulators/hub", "/var/folders/xy/T"), "/Users/ada/Library/Application Support/Mako/simulators/hub/inspector.sock")
+  assert.equal(inspectorSocket("/Users/ada/Library/Application Support/Mako/simulators/hub", "/private/tmp/xy"), "/Users/ada/Library/Application Support/Mako/simulators/hub/inspector.sock")
   // As long as a Thread's data folder of a real stage B run, where macOS refused the socket with EINVAL.
   const long = "/Users/tester0/.mako/thread-data/folder-0000000000000000/workers/sim-phase1/data/simulators/hub"
-  const temporary = "/var/folders/00/000000000000000000000000000000/T"
+  // As long as macOS's per-user temporary folder.
+  const temporary = "/private/tmp/mako-0000000000000000000000000000/T"
   const socket = inspectorSocket(long, temporary)
   assert.ok(socket.startsWith(`${temporary}/mako-hub-`) && socket.endsWith(".sock"))
   assert.ok(Buffer.byteLength(socket) <= 103)

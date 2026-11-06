@@ -23,9 +23,9 @@ import {
   extensionBrowsers,
 } from "../packages/control-runtime/dist/browser-extension-registration.js"
 import {
-  chromiumProfileRoots,
   prepareBrowserExtension,
 } from "@mako/host/control/browser-extension-setup"
+import { chromiumProfileRoots } from "@mako/host/base/chromium-profiles"
 
 const root = await mkdtemp(join(tmpdir(), "mako-extension-test-"))
 const input = new PassThrough()

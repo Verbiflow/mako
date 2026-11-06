@@ -49,14 +49,15 @@ export class FinCostSampler {
     this.#deps = deps
   }
 
-  async sample(fins: readonly FinAtWork[]): Promise<FinCostReading[]> {
+  /** Undefined when it measured nothing: its first reading, or a window too short. An empty list means no Fin took anything. */
+  async sample(fins: readonly FinAtWork[]): Promise<FinCostReading[] | undefined> {
     const rows = await this.#deps.table()
     const at = this.#deps.now?.() ?? Date.now()
     const last = this.#last
     const elapsed = last ? (at - last.at) / 1000 : 0
-    if (last && elapsed < LEAST_WINDOW_MS / 1000) return []
+    if (last && elapsed < LEAST_WINDOW_MS / 1000) return undefined
     this.#last = { at, cpu: new Map(rows.map((row) => [row.pid, row.cpuSeconds])) }
-    if (!last) return []
+    if (!last) return undefined
     const byPid = new Map(rows.map((row) => [row.pid, row]))
     const children = new Map<number, ProcessRow[]>()
     for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row])

@@ -10,6 +10,7 @@ import {
   type AgentsAnswerInput,
   type AgentsLinkInput,
   type AgentsListInput,
+  type AgentsMoveInput,
   type AgentsReadInput,
   type AgentsReportInput,
   type AgentsSendInput,
@@ -24,6 +25,7 @@ const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need 
 /** `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. */
 export function declareAgentMethods(methods: MethodTable, agents: () => AgentOperations | undefined): void {
   methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => agents()?.start(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => agents()?.move(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => agents()?.link(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-list", (caller: AgentCaller, input: AgentsListInput) => agents()?.list(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-read", (caller: AgentCaller, input: AgentsReadInput) => agents()?.read(caller, input) ?? UNAVAILABLE)

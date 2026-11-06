@@ -1427,6 +1427,38 @@ async function unhandedMessageWaitsAfterCrash() {
   }
 }
 
+/**
+ * Mako quits or updates while a message is still being prepared: it was never handed to its harness, so it waits to be
+ * sent again, as the messages queued behind it do, and is no cut turn for the next host to continue with "Continue".
+ */
+async function unhandedMessageWaitsAfterQuit() {
+  const f = fixture()
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.preparing.on = true
+    const brief = randomUUID()
+    f.owner.submit(f.id, brief, "the brief")
+    await tick()
+    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.nativeDelivery?.evidence.kind, "prepared")
+    await f.owner.stop()
+    const afterQuit = new LiveConversations(f.dependencies)
+    try {
+      const found = afterQuit.snapshot(f.id)!.requests[0]!
+      assert.equal(found.status, "held", "it waits again")
+      assert.equal(found.interruption, undefined, "no turn was cut")
+      assert.equal(found.nativeDelivery?.evidence.kind, "not-accepted")
+      assert.equal(afterQuit.snapshot(f.id)!.blocks.filter((block) => block.type === "user" && block.requestId === brief).length, 1, "its message is drawn once")
+      assert.deepEqual(f.sent, [], "nothing reached the harness")
+    } finally {
+      afterQuit.stop()
+    }
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+}
+
 async function durabilityAndBatching() {
   const f = fixture()
   try {
@@ -2844,6 +2876,7 @@ await closeDuringStartup()
 await closeBeforeNativeSpawn()
 await durabilityAndBatching()
 await unhandedMessageWaitsAfterCrash()
+await unhandedMessageWaitsAfterQuit()
 await resumedHibernatesBeforeATurn()
 await hibernatesAndWakesExactlyOnce()
 await hibernatesAndWakesExactlyOnce(true)

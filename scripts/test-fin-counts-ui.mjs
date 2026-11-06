@@ -100,9 +100,9 @@ async function check() {
   // Three Fins at work, their steps as a harness reports them, and one idle: the screenshot's crew.
   await evaluate(`(() => {
     const steps = [
-      "Shell cd /Users/kashyab/.mako/worktrees/makomono-f6c41fc1/dogfood && npm run typecheck",
+      "Shell cd /Users/someone/.mako/worktrees/makomono-0a1b2c3d/dogfood && npm run typecheck",
       "Shell gh pr checks 340 -R Verbiflow/mako 2>&1 | awk '{print $1, $2}'",
-      "Read /Users/kashyab/makomono/mako/src/web-client/desk.tsx",
+      "Read /Users/someone/makomono/mako/src/web-client/desk.tsx",
     ]
     const four = window.apexScene.children().slice(0, 4).map((agent, index) => index < 3
       ? { ...agent, state: { kind: "working", activity: steps[index] }, child: { ...agent.child, state: { kind: "working", step: steps[index] } } }

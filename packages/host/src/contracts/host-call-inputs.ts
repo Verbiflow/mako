@@ -92,8 +92,26 @@ const inputs = {
             z.literal("tree"),
             z.literal("crew"),
             z.literal("apexes"),
+            z.literal("threads"),
           ])
           .optional(),
+        query: z.string().optional(),
+      }),
+    ]),
+  "mako:agents-move": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        child: z.string().optional(),
+        all: z.boolean().optional(),
+        harness: z.string(),
+        model: z.string().optional(),
+        reasoning: z.string().optional(),
+        fast: z.boolean().optional(),
+        clientKey: z.string(),
       }),
     ]),
   "mako:agents-read": () =>
@@ -153,6 +171,28 @@ const inputs = {
           .optional(),
         recommended: z.number().optional(),
         action: z.string().optional(),
+        decides: z.union([z.literal("person"), z.literal("apex")]).optional(),
+        waitingOn: z
+          .array(
+            z.union([
+              z.object({
+                kind: z.literal("pull-request"),
+                ref: z.string(),
+                repository: z.string().optional(),
+                number: z.number().optional(),
+                until: z
+                  .union([
+                    z.literal("checks"),
+                    z.literal("merge"),
+                    z.literal("review"),
+                  ])
+                  .optional(),
+              }),
+              z.object({ kind: z.literal("person"), what: z.string() }),
+              z.object({ kind: z.literal("other"), text: z.string() }),
+            ])
+          )
+          .optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -185,6 +225,7 @@ const inputs = {
             z.literal("interrupt"),
           ])
           .optional(),
+        context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -246,6 +287,7 @@ const inputs = {
         timeoutMs: z.number().optional(),
         after: z.array(z.string()).optional(),
         queue: z.boolean().optional(),
+        context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
         cwd: z.string().optional(),
       }),
@@ -504,6 +546,7 @@ const inputs = {
     ]),
   "mako:fin-defaults": () => z.tuple([]),
   "mako:fin-limit-set": () => z.tuple([z.union([z.null(), z.number()])]),
+  "mako:fin-move-on-limit": () => z.tuple([z.boolean()]),
   "mako:fin-policy-save": () =>
     z.tuple([
       z.object({
@@ -537,7 +580,14 @@ const inputs = {
               .optional(),
           })
           .optional(),
+        forFins: z.string().optional(),
+        forApexes: z.string().optional(),
       }),
+    ]),
+  "mako:fin-role-rules-save": () =>
+    z.tuple([
+      z.union([z.literal("forFins"), z.literal("forApexes")]),
+      z.string(),
     ]),
   "mako:fork": () =>
     z.tuple([
@@ -577,8 +627,8 @@ const inputs = {
       z.object({
         head: z.string().optional(),
         action: z.union([
-          z.literal("abort"),
           z.literal("merge"),
+          z.literal("abort"),
           z.literal("fetch"),
           z.literal("pull"),
           z.literal("continue"),
@@ -662,7 +712,7 @@ const inputs = {
   "mako:list-sessions": () =>
     z.tuple([
       z.string().optional(),
-      z.union([z.literal("workspace"), z.literal("all")]).optional(),
+      z.union([z.literal("all"), z.literal("workspace")]).optional(),
     ]),
   "mako:live-action": () =>
     z.tuple([
@@ -1009,6 +1059,7 @@ const inputs = {
                 path: z.string().optional(),
               })
             ),
+            grants: z.array(z.string()).optional(),
           })
           .optional(),
         conversationId: z.string(),
@@ -1134,6 +1185,7 @@ const inputs = {
                   z.literal("migration"),
                   z.literal("auto-continue"),
                   z.literal("relay"),
+                  z.literal("pull-watch"),
                 ]),
               }),
             ]),
@@ -1142,12 +1194,13 @@ const inputs = {
               .object({
                 source: z.union([
                   z.literal("harness"),
+                  z.literal("apex"),
                   z.literal("rule"),
                   z.literal("asked"),
                   z.literal("mako"),
                   z.literal("fins"),
-                  z.literal("apex"),
                   z.literal("used"),
+                  z.literal("connection"),
                 ]),
                 note: z.string().optional(),
                 rerouted: z
@@ -1155,6 +1208,30 @@ const inputs = {
                     from: z.string(),
                     until: z.number().optional(),
                     instead: z.string().optional(),
+                    account: z.string().optional(),
+                    to: z
+                      .union([
+                        z.object({
+                          why: z.literal("account"),
+                          harness: z.string(),
+                          account: z.string(),
+                          label: z.string(),
+                        }),
+                        z.object({
+                          why: z.literal("connection"),
+                          harness: z.string(),
+                          connection: z.string(),
+                          connectionName: z.string(),
+                          model: z.string(),
+                        }),
+                        z.object({
+                          why: z.literal("harness"),
+                          harness: z.string(),
+                        }),
+                      ])
+                      .optional(),
+                    at: z.number().optional(),
+                    line: z.string().optional(),
                   })
                   .optional(),
                 rule: z
@@ -1216,6 +1293,8 @@ const inputs = {
           })
           .optional(),
         modeId: z.string().optional(),
+        account: z.string().optional(),
+        grants: z.array(z.string()).optional(),
       }),
     ]),
   "mako:live-turn-changes": () =>
@@ -1695,8 +1774,8 @@ const inputs = {
       z.string(),
       z.string(),
       z.object({
-        conversation: z.string().optional(),
         thread: z.string().optional(),
+        conversation: z.string().optional(),
       }),
       z.union([z.null(), z.number()]),
     ]),
@@ -1860,7 +1939,7 @@ const inputs = {
           caseSensitive: z.boolean().optional(),
           wholeWord: z.boolean().optional(),
           threads: z.boolean().optional(),
-          scope: z.union([z.literal("workspace"), z.literal("all")]).optional(),
+          scope: z.union([z.literal("all"), z.literal("workspace")]).optional(),
         })
         .optional(),
     ]),
@@ -2605,6 +2684,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:agents-direct", "conversations"],
   ["mako:agents-link", "conversations"],
   ["mako:agents-list", "conversations"],
+  ["mako:agents-move", "conversations"],
   ["mako:agents-read", "conversations"],
   ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],
@@ -2691,7 +2771,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
   ["mako:fin-limit-set", "harnesses"],
+  ["mako:fin-move-on-limit", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
+  ["mako:fin-role-rules-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
   ["mako:git-changed-since", "git"],

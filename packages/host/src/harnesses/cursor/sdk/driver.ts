@@ -585,6 +585,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     nativeRouting: { kind: "at-launch", via: "`disallowedTools: [\"task\"]` on the SDK's `Agent.create` and every `Agent.resume`, which removes the task tool.", verified: { version: "1.2.0", how: "test:native-routing-cursor (2026-11-01), real turns asking for a subagent: a lead called no task tool and said it had none, as did that lead resumed; an ordinary Thread's task ran and its subagent was observed" } },
     layer: cursorLayer.capabilities,
     modelRoutes: { kind: "absent", reason: "Cursor's SDK runs its models through Cursor's own service and takes no endpoint of the person's." },
+    accountContinuation: { kind: "new-session", reason: "An agent's conversation is kept by Cursor's service under the account whose key started it; another account's key starts an agent of its own." },
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
     contextBreakdown: {
       kind: "itemized",
@@ -875,8 +876,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return live.state
       } catch (error) {
         stop(engine, live)
-        sessions.delete(live.state.id)
-        await live.client.close(2_000).catch(() => live.client.kill())
+        // One that outlives this stays for the next close; what the start reports is why it failed.
+        await live.client.close(2_000).then(() => sessions.delete(live.state.id), () => undefined)
         if (error instanceof CursorSdkError) {
           if (error.kind === "authentication") rejected(error.message)
           throw new Error(error.message, { cause: error })
@@ -993,8 +994,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         // A missing cancellation acknowledgement is not a stopped run. End
         // this provider process and let its exit mark the session disconnected
         // before another continuation can acquire the native session.
-        await live.client.close(5_000).catch(() => live.client.kill())
-        await live.client.exited
+        await live.client.close(5_000)
         throw error
       }
       // A successful cancellation acknowledgement may arrive before the
@@ -1007,10 +1007,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     async close(id) {
       const live = sessions.get(id)
       if (!live) return
-      sessions.delete(id)
-      if (live.closed) return
-      stop(engine, live)
-      await live.client.close(5_000).catch(() => live.client.kill())
+      if (!live.closed) stop(engine, live)
+      // Kept until its process is gone: a close that can't say so rejects, and the next one tries again.
+      await live.client.close(5_000)
+      if (sessions.get(id) === live) sessions.delete(id)
     },
   }
 }

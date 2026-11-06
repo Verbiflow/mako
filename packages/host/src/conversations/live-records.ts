@@ -2,7 +2,9 @@ import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { RESTART_RETIRED_MOVE, carryingWords, quietSwitch, retiredMove } from "../contracts/conversation-control.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
+import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
@@ -598,21 +600,6 @@ export function endedTurnsOnRead(previous: Pick<LiveSnapshot, "session" | "reque
 }
 
 /**
- * A message the dead host began sending but never handed its harness: a driver goes on to its transport call only
- * once `submitted` is written (`handOff`), so one still `prepared` was never sent. It waits again, paused as the
- * others waiting are, rather than standing for a turn the harness never ran; its message is drawn already. A journal
- * written before that guarantee (`gated` absent) keeps the cautious reading: the turn may have run.
- */
-function unhanded(request: LiveRequest): LiveRequest {
-  if (request.status !== "dispatching" || !request.nativeDelivery?.gated || request.nativeDelivery.evidence.kind !== "prepared") return request
-  return {
-    ...request,
-    status: "held",
-    nativeDelivery: { ...request.nativeDelivery, evidence: { kind: "not-accepted", source: "preflight", reason: "Mako closed before handing it to its harness" } },
-  }
-}
-
-/**
  * A journal no host is writing, as this host takes it on: whatever was in
  * flight when the last one ended is settled, and nothing it was doing goes
  * on by itself.
@@ -667,19 +654,29 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
                 }
               : action
           ),
-          transfers: previous.control.transfers.map((transfer) =>
-            transfer.state.kind === "preparing" ||
-            transfer.state.kind === "queued" ||
-            strandedTransfers.has(transfer.input.id)
+          // One under way has an unknown outcome and fails. One that waited behind another switch, or for its time,
+          // never started: it goes once its conversation is read in (`LiveConversations` `loaded`), or at its time.
+          // One whose message waits in the queue (a Stop held it, or a failed close took it back) waits with that
+          // message; a stranded one's retry carries the words its message has now.
+          transfers: previous.control.transfers.map((transfer) => {
+            // A move has no message to wait with, and what it was decided on went with the last host.
+            if (quietSwitch(transfer) && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return retiredMove(transfer, RESTART_RETIRED_MOVE)
+            const own = previous.requests.find((request) => request.id === transfer.input.id && (request.status === "queued" || request.status === "held"))
+            if (own && (transfer.state.kind === "queued" || transfer.state.kind === "preparing"))
+              return { ...transfer, state: { kind: "queued" as const } }
+            return transfer.state.kind === "preparing" ||
+              (transfer.state.kind === "queued" && !transfer.behind && !transfer.retry) ||
+              strandedTransfers.has(transfer.input.id)
               ? {
                   ...transfer,
+                  ...(own && { input: carryingWords(transfer.input, own) }),
                   state: {
                     kind: "failed" as const,
                     error: restartError,
                   },
                 }
               : transfer
-          ),
+          }),
         }
       : undefined,
     session: {
@@ -703,7 +700,7 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
     // A continuation that host had scheduled died with it.
     requests: clearAutoContinue(
       interruptRequests(
-        previous.requests.map(unhanded),
+        previous.requests,
         "host-crashed",
         "Mako closed unexpectedly while this turn was running; whether the provider finished it is unknown"
       ).map((request) =>
@@ -775,7 +772,7 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
 
 /** The listing's line for a conversation, loaded or not. */
 function residentSummary(snapshot: LiveSnapshot): LiveSummary {
-  const wakes = wakeAt(snapshot.requests)
+  const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
@@ -798,7 +795,8 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
 export function wakeAt(requests: readonly LiveRequest[]): number | undefined {
   let soonest: number | undefined
   for (const request of requests) {
-    const at = request.status === "held" ? request.wake?.at ?? request.retry?.at : undefined
+    const hold = holdOf(request)
+    const at = hold && holdDue(hold)
     if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
   }
   return soonest

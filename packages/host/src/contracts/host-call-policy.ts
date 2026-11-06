@@ -254,6 +254,7 @@ const replays = [
   "mako:native-submit",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
+  "mako:agents-move",
   "mako:agents-link",
   "mako:agents-report",
   "mako:agents-send",
@@ -342,10 +343,14 @@ const replays = [
   "mako:fin-default-choose",
   /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
   "mako:fin-policy-save",
+  /** `FinDefaultsStore.saveRoleRules`: the same words for a role saved twice are saved once. */
+  "mako:fin-role-rules-save",
   /** `FinDefaultsStore.setLimit`: the same number saved twice is one choice. */
   "mako:fin-limit-set",
   /** `FinDefaultsStore.setCeiling`: the same number saved twice is one choice. */
   "mako:fin-ceiling-set",
+  /** `FinDefaultsStore.chooseMoveOnLimit`: the same switch set twice is set once. */
+  "mako:fin-move-on-limit",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */

@@ -4,15 +4,19 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
+import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
-import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { transientCause, waitsAgain } from "../contracts/delivery-retry.js"
+import { nextInLine } from "../contracts/request-hold.js"
+import { DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
 import { checkoutSince } from "../base/checkout-since.js"
+import { cutAccount } from "./cut-account.js"
 import { standingLines } from "./control-cadence.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
@@ -21,19 +25,42 @@ import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
 import { turnStart, usageMark } from "./live-settlement.js"
+import { captureNativeHistory, transcriptHolds } from "./native-history.js"
+import type { ConversationControl } from "../contracts/conversation-control.js"
+import { continueTurnPrompt } from "../contracts/turn-continuation.js"
+import type { ThreadPage } from "@mako/sessions"
+
+const MINUTE_MS = 60_000
 
 /** How often in a row a message the harness refused for a turn of its own is sent again at once (`turnInProgress`). */
 const TURN_IN_PROGRESS_RETRIES = 3
 
 /**
- * The message a conversation sends next once nothing holds it back, or undefined when none would go: a paused one
- * first in line pauses those behind it (a message being edited keeps its place), and after a failure only the newest
- * goes, since failure doesn't drain old queued work by itself.
+ * The message a conversation sends next once nothing holds it back, or undefined when none would go (`nextInLine`):
+ * a message being edited, waiting on a sign-in or about to go again keeps its place and holds those behind it; one a
+ * Stop or an exit paused lets later ones go. After a failure only the newest goes, since failure doesn't drain old
+ * queued work by itself.
  */
 export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">): LiveRequest | undefined {
-  const waiting = snapshot.requests.filter((request) => request.status === "queued" || request.status === "held")
-  const request = snapshot.session.status === "failed" ? waiting.at(-1) : waiting[0]
-  return request?.status === "queued" ? request : undefined
+  return nextInLine(snapshot.requests, snapshot.session.status === "failed")
+}
+
+/**
+ * Whether the harness's own transcript shows the Fin's brief `briefId` (`transcriptHolds`): under the message id it
+ * was sent with, where the harness keeps that, or by its "You're fin:" line, which the brief sent again carries too.
+ * False when its session has no transcript, or one Mako can't read.
+ */
+async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationControl, briefId: string, history: (path: string, before?: number) => Promise<ThreadPage | null>): Promise<boolean> {
+  const brief = snapshot.requests.find((request) => request.id === briefId)
+  const bindingId = brief?.nativeDelivery?.bindingId ?? control.activeBindingId
+  const path = control.bindings.find((binding) => binding.id === bindingId)?.path
+  if (!brief || !path) return false
+  const page = await captureNativeHistory(path, history).catch((error) => {
+    hostWarn("live", "a harness's transcript couldn't be read to see whether it had a Fin's brief", { conversation: snapshot.session.id, error: errorMessage({ error }) })
+    return null
+  })
+  const marker = brief.text.split("\n").find((line) => line.includes("You're fin:")) ?? ""
+  return page ? transcriptHolds(page.entries, { attemptId: brief.nativeDelivery?.attemptId, marker }) : false
 }
 
 type DispatchAccess = Pick<LiveAccess,
@@ -107,6 +134,31 @@ export class LiveDispatch {
     hostLog("live", "a message waits for this Mac to hear its account before it runs here", { conversation: resident.snapshot.session.id, requests: [...ids].join(",") })
   }
 
+  /**
+   * The minute's budget for an Apex's digests (`WAKES_PER_MINUTE`), counted from when each was sent: one past it is held
+   * until the oldest of the minute is a minute old, and the one timer sends it then. True when it was held.
+   */
+  private overBudget(resident: Resident, request: LiveRequest): boolean {
+    const now = Date.now()
+    const sent = resident.snapshot.requests.flatMap((candidate) => {
+      const at = candidate.digest?.sentAt
+      return at !== undefined && at > now - MINUTE_MS ? [at] : []
+    }).sort((left, right) => left - right)
+    if (sent.length < WAKES_PER_MINUTE) return false
+    const at = sent[sent.length - WAKES_PER_MINUTE]! + MINUTE_MS
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => candidate === request ? { ...candidate, status: "held" as const, wake: { at, after: DIGEST_WAITS } } : candidate) }
+    try {
+      this.access.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      this.access.storageFailed(resident, { error })
+      return true
+    }
+    hostLog("agents", "a digest waits for the minute's budget", { conversation: resident.snapshot.session.id, request: request.id, at: new Date(at).toISOString() })
+    return true
+  }
+
   drain(resident: Resident): void {
     const { dependencies } = this.access
     const { actions, checkpoints, transfers } = this.parts
@@ -137,7 +189,12 @@ export class LiveDispatch {
       resident.waking
     )
       return
-    if (transfers.pending(resident)) {
+    // Nor while a transfer is under way: once committed, its source may still be closing, and nothing goes on it.
+    if (resident.transferring) return
+    // A switch waits for what was queued before it, as a switch asked for behind another waits for that one's message.
+    // A quiet one goes first: what's queued is for its destination.
+    const transfer = transfers.pending(resident)
+    if (transfer && !(transfer.state.kind === "queued" && !quietSwitch(transfer) && resident.snapshot.requests.some((request) => request.status === "queued" && request.id !== transfer.input.id && (request.createdAt ?? 0) <= transfer.createdAt))) {
       transfers.start(resident)
       return
     }
@@ -153,6 +210,9 @@ export class LiveDispatch {
       return
     const request = nextQueued(resident.snapshot)
     if (!request) return
+    // A switch's own message goes on its destination, once the switch has committed.
+    if (request.id === transfer?.input.id) return
+    if (request.digest && this.overBudget(resident, request)) return
     if (this.leaveRemovedFolder(resident)) return
     if (request.accountSwitch) {
       void this.access.switchAccount(resident, request).catch((error) => {
@@ -190,6 +250,7 @@ export class LiveDispatch {
       nativeDelivery,
       usageFrom: usageFrom && (usageFrom.tokens || usageFrom.cost || usageFrom.unrecorded) ? usageFrom : undefined,
       status: "dispatching" as const,
+      ...request.digest && { digest: { ...request.digest, sentAt: Date.now() } },
       mode: resident.snapshot.session.currentMode ?? undefined,
       context: [
         ...(request.context ?? []),
@@ -264,6 +325,7 @@ export class LiveDispatch {
       // Stop reached while it was prepared, and one the journal can't record as sent all go no further.
       if (handoff && (!own || target?.status !== "dispatching" || target.nativeDelivery?.evidence.kind !== "prepared")) throw new HandoffRefused("superseded")
       if (handoff && target?.pause === "stop") throw new HandoffRefused("stopped")
+      if (handoff && target && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, target) === false) throw new HandoffRefused("withdrawn")
       if (!own || !target?.nativeDelivery) return
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
@@ -296,6 +358,7 @@ export class LiveDispatch {
         unsent()
         throw new HandoffRefused("unsaved")
       }
+      if (handoff) dependencies.agents?.()?.inputDelivered?.(resident.snapshot.session.id, request, "turn")
     }
     const drewIt = !shown && Boolean(text || request.attachments.length)
     const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
@@ -304,10 +367,32 @@ export class LiveDispatch {
       .prompt(resident, current, async () => {
         const active = this.access.control(resident).activeBindingId
         if (review) return review.run(active, review.target, request.tuning, dispatch)
+        // A Fin's brief carried again: a Continue goes in its place when the harness's own transcript shows the brief.
+        // Read now, in its place in the queue, and sent through the same handoff and Stop as any message.
+        const words = request.continues?.brief && await briefInTranscript(resident.snapshot, this.access.control(resident), request.continues.brief, dependencies.history)
+          ? continueTurnPrompt("host-crashed", "mako")
+          : request.text
+        // A continuation says what moved since the cut, read here too, so nothing crosses the read (`TurnContinuation.since`).
+        const since = request.continues?.since
+        const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
         const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: dependencies.agents?.()?.isApex(resident.snapshot.session.id) ? "apex" : "thread" })
-        const standing = instructions && standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, instructions.standing)
-        if (standing) resident.controlSaid = standing.said
+        const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
+        const standing = instructions || Object.keys(rules).length
+          ? standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, { ...instructions?.standing, ...rules })
+          : undefined
+        if (standing) {
+          resident.controlSaid = standing.said
+          const carried = Object.entries(rules).filter(([, line]) => line !== undefined && standing.lines.includes(line)).map(([name]) => name)
+          if (carried.length) {
+            resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((item) => (item.id === request.id ? { ...item, ruleLines: carried } : item)) }
+            try {
+              this.access.flush(resident)
+            } catch (error) {
+              this.access.storageFailed(resident, { error })
+            }
+          }
+        }
         const text = asWritten ? request.text : [
           controlNote([
             ...(standing?.lines ?? []),
@@ -315,7 +400,7 @@ export class LiveDispatch {
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
             ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
           ]),
-          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), request.text),
+          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })
@@ -328,10 +413,12 @@ export class LiveDispatch {
             candidate.id === request.id && candidate.status === "dispatching"
         )
         if (generation !== resident.generation || !target) return
-        // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's.
+        // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's. One whose
+        // reason went away is canceled, never to go.
         if (error instanceof HandoffRefused) {
+          const status = error.why === "withdrawn" ? "canceled" : "held"
           resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((candidate) =>
-            candidate === target ? { ...candidate, status: "held", error: undefined, snapshots: undefined } : candidate) }
+            candidate === target ? { ...candidate, status, error: undefined, snapshots: undefined } : candidate) }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           hostWarn("live", "a message went no further than its handoff", { conversation: resident.snapshot.session.id, request: request.id, why: error.why })
           try {
@@ -437,16 +524,17 @@ export class LiveDispatch {
         }
         // The harness refused it unsent for a cause that clears by itself: it waits and goes again, never a failure.
         const cause = refused ? transientCause(errorMessage({ error }), classifyProviderFailure(errorMessage({ error })).kind, error instanceof SessionBusyError) : undefined
-        const retry = cause && nextRetry(target.retry, cause, errorMessage({ error }), Date.now())
-        if (retry) {
+        const waits = refused ? waitsAgain(target, cause, errorMessage({ error }), Date.now()) : undefined
+        const retry = waits?.retry
+        if (waits) {
           resident.snapshot = {
             ...resident.snapshot,
             requests: resident.snapshot.requests.map((candidate) =>
-              candidate === target ? { ...candidate, status: "held", retry, error: undefined, snapshots: undefined } : candidate),
+              candidate === target ? { ...waits, error: undefined, snapshots: undefined } : candidate),
           }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           this.access.flush(resident)
-          hostWarn("live", "a message its harness refused for now goes again by itself", { conversation: session.id, request: request.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+          hostWarn("live", "a message its harness refused for now goes again by itself", { conversation: session.id, request: request.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
           return
         }
         resident.snapshot = {

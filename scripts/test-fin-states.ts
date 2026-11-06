@@ -156,9 +156,9 @@ try {
       assert.equal(promptsOf(world, fin).length, 1, `${harness}: nor does a restart send anything past it`)
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
       await until("all three to go", () => promptsOf(world, fin).length === 4)
-      // The journal keeps requests as they came, so after a restart the two behind it go in that order.
-      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Carry on\.|Then the CHANGELOG\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "Carry on."],
-        "the person's message first, once they resume it")
+      // The journal keeps the order the resume made (`request_order`), across the restart.
+      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Carry on\.|Then the CHANGELOG\./.exec(text)?.[0]), ["Then the README.", "Carry on.", "Then the CHANGELOG."],
+        "the person's message, then the one that resumed the Fin, then what the stop paused")
       await world.close()
     }
 
@@ -222,7 +222,7 @@ try {
       await world.close()
     }
 
-    // A turn the harness failed for good leaves no message stuck behind it.
+    // A turn the harness failed for good leaves no message stuck behind it (one it fails for now continues by itself: test:delivery-retry).
     {
       let fin = ""
       let turns = 0

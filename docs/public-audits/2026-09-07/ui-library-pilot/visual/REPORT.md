@@ -123,7 +123,7 @@ Probe versions include React/ReactDOM 19.2.6, Motion 12.38.0, D3 scale 4.0.2 / s
 
 ## Mako integration map
 
-All paths below are under `/Users/kashyab/pi-ui/` and describe future integration, not edits made in this audit.
+All paths below are relative to the repository root and describe future integration, not edits made in this audit.
 
 | Area | Current integration point | Pilot proposal and invariants |
 |---|---|---|

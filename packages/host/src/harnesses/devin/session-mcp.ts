@@ -6,10 +6,10 @@ import {
   readFile,
   rm,
   symlink,
-  writeFile,
 } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
+import { publishFile } from "../../base/published-files.js"
 import type { McpServer } from "@agentclientprotocol/sdk"
 import { removeRetiredMakoMcp } from "../../tools/index.js"
 import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
@@ -88,15 +88,11 @@ export async function prepareDevinMcp(
         throw new Error("Devin does not support ACP-routed MCP servers")
       }
     }
-    await writeFile(
-      join(directory, "mcp_config.json"),
-      JSON.stringify(config),
-      { mode: 0o600 }
-    )
+    await publishFile(join(directory, "mcp_config.json"), JSON.stringify(config), { mode: 0o600 })
     if (ownConfig) {
       const settings = DevinSettings.parse(JSON.parse(await nativeFile(join(source, "devin", "config.json"))))
       const config = { ...settings, ...subagentsOff && { subagents_enabled: false }, ...gate && { hooks: withDevinGate(settings.hooks, gate) } }
-      await writeFile(join(directory, "config.json"), JSON.stringify(config), { mode: 0o600 })
+      await publishFile(join(directory, "config.json"), JSON.stringify(config), { mode: 0o600 })
     }
     env.XDG_CONFIG_HOME = root
     return () => rm(root, { recursive: true, force: true })
