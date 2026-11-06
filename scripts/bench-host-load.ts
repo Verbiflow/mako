@@ -25,7 +25,8 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  * A shared runner's speed varies by several times between runs, so the limits are calibrated in the same run: a
  * yardstick process beside the host, under the same contention and running none of Mako's code
  * (`host-load-yardstick.mjs`), times its own event loop while the host is probed. It fails (exit 1) only on a clear
- * regression: a health check waiting two seconds (the stalled host held its loop for 3-5 s at a time), one in a hundred
+ * regression: a health check waiting two seconds past the yardstick's worst wait (the stalled host held its loop for
+ * 3-5 s at a time), one in a hundred
  * waiting past `--times` (30) times the yardstick's one in a hundred (at least 150 ms), one read in a hundred past ten
  * times that, or a probe failing. On one CI runner in one job, at this scale, the yardstick waited 14 ms on one tick in
  * a hundred; the host before #358 waited 3.3 s on one health check in a hundred and 20 s on a read, and the host
@@ -66,7 +67,10 @@ const hostScript = resolve(values.host ?? join(import.meta.dirname, "../packages
 if (!existsSync(hostScript)) throw new Error(`${hostScript} isn't built: npx tsgo -b packages/host`)
 const budget = Number(values["budget-ms"])
 const times = Number(values.times)
-/** A health check this slow is the loop held for seconds, as the day it stalled: a failure on any runner. */
+/**
+ * A health check this much slower than the yardstick's worst wait is the loop held for seconds, as the day it stalled:
+ * a runner that stops every process at once stops the yardstick as long, so its stall isn't the host's.
+ */
 const HELD_MS = 2_000
 /** One health check in a hundred may wait this long whatever the yardstick says: below it a runner's noise decides. */
 const HEALTH_FLOOR_MS = 150
@@ -205,12 +209,13 @@ try {
   const measured = z.object({ late: Measured, spawn: Measured, chunk: Measured }).parse(JSON.parse(readFileSync(yardstickOut, "utf8")))
   const healthLimit = Math.max(HEALTH_FLOOR_MS, times * measured.late.p99)
   const readLimit = READ_TIMES * healthLimit
+  const heldLimit = Math.round(HELD_MS + measured.late.max)
   const failures: string[] = []
   for (const name of ["health", "reads"] as const) {
     const result = answers[name]
     if (result.failed) failures.push(`${name}: ${result.failed} of ${result.n} failed or passed the probe's timeout`)
   }
-  if ((answers.health.max ?? Infinity) >= HELD_MS) failures.push(`a health check waited ${answers.health.max} ms: the loop was held for seconds`)
+  if ((answers.health.max ?? Infinity) >= heldLimit) failures.push(`a health check waited ${answers.health.max} ms, ${HELD_MS} ms past the yardstick's worst ${measured.late.max} ms: the loop was held for seconds`)
   if ((answers.health.p99 ?? Infinity) > healthLimit) failures.push(`one health check in a hundred waited ${answers.health.p99} ms, past ${healthLimit} ms (${times} times the yardstick's ${measured.late.p99} ms)`)
   if ((answers.reads.p99 ?? Infinity) > readLimit) failures.push(`one read in a hundred waited ${answers.reads.p99} ms, past ${readLimit} ms`)
   const row = (name: string, result: { p50: number | null; p99: number | null; max: number | null }, limit: string) => `| ${name} | ${result.p50} | ${result.p99} | ${result.max} | ${limit} |`
@@ -219,7 +224,7 @@ try {
     "",
     "| | p50 ms | p99 ms | max ms | fails at |",
     "|---|---|---|---|---|",
-    row("host health check", answers.health, `p99 > ${healthLimit}, max >= ${HELD_MS}`),
+    row("host health check", answers.health, `p99 > ${healthLimit}, max >= ${heldLimit}`),
     row("host read (`mako:worktrees`)", answers.reads, `p99 > ${readLimit}`),
     row("yardstick's own loop (calibration)", measured.late, "-"),
     row("yardstick's spawn of git", measured.spawn, "-"),

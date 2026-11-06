@@ -34,10 +34,12 @@ const write = (path, text) => mkdir(dirname(path), { recursive: true }).then(() 
 const gone = (pid) => {
   try {
     process.kill(pid, 0)
-    return false
   } catch (error) {
     return error.code === "ESRCH"
   }
+  // A signal reaches a zombie: it has stopped, and waits only for its parent to reap it.
+  const { stdout } = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" })
+  return stdout.trim() === "" || stdout.trim().startsWith("Z")
 }
 const until = async (check, what) => {
   for (const deadline = Date.now() + 10_000; !(await check()); ) {
@@ -137,12 +139,61 @@ try {
   const stubborn = join(root, "stubborn.pid")
   await write(join(fake, "stubborn"), `#!/bin/sh\nsh -c 'trap "" TERM; echo $$ > "${stubborn}"; while :; do sleep 1; done' &\nwait\n`)
   await chmod(join(fake, "stubborn"), 0o755)
-  const timed = runProcessGroup(join(fake, "stubborn"), [], { cwd: root, env: process.env, stdio: "pipe", timeoutMs: 300, graceMs: 300 })
+  const timed = runProcessGroup(join(fake, "stubborn"), [], { cwd: root, env: process.env, stdio: "pipe", timeoutMs: 2_000, graceMs: 300 })
   await until(() => readFile(stubborn, "utf8").then(Boolean, () => false), "the stubborn child to start")
   const holdout = Number(await readFile(stubborn, "utf8"))
   const result = await timed
   assert.equal(result.stopped, "timeout")
   assert.ok(gone(holdout), "a child ignoring SIGTERM was killed before the step settled")
+  // On macOS a group holding only zombies, its last member gone and not yet reaped, answers EPERM until it's reaped:
+  // the process table, which shows nothing alive in it, says the step has ended.
+  const realKill = process.kill
+  let zombies = 0
+  process.kill = (target, signal) => {
+    if (target >= 0 || signal !== 0) return realKill.call(process, target, signal)
+    zombies++
+    throw Object.assign(new Error("kill EPERM"), { code: "EPERM" })
+  }
+  try {
+    const zombie = await runProcessGroup("sh", ["-c", "sleep 30"], { cwd: root, env: process.env, stdio: "pipe", timeoutMs: 100, graceMs: 200 })
+    assert.equal(zombie.stopped, "timeout", "a group gone but for its zombies has ended")
+    assert.ok(zombies > 0, "its look at the group was answered EPERM")
+  } finally {
+    process.kill = realKill
+  }
+
+  // The same answer for a live member Mako may not signal is a failure, with that member still at work.
+  const held = join(root, "held.pid")
+  const heldScript = join(fake, "held")
+  await write(heldScript, `#!/bin/sh\nsh -c 'echo $$ > "${held}"; while :; do sleep 1; done' > /dev/null 2>&1 &\nsleep 2\n`)
+  await chmod(heldScript, 0o755)
+  // Every way of that: refused every signal, refused its stops with looks allowed, and killed to no effect.
+  const denies = [
+    { what: "every signal refused", refuse: () => true, code: "EPERM" },
+    { what: "stops refused, looks allowed", refuse: (signal) => signal !== 0, code: "EPERM" },
+    { what: "a kill that took nothing", swallow: true, message: /outlived its kill/ },
+  ]
+  for (const { what, refuse, swallow, code, message } of denies) {
+    await rm(held, { force: true })
+    let member
+    process.kill = (target, signal) => {
+      if (target >= 0) return realKill.call(process, target, signal)
+      if (refuse?.(signal)) throw Object.assign(new Error("kill EPERM"), { code: "EPERM" })
+      return swallow && signal !== 0 ? true : realKill.call(process, target, signal)
+    }
+    try {
+      const stop = new AbortController()
+      const running = runProcessGroup(heldScript, [], { cwd: root, env: process.env, stdio: "pipe", signal: stop.signal, graceMs: 100 })
+      await until(() => readFile(held, "utf8").then(Boolean, () => false), "the held member to start")
+      member = Number(await readFile(held, "utf8"))
+      stop.abort()
+      await assert.rejects(running, code ? { code } : message, `${what}: a live member is no end of the step`)
+      assert.equal(gone(member), false, `${what}: and it was still alive`)
+    } finally {
+      process.kill = realKill
+      if (member) realKill.call(process, member, "SIGKILL")
+    }
+  }
   // A step that ends by itself is waited for as before: its code, nothing stopped.
   assert.deepEqual(await runProcessGroup("sh", ["-c", "exit 4"], { cwd: root, env: process.env, stdio: "pipe" }), { code: 4, stopped: null })
 

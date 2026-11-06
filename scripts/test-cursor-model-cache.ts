@@ -11,6 +11,7 @@ import { CURSOR_SDK_WIRE_VERSION, type SdkMethod, type SdkResult, type SdkModelL
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { AppKeySchema } from "@mako/host/contracts/thread-environments"
+import { ranOut } from "./lib/ran-out.ts"
 
 const nativeStores = new NativeStores(false)
 
@@ -273,10 +274,17 @@ try {
     while (!asked) await new Promise<void>((resolve) => setTimeout(resolve, 5))
     env = keyH
     const began = performance.now()
-    const started = await hung.start(root, admitted("cursor", { conversationId: "H", emit() {} }, { env }))
+    // The question here never answers: a start that waited for it would never come back. A hang guard thirty times
+    // the 3 s it waits.
+    let guard: ReturnType<typeof setTimeout> | undefined
+    const unanswered = new Promise<never>((_, reject) => {
+      guard = setTimeout(() => reject(new Error("the start still waited on the child's question after 90 s")), 90_000)
+    })
+    const { result: started, waits } = await ranOut(() => Promise.race([hung.start(root, admitted("cursor", { conversationId: "H", emit() {} }, { env })), unanswered]).finally(() => clearTimeout(guard)))
     const waited = performance.now() - began
     assert.deepEqual(killed, ["prefetch:hang"], "the child still asking is stopped")
-    assert.ok(waited >= 2_900 && waited < 6_000, `the start waited for it ${Math.round(waited)} ms, not 20 s`)
+    assert.ok(waited >= 2_900, `the start gave the question its 3 s (${Math.round(waited)} ms)`)
+    assert.deepEqual(waits.filter((ms) => ms >= 1_000), [3_000], "and no more: the wait that ran out is those 3 s, not the 20 s a hung question took")
     assert.ok(spawned.includes("H"), "and the start spawned its own")
     assert.equal(started.settings?.model, keyH.CURSOR_API_KEY, "whose models it asked itself")
     await hung.close("H")

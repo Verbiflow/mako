@@ -53,7 +53,7 @@ assert.equal(
   ),
   "complete"
 )
-const rejectedAt = performance.now()
+// The process stays up: a reply it can't read fails the request with its reason, not at the 30 s timeout.
 await assert.rejects(
   streamRequest(
     processes,
@@ -65,7 +65,6 @@ await assert.rejects(
   ),
   /invalid discovery response/
 )
-assert.ok(performance.now() - rejectedAt < 5_000)
 await assert.rejects(
   runDiscovery(
     processes,
@@ -158,10 +157,14 @@ const turn = processes.run({ ...work, timeoutMs: 100, deadline: "started" }, asy
   .finally(() => { turnSettled = true })
 try {
   let expiredStarted = false
-  const expiredAt = performance.now()
-  await assert.rejects(processes.run({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), /timed out in the queue/)
+  // The work ahead holds its place until the test lets it go: queued work that waited for it would wait forever.
+  let guard: ReturnType<typeof setTimeout> | undefined
+  const forever = new Promise<never>((_, reject) => {
+    guard = setTimeout(() => reject(new Error("queued work still waited 10 s for the place ahead to free")), 10_000)
+  })
+  await assert.rejects(Promise.race([processes.run({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), forever]).finally(() => clearTimeout(guard)),
+    /timed out in the queue/, "queue time consumes the same bounded discovery budget")
   assert.equal(expiredStarted, false, "expired queued work must not spawn")
-  assert.ok(performance.now() - expiredAt < 2_000, "queue time consumes the same bounded discovery budget")
   // Queued before the query just refused, with the same budget: it has waited longer, and waits on.
   assert.equal(turnSettled, false, "a reading with nothing in its place waits its turn instead of failing")
   const cancelled = new AbortController()

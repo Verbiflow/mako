@@ -1085,9 +1085,15 @@ export class Agents implements AgentOperations, ConversationChildren {
   async link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult> {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
-    const process = input.pid === undefined ? undefined : await this.runs.processOf(input.pid)
-    if (input.pid !== undefined && !process)
-      return { refused: "unknown-child", why: `No process ${input.pid} runs on this device; leave pid out for a run that has ended.` }
+    let process: Awaited<ReturnType<AgentRuns["processOf"]>>
+    if (input.pid !== undefined) {
+      try {
+        process = await this.runs.processOf(input.pid)
+      } catch (error) {
+        return { refused: "unavailable", why: `Process ${input.pid} is running, but Mako couldn't read when it started (${errorMessage({ error })}). Try again.` }
+      }
+      if (!process) return { refused: "unknown-child", why: `No process ${input.pid} runs on this device; leave pid out for a run that has ended.` }
+    }
     const path = this.deps.catalog.nativePath({ harness: input.harness, nativeId: input.session })
     const ref = path ? this.deps.catalog.ref(path) : undefined
     if (!ref) return { refused: "unknown-child", why: `No ${input.harness} session with that ID is on this device.` }

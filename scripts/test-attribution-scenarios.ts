@@ -179,7 +179,17 @@ test("interleaved Threads and the person, line by line", async () => {
   await tracker.settled()
   assert.deepEqual(last().author, { certainty: "person", via: "no-activity" })
 
-  const moving = partition(view, root, "T1")
+  // However many lines and runs a file has, each entry's side is worked out once and each version of a file read once.
+  const sided: number[] = []
+  const read: string[] = []
+  const store: JournalStore = Object.create(tracker.store)
+  store.provenance = (seq) => (sided.push(seq), tracker.store.provenance(seq))
+  store.blob = (ref) => (read.push(JSON.stringify(ref)), tracker.store.blob(ref))
+  const counting: JournalView = { ...view, store }
+  const moving = partition(counting, root, "T1")
+  assert.ok(sided.length > 0 && read.length > 0)
+  assert.deepEqual(sided, [...new Set(sided)], "each entry's side is worked out once")
+  assert.deepEqual(read, [...new Set(read)], "each version of a file is read once")
   const byPath = new Map(moving.files.map((file) => [file.path, file]))
   assert.deepEqual([...byPath.keys()].sort(), ["a.ts", "b.ts", "b2.ts", "c.md"])
   assert.deepEqual(byPath.get("b.ts")?.thread, { kind: "absent" })
@@ -192,8 +202,6 @@ test("interleaved Threads and the person, line by line", async () => {
   const cmd = byPath.get("c.md")!
   assert.ok(cmd.thread.kind === "text" && cmd.thread.text === "# Rewritten\n")
   assert.ok(cmd.remaining.kind === "text" && cmd.remaining.text === "# Notes\n\nsome  text\n")
-  assert.ok(moving.ms < 200, `partition took ${moving.ms} ms`)
-
   const other = partition(view, root, "T2")
   assert.deepEqual(other.files.map((file) => file.path).sort(), ["a.ts", "d.ts"])
 

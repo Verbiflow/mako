@@ -2274,7 +2274,7 @@ the same core over `listFiles`. Highlighting runs in Pierre's worker pool (`lib/
 `lib/syntax-theme.ts`, onto the `--syntax-*` tokens; each file wears its kind's mark (`lib/file-kinds.ts`,
 `components/ui/file-icon.tsx`), drawn in one stroke on one grid and told apart by shape, never hue.
 `scripts/test-file-index.ts` holds it to that, and `scripts/bench-file-search.ts` (CI's `file-search`) times it against
-the old way in the same run on this checkout and 100,000 generated files. `node scripts/files-ui.mjs` serves the real
+the old way in turns in the same run on this checkout and 100,000 generated files. `node scripts/files-ui.mjs` serves the real
 panel and viewer over a folder's index, and `scripts/files-ui-shots.mjs` draws them, `--phone` as the web app does.
 
 ## Git
@@ -3514,11 +3514,26 @@ Mac, six link disturbances (words missed, time to current, rereads, a stall
 noticed, and with the owner's last batch lost, when the turn's end showed),
 quiet devices, messages and bytes per token per hop, and from each word to
 its paint on each device (`paint`: the device's arrivals through the window's
-own `StreamFrames`, which per-hop latency leaves out). Past the
-plan's budgets it exits 1 unless `--report-only`; a run that doesn't finish
-exits 2. It takes about two minutes and needs a real Codex CLI; CI runs it
-against its budgets with Codex at the tested build (`sync-bench` in
-`checks.yml`). The first baseline is `docs/public-audits/2026-10-28/sync-latency/`.
+own `StreamFrames`, which per-hop latency leaves out). It judges the plan's
+budgets so a busy runner can't fail them and a real regression still does.
+Counts fail at once: words missed, whole snapshots read, batches past one a
+paint frame (`LIVE_FRAME_MS`) of the words
+the model wrote, and bytes a token as if each batch carried the plan's two
+tokens, so the runner's pace doesn't move them; and the design itself (the
+protocol's silence and probe within the stall budget, a frame of at least two
+tokens). Times, and a change held past the status budget that a device
+never showed, are read past the owner's own showing, which leaves the
+harness's time out, and at the median; a stall must be noticed while it
+lasts (8 s, against the design's 4.5). A time over its limit is measured
+again in a second run, and fails only if it's over in both (`--once` skips
+that). On 2026-11-05 a turn's start on the second Mac read 327 ms at p95 on
+one CI run, Codex taking the prompt; the regressions these guard (a report
+waiting for a tick, a hop held a frame, a reconnect waiting a second) are in
+every run. Past a budget it exits 1 unless `--report-only`; a run that
+doesn't finish exits 2. Every check goes to the job's summary. It takes
+about two minutes and needs a real Codex CLI; CI runs it against its
+budgets with Codex at the tested build (`sync-bench` in `checks.yml`). The
+first baseline is `docs/public-audits/2026-10-28/sync-latency/`.
 
 The account's rows here (`CloudConversations`) take nothing from a catalog that
 isn't read: until `catalog.ready()`, and while a lost reader is replaced,
@@ -4543,17 +4558,21 @@ Before each run the machine is read for a second with nothing measured
 running (`@mako/host/base/machine-load`): other work holding more than half
 the cores, thermal pressure or memory pressure makes it busy; the load
 average is printed but not judged, since it lags and counts the measurement's
-own threads. On a quiet machine the median decides, within on three rounds
-and slower after seven; a busy machine is first waited out for up to 3
-minutes, then a row gets up to 15 rounds (past seven, only within 5 minutes
-of busy measuring), and one they can't settle is unsure, not slower. On the
+own threads. On a quiet machine a median under the allowance is within on
+three rounds; a busy machine is first waited out for up to 3 minutes. A row
+over it at the median alone, on either, gets up to 15 rounds (past seven,
+only within 5 minutes of busy measuring), and one they can't settle is
+unsure, not slower: on 2026-11-05 a quiet CI runner's median read unchanged
+code 29 to 36% slower on three runs, between -29% and +52% at 95%. On the
 morning a person's update failed, the update's own dependency copy had Spotlight
 indexing at a full core and the load average at 26.7: unchanged merge code read
 +43% there and +3% on CI. Every load is simulated in `test-perf-reference.ts`;
 `test-machine-load.ts` loads every core for real. Without
 `MAKO_PERFORMANCE_VERDICT` an unsure row fails as a slower one does, saying to
-measure it on a quieter machine; the table prints each row's rounds, its
-interval and how many rounds were busy.
+measure it on a quieter machine, except in CI's `performance` job
+(`MAKO_PERFORMANCE_UNSURE_REPORTED=1`), which fails only a row its rounds
+show slower; the table prints each row's rounds, its interval and how many
+rounds were busy.
 A passing run builds nothing. A reference that can't be built or has no such
 row fails the row as before, with the reason. The rows read `@mako/*` from
 `packages/*/dist`, so build the packages before measuring, or a run times
@@ -4817,7 +4836,10 @@ step held the daemon 8 to 14 s on a loaded Mac. A push's export reads 500
 rows and passes at most 2,000 units a read (`RecordStore.exportSteps`), and
 what the account holds after it is noted 500 units a turn (`remoteHolds`).
 `test/loop-holds.mjs` times each on a 25MB Cursor chat, a push of 30,000
-versions and an SDK run of 23,400 events against a 50 ms budget. `npm run
+versions and an SDK run of 23,400 events against a 50 ms budget of the
+thread's own CPU time, which a runner taking the CPU away doesn't stretch
+(a push once read 117 ms on the clock on CI, unchanged), and a write
+waiting on another's lock by the loop turning all through the wait. `npm run
 bench:syncd-loop` runs the real daemon on a large chat as it goes on
 (`--store <store.db>` for a copy of a real one, `--sdk <dir>` for copies of an
 SDK agent's `store.db` and of an `index.db` of its rows, `--writer-holds-ms`

@@ -264,11 +264,13 @@ jobs:
 
   # Every harness's decode, live host, projection, recorder, merge and saved-open paths, measured beside the commit
   # this change goes onto, in turns on this runner (`perf-reference.ts`): HEAD^1 is a pull request's base in the merge
-  # commit checked out, and main's previous commit on a push. A row more than 25% slower than that code fails here,
-  # at review, rather than adding up under its baseline's budget until an update's `test:performance` meets it.
+  # commit checked out, and main's previous commit on a push. A row more than 25% slower than that code at 95% (every
+  # round of seven over it, or twelve of fifteen) fails here, at review, rather than adding up under its baseline's
+  # budget until an update's `test:performance` meets it; one the rounds can't tell from the runner's noise is printed
+  # as unsure and passes.
   performance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -283,9 +285,15 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       # The rows read `@mako/*` from the packages' builds.
       - run: npm run build:control-runtime
+      # How a row is judged, on simulated machines: unchanged code as noisy as this runner is never slower, twice as slow always is.
+      - run: npx tsx scripts/test-perf-reference.ts
       - run: npm run perf:decoders -- --reference HEAD^1
+        env:
+          MAKO_PERFORMANCE_UNSURE_REPORTED: "1"
       # The host's live delivery, the window's reduction, usage and tool identity (`test-performance-budgets.ts`), the same way.
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-performance-budgets.ts --reference HEAD^1
+        env:
+          MAKO_PERFORMANCE_UNSURE_REPORTED: "1"
 
   # The local updater's own checks (`UPDATE_CHECKS`), through the function Settings › Updates runs, on a Mac, in the
   # environment it builds: the variables it sets (its verdict file and gross line for the performance check alone, the
@@ -360,10 +368,12 @@ jobs:
 
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
-  # the owner's Codex at the tested build sealed against the bench's stand-in model.
+  # the owner's Codex at the tested build sealed against the bench's stand-in model. Counts (words missed, rereads,
+  # batches a frame, bytes a token at the plan's cadence) fail at once; a time, read past the owner at the median,
+  # fails only when a second run in this job has it over too. Every check goes to the job's summary.
   sync-bench:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -376,15 +386,17 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - uses: ./.github/actions/codex-sandbox
+      # How two runs are judged: a count fails in either, and only a time gets a second try.
+      - run: npx tsx scripts/test-sync-bench-judge.ts
       - name: The sync bench at the tested Codex
         run: |
           version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run bench:sync-latency
 
-  # A message the person sends into a running turn reaches the model within `LANDS_BUDGET_MS`, through Mako's own host,
-  # on the real harnesses this runner has (Claude Code from its SDK, Codex at the tested build), each against the
-  # probe's stand-in model with a 15 s command running (`probe-steer-semantics.ts --lands`).
+  # A message the person sends into a running turn reaches the model while the turn's 15 s command still runs, not
+  # once it returns, through Mako's own host, on the real harnesses this runner has (Claude Code from its SDK, Codex
+  # at the tested build), each against the probe's stand-in model (`probe-steer-semantics.ts --lands`).
   steer-latency:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
