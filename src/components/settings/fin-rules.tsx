@@ -13,6 +13,7 @@ import type { HarnessProfile } from "@/lib/types"
 import { harnessDefaults } from "@/state/composer-settings"
 import { saveFinPolicy, useFinDefaults } from "@/state/fin-defaults"
 import { SEA_MARK } from "@/lib/sea-mark"
+import { targetLine } from "./agent-reads"
 
 /** What people tend to write first: tapped, it becomes a rule to edit. */
 const STARTERS = ["Anything that isn't frontend", "UI, CSS and visual polish", "Quick lookups and one-line fixes", "Reviews and second opinions"]
@@ -98,7 +99,7 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
             profiles={profiles}
             signedIn={signedIn}
             apexOwn
-            onChoose={(target) => save(target ? { ...policy, otherwise: target } : { rules: policy.rules })}
+            onChoose={(target) => save({ ...policy, otherwise: target })}
           />
         </div>
       </div>
@@ -143,13 +144,6 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
       ) : null}
     </section>
   )
-}
-
-/** A target as the Apex reads it: the harness, then its model's words or how the person uses it there. */
-function targetLine(target: FinTarget, profiles: Readonly<Record<string, HarnessProfile>>): string {
-  const words = target.settings && finTuningWords(profiles[target.harness]?.models ?? [], target.settings)
-  const label = harnessLabel(target.harness)
-  return words ? `${label} · ${finTuningLine(words)}` : target.settings?.model ? `${label} · ${target.settings.model}` : `${label}, on the model the person uses there`
 }
 
 function RuleRow({ index, rule, last, focus, profiles, signedIn, onChange, onMove, onRemove }: {
