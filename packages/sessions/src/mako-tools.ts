@@ -69,6 +69,14 @@ const START = verb("Start", "Starting", "Started")
 const READ = verb("Read", "Reading", "Read")
 const MOVE = verb("Move", "Moving", "Moved")
 
+/** `harness`: what it read, or which it installed or updated. */
+function harnessWords(args: Fields): Said {
+  const what = text(args.harness) ?? "a harness"
+  if (args.action === "install") return { verb: verb("Install", "Installing", "Installed"), what }
+  if (args.action === "update") return { verb: verb("Update", "Updating", "Updated"), what }
+  return { verb: verb("Read", "Reading", "Read"), what: "the harnesses' versions" }
+}
+
 /** `settings`: what it read, or which it changed. */
 function settingsWords(args: Fields): Said {
   if (args.action === "read") return { verb: verb("Read", "Reading", "Read"), what: "Settings" }
@@ -343,6 +351,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["thread_move", { group: "cloud", say: () => ({ verb: MOVE, what: "this Thread to the cloud" }) }],
   ["thread", { group: "cloud", say: ({ args }) => threadWords(args) }],
   ["settings", { group: "cloud", say: ({ args }) => settingsWords(args) }],
+  ["harness", { group: "cloud", say: ({ args }) => harnessWords(args) }],
 ])
 
 /** The worktree tools' earlier names, in saved history. */

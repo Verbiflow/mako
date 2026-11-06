@@ -82,9 +82,25 @@ export type SettingsResult =
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "bad-value" | "failed"; why: string }
 
+/** Reads each harness's versions, or installs or updates one. */
+export interface HarnessActInput {
+  action: "read" | "install" | "update"
+  /** install, update: claude, codex, cursor, grok, opencode or devin. */
+  harness?: string
+  /** The caller's own key for this. */
+  clientKey: string
+}
+
+export type HarnessActResult =
+  | { outcome: "read"; harnesses: JsonValue }
+  | { outcome: "started"; action: string; harness: string; next: string }
+  | { outcome: "finished"; action: string; harness: string }
+  | { outcome: "asked"; ask: string; next: string }
+  | { refused: "unavailable" | "no-thread" | "no-harness" | "cloud-machine" | "failed"; why: string }
+
 /** What the MCP door shows the model of an operation; its input schema is the host call's. */
 export interface ThreadToolDefinition {
-  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act"
+  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act" | "mako:harnesses-act"
   replay: HostCallReplay
   /** Inputs the MCP door leaves out: an agent moves its own Thread. */
   filled: readonly "conversation"[]
@@ -149,13 +165,30 @@ export const SETTINGS_TOOL: ThreadToolDefinition = {
   },
 }
 
+export const HARNESS_TOOL: ThreadToolDefinition = {
+  channel: "mako:harnesses-act",
+  replay: "replay",
+  filled: [],
+  mcp: {
+    name: "harness",
+    description: "Read each harness's installed and latest versions, or Install or Update one, as Settings › Harnesses does. Call it when the person asks, or when a harness you need is missing or too old. read answers at once; install and update start now on full access, and on other access Mako asks the person first.",
+    fields: {
+      action: "read, install or update.",
+      harness: "install, update: claude, codex, cursor, grok, opencode or devin.",
+      clientKey: "Your own key for this: a repeat with it is the same action.",
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+}
+
 /** Every tool on a `mako` server that acts for the person through one host call. */
-export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL]
+export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL, HARNESS_TOOL]
 
 /** What an answer tells an agent to do next. */
 export const AFTER_ACT = {
   asked: "Asked the person: their answer is in a card above the composer. Keep working; it happens once they allow it.",
   archived: "Archived. If your work is done, end your turn: the Thread stays archived until the person restores it.",
+  started: "It's under way and goes on without you. Read harness again to see it land; Settings › Harnesses shows it too.",
 } as const
 
 /** What a move's answer tells an agent to do next. */

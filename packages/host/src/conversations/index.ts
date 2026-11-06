@@ -99,6 +99,7 @@ export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./ag
 export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
 export { ThreadActTool, declareThreadActMethods } from "./thread-act-tool.js"
 export { SettingsTool, declareSettingsMethods } from "./settings-tool.js"
+export { HarnessTool, declareHarnessToolMethods } from "./harness-tool.js"
 export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, threadToolText, type ThreadToolDoor } from "./thread-move-tool.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
