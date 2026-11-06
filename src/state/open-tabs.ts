@@ -57,6 +57,12 @@ export function entryKey(entry: OpenEntry): string {
   return entry.kind === "thread" ? entry.thread : `draft:${entry.place}`
 }
 
+/**
+ * The tab just closed while what replaces it is on its way: a Thread opens a beat after it's asked for, and until then
+ * the screen still shows the one closed, which isn't a reason to open it again.
+ */
+let leavingScreen: string | undefined
+
 /** The next Thread to reach the screen gets a tab of its own: a fork, a Fin, a Cmd-click. */
 let ownTabNext = false
 
@@ -77,7 +83,8 @@ function replaceable(entry: OpenEntry | undefined): boolean {
 /** Put what's on screen in the strip, by the rule at the top of this file. */
 export function showInTabs(here: { thread?: string; session?: string; draft?: { thread: string } | null }): void {
   const shown = shownEntry(here)
-  if (!shown) return
+  if (leavingScreen !== undefined && (!shown || entryKey(shown) !== leavingScreen)) leavingScreen = undefined
+  if (!shown || leavingScreen !== undefined) return
   const own = ownTabNext
   ownTabNext = false
   openTabsStore.set(({ entries, active }) => {
@@ -121,8 +128,9 @@ export function draftBecameThread(place: string, placed: { thread: string; sessi
   })
 }
 
-/** Close tabs, by their entries' keys. What they name stays where it was. */
-export function closeEntries(keys: ReadonlySet<string>): void {
+/** Close tabs, by their entries' keys. What they name stays where it was. `leaving`: the one of them on screen, on its way off it. */
+export function closeEntries(keys: ReadonlySet<string>, leaving?: string): void {
+  leavingScreen = leaving
   openTabsStore.set(({ entries, active }) => ({
     entries: entries.filter((entry) => !keys.has(entryKey(entry))),
     active: active !== undefined && keys.has(active) ? undefined : active,

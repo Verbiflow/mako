@@ -388,14 +388,17 @@ export function closeDraftTab(draft: SessionDraft): void {
 export function closeThreadTab(tab: Extract<SessionTab, { kind: "session" }>): void {
   const thread = tabThread(tab)
   if (!thread) return
+  let leaving: string | undefined
   if (tab.id === onScreenTab(currentOnScreen())) {
     const tabs = currentOpenTabs()
     const at = tabs.findIndex((candidate) => candidate.id === tab.id)
     const neighbour = tabs[at + 1] ?? tabs[at - 1]
-    if (neighbour) openSessionTab(neighbour)
-    else leaveOnScreen()
+    if (neighbour) {
+      leaving = thread
+      openSessionTab(neighbour)
+    } else leaveOnScreen()
   }
-  closeEntries(new Set([thread]))
+  closeEntries(new Set([thread]), leaving)
 }
 
 /** Nothing on screen: the window's start. */

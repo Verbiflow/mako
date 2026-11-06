@@ -87,6 +87,21 @@ closeEntries(new Set([b.thread]))
 assert.deepEqual(keys(), [c.thread, d.thread, a.thread])
 assert.equal(openTabsStore.get().active, undefined)
 
+// Closing the tab on screen: what replaces it opens a beat later, and the screen showing the closed one until then
+// doesn't open it again. Once it's gone, opening it is opening it.
+reset()
+showInTabs(a)
+keepActiveTab()
+openNextInOwnTab()
+showInTabs(b)
+closeEntries(new Set([b.thread]), b.thread)
+showInTabs(b)
+assert.deepEqual(keys(), [a.thread], "the screen catching up doesn't bring a closed tab back")
+showInTabs(a)
+assert.equal(openTabsStore.get().active, a.thread)
+showInTabs(b)
+assert.deepEqual(keys(), [a.thread, b.thread], "opened again, it has a tab again")
+
 // A new Thread: its tab comes first, and its first send turns that tab into the Thread, where it stood.
 reset()
 showInTabs(a)
