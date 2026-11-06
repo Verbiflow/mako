@@ -144,7 +144,8 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   await sleep(150)
   assert.equal(runs, 0, "Nothing routine runs while a start holds the foreground, however often it comes due")
   release()
-  await sleep(2)
+  // Promises only, so the job's next tick, which can fall any moment now, can't run in between.
+  for (let turn = 0; turn < 10; turn++) await Promise.resolve()
   assert.equal(runs, 1, "It runs once the start is over, once")
   await sleep(60)
   assert.ok(runs >= 2, "and on its schedule after")

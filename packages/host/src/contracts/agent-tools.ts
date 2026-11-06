@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, FIN_WORD, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { APEX_WORD, decisionWords, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -49,8 +49,15 @@ export interface AgentsStartInput extends DoorFilled {
   after?: string[]
   /** True: past the person's limit or the tree's running budget it waits for one to end instead of being refused. */
   queue?: boolean
+  /** Threads its brief refers to, each attached to it as a person's chip attaches one: it reads them whole with thread_history. */
+  context?: AgentContextInput[]
   /** The caller's own key for this spawn: a repeat with the same key answers the same Fin. */
   clientKey: string
+}
+
+/** A Thread attached to a message as the person's `@` chip attaches one: a `thread:<harness>:<id>` ref, a Thread ID or a Fin's name. */
+export interface AgentContextInput {
+  thread: string
 }
 
 /** A report as a `wait` answer carries it: in full, as `agents_read` gives it. */
@@ -59,6 +66,8 @@ export interface WaitedReport {
   summary: string
   artifacts?: Artifact[]
   question?: string
+  /** Who decides a done report's question. */
+  decides?: "apex" | "person"
 }
 
 /**
@@ -97,6 +106,8 @@ export interface AgentsStarted {
   note?: string
   /** Its Apex's harness was at its limit (until `until`), so it started on the person's next harness; `instead` is another account of that harness with room. */
   limited?: { harness: string; until?: number; instead?: string }
+  /** Where it went instead, and why, as its row says it (`movedLine`). */
+  moved?: string
   /** The person's rule it follows, as its row says it. */
   rule?: string
   next: string
@@ -117,9 +128,16 @@ export type AgentsLinkResult = { child: string; name: string; origin: ChildOrigi
 export interface AgentsListInput {
   /**
    * `tree` adds every descendant, each under its parent; `crew`, from a Fin, is its Apex and the other Fins it started
-   * (`AgentsCrew`); `apexes`, the person's other Apexes on this host (`AgentsApexes`).
+   * (`AgentsCrew`); `apexes`, the person's other Apexes on this host (`AgentsApexes`); `threads`, the conversations
+   * on this device an `@` picker offers, newest first (`AgentsThreads`).
    */
-  scope?: "children" | "tree" | "crew" | "apexes"
+  scope?: "children" | "tree" | "crew" | "apexes" | "threads"
+  /** With `threads`: words of a title, a Thread ID or a Fin's name. */
+  query?: string
+}
+/** The conversations `agents_list` with `scope: threads` found, each by the ref `context` and `thread_history` take. */
+export interface AgentsThreads {
+  threads: { ref: string; title?: string; harness: string; updatedAt?: string }[]
 }
 export interface AgentStrip {
   child: string
@@ -132,12 +150,20 @@ export interface AgentStrip {
   runsOn?: string
   /** The person's rule it was started by: "Rule 2 · Anything that isn't frontend". */
   rule?: string
+  /** Where it went on when its harness's account ran out, and why (`movedLine`). */
+  moved?: string
   origin: ChildOrigin
   state: ChildState
   title?: string
   toolUses?: number
   /** Its last report, as one line. */
   report?: { status: ReportStatus; line: string; at: number }
+  /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
+  waiting?: string
+  /** Seconds since its last activity, while it isn't working (`idleFor`). */
+  idleFor?: number
+  /** Its open pull requests, from what the host holds (`finPullRequests`). */
+  openPRs?: FinPullRequest[]
   startedAt: number
 }
 /**
@@ -188,11 +214,11 @@ export interface OtherApex {
    * Its open Fins' last reports (or, before one, their state), what needs the person first, at most
    * `APEX_DIGEST_FINS` and how many more; and `said`, the first paragraph of its own last reply.
    */
-  digest: { fins: { name: string; line: string }[]; more?: number; said?: string }
+  digest: { fins: { name: string; line: string; idleFor?: number; openPRs?: FinPullRequest[] }[]; more?: number; said?: string }
 }
 /** The open Fins one Apex's digest names; the rest are counted. */
 export const APEX_DIGEST_FINS = 8
-export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentsApexes | AgentRefused
+export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
 
 export interface AgentsReadInput {
   /** The Fin's name or Thread ID. */
@@ -200,7 +226,15 @@ export interface AgentsReadInput {
   view?: "report" | "transcript"
   maxChars?: number
 }
-export type AgentsReadResult = { child: string; name: string; state: ChildState; text: string; truncated?: true } | AgentRefused
+export type AgentsReadResult = {
+  child: string
+  name: string
+  state: ChildState
+  text: string
+  truncated?: true
+  /** A transcript's end is a tail: where the whole is. */
+  whole?: string
+} | AgentRefused
 
 export interface AgentsReportInput {
   status: ReportStatus
@@ -214,6 +248,10 @@ export interface AgentsReportInput {
   recommended?: number
   /** What whoever answers does, in one sentence. */
   action?: string
+  /** Who decides a done report's question: `apex` (absent) or `person`. */
+  decides?: "apex" | "person"
+  /** What it waits on outside its tree, with a question it asks. */
+  waitingOn?: WaitingOn[]
   /** A repeat with the same key is the same report. */
   clientKey: string
 }
@@ -228,6 +266,8 @@ export interface AgentsSendInput {
   text?: string
   /** For a working Fin; `queue` when absent. */
   deliver?: FinDeliver
+  /** Threads this message refers to, each attached as a person's chip attaches one. */
+  context?: AgentContextInput[]
   /** A repeat with the same key is the same message. */
   clientKey: string
 }
@@ -288,8 +328,49 @@ export interface AgentsWaitInput {
 export type AgentsWaitResult = { reports: { child: string; name: string; status: ReportStatus; line: string; at: number }[]; cursor: number; timedOut: boolean } | AgentRefused
 
 /** The operations an engine answers; each door calls one of these through its host call. */
+/** The same Thread goes on on another harness: one Fin, or `all` of the caller's. */
+export interface AgentsMoveInput {
+  /** Its name or Thread ID; absent with `all`. */
+  child?: string
+  /** Every Fin of the caller's that isn't at work; what can't move is listed under `left`. */
+  all?: boolean
+  harness: string
+  model?: string
+  reasoning?: string
+  fast?: boolean
+  /** The caller's own key for this move: a repeat with it is the same move. */
+  clientKey: string
+}
+export interface AgentMoved {
+  child: string
+  name: string
+  /** What it was on; the same as `harness` when it was already there. */
+  from: string
+  harness: string
+  /** `moved`: it's there. `moving`: it's on its way, and a failure reports to you. `here`: it was there already. */
+  state: "moved" | "moving" | "here"
+  /** Its model, reasoning and fast lane in words. */
+  runsOn?: string
+  note?: string
+  /** One sentence: what it does now. */
+  hears: string
+}
+export interface AgentNotMoved {
+  name: string
+  refused: AgentRefused["refused"]
+  why: string
+}
+export interface AgentsMoved {
+  moved: AgentMoved[]
+  /** With `all`: the Fins that stayed where they are, and why. */
+  left?: AgentNotMoved[]
+  deduped?: true
+}
+export type AgentsMoveResult = AgentsMoved | AgentRefused
+
 export interface AgentOperations {
   start(caller: AgentCaller, input: AgentsStartInput): Promise<AgentsStartResult>
+  move(caller: AgentCaller, input: AgentsMoveInput): Promise<AgentsMoveResult>
   link(caller: AgentCaller, input: AgentsLinkInput): Promise<AgentsLinkResult>
   list(caller: AgentCaller, input: AgentsListInput): Promise<AgentsListResult>
   read(caller: AgentCaller, input: AgentsReadInput): Promise<AgentsReadResult>
@@ -343,6 +424,10 @@ export const AFTER_START = "Its report wakes you. End your turn or keep working;
 
 /** What a start's answer tells its caller to do next: by how it asked to hear back, and how a wait's window ended. */
 export function afterStart(wake: WakeOn, waited?: StartWaited): string {
+  if (waited?.outcome === "result" && waited.report.status === "done" && waited.report.question)
+    return waited.report.decides === "person"
+      ? "It finished, and leaves a decision that is the person's: they answer it from their Inbox. Go on with its result."
+      : "It finished, and leaves the decision its report asks: answer it with agents_answer, or leave it to the person with agents_answer person: true."
   if (waited?.outcome === "result") return "It finished: its report is above. Go on with it."
   if (waited?.outcome === "pending") return "It's still working. End your turn now: its result starts your next turn. Don't wait or poll."
   if (waited?.outcome === "question")
@@ -367,11 +452,14 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `Pass \`model\`, \`reasoning\` or \`fast\` only as the person said them ("Codex on high", "the fast one"); left out, a ${FIN_WORD} runs on what the person uses.`,
   `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report or ask, and a message to it has to stop its run.`,
   `Each device runs as many ${FIN_WORD}s at once as its capacity, from its hardware and what a ${FIN_WORD} costs there, or the person's own number; past it a start is refused unless you pass \`queue: true\`, which starts it when one ends.`,
+  `When a ${FIN_WORD}'s harness runs out or should change, move it with \`agents_move\`: the same Thread goes on there with its whole conversation. Never start a new ${FIN_WORD} to take over from one.`,
+  `To attach another Thread to a ${FIN_WORD}'s work, pass \`context: [{ thread }]\`, never a path in the brief.`,
   `To run work in order, pass \`after: [<${FIN_WORD} names>]\`: it starts once those finish, and if one fails or is stopped you're woken to decide instead.`,
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
   `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
-  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended.`,
+  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended. Finished but leaving a decision (a merge, a choice between results)? Report done with the question and options, and \`decides\` saying who decides: \`apex\` or \`person\`.`,
+  `To wait on a pull request, report progress with \`waitingOn\` naming it and what you wait for (checks, review or merge), then end your turn instead of polling its checks, because Mako wakes you with its outcome.`,
   `Other ${APEX_WORD}es of the person: read them with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them.`,
   `Message another ${APEX_WORD} (\`agents_send\` \`to: apex:<title>\`) only when the person asked you to, or when you need something only it can give or decide (it owns the files or branch you'd change, or its work blocks yours).`,
   "Never message for status, thanks or acknowledgement: their digest already says how they stand. One message with everything it needs; its reply wakes you; don't reply to a reply unless it asks you something.",
@@ -389,6 +477,10 @@ export interface FrontDoorChild {
   report?: { status: ReportStatus; line: string; at: number }
   /** The person's newest words to it directly: in its own Thread, or from its Apex's composer. */
   direct?: { line: string; at: number }
+  /** Seconds since its last activity, while it isn't working (`idleFor`): the crew view carries it, the note doesn't. */
+  idleFor?: number
+  /** Its open pull requests (`finPullRequests`): the crew view carries them, the note doesn't. */
+  openPRs?: FinPullRequest[]
 }
 
 /** Fins the note lists by name; the rest are counted, and `agents_list` has them. */
@@ -422,6 +514,12 @@ function frontDoorLine(fin: FrontDoorChild, now: number): string {
 }
 
 function stateWords(state: ChildState, report: FrontDoorChild["report"], now: number): string {
+  const words = askedWords(state, report, now)
+  const waiting = (state.kind === "blocked" || state.kind === "ended") && waitingWords(state.waitingOn)
+  return waiting ? `${words} · ${waiting}` : words
+}
+
+function askedWords(state: ChildState, report: FrontDoorChild["report"], now: number): string {
   switch (state.kind) {
     case "working":
       return `working${state.phase ?? state.step ? `: ${state.phase ?? state.step}` : ""}`
@@ -430,17 +528,18 @@ function stateWords(state: ChildState, report: FrontDoorChild["report"], now: nu
     case "queued":
       return state.refused ? `not started: ${state.refused.replace(/^It didn't start: /, "")}` : state.held ? `not started: ${state.held} didn't finish` : state.after?.length ? `starts after ${state.after.join(", ")}` : `queued, ${state.ahead} ahead`
     case "idle":
-      return "idle"
+      return state.waitingOn?.length ? waitingStateWords(state.waitingOn, state.since, now) : "idle"
     case "blocked":
       return `waits on ${state.on === "lead" ? "you (agents_answer)" : "the person"}: ${state.question}`
     case "ended":
+      if (state.decision) return decisionWords(state.decision)
       return `${state.outcome}${report ? ` ${ago(report.at, now)}: ${report.line}` : state.reason ? `: ${state.reason}` : ""}`
   }
 }
 
-/** Live work first, then what waits, then what's finished: what a message is most likely for comes first. */
+/** What waits first, a finished Fin's open decision too, then live work, then what's finished: what a message is most likely for comes first. */
 function routeOrder(state: ChildState): number {
-  return state.kind === "blocked" ? 0 : state.kind === "working" || state.kind === "starting" ? 1 : state.kind === "queued" || state.kind === "idle" ? 2 : 3
+  return state.kind === "blocked" || (state.kind === "ended" && state.decision) ? 0 : state.kind === "working" || state.kind === "starting" ? 1 : state.kind === "queued" || state.kind === "idle" ? 2 : 3
 }
 
 function ago(at: number, now: number): string {
@@ -456,6 +555,7 @@ const START = [
   "Use it for work that outlives this turn, runs in parallel with other work, writes code beside another writer, needs another harness or model, or should be something the person can open and steer.",
   "Don't use it for a one-file change, a question you can answer, or work that needs this conversation's own context: do those in your turn.",
   "The brief is everything it knows; it sees none of this conversation.",
+  `Never start one to take over from a ${FIN_WORD} whose harness ran out or should change: agents_move moves that same Thread. Attach a Thread its brief refers to with context, not a path.`,
   "By default it returns at once and its reports wake you (mode background, wake decisions): use that whenever you have other work or can end your turn.",
   "Use mode wait only when your next step can't go on without its result: you get the result here if it comes within " + WAIT_WORDS + ", else your turn ends and the result starts your next one.",
   "Don't wait or poll after starting.",
@@ -487,6 +587,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         wake: "What wakes you: decisions (default: it finished, failed, is blocked or asks), finish (only its result; its questions go to the person), or never (nothing; read it with agents_read; its questions go to the person).",
         timeoutMs: `For wait: how long to hold for its result here, at most ${WAIT_LIMIT_MS} (the default).`,
         after: `Only to order work: your ${FIN_WORD}s, by name or Thread (queued ones too), at most ${AFTER_LIMIT}, that must finish first. It waits until each has; if one fails or is stopped it doesn't start, and you're woken to decide.`,
+        context: `Threads this work refers to, as [{ thread }], each a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name: attached as the person's @ chip attaches one, and read whole with thread_history. agents_list with scope threads finds a ref.`,
         queue: `true: if its place is full (a device's capacity, the cloud's plan, or the person's ceiling across places) or this tree's running budget is, it waits for one to end. Absent: a full place refuses the start, saying where else it could run.`,
         clientKey: `Your own key for this spawn: a repeat with it answers the same ${FIN_WORD}.`,
       },
@@ -513,8 +614,28 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     mcp: {
       name: "agents_list",
       description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest.` },
+      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.` },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+  },
+  {
+    verb: "move",
+    channel: "mako:agents-move",
+    replay: "replay",
+    filled: [],
+    mcp: {
+      name: "agents_move",
+      description: `Move one of your ${FIN_WORD}s to another harness: the same Thread, with its name, worktree, branch, messages and reports, and its whole conversation carried over as a transcript, as the person's harness switch does. It needs nothing from the harness it leaves, so it works on a ${FIN_WORD} that's idle, failed, stopped or ended, or whose harness ran out of usage. Never start a new ${FIN_WORD} to take over from one: move it. A stopped ${FIN_WORD} stays stopped, and one with no message waiting runs nothing until your next.`,
+      fields: {
+        child: `The ${FIN_WORD}'s name or Thread ID.`,
+        all: `true instead of child: every ${FIN_WORD} of yours that isn't at work.`,
+        harness: "claude, codex, cursor, grok, opencode or devin. One at its limit is refused with its reset.",
+        model: "Only when the person named one: a model the harness lists. Absent: what the person uses there.",
+        reasoning: "Only when the person said one: a level the model takes.",
+        fast: "Only when the person asked for it: true for the fast lane, false for the standard one.",
+        clientKey: "Your own key for this move: a repeat with it is the same move.",
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
   },
   {
@@ -524,7 +645,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_read",
-      description: `One ${FIN_WORD}'s last report in full, or the end of its transcript: a bounded window, for when its digest line isn't enough.`,
+      description: `One ${FIN_WORD}'s last report in full, or the end of its transcript: a quick, bounded tail, for when its digest line isn't enough. thread_history with its Thread ID reads it whole.`,
       fields: { child: "Its name or Thread ID.", view: "report (default) or transcript.", maxChars: "At most this many characters (default 8000)." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -541,7 +662,9 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         status: "done, failed, blocked, needs-input or progress.",
         summary: "What happened, first sentence first; where to read more.",
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
-        question: "For blocked or needs-input: the decision you need.",
+        question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
+        decides: "With a done question: apex (default) or person, who decides it.",
+        waitingOn: "What you wait on outside your tree, with a question or on progress, each {kind: \"pull-request\", ref: \"owner/name#412\" or its URL, until: \"checks\" | \"review\" | \"merge\"}, {kind: \"person\", what: \"merge\"}, or {kind: \"other\", text} in a few words. Mako wakes you with a pull request's outcome.",
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",
         action: "What whoever answers does, in one sentence: \"Pick the branch the release goes from.\"",
@@ -591,6 +714,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
         deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,
+        context: `Threads this message refers to, as [{ thread }], each a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name: attached as the person's @ chip attaches one.`,
         clientKey: "Your own key for this message: a repeat with it is the same message.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },

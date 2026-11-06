@@ -119,7 +119,9 @@ export function CommandPalette() {
     }))
   }, [files, found, term])
 
+  // Read as it opens: closed, the palette lists nothing, and asks no command whether it applies.
   const entries = useMemo<Entry[]>(() => {
+    if (!open) return []
     const list: Entry[] = deskCommands
       .filter((command) => command.when?.() !== false)
       .map((command) => toEntry(command, keybindings))
@@ -165,6 +167,7 @@ export function CommandPalette() {
 
     return list
   }, [
+    open,
     activeModel,
     deskCommands,
     favoriteModels,

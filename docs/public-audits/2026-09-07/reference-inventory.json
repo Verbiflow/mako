@@ -8111,7 +8111,7 @@
       },
       {
         "number": 41225,
-        "title": "`opencode web` ENOENT: no such file or directory, lstat '/home/sinawic/codex/r\ufffd\ufffdy\ufffd')",
+        "title": "`opencode web` ENOENT: no such file or directory, lstat '/home/someone/codex/r\ufffd\ufffdy\ufffd')",
         "url": "https://github.com/anomalyco/opencode/issues/41225"
       },
       {
@@ -8736,7 +8736,7 @@
       },
       {
         "number": 39494,
-        "title": "Error: Sidecar did not become ready within 60000ms: C:\\Users\\Suppe\\AppData\\Local\\Programs\\@opencode-aidesktop\\resources\\app.asar\\out\\main\\sidecar.js",
+        "title": "Error: Sidecar did not become ready within 60000ms: C:\\Users\\someone\\AppData\\Local\\Programs\\@opencode-aidesktop\\resources\\app.asar\\out\\main\\sidecar.js",
         "url": "https://github.com/anomalyco/opencode/issues/39494"
       },
       {
@@ -9671,7 +9671,7 @@
       },
       {
         "number": 36510,
-        "title": "TUI crash: opencode server GET http://127.0.0.1:4096/vcs/diff?mode=git&context=12&directory=%2Fhome%2Fkkosu \u2192 404 Not Found: (empty response body)",
+        "title": "TUI crash: opencode server GET http://127.0.0.1:4096/vcs/diff?mode=git&context=12&directory=%2Fhome%2Fsomeone \u2192 404 Not Found: (empty response body)",
         "url": "https://github.com/anomalyco/opencode/issues/36510"
       },
       {

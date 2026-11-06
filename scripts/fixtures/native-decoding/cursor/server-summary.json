@@ -242,7 +242,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           }
         }
       },
@@ -255,7 +255,7 @@
             "title": "Read big3.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
           }
         }
       ]
@@ -273,7 +273,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           },
           "result": {
             "status": "success",
@@ -296,7 +296,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+                "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
               }
             ]
           }
@@ -316,7 +316,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           }
         }
       },
@@ -329,7 +329,7 @@
             "title": "Read big3.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
           }
         }
       ]
@@ -347,7 +347,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           },
           "result": {
             "status": "success",
@@ -370,7 +370,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+                "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
               }
             ]
           }
@@ -390,7 +390,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           }
         }
       },
@@ -403,7 +403,7 @@
             "title": "Read big3.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
           }
         }
       ]
@@ -421,7 +421,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           },
           "result": {
             "status": "success",
@@ -444,7 +444,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+                "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
               }
             ]
           }
@@ -464,7 +464,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           }
         }
       },
@@ -477,7 +477,7 @@
             "title": "Read big3.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt\"\n}"
           }
         }
       ]
@@ -495,7 +495,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
           },
           "result": {
             "status": "success",
@@ -518,7 +518,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
+                "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big3.txt"
               }
             ]
           }
@@ -1151,7 +1151,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
           }
         }
       },
@@ -1164,7 +1164,7 @@
             "title": "Read big4.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt\"\n}"
           }
         }
       ]
@@ -1182,7 +1182,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
           },
           "result": {
             "status": "success",
@@ -1205,7 +1205,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
+                "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
               }
             ]
           }
@@ -1225,7 +1225,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
           }
         }
       },
@@ -1238,7 +1238,7 @@
             "title": "Read big4.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt\"\n}"
           }
         }
       ]
@@ -1256,7 +1256,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
           },
           "result": {
             "status": "success",
@@ -1279,7 +1279,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
+                "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big4.txt"
               }
             ]
           }
@@ -1627,7 +1627,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big5.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big5.txt"
           }
         }
       },
@@ -1640,7 +1640,7 @@
             "title": "Read big5.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big5.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-gUb8zc/work/big5.txt\"\n}"
           }
         }
       ]
@@ -1658,7 +1658,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big5.txt"
+            "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big5.txt"
           },
           "result": {
             "status": "success",
@@ -1681,7 +1681,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-gUb8zc/work/big5.txt"
+                "path": "/tmp/mako-live-test-cursor-context-gUb8zc/work/big5.txt"
               }
             ]
           }

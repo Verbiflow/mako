@@ -23,6 +23,7 @@ import { ChangeList } from "@/components/inspector/change-list"
 import { ReviewStream } from "@/components/inspector/review-stream"
 import { requestedTurn, useReviewScope } from "@/state/review-scope"
 import { DIFF_THEME } from "@/lib/diff-theme"
+import { HighlightPool } from "@/lib/highlight-pool"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
 import { Collapse } from "@/components/ui/collapse"
@@ -524,67 +525,69 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
             {diff.binary ? "Binary file — no text diff." : "No text content to compare."}
           </p>
         ) : (
-          <Virtualizer className="min-h-full">
-            <MultiFileDiff
-              {...(diff.oldFile && diff.newFile
-                ? { oldFile: diff.oldFile, newFile: diff.newFile }
-                : diff.newFile
-                  ? { oldFile: null, newFile: diff.newFile }
-                  : { oldFile: diff.oldFile!, newFile: null })}
-              options={{
-                theme: DIFF_THEME,
-                disableFileHeader: true,
-                diffStyle,
-                overflow: wrapDiff ? "wrap" : "scroll",
-                // Off by default, which is why the comment control rendered
-                // nowhere at all. `onGutterUtilityClick` is the other half of
-                // this API and the two are mutually exclusive — a custom slot
-                // owns its own click.
-                enableGutterUtility: true,
-                // A press on a line number picks it, shift or a drag extends
-                // the range, and the field under it adds the lines as a chip.
-                enableLineSelection: true,
-                onLineSelectionEnd,
-              }}
-              selectedLines={pickedRange}
-              lineAnnotations={annotations}
-              renderAnnotation={(annotation) => (
-                <Annotation
-                  workspace={workspace}
-                  path={path ?? ""}
-                  line={annotation.lineNumber}
-                  side={annotation.side}
-                  comments={comments}
-                  selection={pickedRange && path && isPickEnd(pickedRange, annotation) ? (
-                    <PickedDiffLines
-                      path={workspacePath(`${workspace}/${path}`, store.get().meta?.cwd)}
-                      base="HEAD"
-                      diff={pickedDiff}
-                      range={pickedRange}
-                      onDone={() => setPicked(null)}
-                    />
-                  ) : undefined}
-                />
-              )}
-              renderGutterUtility={(getHoveredLine) => (
-                <GutterAdd
-                  onClick={() => {
-                    const hovered = getHoveredLine()
-                    if (!hovered || !path) return
-                    setPicked(null)
-                    review.start({
-                      workspace,
-                      path,
-                      line: hovered.lineNumber,
-                      side: hovered.side,
-                      code: lineAt(diff, hovered.lineNumber, hovered.side),
-                      base: "HEAD",
-                    })
-                  }}
-                />
-              )}
-            />
-          </Virtualizer>
+          <HighlightPool>
+            <Virtualizer className="min-h-full">
+              <MultiFileDiff
+                {...(diff.oldFile && diff.newFile
+                  ? { oldFile: diff.oldFile, newFile: diff.newFile }
+                  : diff.newFile
+                    ? { oldFile: null, newFile: diff.newFile }
+                    : { oldFile: diff.oldFile!, newFile: null })}
+                options={{
+                  theme: DIFF_THEME,
+                  disableFileHeader: true,
+                  diffStyle,
+                  overflow: wrapDiff ? "wrap" : "scroll",
+                  // Off by default, which is why the comment control rendered
+                  // nowhere at all. `onGutterUtilityClick` is the other half of
+                  // this API and the two are mutually exclusive — a custom slot
+                  // owns its own click.
+                  enableGutterUtility: true,
+                  // A press on a line number picks it, shift or a drag extends
+                  // the range, and the field under it adds the lines as a chip.
+                  enableLineSelection: true,
+                  onLineSelectionEnd,
+                }}
+                selectedLines={pickedRange}
+                lineAnnotations={annotations}
+                renderAnnotation={(annotation) => (
+                  <Annotation
+                    workspace={workspace}
+                    path={path ?? ""}
+                    line={annotation.lineNumber}
+                    side={annotation.side}
+                    comments={comments}
+                    selection={pickedRange && path && isPickEnd(pickedRange, annotation) ? (
+                      <PickedDiffLines
+                        path={workspacePath(`${workspace}/${path}`, store.get().meta?.cwd)}
+                        base="HEAD"
+                        diff={pickedDiff}
+                        range={pickedRange}
+                        onDone={() => setPicked(null)}
+                      />
+                    ) : undefined}
+                  />
+                )}
+                renderGutterUtility={(getHoveredLine) => (
+                  <GutterAdd
+                    onClick={() => {
+                      const hovered = getHoveredLine()
+                      if (!hovered || !path) return
+                      setPicked(null)
+                      review.start({
+                        workspace,
+                        path,
+                        line: hovered.lineNumber,
+                        side: hovered.side,
+                        code: lineAt(diff, hovered.lineNumber, hovered.side),
+                        base: "HEAD",
+                      })
+                    }}
+                  />
+                )}
+              />
+            </Virtualizer>
+          </HighlightPool>
             )}
           </div>
         </div>

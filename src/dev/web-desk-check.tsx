@@ -6,7 +6,8 @@ import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { nativeStartedAt, personPromptedAt } from "@mako/host/contracts/worked-at"
 import { Toaster } from "@/components/ui/sonner"
 import { acp, acpStore } from "@/state/acp"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { getMako } from "@/lib/bridge"
+import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
 import { store } from "@/state/session"
 import { threadsStore } from "@/state/thread-store"
 import { accountListStore } from "@/web-client/account-list"
@@ -17,6 +18,7 @@ import { applyTheme } from "@/web-client/theme"
 import type { WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busyActivity, busySnapshot } from "./mock-busy-thread"
+import { apexSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 import { installMockBridge, MOCK_HEADS } from "./mock-bridge"
 import { mockThreads } from "./mock-runtime-fixtures"
 import "../web-client/style.css"
@@ -25,7 +27,8 @@ import "../web-client/style.css"
  * The web app in a laptop's browser (`Desk`) through its production pieces, on the mock bridge: the account's list
  * holds the threads the desktop's `?mock&app=busy` desk lists (the same titles, agents and folders, run on one Mac),
  * and opening one draws its conversation from the same fixtures. `test-web-desk-ui.mjs` drives it beside the desktop.
- * `?thread=busy` opens the busy Thread; `?theme=light` draws it light.
+ * `?thread=busy` opens the busy Thread, `?thread=apex` the mock Apex (`&turns=260` for a long one); `?theme=light`
+ * draws it light.
  */
 
 const search = new URLSearchParams(location.search)
@@ -110,11 +113,17 @@ const busy = BUSY_SESSIONS.map((entry, index) => {
   })
 })
 
+// The Apex's host answering, as its owner's batches reach the browser: a message sent to it gets its turn.
+getMako().onEvent((event) => {
+  if (event.type === "live-batch" && event.batch.id === APEX_CONVERSATION) applyLiveBatch(event.batch)
+})
+const apex = row({ session: APEX_SESSION, thread: APEX_THREAD, threadTitle: APEX_TITLE, conversation: APEX_CONVERSATION, harness: "claude", title: APEX_TITLE, folder: APEX_CWD, createdAt: now, activityAt: now })
+
 threadsStore.set({ composerHarness: "claude", descriptors: fixtureHarnesses })
 store.set({ messages: [], stream: null })
 accountListStore.set({
   phase: "live",
-  rows: [...busy, ...native],
+  rows: [...busy, apex, ...native],
   devices: new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]),
 })
 
@@ -122,6 +131,7 @@ accountListStore.set({
 function opened(session: WebSession): LiveSnapshot {
   const index = BUSY_SESSIONS.findIndex((entry) => entry.conversation === session.row.conversation)
   if (index >= 0) return busySnapshot(index)
+  if (session.row.conversation === APEX_CONVERSATION) return apexSnapshot()
   const request = { id: uuid(session.row.conversation, 4), text: session.row.title ?? "Go on", attachments: [], status: "completed" as const }
   return {
     ...session.summary,
@@ -171,6 +181,7 @@ Reflect.set(window, "webDeskCheck", {
 
 function initialRoute(): WebRoute {
   if (search.get("thread") === "busy") return { kind: "thread", thread: BUSY_THREAD, session: BUSY_SESSIONS[0].session }
+  if (search.get("thread") === "apex") return { kind: "thread", thread: APEX_THREAD, session: APEX_SESSION }
   return { kind: "list" }
 }
 

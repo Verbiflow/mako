@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { availableParallelism, tmpdir } from "node:os"
 import { join } from "node:path"
 import { CapacityGovernor, cloudCapacity, deviceCapacity, PRIOR_COST, DEVICE_CEILING } from "@mako/host/conversations/fin-capacity"
 import { FinCapacity, pressureOf } from "@mako/host/conversations/fin-capacity-host"
 import { FinCostModel } from "@mako/host/conversations/fin-cost"
-import type { MacReading } from "@mako/host/conversations/mac-capacity"
+import { FinCostSampler } from "@mako/host/conversations/fin-cost-sampler"
+import type { ProcessRow } from "@mako/host/usage/mako-footprint"
+import { MacCapacity, type MacReading } from "@mako/host/conversations/mac-capacity"
 
 /**
  * A Fin's capacity (`npm run test:fin-capacity`): each machine's number from its hardware and what a Fin costs there,
@@ -75,14 +77,126 @@ const GB = 1024 ** 3
 // ── Pressure from one reading.
 {
   const hardware = { cores: 14, memoryBytes: 36 * GB }
-  const reading = (over: Partial<MacReading> = {}): MacReading => ({ cores: 14, memoryBytes: 36 * GB, load: 4, ...over })
+  const reading = (over: Partial<MacReading> = {}): MacReading => ({ cores: 14, memoryBytes: 36 * GB, busyCores: 4, ...over })
   assert.deepEqual(pressureOf(reading(), 2, hardware), { memory: false, thermal: false, person: false, disk: false })
-  assert.equal(pressureOf(reading({ load: 30 }), 10, hardware).person, true, "the person's own work past their reserve")
-  assert.equal(pressureOf(reading({ load: 20 }), 10, hardware).person, false, "load that's the Fins' own isn't the person's")
+  assert.equal(pressureOf(reading({ busyCores: 13.5 }), 2, hardware).person, true, "the person's own work past their reserve, with no idle core to spare")
+  assert.equal(pressureOf(reading({ busyCores: 14 }), 13, hardware).person, false, "cores the Fins were measured to take aren't the person's")
+  assert.equal(pressureOf({ cores: 14, memoryBytes: 36 * GB }, 0, hardware).person, false, "no reading of the cores presses nothing")
+  // The Mac as it stood on 2026-11-05, measured: 1 Fin at work, 9 cores busy, 5 idle, the load average at 18.
+  assert.equal(pressureOf(reading({ busyCores: 9 }), 1, hardware).person, false, "idle cores are room, whatever keeps the rest busy")
+  // Fins mostly wait on their models: a full Mac presses however many there are, unless their own processes filled it.
+  for (const [each, pressed] of [[0.05, true], [14 / 8, false]] as const) {
+    let at = 0
+    const fins = Array.from({ length: 8 }, (_, index) => ({ conversation: `fin-${index}`, harness: "claude" }))
+    const capacity = new FinCapacity({
+      read: async () => reading({ busyCores: 14 }),
+      costs: new FinCostModel(),
+      sampler: new FinCostSampler({
+        table: async () => fins.map((_, index) => ({ pid: 10 + index, ppid: 1, rssKb: 1024, cpuPercent: 0, cpuSeconds: (each * at) / 1000, command: "/opt/claude/claude" })),
+        owned: () => fins.map(({ conversation }, index) => ({ pid: 10 + index, owner: conversation })),
+        now: () => at,
+      }),
+      own: () => undefined,
+      hardware: () => hardware,
+      now: () => at,
+    })
+    for (; at < 30 * 60_000; at += 10_000) await capacity.observe(8, { claude: 8 }, fins)
+    assert.equal(/your own work is busy/.test(capacity.reading().pressure ?? ""), pressed, `8 Fins taking ${each} core each on a full Mac`)
+  }
+  // A Fin measured filling the Mac has gone, a shell-linked one holds its place, and other work fills the Mac: what the
+  // gone one took doesn't excuse it, whether the next look read no Fins at work or could read nothing.
+  for (const after of ["gone", "unreadable"] as const) {
+    let at = 0
+    let gone = false
+    const fin = [{ conversation: "fin", harness: "claude" }]
+    const capacity = new FinCapacity({
+      read: async () => reading({ busyCores: 14 }),
+      costs: new FinCostModel(),
+      sampler: new FinCostSampler({
+        table: async () => {
+          if (gone && after === "unreadable") throw new Error("ps failed")
+          return [{ pid: 10, ppid: 1, rssKb: 1024, cpuPercent: 0, cpuSeconds: (14 * at) / 1000, command: "/opt/claude/claude" }]
+        },
+        owned: () => gone ? [] : [{ pid: 10, owner: "fin" }],
+        now: () => at,
+      }),
+      own: () => undefined,
+      hardware: () => hardware,
+      now: () => at,
+    })
+    for (; at < 60_000; at += 10_000) await capacity.observe(1, { claude: 1 }, fin)
+    assert.equal(capacity.reading().pressure, undefined, "while it fills the Mac, nothing presses")
+    gone = true
+    for (; at < 31 * 60_000; at += 10_000) await capacity.observe(1, { claude: 1 }, fin)
+    assert.match(capacity.reading().pressure ?? "", /your own work is busy/, `the Fin's cores don't outlast it: ${after}`)
+  }
+  // A look that measures nothing keeps the last reading while it's fresh: a window too short says nothing of the Fins.
+  {
+    let at = 0
+    const fin = [{ conversation: "fin", harness: "claude" }]
+    const capacity = new FinCapacity({
+      read: async () => reading({ busyCores: 14 }),
+      costs: new FinCostModel(),
+      sampler: new FinCostSampler({
+        table: async () => [{ pid: 10, ppid: 1, rssKb: 1024, cpuPercent: 0, cpuSeconds: (14 * at) / 1000, command: "/opt/claude/claude" }],
+        owned: () => [{ pid: 10, owner: "fin" }],
+        now: () => at,
+      }),
+      own: () => undefined,
+      hardware: () => hardware,
+      now: () => at,
+    })
+    for (; at < 15 * 60_000; at += 10_000) {
+      await capacity.observe(1, { claude: 1 }, fin)
+      await capacity.observe(1, { claude: 1 }, fin)
+    }
+    assert.equal(capacity.reading().pressure, undefined, "a second look at once doesn't forget what the Fin took")
+  }
+  // What capacity reads over minutes of that Mac: nothing presses, so the number stays the machine's own.
+  {
+    let at = 0
+    const capacity = new FinCapacity({
+      read: async () => reading({ busyCores: 9 }),
+      costs: new FinCostModel(undefined),
+      own: () => undefined,
+      hardware: () => hardware,
+      now: () => at,
+    })
+    const base = capacity.atOnce()
+    for (; at < 15 * 60_000; at += 10_000) await capacity.observe(1, {})
+    assert.equal(capacity.atOnce(), base, "five idle cores cut nothing")
+  }
   assert.equal(pressureOf(reading({ memoryPressure: true }), 0, hardware).memory, true)
   assert.equal(pressureOf(reading({ swapFreeBytes: 100 * 1024 ** 2 }), 0, hardware).memory, true)
   assert.equal(pressureOf(reading({ hot: true }), 0, hardware).thermal, true)
   assert.equal(pressureOf(reading({ diskFreeBytes: 5 * GB }), 0, hardware).disk, true)
+}
+
+// ── A reading is the CPU time really spent since the last one: what isn't busy is idle, whatever the load average says.
+{
+  let at = 0
+  let ticks = { busy: 0, total: 0 }
+  const mac = new MacCapacity({ now: () => at, ticks: () => ticks })
+  const cores = availableParallelism()
+  const spend = (busyShare: number) => {
+    at += 10_000
+    ticks = { busy: ticks.busy + busyShare * 10_000 * cores, total: ticks.total + 10_000 * cores }
+  }
+  spend(0.25)
+  assert.equal((await mac.read()).busyCores, cores * 0.25)
+  spend(0.75)
+  assert.equal((await mac.read()).busyCores, cores * 0.75, "each reading covers only the time since the last")
+  at += 1_000
+  ticks = { busy: ticks.busy + 1_000 * cores, total: ticks.total + 1_000 * cores }
+  assert.equal((await mac.read()).busyCores, cores * 0.75, "a burst of starts reads the Mac once")
+  // Reads side by side: the first takes the CPU time spent, and the next would find none and call a full Mac idle.
+  spend(1)
+  assert.deepEqual((await Promise.all([mac.read(), mac.read(), mac.read()])).map((reading) => reading.busyCores), [cores, cores, cores], "they share one reading")
+  assert.equal((await mac.read()).busyCores, cores, "and it stays what's kept")
+  // Time passed, but no CPU time did: that says nothing of the cores, whichever reading came before.
+  at += 10_000
+  assert.equal((await mac.read()).busyCores, cores, "no time spent keeps the last reading")
+  assert.equal((await new MacCapacity({ now: () => at, ticks: () => ticks }).read()).busyCores, undefined, "and a first reading says nothing")
 }
 
 // ── The cost each machine learns of its own Fins, per harness, kept across hosts.
@@ -134,7 +248,7 @@ const GB = 1024 ** 3
 {
   let now = 0
   let own: number | undefined
-  let reading: MacReading = { cores: 14, memoryBytes: 36 * GB, load: 2 }
+  let reading: MacReading = { cores: 14, memoryBytes: 36 * GB, busyCores: 2 }
   const capacity = new FinCapacity({
     read: async () => reading,
     costs: new FinCostModel(),
@@ -159,6 +273,38 @@ const GB = 1024 ** 3
   assert.match(pressed.pressure ?? "", /memory pressure/)
   const fixed = new FinCapacity({ read: async () => reading, costs: new FinCostModel(), own: () => 3, fixed: 8 })
   assert.equal(fixed.atOnce(), 8, "MAKO_FIN_SLOTS sets a test host's whatever else")
+}
+
+// ── What a Fin costs here is learned from its processes, read only on the looks that pass the Fins at work.
+{
+  let now = 0
+  let reads = 0
+  let cpuSeconds = 100
+  const table = async (): Promise<ProcessRow[]> => {
+    reads += 1
+    return [{ pid: 10, ppid: 1, rssKb: 400 * 1024, cpuPercent: 0, cpuSeconds, command: "/opt/codex/bin/codex app-server" }]
+  }
+  const costs = new FinCostModel()
+  const capacity = new FinCapacity({
+    read: async () => ({ cores: 14, memoryBytes: 36 * GB, busyCores: 2 }),
+    costs,
+    sampler: new FinCostSampler({ table, owned: () => [{ pid: 10, owner: "codex-fin" }], now: () => now }),
+    own: () => undefined,
+    hardware: () => ({ cores: 14, memoryBytes: 36 * GB }),
+    now: () => now,
+  })
+  const fins = [{ conversation: "codex-fin", harness: "codex" }]
+  await capacity.observe(1, { codex: 1 })
+  assert.equal(reads, 0, "a start's look doesn't read every Fin's processes")
+  for (let at = 0; at < 6; at += 1) {
+    now += 10_000
+    cpuSeconds += 1
+    await capacity.observe(1, { codex: 1 }, fins)
+  }
+  assert.equal(reads, 6)
+  const codex = costs.of("codex")
+  assert.ok(codex.cores < PRIOR_COST.cores && codex.memoryBytes < PRIOR_COST.memoryBytes, `a lighter Fin than the prior moves its cost down: ${JSON.stringify(codex)}`)
+  assert.deepEqual(costs.of("claude"), PRIOR_COST, "a harness not at work isn't read")
 }
 
 console.log("fin capacity: each machine's number from its hardware and its Fins' cost, steady under one busy minute")

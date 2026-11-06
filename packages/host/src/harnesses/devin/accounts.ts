@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { chmod, mkdir, readdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readdir, readFile, readlink, rename, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
 import { devinDataHome } from "@mako/sessions"
 import { z } from "zod"
@@ -22,6 +22,7 @@ import {
   type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
+import { publishFile } from "../../base/published-files.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { devinExecutable } from "./executable.js"
@@ -329,7 +330,7 @@ async function confirmAccountLogin(root: AccountRoot, { name, renew }: AccountLo
   }
   await chmod(accountCredentials(root, name), 0o600)
   if (status.email !== undefined)
-    await writeFile(identityPath(root, name), JSON.stringify({ email: status.email }), { mode: 0o600 })
+    await publishFile(identityPath(root, name), JSON.stringify({ email: status.email }), { mode: 0o600 })
 }
 
 async function usageFor(readings: Readings, path: string): Promise<AccountUsage> {

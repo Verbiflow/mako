@@ -17,9 +17,11 @@ import { installOpenCode } from "./opencode/index.js"
 /**
  * Every harness, in Mako's order: the order it tries them in when it must
  * pick one itself, such as setting a project up or drafting a commit
- * message, until the person reorders them in Settings › Models.
+ * message, until the person reorders them in Settings › Models. The one list
+ * a harness joins: the host, its live drivers and the conformance suite all
+ * install from it.
  */
-const modules: ProviderModule[] = [
+export const harnessModules: readonly ProviderModule[] = [
   installClaude,
   installCodex,
   installCursor,
@@ -31,7 +33,7 @@ const modules: ProviderModule[] = [
 /** A provider host with every harness Mako ships installed on it. */
 export function createHarnessHost(context: HarnessContext): ProviderHost {
   const host = createProviderHost(context)
-  for (const install of modules) install(host, context)
+  for (const install of harnessModules) install(host, context)
   return host
 }
 

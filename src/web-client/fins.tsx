@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { CheckIcon, ChevronRightIcon, MinusIcon, PlusIcon } from "lucide-react"
 import { errorMessage } from "@mako/host/contracts/error-message"
-import { cloudWords, FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT_MAX, FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
+import { cloudWords, FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT_MAX, FIN_RULE_CHARS, FIN_RULES_LIMIT, finTuningLine, finTuningWords, resolveFinTuning, ROLE_RULES_CHARS, roleRulesPreview, type FinChoicesReading, type FinPolicy, type FinRule, type FinTarget, type RoleRules } from "@mako/host/contracts/fin-tuning"
+import { ROLE_FIELDS, roughTokens } from "@/lib/role-rules"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { modelByIdentity, optionDefault, settingsWithVariant, type ModelOption, type SessionSettings, type SettingValue } from "@mako/sessions/settings"
 import { cn } from "@/lib/utils"
@@ -90,6 +91,15 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
     })
   }
 
+  const saveRoleRules = (role: RoleRules, text: string) => {
+    const before = reading
+    if (before) setReading({ ...before, policy: { ...before.policy, [role]: text || undefined } })
+    call<FinChoicesReading>("mako:fin-role-rules-save", [role, text]).then(setReading, (error) => {
+      setReading(before)
+      toast.error(errorMessage({ error }))
+    })
+  }
+
   const save = (channel: string, value: number | null, next: FinChoicesReading) => {
     const before = reading
     setReading(next)
@@ -129,6 +139,7 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
         </Group>
       ) : null}
       {reading ? <RulesGroup policy={reading.policy} profiles={profiles} signedIn={signedIn} onSave={savePolicy} {...(opened?.startsWith("rule:") && { opened: opened.slice(5) })} /> : null}
+      {reading ? <RoleRulesGroups policy={reading.policy} target={(target) => targetWords(target, profiles)} onSave={saveRoleRules} /> : null}
       <Group
       title="Fins, per harness"
       footer={failure ?? `Once a harness is picked, the model it runs on when your rule or your words name none, on ${mac}. Same as you: the Apex's model on its own harness, else the one you last used there.`}
@@ -229,6 +240,59 @@ function FinSheet({ harness, profile, chosen, used, onDismiss, onChoose }: {
         </div>
       </SheetScroll>
     </Sheet>
+  )
+}
+
+/**
+ * The person's standing rules for every Fin and every Apex on the phone, one group each: their words, saved when the
+ * field loses focus through the same host call as the desk's (`mako:fin-role-rules-save`), and the same toggle with
+ * what they add to an agent's note (`roleRulesPreview`).
+ */
+export function RoleRulesGroups({ policy, target, onSave }: { policy: FinPolicy; target: (target: FinTarget) => string; onSave: (role: RoleRules, text: string) => void }) {
+  return (
+    <>
+      {ROLE_FIELDS.map((field) => (
+        <RoleRulesGroup key={field.role} {...field} policy={policy} target={target} onSave={onSave} />
+      ))}
+    </>
+  )
+}
+
+function RoleRulesGroup({ role, label, description, placeholder, reads, policy, target, onSave }: (typeof ROLE_FIELDS)[number] & {
+  policy: FinPolicy
+  target: (target: FinTarget) => string
+  onSave: (role: RoleRules, text: string) => void
+}) {
+  const saved = policy[role] ?? ""
+  const [text, setText] = useState(saved)
+  const [open, setOpen] = useState(false)
+  const shown = roleRulesPreview(role, { ...policy, [role]: text.trim() || undefined }, target).join("\n")
+  return (
+    <Group title={label} footer={description}>
+      <textarea
+        aria-label={label}
+        data-role-rules={role}
+        value={text}
+        rows={2}
+        maxLength={ROLE_RULES_CHARS}
+        placeholder={placeholder}
+        onChange={(event) => setText(event.target.value)}
+        onBlur={() => text.trim() !== saved && onSave(role, text.trim())}
+        className="min-h-14 w-full resize-none rounded-none bg-transparent px-4 py-3 text-ui leading-snug outline-none [field-sizing:content] placeholder:text-faint"
+      />
+      {shown ? (
+        <button type="button" aria-expanded={open} onClick={() => setOpen((was) => !was)} className="web-row flex h-11 w-full items-center gap-3 px-4 text-left text-label text-faint">
+          <span className="flex-1">{reads}</span>
+          <ChevronRightIcon className={cn("size-4 shrink-0 transition-transform duration-150", open && "rotate-90")} />
+        </button>
+      ) : null}
+      {shown && open ? (
+        <div data-role-preview={role} className="flex flex-col gap-1.5 px-4 py-3">
+          <span className="text-label text-faint tabular">{roughTokens(shown)}</span>
+          <pre className="font-mono text-label leading-relaxed whitespace-pre-wrap text-muted-foreground">{shown}</pre>
+        </div>
+      ) : null}
+    </Group>
   )
 }
 

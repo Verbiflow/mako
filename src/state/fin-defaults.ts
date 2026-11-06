@@ -1,5 +1,5 @@
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { FinChoicesReading, FinPolicy } from "@mako/host/contracts/fin-tuning"
+import type { FinChoicesReading, FinPolicy, RoleRules } from "@mako/host/contracts/fin-tuning"
 import { getMako } from "@/lib/bridge"
 import { createHook, createStore } from "./store"
 
@@ -11,6 +11,7 @@ import { createHook, createStore } from "./store"
  */
 const store = createStore<{ reading: FinChoicesReading | undefined; failed: boolean }>({ reading: undefined, failed: false })
 export const useFinDefaults = createHook(store)
+export const finDefaultsStore = store
 
 export function loadFinDefaults(): Promise<void> {
   return getMako()
@@ -30,6 +31,30 @@ export async function chooseFinDefault(harness: string, settings: SessionSetting
   }
   try {
     store.set({ reading: await getMako().chooseFinDefault(harness, settings) })
+  } catch (error) {
+    store.set({ reading: before })
+    throw error
+  }
+}
+
+/** Whether a Fin whose account runs out goes on to the next one: shown at once, put back if the host refuses. */
+export async function chooseMoveOnLimit(on: boolean): Promise<void> {
+  const before = store.get().reading
+  if (before) store.set({ reading: { ...before, moveOnLimit: on } })
+  try {
+    store.set({ reading: await getMako().chooseFinMoveOnLimit(on) })
+  } catch (error) {
+    store.set({ reading: before })
+    throw error
+  }
+}
+
+/** The person's standing rules for one role, saved alone: shown at once, put back if the host refuses them. */
+export async function saveRoleRules(role: RoleRules, text: string): Promise<void> {
+  const before = store.get().reading
+  if (before) store.set({ reading: { ...before, policy: { ...before.policy, [role]: text || undefined } } })
+  try {
+    store.set({ reading: await getMako().saveRoleRules(role, text) })
   } catch (error) {
     store.set({ reading: before })
     throw error

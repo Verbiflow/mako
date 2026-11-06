@@ -164,15 +164,18 @@ export interface BranchChanges {
   }
 }
 
-/** A Fin a message resumes after it was stopped or its turn failed, and what moved since (`finResumedText`). */
+/** A Fin a message resumes after it was stopped or its turn failed, or one whose cut turn Mako continues, and what moved since (`finResumedText`). */
 export interface FinResume {
-  how: "stopped" | "failed"
+  how: "stopped" | "failed" | "cut"
   at: number
   reason?: string
   now: number
   checkout: readonly RepositoryChanges[]
   branches: readonly BranchChanges[]
 }
+
+/** How every account of a resume opens (`finResumedText`): a continuation is read back by the words before it. */
+export const RESUMED_OPENS = "[mako · resumed after "
 
 /** How long ago, in words: "just now", "5 minutes ago", "3 hours ago", "2 days ago". */
 export function agoWords(ms: number): string {
@@ -205,14 +208,47 @@ function branchLine(branch: BranchChanges): string | undefined {
  */
 export function finResumedText(resume: FinResume): string {
   const ago = agoWords(resume.now - resume.at)
-  const head = `[mako · resumed after ${resume.how === "stopped" ? "a stop" : "a failure"} ${ago}]`
+  const head = `${RESUMED_OPENS}${resume.how === "stopped" ? "a stop" : resume.how === "failed" ? "a failure" : "a cut"} ${ago}]`
   const why = resume.reason ? ` (${clip(resume.reason, 400)})` : ""
   const opening = resume.how === "stopped"
     ? `You were stopped ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
-    : `Your last turn failed ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
+    : resume.how === "failed"
+      ? `Your last turn failed ${ago}${why}, and this message resumes your work in the same session: everything above is yours.`
+      : `Your turn was cut short ${ago}${why}, and this continues it in the same session: everything above is yours.`
   const moved = checkoutLines(resume.checkout)
   const since = moved.length ? `In your checkout since then:\n${moved.join("\n")}` : "Nothing moved in your checkout since then: no commit, push or file change."
   const branches = resume.branches.map(branchLine).filter((line): line is string => line !== undefined)
   const now = branches.length ? `\n\nWhere your branch stands now:\n${branches.join("\n")}` : ""
   return `${head}\n${opening}\n\n${since}${now}\n\nCheck what you had in flight when you stopped (a command half-run, a file half-written) and anything that landed meanwhile before going on.`
+}
+/** A Fin whose turn stopped on its account's usage limit, going on elsewhere (`finMovedText`). */
+export interface FinMovedOn {
+  /** Where it was, where it goes on, and why, in the person's words (`movedWords`). */
+  from: string
+  to: string
+  why: string
+  /** The same session on another account, or the conversation handed to a new session. */
+  session: "same" | "handed-over"
+  checkout: readonly RepositoryChanges[]
+}
+
+/**
+ * What a Fin reads as it goes on after its account ran out mid-turn: where it
+ * stopped and why, where it goes on now, and what moved in its checkout since
+ * the turn began, so it checks what it had in flight before carrying on.
+ */
+export function finMovedText(moved: FinMovedOn): string {
+  const session = moved.session === "same"
+    ? "This is the same session: everything above is yours."
+    : `The conversation above is yours, carried over from ${moved.from}.`
+  const changed = checkoutLines(moved.checkout)
+  const since = changed.length ? `In your checkout since that turn began:\n${changed.join("\n")}` : "Nothing moved in your checkout since that turn began: no commit, push or file change."
+  return [
+    "[mako · moved after a usage limit]",
+    `Your last turn stopped on ${moved.from}: ${moved.why}. Mako ${moved.to.replace(/^Moved/, "moved you")}, so the work goes on there. ${session}`,
+    "",
+    since,
+    "",
+    "Check what you had in flight when it stopped (a command half-run, a file half-written), then carry on with the work.",
+  ].join("\n")
 }

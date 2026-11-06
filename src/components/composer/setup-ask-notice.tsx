@@ -3,7 +3,7 @@ import { askAnswerLabel, askAnswers } from "@mako/host/contracts/setup"
 import type { ComposerNotice } from "@/extend/notices"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { activeAcp, useAcp } from "@/state/acp"
-import { answerAsk, askWords, readSetupIfOld, useSetup } from "@/state/setup"
+import { answerAsk, readSetupIfOld, setupAskWords, useSetup } from "@/state/setup"
 
 /**
  * Above the composer of a Thread whose agent asked for something its place lacks (a repository, a file, access, a
@@ -23,7 +23,7 @@ export function useSetupAskNotice(): ComposerNotice | null {
     tone: "attention",
     ...(ask.by.harness && { icon: <HarnessIcon harness={ask.by.harness} /> }),
     title: "Waiting on you",
-    description: askWords(ask),
+    description: setupAskWords(ask),
     detail: <p>“{ask.why}”. Answering here is the same as in this Thread&apos;s Setup and your Inbox; nothing is added until you do.</p>,
     actions: [
       { label: askAnswerLabel(ask, first!, true), primary: true, onClick: () => answerAsk(cwd, ask, first!) },

@@ -29,7 +29,7 @@ Codex informed typed item identity and authoritative final-item replacement. Mon
 
 ## Verification
 
-`npm run verify:sessions` passed on the repaired working tree. It runs typechecking, the complete sessions package suite, live coordinator and actual bridge-routing tests, draft and citation checks, Codex protocol tests, provider composition, host file/git tests, stage tests, the existing performance check, lint, and a production build. Full output is in `repair-verification.txt`.
+`npm run verify:sessions` passed on the repaired working tree. It runs typechecking, the complete sessions package suite, live coordinator and actual bridge-routing tests, draft and citation checks, Codex protocol tests, provider composition, host file/git tests, stage tests, the existing performance check, lint, and a production build.
 
 Specific evidence:
 

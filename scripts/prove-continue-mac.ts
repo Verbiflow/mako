@@ -16,7 +16,7 @@ import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
 import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { PackagedApp } from "./lib/packaged-app.mjs"
 import { assertOwnHarnessStores } from "./lib/proof-host.ts"
-import { assertScratchEnvironment, scratchKeychain, seedScratchHome } from "./scratch-harness-home.ts"
+import { assertScratchEnvironment, scratchInstall, scratchKeychain, seedScratchHome } from "./scratch-harness-home.ts"
 import { scriptedModel } from "./scripted-model.ts"
 
 /**
@@ -110,7 +110,7 @@ if (branchOnGitHub && !remoteBranches.includes(branchOnGitHub)) throw new Error(
 
 const opencodeBin = values.opencode ? join(root, "opencode", "bin") : undefined
 if (opencodeBin) {
-  await run("npm", ["install", "-g", "--prefix", join(root, "opencode"), "--allow-scripts=@opencode/cli", `@opencode/cli@${values.opencode}`], { env: { ...scratch.env } })
+  await scratchInstall("npm", ["install", "-g", "--prefix", join(root, "opencode"), "--allow-scripts=@opencode/cli", `@opencode/cli@${values.opencode}`], { env: { ...scratch.env } })
   const installed = (await run(join(opencodeBin, "opencode"), ["--version"], { env: { ...scratch.env } })).stdout.trim()
   if (/\d+\.\d+\.\d+\S*/.exec(installed)?.[0] !== values.opencode) throw new Error(`npm installed OpenCode ${installed}, not ${values.opencode}`)
 }

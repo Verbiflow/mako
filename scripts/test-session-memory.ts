@@ -234,6 +234,7 @@ async function reconnectAfterRestart() {
     return input
   }
   const after = new LiveConversations(dependencies)
+  const waiting = (input: TransferInput) => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === input.id)
   try {
     assert.equal(after.snapshot(id)?.session.connection, "disconnected", "the restarted host recovers the journal disconnected")
     const moved = reconnect(after, "Go ahead")
@@ -249,19 +250,20 @@ async function reconnectAfterRestart() {
     // Something else has the store open: refused by name, nothing spawned.
     verdict = { kind: "held", by: "another cursor-agent process" }
     const held = reconnect(after, "Try again")
-    await until(() => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === held.id)?.state.kind === "failed", "the held reconnect to fail")
-    const refused = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === held.id)
-    assert.ok(refused?.state.kind === "failed" && refused.state.error.includes(heldReason("another cursor-agent process")), `the refusal names what holds the session: ${JSON.stringify(refused?.state)}`)
+    await until(() => waiting(held)?.retry !== undefined, "the held reconnect to wait")
+    assert.ok(waiting(held)?.retry?.reason.includes(heldReason("another cursor-agent process")), `what it waits on names what holds the session: ${JSON.stringify(waiting(held))}`)
+    assert.equal(waiting(held)?.state.kind, "queued", "a session open elsewhere clears by itself, so it goes again by itself, until a Stop holds it")
     assert.equal(starts.length, 2, "a held session spawns nothing")
+    await after.cancel(id)
 
     // Another Mako host holds it in the ledger: the hold is checked before anything spawns.
     verdict = { kind: "resumable", record: "same" }
     dev.hold("cursor", "agent-restart", "elsewhere")
     const elsewhere = reconnect(after, "Once more")
-    await until(() => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === elsewhere.id)?.state.kind === "failed", "the cross-host reconnect to fail")
-    const crossHost = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === elsewhere.id)
-    assert.ok(crossHost?.state.kind === "failed" && crossHost.state.error === heldReason("Mako's dev host"), `another host's hold refuses the reconnect: ${JSON.stringify(crossHost?.state)}`)
+    await until(() => waiting(elsewhere)?.retry !== undefined, "the cross-host reconnect to wait")
+    assert.equal(waiting(elsewhere)?.retry?.reason, heldReason("Mako's dev host"), `another host's hold keeps the reconnect waiting: ${JSON.stringify(waiting(elsewhere))}`)
     assert.equal(starts.length, 2)
+    await after.cancel(id)
     assert.equal(dev.heldBy("cursor", "agent-restart"), null, "the other host's hold was not taken over")
     dev.release("cursor", "agent-restart")
 
@@ -272,6 +274,44 @@ async function reconnectAfterRestart() {
     assert.ok(unavailable?.state.kind === "failed" && unavailable.state.error.includes("The session store is missing or unreadable."), "the refusal carries the provider's own reason")
   } finally {
     after.stop()
+  }
+}
+
+/**
+ * Close, carry on, Close again, as often as the person likes: each Close closes what's open and lets go of its hold,
+ * however many came before it, and a Close of what's closed changes nothing.
+ */
+async function closeAfterReconnect() {
+  const starts: string[] = []
+  const owner = new LiveConversations({
+    appPath: root,
+    driver: () => fixtureDriver("agent-reclose", starts),
+    history: async () => null,
+    emit: () => {},
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+    root: join(root, "reclose"),
+    memory: installed,
+  })
+  const id = randomUUID()
+  const held = () => dev.heldBy("cursor", "agent-reclose")
+  try {
+    await owner.start("cursor", "/repo", { conversationId: id })
+    await until(() => owner.snapshot(id)?.session.status === "ready" && held() !== null, "the first session to hold")
+    for (const round of [1, 2, 3]) {
+      await owner.close(id)
+      assert.equal(owner.snapshot(id)?.session.status, "closed", `close ${round}`)
+      assert.equal(held(), null, `close ${round} lets go of its hold`)
+      await owner.close(id)
+      assert.equal(owner.snapshot(id)?.session.status, "closed", `close ${round}, again, changes nothing`)
+      const input: TransferInput = { id: randomUUID(), provider: "cursor", text: `Carry on ${round}`, attachments: [] }
+      owner.transfer(id, input)
+      await until(() => owner.snapshot(id)?.session.status !== "closed" && held() !== null, `reconnect ${round} to hold the session`)
+    }
+    await owner.close(id)
+    assert.equal(held(), null, "the last close lets go of its hold too")
+    assert.equal(starts.length, 4, "one session opened for each time it went on, and none for a close")
+  } finally {
+    owner.stop()
   }
 }
 
@@ -620,6 +660,7 @@ hostDataRoots()
   await liveConversationsRoundTrip()
   await reconnectAfterRestart()
   await reconnectAfterOwnTurn()
+  await closeAfterReconnect()
   await backfillFromJournals()
   await newerLedger()
   console.log("Session memory: legacy route retirement, cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, quiet reconnect after an interrupted turn, journal backfill, a newer Mako's ledger read and its facts taken after the update")

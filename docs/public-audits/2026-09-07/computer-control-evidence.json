@@ -1,7 +1,7 @@
 {
   "correction": "The initial desktop test mistakenly selected the AXStaticText label with a broad regex. Its failure and the resulting Codex-advantage claim were invalid. The exact AXTextField selector passes.",
   "mako_desktop": {
-    "root": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-control-e2e-AuYYwK",
+    "root": "$TMPDIR/mako-control-e2e-AuYYwK",
     "host": "Node launched by Codex; signed Mako release not certified",
     "outcome": {
       "status": "passed"
@@ -154,7 +154,7 @@
     ]
   },
   "mako_desktop_fill": {
-    "root": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-control-e2e-Za0yMK",
+    "root": "$TMPDIR/mako-control-e2e-Za0yMK",
     "host": "Node launched by Codex; signed Mako release not certified",
     "outcome": {
       "status": "passed"
@@ -288,7 +288,7 @@
     ]
   },
   "browser_before_isolation_fix": {
-    "root": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-browser-e2e-nOi3pf",
+    "root": "$TMPDIR/mako-browser-e2e-nOi3pf",
     "outcome": {
       "status": "failed",
       "error": "Client B must not change client A's implicit browser target"
@@ -328,7 +328,7 @@
     "submissions": []
   },
   "browser_after_fix": {
-    "root": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-browser-e2e-F0WkAx",
+    "root": "$TMPDIR/mako-browser-e2e-F0WkAx",
     "outcome": {
       "status": "passed"
     },
@@ -372,7 +372,7 @@
       {
         "name": "restart refusal",
         "isError": true,
-        "text": "Traceback (most recent call last):\n  File \"/Users/kashyab/.local/bin/browser-use\", line 10, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/Users/kashyab/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_use/cli.py\", line 433, in main\n    result, command = _dispatch(args)\n                      ^^^^^^^^^^^^^^^\n  File \"/Users/kashyab/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_use/cli.py\", line 391, in _dispatch\n    return _run_browser_harness(), args[0] if args else 'run'\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/kashyab/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_use/cli.py\", line 201, in _run_browser_harness\n    run.main()\n  File \"/Users/kashyab/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/run.py\", line 247, in main\n    _run(args)\n  File \"/Users/kashyab/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/run.py\", line 387, in _run\n    exec(code, globals())\n  File \"<string>\", line 13, in <module>\nRuntimeError: Browser connection restarted; call mako_browser_reconnect before continuing. No action was replayed."
+        "text": "Traceback (most recent call last):\n  File \"~/.local/bin/browser-use\", line 10, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"~/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_use/cli.py\", line 433, in main\n    result, command = _dispatch(args)\n                      ^^^^^^^^^^^^^^^\n  File \"~/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_use/cli.py\", line 391, in _dispatch\n    return _run_browser_harness(), args[0] if args else 'run'\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"~/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_use/cli.py\", line 201, in _run_browser_harness\n    run.main()\n  File \"~/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/run.py\", line 247, in main\n    _run(args)\n  File \"~/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/run.py\", line 387, in _run\n    exec(code, globals())\n  File \"<string>\", line 13, in <module>\nRuntimeError: Browser connection restarted; call mako_browser_reconnect before continuing. No action was replayed."
       },
       {
         "source": "print(js('document.title'))",
@@ -414,7 +414,7 @@
   },
   "paid_browser_runs": [
     {
-      "root": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-a1DyBO",
+      "root": "$TMPDIR/mako-provider-e2e-a1DyBO",
       "proof": "d2d7eb23-93db-4e62-87c8-4222ddbba579",
       "submissions": [
         {
@@ -463,7 +463,7 @@
       ]
     },
     {
-      "root": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-Ul0tRS",
+      "root": "$TMPDIR/mako-provider-e2e-Ul0tRS",
       "proof": "2916eeef-4d40-46a6-ad7a-9e3b361d457a",
       "submissions": [
         {

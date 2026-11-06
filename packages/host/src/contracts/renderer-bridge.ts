@@ -25,7 +25,7 @@ import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { AccessChoices } from "./access-choices.js"
-import type { FinChoicesReading, FinPolicy } from "./fin-tuning.js"
+import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -234,10 +234,14 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseFinDefault: (harness: string, settings: SessionSettings | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-default-choose", harness, settings),
     /** The person's rules for which work goes to which harness and model, saved whole. */
     saveFinPolicy: (policy: FinPolicy) => invokeTrustedHost<FinChoicesReading>("mako:fin-policy-save", policy),
+    /** The person's standing rules for every agent of one role, saved alone: everything else in the policy stays. */
+    saveRoleRules: (role: RoleRules, text: string) => invokeTrustedHost<FinChoicesReading>("mako:fin-role-rules-save", role, text),
     /** This device's own number of Fins at once, 1 to `FIN_LIMIT_MAX`, or with null its capacity (Auto). */
     setFinLimit: (limit: number | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-limit-set", limit),
     /** The person's Fins at once across every place, 1 to `FIN_CEILING_MAX`. */
     setFinCeiling: (ceiling: number) => invokeTrustedHost<FinChoicesReading>("mako:fin-ceiling-set", ceiling),
+    /** Settings › Fins: whether a Fin whose account runs out goes on to the next one. */
+    chooseFinMoveOnLimit: (on: boolean) => invokeTrustedHost<FinChoicesReading>("mako:fin-move-on-limit", on),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
