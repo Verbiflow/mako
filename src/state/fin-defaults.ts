@@ -11,6 +11,7 @@ import { createHook, createStore } from "./store"
  */
 const store = createStore<{ reading: FinChoicesReading | undefined; failed: boolean }>({ reading: undefined, failed: false })
 export const useFinDefaults = createHook(store)
+export const finDefaultsStore = store
 
 export function loadFinDefaults(): Promise<void> {
   return getMako()
