@@ -2,13 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { exceeds, opensTurn, PAYLOAD_LIMITS, previewLines, PROSE_LIMITS, steeredMessages, steersShown, type Thread, type ThreadRef } from "@mako/sessions"
 import { attachmentDescription, describeToolDetails } from "@mako/sessions/content"
-import { readMessage } from "@mako/sessions/context-wire"
 import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import type { ThreadCatalog, ThreadStore } from "../threads/index.js"
 import { resumed } from "./resumed-history.js"
-import { treeEdges } from "./thread-tree.js"
+import { heldReferences, treeEdges, type HeldReference } from "./thread-tree.js"
+import { readMessage } from "@mako/sessions/context-wire"
 
 /**
  * `thread_history` on the `mako` server: a running agent reads its Thread's
@@ -113,19 +113,13 @@ interface Turn {
   end: number
 }
 
-interface Reference {
-  ref: string
-  harness?: string
-  title?: string
-}
-
 interface View {
   title?: string
   parts: Part[]
   /** The Session a turn or ref without a number means. */
   home: Part
   /** Threads the requests referenced: what else this caller may read. */
-  references: Reference[]
+  references: HeldReference[]
   /** The calling conversation, when the view is its own Thread. */
   caller?: string
 }
@@ -249,7 +243,7 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
       if (!home) return undefined
       return "conversation" in home ? parts.find((part) => part.conversation === home.conversation) : parts.find((part) => part.sessionId === home.session)
     }
-    const read: View = { parts, home: homeOf() ?? parts.at(-1)!, references: references([...snapshots.values()]) }
+    const read: View = { parts, home: homeOf() ?? parts.at(-1)!, references: heldReferences([...snapshots.values()].flatMap((snapshot) => snapshot.requests)) }
     title ??= parts.find((part) => part.title)?.title
     if (title) read.title = title
     if (caller) read.caller = caller
@@ -386,21 +380,6 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
   }
 }
 
-/** Every `thread:` reference the requests' `<mako_context>` blocks carry, once each. */
-function references(snapshots: readonly LiveSnapshot[]): Reference[] {
-  const found = new Map<string, Reference>()
-  for (const snapshot of snapshots)
-    for (const request of snapshot.requests)
-      for (const item of readMessage(request.text).items) {
-        const ref = item.kind === "conversation" ? item.attrs.ref : undefined
-        if (!ref?.startsWith("thread:") || found.has(ref)) continue
-        const reference: Reference = { ref }
-        if (item.attrs.harness) reference.harness = item.attrs.harness
-        if (item.attrs.title) reference.title = item.attrs.title
-        found.set(ref, reference)
-      }
-  return [...found.values()]
-}
 
 /**
  * A Session's turns, as the transcript groups them (`groupTurns`): one opens

@@ -1,3 +1,4 @@
+import { readMessage } from "@mako/sessions/context-wire"
 import type { ThreadParent } from "../contracts/agents.js"
 
 interface Edges {
@@ -33,4 +34,23 @@ export function treeEdges(edges: Edges, thread: string): ThreadParent[] {
   }
   visit(rootThread(edges, thread), 0)
   return found
+}
+
+/** A thread a message attached, as its `<mako_context>` item names it. */
+export interface HeldReference {
+  ref: string
+  harness?: string
+  title?: string
+}
+
+/** Every `thread:` reference these messages' `<mako_context>` blocks carry, once each: what `thread_history` lets them read. */
+export function heldReferences(requests: readonly { text: string }[]): HeldReference[] {
+  const found = new Map<string, HeldReference>()
+  for (const request of requests)
+    for (const item of readMessage(request.text).items) {
+      const ref = item.kind === "conversation" ? item.attrs.ref : undefined
+      if (!ref?.startsWith("thread:") || found.has(ref)) continue
+      found.set(ref, { ref, ...(item.attrs.harness && { harness: item.attrs.harness }), ...(item.attrs.title && { title: item.attrs.title }) })
+    }
+  return [...found.values()]
 }

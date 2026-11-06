@@ -630,14 +630,10 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const snapshot = live.snapshot(id)
     const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
     if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
-    // A dormant binding is the person going back to a harness, as their switch does; the active one is a reply.
-    if (snapshot.control?.activeBindingId !== bindingId) {
-      const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
-      if (!continued) throw new Error("The selected native session is unavailable")
-      return continued
-    }
-    return live.admitInOrder(id, profiles.resolveLaunch(binding.provider, snapshot.session.cwd, tuning ?? binding.tuning),
-      (selected) => live.continueBinding(id, bindingId, requestId, text, attachments, selected))
+    // Which binding is active is read as it's admitted: a move may land while the selection resolves.
+    const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
+    if (!continued) throw new Error("The selected native session is unavailable")
+    return continued
   })
   methods.handle("mako:live-prompt", async (id: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) => {
     const session = live.session(id)

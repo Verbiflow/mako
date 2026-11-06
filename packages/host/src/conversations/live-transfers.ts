@@ -208,14 +208,6 @@ export class LiveTransfers {
     return this.host.control(resident).transfers.find((transfer) => transfer.input.id === id && unsettled(transfer))
   }
 
-  /** The person removed a message from the queue: the switch it was waiting to carry goes with it. */
-  withdraw(snapshot: LiveSnapshot, id: string): LiveSnapshot {
-    const control = snapshot.control
-    if (!control?.transfers.some((transfer) => transfer.input.id === id && unsettled(transfer))) return snapshot
-    for (const transfer of control.transfers) if (transfer.input.id === id && unsettled(transfer)) this.tell(removed(transfer))
-    return { ...snapshot, control: { ...control, transfers: control.transfers.map((transfer) => (transfer.input.id === id && unsettled(transfer) ? removed(transfer) : transfer)) } }
-  }
-
   /**
    * A switch that can't go, as itself, for good: it fails, and a message of its the queue held goes with it, so the
    * failure's retry (`retryTransfer`) carries the person's words and nothing else sends them.
@@ -824,6 +816,22 @@ function messageOf(transfer: ContextTransfer, createdAt: number, fields: Pick<Li
 }
 
 /**
+ * A switch's message that left the queue took the switch with it, whatever took it (a removal, Clear Queue, a Thread
+ * carrying it away, a start that failed): read at every write (`LiveConversations.flush`), so no path can leave a switch
+ * pending behind a row that will never go.
+ */
+export function withdrawGone(snapshot: LiveSnapshot): LiveSnapshot {
+  const control = snapshot.control
+  const gone = (transfer: ContextTransfer) => {
+    if (!unsettled(transfer)) return false
+    const own = snapshot.requests.find((request) => request.id === transfer.input.id)
+    return own !== undefined && own.status !== "queued" && own.status !== "held"
+  }
+  if (!control?.transfers.some(gone)) return snapshot
+  return { ...snapshot, control: { ...control, transfers: control.transfers.map((transfer) => (gone(transfer) ? removed(transfer) : transfer)) } }
+}
+
+/**
  * A Stop reaches every switch not yet committed, waiting or under way: each is queued work, so it waits as a message of
  * the queue, held by the Stop, and from here on is edited, removed and resumed as any message is. An attempt under way
  * sees its transfer no longer next and drops what it comes back with (`LiveTransfers.perform`).
@@ -859,18 +867,17 @@ function supersedeMoves(snapshot: LiveSnapshot, id: string): LiveSnapshot {
  * A committed switch taken back (its source wouldn't close), as an operation on the conversation as it is now: the
  * session, binding and history it made the conversation's go back to `before`'s, and nothing else moves. Its message
  * keeps its words, its place and its holds, losing only the destination's context, and the switch waits with it to go
- * again; a message the person removed took the switch with it.
+ * again (`withdrawGone`: one whose message was removed goes with it).
  */
 function undoSwitch(current: LiveSnapshot, control: ConversationControl, before: LiveSnapshot, beforeControl: ConversationControl, id: string, landed: LiveSnapshot["requests"]): LiveSnapshot {
   const was = beforeControl.transfers.find((transfer) => transfer.input.id === id)
-  const gone = current.requests.find((request) => request.id === id)?.status === "canceled"
   return {
     ...current,
     nativeAgents: before.nativeAgents,
     session: before.session,
     threadPath: before.threadPath,
     permissions: before.permissions,
-    requests: departing(current.requests.map((request) => (request.id === id ? { ...request, context: undefined, targetBindingId: undefined } : request)), before.requests, landed),
+    requests: departing(current.requests, before.requests, landed).map((request) => (request.id === id ? { ...request, context: undefined, targetBindingId: undefined } : request)),
     control: {
       ...control,
       activeBindingId: beforeControl.activeBindingId,
@@ -878,8 +885,7 @@ function undoSwitch(current: LiveSnapshot, control: ConversationControl, before:
       merges: control.merges.filter((merge) => merge.id !== id),
       transfers: control.transfers.map((transfer) => {
         if (transfer.input.id !== id || !was) return transfer
-        if (quietSwitch(was)) return retiredMove(was, CLOSE_RETIRED_MOVE)
-        return gone ? removed(was) : { ...was, behind: undefined, state: { kind: "queued" } }
+        return quietSwitch(was) ? retiredMove(was, CLOSE_RETIRED_MOVE) : { ...was, behind: undefined, state: { kind: "queued" as const } }
       }),
     },
   }

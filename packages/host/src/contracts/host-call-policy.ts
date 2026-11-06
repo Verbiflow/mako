@@ -341,6 +341,8 @@ const replays = [
   "mako:fin-default-choose",
   /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
   "mako:fin-policy-save",
+  /** `FinDefaultsStore.saveRoleRules`: the same words for a role saved twice are saved once. */
+  "mako:fin-role-rules-save",
   /** `FinDefaultsStore.setLimit`: the same number saved twice is one choice. */
   "mako:fin-limit-set",
   /** `FinDefaultsStore.setCeiling`: the same number saved twice is one choice. */

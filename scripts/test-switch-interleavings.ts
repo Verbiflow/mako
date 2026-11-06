@@ -10,10 +10,11 @@ import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
 
 /**
  * Switches against the queue, generated (`npm run test:switch-interleavings`): seeded schedules over a switch opening,
- * committing, its source closing or refusing to, a second switch, Stop, Resume, an edit, a removal, a new message, a
- * crash, a restart and an agent's quiet move, with the rules of `docs/delivery-queue.md` checked after every step: nothing
- * sends after a Stop until it's resumed, no binding comes after a Stop that nobody asked for since, no acknowledged edit
- * or accepted message is lost, at most one switch is in flight, and the conversation always has a binding it can use. `SEED=n` runs one schedule, `PINNED=n` one pinned one; a schedule a
+ * committing, its source closing or refusing to, a second switch, Stop, Resume, an edit, a removal, Clear Queue, a row
+ * carried to the cloud, a remote cancel, a new message, a crash, a restart and an agent's quiet move, with the rules of
+ * `docs/delivery-queue.md` checked after every step: nothing sends after a Stop until it's resumed, no binding comes
+ * after a Stop that nobody asked for since, no acknowledged edit or accepted message is lost, at most one switch is in
+ * flight, and the conversation always has a binding it can use. `SEED=n` runs one schedule, `PINNED=n` one pinned one; a schedule a
  * review or a failure found is pinned in `PINNED`, with what it found, and runs first.
  */
 const HOUR = 3_600_000
@@ -34,6 +35,9 @@ type Step =
   | { kind: "edit" }
   | { kind: "pause-edit" }
   | { kind: "delete" }
+  | { kind: "clear" }
+  | { kind: "carried" }
+  | { kind: "remote-cancel" }
   | { kind: "message" }
   | { kind: "crash" }
   | { kind: "restart" }
@@ -89,6 +93,18 @@ const PINNED: { name: string; steps: Step[] }[] = [
     steps: steps({ kind: "move", to: "cursor" }, { kind: "crash" }, { kind: "message" }),
   },
   {
+    name: "pr-review round 10: Clear Queue takes a stopped switch's row, and the switch with it, so the next message goes",
+    steps: steps({ kind: "switch", to: "cursor" }, { kind: "stop" }, { kind: "open" }, { kind: "clear" }, { kind: "message" }),
+  },
+  {
+    name: "pr-review round 10: a row carried to the cloud takes its switch with it, so the next message goes",
+    steps: steps({ kind: "switch", to: "cursor" }, { kind: "stop" }, { kind: "open" }, { kind: "carried" }, { kind: "message" }),
+  },
+  {
+    name: "a remote cancel of a stopped switch's row takes the switch with it, so the next message goes",
+    steps: steps({ kind: "switch", to: "cursor" }, { kind: "stop" }, { kind: "open" }, { kind: "remote-cancel" }, { kind: "message" }),
+  },
+  {
     name: "seed 24, as generated then: a resume releases a held switch ahead of the one under way, which stays next, one at a time",
     steps: steps({ kind: "switch", to: "cursor" }, { kind: "stop" }, { kind: "open-fail" }, { kind: "switch", to: "grok" }, { kind: "resume" }, { kind: "open" }, { kind: "close-ok" }),
   },
@@ -126,7 +142,10 @@ function schedule(next: () => number): Step[] {
     else if (roll < 0.75) made.push({ kind: "resume" })
     else if (roll < 0.84) made.push({ kind: "edit" })
     else if (roll < 0.87) made.push({ kind: "pause-edit" })
-    else if (roll < 0.91) made.push({ kind: "delete" })
+    else if (roll < 0.89) made.push({ kind: "delete" })
+    else if (roll < 0.9) made.push({ kind: "clear" })
+    else if (roll < 0.91) made.push({ kind: "carried" })
+    else if (roll < 0.92) made.push({ kind: "remote-cancel" })
     else if (roll < 0.95) made.push({ kind: "message" })
     else if (roll < 0.98) made.push({ kind: "crash" })
     else made.push({ kind: "restart" })
@@ -221,14 +240,16 @@ class Schedule {
     await this.quiet()
   }
 
-  private accept(words: string, send: (id: string) => void): void {
+  /** Whether it was accepted: one refused to its sender's face was not. */
+  private accept(words: string, send: (id: string) => void): boolean {
     const id = randomUUID()
     const work: Work = { id, words, was: [], gone: false, stopped: false, sent: 0 }
     try {
       send(id)
       this.work.push(work)
+      return true
     } catch {
-      // Refused to its sender's face: nothing was accepted.
+      return false
     }
   }
 
@@ -316,10 +337,31 @@ class Schedule {
         work.gone = true
         break
       }
-      case "message":
-        this.stopped = undefined
-        this.accept(`message-${(this.serial += 1)}.`, (request) => void live.submit(id, request, `message-${this.serial}.`, []))
+      case "clear":
+        for (const work of rows()) work.gone = true
+        live.clearQueue(id)
         break
+      case "carried": {
+        const work = pick(rows())
+        if (!work) break
+        live.carried(id, [work.id], "cloud")
+        work.gone = true
+        break
+      }
+      case "remote-cancel": {
+        const work = pick(rows())
+        if (!work) break
+        await live.cancelRequest(id, work.id)
+        work.gone = true
+        break
+      }
+      case "message": {
+        this.stopped = undefined
+        const waits = this.snapshot.control!.transfers.some((transfer) => (transfer.state.kind === "queued" || transfer.state.kind === "preparing") && this.snapshot.requests.find((request) => request.id === transfer.input.id)?.status !== "held")
+        const taken = this.accept(`message-${(this.serial += 1)}.`, (request) => void live.submit(id, request, `message-${this.serial}.`, []))
+        assert.ok(taken || waits, `a message was refused with no switch under way: ${JSON.stringify(this.snapshot.control!.transfers.map((transfer) => [transfer.input.text, transfer.state.kind]))}`)
+        break
+      }
       case "restart":
         await this.quit(() => this.world.restart())
         break
@@ -407,6 +449,12 @@ class Schedule {
       const queued = snapshot.requests.some((request) => request.text === work.words && request.status !== "canceled")
       const carried = control.transfers.some((transfer: ContextTransfer) => transfer.input.text === work.words)
       assert.ok(queued || carried, label(`accepted words are nowhere: ${work.words}: ${JSON.stringify({ requests: snapshot.requests.map((request) => [request.text, request.status]), transfers: control.transfers.map((transfer) => [transfer.input.text, transfer.state.kind]) })}`))
+    }
+    // A switch waiting has its message in the queue, or still its own: whatever took that row took the switch with it.
+    for (const transfer of control.transfers) {
+      if (transfer.state.kind !== "queued" && transfer.state.kind !== "preparing") continue
+      const row = snapshot.requests.find((request) => request.id === transfer.input.id)
+      assert.ok(!row || row.status === "queued" || row.status === "held", label(`a switch outlived its message: ${transfer.input.text} is ${row?.status}`))
     }
     // One home for its message: a switch that failed for good doesn't leave a copy in the queue that its retry would send twice.
     for (const transfer of control.transfers) {

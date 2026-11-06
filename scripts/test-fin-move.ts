@@ -13,6 +13,8 @@ import { arriving } from "@mako/host/contracts/request-hold"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
+import { declareConversationMethods } from "@mako/host/conversations/index"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { threadHistoryTools } from "@mako/host/conversations/thread-history"
 import { HARNESSES, AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
@@ -480,6 +482,243 @@ async function landing(): Promise<void> {
   }
 }
 
+/** What the first review of this reproduced, each through the host's real operations. */
+async function reviewed(): Promise<void> {
+  {
+    // A Stop that lands while a move reads its history wins, whatever idle thing it leaves behind.
+    const f = await fixture("codex")
+    await f.world.settle(40, 20_000)
+    const { conversation, child } = f.fin()
+    const read = f.world.live.historyReady.bind(f.world.live)
+    let reading = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    f.world.live.historyReady = async (id) => {
+      if (id === conversation) {
+        reading = true
+        await gate
+      }
+      return read(id)
+    }
+    const asked = f.world.agents.move(f.apex.caller, { child: "labels", harness: "claude", clientKey: "before-stop" })
+    await until("the move to read its history", () => reading)
+    await f.world.agents.stop(f.apex.caller, { child: "labels", reason: "not now" })
+    release()
+    const answer = await asked
+    assert.ok("refused" in answer, JSON.stringify(answer))
+    assert.match(answer.why, /a Stop or a turn came before it moved/)
+    assert.equal(f.world.live.session(conversation)?.harness, "codex", "no binding comes after the Stop")
+    assert.ok(f.world.store.edges().of(child)?.closedAt !== undefined)
+    await f.world.close()
+  }
+  {
+    // A relaunch asked for before a Stop sends nothing after it: the brief stays paused, and its row is the Stop's.
+    let stall: ((error: Error) => void) | undefined
+    let stalling = true
+    const cut = new AgentsWorld({ root: join(root, "relaunch-stop"), script: () => "Done", starting: async (_conversation, harness) => {
+      if (harness === "codex" && stalling) await new Promise<void>((_resolve, reject) => { stall = reject })
+    } })
+    const apex = await cut.apex("claude", "full")
+    const started = cut.agents.start(apex.caller, { brief: { objective: "Label the stopped rows" }, name: "cut", harness: "codex", cwd: cut.root, clientKey: "cut" }).catch(() => undefined)
+    await until("its launch to stall", () => stall !== undefined)
+    stalling = false
+    stall!(new Error("the host stopped"))
+    await started
+    const read = LiveConversations.prototype.historyReady
+    let reading = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    LiveConversations.prototype.historyReady = async function (this: LiveConversations, id) {
+      reading = true
+      await gate
+      return read.call(this, id)
+    }
+    try {
+      await cut.restart()
+      await until("its relaunch to read its history", () => reading)
+      const fin = cut.store.edges().children(cut.store.journalPlacement(apex.conversation)!.thread)[0]!
+      await cut.agents.stop(cut.caller(apex.conversation), { child: fin.name, reason: "not now" })
+      release()
+      await cut.settle(40, 20_000, "ignore")
+    } finally {
+      LiveConversations.prototype.historyReady = read
+    }
+    assert.equal(cut.prompts.filter((prompt) => prompt.text.includes("Label the stopped rows")).length, 0, "a stopped brief isn't sent")
+    await cut.close()
+  }
+  {
+    // A person's switch that a Stop reaches as it waits is accepted, and the Stop holds it.
+    const f = await fixture("codex")
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    const read = f.world.live.historyReady.bind(f.world.live)
+    let reading = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    f.world.live.historyReady = async (id) => {
+      if (id === conversation) {
+        reading = true
+        await gate
+      }
+      return read(id)
+    }
+    const id = randomUUID()
+    const asked = f.world.continueOn(conversation, { kind: "words", input: { id, provider: "claude", text: "held-words", attachments: [] } })
+    await until("the switch to read its history", () => reading)
+    await f.world.live.cancel(conversation)
+    release()
+    await asked
+    await f.world.settle(40, 20_000, "ignore")
+    assert.equal(f.world.live.snapshot(conversation)?.requests.find((request) => request.id === id)?.pause, "stop", "its words wait for Resume")
+    assert.equal(f.world.live.session(conversation)?.harness, "codex")
+    assert.ok(!f.prompts().some((prompt) => prompt.text.includes("held-words")))
+    await f.world.close()
+  }
+  {
+    // A Resume acknowledged while the source closes stands when the close fails: the row runs, and its old hold doesn't come back.
+    let refusing = false
+    let armed = false
+    let closing = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    const f = await fixture("codex", {
+      refusePrompt: (_conversation, harness) => (harness === "codex" && refusing ? "You've hit your usage limit." : undefined),
+      closing: async () => {
+        if (!armed) return
+        armed = false
+        closing = true
+        await gate
+        throw new Error("synthetic source close failure")
+      },
+    })
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    const row = randomUUID()
+    refusing = true
+    f.world.live.submit(conversation, row, "row-resumed", [])
+    await until("it to wait", () => Boolean(f.world.live.snapshot(conversation)!.requests.find((request) => request.id === row)?.retry))
+    const id = randomUUID()
+    const finished = f.world.live.switchSettled(id)
+    armed = true
+    await f.world.continueOn(conversation, { kind: "move", move: { id, to: { harness: "claude" } } }, { kind: "service", name: "auto-continue" })
+    await until("the source to close", () => closing)
+    await f.world.live.cancel(conversation)
+    f.world.live.editQueued(conversation, { requestId: row, expectedText: "row-resumed", change: { kind: "resume" } })
+    refusing = false
+    release()
+    assert.equal((await finished).state.kind, "failed")
+    await f.world.settle(40, 20_000, "ignore")
+    const after = f.world.live.snapshot(conversation)!.requests.find((request) => request.id === row)
+    assert.equal(after?.retry, undefined, "its old hold stays gone")
+    assert.notEqual(after?.status, "held", "the person's Resume stands")
+    await f.world.close()
+  }
+  {
+    // A failed answer doesn't reopen a question another message closed.
+    const f = await fixture("codex")
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "first-answer" }, { label: "second-answer" }], clientKey: "ask" })
+    await f.world.settle(40, 20_000)
+    let entered = false
+    let armed = true
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    Object.assign(f.world.agents, { resumeAccount: async () => {
+      if (armed) {
+        armed = false
+        entered = true
+        await gate
+      }
+      return undefined
+    } })
+    const submit = f.world.live.submit.bind(f.world.live)
+    f.world.live.submit = (id, request, text, ...rest) => {
+      if (text.includes("first-answer")) throw new Error("synthetic refusal")
+      return submit(id, request, text, ...rest)
+    }
+    const first = f.world.agents.answer(f.apex.caller, { to: "labels", answer: "first-answer", clientKey: "first" })
+    await until("the answer to wait", () => entered)
+    assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "another-message", clientKey: "other" })))
+    await until("the other message", () => f.prompts().some((prompt) => prompt.text.includes("another-message")))
+    release()
+    assert.ok("refused" in await first, "the first answer failed")
+    await f.world.settle(40, 20_000)
+    const second = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "second-answer", clientKey: "second" })
+    assert.ok("refused" in second && second.refused === "conflict", JSON.stringify(second))
+    assert.equal(f.prompts().filter((prompt) => prompt.text.includes("second-answer")).length, 0)
+    await f.world.close()
+  }
+  {
+    // A reply decided while its binding was active, overtaken by a move as its selection resolves, goes through the one operation.
+    let opening = false
+    let armed = false
+    let open = () => {}
+    let select = () => {}
+    const opened = new Promise<void>((done) => { open = done })
+    const selected = new Promise<void>((done) => { select = done })
+    const f = await fixture("codex", { starting: async (_conversation, harness) => {
+      if (armed && harness === "claude") {
+        opening = true
+        await opened
+      }
+    } })
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    const active = f.world.live.snapshot(conversation)!.control!.activeBindingId
+    armed = true
+    const id = randomUUID()
+    await f.world.continueOn(conversation, { kind: "move", move: { id, to: { harness: "claude" } } })
+    await until("the move to prepare", () => opening)
+    const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
+    const table = { handle: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => void handlers.set(channel, handler) }
+    // SAFETY: the handler reads only the fields given here; the rest of the host isn't reached by these channels.
+    const deps = { conversations: { live: f.world.live, agents: f.world.agents, continueOn: f.world.continueOn, harnessLabel: (harness: string) => harness, native: {}, runs: {}, history: {}, continuation: {} }, profiles: { resolveLaunch: async () => { await selected; return undefined } }, threads: { catalog: {} }, workspaces: {}, movers: {}, lifecycle: {}, telemetry: { feature: () => {} }, files: {}, emit: () => {}, workspace: async () => root, invoke: async () => {} } as never
+    // SAFETY: a method table is `handle` to whoever declares on it.
+    declareConversationMethods(table as never, deps)
+    const count = f.world.continued.length
+    const reply = handlers.get("mako:live-continue")!(conversation, active, randomUUID(), "row-reply", [])
+    assert.equal(f.world.continued.length, count + 1, "a reply goes through continueOn, active or not")
+    open()
+    await f.world.live.switchSettled(id)
+    select()
+    await reply.catch(() => undefined)
+    await f.world.settle(40, 20_000, "ignore")
+    await f.world.close()
+  }
+  {
+    // A person's picker is for the Apex they talk to; a Fin reaches its tree and what it holds, so it comes down by hand.
+    const rows: ThreadRef[] = []
+    const artifact = { kind: "file" as const, file: "/tmp/t/transcript.md", note: "Bundle", title: "Private matter", harness: "grok", turns: 1, digest: "d", losses: [] }
+    const f = await fixture("claude", { references: { list: () => rows, transcriptArtifact: async () => artifact } })
+    await f.world.settle(40, 20_000)
+    const stranger = await f.world.apex("grok", "full")
+    f.world.say(stranger.conversation, "Private matter, outside the tree")
+    await f.world.settle(40, 20_000)
+    const native = f.world.live.snapshot(stranger.conversation)!.session.nativeId!
+    rows.push({ harness: "grok", nativeId: native, path: join(root, "stranger"), title: "Private matter", threadId: f.world.store.journalPlacement(stranger.conversation)!.thread })
+    const ref = threadToken("grok", native).slice(1)
+    const { conversation } = f.fin()
+    const fin = f.world.caller(conversation)
+    const asked = await f.world.agents.start(fin, { brief: { objective: "Below" }, name: "below", harness: "codex", cwd: f.world.root, clientKey: "below", context: [{ thread: ref }] })
+    assert.ok("refused" in asked && asked.refused === "access", JSON.stringify(asked))
+    const listed = await f.world.agents.list(fin, { scope: "threads", query: "Private" })
+    assert.ok("threads" in listed && listed.threads.length === 0, "a Fin finds no further than it reaches")
+    const byRef = await f.world.agents.list(fin, { scope: "threads", query: ref })
+    assert.ok("threads" in byRef && byRef.threads.length === 0)
+    const seen = await f.world.agents.list(f.apex.caller, { scope: "threads", query: "Private" })
+    assert.ok("threads" in seen && seen.threads.length === 1, "the Apex the person talks to reaches what their picker offers")
+    assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "See this", clientKey: "down", context: [{ thread: ref }] })))
+    await f.world.settle(40, 20_000)
+    const handed = await f.world.agents.start(fin, { brief: { objective: "Below" }, name: "below", harness: "codex", cwd: f.world.root, clientKey: "below-2", context: [{ thread: ref }] })
+    assert.ok(!("refused" in handed), `what's handed down can be handed on: ${JSON.stringify(handed)}`)
+    const own = await f.world.agents.start(fin, { brief: { objective: "Beside" }, name: "beside", harness: "codex", cwd: f.world.root, clientKey: "beside", context: [{ thread: "below" }] })
+    assert.ok(!("refused" in own), JSON.stringify(own))
+    await f.world.settle(40, 20_000)
+    await f.world.close()
+  }
+}
+
 /** Only `continueOn` reaches a switch to another harness: a new caller of `transfer` fails here. */
 function onePath(): void {
   const host = join(repo, "packages/host/src")
@@ -506,10 +745,11 @@ function onePath(): void {
       assert.ok(allow, `${file} calls transfer: go through continueOn`)
       assert.ok(allow.test(text.slice(call.index, call.index + 200)), `${file} calls transfer with something new: ${text.slice(call.index, call.index + 80)}`)
     }
-    for (const call of text.matchAll(/\.moveOn\(/g))
-      assert.equal(file, "conversations/continue-on.ts", `${file} moves a Thread beside continueOn: ${text.slice(call.index, call.index + 60)}`)
-    if (file !== "conversations/continue-on.ts" && file !== "conversations/live-conversations.ts")
-      assert.ok(!/live\.continueBinding\((?!id, bindingId, requestId, text, attachments, selected\))/.test(text), `${file} continues a binding beside continueOn`)
+    // A reply to a binding can become a switch at its admission, so it has no way around either.
+    for (const call of text.matchAll(/\.(?:moveOn|continueBinding)\(/g)) {
+      const answers = file === "conversations/live-conversations.ts" && text.startsWith(".continueBinding(id, bindingId, requestId, text, [], undefined, displayText)", call.index) && text.slice(call.index - 180, call.index).includes("activeBindingId !== bindingId")
+      assert.ok(file === "conversations/continue-on.ts" || answers, `${file} goes beside continueOn: ${text.slice(call.index, call.index + 60)}`)
+    }
   }
   const agents = readFileSync(join(host, "conversations/agents.ts"), "utf8")
   assert.ok(!/"transfer"/.test(agents.slice(0, agents.indexOf("export interface AgentsDeps"))), "Agents reaches no transfer of its own")
@@ -626,6 +866,7 @@ try {
   onePath()
   await refusals()
   await landing()
+  await reviewed()
   await callersShareIt()
   await attaching()
   await reading()

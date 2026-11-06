@@ -21,10 +21,13 @@ schedules, and a failing schedule is pinned there.
    message.** Whether it's waiting behind another switch, waiting to go again, or
    under way, its message enters the queue as a held row (`holdSwitches`), and the
    switch waits with that row. From there the row is edited, removed and resumed
-   as any message is. Resume sends the row's words through the switch. Removing
-   the row takes the switch with it (`LiveTransfers.withdraw`). While a switch's
-   row is held, the switch holds nothing else up: a new message, or a new switch,
-   goes ahead of it. A move is the exception: rule 11.
+   as any message is. Resume sends the row's words through the switch. Whatever
+   takes the row out of the queue takes the switch with it: a removal, Clear
+   Queue, the Thread carrying it to the cloud, a remote cancel, a failed start.
+   That's read at every write (`withdrawGone`, in `LiveConversations.flush`), so
+   a new path can't leave a switch pending behind a row that will never go. While
+   a switch's row is held, the switch holds nothing else up: a new message, or a
+   new switch, goes ahead of it. A move is the exception: rule 11.
 
 3. **A committed switch completes, a Stop or not.** Once the journal names the
    destination as the binding, the conversation is on it. The Stop pauses the
@@ -80,12 +83,16 @@ schedules, and a failing schedule is pinned there.
     account that signed out changes nothing, and its hold stays. A Stop and a
     person's edit stay whatever the switch: a row a Stop paused while it waited on
     a sign-in stops waiting on the sign-in and goes on waiting for its Resume
-    (`arriving`). A close that fails puts the rows back (`departing`).
+    (`arriving`). A close that fails puts back what it freed, but only rows still
+    as the landing left them: a Resume, an edit or a Stop since stands (`departing`).
 
 11. **A Stop retires a move not yet committed.** This is the one exception to
     rule 2. A move has no row to be held in and never owns one, so it can't wait
     with a message: it goes no further, no binding comes after the Stop, and
-    whoever asked is told, and can ask again. A move asked for after a Stop can go,
+    whoever asked is told, and can ask again. That holds from the moment it's asked,
+    not from its admission: a Stop that lands while it resolves its selection or
+    reads its history declines it, and what a person asked for in that window is
+    accepted and held, as rule 2 says. A move asked for after a Stop can go,
     since it sends nothing: the Stop's holds stay, the Thread stays stopped, and
     what it paused goes on the target at its Resume. An automatic move yields
     instead (`unlessStopped`), and what it was decided on is read at its admission

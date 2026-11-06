@@ -95,7 +95,7 @@ export function describeTransferRecovery(
     case "failed":
     case "uncertain": {
       if (state.kind === "failed" && state.removed)
-        return { title: `Switch to ${provider} removed`, guidance: "You removed its message before it went. Nothing reached the destination.", retryLabel: undefined }
+        return { title: `Switch to ${provider} removed`, guidance: "Its message left the queue before it went. Nothing reached the destination.", retryLabel: undefined }
       const failure = state.kind === "failed" && state.failure
         ? describeProviderFailure(state.failure, provider) : undefined
       // Nothing started, so there is no switch to retry and no work to repeat.

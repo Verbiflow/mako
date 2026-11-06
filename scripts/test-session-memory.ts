@@ -234,6 +234,7 @@ async function reconnectAfterRestart() {
     return input
   }
   const after = new LiveConversations(dependencies)
+  const waiting = (input: TransferInput) => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === input.id)
   try {
     assert.equal(after.snapshot(id)?.session.connection, "disconnected", "the restarted host recovers the journal disconnected")
     const moved = reconnect(after, "Go ahead")
@@ -249,19 +250,20 @@ async function reconnectAfterRestart() {
     // Something else has the store open: refused by name, nothing spawned.
     verdict = { kind: "held", by: "another cursor-agent process" }
     const held = reconnect(after, "Try again")
-    await until(() => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === held.id)?.state.kind === "failed", "the held reconnect to fail")
-    const refused = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === held.id)
-    assert.ok(refused?.state.kind === "failed" && refused.state.error.includes(heldReason("another cursor-agent process")), `the refusal names what holds the session: ${JSON.stringify(refused?.state)}`)
+    await until(() => waiting(held)?.retry !== undefined, "the held reconnect to wait")
+    assert.ok(waiting(held)?.retry?.reason.includes(heldReason("another cursor-agent process")), `what it waits on names what holds the session: ${JSON.stringify(waiting(held))}`)
+    assert.equal(waiting(held)?.state.kind, "queued", "a session open elsewhere clears by itself, so it goes again by itself, until a Stop holds it")
     assert.equal(starts.length, 2, "a held session spawns nothing")
+    await after.cancel(id)
 
     // Another Mako host holds it in the ledger: the hold is checked before anything spawns.
     verdict = { kind: "resumable", record: "same" }
     dev.hold("cursor", "agent-restart", "elsewhere")
     const elsewhere = reconnect(after, "Once more")
-    await until(() => after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === elsewhere.id)?.state.kind === "failed", "the cross-host reconnect to fail")
-    const crossHost = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === elsewhere.id)
-    assert.ok(crossHost?.state.kind === "failed" && crossHost.state.error === heldReason("Mako's dev host"), `another host's hold refuses the reconnect: ${JSON.stringify(crossHost?.state)}`)
+    await until(() => waiting(elsewhere)?.retry !== undefined, "the cross-host reconnect to wait")
+    assert.equal(waiting(elsewhere)?.retry?.reason, heldReason("Mako's dev host"), `another host's hold keeps the reconnect waiting: ${JSON.stringify(waiting(elsewhere))}`)
     assert.equal(starts.length, 2)
+    await after.cancel(id)
     assert.equal(dev.heldBy("cursor", "agent-restart"), null, "the other host's hold was not taken over")
     dev.release("cursor", "agent-restart")
 

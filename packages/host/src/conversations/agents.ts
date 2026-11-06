@@ -42,7 +42,6 @@ import {
   type AgentsRedirected,
   type AgentsRedirectInput,
   type AgentsRespondInput,
-  type Brief,
   type ChildJournal,
   type ChildStart,
   type FinDeliver,
@@ -98,11 +97,11 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, apexNote, BRIEF_CLOSE, briefIntro, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
-import { FIN_LIMIT, finPolicyNote, placeFull, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
+import { FIN_LIMIT, finPolicyNote, placeFull, roleRuleLines, type RoleRuleLines, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import { RESTART_RETIRED_MOVE, type ContextTransfer } from "../contracts/conversation-control.js"
@@ -117,7 +116,7 @@ import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type 
 import { namedUuid } from "./cloud-moves.js"
 import { settledWithin, type ContinueOn } from "./continue-on.js"
 import type { LiveConversations } from "./live-conversations.js"
-import { treeEdges } from "./thread-tree.js"
+import { heldReferences, treeEdges } from "./thread-tree.js"
 import type { ConversationChildren } from "./live-runtime.js"
 import { macLoad, type MacLoad, type MacReading } from "./mac-capacity.js"
 
@@ -132,6 +131,8 @@ const LIMIT_READ_MS = 3_000
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
 /** How often what waits looks again, for a limit the person raised or a Fin that ended unseen. */
 const ROOM_EVERY_MS = 10_000
+/** The job that looks every `ROOM_EVERY_MS`. */
+export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
 export const APEX_ANSWER_MS = 60_000
 
@@ -182,7 +183,7 @@ const READ_CHARS = 8_000
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "snapshot" | "editQueued" | "switchSettled" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
+  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect"
 >
 
 export interface AgentsDeps {
@@ -481,7 +482,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: deps.now,
     })
     // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
-    this.stopRoomWatch = deps.jobs.every("read this device's capacity", ROOM_EVERY_MS, () => this.observe(true))
+    this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true))
   }
 
   /** A digest never says a Fin ended that its Session shows at work: the end the host inferred for its run is past. */
@@ -579,8 +580,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!snapshot) return
     const binding = snapshot.control?.bindings.find((candidate) => candidate.id === snapshot.control?.activeBindingId)
     const paused = snapshot.requests.filter((request) => madePaused(request) && (request.actor?.kind === "agent" || request.continues?.brief))
+    const waiting = (id: string) => this.deps.live.snapshot(conversation)?.requests.find((request) => request.id === id && madePaused(request))
     const resume = (requests: readonly LiveRequest[]) => {
-      for (const request of requests) {
+      for (const { id } of requests) {
+        // Read as it stands: what a Stop paused since isn't Mako's to send on.
+        const request = waiting(id)
+        if (!request) continue
         try {
           this.deps.live.editQueued(conversation, { requestId: request.id, expectedText: request.text, change: { kind: "resume" } })
           hostLog("agents", "resumed", { op: edge.op, request: request.id, relaunched: false })
@@ -594,10 +599,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     // Its harness never started: the exit cut its launch. It starts now, the brief its first message, and the rest wait behind it.
     const input = { id: namedUuid(`relaunch:${first.id}`), provider: snapshot.session.harness, text: first.text, attachments: first.attachments, ...(first.tuning && { tuning: first.tuning }), ...(binding?.modeId && { modeId: binding.modeId }) }
     const taken = () => {
-      this.deps.live.editQueued(conversation, { requestId: first.id, expectedText: first.text, change: { kind: "remove" } })
+      const row = waiting(first.id)
+      if (!row) return false
+      this.deps.live.editQueued(conversation, { requestId: row.id, expectedText: row.text, change: { kind: "remove" } })
       return true
     }
-    void this.deps.continueOn(conversation, { kind: "words", input, ...(first.continues && { continues: first.continues }) }, first.actor, taken).then(() => {
+    void this.deps.continueOn(conversation, { kind: "words", input, ...(first.continues && { continues: first.continues }) }, first.actor, taken).then((relaunched) => {
+      if (!relaunched) return
       hostLog("agents", "resumed", { op: edge.op, request: first.id, relaunched: true })
       resume(paused.slice(1))
     }, (error) => hostWarn("agents", "a Fin's paused message waits for Resume", { op: edge.op, request: first.id, error: errorMessage({ error }) }))
@@ -638,6 +646,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.roster(conversation).length) return true
     const thread = this.store()?.journalPlacement(conversation)?.thread
     return thread !== undefined && this.store()?.edges().of(thread)?.role === APEX_ROLE
+  }
+
+  /**
+   * The person's standing rules a conversation reads, as standing lines of Mako's note (`roleRuleLines`): a Fin the Fin
+   * rules, and the Apex rules a top-level Thread, an Apex or a Fin started as one. Its process hears them whole once and
+   * then as they change, whoever's message starts its turn (`standingLines`).
+   */
+  ruleLines(conversation: string): RoleRuleLines {
+    const policy = this.deps.finPolicy?.()
+    const requests = this.deps.live.snapshot(conversation)?.requests ?? []
+    const read = new Set(requests.flatMap((request) => request.ruleLines ?? []))
+    if (!policy?.forFins && !policy?.forApexes && !read.size) return {}
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
   }
 
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[] {
@@ -1346,16 +1369,26 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { question: latest.question ?? "It asks for a decision.", on: "lead", ask }
   }
 
-  /** A message reached it after it asked, in whoever's words: what it asked is answered, and nobody hears it as open again. */
+  /**
+   * A message reached it after it asked, in whoever's words: what it asked is answered, and nobody hears it as open
+   * again. An answer still on its way that later fails doesn't open it: this message closed it (`sendAnswer`).
+   */
   private questionAnswered(edge: ThreadParent, request: string, text: string, actor: Actor | undefined, delivery: FinDelivery): void {
-    const open = this.openQuestion(edge)
-    if (open?.ask?.kind !== "report") return
+    const latest = this.latest.get(edge.child)
+    if (!latest || (latest.status !== "blocked" && latest.status !== "needs-input") || edge.closedAt !== undefined) return
     const store = this.store()!
-    const child = ThreadIdSchema.parse(edge.child)
+    const ask = reportAsk(latest).id
     const delivered = { at: this.now(), delivery }
-    const claim = store.claimAnswer({ ask: open.ask.id, child, op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: text.slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
+    const held = this.answersHeld.get(edge.child)
+    if (held?.ask === ask) {
+      if (held.request === request || held.delivered) return
+      store.markAnswerDelivered(ask, delivered)
+      this.answersHeld.set(edge.child, { ...held, delivered })
+      return this.childMoved(edge, false)
+    }
+    const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: text.slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
     if (!claim.claimed) return
-    store.markAnswerDelivered(open.ask.id, delivered)
+    store.markAnswerDelivered(ask, delivered)
     this.answersHeld.set(edge.child, { ...claim.answer, delivered })
     this.childMoved(edge, false)
   }
@@ -1457,6 +1490,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         hostWarn("agents", "a kept answer didn't reach its Fin; the next start sends it", { op: edge.op, ask: kept.ask, refused: sent.refused })
         return sent
       }
+      // Another message reached it meanwhile, so the question stays closed, whatever became of this answer.
+      if (this.answersHeld.get(edge.child)?.delivered && this.answersHeld.get(edge.child)?.ask === kept.ask) return sent
       store.releaseAnswer(kept.ask, kept.op)
       const before = store.latestAnswers().get(edge.child)
       if (before) this.answersHeld.set(edge.child, before)
@@ -1846,6 +1881,8 @@ export class Agents implements AgentOperations, ConversationChildren {
           this.tellHeld(spawn.op, queued, { refused: queued.refused })
           continue
         }
+        // A stopped Fin's own Fins wait for it to resume (`reopen`): a stop doesn't go on starting work under it.
+        if (queued && this.apexStopped(queued.lead.thread)) continue
         if (queued?.after?.length) {
           const stand = this.afterStand(queued)
           if (stand.held) this.tellHeld(spawn.op, queued, stand.held)
@@ -2227,6 +2264,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (conversation) await this.halt(edge, conversation)
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why })
     this.childMoved(closed, false)
+    // Its own queued Fins now wait for it to resume.
+    this.queueRefresh()
     void this.drain()
     return true
   }
@@ -2614,17 +2653,42 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * The Threads `context` names as `thread:<harness>:<id>` refs, each what a person's picker would have written, or a
-   * refusal naming the one that isn't known. A ref goes as it is: a reference the catalog can't place says so in its
-   * item, as a chip's does.
+   * refusal naming the one that isn't known or isn't this caller's to attach (`reachOf`). A ref goes as it is: a
+   * reference the catalog can't place says so in its item, as a chip's does.
    */
   private threadRefs(apex: Apex, context: readonly AgentContextInput[] | undefined): readonly string[] | AgentRefused {
+    if (!context?.length) return []
+    const reach = this.reachOf(apex)
     const refs: string[] = []
-    for (const { thread } of context ?? []) {
+    for (const { thread } of context) {
       const ref = this.threadRef(apex, thread)
       if (!ref) return { refused: "unknown-thread", why: `${thread} isn't a Thread here: name it by a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name. agents_list with scope threads finds one.` }
+      if (!reach(ref)) return { refused: "access", why: `${thread} is outside this ${FIN_WORD}'s reach: it attaches Threads of its own tree and those it holds by reference. Its ${APEX_WORD} can hand one down with context.` }
       refs.push(ref)
     }
     return refs
+  }
+
+  /**
+   * What this caller may attach or find, the one check for both, since what's attached can be read and exported
+   * (`thread_history`). The person's picker offers everything to the Apex they talk to, whose every attach shows as a
+   * chip in its Thread. A Fin below reaches its own tree and what it holds by reference, so a Thread comes down only as
+   * an Apex deliberately hands it on. Keys are the harness and the ids a ref can carry, so spellings of one session match.
+   */
+  private reachOf(apex: Apex): (ref: string) => boolean {
+    const store = this.store()!
+    if (!store.edges().of(apex.thread)) return () => true
+    const keysOf = (ref: string): string[] => {
+      const token = parseThreadToken(ref)
+      if (!token) return []
+      const row = this.deps.references && findThreadReference(this.deps.references.list({ harness: token.harness }), token.harness, token.id)
+      return [token.id, ...(row ? [row.nativeId, threadReferenceId(row)] : [])].map((id) => `${token.harness}\0${id}`)
+    }
+    const tree = treeEdges(store.edges(), apex.thread)
+    const family = [apex.thread, tree[0]?.parent, ...tree.map((edge) => edge.child)].flatMap((thread) => (thread ? this.refsOfThread(ThreadIdSchema.parse(thread)) : []))
+    const held = heldReferences(this.conversationsOfThread(apex.thread).flatMap((conversation) => this.deps.live.snapshot(conversation)?.requests ?? []))
+    const reached = new Set([...family, ...held.map((reference) => reference.ref)].flatMap(keysOf))
+    return (ref) => keysOf(ref).some((key) => reached.has(key))
   }
 
   /** A ref as written, or the ref of a Thread by its ID or of a Fin of the caller's tree by its name. */
@@ -2640,16 +2704,26 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** A Thread's ref: its newest session its harness keeps; `thread_history` reads every session of the Thread from any. */
   private refOfThread(thread: ThreadId): string | undefined {
+    const natives = this.nativesOf(thread)
+    const session = [...natives].reverse().find((native) => this.deps.catalog.nativePath({ harness: native.harness, nativeId: native.nativeId })) ?? natives.at(-1)
+    return session && threadToken(session.harness, session.nativeId).slice(1)
+  }
+
+  private refsOfThread(thread: ThreadId): string[] {
+    return this.nativesOf(thread).map((native) => threadToken(native.harness, native.nativeId).slice(1))
+  }
+
+  /** The native sessions a Thread ran in, oldest first. */
+  private nativesOf(thread: ThreadId): { harness: string; nativeId: string }[] {
     const conversation = this.conversationOf(thread)
     const snapshot = conversation ? this.deps.live.snapshot(conversation) : undefined
     const bindings = (snapshot?.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ harness: binding.provider, nativeId: binding.nativeId }] : []))
+    if (bindings.length) return bindings
     const store = this.store()!
-    const natives = bindings.length ? bindings : (store.thread(thread)?.sessions ?? []).flatMap((session) => store.sessionContents(session).natives.flatMap(({ path }) => {
+    return (store.thread(thread)?.sessions ?? []).flatMap((session) => store.sessionContents(session).natives.flatMap(({ path }) => {
       const row = this.deps.catalog.ref(path)
       return row ? [{ harness: row.harness, nativeId: row.nativeId }] : []
     }))
-    const session = [...natives].reverse().find((native) => this.deps.catalog.nativePath({ harness: native.harness, nativeId: native.nativeId })) ?? natives.at(-1)
-    return session && threadToken(session.harness, session.nativeId).slice(1)
   }
 
   /** Words with the Threads `refs` names attached, in the one format a person's chip writes. */
@@ -2660,17 +2734,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     return writeMessage({ body: words, items })
   }
 
-  /** What an `@` picker offers: by a Thread's ID or a Fin's name, else the conversations whose titles hold the words, newest first. */
+  /** What an `@` picker offers this caller (`reachOf`): by a Thread's ID or a Fin's name, else the conversations whose titles hold the words, newest first. */
   private threadsMatching(apex: Apex, query: string | undefined): AgentsThreads {
     const references = this.deps.references
-    const words = query?.trim().toLowerCase()
-    const named = query ? this.threadRef(apex, query) : undefined
+    const reach = this.reachOf(apex)
     const rows = references?.list({}) ?? []
-    const token = named ? parseThreadToken(named) : null
-    const exact = token ? findThreadReference(rows, token.harness, token.id) : undefined
-    if (named) return { threads: [{ ref: named, harness: token?.harness ?? "", ...(exact?.title && { title: exact.title }), ...(exact?.updatedAt && { updatedAt: exact.updatedAt }) }] }
-    const found = (words ? rows.filter((row) => row.title?.toLowerCase().includes(words)) : rows).slice(0, THREADS_LISTED)
-    return { threads: found.map((row) => ({ ref: threadToken(row.harness, threadReferenceId(row)).slice(1), harness: row.harness, ...(row.title && { title: row.title }), ...(row.updatedAt && { updatedAt: row.updatedAt }) })) }
+    const refOf = (row: ThreadRef) => threadToken(row.harness, threadReferenceId(row)).slice(1)
+    const named = query ? this.threadRef(apex, query) : undefined
+    if (named) {
+      const token = parseThreadToken(named)
+      const exact = token ? findThreadReference(rows, token.harness, token.id) : undefined
+      return { threads: reach(named) ? [{ ref: named, harness: token?.harness ?? "", ...(exact?.title && { title: exact.title }), ...(exact?.updatedAt && { updatedAt: exact.updatedAt }) }] : [] }
+    }
+    const words = query?.trim().toLowerCase()
+    const found = (words ? rows.filter((row) => row.title?.toLowerCase().includes(words)) : rows).filter((row) => reach(refOf(row))).slice(0, THREADS_LISTED)
+    return { threads: found.map((row) => ({ ref: refOf(row), harness: row.harness, ...(row.title && { title: row.title }), ...(row.updatedAt && { updatedAt: row.updatedAt }) })) }
   }
 
   /** Whether a turn runs in it, or a message is on its way to its harness: nothing moves under either. */
@@ -2728,6 +2806,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private async moveOne(apex: Apex, edge: ThreadParent, input: AgentsMoveInput, op: string): Promise<AgentMoved | AgentRefused> {
     const { name } = edge
     if (edge.run && !edge.run.ended) return { refused: "conflict", why: `${name} runs in a process your shell started: agents_stop stops it, and then it can move.` }
+    // Owned from here, before anything is waited for: a Stop, a stop of the Fin or a turn that comes meanwhile declines it.
+    const closed = edge.closedAt
+    const opening = this.conversationOf(edge.child)
+    const marked = opening ? this.deps.live.stopMark(opening) : 0
     const taken = edge.run && !this.conversationOf(edge.child) ? await this.takeOver(edge) : undefined
     if (taken && "refused" in taken) return taken
     const conversation = this.conversationOf(edge.child)
@@ -2751,11 +2833,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const note = [fit.note, decided.note].filter(Boolean).join(" ")
     let snapshot: LiveSnapshot | undefined
     try {
-      snapshot = await this.deps.continueOn(conversation, { kind: "move", move: { id: moveId, to: { harness: input.harness, modeId: mode.id, ...(decided.settings && { tuning: decided.settings }) } } }, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, () => !this.inTurn(conversation))
+      snapshot = await this.deps.continueOn(conversation, { kind: "move", move: { id: moveId, to: { harness: input.harness, modeId: mode.id, ...(decided.settings && { tuning: decided.settings }) } } }, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, () => !this.inTurn(conversation) && this.store()!.edges().of(edge.child)?.closedAt === closed && (opening === undefined || this.deps.live.stopMark(opening) === marked))
     } catch (error) {
       return { refused: "unavailable", why: `${name} stayed on ${this.deps.harnessLabel(from)}: ${errorMessage({ error })}` }
     }
-    if (!snapshot) return { refused: "conflict", why: `${name} started a turn as it was moved: it can move once that ends.` }
+    if (!snapshot) return { refused: "conflict", why: `${name} stayed on ${this.deps.harnessLabel(from)}: a Stop or a turn came before it moved. Ask again to move it.` }
     const waiting = snapshot.requests.filter((request) => request.status === "queued" || holdOf(request)?.kind === "retry" || holdOf(request)?.kind === "sign-in").length
     const settled = this.deps.live.switchSettled(moveId)
     const landed = (at: ContextTransfer) => {
@@ -2959,7 +3041,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * placeholder's `child` is the waiting entry's own ID, for agents_read and agents_stop; the Fin's Thread gets its own
    * ID once it starts.
    */
-  private heldFor(thread: string): Array<{ op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } }> {
+  private heldFor(thread: string): Array<{ op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string; apexStopped?: true } }> {
     const store = this.store()
     if (!store) return []
     const spawns = store.queuedSpawns().filter((spawn) => !store.edges().byOp(spawn.op))
@@ -2981,12 +3063,13 @@ export class Agents implements AgentOperations, ConversationChildren {
         startedBy: { kind: "agent", session: SessionIdSchema.parse(queued.lead.session) },
         createdAt: spawn.at,
       }
-      return [{ op: spawn.op, placeholder, queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }), ...(queued.refused && { refused: queued.refused }) } }]
+      const apexStopped = this.apexStopped(thread)
+      return [{ op: spawn.op, placeholder, queued: { reason, ahead, ...(stand?.pending.length && { after: stand.pending }), ...(stand?.held && { held: stand.held.name }), ...(queued.refused && { refused: queued.refused }), ...(apexStopped && { apexStopped }) } }]
     })
   }
 
   /** A held spawn of the Apex's, by name or by its waiting entry's ID (`heldFor`). */
-  private heldNamed(apex: Apex, ref: string): { op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string } } | undefined {
+  private heldNamed(apex: Apex, ref: string): { op: string; placeholder: ThreadParent; queued: { reason: QueueReason; ahead: number; after?: string[]; held?: string; refused?: string; apexStopped?: true } } | undefined {
     const name = finName(ref)
     return this.heldFor(apex.thread).find(({ placeholder }) => placeholder.child === ref || placeholder.name === name)
   }
@@ -3027,6 +3110,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** Every parent with a spawn held now. */
   private holdingThreads(): string[] {
     return (this.store()?.queuedSpawns() ?? []).flatMap((spawn) => parseQueued(spawn.record)?.lead.thread ?? [])
+  }
+
+  /** Whether this Apex is a Fin that was stopped, and not resumed since. */
+  private apexStopped(thread: string): boolean {
+    return this.store()?.edges().of(thread)?.closedAt !== undefined
   }
 
   private ready(conversation: string): ParentReady {
@@ -3142,6 +3230,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "resumed after stop", { op: edge.op, child: edge.child, by: why, stoppedFor: this.now() - edge.closedAt })
     this.forget(edge.parent)
     this.childMoved(open, false)
+    // Its own queued Fins waited for it.
+    this.queueRefresh()
+    void this.drain()
     return open
   }
 
@@ -3599,21 +3690,6 @@ function permissionAnswer(pending: PendingAsk, input: Pick<AgentsAnswerInput, "a
 
 function unknownFin(ref: string): AgentRefused {
   return { refused: "unknown-child", why: `No ${FIN_WORD} of this Thread is named ${ref}. agents_list shows them.` }
-}
-
-/** What a Fin's first turn reads: who asked, as an agent's words, and everything it knows of the work. */
-export function briefText(brief: Brief, name: string): string {
-  const lines = [
-    fromAgent(YOUR_APEX),
-    briefIntro(name),
-    "",
-    brief.objective,
-  ]
-  if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
-  if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
-  if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
-  lines.push("", BRIEF_CLOSE)
-  return lines.join("\n")
 }
 
 /** A Fin as another Fin of its Apex reads it: the person's words to it directly stay its own. */

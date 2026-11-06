@@ -84,7 +84,7 @@ import { ContextBundles, prepareLiveContext } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
-import { holdSwitches, LiveTransfers } from "./live-transfers.js"
+import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
@@ -132,6 +132,8 @@ export class LiveConversations {
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
   private readonly bundles: ContextBundles
+  /** Each conversation's Stops so far (`stopMark`). */
+  private readonly stopped = new Map<string, number>()
   private readonly sources: LiveSources
   private readonly launches: LiveLaunches
   private readonly hibernation: LiveHibernation
@@ -310,7 +312,11 @@ export class LiveConversations {
     })
     this.approvals = new LiveApprovals(access)
     this.questions = new LiveQuestions(access, {
-      continue: (id, bindingId, requestId, text, displayText) => { this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText) },
+      // An answer goes to the session that asked, on the binding it read as active with nothing awaited since: never a switch.
+      continue: (id, bindingId, requestId, text, displayText) => {
+        if (conversationControl(this.records.require(id)).activeBindingId !== bindingId) throw new Error("This question is no longer available on the current session")
+        this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText)
+      },
       steer: (id, input) => this.act(id, input, "native"),
     })
     this.actions = new LiveActions(access, (id, running, input) => this.steerByRestart(id, running, input))
@@ -503,6 +509,7 @@ export class LiveConversations {
    * paused (`docs/delivery-queue.md`).
    */
   stopHolds(id: string): number {
+    this.stopped.set(id, this.stopMark(id) + 1)
     const resident = this.records.load(id)
     // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
     // One being edited takes the mark under its edit, so saving the edit doesn't send it.
@@ -526,6 +533,14 @@ export class LiveConversations {
     }
     for (const transfer of retired) this.transfers.tell(transfer)
     return count
+  }
+
+  /**
+   * How many Stops `id` has had on this host. What takes this before it waits and reads it after knows whether a Stop
+   * came meanwhile, whatever the conversation looks like by then: idle is what a Stop leaves.
+   */
+  stopMark(id: string): number {
+    return this.stopped.get(id) ?? 0
   }
 
   /** Whether a message to its running turn lands at the agent's next step (`steer` with `step`), not at the turn's end. */
@@ -1259,13 +1274,12 @@ export class LiveConversations {
         break
     }
     const previous = resident.snapshot
-    const edited = {
+    resident.snapshot = {
       ...previous,
       requests: previous.requests.map((item) =>
         item.id === request.id ? next : item
       ),
     }
-    resident.snapshot = command.change.kind === "remove" ? this.transfers.withdraw(edited, request.id) : edited
     try {
       this.flush(resident)
     } catch (error) {
@@ -1796,6 +1810,7 @@ export class LiveConversations {
 
   /** Commits what changed to the journal and tells every window, in one batch. */
   private flush(resident: Resident): void {
+    resident.snapshot = withdrawGone(resident.snapshot)
     if (this.records.isReleased(resident)) {
       hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })
       return

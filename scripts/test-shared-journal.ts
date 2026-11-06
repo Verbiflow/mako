@@ -421,7 +421,7 @@ if (process.argv[2] === "owner-child") {
     assert.match(folder, /^\/Users\/someone\/\.mako\/attribution\/[0-9a-f]{16}$/)
     assert.ok(Buffer.byteLength(ownerAddress(folder, "darwin")) <= 100)
     assert.match(ownerAddress(folder, "linux"), /^\0mako-attribution-[0-9a-f]{24}$/)
-    const deep = join("/private/var/folders/xx/yyyyyyyyyyyyyyyyyyyyyyyyyyyy/T", "a".repeat(80), "attribution", "0123456789abcdef")
+    const deep = join("/private/tmp/xx/yyyyyyyyyyyyyyyyyyyyyyyyyyyy/T", "a".repeat(80), "attribution", "0123456789abcdef")
     assert.ok(Buffer.byteLength(ownerAddress(deep, "darwin")) <= 104, "a path too long for a socket falls back to a short one")
     mkdirSync(tmpdir(), { recursive: true })
   })

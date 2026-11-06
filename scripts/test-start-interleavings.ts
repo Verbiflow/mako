@@ -303,12 +303,16 @@ async function budgetsTakenOnce(root: string, budget: { running: number; started
   }
 }
 
-/** A direct start whose preparation fails gives its place back to the waiter behind it from that failure, with no other event. */
+/**
+ * A direct start whose preparation fails gives its place back to the waiter behind it from that failure, with no other
+ * event: with no room watch, a waiter that starts at all started from the failure.
+ */
 async function failedStartFreesItsPlace(root: string): Promise<void> {
   let fail: (error: Error) => void = () => {}
   const prepared = new Map<string, number>()
   const w = new AgentsWorld({
     root: join(root, "failed-frees"),
+    noRoomWatch: true,
     finLimit: () => 1,
     preparing: (options) => {
       prepared.set(options.parent!.name, performance.now())
@@ -325,8 +329,8 @@ async function failedStartFreesItsPlace(root: string): Promise<void> {
     const failedAt = performance.now()
     fail(new Error("its worktree couldn't be made"))
     assert.ok("refused" in (await first))
-    await until(() => prepared.has("second"), "the waiter to start from the failure itself", 1_000)
-    assert.ok(prepared.get("second")! - failedAt < 100, `the waiter starts within 100 ms of the place freeing: ${(prepared.get("second")! - failedAt).toFixed(1)} ms`)
+    await until(() => prepared.has("second"), "the waiter to start from the failure itself")
+    assert.ok(prepared.get("second")! >= failedAt, "after the failure freed its place")
   } finally {
     fail(new Error("cleanup"))
     await w.close()

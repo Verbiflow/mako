@@ -46,7 +46,7 @@ export type Continuation =
   | { kind: "reply"; reply: BindingReply }
 
 export interface ContinueOnDeps {
-  live: Pick<LiveConversations, "session" | "historyReady" | "transfer" | "moveOn" | "continueBinding" | "admitInOrder">
+  live: Pick<LiveConversations, "session" | "historyReady" | "transfer" | "moveOn" | "continueBinding" | "admitInOrder" | "stopMark" | "stopHolds">
   /** Whether `harness`'s session goes on under another account (`ProviderLiveDriver.accountContinuation`); without it, another account is a hand-over. */
   resumesUnderAccount?(harness: string): boolean
   /** The selection as the harness takes it (`HarnessProfiles.resolveLaunch`). */
@@ -69,9 +69,10 @@ function destination(continuation: Continuation) {
  * move all come here, with `actor` saying who asked: the selection is resolved, the history the transcript is written
  * from is read, and the switch is admitted (`LiveTransfers.accept`), its transcript carrying the conversation over.
  * Nothing but this reaches `LiveConversations.transfer` for another harness (`scripts/test-fin-move.ts` fails on a
- * caller that does). `stillDecided` is what a move was decided on, which the waits above may have changed: read at
- * admission and, for a switch, again with nothing awaited before its commit. False declines it: the answer is undefined,
- * or, past admission, its switch settles failed.
+ * caller that does). A Stop that lands in those waits wins: a move is declined, and what a person asked for is accepted
+ * and held. `stillDecided` is what a move was decided on, which the waits may have changed too: read at admission and,
+ * for a switch, again with nothing awaited before its commit. False declines it: the answer is undefined, or, past
+ * admission, its switch settles failed.
  */
 export function continueOn(deps: ContinueOnDeps): ContinueOn {
   /** Whether the session goes on where it is: no switch, only another model, or an account it can go on under. */
@@ -79,22 +80,27 @@ export function continueOn(deps: ContinueOnDeps): ContinueOn {
     harness === to.harness && (to.account === undefined || deps.resumesUnderAccount?.(to.harness) === true)
   return async (id, continuation, actor, stillDecided) => {
     const { live } = deps
+    // Owned before anything is waited for: a Stop that lands in these waits is read here, not guessed from what it left.
+    const mark = live.stopMark(id)
+    const stoppedSince = () => live.stopMark(id) !== mark
     const before = live.session(id)
     const { provider, tuning: asked } = destination(continuation)
-    const ready = Promise.all([deps.resolveLaunch(provider, before?.cwd, asked), live.historyReady(id)]).then(([tuning]) => tuning)
+    // A reply to the active binding sends what it would with or without the history; a read that fails doesn't refuse it.
+    const history = continuation.kind === "reply" ? live.historyReady(id).catch(() => undefined) : live.historyReady(id)
+    const ready = Promise.all([deps.resolveLaunch(provider, before?.cwd, asked), history]).then(([tuning]) => tuning)
     const admitted = await live.admitInOrder(id, ready, (tuning) => {
-      if (continuation.kind !== "move" && stillDecided && !stillDecided()) return undefined
       const withTuning = { ...tuning && { tuning } }
-      switch (continuation.kind) {
-        case "words":
-          return live.transfer(id, { ...continuation.input, ...withTuning }, actor, continuation.continues)
-        case "move":
-          return live.moveOn(id, { ...continuation.move, to: { ...continuation.move.to, ...withTuning } }, stays(before?.harness, continuation.move.to), actor, stillDecided)
-        case "reply": {
-          const { bindingId, requestId, text, attachments } = continuation.reply
-          return live.continueBinding(id, bindingId, requestId, text, attachments, tuning, undefined, actor)
-        }
+      if (continuation.kind === "move") {
+        const { move } = continuation
+        return live.moveOn(id, { ...move, to: { ...move.to, ...withTuning } }, stays(before?.harness, move.to), actor, () => !stoppedSince() && (stillDecided?.() ?? true))
       }
+      // What Mako decided yields to the Stop. What someone asked for was asked first: it's accepted, and the Stop holds it.
+      if (stillDecided && (stoppedSince() || !stillDecided())) return undefined
+      const taken = continuation.kind === "words"
+        ? live.transfer(id, { ...continuation.input, ...withTuning }, actor, continuation.continues)
+        : live.continueBinding(id, continuation.reply.bindingId, continuation.reply.requestId, continuation.reply.text, continuation.reply.attachments, tuning, undefined, actor)
+      if (stoppedSince()) live.stopHolds(id)
+      return taken
     })
     if (admitted) {
       hostLog("transfer", "a Thread continues on a harness", { conversation: id, from: before?.harness ?? "", to: provider, by: actor?.kind ?? "person" })

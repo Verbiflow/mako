@@ -121,19 +121,16 @@ function retuned(request: LiveRequest, to: Landing, leaving: boolean): LiveReque
 }
 
 /**
- * The queue as it was before a landing that was taken back: what it freed waits again, as it did, and its order goes
- * back if it changed it. Anything else that changed since stands. `landed` is what the landing made of `before`.
+ * The queue as it was before a landing that was taken back. What the landing freed waits again as it did, and its order
+ * goes back, but only rows still as the landing left them are the landing's to touch: `landed` is what it made, by
+ * identity, so a Resume, an edit or a Stop since stands, and such a row keeps the place it has.
  */
 export function departing(requests: readonly LiveRequest[], before: readonly LiveRequest[], landed: readonly LiveRequest[]): LiveRequest[] {
   const was = new Map(before.map((request) => [request.id, request]))
-  const back = requests.map((request) => {
-    const earlier = was.get(request.id)
-    if (!earlier) return request
-    const freed = request.status === "queued" && earlier.status === "held" && (earlier.retry !== undefined || earlier.signIn !== undefined)
-    return freed ? { ...request, status: earlier.status, retry: earlier.retry, signIn: earlier.signIn, tuning: earlier.tuning } : request.status === "held" ? { ...request, tuning: earlier.tuning, signIn: earlier.signIn } : request
-  })
-  const same = before.every((request, index) => landed[index]?.id === request.id)
-  if (same) return back
+  const owned = new Set(landed)
+  const back = requests.map((request) => (owned.has(request) ? was.get(request.id) ?? request : request))
+  const untouched = landed.every((request) => requests.includes(request))
+  if (!untouched || before.every((request, index) => landed[index]?.id === request.id)) return back
   const place = new Map(before.map((request, index) => [request.id, index]))
   return back.map((request, index) => ({ request, index })).sort((left, right) => (place.get(left.request.id) ?? before.length + left.index) - (place.get(right.request.id) ?? before.length + right.index)).map(({ request }) => request)
 }
