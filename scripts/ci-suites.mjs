@@ -17,7 +17,7 @@ const SUITES = [
   "test:control-media-sources", "test:control-packages", "test:control-preview", "test:control-recording-continuous",
   "test:desktop-answers", "test:desktop-crashes", "test:dev-updates", "test:execution-ownership",
   "test:file-previews", "test:git", "test:git-remote", "test:host", "test:host-shutdown", "test:host-signals",
-  "test:host-single", "test:lazy", "test:listed-repositories", "test:mcp", "test:message-queue",
+  "test:host-single", "test:lazy", "test:limit-notice-ui", "test:listed-repositories", "test:mcp", "test:message-queue",
   "test:mobile-behavior", "test:moves", "test:native-authoring", "test:opencode-agents", "test:opencode-api",
   "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:queued-steering",
   "test:rail-list", "test:scripted-model", "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal",
