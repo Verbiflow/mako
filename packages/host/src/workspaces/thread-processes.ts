@@ -23,6 +23,8 @@ const run = promisify(execFile)
  */
 const STOP_GRACE_MS = 15_000
 const POLL_MS = 100
+/** How far a look for a run's last process backs off: what's left of a check can go on for as long as it likes. */
+const GONE_POLL_MOST_MS = 2_000
 /** How long one look at the process table answers for the next: windows ask for every app's marks every few seconds. */
 const SHARED_TABLE_MS = 1_000
 /** Between tries of a readiness command: closely while a start is usually done, then less often for one that never comes up. */
@@ -359,7 +361,7 @@ export class ThreadProcesses {
     return { started, refused }
   }
 
-  /** Hears each run this host started as it ends, the moment its process exits: a build slot it held goes at once. */
+  /** Hears each run this host started once its whole process tree is gone, as soon as it can tell: a build slot it held goes then. */
   onExit(listener: (app: AppKey, key: string) => void): () => void {
     this.exitListeners.add(listener)
     return () => this.exitListeners.delete(listener)
@@ -1008,6 +1010,22 @@ export class ThreadProcesses {
     return { kind: "ended" }
   }
 
+  /**
+   * A run's wrapper exited, which only says to look: its children can outlive it, as one a stop's SIGTERM didn't end
+   * does, and it reads as running until they're gone (`state`). A look that fails says nothing, so it looks again. A
+   * run that took its key meanwhile has its own end to hear.
+   */
+  private async heardEnd(app: AppKey, key: string, pid: number, run: Run | undefined): Promise<void> {
+    for (let wait = POLL_MS; run; wait = Math.min(wait * 2, GONE_POLL_MOST_MS)) {
+      const rows = await processTable().catch(() => undefined)
+      if (rows && !members(rows, run).length) break
+      await new Promise((resolve) => setTimeout(resolve, wait).unref())
+    }
+    const taken = (await this.runs(app).catch(() => undefined))?.[key]
+    if (taken && taken.pid !== pid) return
+    for (const listener of this.exitListeners) listener(app, key)
+  }
+
   /** Starts the run once `record` has saved it, so no host can lose track of it. */
   private async spawn(app: AppKey, spec: RunSpec, record: (run: Run) => Promise<void>): Promise<void> {
     this.tableChanged()
@@ -1037,9 +1055,8 @@ export class ThreadProcesses {
         child.once("spawn", () => resolve(child.pid!))
         child.once("error", reject)
       })
-      child.once("exit", () => {
-        for (const listener of this.exitListeners) listener(app, key)
-      })
+      let saved: Run | undefined
+      child.once("exit", () => void this.heardEnd(app, key, pid, saved))
       child.unref()
       const release = child.stdin!
       release.on("error", () => {})
@@ -1049,6 +1066,7 @@ export class ThreadProcesses {
         const run: Run = { kind: spec.kind, name: spec.name, command: spec.command, cwd: spec.cwd, pid, startedMs: row.startedMs, at: this.now() }
         if (spec.port !== undefined) run.port = spec.port
         if (spec.ready !== undefined) run.ready = spec.ready
+        saved = run
         await record(run)
         this.tableChanged()
         release.end("go\n")

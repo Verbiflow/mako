@@ -1,7 +1,7 @@
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
@@ -153,9 +153,7 @@ try {
   release(one.folder)
   const result = await patient.check(two.conversation, "quick")
   assert.match(result, /^The quick check passed in [\d.]+ s\./, result)
-  const handoff = starting.get(two.environment.app)! - exited.get(`${one.environment.app} ${runKey("check", "quick")}`)!
-  console.log(`build slot handoff: ${handoff.toFixed(1)} ms`)
-  assert.ok(handoff < 100, `the second check starts within 100 ms of the first ending: ${handoff.toFixed(1)} ms`)
+  assert.ok(starting.get(two.environment.app)! >= exited.get(`${one.environment.app} ${runKey("check", "quick")}`)!, "the second check starts only once the first has gone")
   assert.match(await patient.check(one.conversation, "quick"), /passed/, "the first's result is kept for it")
   await until(() => !slots.reading().holders.length, "both slots given back")
   // A run that can't be started gives its slot back, or every check after it would wait forever.
@@ -283,22 +281,6 @@ function heldReads(processes: ThreadProcesses) {
   } finally {
     await done()
   }
-}
-
-// ── A place in line for a run that turns out to have survived becomes that run's, and a second look counts it once.
-{
-  const slots = new BuildSlots(() => 1)
-  const waiting = slots.take({ key: "left", label: "a caller's check" })
-  const other = slots.take({ key: "other", label: "another check" })
-  const left = slots.recover({ key: "left", label: "the check the last host left" })
-  assert.equal(left, waiting, "the caller's place is the survivor's")
-  assert.deepEqual([waiting.held(), waiting.survivor()], [true, true])
-  assert.equal(slots.recover({ key: "left", label: "the check the last host left" }), undefined, "a second look counts it once")
-  slots.recovered()
-  assert.equal(other.held(), false, "it holds the only slot")
-  assert.deepEqual(slots.reading().waiting, 1, "and has left the line")
-  waiting.release()
-  assert.equal(other.held(), true)
 }
 
 // ── A place in line for a run that turns out to have survived becomes that run's, and a second look counts it once.
@@ -445,6 +427,61 @@ function heldReads(processes: ThreadProcesses) {
     await until(() => !slots.reading().holders.length && !slots.reading().waiting, "the slot to be free")
   } finally {
     await done()
+  }
+}
+
+/** A check's process that outlives its wrapper: says it's up, notes a SIGTERM without ending, and goes when `file` appears. */
+const stubborn = (file: string) => `process.on("SIGTERM",()=>fs.writeFileSync("termed",""));fs.writeFileSync("up","");setInterval(()=>{if(fs.existsSync("${file}"))process.exit(0)},20)`
+
+// ── A slot frees with a run's whole process tree, not its wrapper: a stop's SIGTERM can leave a child still running.
+{
+  const slots = new BuildSlots(() => 1)
+  const b = bench("stopping", () => slots)
+  try {
+    const tools = b.host()
+    for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? `node -e '${stubborn("go")}'` : "echo second finished" } }), "A check")
+    await tools.check(b.one.conversation, "quick")
+    await until(() => existsSync(join(b.one.folder, "up")), "the first check's child")
+    assert.match(await tools.check(b.two.conversation, "quick"), /waits for a build slot: 1 of 1 in use/)
+    const [run] = await b.processes.status(b.one.environment.app)
+    const stopping = b.processes.stop(b.one.environment.app)
+    await until(() => existsSync(join(b.one.folder, "termed")), "the child to hear SIGTERM")
+    await until(() => {
+      try {
+        return !process.kill(run!.pid!, 0)
+      } catch {
+        return true
+      }
+    }, "the wrapper to exit")
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(slots.reading().waiting, 1, "the second still waits while the stop goes on")
+    assert.notEqual((await b.processes.status(b.two.environment.app)).find((each) => each.name === "quick")?.state.kind, "running", "nothing starts beside what's left of it")
+    release(b.one.folder)
+    await stopping
+    b.wait.ms = 10_000
+    assert.match(await tools.check(b.two.conversation, "quick"), /passed/, "once it's gone, the next goes")
+  } finally {
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── So does a check that ends and leaves a child behind: it reads as running, and holds its slot, until that's gone.
+{
+  const slots = new BuildSlots(() => 1)
+  const b = bench("left-behind", () => slots)
+  try {
+    const tools = b.host()
+    await tools.save(b.one.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: `node -e '${stubborn("go")}' & exit 0` } }), "A check")
+    await tools.check(b.one.conversation, "quick")
+    await until(() => existsSync(join(b.one.folder, "up")), "the child it left")
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(slots.reading().holders.length, 1, "its slot stays held")
+    release(b.one.folder)
+    await until(() => !slots.reading().holders.length, "the slot to free once it's gone")
+  } finally {
+    await b.processes.stop(b.one.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
   }
 }
 
