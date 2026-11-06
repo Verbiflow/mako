@@ -196,6 +196,8 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:agents-next-place": () => z.tuple([z.string()]),
+  "mako:agents-continue-next": () => z.tuple([z.string(), z.string()]),
   "mako:agents-respond": () =>
     z.tuple([
       z.string(),
@@ -2666,6 +2668,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:agents-read", "conversations"],
   ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],
+  ["mako:agents-next-place", "conversations"],
+  ["mako:agents-continue-next", "conversations"],
   ["mako:agents-respond", "conversations"],
   ["mako:agents-send", "conversations"],
   ["mako:agents-start", "conversations"],

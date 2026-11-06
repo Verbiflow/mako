@@ -200,6 +200,8 @@ export interface LimitFacts {
   harness: string
   account?: string
   until?: number
+  /** Where the Apex itself went, when it did. */
+  apex?: string
   /** Where each Fin went, as the person reads it ("Claude Code"), and what stopped with nowhere to go. */
   moved: readonly string[]
   stopped: number
@@ -233,6 +235,7 @@ export function limitNoticeWords(facts: LimitFacts, label: (harness: string) => 
   return {
     ran: `${where} ran out${facts.until === undefined ? "" : ` until ${resetWords(facts.until, now)}`}`,
     did: [
+      ...(facts.apex ? [`This Thread moved to ${facts.apex}.`] : []),
       ...[...by].map(([to, n]) => `${count(n, "Fin", "Fins")} moved to ${to}.`),
       ...(facts.stopped ? [`${count(facts.stopped, "Fin has", "Fins have")} nowhere to go.`] : []),
       ...(facts.waiting ? [`${count(facts.waiting, "report is waiting for its Apex", "reports are waiting for their Apex")}.`] : []),
