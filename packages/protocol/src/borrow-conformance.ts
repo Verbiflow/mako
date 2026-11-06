@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { z } from "zod"
 import {
   BORROW_INLINE_BYTES,
   BorrowAnswerSchema,
@@ -117,9 +118,14 @@ function refusalOf(answer: BorrowAnswer): string {
   return answer.refusal.refused
 }
 
+/** A broker refuses with a status where the answer would be. */
+function refused(answer: Grant | Uint8Array | number): boolean {
+  return z.number().safeParse(answer).success
+}
+
 function granted(given: Grant | number): Grant {
   const parsed = GrantSchema.safeParse(given)
-  assert.ok(parsed.success, `the grant was refused with ${JSON.stringify(given)}`)
+  assert.ok(parsed.success, `the grant was refused with ${given}`)
   return parsed.data
 }
 
@@ -148,7 +154,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
 
     const other = await broker.borrower(OTHER_REPOSITORY)
     assert.equal(refusalOf(await other.borrow(need("c-1"))), "out-of-scope")
-    assert.ok(!(await other.value(lease.id) instanceof Uint8Array), "another Thread can't read the lease's value")
+    assert.ok(refused(await other.value(lease.id)), "another Thread can't read the lease's value")
     assert.equal(refusalOf(await mine.borrow(need("c-2", { kind: "env", ref: "DATABASE_URL" }))), "no-grant")
   })
 
@@ -172,13 +178,13 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const after = await mine.pushes(before.seq)
     assert.deepEqual(after.pushes.map((entry) => BorrowPushSchema.parse(entry.push)), [{ push: "ended", lease: lease.id, why: "revoked" }])
     assert.ok(after.pushes.every((entry) => entry.seq > before.seq))
-    assert.ok(!(await mine.value(lease.id) instanceof Uint8Array), "a revoked lease's value doesn't open")
+    assert.ok(refused(await mine.value(lease.id)), "a revoked lease's value doesn't open")
     assert.equal(refusalOf(await mine.renew(lease.id)), "revoked")
     assert.equal(refusalOf(await mine.borrow(need("c-1"))), "revoked", "the same need ended stays ended")
     assert.equal(refusalOf(await mine.borrow(need("c-2"))), "revoked")
     assert.deepEqual((await person.leases()).filter((each) => each.grant === "env"), [])
     assert.deepEqual((await person.grants()).filter((each) => each.id === "env"), [])
-    assert.equal(GrantSchema.safeParse(await person.grant(vaultCopy(person.account, "env", { version: 2 }), canary())).success, false, "a revoked grant doesn't come back")
+    assert.ok(refused(await person.grant(vaultCopy(person.account, "env", { version: 2 }), canary())), "a revoked grant doesn't come back")
     const events = await person.events()
     assert.ok(events.some((event) => event.event === "revoked" && event.lease === lease.id))
   })
@@ -257,7 +263,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const [ask] = await person.asks()
     assert.ok(ask)
     const secret = `cat: ${new TextDecoder().decode(canary()).trim()}: Permission denied`
-    // SAFETY: the answer is malformed on purpose, a field the contract doesn't have, to see the broker refuse it.
+    // SAFETY: the type refuses `detail`; the case is a transport that sends it anyway, and the broker refusing it.
     assert.equal(await person.answer(ask.ask, { answer: "unavailable", reason: "unreadable", detail: secret } as never), undefined, "an answer with words of its own isn't taken")
     const answered = await person.answer(ask.ask, { answer: "unavailable", reason: "unreadable" })
     assert.ok(answered)
@@ -301,7 +307,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const before = await mine.pushes()
     await mine.release(lease.id)
     assert.deepEqual((await mine.pushes(before.seq)).pushes, [])
-    assert.ok(!(await mine.value(lease.id) instanceof Uint8Array))
+    assert.ok(refused(await mine.value(lease.id)))
     assert.ok((await person.events()).some((event) => event.event === "released" && event.lease === lease.id))
   })
 }
