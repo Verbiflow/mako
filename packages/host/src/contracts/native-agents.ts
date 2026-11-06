@@ -50,9 +50,10 @@ export type FinAsk = z.infer<typeof FinAskSchema>
 /**
  * What a Fin that finished leaves for someone to decide (a merge, a choice
  * between results), from the question its done report asks: its Apex's
- * (`lead`) or the person's, and the ask that answers it.
+ * (`lead`) or the person's, and the ask that answers it, which only its
+ * owner has: a row's Fin on another device says the question alone.
  */
-export const FinDecisionSchema = z.object({ question: note, on: z.enum(["lead", "person"]), ask: FinAskSchema })
+export const FinDecisionSchema = z.object({ question: note, on: z.enum(["lead", "person"]), ask: FinAskSchema.optional() })
 export type FinDecision = z.infer<typeof FinDecisionSchema>
 
 /**
