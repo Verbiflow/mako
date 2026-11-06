@@ -1,6 +1,6 @@
 import { useElementPickNotice } from "@/components/composer/element-pick-notice"
 import { useProviderConnectionNotice } from "@/components/composer/connection-notice"
-import { useAccountLimitNotice, useAccountSwitchNotice } from "@/components/composer/account-notice"
+import { useAccountLimitNotice, useAccountSwitchNotice, useLimitContinueNotice } from "@/components/composer/account-notice"
 import { useModelChoiceNotice } from "@/components/composer/model-notice"
 import { useRuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
 import { useRestoreVersionNotice } from "@/components/composer/restore-version-notice"
@@ -40,6 +40,7 @@ export function installComposerNotices(): Array<() => void> {
     registerNotice("sign-in-recovery", useSignInRecoveryNotice, -6),
     registerNotice("message-failure", useFailureNotice, -5),
     registerNotice("account-limit", useAccountLimitNotice, -4),
+    registerNotice("limit-continue", useLimitContinueNotice, -4),
     registerNotice("account-switch", useAccountSwitchNotice),
     registerNotice("model-choice", useModelChoiceNotice),
     registerNotice("interrupted-sends", useInterruptedSendsNotice),

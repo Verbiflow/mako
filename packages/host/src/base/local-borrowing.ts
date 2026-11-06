@@ -170,6 +170,19 @@ export class LocalBorrowing implements Borrowing {
     return next
   }
 
+  /**
+   * Runs `work` holding the folder's lock while `lease` stands, and says how it ended if it doesn't. Nothing `work`
+   * does can fall after the lease's revoke: a revoke takes the same lock, so it comes wholly before `work` or sees
+   * everything `work` did.
+   */
+  whileLeased<T>(lease: string, work: () => Promise<T>): Promise<{ done: T } | { ended: "revoked" | "expired" | "released" }> {
+    return this.locked(async () => {
+      const held = (await this.#load()).state.leases[lease]
+      if (!held) return { ended: "released" as const }
+      return held.ended ? { ended: held.ended.why } : { done: await work() }
+    })
+  }
+
   #now(): number {
     return (this.#options.now ?? Date.now)()
   }

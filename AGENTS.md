@@ -447,18 +447,22 @@ family (`ModelRouteAdapter.model` names the model as the harness lists it);
 then their next harness that fits its access and has room. At a start it
 applies whether or not the harness was named, and a named model keeps the
 refusal. Another account runs only that Fin's launches
-(`ProviderStartOptions.pinnedAccount`, from its edge's `tuned.rerouted.to`),
+(`ProviderStartOptions.pinnedAccount`, from its binding's `account`),
 never the person's selection, and admission checks the pin before each input
 as it checks a selection. Mid-run, what waits out the limit (#391's held
 request with its `retry`: the continuation of a turn the limit cut, or a
 message the harness refused) moves instead, when the harness's own marker
 (`TurnReply.limit`) or the account's reading says it's a limit: the move takes
-that very request over (`LiveConversations.moveWaiting`), only while it still
-waits for its time on this host, and handOff guards its send as every send's.
-Right before that, with nothing awaited between, it reads again what it was
-decided on (`stillDecided`: the Fin open and not released, this host's claim
-on the same wait); when that or the request's state (a Stop's latch, `pause`)
-no longer holds, the move is retired in the store and nothing is sent. It goes
+that very request over through `continueOn`, first with the move's words on it,
+yielding to a Stop (`unlessStopped`), and handOff guards its send as every
+send's. What it was decided on (`stillDecided`: the Fin open and not released,
+this host's claim on the same wait) is read at admission and again before
+commit; when that or the request's state (a Stop's latch, `pause`) no longer
+holds, the move is retired in the store and nothing says it moved. An Apex with
+Fins open moves the same way, whatever waits, its person's message included, and
+what stood idle on that account goes with the tree; a Fin that finished stays
+until a message finds it. A Thread with no Fins is the person's: one card offers
+the next place (`Agents.nextPlace`). It goes
 on in the same session on another account where its driver declares
 `accountContinuation` `resumes` (Claude; `test-harness-definitions.ts`
 requires every harness to declare it), on a connection's model, or by a
