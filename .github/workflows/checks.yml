@@ -245,6 +245,7 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
       - run: npm run test:background-agents
+      - run: npm run test:build-slots
       - run: npm run test:agents-migrate
       # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
       # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).

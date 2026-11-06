@@ -1,3 +1,4 @@
+import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
 import type { Git } from "@mako/git"
@@ -18,6 +19,7 @@ import { WorkspaceMoves } from "./moves.js"
 import { WorktreeLeaves } from "./worktree-leaves.js"
 import { moveablePlace, registerWorkspaceTools, repositoryPlace, workspaceTools } from "./tools.js"
 import { projectRecipe, type RecipeAccounts, type RecipeWhere } from "./thread-recipe.js"
+export { BuildSlots } from "./build-slots.js"
 export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
@@ -252,6 +254,8 @@ export interface WorkspaceMoversDeps {
   movedPaths: NonNullable<ThreadWorktreeMoveDeps["movedPaths"]>
   /** How long a harness's MCP calls may wait, for an app check to fit inside one. */
   checkWaitMs(harness: string): number | undefined
+  /** The host's build slots, which every check run takes one of while it runs. */
+  buildSlots?: BuildSlots
   jobs: HostJobs
   emit(event: HostEvent): void
   warn(message: string, facts: Record<string, string | number | boolean | undefined>): void
@@ -313,6 +317,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     },
     folder: (cwd, claim) => environments.forFolder(cwd, claim),
     processes,
+    ...(deps.buildSlots && { buildSlots: deps.buildSlots }),
     traces: new TraceRefresh(),
     recipesRoot: workspaces.recipes,
     where: workspaces.where,

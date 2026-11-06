@@ -36,6 +36,8 @@ export class FinCapacity {
   #finCores = { cores: 0, at: 0 }
   #pressure: string | undefined
   #allowed: number | undefined
+  #busyCores: number | undefined
+  #pressedNow = false
   readonly #listeners = new Set<() => void>()
 
   constructor(deps: FinCapacityDeps) {
@@ -44,7 +46,7 @@ export class FinCapacity {
 
   /** `fins`, the Fins at work here by conversation, when this look should also read what they cost. */
   async observe(working: number, mix: Readonly<Record<string, number>>, fins?: readonly FinAtWork[]): Promise<void> {
-    const before = this.atOnce()
+    const before = { fins: this.atOnce(), builds: this.builds() }
     this.#mix = { ...mix }
     if (fins && this.#deps.sampler) {
       const readings = await this.#deps.sampler.sample(fins).catch(() => undefined)
@@ -53,10 +55,26 @@ export class FinCapacity {
     }
     const reading = await this.#deps.read().catch(() => undefined)
     const finCores = working && this.#now() - this.#finCores.at < FIN_CORES_FRESH_MS ? this.#finCores.cores : 0
-    if (reading) this.#governor.read(this.#now(), pressureOf(reading, finCores, this.#hardware()))
+    if (reading) {
+      const pressure = pressureOf(reading, finCores, this.#hardware())
+      this.#governor.read(this.#now(), pressure)
+      this.#busyCores = reading.busyCores
+      this.#pressedNow = Object.values(pressure).some(Boolean)
+    }
     this.#deps.costs.save()
     this.#allow()
-    if (this.atOnce() > before) this.changed()
+    if (this.atOnce() > before.fins || this.builds() > before.builds) this.changed()
+  }
+
+  /**
+   * Builds that run at once (`BuildSlots`): the room capacity keeps for them, and one more while nothing presses on the
+   * machine and its idle cores leave a build's room, so an idle machine isn't held to one.
+   */
+  builds(): number {
+    const base = this.#base()
+    const hardware = this.#hardware()
+    const idle = !this.#pressedNow && this.#busyCores !== undefined && this.#busyCores + base.cost.buildCores <= hardware.cores - reserveOf(hardware).cores
+    return base.builds + (idle ? 1 : 0)
   }
 
   /** Hears each time this device may take more than before: what waits for it goes then, not at the next look. */

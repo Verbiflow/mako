@@ -15,7 +15,7 @@
  */
 
 /** The families of work Mako has its own tools for. */
-export type CallFamily = "worktree" | "branch" | "pull-request" | "app" | "port" | "browser" | "agent-cli" | "background" | "polling"
+export type CallFamily = "worktree" | "branch" | "pull-request" | "app" | "port" | "browser" | "agent-cli" | "background" | "polling" | "build"
 
 export type CallRoute =
   | { kind: "allow" }
@@ -33,6 +33,8 @@ export interface CallThread {
   recipe?: { kind: "ready"; processes: string[] } | { kind: "none" }
   /** The launch has Mako's `mako-computer` server. */
   computer?: boolean
+  /** This machine's build slots now (`BuildSlots`): a heavy suite started while every one is in use hears so. */
+  builds?: { slots: number; holders: string[] }
 }
 
 /** How a harness names a Mako tool, for the message: `mcp__mako__worktree_move` on Claude, the bare name elsewhere. */
@@ -419,6 +421,8 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     if (program === "open" && (argv.some((word) => /^https?:\/\//.test(word)) || (argv.includes("-a") && argv.some((word) => BROWSERS.test(word)))))
       return { kind: "warn", family: "browser", rule: "open-browser", message: `The js tool on the mako-computer server opens and drives a browser you can read back; to put a page or file in front of the person, use ${n("show")}.` }
   }
+  if (thread.builds && thread.builds.holders.length >= thread.builds.slots && heavySuite(program, argv.slice(1)))
+    return { kind: "warn", family: "build", rule: "build-slots-full", message: `Every build slot on this machine is in use (${thread.builds.holders.join("; ")}), so a suite run now runs beside them and slows every Fin here. ${n("app_check")} waits its turn for one and starts the moment one frees.` }
   if (segment.background && program !== "sleep" && !line.loop)
     return { kind: "warn", family: "background", rule: "background", message: `Work left running past your turn is nobody's to stop or read. ${n("app_start")} runs the project's app, and ${n("agents_start")} runs work the person can open and that reports back.` }
   const seconds = sleepSeconds(argv)
@@ -463,3 +467,24 @@ export interface NativeCallPolicy {
 }
 
 export const NATIVE_CALL_POLICY: NativeCallPolicy = { shell: routeShellCall, tool: routeNativeTool }
+
+/** Package-manager scripts and tools that build or run a whole suite: what a build slot is for. */
+const HEAVY_SCRIPTS = new Set(["test", "build", "check", "typecheck", "lint", "e2e"])
+const HEAVY_TOOLS = new Set(["vitest", "jest", "mocha", "playwright", "xcodebuild", "gradle", "gradlew", "mvn", "bazel", "tsgo"])
+
+/** Whether a command builds or runs a whole suite (`build-slots-full`): its program, or a package script named like one. */
+function heavySuite(program: string, args: readonly string[]): boolean {
+  if (HEAVY_TOOLS.has(program)) return true
+  // A tool run through a package runner is that tool: `npx vitest`, `pnpm exec tsc -b`, `bunx jest`.
+  const run = program === "npx" || program === "bunx" ? args : (program === "pnpm" || program === "yarn" || program === "npm") && (args[0] === "exec" || args[0] === "dlx") ? args.slice(1) : undefined
+  const tool = run?.find((arg) => !arg.startsWith("-"))
+  if (run && tool) return heavySuite(basename(tool), run.slice(run.indexOf(tool) + 1))
+  if (program === "tsc") return args.some((arg) => arg === "-b" || arg === "--build" || arg === "-p" || arg === "--project")
+  if (program === "cargo" || program === "go" || program === "swift") return ["test", "build", "check"].includes(args[0] ?? "")
+  if (["npm", "pnpm", "yarn", "bun"].includes(program)) {
+    const words = args.filter((arg) => !arg.startsWith("-"))
+    const script = words[0] === "run" || words[0] === "run-script" ? words[1] : words[0]
+    return script !== undefined && HEAVY_SCRIPTS.has(script.split(":")[0]!)
+  }
+  return false
+}
