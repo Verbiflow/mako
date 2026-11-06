@@ -39,6 +39,9 @@ export interface Keychain {
   delete(item: KeychainItem): Promise<boolean>
 }
 
+/** A password the addon read; anything else (`null` for no item) is none. */
+const Password = z.string()
+
 /**
  * The keychain asked from this process, through `@napi-rs/keyring`, off the
  * event loop. A prompt from macOS keeps the read waiting until the person
@@ -52,10 +55,12 @@ export function processKeychain(keyring: () => Promise<typeof Keyring>): Keychai
         const { AsyncEntry, findCredentialsAsync } = await keyring()
         if (item.account === undefined) {
           const [first] = await findCredentialsAsync(item.service)
-          return first ? { kind: "found", value: first.password } : { kind: "missing" }
+          const password = Password.safeParse(first?.password)
+          return password.success ? { kind: "found", value: password.data } : { kind: "missing" }
         }
-        const value = await new AsyncEntry(item.service, item.account).getPassword()
-        return value === undefined ? { kind: "missing" } : { kind: "found", value }
+        // No item reads as null from the addon, not undefined.
+        const password = Password.safeParse(await new AsyncEntry(item.service, item.account).getPassword())
+        return password.success ? { kind: "found", value: password.data } : { kind: "missing" }
       } catch (error) {
         return { kind: "failed", reason: error instanceof Error ? error.message : String(error) }
       }
