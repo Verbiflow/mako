@@ -1,5 +1,5 @@
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { FinChoicesReading, FinPolicy } from "@mako/host/contracts/fin-tuning"
+import type { FinChoicesReading, FinPolicy, RoleRules } from "@mako/host/contracts/fin-tuning"
 import { getMako } from "@/lib/bridge"
 import { createHook, createStore } from "./store"
 
@@ -42,6 +42,18 @@ export async function chooseMoveOnLimit(on: boolean): Promise<void> {
   if (before) store.set({ reading: { ...before, moveOnLimit: on } })
   try {
     store.set({ reading: await getMako().chooseFinMoveOnLimit(on) })
+  } catch (error) {
+    store.set({ reading: before })
+    throw error
+  }
+}
+
+/** The person's standing rules for one role, saved alone: shown at once, put back if the host refuses them. */
+export async function saveRoleRules(role: RoleRules, text: string): Promise<void> {
+  const before = store.get().reading
+  if (before) store.set({ reading: { ...before, policy: { ...before.policy, [role]: text || undefined } } })
+  try {
+    store.set({ reading: await getMako().saveRoleRules(role, text) })
   } catch (error) {
     store.set({ reading: before })
     throw error

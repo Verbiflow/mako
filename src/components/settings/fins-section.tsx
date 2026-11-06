@@ -1,6 +1,8 @@
 import { useEffect, type ReactNode } from "react"
+import { targetLine } from "./agent-reads"
 import { FinRules } from "./fin-rules"
 import { FinMoveOnLimit } from "./fin-move-on-limit"
+import { RoleRules } from "./role-rules"
 import { toast } from "sonner"
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, MinusIcon, PlusIcon, ZapIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
@@ -36,6 +38,7 @@ export function FinsSection() {
     <div className="flex flex-col gap-8">
       <FinLimit />
       <FinRules order={order} profiles={profiles} />
+      <RoleRules target={(target) => targetLine(target, profiles)} />
       <section className="flex flex-col gap-3">
       <div>
         <h3 className="text-ui font-medium">What Fins run on, per harness</h3>

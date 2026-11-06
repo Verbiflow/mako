@@ -36,6 +36,7 @@ import type {
   ConversationTools,
 } from "../harnesses/index.js"
 import type { ControlInstructions, ControlSaid } from "./control-cadence.js"
+import type { RoleRuleLines } from "../contracts/fin-tuning.js"
 import type { LiveJournal } from "./live-journal.js"
 import type { JournalReclaims } from "./journal-reclaim.js"
 import type { LiveMoves } from "./live-moves.js"
@@ -219,6 +220,8 @@ export interface ConversationChildren {
   isApex(conversation: string): boolean
   /** What an Apex hears before a message the person sends it: its Fins as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
+  /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
+  ruleLines(conversation: string): RoleRuleLines
   /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
   pinnedAccount?(conversation: string, harness: string): string | undefined
 }
