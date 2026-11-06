@@ -469,7 +469,7 @@ export function createMakoBridge(transport: BridgeTransport) {
      * answers how that move went. Its steps arrive as `thread-move-step` events.
      */
     threadMove: (conversationId: string, move: string, handOff?: ThreadHandOff) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move, handOff),
-    /** Agents' asks to move their Thread to the cloud (`thread_move` below full access); `thread-move-asks` events follow them. */
+    /** What the agent of a conversation asked the person (`AgentAsk`) is answered on the host running it. */
     answerAgentAsk: (conversationId: string, id: string, allow: boolean) => invokeTrustedHost<void>("mako:agent-ask-answer", conversationId, id, allow),
     /** What the Thread of a conversation's harnesses here and in the cloud mean for moving it either way, before it moves. */
     threadHarnessCheck: (conversationId: string) => invokeTrustedHost<ThreadHarnessCheck>("mako:thread-harness-check", conversationId),
