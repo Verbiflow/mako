@@ -944,7 +944,7 @@ describe("the live form", () => {
     emit(2)
     runtime.emit("th-1", Payload.encoded("only whole 3"))
     assert.deepEqual(sentEvents(first), [["whole 1", undefined], ["compact 2", COMPACT_LIVE_FORM], ["only whole 3", undefined]])
-    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], form: COMPACT_LIVE_FORM, compact: 1 })
+    assert.deepEqual([threads.stats()[0].form, threads.stats()[0].compact], [COMPACT_LIVE_FORM, 1])
     runtime.close()
 
     const second = scriptedLink()
