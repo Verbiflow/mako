@@ -44,6 +44,7 @@ import {
   type AgentsPlaced,
   type AgentsPlaceInput,
   type ApexCaller,
+  type Placed,
   type PlaceTarget,
   PlaceTargetSchema,
   reportPhase,
@@ -387,10 +388,10 @@ interface Apex {
 }
 
 /**
- * The most access a Fin started from another device runs at here, until the person sets this device's own. One
- * place, so another answer is a one-line change: `auto` is decision B2's recommended answer, provisional until the
- * person gives theirs. Below full, so an Apex on another device never grants a Fin's approvals here: the person does,
- * in the Fin's own Thread.
+ * The most access a Fin started from another device runs at here: the person's decision of 2026-11-06 (B2, "Auto
+ * edits, Full by choice"). Full by choice comes with the per-device ceiling's Settings, a later slice, which replaces
+ * this constant; until then no placed Fin runs on full here, so an Apex on another device never grants a Fin's
+ * approvals here: the person does, in the Fin's own Thread.
  */
 export const PLACED_CEILING: AccessTier = "auto"
 
@@ -501,6 +502,14 @@ interface StartRecord {
   launching?: { where: string; tree: string }
   cancelled: boolean
   answer: Promise<AgentsStartResult>
+}
+
+/** A device's word on a Fin's standing, as every device orders them: the host that said it, by its generation, and its count of sayings (`Placed.said`). */
+type SaidMark = NonNullable<Placed["said"]>
+
+/** Whether `next` is a newer word of a Fin's device than `said`, the mark kept on the edge: by the host's generation, then its count. */
+function newerSaid(said: SaidMark | undefined, next: SaidMark): boolean {
+  return !said || next.owner > said.owner || (next.owner === said.owner && next.seq > said.seq)
 }
 
 /** How a kept stop of a start or a Fin on another device went: stopped, as that device said, or why it still waits for it. */
@@ -635,8 +644,6 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** How each Fin here whose Apex is elsewhere stood when its device last said so, and this host's count of sayings (`standingOf`). */
   private readonly standingSaid = new Map<string, boolean>()
   private standingSeq = 0
-  /** The newest standing taken for each Fin placed elsewhere, by the host that said it and its count (`standingHeard`). */
-  private readonly standingTaken = new Map<string, { owner: number; seq: number }>()
   /** Stops being sent to other places now, by the start's op: one at a time each (`cancelAway`, `retryStops`). */
   private readonly stopping = new Map<string, Promise<StopOutcome>>()
 
@@ -1615,7 +1622,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!Array.isArray(listed.children)) return undefined
     for (const strip of listed.children) {
       const epoch = before.get(strip.child)
-      if (epoch !== undefined) this.placedStands(strip.child, strip.state.kind === "working" || strip.state.kind === "starting", epoch)
+      if (epoch !== undefined) this.placedStands(strip.child, strip.state.kind === "working" || strip.state.kind === "starting", epoch, strip.said)
     }
     return listed.children
   }
@@ -1625,16 +1632,21 @@ export class Agents implements AgentOperations, ConversationChildren {
    * `epoch` is this device's count for the Fin when that word was asked for: one it set to work since, or is sending
    * to now, keeps what this device knows, which is newer.
    */
-  private placedStands(child: string, working: boolean, epoch: number): void {
+  private placedStands(child: string, working: boolean, epoch: number, said?: SaidMark): void {
     const store = this.store()!
     const edge = store.edges().of(child)
     if (!edge?.placed || (edge.placed.epoch ?? 1) !== epoch) return
     if (this.placedSending.get(child)) return void this.placedMissed.add(child)
+    // Only the newest word of its device, by the mark kept with `working`: an older one, replayed or late, changes nothing.
+    if (said && !newerSaid(edge.placed.said, said)) return
     // At work there with its delegation closed here: someone on its device sent it on, so it's open here too.
     const reopened = working && edge.closedAt !== undefined ? store.reopenEdge(child, this.now()) : undefined
-    if ((edge.placed.working ?? false) === working && !reopened) return
-    const kept = store.keepPlaced(child, { working }) ?? reopened ?? edge
-    hostLog("agents", "placed Fin stands", { child, working, place: edge.asked.place ?? "" })
+    const changed = (edge.placed.working ?? false) !== working || reopened !== undefined
+    if (!changed && !said) return
+    // The mark and the work are one write, so a restart never finds one without the other.
+    const kept = store.keepPlaced(child, { ...(changed && { working }), ...(said && { said }) }) ?? reopened ?? edge
+    if (!changed) return
+    hostLog("agents", "placed Fin stands", { child, working, place: edge.asked.place ?? "", ...(said && { owner: said.owner, seq: said.seq }) })
     this.forget(edge.parent)
     this.childMoved(kept, false)
     if (!working) void this.drain()
@@ -1653,11 +1665,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!this.placedSending.get(child)) void this.reconcilePlaced([edge])
       return
     }
-    // Only the newest said: a notice on its way while the Fin's standing changed arrives after the one that says so.
-    const taken = this.standingTaken.get(child)
-    if (taken && (standing.owner < taken.owner || (standing.owner === taken.owner && standing.seq <= taken.seq))) return
-    this.standingTaken.set(child, { owner: standing.owner, seq: standing.seq })
-    this.placedStands(child, standing.working, epoch)
+    // Only the newest said, by the mark on the edge (`Placed.said`): a notice replayed, or on its way while the Fin's
+    // standing changed, arrives after the word that says so and changes nothing, after a restart too.
+    this.placedStands(child, standing.working, epoch, { owner: standing.owner, seq: standing.seq })
   }
 
   /**
@@ -1836,6 +1846,11 @@ export class Agents implements AgentOperations, ConversationChildren {
         })
     }
     visit(apex.thread)
+    // For an Apex on another device, each strip is this host's newest word on its Fin: an older notice changes nothing after it.
+    if (apex.away) {
+      const said = this.saidNow()
+      for (const strip of strips) if (!strip.under) strip.said = said
+    }
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
     return { children: strips, tree: { ...counts, of: { ...this.budget } } }
@@ -4404,8 +4419,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     const asks = report.implicit === true && (report.status === "blocked" || report.status === "needs-input")
     const working = !asks && this.occupies(edge)
     this.standingSaid.set(edge.child, working)
+    return { heard: edge.remote?.heard ?? 1, working, ...this.saidNow() }
+  }
+
+  /**
+   * This host's next word on a Fin here, in the order every device sorts its words by: its generation, which a host
+   * that restarts takes afresh and higher, then its count of sayings in this life.
+   */
+  private saidNow(): SaidMark {
     this.standingSeq += 1
-    return { heard: edge.remote?.heard ?? 1, working, owner: this.generation, seq: this.standingSeq }
+    return { owner: this.generation, seq: this.standingSeq }
   }
 
   /** An Apex on another device sets its Fin here to work, or stops it: its device knows that from its own call, so it isn't said back (`restate`). */
