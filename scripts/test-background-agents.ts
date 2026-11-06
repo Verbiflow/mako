@@ -20,7 +20,8 @@ import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
 import { END_CONFIRM_MS, lastStep, PROCESS_READS, type ProcessReads } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { namedUuid } from "@mako/host/conversations/cloud-moves"
-import { Agents } from "@mako/host/conversations/agents"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import { Agents, settingsIn } from "@mako/host/conversations/agents"
 import { macLoad } from "@mako/host/conversations/mac-capacity"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
 import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
@@ -1250,6 +1251,30 @@ async function finReadingsLoadNothing(): Promise<void> {
   }
 }
 
+/** What a Fin shows it runs with: a request on the binding it left says nothing of the one it's on, loaded or not. */
+function settingsFollowTheBinding(): void {
+  const asked = (model: string, on?: string, target?: string): LiveRequest => ({
+    id: randomUUID(),
+    text: "Go",
+    attachments: [],
+    status: "completed",
+    tuning: { model },
+    ...(on && { nativeRun: { bindingId: on, runId: "run" } }),
+    ...(target && { targetBindingId: target }),
+  })
+  const snapshot = (requests: LiveRequest[], settings?: { model: string }, activeBindingId?: string): Parameters<typeof settingsIn>[0] => ({
+    requests,
+    session: { ...(settings && { settings }) },
+    ...(activeBindingId && { control: { activeBindingId, bindings: [] } }),
+  })
+  const moved = { model: "destination" }
+  assert.deepEqual(settingsIn(snapshot([asked("source", "before")], moved, "after")), moved, "after a move, the source's last model isn't this one's")
+  assert.deepEqual(settingsIn(snapshot([asked("source", "before"), asked("chosen here", "after")], moved, "after")), { model: "chosen here" }, "a model asked of this binding is still the first word")
+  assert.deepEqual(settingsIn(snapshot([asked("source", "before"), asked("waiting", undefined, "after")], moved, "after")), { model: "waiting" }, "as is one on its way to it")
+  assert.deepEqual(settingsIn(snapshot([asked("before bindings")], moved, "after")), { model: "before bindings" }, "a request that names no binding reads as it did")
+  assert.deepEqual(settingsIn(snapshot([asked("only")], moved)), { model: "only" }, "and so does a conversation with none")
+}
+
 async function waitFor(check: () => boolean, what: string, ms = 8_000): Promise<void> {
   const deadline = Date.now() + ms
   while (!check()) {
@@ -1815,6 +1840,7 @@ try {
   await stopAllUnqueues()
   await unreadableQueuedStarts()
   await finReadingsLoadNothing()
+  settingsFollowTheBinding()
   await startedFinsOldQueueRow()
   await finsAtWorkByBinding()
   await stoppedApexHolds()
